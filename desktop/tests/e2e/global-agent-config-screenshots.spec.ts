@@ -32,7 +32,6 @@ async function openCreateDialog(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
-  await page.getByRole("menuitem", { name: "Create agent" }).click();
   await page.locator("#persona-display-name").fill("Test Agent");
 }
 
@@ -147,16 +146,16 @@ const CATALOG_NONE_AVAILABLE = [
     underlying_cli_path: null,
   },
   {
-    id: "goose",
-    label: "Goose",
+    id: "omp",
+    label: "Oh My Pi",
     avatar_url: "",
     availability: "not_installed",
-    command: "goose",
+    command: "omp",
     binary_path: null,
     default_args: [],
     mcp_command: null,
-    install_hint: "Install Goose to use this runtime.",
-    install_instructions_url: "https://github.com/block/goose",
+    install_hint: "Install Oh My Pi to use this runtime.",
+    install_instructions_url: "https://github.com/can1357/oh-my-pi",
     can_auto_install: false,
     underlying_cli_path: null,
   },
@@ -244,32 +243,28 @@ test.describe("global agent config screenshots", () => {
 
     await openAiDefaultsSettings(page);
 
-    const harness = page.getByTestId("global-agent-default-harness");
+    const defaultsCard = page.locator(
+      '[data-testid="settings-global-agent-config"]:visible',
+    );
+    const harness = defaultsCard.getByTestId("global-agent-default-harness");
+    await expect(defaultsCard).toHaveCount(1);
     await expect(harness).toHaveText("Claude Code");
     await expect(page.getByText("Provider", { exact: true })).toHaveCount(0);
-    await expect(page.locator("#global-agent-model")).toBeVisible();
+    await expect(defaultsCard.locator("#global-agent-model")).toBeVisible();
 
-    // Make the form dirty, then return to Claude with no model override. The
-    // harness-native default keeps the now-actionable Save button enabled.
     await harness.press("Enter");
     await page.getByTestId("global-agent-default-harness-option-codex").click();
-    await harness.press("Enter");
-    await page
-      .getByTestId("global-agent-default-harness-option-claude")
-      .click();
-    await expect(page.getByTestId("global-agent-model")).toHaveText(
-      /Default model/,
+    await waitForAnimations(page);
+    const model = defaultsCard.locator(
+      '[data-testid="global-agent-model"]:visible',
     );
-    await expect(
-      page.getByRole("button", { name: "Save defaults" }),
-    ).toBeEnabled();
-
-    await harness.press("Enter");
-    await page.getByTestId("global-agent-default-harness-option-codex").click();
-    const model = page.getByTestId("global-agent-model");
+    await expect(model).toHaveCount(1);
     await model.click();
     await page.getByTestId("global-agent-model-option-gpt-5.5[high]").click();
-    await page.getByRole("button", { name: "Save defaults" }).click();
+    await defaultsCard
+      .getByRole("button", { name: "Save defaults" })
+      .filter({ visible: true })
+      .click();
 
     const saved = await page.evaluate(async () =>
       (
@@ -289,15 +284,15 @@ test.describe("global agent config screenshots", () => {
   }) => {
     await installMockBridge(page, {
       globalAgentConfig: {
-        preferred_runtime: "goose",
+        preferred_runtime: "omp",
         provider: "databricks_v2",
-        model: "goose-claude-4-6-opus",
+        model: "omp-claude-4-6-opus",
         env_vars: {},
       },
       runtimeFileConfigs: {
-        goose: {
+        omp: {
           provider: "databricks_v2",
-          model: "goose-claude-4-6-opus",
+          model: "omp-claude-4-6-opus",
           satisfiedEnvKeys: ["DATABRICKS_HOST"],
         },
       },
@@ -518,7 +513,7 @@ test.describe("global agent config screenshots", () => {
     );
 
     const harness = defaultsDialog.getByTestId("global-agent-default-harness");
-    await expect(harness).toHaveText("Colony Agent");
+    await expect(harness).toHaveText("Oh My Pi");
     const provider = defaultsDialog.getByTestId("global-agent-provider");
     await expect(provider).toBeVisible();
     await waitForAnimations(page);
@@ -593,7 +588,7 @@ test.describe("global agent config screenshots", () => {
     });
   });
 
-  test("unset defaults persist the visible Colony Agent fallback", async ({
+  test("unset defaults persist the visible Oh My Pi fallback", async ({
     page,
   }) => {
     await installMockBridge(page);
@@ -606,7 +601,7 @@ test.describe("global agent config screenshots", () => {
     const defaultsDialog = page.getByTestId("agent-ai-defaults-dialog");
     await expect(
       defaultsDialog.getByTestId("global-agent-default-harness"),
-    ).toHaveText("Colony Agent");
+    ).toHaveText("Oh My Pi");
 
     await defaultsDialog.getByTestId("global-agent-provider").click();
     await page.getByTestId("global-agent-provider-option-anthropic").click();
@@ -628,7 +623,7 @@ test.describe("global agent config screenshots", () => {
       ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config", null),
     );
     expect(saved).toMatchObject({
-      preferred_runtime: "buzz-agent",
+      preferred_runtime: "omp",
       provider: "anthropic",
     });
   });
@@ -743,7 +738,6 @@ test.describe("global agent config screenshots", () => {
     await page.goto("/");
     await page.getByTestId("open-agents-view").click();
     await page.getByTestId("new-agent-card").click();
-    await page.getByRole("menuitem", { name: "Create agent" }).click();
 
     await expect(page.getByTestId("persona-dialog-submit")).toBeDisabled({
       timeout: 10_000,
@@ -777,7 +771,7 @@ test.describe("global agent config screenshots", () => {
       defaultsSection.getByText("Harness", { exact: true }),
     ).toBeVisible();
     await expect(
-      defaultsSection.getByText("Colony Agent", { exact: true }),
+      defaultsSection.getByText("Oh My Pi", { exact: true }),
     ).toBeVisible();
 
     // Global provider satisfies the provider-default rule → submit enabled.
@@ -1010,5 +1004,45 @@ test.describe("global agent config screenshots", () => {
     await dialog.screenshot({
       path: `${SHOTS}/11-edit-runtime-less-provider-required-save-blocked.png`,
     });
+  });
+
+  // Will's exact stuck path: databricks_v2 global provider + saved global
+  // OPENAI_API_KEY.  The cue must be visible without opening Advanced; once
+  // Advanced is opened the annotation must appear on the matching row.
+  test("card-mint-key-cue-visible-and-annotation-in-advanced", async ({
+    page,
+  }) => {
+    await installMockBridge(page, {
+      globalAgentConfig: {
+        provider: "databricks_v2",
+        model: null,
+        preferred_runtime: "buzz-agent",
+        env_vars: { OPENAI_API_KEY: "sk-placeholder" },
+      },
+    });
+
+    await openAiDefaultsSettings(page);
+
+    const card = page.getByTestId("settings-global-agent-config");
+
+    // The cue must be visible without the user opening Advanced.
+    await expect(card.getByTestId("card-mint-key-cue")).toBeVisible();
+    await expect(card.getByTestId("card-mint-key-cue")).toContainText(
+      "OPENAI_API_KEY",
+    );
+    await expect(card.getByTestId("card-mint-key-cue")).toContainText(
+      "Advanced → Environment variables",
+    );
+
+    // Advanced is collapsed at this point.
+    const advancedToggle = card.getByTestId("global-agent-advanced-toggle");
+    await expect(advancedToggle).toHaveAttribute("aria-expanded", "false");
+
+    // Open Advanced — the OPENAI_API_KEY row's annotation must be visible.
+    await advancedToggle.click();
+    await expect(advancedToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      card.getByText("Used for minting agent trading cards"),
+    ).toBeVisible();
   });
 });

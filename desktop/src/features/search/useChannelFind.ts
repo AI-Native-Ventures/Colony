@@ -3,8 +3,6 @@ import * as React from "react";
 import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { SearchHit } from "@/shared/api/types";
-import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
-
 const MIN_QUERY_LENGTH = 2;
 const DEBOUNCE_MS = 300;
 
@@ -134,24 +132,6 @@ export function useChannelFind({
       current === 0 ? matchedIds.length - 1 : current - 1,
     );
   }, [matchedIds.length]);
-
-  // Register platform-standard find shortcut (⌘F on macOS, Ctrl+F elsewhere).
-  React.useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (
-        hasPrimaryShortcutModifier(event) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "f"
-      ) {
-        event.preventDefault();
-        setIsOpen(true);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
 
   // Close find bar when switching channels.
   const prevChannelIdRef = React.useRef(channelId);

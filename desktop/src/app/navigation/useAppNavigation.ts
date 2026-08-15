@@ -9,6 +9,10 @@ import {
 import { cacheSearchHitEvent } from "@/app/navigation/searchHitEventCache";
 import { resolveSearchHitDestination } from "@/app/navigation/resolveSearchHitDestination";
 import type {
+  ActionCenterFilter,
+  ActionCenterStateFilter,
+} from "@/features/action-center/contracts";
+import type {
   DiscoverySearch,
   DiscoverySurface,
   DiscoveryTab,
@@ -18,6 +22,12 @@ import type { SearchHit } from "@/shared/api/types";
 type NavigationBehavior = {
   replace?: boolean;
   resetScroll?: boolean;
+};
+
+export type ActionCenterNavigationOptions = NavigationBehavior & {
+  filter?: ActionCenterFilter;
+  item?: string;
+  state?: ActionCenterStateFilter;
 };
 
 type NewMessageNavigationOptions = NavigationBehavior & {
@@ -112,6 +122,22 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goActionCenter = React.useCallback(
+    (options?: ActionCenterNavigationOptions) =>
+      commitNavigation(
+        {
+          to: "/action-center",
+          search: {
+            ...(options?.filter ? { filter: options.filter } : {}),
+            ...(options?.item ? { item: options.item } : {}),
+            ...(options?.state ? { state: options.state } : {}),
+          },
+        },
+        options,
+      ),
+    [commitNavigation],
+  );
+
   const goBlocks = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -187,6 +213,7 @@ export function useAppNavigation() {
         commitHash?: string;
         pullRequestId?: string;
         issueId?: string;
+        repositoryId?: string;
       },
     ) =>
       commitNavigation(
@@ -203,6 +230,9 @@ export function useAppNavigation() {
               ? { pullRequestId: behavior.pullRequestId }
               : {}),
             ...(behavior?.issueId ? { issueId: behavior.issueId } : {}),
+            ...(behavior?.repositoryId
+              ? { repositoryId: behavior.repositoryId }
+              : {}),
           },
         },
         behavior,
@@ -398,6 +428,7 @@ export function useAppNavigation() {
     closeForumPost,
     closeSettings,
     closeWorkflowDetail,
+    goActionCenter,
     goAgents,
     goBlocks,
     goChannel,

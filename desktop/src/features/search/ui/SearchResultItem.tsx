@@ -1,13 +1,22 @@
 import type * as React from "react";
 import {
+  Activity,
   ArrowRight,
+  Blocks,
   Bot,
+  Compass,
   FileText,
+  FolderGit2,
   Hash,
+  House,
+  ListChecks,
   MessageCircle,
   Plus,
+  Receipt,
+  Settings,
   User,
   type LucideIcon,
+  Zap,
 } from "lucide-react";
 
 import { HashSearch } from "@/shared/ui/icons";
@@ -20,14 +29,33 @@ import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 import { Badge } from "@/shared/ui/badge";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
+export type SearchCommandId =
+  | "browse-channels"
+  | "create-agent"
+  | "create-channel"
+  | "new-message"
+  | "open-action-center"
+  | "open-agents"
+  | "open-blocks"
+  | "open-discovery"
+  | "open-home"
+  | "open-projects"
+  | "open-pulse"
+  | "open-settings"
+  | "open-spend"
+  | "open-workflows";
+
+export type SearchCommand = {
+  description?: string;
+  id: SearchCommandId;
+  onSelect: () => void | Promise<void>;
+  title: string;
+};
+
 export type SearchResult =
   | {
       kind: "action";
-      action: {
-        description?: string;
-        id: "browse-channels" | "create-agent" | "create-channel";
-        title: string;
-      };
+      action: SearchCommand;
     }
   | { kind: "channel"; channel: Channel }
   | { kind: "user"; user: UserSearchResult }
@@ -70,10 +98,35 @@ export function resultIcon(
   channelLookup: ReadonlyMap<string, Channel>,
 ) {
   if (result.kind === "action") {
-    if (result.action.id === "browse-channels") {
-      return HashSearch;
+    switch (result.action.id) {
+      case "browse-channels":
+        return HashSearch;
+      case "create-agent":
+      case "open-action-center":
+        return ListChecks;
+      case "open-agents":
+        return Bot;
+      case "create-channel":
+        return Plus;
+      case "new-message":
+        return MessageCircle;
+      case "open-blocks":
+        return Blocks;
+      case "open-discovery":
+        return Compass;
+      case "open-home":
+        return House;
+      case "open-projects":
+        return FolderGit2;
+      case "open-pulse":
+        return Activity;
+      case "open-settings":
+        return Settings;
+      case "open-spend":
+        return Receipt;
+      case "open-workflows":
+        return Zap;
     }
-    return result.action.id === "create-agent" ? Bot : Plus;
   }
 
   if (result.kind === "user") {

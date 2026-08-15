@@ -103,7 +103,6 @@ pub fn reset_rate_limit_gate() {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-
     // The gate is a process-wide static shared by every test in this binary,
     // so all gate tests serialize on one async lock to keep armed expiries
     // from bleeding between parallel test threads.

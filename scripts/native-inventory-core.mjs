@@ -497,7 +497,8 @@ function tauriCoupling(strippedText) {
 }
 
 const EMIT_EVENT = /\.emit(?:_to|_filter)?\s*\(\s*(?:[A-Za-z0-9_"'.&]+\s*,\s*)?"([a-z0-9:_-]+)"/g;
-const EMIT_MULTILINE = /\.emit(?:_to|_filter)?\s*\([^)"]{0,200}?"([a-z0-9:_-]+)"/g;
+const EMIT_MULTILINE =
+  /\.emit\s*\([^)"]{0,200}?"([a-z0-9:_-]+)"|\.emit_to\s*\([^)"]{0,200}?"[^"]*"\s*,\s*[^)"]{0,200}?"([a-z0-9:_-]+)"/g;
 // `.emit(SOME_CONST, payload)` — the name is an identifier, not a literal, so
 // neither pattern above sees it. Three real events were absent from the
 // inventory for this reason: mesh-download-progress, managed-agent-runtime-status
@@ -544,7 +545,7 @@ async function emittedEvents(files, projectRoot) {
     // a single line elsewhere, which made emit_sites an undercount.
     const stripped = stripComments(src);
     for (const match of stripped.matchAll(EMIT_MULTILINE)) {
-      const name = match[1];
+      const name = match[1] ?? match[2];
       const lineNo = stripped.slice(0, match.index).split(/\r?\n/).length;
       const site = `${rel}:${lineNo}`;
       if (!out.has(name)) out.set(name, []);

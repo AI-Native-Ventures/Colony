@@ -1,19 +1,13 @@
 name: CI
-# CI gates every integration point without repeating the same proof. PRs to
-# `develop` are path-filtered, the merge queue always runs its six required
-# contexts, and the resulting `develop` push runs only path-selected secondary
-# coverage. PRs from `develop` to `main` always run the six required contexts
-# plus relevant secondary jobs and report one production Promotion Gate.
+# CI gates every integration point without repeating the same proof. Pull
+# requests are path-filtered.  A `develop` push runs only path-selected
+# secondary coverage, while a `develop` to `main` promotion reports one
+# production Promotion Gate over the exact relevant checks.
 on:
   push:
     branches: [main, develop, release]
   pull_request:
     branches: [main, develop, release]
-  # Required for the develop merge queue. Without this trigger the queue creates
-  # no check runs at all, so every required check stays pending and entries sit
-  # in AWAITING_CHECKS forever -- three PRs were stuck for an hour before anyone
-  # noticed, because "pending" looks like "running".
-  merge_group:
 
 # One run per ref, newest wins. Rapid promotions to main collapse into a
 # single run that tests the cumulative state instead of billing one full
@@ -35,31 +29,18 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    # In a merge_group run, paths-filter has no base to diff against:
-    # github.ref is the gh-readonly-queue branch and fetch-depth 2 does not
-    # contain the queue's base_sha. So buckets are set explicitly rather than
-    # filtered.
-    #
-    # rust / desktop / desktop-rust are forced true for merge groups and
-    # production promotion PRs because between them they gate every one of the
-    # six required contexts. Release pushes retain their established full
-    # matrix. Raw outputs stay separate so forcing core proof never turns on
-    # every secondary suite.
-    #
-    # web / mobile / blocks are NOT forced. They gate only Web, Mobile and
-    # Blocks Live Gate, none of which is required, and Mobile alone is 915
-    # Flutter tests. Running them per batch buys no gate strength and spends
-    # the queue's 60-minute check_response_timeout -- and a queue run that times
-    # out fails into exactly the stuck-forever state this commit fixes. The
-    # relay e2e chain still runs, since it hangs off `rust`; it is the longest
-    # pole in a queue run and #168 lengthened its cold build further.
+    # Every pull request is classified by its actual diff, including a
+    # `develop` to `main` promotion.  The Promotion Gate below validates the
+    # selected checks; it does not force unrelated desktop/Rust work merely to
+    # satisfy a historical branch-protection context.  Release pushes retain
+    # broad coverage.
     outputs:
       core-enabled: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/release') && 'true' || 'false' }}
-      secondary-enabled: ${{ (github.event_name != 'merge_group' && github.ref != 'refs/heads/main') && 'true' || 'false' }}
+      secondary-enabled: ${{ github.ref != 'refs/heads/main' && 'true' || 'false' }}
       release-push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || 'false' }}
-      rust: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/release')) && 'true' || steps.filter.outputs.rust }}
-      desktop: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/release')) && 'true' || steps.filter.outputs.desktop }}
-      desktop-rust: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/release')) && 'true' || steps.filter.outputs.desktop-rust }}
+      rust: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.rust }}
+      desktop: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.desktop }}
+      desktop-rust: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/release') && 'true' || steps.filter.outputs.desktop-rust }}
       raw-rust: ${{ steps.filter.outputs.rust }}
       raw-desktop: ${{ steps.filter.outputs.desktop }}
       raw-desktop-rust: ${{ steps.filter.outputs.desktop-rust }}
@@ -116,15 +97,20 @@ jobs:
               - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
               - '.github/workflows/ci.yml'
+              - 'scripts/ci-pnpm-store-path.sh'
+              - 'scripts/ci-prepare-sherpa-onnx.sh'
             desktop-rust:
               - 'desktop/src-tauri/**'
               - '.github/workflows/ci.yml'
+              - 'scripts/ci-pnpm-store-path.sh'
+              - 'scripts/ci-prepare-sherpa-onnx.sh'
             web:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
               - 'web/**'
               - 'pnpm-lock.yaml'
               - '.github/workflows/ci.yml'
+              - 'scripts/ci-pnpm-store-path.sh'
             mobile:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
@@ -156,6 +142,9 @@ jobs:
               - 'scripts/start-isolated-test-relay.sh'
               - 'docker-compose.harness.yml'
               - '.github/workflows/ci.yml'
+              - 'scripts/ci-activate-hermit.sh'
+              - 'scripts/ci-pnpm-store-path.sh'
+              - 'scripts/ci-prepare-sherpa-onnx.sh'
             desktop-integration:
               - 'desktop/**'
               - 'crates/**'
@@ -169,6 +158,8 @@ jobs:
               - 'scripts/create-required-extensions.sql'
               - 'scripts/attach-schema-partitions.sql'
               - '.github/workflows/ci.yml'
+              - 'scripts/ci-activate-hermit.sh'
+              - 'scripts/ci-pnpm-store-path.sh'
             windows:
               - 'crates/**'
               - 'desktop/src-tauri/**'
@@ -243,6 +234,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
@@ -264,6 +257,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -288,6 +283,15 @@ jobs:
         with:
           fetch-depth: 2
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Cache sherpa-onnx native archive
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .cache/sherpa-onnx
+          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      - name: Prepare sherpa-onnx native archive
+        run: ./scripts/ci-prepare-sherpa-onnx.sh
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -320,7 +324,7 @@ jobs:
             wget
       - name: Get pnpm store directory
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-pnpm-store-path.sh
       - name: Restore pnpm store cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -385,9 +389,11 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - name: Get pnpm store directory
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-pnpm-store-path.sh
       - name: Restore pnpm store cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -477,6 +483,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       # Reuse the relay binaries and backend test archive when none of their
       # inputs changed (desktop-only PRs hit this every time). The key covers
       # everything they embed, including migrations via sqlx migrate!.
@@ -553,7 +561,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Activate Hermit
+        id: activate-hermit
+        continue-on-error: true
+        uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Retry Hermit activation
+        if: steps.activate-hermit.outcome == 'failure'
+        run: ./scripts/ci-activate-hermit.sh
       - name: Start integration services
         run: |
           for attempt in 1 2 3; do
@@ -569,7 +585,7 @@ jobs:
           done
       - name: Get pnpm store directory
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-pnpm-store-path.sh
       - name: Restore pnpm store cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -768,7 +784,22 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 2
-      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - name: Activate Hermit
+        id: activate-hermit
+        continue-on-error: true
+        uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Retry Hermit activation
+        if: steps.activate-hermit.outcome == 'failure'
+        run: ./scripts/ci-activate-hermit.sh
+      - name: Cache sherpa-onnx native archive
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .cache/sherpa-onnx
+          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      - name: Prepare sherpa-onnx native archive
+        run: ./scripts/ci-prepare-sherpa-onnx.sh
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -804,7 +835,7 @@ jobs:
             wget
       - name: Get pnpm store directory
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-pnpm-store-path.sh
       - name: Restore pnpm store cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -868,6 +899,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - name: Install cargo-nextest
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
         with:
@@ -1074,6 +1107,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
@@ -1140,6 +1175,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
@@ -1244,9 +1281,11 @@ jobs:
         with:
           fetch-depth: 2
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - name: Get pnpm store directory
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-pnpm-store-path.sh
       - name: Restore pnpm store cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -1284,6 +1323,8 @@ jobs:
         with:
           fetch-depth: 2
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - name: Compute Hermit cache key
         id: hermit-bin-hash
         run: |
@@ -1345,6 +1386,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - name: Dependency policy
         run: cargo-deny check
 
@@ -1370,6 +1413,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: cross-${{ matrix.target }}
@@ -1413,9 +1458,11 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
       - name: Get pnpm store directory
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        run: ./scripts/ci-pnpm-store-path.sh
       - name: Restore pnpm store cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -1595,6 +1642,9 @@ jobs:
       WEB_RESULT: ${{ needs.web.result }}
       MOBILE_RESULT: ${{ needs.mobile.result }}
       BLOCKS_RESULT: ${{ needs.blocks-live-gate.result }}
+      RAW_RUST: ${{ needs.changes.outputs.raw-rust }}
+      RAW_DESKTOP: ${{ needs.changes.outputs.raw-desktop }}
+      RAW_DESKTOP_RUST: ${{ needs.changes.outputs.raw-desktop-rust }}
       RAW_WEB: ${{ needs.changes.outputs.raw-web }}
       RAW_MOBILE: ${{ needs.changes.outputs.raw-mobile }}
       RAW_BLOCKS: ${{ needs.changes.outputs.raw-blocks }}
@@ -1641,11 +1691,21 @@ jobs:
           fi
 
           require_success "Detect Changed Paths" "$CHANGES_RESULT"
-          require_success "Rust Lint" "$RUST_LINT_RESULT"
-          require_success "Unit Tests" "$UNIT_TESTS_RESULT"
-          require_success "Desktop Core" "$DESKTOP_CORE_RESULT"
-          require_success "Desktop" "$DESKTOP_RESULT"
-          require_success "Relay Suites" "$RELAY_SUITES_RESULT"
+
+          core_relevant=false
+          if [ "$RAW_RUST" = "true" ] || [ "$RAW_DESKTOP" = "true" ] || [ "$RAW_DESKTOP_RUST" = "true" ]; then
+            core_relevant=true
+          fi
+          rust_lint_relevant=false
+          if [ "$RAW_RUST" = "true" ] || [ "$RAW_DESKTOP_RUST" = "true" ]; then
+            rust_lint_relevant=true
+          fi
+
+          require_optional "Rust Lint" "$rust_lint_relevant" "$RUST_LINT_RESULT"
+          require_optional "Unit Tests" "$RAW_RUST" "$UNIT_TESTS_RESULT"
+          require_optional "Desktop Core" "$core_relevant" "$DESKTOP_CORE_RESULT"
+          require_optional "Desktop" "$core_relevant" "$DESKTOP_RESULT"
+          require_optional "Relay Suites" "$RAW_RUST" "$RELAY_SUITES_RESULT"
 
           require_optional "Desktop Integration" "$RAW_DESKTOP_INTEGRATION" "$DESKTOP_INTEGRATION_RESULT"
           require_optional "Windows" "$RAW_WINDOWS" "$WINDOWS_RESULT"

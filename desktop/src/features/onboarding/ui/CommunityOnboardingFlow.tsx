@@ -251,7 +251,13 @@ export function CommunityOnboardingFlow({
         pubkey: identity.pubkey,
         communityScope: relayUrl,
       });
-      if (!result.ok) throw new Error(result.reason);
+      // Public starter channels are optional; initializeStarterChannels still
+      // returns a focus channel when the required private Welcome channel was
+      // created successfully. Only a failure without a focus target should
+      // keep onboarding open.
+      if (!result.ok && !result.focusChannelId) {
+        throw new Error(result.reason);
+      }
       if (result.focusChannelId) {
         // Direct entry: point the router at the Welcome channel *before* the
         // app mounts, so it never lands on Home first. Consume the pending
@@ -611,6 +617,7 @@ export function CommunityOnboardingFlow({
                       onUrlChange={setAvatarUrl}
                       presentation="onboarding-modal"
                       previewName={displayName.trim() || "Your profile"}
+                      showInlineUploadPreview
                       testIdPrefix="community-avatar"
                     />
                   </div>

@@ -11,7 +11,7 @@ import { getIdentity } from "@/shared/api/tauriIdentity";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { resetLeadUpdateListeners } from "@/features/discovery/data/leadUpdates";
-import { resetLinkPreviewTitleCache } from "@/shared/lib/useResolvedLinkPreviews";
+import { resetLinkPreviewMetadataCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import {
   clearAllDrafts,
@@ -20,6 +20,7 @@ import {
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
 import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
+import { resetTaskArtifactOpeningState } from "@/features/workspace/lib/openTaskArtifact";
 import { resetTerminalSessions } from "@/features/workspace/lib/terminalSessions";
 import { resetWebSessions } from "@/features/workspace/lib/webSessions";
 import {
@@ -34,6 +35,7 @@ import { resetBlockActionQueue } from "@/features/blocks/blockActionQueue";
 import { resetInFlightBlockActions } from "@/features/blocks/blockActions";
 import { resetBlockRepository } from "@/features/blocks/blockRepository";
 import { resetCompanyRepositoryState } from "@/features/company/companyRepository";
+import { resetTaskRunRepositoryState } from "@/features/company/taskRunRepository";
 import { resetLedgerRepositoryState } from "@/features/ledger/ledgerRepository";
 import { resetPartyRepositoryState } from "@/features/parties/partyRepository";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
@@ -66,6 +68,7 @@ function resetCommunityState({
   const terminalReset = resetTerminalSessions();
   const webReset = resetWebSessions();
   resetWorkspaceTabs();
+  resetTaskArtifactOpeningState();
   resetChannelSurfaceModes();
   resetAgentObserverStore();
   resetActiveAgentTurnsStore();
@@ -75,6 +78,7 @@ function resetCommunityState({
   resetBlockActionQueue();
   resetBlockRepository();
   resetCompanyRepositoryState();
+  resetTaskRunRepositoryState();
   resetPartyRepositoryState();
   resetLedgerRepositoryState();
   if (resetAvatarState) {
@@ -88,7 +92,7 @@ function resetCommunityState({
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
-  resetLinkPreviewTitleCache();
+  resetLinkPreviewMetadataCache();
   return Promise.all([terminalReset, webReset]).then(() => undefined);
 }
 
@@ -114,6 +118,7 @@ export function useCommunityInit(
   activeCommunity: Community | null,
   communityKey: string,
   isSharedIdentity: boolean,
+  suppressAutoConnect = false,
 ): CommunityInitResult {
   const [result, setResult] = useState<CommunityInitResult>({
     isReady: false,
@@ -148,9 +153,10 @@ export function useCommunityInit(
           // relay as the first community. Public builds retain community
           // selection even when BUZZ_RELAY_URL is overridden at runtime.
           if (
-            isSharedIdentity ||
-            (autoConnectDefaultRelay &&
-              shouldAutoConnectDefaultRelay(defaultRelayUrl))
+            !suppressAutoConnect &&
+            (isSharedIdentity ||
+              (autoConnectDefaultRelay &&
+                shouldAutoConnectDefaultRelay(defaultRelayUrl)))
           ) {
             const identity = await getIdentity();
             if (cancelled) return;
@@ -234,8 +240,6 @@ export function useCommunityInit(
           return;
         }
       }
-      hasInitializedRef.current = true;
-      appliedRelayUrlRef.current = activeCommunity.relayUrl;
 
       // Apply community config to the Tauri backend.
       //
@@ -280,6 +284,13 @@ export function useCommunityInit(
       }
 
       if (!cancelled) {
+        // Mark initialization complete only after the backend accepted this
+        // community. React StrictMode re-runs effects on the initial mount;
+        // setting this before the first await makes that replay look like a
+        // community switch and needlessly tears down native workspace sessions.
+        hasInitializedRef.current = true;
+        appliedRelayUrlRef.current = activeCommunity.relayUrl;
+
         // Refresh relay-derived media state only after the backend has installed
         // this community's relay override. On cold launch, mediaUrl.ts may have
         // eagerly cached the default relay origin before applyCommunity ran;
@@ -323,6 +334,7 @@ export function useCommunityInit(
     activeCommunity?.token,
     activeCommunity?.reposDir,
     isSharedIdentity,
+    suppressAutoConnect,
     communityKey,
   ]);
 

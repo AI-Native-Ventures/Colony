@@ -52,6 +52,8 @@ pub(crate) struct KnownAcpRuntime {
     pub max_tokens_env_var: Option<&'static str>,
     /// Env var for normalizing `context_limit`. `None` when not applicable.
     pub context_limit_env_var: Option<&'static str>,
+    /// Env var for normalizing `max_rounds`. `None` when not applicable.
+    pub max_rounds_env_var: Option<&'static str>,
     /// Normalized field keys that must be set for this harness to function.
     /// Used by the config bridge to mark fields as required in the UI.
     /// Keys match the camelCase names used in `NormalizedConfig` (e.g. "model", "provider").
@@ -87,22 +89,6 @@ mod tests {
 
     #[test]
     fn vendor_metadata_distinguishes_cli_and_adapter_guidance() {
-        let goose = known_acp_runtime_exact("goose").unwrap();
-        assert_eq!(
-            goose.cli_install_instructions_url,
-            "https://goose-docs.ai/docs/getting-started/installation/"
-        );
-        assert!(goose.adapter_install_instructions_url.is_empty());
-        assert!(goose.cli_install_hint.contains("Goose CLI"));
-        assert!(goose
-            .cli_install_commands_windows
-            .iter()
-            .any(|command| command.contains("raw.githubusercontent.com/aaif-goose/goose/main")));
-        assert!(goose
-            .cli_install_commands_windows
-            .iter()
-            .any(|command| command.contains("$env:CONFIGURE='false'")));
-
         let claude = known_acp_runtime_exact("claude").unwrap();
         assert_eq!(
             claude.cli_install_instructions_url,

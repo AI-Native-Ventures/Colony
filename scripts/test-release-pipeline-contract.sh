@@ -43,7 +43,7 @@ function filter(name) {
   return match[0];
 }
 
-requireContract(/^  merge_group:\s*$/m.test(ci), "CI must keep the merge_group trigger");
+requireContract(!/^  merge_group:\s*$/m.test(ci), "CI must not restore the disabled develop merge queue trigger");
 
 const changes = job("changes");
 for (const output of [
@@ -68,8 +68,8 @@ for (const output of [
 }
 for (const output of ["rust", "desktop", "desktop-rust"]) {
   const line = changes.match(new RegExp(`^      ${output}:.*$`, "m"))?.[0] ?? "";
-  requireContract(line.includes("github.event_name == 'merge_group'"), `${output} must be forced for merge_group`);
-  requireContract(line.includes("github.base_ref == 'main'"), `${output} must be forced for main promotion PRs`);
+  requireContract(!line.includes("github.event_name == 'merge_group'"), `${output} must not be forced for a disabled merge queue`);
+  requireContract(!line.includes("github.base_ref == 'main'"), `${output} must not be forced for main promotion PRs`);
   requireContract(line.includes("refs/heads/release"), `${output} must preserve full release push coverage`);
 }
 
@@ -150,6 +150,14 @@ requireContract(promotion.includes("github.base_ref == 'main'"), "Promotion Gate
 requireContract(promotion.includes('HEAD_REF: ${{ github.head_ref }}'), "Promotion Gate must inspect the head branch");
 requireContract(promotion.includes('"$HEAD_REF" != "develop"'), "Promotion Gate must reject heads other than develop");
 requireContract(promotion.includes('true|false)'), "Promotion Gate must reject missing or malformed path relevance");
+for (const output of ["RAW_RUST", "RAW_DESKTOP", "RAW_DESKTOP_RUST"]) {
+  requireContract(promotion.includes(`${output}: \${{ needs.changes.outputs.raw-`), `Promotion Gate must receive '${output}' path relevance`);
+}
+requireContract(promotion.includes('require_optional "Rust Lint"'), "Promotion Gate must scope Rust Lint to the promotion diff");
+requireContract(promotion.includes('require_optional "Unit Tests"'), "Promotion Gate must scope Unit Tests to the promotion diff");
+requireContract(promotion.includes('require_optional "Desktop Core"'), "Promotion Gate must scope Desktop Core to the promotion diff");
+requireContract(promotion.includes('require_optional "Desktop"'), "Promotion Gate must scope Desktop to the promotion diff");
+requireContract(promotion.includes('require_optional "Relay Suites"'), "Promotion Gate must scope Relay Suites to the promotion diff");
 
 for (const dependency of [
   "changes",
@@ -228,14 +236,14 @@ expect_mutation_failure() {
 
 noop=':'
 expect_mutation_failure \
-  "merge_group trigger removed" \
-  "sed -i.bak '/^  merge_group:$/d' '$tmp/ci.yml'" "$noop" "$noop"
+  "merge_group trigger restored" \
+  "perl -0pi -e 's/^on:$/on:\\n  merge_group:/m' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "core push rerun restored" \
   "perl -0pi -e \"s/needs\\.changes\\.outputs\\.core-enabled == 'true'/github.event_name == 'push'/\" '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
-  "secondary merge_group routing restored" \
-  "perl -0pi -e \"s/needs\\.changes\\.outputs\\.secondary-enabled == 'true'/github.event_name == 'merge_group'/\" '$tmp/ci.yml'" "$noop" "$noop"
+  "promotion core forcing restored" \
+  "perl -0pi -e \"s/steps\\.filter\\.outputs\\.rust/github.base_ref == 'main' || steps.filter.outputs.rust/\" '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "promotion head assertion removed" \
   "perl -0pi -e 's/^.*\"\\\$HEAD_REF\" != \"develop\".*\\n//m' '$tmp/ci.yml'" "$noop" "$noop"
@@ -243,8 +251,8 @@ expect_mutation_failure \
   "non-promotion check renamed to the required context" \
   "perl -0pi -e 's/^    name: .*Promotion Gate.*$/    name: Promotion Gate/m' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
-  "required promotion dependency removed" \
-  "perl -0pi -e 's/\\n      - rust-lint\\n/\\n/' '$tmp/ci.yml'" "$noop" "$noop"
+  "promotion Rust relevance removed" \
+  "sed -i.bak '/require_optional \"Rust Lint\"/d' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "tag promotion verification removed" \
   "$noop" "sed -i.bak '/Verify Promotion Gate/d' '$tmp/auto-tag.yml'" "$noop"

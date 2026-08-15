@@ -18,6 +18,8 @@ import {
 } from "./agentProposal.ts";
 import {
   agentProposalExecutionKey,
+  pendingAcknowledgedAgentProposalActions,
+  rememberAcknowledgedAgentProposalAction,
   isAuthoritativeAgentProposalReceipt,
   runAgentProposalActionOnce,
   validateAgentProposalActionContext,
@@ -449,6 +451,16 @@ test("broker permits the next queued action after a non-resolving failure", asyn
   assert.equal(await first, "failed");
   assert.equal(await second, "created");
   assert.deepEqual(order, ["failed", "retry"]);
+});
+
+test("broker retains locally acknowledged actions until a broker can consume them", () => {
+  const event = { id: "locally-acknowledged-action" };
+  rememberAcknowledgedAgentProposalAction({ event });
+  assert.ok(
+    pendingAcknowledgedAgentProposalActions().some(
+      (item) => item.event.id === event.id,
+    ),
+  );
 });
 
 test("only the owner processor's valid same-channel receipt is authoritative", () => {

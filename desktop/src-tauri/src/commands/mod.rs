@@ -1,3 +1,4 @@
+mod agent_access;
 mod agent_auth;
 mod agent_config;
 mod agent_creation;
@@ -37,10 +38,14 @@ pub(crate) mod media;
 mod media_animated;
 mod media_download;
 mod media_gif;
+mod media_raw;
 mod media_snapshot_png;
 mod media_transcode;
+mod media_upload_progress;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
+#[cfg(feature = "mesh-llm")]
+pub(crate) mod mesh_readiness;
 mod messages;
 mod notifications;
 mod observer_archive;
@@ -64,6 +69,7 @@ mod qr_download;
 mod relay_members;
 mod relay_reconnect;
 mod social;
+mod task_artifacts;
 mod team_snapshot;
 mod teams;
 mod terminal;
@@ -75,6 +81,7 @@ mod workflows;
 mod workspace;
 pub mod workspace_files;
 
+pub use agent_access::*;
 pub use agent_auth::*;
 pub use agent_config::*;
 pub use agent_creation::*;
@@ -102,6 +109,7 @@ pub use legacy_storage::*;
 pub use link_preview::*;
 pub use media::*;
 pub use media_download::*;
+pub use media_raw::*;
 #[cfg(feature = "mesh-llm")]
 pub use mesh_llm::*;
 pub use messages::*;
@@ -123,6 +131,7 @@ pub use qr_download::*;
 pub use relay_members::*;
 pub use relay_reconnect::*;
 pub use social::*;
+pub use task_artifacts::*;
 pub use team_snapshot::*;
 pub use teams::*;
 pub use terminal::*;

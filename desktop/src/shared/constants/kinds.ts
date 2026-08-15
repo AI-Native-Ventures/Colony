@@ -32,6 +32,15 @@ export const KIND_JOB_PROGRESS = 43003;
 export const KIND_JOB_RESULT = 43004;
 export const KIND_JOB_CANCEL = 43005;
 export const KIND_JOB_ERROR = 43006;
+// Durable employee-job protocol. The relay arbitrates 43010-43014 into the
+// parameterized 30191 head; Task-linked heads carry lease/checkpoint/delivery
+// truth for the task-thread surface.
+export const KIND_JOB_HEAD = 30191;
+export const KIND_JOB_FILING = 43010;
+export const KIND_JOB_CLAIM = 43011;
+export const KIND_JOB_HEARTBEAT = 43012;
+export const KIND_JOB_OUTCOME = 43013;
+export const KIND_JOB_CHECKPOINT = 43014;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
@@ -50,6 +59,7 @@ export const KIND_CHANNEL_SECTIONS = 30078;
 export const KIND_CHANNEL_MUTES = 30078;
 export const KIND_CHANNEL_STARS = 30078;
 export const KIND_CHANNEL_SORT = 30078;
+export const KIND_COMMUNITY_THEME = 30078;
 // NIP-33 persona/team/managed-agent projection events (d-tag keyed). Published
 // backend-side as secrets-stripped snapshots; the inbound sync hook subscribes
 // to all three to patch local records. Mirror of buzz-core's KIND_PERSONA etc.
@@ -107,6 +117,8 @@ export const KIND_AGENT_TURN_METRIC = 44200;
 export const KIND_EVENT_REMINDER = 30300;
 export const KIND_REPO_ANNOUNCEMENT = 30617;
 export const KIND_REPO_STATE = 30618;
+// NIP-MP: project grouping above NIP-34 repositories.
+export const KIND_PROJECT_ANNOUNCEMENT = 30621;
 export const KIND_GIT_PATCH = 1617;
 export const KIND_GIT_PULL_REQUEST = 1618;
 export const KIND_GIT_PR_UPDATE = 1619;

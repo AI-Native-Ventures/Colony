@@ -488,6 +488,12 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_MODEL")]
     pub model: Option<String>,
 
+    /// LLM provider the model belongs to (e.g. `"deepseek"`, `"anthropic"`).
+    /// Used to qualify an unqualified model id against provider-prefixed ACP
+    /// catalogs (`provider/model`), matching Oh My Pi / OpenCode conventions.
+    #[arg(long, env = "BUZZ_ACP_PROVIDER")]
+    pub provider: Option<String>,
+
     /// Title for the agent's ACP sessions, passed out-of-band in `session/new`
     /// `_meta`. Adapters that recognize it name the session after this value;
     /// others ignore it. Never enters the prompt.
@@ -539,9 +545,21 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_RELAY_OBSERVER", default_value_t = false)]
     pub relay_observer: bool,
 
+    /// Exit after this many seconds with no dispatched events and no turn in flight.
+    /// 0 disables inactivity self-termination.
+    #[arg(long, env = "BUZZ_ACP_EXIT_AFTER_INACTIVITY", default_value_t = 0)]
+    pub exit_after_inactivity: u64,
+
     /// Connect and subscribe before starting the ACP/LLM subprocess pool.
     #[arg(long, env = "BUZZ_ACP_LAZY_POOL", default_value_t = false)]
     pub lazy_pool: bool,
+
+    /// Tear the woken pool back down to the lazy empty-slot state after this
+    /// many seconds with no dispatched turn in flight and an empty queue,
+    /// releasing worker subprocesses until the next accepted event re-wakes.
+    /// Requires `--lazy-pool`; ignored otherwise. 0 disables idle re-sleep.
+    #[arg(long, env = "BUZZ_ACP_IDLE_POOL_SLEEP", default_value_t = 0)]
+    pub idle_pool_sleep: u64,
 }
 
 impl fmt::Debug for CliArgs {
@@ -632,6 +650,10 @@ pub struct Config {
     pub memory_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
+    /// LLM provider the desired model belongs to. Used to qualify an
+    /// unqualified model id against provider-prefixed ACP catalogs
+    /// (`provider/model`), matching Oh My Pi / OpenCode conventions.
+    pub provider: Option<String>,
     /// Sanitized session title, sent as `_meta.sessionTitle` on `session/new`.
     /// `None` when unset or when the configured value sanitized to empty.
     pub session_title: Option<String>,
@@ -675,8 +697,14 @@ pub struct Config {
     pub has_generated_codex_config: bool,
     /// Whether to publish encrypted observer frames through the relay.
     pub relay_observer: bool,
+    /// Seconds without dispatched events before an idle harness exits. 0 = disabled.
+    pub exit_after_inactivity_secs: u64,
     /// Whether ACP/LLM subprocess initialization is deferred until accepted work arrives.
     pub lazy_pool: bool,
+    /// Seconds with no dispatched turn in flight and an empty queue before a
+    /// woken lazy pool is torn back down to the empty-slot state. 0 = disabled.
+    /// Only meaningful when `lazy_pool` is true.
+    pub idle_pool_sleep_secs: u64,
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
     /// Replaces the old REST-based owner lookup.
     pub agent_owner: Option<String>,
@@ -838,7 +866,8 @@ pub(crate) fn normalize_agent_command_identity(command: &str) -> String {
 
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_agent_command_identity(command).as_str() {
-        "goose" => Some(vec!["acp".to_string()]),
+        "omp" | "opencode" => Some(vec!["acp".to_string()]),
+        "prime-agent" => Some(vec!["--mode".to_string(), "acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
@@ -1260,6 +1289,7 @@ impl Config {
             typing_enabled: !args.no_typing,
             memory_enabled: args.memory && !args.no_memory,
             model,
+            provider: args.provider,
             session_title: args
                 .session_title
                 .as_deref()
@@ -1271,7 +1301,9 @@ impl Config {
             persona_env_vars,
             has_generated_codex_config,
             relay_observer: args.relay_observer,
+            exit_after_inactivity_secs: args.exit_after_inactivity,
             lazy_pool: args.lazy_pool,
+            idle_pool_sleep_secs: args.idle_pool_sleep,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
@@ -1631,6 +1663,7 @@ mod tests {
             typing_enabled: true,
             memory_enabled: true,
             model: None,
+            provider: None,
             session_title: None,
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
@@ -1639,7 +1672,9 @@ mod tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            exit_after_inactivity_secs: 0,
             lazy_pool: false,
+            idle_pool_sleep_secs: 0,
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
@@ -1751,9 +1786,14 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_goose_args_to_acp() {
-        assert_eq!(normalize_agent_args("goose", Vec::new()), vec!["acp"]);
-        assert_eq!(normalize_agent_args("goose", vec!["".into()]), vec!["acp"]);
+    fn normalizes_pi_family_args_to_acp() {
+        assert_eq!(normalize_agent_args("omp", Vec::new()), vec!["acp"]);
+        assert_eq!(normalize_agent_args("omp", vec!["".into()]), vec!["acp"]);
+        assert_eq!(normalize_agent_args("opencode", Vec::new()), vec!["acp"]);
+        assert_eq!(
+            normalize_agent_args("opencode", vec!["".into()]),
+            vec!["acp"]
+        );
     }
 
     #[test]

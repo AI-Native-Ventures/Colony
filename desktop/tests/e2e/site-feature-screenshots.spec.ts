@@ -272,10 +272,12 @@ test("capture: the company channel hero shot", async ({ page }) => {
         });
       }
 
-      const channels = (await invoke("get_channels", {})) as Array<{
-        id: string;
-        name: string;
-      }>;
+      const channelResponse = (await invoke("get_channels", {})) as
+        | Array<{ id: string; name: string }>
+        | { channels?: Array<{ id: string; name: string }> };
+      const channels = Array.isArray(channelResponse)
+        ? channelResponse
+        : (channelResponse.channels ?? []);
       const scaffolding = new Set([
         "all-replies",
         "deep-history",

@@ -6,6 +6,7 @@ import {
   CornerUpLeft,
   EllipsisVertical,
   Flag,
+  Globe2,
   Link2,
   MailCheck,
   MailOpen,
@@ -14,8 +15,14 @@ import {
   Trash2,
 } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 
 import { buildMessageLink } from "@/features/messages/lib/messageLink";
+import {
+  decideWorkspaceUrlOpening,
+  openUrlInWorkspace,
+} from "@/features/workspace/lib/openUrlInWorkspace";
+import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
 import { getThreadReference } from "@/features/messages/lib/threading";
@@ -35,17 +42,9 @@ import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { emojiDisplayName } from "@/shared/lib/emojiName";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { KIND_HUDDLE_STARTED } from "@/shared/constants/kinds";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
+import { HashArrowIn } from "@/shared/ui/icons";
+import { DeleteMessageConfirmDialog } from "./DeleteMessageConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,7 +68,9 @@ function MoreActionsMenu({
   onMarkUnread,
   onMarkRead,
   onOpenChange,
+  onOpenInWorkspace,
   onRemindLater,
+  onSendToChannel,
   onUnfollowThread,
   open,
   isFollowingThread,
@@ -85,7 +86,9 @@ function MoreActionsMenu({
   onMarkUnread?: (message: TimelineMessage) => void;
   onMarkRead?: (message: TimelineMessage) => void;
   onOpenChange: (open: boolean) => void;
+  onOpenInWorkspace?: () => void;
   onRemindLater?: (message: TimelineMessage) => void;
+  onSendToChannel?: (message: TimelineMessage) => Promise<void>;
   onUnfollowThread?: (message: TimelineMessage) => void;
   open: boolean;
   isFollowingThread?: boolean;
@@ -211,6 +214,16 @@ function MoreActionsMenu({
             </DropdownMenuItem>
           ) : null}
 
+          {onOpenInWorkspace ? (
+            <DropdownMenuItem
+              data-testid={`open-workspace-${message.id}`}
+              onClick={onOpenInWorkspace}
+            >
+              <Globe2 className="h-4 w-4" />
+              Open in workspace
+            </DropdownMenuItem>
+          ) : null}
+
           {onRemindLater ? (
             <DropdownMenuItem
               onClick={() => {
@@ -219,6 +232,31 @@ function MoreActionsMenu({
             >
               <Clock className="h-4 w-4" />
               Remind me later
+            </DropdownMenuItem>
+          ) : null}
+
+          {onSendToChannel ? (
+            <DropdownMenuItem
+              aria-label="Send to channel"
+              data-testid={`send-to-channel-${message.id}`}
+              onClick={() => {
+                void onSendToChannel(message)
+                  .then(() => toast.success("Sent to channel"))
+                  .catch((error) => {
+                    console.error(
+                      "Failed to send thread message to channel",
+                      error,
+                    );
+                    toast.error("Couldn't send to channel");
+                  });
+              }}
+            >
+              <HashArrowIn
+                aria-hidden="true"
+                className="h-4 w-4"
+                data-testid="send-to-channel-icon"
+              />
+              Send to channel
             </DropdownMenuItem>
           ) : null}
 
@@ -277,35 +315,11 @@ function MoreActionsMenu({
       </DropdownMenu>
 
       {onDelete ? (
-        <AlertDialog
+        <DeleteMessageConfirmDialog
+          onConfirm={() => onDelete(message)}
           onOpenChange={setIsDeleteDialogOpen}
           open={isDeleteDialogOpen}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete message?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will permanently delete this message and cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel asChild>
-                <Button type="button" variant="outline">
-                  Cancel
-                </Button>
-              </AlertDialogCancel>
-              <AlertDialogAction asChild>
-                <Button
-                  onClick={() => onDelete(message)}
-                  type="button"
-                  variant="destructive"
-                >
-                  Delete
-                </Button>
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        />
       ) : null}
 
       {canReport ? (
@@ -377,6 +391,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   onReactionSelect,
   onRemindLater,
   onReply,
+  onSendToChannel,
   onUnfollowThread,
   reactionErrorMessage = null,
   reactions,
@@ -396,6 +411,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   onReactionSelect?: (emoji: string) => Promise<void>;
   onRemindLater?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
+  onSendToChannel?: (message: TimelineMessage) => Promise<void>;
   onUnfollowThread?: (message: TimelineMessage) => void;
   reactionErrorMessage?: string | null;
   reactions: TimelineReaction[];
@@ -422,6 +438,21 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   );
   const hasReplyAction = Boolean(onReply);
   const hasReactionAction = Boolean(onReactionSelect);
+  const workspaceUrlDecision =
+    channelId && !message.pending
+      ? decideWorkspaceUrlOpening(
+          message.body,
+          (kind) => getTabKind(kind) !== undefined,
+        )
+      : null;
+  const handleOpenInWorkspace = React.useCallback(() => {
+    if (!channelId) return;
+    const result = openUrlInWorkspace({
+      body: message.body,
+      channelId,
+    });
+    if (!result.ok) toast.error(result.message);
+  }, [channelId, message.body]);
 
   const hasMoreMenuActions =
     Boolean(onEdit) ||
@@ -431,6 +462,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
     Boolean(onFollowThread) ||
     Boolean(onUnfollowThread) ||
     Boolean(onRemindLater) ||
+    Boolean(onSendToChannel) ||
     !message.pending;
 
   const wouldAddReaction = React.useCallback(
@@ -577,7 +609,13 @@ export const MessageActionBar = React.memo(function MessageActionBar({
               onMarkUnread={onMarkUnread}
               onMarkRead={onMarkRead}
               onOpenChange={setIsDropdownOpen}
+              onOpenInWorkspace={
+                workspaceUrlDecision?.supported
+                  ? handleOpenInWorkspace
+                  : undefined
+              }
               onRemindLater={onRemindLater}
+              onSendToChannel={onSendToChannel}
               onUnfollowThread={onUnfollowThread}
               open={isDropdownOpen}
               isFollowingThread={isFollowingThread}

@@ -314,6 +314,31 @@ export function welcomeStarterRuntimeUpdate(
 }
 
 /**
+ * Whether a Welcome teammate's access settings match what this build expects.
+ * Colony provisions the Chief of Staff owner-only; teammates arrive only after
+ * blueprint approval and share the same owner, so the owner-only branch is the
+ * live path and the allowlist branch covers pre-approval-era installs.
+ */
+export function welcomeTeammateHasExpectedAccess(
+  teammate: ManagedAgent,
+  leadPubkey: string,
+  agentAccessOwnerOnly: boolean,
+) {
+  if (agentAccessOwnerOnly) {
+    return (
+      teammate.respondTo === "owner-only" &&
+      teammate.respondToAllowlist.length === 0
+    );
+  }
+  return (
+    teammate.respondTo === "allowlist" &&
+    teammate.respondToAllowlist.some(
+      (pubkey) => normalizePubkey(pubkey) === normalizePubkey(leadPubkey),
+    )
+  );
+}
+
+/**
  * Ensure the complete built-in Welcome Team is ready for kickoff.
  * The team itself is Rust-seeded; this only activates personas, creates any
  * missing relay-scoped instances, and adds all three to Welcome as bots.

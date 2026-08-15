@@ -250,6 +250,9 @@ enum Cmd {
     /// Announce and discover git repositories (NIP-34)
     #[command(subcommand)]
     Repos(ReposCmd),
+    /// Create and manage multi-repo projects (NIP-MP)
+    #[command(subcommand)]
+    Projects(ProjectsCmd),
     /// Send, get, list, and set status on git patches (NIP-34)
     #[command(subcommand)]
     Patches(PatchesCmd),
@@ -286,7 +289,7 @@ enum Cmd {
     /// Hire and list the workspace's employees (kinds 9045/30190)
     #[command(subcommand)]
     Employees(EmployeesCmd),
-    /// File, claim, heartbeat, and finish employee jobs (kinds 43010-43013)
+    /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
 }
@@ -377,6 +380,12 @@ buzz agents archive <PUBKEY> --reason bot-rebuilt --replaced-by <NEW_PUBKEY>"
         /// Optional human-readable note (not parsed for authorization)
         #[arg(long, default_value = "")]
         content: String,
+        /// Allow sending without owner-auth attestation after extraction fails
+        /// (relay-admin path). Use only when your key is a relay admin; ordinary
+        /// owners do not need this flag. Without it, auth-extraction failure after
+        /// one automatic retry is a hard error rather than a silent bare send.
+        #[arg(long, default_value_t = false)]
+        admin: bool,
     },
     /// Submit a NIP-IA unarchive request for an identity (kind 9036)
     #[command(after_help = "Examples:\n  \
@@ -390,6 +399,12 @@ buzz agents unarchive <PUBKEY> --reason returned")]
         /// Optional human-readable note (not parsed for authorization)
         #[arg(long, default_value = "")]
         content: String,
+        /// Allow sending without owner-auth attestation after extraction fails
+        /// (relay-admin path). Use only when your key is a relay admin; ordinary
+        /// owners do not need this flag. Without it, auth-extraction failure after
+        /// one automatic retry is a hard error rather than a silent bare send.
+        #[arg(long, default_value_t = false)]
+        admin: bool,
     },
     /// Read the relay's current NIP-IA archive snapshot (kind 13535)
     #[command(
@@ -1327,7 +1342,10 @@ pub enum ChannelsCmd {
         #[arg(long, value_name = "PATH")]
         templates_file: Option<String>,
     },
-    /// Update channel name, description, or ephemeral TTL
+    /// Update channel name, description, visibility, or ephemeral TTL
+    #[command(
+        after_help = "Examples:\n  buzz channels update --channel <uuid> --name general\n  buzz channels update --channel <uuid> --visibility open\n  buzz channels update --channel <uuid> --visibility private"
+    )]
     Update {
         /// Channel UUID
         #[arg(long)]
@@ -1338,6 +1356,9 @@ pub enum ChannelsCmd {
         /// New channel description
         #[arg(long)]
         description: Option<String>,
+        /// New channel visibility
+        #[arg(long, value_enum)]
+        visibility: Option<ChannelVisibility>,
         /// Make the channel ephemeral (or change its lifetime): seconds until
         /// the relay archives it after the last message. Conflicts with --no-ttl.
         #[arg(long, value_name = "SECONDS", conflicts_with = "no_ttl")]
@@ -2022,6 +2043,121 @@ pub enum RepoPushRole {
     Member,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum ProjectVisibility {
+    /// Project appears in public listings (default).
+    Listed,
+    /// Project is hidden from public listings.
+    Unlisted,
+}
+
+impl ProjectVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Listed => "listed",
+            Self::Unlisted => "unlisted",
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub enum ProjectsCmd {
+    /// Create a new multi-repo project (NIP-MP kind:30621)
+    ///
+    /// Requires at least one --repo. Fails with Conflict if the project already exists.
+    Create {
+        /// Project identifier (slug), up to 1024 bytes
+        slug: String,
+        /// Member repository coordinate: bare Buzz repo id (e.g. `buzz`) or full
+        /// `30617:<owner-hex>:<repo-d>` for cross-owner or colon-bearing repo ids.
+        /// At least one --repo is required.
+        #[arg(long = "repo", required = true)]
+        repo: Vec<String>,
+        /// Display name (≤256 bytes)
+        #[arg(long)]
+        name: Option<String>,
+        /// Description (≤2048 bytes)
+        #[arg(long)]
+        description: Option<String>,
+        /// Associated Buzz channel UUID
+        #[arg(long)]
+        channel: Option<String>,
+        /// Visibility: `listed` (default) or `unlisted`
+        #[arg(long)]
+        visibility: Option<ProjectVisibility>,
+    },
+    /// Get a project by slug
+    Get {
+        /// Project slug
+        slug: String,
+        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        #[arg(long)]
+        owner: Option<String>,
+    },
+    /// List projects
+    List {
+        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+    /// Add one or more member repositories to a project
+    #[command(name = "add-repo")]
+    AddRepo {
+        /// Project slug
+        slug: String,
+        /// Member repository coordinate (bare id or full `30617:<owner-hex>:<repo-d>`)
+        #[arg(long = "repo", required = true)]
+        repo: Vec<String>,
+    },
+    /// Remove one or more member repositories from a project
+    #[command(name = "remove-repo")]
+    RemoveRepo {
+        /// Project slug
+        slug: String,
+        /// Member repository coordinate to remove (bare id or full `30617:<owner-hex>:<repo-d>`)
+        #[arg(long = "repo", required = true)]
+        repo: Vec<String>,
+    },
+    /// Update project metadata (at least one setter or clearer required)
+    #[command(group = clap::ArgGroup::new("mutation").required(true).multiple(true))]
+    Update {
+        /// Project slug
+        slug: String,
+        /// Set the display name
+        #[arg(long, group = "mutation")]
+        name: Option<String>,
+        /// Remove the display name
+        #[arg(long, group = "mutation", conflicts_with = "name")]
+        clear_name: bool,
+        /// Set the description
+        #[arg(long, group = "mutation")]
+        description: Option<String>,
+        /// Remove the description
+        #[arg(long, group = "mutation", conflicts_with = "description")]
+        clear_description: bool,
+        /// Set the associated Buzz channel UUID
+        #[arg(long, group = "mutation")]
+        channel: Option<String>,
+        /// Remove the associated channel
+        #[arg(long, group = "mutation", conflicts_with = "channel")]
+        clear_channel: bool,
+        /// Set visibility: `listed` or `unlisted`
+        #[arg(long, group = "mutation")]
+        visibility: Option<ProjectVisibility>,
+        /// Remove the visibility tag (absence defaults to `listed`)
+        #[arg(long, group = "mutation", conflicts_with = "visibility")]
+        clear_visibility: bool,
+    },
+    /// Delete a project (head-based tombstone; verified after submit)
+    Delete {
+        /// Project slug
+        slug: String,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum PatchesCmd {
     /// Send a git patch (NIP-34 kind:1617)
@@ -2644,7 +2780,7 @@ pub enum EmployeesCmd {
 }
 
 /// Subcommands for `buzz jobs`: the queue an employee works from (kinds
-/// 43010-43013). Filing creates work; claiming takes an exclusive lease on
+/// 43010-43014). Filing creates work; claiming takes an exclusive lease on
 /// it; heartbeating holds that lease; finishing reports back. A lease nobody
 /// renews lapses and the job returns to the queue, which is how work survives
 /// the machine running it dying. See `docs/design/company-employees.html`.
@@ -2670,6 +2806,9 @@ pub enum JobsCmd {
         /// delegating employee's.
         #[arg(long)]
         parent: Option<String>,
+        /// Canonical Company Task this durable run executes
+        #[arg(long)]
+        task: Option<String>,
     },
     /// Take the lease on a job (kind 43011). Only the job's own human may
     /// claim it. Read the head afterwards to find out whether you won.
@@ -2690,6 +2829,29 @@ pub enum JobsCmd {
         #[arg(long)]
         attempt: i32,
     },
+    /// Persist resumable progress under the current fenced lease (kind
+    /// 43014). A later lease holder receives the newest checkpoint in the
+    /// canonical job head.
+    Checkpoint {
+        /// The job id (64 hex characters)
+        #[arg(long)]
+        job: String,
+        /// Current lease attempt from the canonical head
+        #[arg(long)]
+        attempt: i32,
+        /// Strictly increasing checkpoint sequence
+        #[arg(long)]
+        sequence: i64,
+        /// Work completed and the next resumable step
+        #[arg(long)]
+        summary: String,
+        /// Optional non-secret worker resume cursor
+        #[arg(long)]
+        resume_token: Option<String>,
+        /// Optional completion estimate from 0 through 100
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+        progress: Option<u8>,
+    },
     /// Report a job finished (kind 43013). Only the current lease holder may.
     Done {
         /// The job id (64 hex characters)
@@ -2707,6 +2869,10 @@ pub enum JobsCmd {
         /// Model that executed the job; stamped on the head
         #[arg(long)]
         model: Option<String>,
+        /// Delivery evidence as KIND:REF. Repeat for supporting artifacts.
+        /// Task-linked jobs require at least one artifact.
+        #[arg(long = "artifact")]
+        artifacts: Vec<String>,
     },
     /// Report a job failed (kind 43013). Only the current lease holder may.
     Fail {
@@ -2969,6 +3135,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Social(sub) => commands::social::dispatch(sub, &client).await,
         Cmd::Notes(sub) => commands::notes::dispatch(sub, &client).await,
         Cmd::Repos(sub) => commands::repos::dispatch(sub, &client).await,
+        Cmd::Projects(sub) => commands::projects::dispatch(sub, &client).await,
         Cmd::Patches(sub) => commands::patches::dispatch(sub, &client).await,
         Cmd::Issues(sub) => commands::issues::dispatch(sub, &client).await,
         Cmd::Pr(sub) => commands::pr::dispatch(sub, &client).await,
@@ -3494,6 +3661,7 @@ mod tests {
             "parties",
             "patches",
             "pr",
+            "projects",
             "reactions",
             "repos",
             "social",

@@ -1,4 +1,5 @@
 import { listen } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
 
 type TtsSpeakerActivity = { pubkey: string; level: number };

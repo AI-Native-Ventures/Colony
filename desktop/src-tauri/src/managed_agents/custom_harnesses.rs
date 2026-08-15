@@ -268,7 +268,7 @@ pub(crate) fn registry_test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 /// Thread-safe registry of non-builtin (preset + custom) harness definitions,
 /// populated on every `discover_acp_runtimes_from` call and queried at spawn time.
-fn loaded_harness_registry() -> &'static RwLock<Vec<Arc<HarnessDefinition>>> {
+pub(super) fn loaded_harness_registry() -> &'static RwLock<Vec<Arc<HarnessDefinition>>> {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<RwLock<Vec<Arc<HarnessDefinition>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| RwLock::new(Vec::new()))
@@ -1137,8 +1137,8 @@ mod tests {
         );
         assert_eq!(found.unwrap().command, "my-custom-bin");
 
-        // At least one preset entry must be in the registry (e.g. "cursor").
-        let preset = lookup_loaded_harness_by_id("cursor");
+        // At least one preset entry must be in the registry (e.g. "omp").
+        let preset = lookup_loaded_harness_by_id("omp");
         assert!(
             preset.is_some(),
             "warm registry must contain preset entries"
@@ -1150,9 +1150,9 @@ mod tests {
     fn warm_registry_with_no_custom_dir_loads_presets_only() {
         let _lock = registry_test_lock();
         warm_harness_registry_from_dir(None);
-        // At least the "cursor" preset must be present.
+        // At least the "omp" preset must be present.
         assert!(
-            lookup_loaded_harness_by_id("cursor").is_some(),
+            lookup_loaded_harness_by_id("omp").is_some(),
             "presets must be reachable even without a custom dir"
         );
     }

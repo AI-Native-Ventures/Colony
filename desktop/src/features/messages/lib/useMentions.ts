@@ -16,7 +16,8 @@ import {
   coalesceAutocompleteCandidatesByKey,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
-  isAgentIdentityInManagedList,
+  isAgentIdentityInAllowedList,
+  isAgentMentionChannelType,
   shouldHideAgentFromMentions,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import {
@@ -202,10 +203,16 @@ export function useMentions(
     () => getSharedChannelIds(channelsQuery.data),
     [channelsQuery.data],
   );
+  const mentionChannelId = isAgentMentionChannelType(options?.channelType)
+    ? channelId
+    : null;
   const mentionableAgentPubkeys = React.useMemo(
     () =>
       getMentionableAgentPubkeys({
         currentPubkey,
+        eligibilityScope: mentionChannelId
+          ? { type: "channel", channelId: mentionChannelId }
+          : { type: "managed-only" },
         managedAgentPubkeys,
         relayAgents: relayAgentsQuery.data,
         sharedChannelIds,
@@ -213,6 +220,7 @@ export function useMentions(
     [
       currentPubkey,
       managedAgentPubkeys,
+      mentionChannelId,
       relayAgentsQuery.data,
       sharedChannelIds,
     ],
@@ -258,7 +266,7 @@ export function useMentions(
       if (isArchivedDiscovery(pubkey)) {
         return;
       }
-      if (!isAgentIdentityInManagedList(candidate, managedAgentPubkeys)) {
+      if (!isAgentIdentityInAllowedList(candidate, mentionableAgentPubkeys)) {
         return;
       }
       if (
@@ -424,7 +432,6 @@ export function useMentions(
     managedAgentNamesByPubkey,
     managedAgentPersonaIds,
     managedAgentPersonaIdsByPubkey,
-    managedAgentPubkeys,
     managedAgentsQuery.data,
     memberPubkeys,
     members,

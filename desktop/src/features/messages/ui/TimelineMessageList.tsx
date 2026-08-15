@@ -32,6 +32,10 @@ import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManag
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import {
+  StickyDayDividerOverlay,
+  useStickyDayDivider,
+} from "./useStickyDayDivider";
 import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
@@ -62,6 +66,10 @@ type TimelineMessageListProps = {
   firstUnreadMessageId?: string | null;
   followThreadById?: (rootId: string) => void;
   highlightedMessageId?: string | null;
+  /** Event id of the thread whose panel is open; its root message row is
+   *  highlighted with the accent tint so the open thread is visible from the
+   *  channel side. */
+  openThreadHeadId?: string | null;
   isFollowingThreadById?: (rootId: string) => boolean;
   isMessageUnreadById?: (messageId: string) => boolean;
   entranceMessageId?: string | null;
@@ -136,6 +144,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   firstUnreadMessageId = null,
   followThreadById,
   highlightedMessageId = null,
+  openThreadHeadId = null,
   huddleMemberPubkeys,
   huddleMemberPubkeysPending = false,
   isFollowingThreadById,
@@ -274,6 +283,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               followThreadById={followThreadById}
               footer={messageFooters?.[item.entry.message.id] ?? null}
               highlightedMessageId={highlightedMessageId}
+              openThreadHeadId={openThreadHeadId}
               huddleMemberPubkeys={huddleMemberPubkeys}
               huddleMemberPubkeysPending={huddleMemberPubkeysPending}
               hideAgentAccessBadges={hideAgentAccessBadges}
@@ -314,6 +324,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       currentPubkey,
       followThreadById,
       highlightedMessageId,
+      openThreadHeadId,
       huddleMemberPubkeys,
       huddleMemberPubkeysPending,
       hideAgentAccessBadges,
@@ -388,10 +399,13 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   );
 });
 
-function timelineItemMessageId(item: TimelineNonDayItem): string | null {
+function timelineItemMessageIds(item: TimelineNonDayItem): string[] {
+  if (item.kind === "system-group") {
+    return item.entries.map((entry) => entry.message.id);
+  }
   return item.kind === "message" || item.kind === "system"
-    ? item.entry.message.id
-    : null;
+    ? [item.entry.message.id]
+    : [];
 }
 
 type VirtualizedTimelineRowsProps = {
@@ -456,6 +470,10 @@ function VirtualizedTimelineRows({
     typeof window === "undefined" ? 1_000 : window.innerHeight,
   );
   const hasInitialPositionedRef = React.useRef(false);
+  const lastReaderScrollOffsetRef = React.useRef<number | null>(null);
+  const programmaticBottomSettleRef = React.useRef(false);
+  const programmaticScrollRef = React.useRef(false);
+  const userScrollGestureRef = React.useRef(false);
   const estimateCallCountRef = React.useRef(0);
   const estimateItemSize = React.useCallback(
     (item: VirtualizedTimelineItem) => {
@@ -481,8 +499,11 @@ function VirtualizedTimelineRows({
     [dayGroups, hideDayDividers, historyExhausted, leadingContent],
   );
   const keys = React.useMemo(() => items.map(virtualizedItemKey), [items]);
+  const { pinnedDay, pinnedDayLabelRef, updatePinnedDayLabel } =
+    useStickyDayDivider({ items, listRef, hostRef });
   itemsLengthRef.current = items.length;
   const previousKeysRef = React.useRef<readonly string[]>([]);
+  const hasSeenPrependRef = React.useRef(false);
   const [prependShiftEpoch, clearPrependShift] = React.useReducer(
     (version: number) => version + 1,
     0,
@@ -505,6 +526,9 @@ function VirtualizedTimelineRows({
     void prependShiftEpoch;
     return didPrependVirtualizedTimeline(previousKeysRef.current, keys);
   }, [keys, prependShiftEpoch]);
+  if (isPrepend) {
+    hasSeenPrependRef.current = true;
+  }
 
   React.useLayoutEffect(() => {
     previousKeysRef.current = keys;
@@ -513,6 +537,7 @@ function VirtualizedTimelineRows({
     }
     if (!hasInitialPositionedRef.current && items.length > 0) {
       hasInitialPositionedRef.current = true;
+      programmaticBottomSettleRef.current = true;
       settleAtBottom();
     }
   }, [isPrepend, items.length, keys, settleAtBottom]);
@@ -521,8 +546,9 @@ function VirtualizedTimelineRows({
     const byId = new Map<string, number>();
     items.forEach((item, index) => {
       if (item.kind !== "timeline-item") return;
-      const messageId = timelineItemMessageId(item.item);
-      if (messageId) byId.set(messageId, index);
+      for (const messageId of timelineItemMessageIds(item.item)) {
+        byId.set(messageId, index);
+      }
     });
     return byId;
   }, [items]);
@@ -539,18 +565,59 @@ function VirtualizedTimelineRows({
       );
     }
     onVirtualizerScrollerChange?.(element);
-    return () => onVirtualizerScrollerChange?.(null);
+    if (!element) return;
+    const markUserScrollGesture = () => {
+      programmaticBottomSettleRef.current = false;
+      programmaticScrollRef.current = false;
+      userScrollGestureRef.current = true;
+    };
+    element.addEventListener("pointerdown", markUserScrollGesture, {
+      passive: true,
+    });
+    element.addEventListener("touchstart", markUserScrollGesture, {
+      passive: true,
+    });
+    element.addEventListener("wheel", markUserScrollGesture, {
+      passive: true,
+    });
+    element.addEventListener("keydown", markUserScrollGesture);
+    return () => {
+      element.removeEventListener("pointerdown", markUserScrollGesture);
+      element.removeEventListener("touchstart", markUserScrollGesture);
+      element.removeEventListener("wheel", markUserScrollGesture);
+      element.removeEventListener("keydown", markUserScrollGesture);
+      onVirtualizerScrollerChange?.(null);
+    };
   }, [onVirtualizerScrollerChange]);
+
+  React.useLayoutEffect(() => {
+    updatePinnedDayLabel(listRef.current?.scrollOffset ?? 0);
+  }, [updatePinnedDayLabel]);
 
   React.useLayoutEffect(() => {
     if (!onVirtualizerApiChange) return;
     const api: TimelineVirtualizerApi = {
-      cancelBottomIntent: cancelBottomSettle,
+      cancelBottomIntent() {
+        programmaticBottomSettleRef.current = false;
+        programmaticScrollRef.current = false;
+        cancelBottomSettle();
+      },
       scrollToBottom() {
+        programmaticBottomSettleRef.current = true;
+        programmaticScrollRef.current = false;
+        lastReaderScrollOffsetRef.current = null;
         settleAtBottom();
       },
-      settleAtBottom,
+      settleAtBottom() {
+        programmaticBottomSettleRef.current = true;
+        programmaticScrollRef.current = false;
+        lastReaderScrollOffsetRef.current = null;
+        settleAtBottom();
+      },
       scrollToMessage(messageId) {
+        programmaticBottomSettleRef.current = false;
+        programmaticScrollRef.current = true;
+        lastReaderScrollOffsetRef.current = null;
         cancelBottomSettle();
         const index = messageItemIndexByIdRef.current.get(messageId);
         if (index === undefined) return false;
@@ -566,12 +633,8 @@ function VirtualizedTimelineRows({
     const host = hostRef.current;
     if (!host) return;
     const updateBufferSize = () => {
-      // Measure rows three viewports ahead of the reader. Virtua deliberately
-      // hides each newly mounted row until its first ResizeObserver result; a
-      // one-viewport lead can be consumed by WebKit trackpad momentum before
-      // that result commits, producing a first-pass-only blank flash. The
-      // measured size is cached, which is why revisiting the same range is
-      // already stable.
+      // Measure three viewports ahead so WebKit momentum does not outrun
+      // Virtua's first ResizeObserver pass.
       setOffscreenBufferSize(host.clientHeight * 3);
     };
     updateBufferSize();
@@ -590,13 +653,39 @@ function VirtualizedTimelineRows({
       if (!list || !(scroller instanceof HTMLDivElement)) return;
       onVirtualizerRangeChanged?.();
       const distanceFromBottom = list.scrollSize - list.viewportSize - offset;
-      // Do not infer reader intent from an intermediate virtualizer offset.
-      // Initial channel positioning deliberately chases the floor while rows
-      // are measured; those measurements can briefly report a large gap and
-      // emit `onScroll` without any user input. Cancelling here strands the
-      // channel above its newest message. The settle hook's wheel, pointer,
-      // touch, and key listeners are the authoritative user-interaction gate.
+      if (programmaticBottomSettleRef.current) {
+        if (distanceFromBottom <= 32) {
+          programmaticBottomSettleRef.current = false;
+        }
+        lastReaderScrollOffsetRef.current = null;
+        userScrollGestureRef.current = false;
+      } else if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
+        lastReaderScrollOffsetRef.current = null;
+        userScrollGestureRef.current = false;
+      } else if (hasInitialPositionedRef.current && list.viewportSize > 0) {
+        const lastReaderOffset = lastReaderScrollOffsetRef.current;
+        if (
+          distanceFromBottom <= 32 &&
+          lastReaderOffset !== null &&
+          hasSeenPrependRef.current &&
+          !userScrollGestureRef.current &&
+          offset > lastReaderOffset + 32
+        ) {
+          list.scrollTo(lastReaderOffset);
+          return;
+        }
+        if (distanceFromBottom > 32) {
+          lastReaderScrollOffsetRef.current = offset;
+          cancelBottomSettle();
+        } else {
+          lastReaderScrollOffsetRef.current = null;
+          userScrollGestureRef.current = false;
+        }
+      }
+      // Keep the reader's non-bottom offset until an actual gesture claims it.
       onAtBottomStateChange?.(distanceFromBottom <= 32);
+      updatePinnedDayLabel(offset);
       if (offset <= 200) {
         // Layout scrolls near the top must not poison the reader's next input.
         armUpwardMomentum(onStartReached?.() ?? false);
@@ -604,14 +693,16 @@ function VirtualizedTimelineRows({
     },
     [
       armUpwardMomentum,
+      cancelBottomSettle,
       onAtBottomStateChange,
       onStartReached,
       onVirtualizerRangeChanged,
+      updatePinnedDayLabel,
     ],
   );
 
   return (
-    <div className="h-full min-h-0 w-full" ref={hostRef}>
+    <div className="relative h-full min-h-0 w-full" ref={hostRef}>
       <PreserveVirtualizedItemVisibilityContext value={isPrepend}>
         <VList
           ref={listRef}
@@ -643,20 +734,12 @@ function VirtualizedTimelineRows({
               const dayLabel = formatDayHeading(item.headingTimestamp);
               return (
                 <div
-                  // The sticky pill needs travel room, but its containing block
-                  // is this item wrapper. The trailing spacer extends the content
-                  // box by 4rem while the matching negative margin keeps the
-                  // measured layout height at exactly the divider's height, so
-                  // row spacing and Virtua's size cache are unaffected. Both the
-                  // spacer and the pill are pointer-events-none, and the later
-                  // (absolutely positioned) row siblings paint above the spacer.
-                  className="relative -mb-16 flex flex-col before:absolute before:inset-x-0 before:top-4 before:h-px before:bg-border/35 before:content-['']"
+                  className="relative flex flex-col before:absolute before:inset-x-0 before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-border/35 before:content-['']"
                   data-day-label={dayLabel}
                   data-testid="message-timeline-day-group"
                   key={virtualizedItemKey(item)}
                 >
-                  <DayDivider label={dayLabel} />
-                  <div aria-hidden className="pointer-events-none h-16" />
+                  <DayDivider label={dayLabel} sticky={false} />
                 </div>
               );
             }
@@ -672,6 +755,10 @@ function VirtualizedTimelineRows({
           }}
         </VList>
       </PreserveVirtualizedItemVisibilityContext>
+      <StickyDayDividerOverlay
+        pinnedDay={pinnedDay}
+        pinnedDayLabelRef={pinnedDayLabelRef}
+      />
     </div>
   );
 }
@@ -742,6 +829,7 @@ type MessageRowItemProps = Pick<
   | "currentPubkey"
   | "followThreadById"
   | "highlightedMessageId"
+  | "openThreadHeadId"
   | "huddleMemberPubkeys"
   | "huddleMemberPubkeysPending"
   | "hideAgentAccessBadges"
@@ -776,6 +864,7 @@ function MessageRowItem({
   followThreadById,
   footer,
   highlightedMessageId,
+  openThreadHeadId,
   huddleMemberPubkeys,
   huddleMemberPubkeysPending,
   hideAgentAccessBadges,
@@ -800,6 +889,7 @@ function MessageRowItem({
   videoReviewContext,
 }: MessageRowItemProps) {
   const { message, summary } = entry;
+  const isOpenThreadRoot = message.id === openThreadHeadId;
   const canManage = canManageMessageForCurrentUser(
     message,
     currentPubkey,
@@ -814,6 +904,8 @@ function MessageRowItem({
       <div
         className={cn(
           "group/message relative mx-1 mb-1 flex flex-col gap-0 rounded-2xl px-0 py-1 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
+          isOpenThreadRoot &&
+            "bg-primary/[0.07] ring-1 ring-inset ring-primary/20",
           isHighlighted &&
             "-mx-4 px-4 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-6",
         )}
@@ -880,6 +972,7 @@ function MessageRowItem({
       <MessageRow
         channelId={channelId}
         highlighted={message.id === highlightedMessageId || isSearchActive}
+        isOpenThreadRoot={isOpenThreadRoot}
         huddleMemberPubkeys={huddleMemberPubkeys}
         huddleMemberPubkeysPending={huddleMemberPubkeysPending}
         hideAgentAccessBadge={hideAgentAccessBadges}

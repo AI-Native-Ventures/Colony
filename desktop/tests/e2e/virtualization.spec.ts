@@ -31,6 +31,11 @@ async function seedChannelSections(page: Page) {
 // pointer down, past the activation threshold, onto the target, then releases —
 // the sequence dnd-kit needs to fire onDragEnd and commit the reorder.
 async function dragOver(page: Page, source: Locator, target: Locator) {
+  // Channel selection can leave the custom sections above the sticky sidebar
+  // header. Scroll the drag source into the scroll viewport before using its
+  // geometry; boundingBox() alone still returns coordinates hidden underneath
+  // that header.
+  await source.scrollIntoViewIfNeeded();
   const from = await source.boundingBox();
   const to = await target.boundingBox();
   if (!from || !to) throw new Error("drag handles not laid out");

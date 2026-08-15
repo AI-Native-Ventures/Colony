@@ -17,6 +17,7 @@ const RUNTIME_LOGOS: Record<string, string> = {
 // Public-path logos for bundled presets. Served from /harness-logos/ at runtime.
 // Keys match the preset `id` values emitted by the backend PRESET_HARNESSES.
 export const PRESET_LOGOS: Record<string, string> = {
+  devin: "/harness-logos/devin.svg",
   omp: "/harness-logos/omp.svg",
   grok: "/harness-logos/grok.svg",
   opencode: "/harness-logos/opencode.svg",
@@ -24,6 +25,7 @@ export const PRESET_LOGOS: Record<string, string> = {
   amp: "/harness-logos/amp.png",
   hermes: "/harness-logos/hermes.png",
   openclaw: "/harness-logos/openclaw.svg",
+  "prime-agent": "/harness-logos/prime-agent.svg",
 };
 
 function isBuzzRuntime(runtime: AcpRuntimeCatalogEntry): boolean {
@@ -73,7 +75,6 @@ export function RuntimeIcon({
           "rounded-md object-contain",
           className,
           id === "omp" && "bg-[#0d0d0d] p-1",
-          id === "grok" && "bg-white p-1",
         )}
         onError={() => setImageFailed(true)}
         src={imageUrl}

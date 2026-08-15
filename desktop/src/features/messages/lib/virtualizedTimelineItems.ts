@@ -32,7 +32,7 @@ export function estimateVirtualizedTimelineItemHeight(
 ): number {
   if (item.kind === "bottom-spacer") return 96;
   if (item.kind === "leading-content") return 60;
-  if (item.kind === "day-divider") return 32;
+  if (item.kind === "day-divider") return 56;
   return estimateTimelineItemHeight(item.item);
 }
 
@@ -112,6 +112,7 @@ export function didPrependVirtualizedTimeline(
   // `shift` only when every previous slot is the exact suffix it expects.
   return (
     prependedCount > 0 &&
+    previousKeys.length > 0 &&
     previousKeys.every((key, index) => key === keys[index + prependedCount])
   );
 }

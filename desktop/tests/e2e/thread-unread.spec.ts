@@ -711,7 +711,7 @@ test.describe("thread unread indicator", () => {
     await expect(badge).toContainText("3");
   });
 
-  // Thread-only replies now also light the channel sidebar badge. Viewing the
+  // Thread-only replies now also light the channel sidebar dot. Viewing the
   // channel should leave unopened thread replies unread until the thread is read.
   test("11-thread-reply-lights-sidebar-badge-after-channel-view", async ({
     page,
@@ -748,15 +748,15 @@ test.describe("thread unread indicator", () => {
     await expect(page.getByTestId("chat-title")).toHaveText("general");
 
     // The crux: leave general. The unopened thread reply should still keep a
-    // numeric channel sidebar badge until the thread itself is read.
+    // channel sidebar dot until the thread itself is read.
     await page.getByTestId("channel-random").click();
     await expect(page.getByTestId("chat-title")).toHaveText("random");
-    await expect(page.getByTestId("channel-unread-general")).toBeVisible();
+    await expect(page.getByTestId("channel-unread-dot-general")).toBeVisible();
   });
 
   // Regression guard for the all-replies window: when the loaded window holds
   // ONLY thread replies (the top-level root has scrolled past the history
-  // limit), thread-only activity should still light the channel sidebar badge.
+  // limit), thread-only activity should still light the channel sidebar dot.
   //
   // The `all-replies` fixture carries a far-future `lastMessageAt` (standing in
   // for the backend's reply-inclusive MAX) with no top-level message in its
@@ -768,8 +768,7 @@ test.describe("thread unread indicator", () => {
     // Emit ONE reply whose parent root is NOT in the window (orphan parent id),
     // so the loaded window is all-replies: no top-level message exists for
     // `latestActiveMessage` to find. The reply mentions the current user so it
-    // clears the notify gate and creates Inbox activity without lighting the
-    // channel sidebar dot.
+    // clears the notify gate and creates Inbox thread activity.
     await page.getByTestId("channel-general").click();
     await expect(page.getByTestId("chat-title")).toHaveText("general");
     await waitForMockLiveSubscription(page, "all-replies");
@@ -779,17 +778,21 @@ test.describe("thread unread indicator", () => {
       mentionPubkeys: [SELF_PUBKEY],
       createdAt: unreadTimestamp(),
     });
-    await expect(page.getByTestId("channel-unread-all-replies")).toHaveCount(0);
+    await expect(
+      page.getByTestId("channel-unread-dot-all-replies"),
+    ).toBeVisible();
 
     // View all-replies while the reply is unread.
     await page.getByTestId("channel-all-replies").click();
     await expect(page.getByTestId("chat-title")).toHaveText("all-replies");
 
     // The crux: leave the channel. Its unopened thread reply should still keep
-    // a numeric channel sidebar badge until the thread itself is read.
+    // a channel sidebar dot until the thread itself is read.
     await page.getByTestId("channel-general").click();
     await expect(page.getByTestId("chat-title")).toHaveText("general");
-    await expect(page.getByTestId("channel-unread-all-replies")).toBeVisible();
+    await expect(
+      page.getByTestId("channel-unread-dot-all-replies"),
+    ).toBeVisible();
   });
 
   // Regression guard for BUG-2 (clear-on-read): opening an unread thread marks
@@ -945,6 +948,34 @@ test.describe("thread unread indicator", () => {
   // a message in the channel you are looking at is never unread). So the only
   // route to an unread top-level message here is the mark-unread action itself,
   // which is exactly what the toggle's forced-unread overlay exists to drive.
+  test("16-thread-header-read-state-toggle", async ({ page }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await waitForMockLiveSubscription(page, "general");
+
+    await emitMockMessage(page, "general", "Initial thread reply", {
+      parentEventId: "mock-general-welcome",
+      pubkey: TEST_IDENTITIES.alice.pubkey,
+      createdAt: Math.floor(Date.now() / 1000) - 10,
+    });
+    const summary = page.getByTestId("message-thread-summary").first();
+    await expect(summary).toBeVisible();
+    await summary.click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toBeVisible();
+
+    const toggle = panel.getByTestId("thread-read-state-toggle");
+    await expect(toggle).toHaveAttribute("aria-label", "Mark thread as unread");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-label", "Mark thread as read");
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-label", "Mark thread as unread");
+  });
+
   test("15-mark-read-unread-menu-single-toggle", async ({ page }) => {
     await installMockBridge(page);
     await page.goto("/");

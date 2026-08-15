@@ -18,31 +18,14 @@ const HARNESS_DESCRIPTIONS: Record<string, string> = {
   // Source: https://developers.openai.com/codex — "Codex is OpenAI's coding
   // agent".
   codex: "OpenAI's coding agent, connected through the codex-acp adapter.",
-  // Source: https://block.github.io/goose/ — "an open source, extensible AI
-  // agent".
-  goose: "Block's open-source, extensible AI agent.",
 
   // Bundled presets — sources per RESEARCH/BYOH_CATALOG_IA.md.
-  // Source: https://cursor.com/docs/cli/acp
-  cursor: "Cursor's coding agent, connected to Colony through its ACP server.",
   // Source: https://github.com/can1357/oh-my-pi
   omp: "A terminal coding agent with integrated development tools.",
-  // Source: https://build.x.ai (docs unavailable during research; kept
-  // deliberately conservative).
-  grok: "xAI's coding agent, connected to Colony through its ACP entrypoint.",
   // Source: https://github.com/anomalyco/opencode
   opencode: "An open-source coding agent.",
-  // Sources: https://github.com/MoonshotAI/kimi-cli,
-  // https://moonshotai.github.io/kimi-cli/en/
-  kimi: "A terminal coding agent for software development and command-line tasks.",
-  // Sources: https://ampcode.com, https://ampcode.com/manual
-  amp: "A coding agent from Sourcegraph.",
-  // Sources: https://github.com/NousResearch/hermes-agent,
-  // https://hermes-agent.nousresearch.com/docs/
-  hermes: "A general-purpose AI agent from Nous Research.",
-  // Sources: https://github.com/openclaw/openclaw,
-  // https://docs.openclaw.ai/start/getting-started
-  openclaw: "A personal AI assistant that runs on your own devices.",
+  // Source: https://github.com/PrimeIntellect-ai/prime-agent
+  "prime-agent": "An open-source coding agent from Prime Intellect.",
 };
 
 /**

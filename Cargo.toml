@@ -6,8 +6,11 @@ members = [
     "crates/buzz-conformance",
     "crates/buzz-push-gateway",
     "crates/buzz-db",
+    "crates/buzz-datastore-tracing",
+    "crates/buzz-deletion",
     "crates/buzz-pubsub",
     "crates/buzz-auth",
+    "crates/buzz-backend-kubernetes",
     "crates/buzz-search",
     "crates/buzz-audit",
     "crates/buzz-acp",
@@ -136,6 +139,12 @@ buzz-meter   = { path = "crates/buzz-meter" }
 buzz-meter-core = { path = "crates/buzz-meter-core" }
 buzz-conformance = { path = "crates/buzz-conformance" }
 buzz-db = { path = "crates/buzz-db" }
+buzz-datastore-tracing = { path = "crates/buzz-datastore-tracing" }
+buzz-deletion = { path = "crates/buzz-deletion" }
+
+# Kubernetes (buzz-backend-kubernetes provider)
+kube = { version = "2.0", default-features = false, features = ["client", "rustls-tls"] }
+k8s-openapi = { version = "0.26", features = ["v1_31"] }
 buzz-auth = { path = "crates/buzz-auth" }
 buzz-pubsub = { path = "crates/buzz-pubsub" }
 buzz-search = { path = "crates/buzz-search" }

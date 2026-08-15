@@ -1,8 +1,11 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
+import { useAppShell } from "@/app/AppShellContext";
+import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 import type { Community } from "@/features/communities/types";
+import type { LeaveCommunityResult } from "@/features/communities/leaveCommunity";
 import { AddCommunityDialog } from "@/features/communities/ui/AddCommunityDialog";
 import type { AddCommunityPrefillRequest } from "@/features/communities/addCommunityPrefill";
 import { useIsMobile } from "@/shared/hooks/use-mobile";
@@ -19,6 +22,7 @@ import {
   sortChannelsForSidebar,
 } from "@/features/sidebar/lib/channelSortPreference";
 import { useChannelSortPreference } from "@/features/sidebar/lib/useChannelSortPreference";
+import { useSidebarScrollBoundary } from "@/features/sidebar/lib/useSidebarScrollBoundary";
 import { useSidebarScrollLock } from "@/features/sidebar/lib/useSidebarScrollLock";
 import { isSidebarBackgroundTarget } from "@/features/sidebar/lib/sidebarBackgroundTarget";
 import { useUnreadOverflow } from "@/features/sidebar/lib/useUnreadOverflow";
@@ -33,6 +37,7 @@ import {
 import {
   AppSidebarPinnedHeader,
   AppSidebarPrimaryMenu,
+  type AppSidebarPinnedHeaderProps,
 } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
 import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
 import { SidebarSection } from "@/features/sidebar/ui/SidebarSection";
@@ -78,7 +83,6 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/shared/ui/sidebar";
-
 type AppSidebarProps = {
   addCommunityPrefill?: AddCommunityPrefillRequest | null;
   activeCommunity: Community | null;
@@ -130,8 +134,9 @@ type AppSidebarProps = {
     id: string,
     updates: Partial<Pick<Community, "name" | "relayUrl" | "token">>,
   ) => void;
-  onRemoveCommunity: (id: string) => void;
+  onRemoveCommunity: (id: string) => Promise<LeaveCommunityResult | undefined>;
   onCreateAgent: () => void;
+  onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
@@ -149,6 +154,7 @@ type AppSidebarProps = {
    */
   searchChannels: Channel[];
   searchFocusRequest: number;
+  scopeSearchFocusRequest: number;
   onSelectSettings: (section?: SettingsSection) => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
   onSetUserStatus: (text: string, emoji: string) => void;
@@ -169,7 +175,7 @@ type AppSidebarProps = {
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
   workspaceExpanded?: boolean;
-};
+} & Pick<AppSidebarPinnedHeaderProps, "commandActions">;
 export function AppSidebar({
   addCommunityPrefill,
   activeCommunity,
@@ -206,6 +212,8 @@ export function AppSidebar({
   onUpdateCommunity,
   onRemoveCommunity,
   onCreateAgent,
+  commandActions,
+  onSelectActionCenter,
   onSelectAgents,
   onSelectBlocks,
   onSelectDiscovery,
@@ -218,6 +226,7 @@ export function AppSidebar({
   onOpenSearchResult,
   searchChannels,
   searchFocusRequest,
+  scopeSearchFocusRequest,
   onSelectSettings,
   onSetPresenceStatus,
   onSetUserStatus,
@@ -238,6 +247,10 @@ export function AppSidebar({
   onUnstarChannel,
   workspaceExpanded = false,
 }: AppSidebarProps) {
+  const { feedItemState } = useAppShell();
+  const actionCenter = useActionCenterItems({
+    localDoneIds: feedItemState.doneSet,
+  });
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
@@ -250,44 +263,7 @@ export function AppSidebar({
   const [dmActionsMenuOpen, setDmActionsMenuOpen] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   useSidebarScrollLock(scrollRef);
-
-  React.useEffect(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) return;
-
-    const handleWheel = (event: WheelEvent) => {
-      if (event.deltaY === 0) return;
-
-      const maxScrollTop =
-        scrollElement.scrollHeight - scrollElement.clientHeight;
-      if (maxScrollTop <= 0) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-
-      const atTop = scrollElement.scrollTop <= 0;
-      const atBottom = scrollElement.scrollTop >= maxScrollTop - 1;
-      const scrollingPastTop = event.deltaY < 0 && atTop;
-      const scrollingPastBottom = event.deltaY > 0 && atBottom;
-
-      if (scrollingPastTop || scrollingPastBottom) {
-        event.preventDefault();
-        event.stopPropagation();
-        scrollElement.scrollTop = scrollingPastTop ? 0 : maxScrollTop;
-      }
-    };
-
-    scrollElement.addEventListener("wheel", handleWheel, {
-      capture: true,
-      passive: false,
-    });
-    return () => {
-      scrollElement.removeEventListener("wheel", handleWheel, {
-        capture: true,
-      });
-    };
-  }, []);
+  useSidebarScrollBoundary(scrollRef);
 
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
@@ -567,15 +543,20 @@ export function AppSidebar({
       >
         <AppSidebarPinnedHeader
           channelLabels={dmChannelLabels}
+          currentChannelId={
+            selectedView === "channel" ? selectedChannelId : null
+          }
           currentPubkey={currentPubkey}
           onBrowseChannels={onBrowseChannels}
           onCreateAgent={onCreateAgent}
           onCreateChannel={handleOpenCreateChannel}
+          commandActions={commandActions}
           onOpenDm={onOpenDm}
           onOpenSearchResult={onOpenSearchResult}
           onSelectChannel={onSelectChannel}
           searchChannels={searchChannels}
           searchFocusRequest={searchFocusRequest}
+          scopeSearchFocusRequest={scopeSearchFocusRequest}
           suggestionChannels={channels}
         />
 
@@ -603,7 +584,9 @@ export function AppSidebar({
               data-testid="sidebar-scroll-content"
             >
               <AppSidebarPrimaryMenu
+                actionCenterBadgeCount={actionCenter.openCount}
                 homeBadgeCount={homeBadgeCount}
+                onSelectActionCenter={onSelectActionCenter}
                 onSelectAgents={onSelectAgents}
                 onSelectBlocks={onSelectBlocks}
                 onSelectDiscovery={onSelectDiscovery}
@@ -933,7 +916,6 @@ export function AppSidebar({
         }}
         onCreate={handleCreateFromDialog}
       />
-
       <AddCommunityDialog
         prefill={addCommunityPrefill}
         onOpenChange={onAddCommunityOpenChange ?? (() => {})}

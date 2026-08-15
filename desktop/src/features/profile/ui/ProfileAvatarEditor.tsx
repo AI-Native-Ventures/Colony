@@ -66,18 +66,19 @@ function randomInitialEmojiAvatarColor() {
 
 export function ProfileAvatarEditor({
   avatarUrl,
+  previewName,
   donePending = false,
   emojiPickerTheme = "dark",
   emojiPickerThemeVars,
   onCustomColorPickerOpenChange,
   onEmojiAvatarChange,
   onModeChange,
+  onLocalPreviewChange,
   onUploadedAvatarChange,
   onUrlChange,
   onAnimatedAvatarApply,
   onDone,
   onUploadingChange,
-  previewName,
   showEmojiColorControlsWhenEmpty = false,
   disabled,
   testIdPrefix = "profile-avatar",
@@ -86,6 +87,7 @@ export function ProfileAvatarEditor({
   onAnimatedPreviewActiveChange,
   onAnimatedPreviewCaptionChange,
   presentation = "default",
+  showInlineUploadPreview = false,
 }: ProfileAvatarEditorProps) {
   const { burstEmoji } = useEmojiBurst();
   const shouldReduceMotion = useReducedMotion();
@@ -97,6 +99,9 @@ export function ProfileAvatarEditor({
   const [isDragging, setIsDragging] = React.useState(false);
   const [urlDraft, setUrlDraft] = React.useState("");
   const localPreview = useLocalAvatarPreview();
+  React.useEffect(() => {
+    onLocalPreviewChange?.(localPreview.previewUrl);
+  }, [localPreview.previewUrl, onLocalPreviewChange]);
   const [selectedEmoji, setSelectedEmoji] = React.useState<string | null>(
     () => initialEmojiAvatar?.emoji ?? null,
   );
@@ -245,18 +250,14 @@ export function ProfileAvatarEditor({
     }
     onDone?.();
   }, [mode, onDone]);
-
   React.useEffect(() => {
     if (!isAnimatedDoneQueued) return;
     setIsAnimatedDoneQueued(false);
     onDone?.();
   }, [isAnimatedDoneQueued, onDone]);
-
   useEmojiMartStyles(emojiPickerContainerRef, mode === "emoji");
-
   React.useEffect(() => {
     if (mode !== "emoji") return;
-
     let animationFrame = 0;
     let observer: MutationObserver | null = null;
     const syncSelectedEmojiButton = () => {
@@ -268,7 +269,6 @@ export function ProfileAvatarEditor({
         animationFrame = window.requestAnimationFrame(syncSelectedEmojiButton);
         return;
       }
-
       shadowRoot
         .querySelectorAll('button[data-buzz-selected="true"]')
         .forEach((button) => {
@@ -281,11 +281,9 @@ export function ProfileAvatarEditor({
           }
         });
       }
-
       observer ??= new MutationObserver(syncSelectedEmojiButton);
       observer.observe(shadowRoot, { childList: true, subtree: true });
     };
-
     animationFrame = window.requestAnimationFrame(syncSelectedEmojiButton);
     return () => {
       window.cancelAnimationFrame(animationFrame);
@@ -502,7 +500,9 @@ export function ProfileAvatarEditor({
     <fieldset
       className={cn(
         "mx-auto w-full border-0 p-0 text-sm",
-        isOnboardingModal ? "max-w-[456px]" : "max-w-[576px]",
+        isOnboardingModal
+          ? "max-w-[456px] md:ml-0 md:mr-auto"
+          : "max-w-[576px]",
       )}
       data-testid={`${testIdPrefix}-editor`}
       disabled={isInputDisabled}
@@ -612,10 +612,10 @@ export function ProfileAvatarEditor({
                     onClick={openPicker}
                     type="button"
                   >
-                    {isOnboardingModal &&
+                    {showInlineUploadPreview &&
                     (localPreview.previewUrl || avatarUrl) ? (
                       <ProfileAvatarUploadPreview
-                        avatarUrl={localPreview.previewUrl || avatarUrl || ""}
+                        avatarUrl={localPreview.previewUrl || avatarUrl}
                         label={previewName}
                         testId={`${testIdPrefix}-upload-preview`}
                       />
@@ -753,7 +753,11 @@ export function ProfileAvatarEditor({
               ) : (
                 <div className="relative grid content-start gap-3">
                   <div
-                    className="buzz-emoji-mart relative z-0 h-[316px] overflow-hidden rounded-xl bg-muted transition-colors duration-[250ms] ease-out"
+                    className={cn(
+                      "buzz-emoji-mart relative z-0 overflow-hidden rounded-xl bg-muted transition-colors duration-[250ms] ease-out",
+                      isOnboardingModal ? "h-[316px]" : "h-[384px]",
+                    )}
+                    data-testid={`${testIdPrefix}-emoji-picker`}
                     ref={emojiPickerContainerRef}
                     style={emojiMartThemeVars}
                   >
@@ -788,9 +792,9 @@ export function ProfileAvatarEditor({
                         applyEmojiAvatar(emoji.native, nextColor);
                       }}
                       previewPosition="none"
-                      searchPosition="none"
+                      searchPosition="sticky"
                       set="native"
-                      skinTonePosition="none"
+                      skinTonePosition="search"
                       theme={emojiPickerTheme}
                     />
                   </div>

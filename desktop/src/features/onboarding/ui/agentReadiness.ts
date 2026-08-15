@@ -13,8 +13,9 @@ export type AgentReadinessResult =
  * Determine whether the user has a working agent path configured.
  *
  * CLI path: the preferred Claude or Codex runtime is available and logged in.
- * Provider path: the preferred Colony Agent or Goose runtime has provider and
- * model set, plus all required credential env vars for that provider.
+ * Provider path: the preferred provider-configured runtime (Colony Agent,
+ * Oh My Pi, OpenCode, or a custom harness) has provider and model set, plus
+ * all required credential env vars for that provider.
  *
  * Returns enough info for the UI to say which path matched, or that neither did.
  */
@@ -58,7 +59,11 @@ export function resolveAgentReadiness(
     };
   }
 
-  if (preferredRuntime.id !== "buzz-agent" && preferredRuntime.id !== "goose") {
+  if (
+    preferredRuntime.id !== "buzz-agent" &&
+    preferredRuntime.id !== "omp" &&
+    preferredRuntime.id !== "opencode"
+  ) {
     return { ready: false };
   }
 

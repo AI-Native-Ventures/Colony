@@ -47,13 +47,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * does not mention the table.
  */
 export const KNOWN_DRIFT = new Map([
-  ["discovery_lead_profiles", "discovery, owned elsewhere"],
-  ["party_action_claims", "same broker shape as company_action_claims; fails the same way once a party suite runs"],
-  ["ledger_action_claims", "same broker shape as company_action_claims"],
-  ["jobs", "unowned"],
-  ["git_repo_names", "unowned"],
   ["product_feedback", "unowned"],
-  ["parameterized_event_watermarks", "unowned"],
 ]);
 
 /** Table names created by `text`, excluding partition children. */

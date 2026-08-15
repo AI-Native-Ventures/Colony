@@ -10,10 +10,10 @@ test("global defaults accept an advanced credential set in runtime config", () =
     provider: "databricks_v2",
     runtimeFileConfig: {
       provider: "databricks_v2",
-      model: "goose-claude-4-6-opus",
+      model: "omp-claude-4-6-opus",
       satisfiedEnvKeys: ["DATABRICKS_HOST"],
     },
-    runtimeId: "goose",
+    runtimeId: "omp",
   });
 
   assert.equal(state.advancedCredentialMissing, false);
@@ -29,10 +29,10 @@ test("an explicit empty global value shadows the runtime config", () => {
     provider: "databricks_v2",
     runtimeFileConfig: {
       provider: "databricks_v2",
-      model: "goose-claude-4-6-opus",
+      model: "omp-claude-4-6-opus",
       satisfiedEnvKeys: ["DATABRICKS_HOST"],
     },
-    runtimeId: "goose",
+    runtimeId: "omp",
   });
 
   assert.equal(state.advancedCredentialMissing, true);
@@ -51,7 +51,7 @@ test("global defaults accept a provider key set in runtime config", () => {
       model: "gpt-5.5",
       satisfiedEnvKeys: ["OPENAI_COMPAT_API_KEY"],
     },
-    runtimeId: "goose",
+    runtimeId: "omp",
   });
 
   assert.equal(state.apiKeyFileSatisfied, true);

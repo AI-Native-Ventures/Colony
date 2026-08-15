@@ -52,11 +52,11 @@ test("localMode_buzzAgent_supportsProviderSelection", () => {
   );
 });
 
-test("localMode_goose_supportsProviderSelection", () => {
+test("localMode_omp_supportsProviderSelection", () => {
   assert.equal(
-    runtimeSupportsLlmProviderSelection("goose"),
+    runtimeSupportsLlmProviderSelection("omp"),
     true,
-    "goose must support LLM provider selection",
+    "omp must support LLM provider selection",
   );
 });
 
@@ -296,20 +296,20 @@ test("localMode_providerSelection_drives_requiredKey", () => {
 
 // ── File-config bridge tests ──────────────────────────────────────────────
 
-test("localMode_goose_databricksHost_satisfiedByFileConfig_notRequired", () => {
-  // Scenario: goose runtime, databricks_v2 provider, DATABRICKS_HOST in file.
-  // The gate should NOT flag DATABRICKS_HOST as missing — it's satisfied in goose config.
+test("localMode_omp_databricksHost_satisfiedByFileConfig_notRequired", () => {
+  // Scenario: omp runtime, databricks_v2 provider, DATABRICKS_HOST in file.
+  // The gate should NOT flag DATABRICKS_HOST as missing — it's satisfied in omp config.
   const fileConfig = {
     provider: "databricks_v2",
-    model: "goose-claude-4-6-opus",
+    model: "omp-claude-4-6-opus",
     satisfiedEnvKeys: ["DATABRICKS_HOST"],
   };
   const result = computeLocalModeGate({
     envVars: {},
     isProviderMode: false,
-    model: "goose-claude-4-6-opus",
+    model: "omp-claude-4-6-opus",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: fileConfig,
   });
 
@@ -319,7 +319,7 @@ test("localMode_goose_databricksHost_satisfiedByFileConfig_notRequired", () => {
   );
   assert.ok(
     result.fileSatisfiedEnvKeys.includes("DATABRICKS_HOST"),
-    "DATABRICKS_HOST must appear in fileSatisfiedEnvKeys when set in goose config",
+    "DATABRICKS_HOST must appear in fileSatisfiedEnvKeys when set in omp config",
   );
   assert.equal(
     result.satisfied,
@@ -328,15 +328,15 @@ test("localMode_goose_databricksHost_satisfiedByFileConfig_notRequired", () => {
   );
 });
 
-test("localMode_goose_databricksHost_noFileConfig_stillRequired", () => {
-  // Scenario: goose + databricks_v2, no file config present.
+test("localMode_omp_databricksHost_noFileConfig_stillRequired", () => {
+  // Scenario: omp + databricks_v2, no file config present.
   // DATABRICKS_HOST must still be required.
   const result = computeLocalModeGate({
     envVars: {},
     isProviderMode: false,
     model: "some-model",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
 
@@ -351,8 +351,8 @@ test("localMode_goose_databricksHost_noFileConfig_stillRequired", () => {
   );
 });
 
-test("localMode_goose_providerSatisfiedByFileConfig_noNormalizedFieldRequired", () => {
-  // Scenario: goose, no provider in Buzz env but file config has provider + model.
+test("localMode_omp_providerSatisfiedByFileConfig_noNormalizedFieldRequired", () => {
+  // Scenario: omp, no provider in Buzz env but file config has provider + model.
   // Neither 'provider' nor 'model' should be required.
   const fileConfig = {
     provider: "anthropic",
@@ -364,7 +364,7 @@ test("localMode_goose_providerSatisfiedByFileConfig_noNormalizedFieldRequired", 
     isProviderMode: false,
     model: "",
     provider: "",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: fileConfig,
   });
 
@@ -375,15 +375,15 @@ test("localMode_goose_providerSatisfiedByFileConfig_noNormalizedFieldRequired", 
   );
 });
 
-test("localMode_goose_envPlusFileConfig_bothEmpty_stillRequired", () => {
-  // Scenario: goose, empty env, file config is null (no file).
+test("localMode_omp_envPlusFileConfig_bothEmpty_stillRequired", () => {
+  // Scenario: omp, empty env, file config is null (no file).
   // Both provider and model must be required.
   const result = computeLocalModeGate({
     envVars: {},
     isProviderMode: false,
     model: "",
     provider: "",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
 
@@ -401,7 +401,7 @@ test("localMode_goose_envPlusFileConfig_bothEmpty_stillRequired", () => {
 // ── Baked build env satisfaction ──────────────────────────────────────────
 
 test("baked_databricksHost_silencesRequirement", () => {
-  // Scenario: goose + databricks_v2, DATABRICKS_HOST baked in (Block build).
+  // Scenario: omp + databricks_v2, DATABRICKS_HOST baked in (Block build).
   // The gate must NOT flag DATABRICKS_HOST as missing or required.
   const result = computeLocalModeGate({
     bakedEnvKeys: ["DATABRICKS_HOST"],
@@ -409,7 +409,7 @@ test("baked_databricksHost_silencesRequirement", () => {
     isProviderMode: false,
     model: "some-model",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
 
@@ -434,7 +434,7 @@ test("baked_databricksHost_andAgentLocal_agentLocalWins_keyNotRequired", () => {
     isProviderMode: false,
     model: "some-model",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
 
@@ -453,7 +453,7 @@ test("baked_emptyOrUndefined_behaviorUnchanged", () => {
     isProviderMode: false,
     model: "some-model",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
   const resultEmpty = computeLocalModeGate({
@@ -462,7 +462,7 @@ test("baked_emptyOrUndefined_behaviorUnchanged", () => {
     isProviderMode: false,
     model: "some-model",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
 
@@ -495,7 +495,7 @@ test("baked_satisfiedKey_doesNotCountAsMissing_noSaveBlock", () => {
     isProviderMode: false,
     model: "some-model",
     provider: "databricks_v2",
-    runtimeId: "goose",
+    runtimeId: "omp",
     runtimeFileConfig: null,
   });
 
@@ -565,7 +565,7 @@ test("requiredEnvKeys_exclusionSemantics_filledKeyStaysInAmberRow", () => {
   // not missing-only). Regression guard for the allowlist bug fixed in review.
   // The gate returns missingEnvKeys (empty), not filledKeys — the amber row list
   // is derived independently as allRequired minus baked/file-satisfied.
-  const allKeys = requiredCredentialEnvKeys("goose", "databricks_v2");
+  const allKeys = requiredCredentialEnvKeys("omp", "databricks_v2");
   const envVarsWithKey = { DATABRICKS_HOST: "https://filled.example.com/" };
   const bakedSatisfied = getBakedSatisfiedEnvKeys(allKeys, envVarsWithKey, []);
   // No baked env, no file config: all keys must stay in the amber row list
@@ -581,7 +581,7 @@ test("requiredEnvKeys_exclusionSemantics_filledKeyStaysInAmberRow", () => {
 
 test("requiredEnvKeys_exclusionSemantics_bakedKeyDropsFromAmberRow", () => {
   // A baked-satisfied key must be excluded from the amber row list.
-  const allKeys = requiredCredentialEnvKeys("goose", "databricks_v2");
+  const allKeys = requiredCredentialEnvKeys("omp", "databricks_v2");
   const bakedSatisfied = getBakedSatisfiedEnvKeys(allKeys, {}, [
     "DATABRICKS_HOST",
   ]);
@@ -600,7 +600,7 @@ test("saveBlock_bakedSatisfiedKey_notMissing", () => {
   // The save-block gate (hasMissingRequiredEnvKey) must return false when the
   // only unset required key is baked-satisfied. Pins the hook path exercised by
   // useRequiredCredentialState without needing React rendering machinery.
-  const allKeys = requiredCredentialEnvKeys("goose", "databricks_v2");
+  const allKeys = requiredCredentialEnvKeys("omp", "databricks_v2");
   const bakedSatisfied = getBakedSatisfiedEnvKeys(allKeys, {}, [
     "DATABRICKS_HOST",
   ]);
@@ -618,7 +618,7 @@ test("saveBlock_bakedSatisfiedKey_notMissing", () => {
 
 test("saveBlock_noFilterNoBaked_stillMissing", () => {
   // Control: without baked env the same key is still required and missing.
-  const allKeys = requiredCredentialEnvKeys("goose", "databricks_v2");
+  const allKeys = requiredCredentialEnvKeys("omp", "databricks_v2");
   const bakedSatisfied = getBakedSatisfiedEnvKeys(allKeys, {}, []);
   const requiredAfterFilter = allKeys.filter(
     (key) => !bakedSatisfied.includes(key),
@@ -871,7 +871,7 @@ test("bakedDefaults_emptyGlobal_usesBuildValuesForCreateAndEditLabels", () => {
     { key: "BUZZ_AGENT_PROVIDER", value: "databricks_v2", masked: false },
     {
       key: "BUZZ_AGENT_MODEL",
-      value: "goose-claude-opus-4-8",
+      value: "omp-claude-opus-4-8",
       masked: false,
     },
     { key: "BUZZ_AGENT_THINKING_EFFORT", value: "high", masked: false },
@@ -896,11 +896,11 @@ test("bakedDefaults_emptyGlobal_usesBuildValuesForCreateAndEditLabels", () => {
   );
   assert.deepEqual(model, {
     source: "build",
-    value: "goose-claude-opus-4-8",
+    value: "omp-claude-opus-4-8",
   });
   assert.equal(
     getBakedModelInheritLabel(model.value),
-    "Inherit build default (goose-claude-opus-4-8)",
+    "Inherit build default (omp-claude-opus-4-8)",
   );
   assert.deepEqual(effort, { source: "build", value: "high" });
 });
@@ -1397,13 +1397,13 @@ test("global model fallback resolves the selected provider model env", () => {
   const bakedEnv = [
     {
       key: "DATABRICKS_MODEL",
-      value: "goose-claude-opus-4-8",
+      value: "omp-claude-opus-4-8",
       masked: false,
     },
   ];
   assert.equal(
     getGlobalModelFallback(bakedEnv, "databricks_v2"),
-    "goose-claude-opus-4-8",
+    "omp-claude-opus-4-8",
   );
 });
 
@@ -1432,13 +1432,13 @@ test("inherited defaults expose a provider-specific model fallback to agent dial
     [
       {
         key: "DATABRICKS_MODEL",
-        value: "goose-claude-opus-4-8",
+        value: "omp-claude-opus-4-8",
         masked: false,
       },
     ],
   );
   assert.deepEqual(defaults.model, {
     source: "build",
-    value: "goose-claude-opus-4-8",
+    value: "omp-claude-opus-4-8",
   });
 });

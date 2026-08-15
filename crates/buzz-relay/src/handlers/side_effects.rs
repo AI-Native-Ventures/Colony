@@ -9,7 +9,7 @@ use uuid::Uuid;
 use buzz_core::kind::{
     event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_DM_VISIBILITY,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_HIRE_REQUEST, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST,
-    KIND_IA_UNARCHIVED, KIND_JOB_FILING, KIND_JOB_OUTCOME, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_IA_UNARCHIVED, KIND_JOB_FILING, KIND_JOB_HEARTBEAT, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
     KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION, KIND_THREAD_SUMMARY,
 };
@@ -33,7 +33,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// handled in `ingest_event()` before storage so we can short-circuit on
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | KIND_HIRE_REQUEST | KIND_JOB_FILING..=KIND_JOB_OUTCOME | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | KIND_HIRE_REQUEST | KIND_JOB_FILING..=KIND_JOB_HEARTBEAT | 41001..=41003 | 40099)
 }
 
 async fn evict_live_channel_subscriptions(
@@ -224,7 +224,7 @@ pub async fn handle_side_effects(
         // answers by republishing the job head, so a worker learns whether it
         // won a lease by watching the head rather than by a private reply
         // that could disagree with what everyone else sees.
-        KIND_JOB_FILING..=KIND_JOB_OUTCOME => {
+        KIND_JOB_FILING..=KIND_JOB_HEARTBEAT => {
             match crate::job_broker::handle_job_event(tenant, state, event).await {
                 Ok(outcome) => info!(?outcome, kind, "job event handled"),
                 Err(error) => warn!(error = %error, kind, "job event refused"),
@@ -377,27 +377,26 @@ pub async fn validate_admin_event(
                 .iter()
                 .find(|m| m.pubkey == actor_bytes)
                 .and_then(|m| m.role.parse().ok());
+            let target_pubkey =
+                extract_p_tag(event).ok_or_else(|| anyhow::anyhow!("missing p tag"))?;
 
             // PUT_USER: open channels allow any authenticated user; private channels
-            // require the actor to be an existing member (any role can invite).
+            // require the actor to be an existing active member. Any active member may
+            // add an ordinary member, guest, or bot, but only owners/admins may grant
+            // an elevated role.
             if channel.visibility == "private" {
                 if actor_role.is_none() {
                     return Err(anyhow::anyhow!("actor not authorized"));
                 }
 
-                // Only owners/admins may grant elevated roles.
-                if requested_role.is_some_and(|r| r.is_elevated())
-                    && !actor_role.is_some_and(|r| r.is_elevated())
+                if requested_role.is_some_and(|role| role.is_elevated())
+                    && !actor_role.is_some_and(|role| role.is_elevated())
                 {
                     return Err(anyhow::anyhow!(
                         "only owners/admins may grant elevated roles"
                     ));
                 }
             }
-
-            // Extract target pubkey from p tag
-            let target_pubkey =
-                extract_p_tag(event).ok_or_else(|| anyhow::anyhow!("missing p tag"))?;
 
             // Changing an ACTIVE existing member's role is privileged in both
             // directions, on every visibility. `get_members` filters
@@ -2189,9 +2188,18 @@ async fn handle_a_tag_deletion(
             };
             // Safe cast: NIP-33 kinds are 30000–39999, well within i32.
             let kind_i32 = k as i32;
+            // NIP-09 scopes an a-tag deletion to versions at or before the
+            // deletion's own created_at, so a stale/replayed tombstone can never
+            // erase a newer replacement head.
             let deleted = state
                 .db
-                .soft_delete_by_coordinate(tenant.community(), kind_i32, &pubkey_bytes, d_tag)
+                .soft_delete_by_coordinate(
+                    tenant.community(),
+                    kind_i32,
+                    &pubkey_bytes,
+                    d_tag,
+                    event.created_at.as_secs() as i64,
+                )
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!(

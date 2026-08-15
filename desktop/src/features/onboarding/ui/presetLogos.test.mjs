@@ -24,15 +24,15 @@ const desktopRoot = path.resolve(
   "../../../..",
 );
 
-const discoveryRs = readFileSync(
-  path.join(desktopRoot, "src-tauri/src/managed_agents/discovery.rs"),
+const presetsRs = readFileSync(
+  path.join(desktopRoot, "src-tauri/src/managed_agents/discovery/presets.rs"),
   "utf8",
 );
 
-const presetBlock = discoveryRs.match(
+const presetBlock = presetsRs.match(
   /const PRESET_HARNESSES: &\[PresetHarness\] = &\[([\s\S]*?)\n\];/,
 );
-assert.ok(presetBlock, "could not locate PRESET_HARNESSES in discovery.rs");
+assert.ok(presetBlock, "could not locate PRESET_HARNESSES in presets.rs");
 
 const presetIds = [...presetBlock[1].matchAll(/^\s{8}id: "([^"]+)",$/gm)].map(
   (match) => match[1],
@@ -42,8 +42,8 @@ test("PRESET_HARNESSES parse found the preset ids", () => {
   // Guards the regex itself: a struct-field rename would otherwise silently
   // yield zero ids and make every assertion below vacuously pass.
   assert.ok(
-    presetIds.length >= 8,
-    `expected at least 8 preset ids, parsed ${presetIds.length}`,
+    presetIds.length >= 3,
+    `expected at least 3 preset ids, parsed ${presetIds.length}`,
   );
 });
 

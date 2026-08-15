@@ -15,14 +15,18 @@ import {
   hasSameMessageAuthor,
   isWithinGroupingWindow,
 } from "@/features/messages/lib/messageGrouping";
-import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
+import type { MessageComposerEditTarget } from "@/features/messages/ui/MessageComposer.types";
 import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManageMessage";
 import type { TimelineMessage } from "@/features/messages/types";
+import type { VideoReviewPresentation } from "@/features/messages/lib/videoReviewContext";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import type { ThreadPanelLayoutProps } from "@/features/channels/lib/threadPanelLayout";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
+import { extractCanonicalTaskId } from "@/features/company/taskThreadModel";
+import { TaskThreadContext } from "@/features/company/ui/TaskThreadContext";
+import { VideoReviewNavigationProvider } from "@/shared/ui/VideoReviewNavigation";
 import { cn } from "@/shared/lib/cn";
 import { AuxiliaryPanel } from "@/shared/layout/AuxiliaryPanel";
 import { AuxiliaryPanelBody } from "@/shared/layout/AuxiliaryPanel";
@@ -38,7 +42,6 @@ import {
 } from "@/features/messages/lib/messageThreadPanelLayout";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
-import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { ComposerActivityAccessory } from "./ComposerActivityAccessory";
 import { ComposerDockBackdrop } from "./ComposerDockBackdrop";
 import { MessageComposer } from "./MessageComposer";
@@ -48,8 +51,11 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 import { UnreadDivider } from "./UnreadDivider";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
+import { useStableSendToChannel } from "./useStableSendToChannel";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
+import { getActiveContinuationDepths } from "./MessageThreadPanel.helpers";
+import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -62,12 +68,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   huddleMemberPubkeysPending?: boolean;
   /** Present the huddle's parent-channel thread as a dedicated live chat. */
   isHuddleTranscript?: boolean;
-  editTarget?: {
-    author: string;
-    body: string;
-    id: string;
-    imetaMedia?: ImetaMedia[];
-  } | null;
+  editTarget?: MessageComposerEditTarget | null;
   isSending: boolean;
   onCancelEdit?: () => void;
   onCancelReply: () => void;
@@ -97,6 +98,11 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
       threadHeadId: string | null;
     } | null,
   ) => Promise<void>;
+  onSendToChannel?: (
+    message: TimelineMessage,
+    threadRoot: TimelineMessage,
+    channelId: string,
+  ) => Promise<void>;
   onToggleReaction?: (
     message: TimelineMessage,
     emoji: string,
@@ -111,7 +117,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   threadUnreadCount?: number;
   threadReplyUnreadCounts?: ReadonlyMap<string, number>;
   threadTypingPubkeys: string[];
-  threadHeadVideoReviewContext?: VideoReviewContext;
+  videoReviewPresentation?: VideoReviewPresentation;
   activityAccessoryContent?: React.ReactNode;
   activityAccessoryVisible: boolean;
   widthPx: number;
@@ -131,58 +137,8 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
 };
 
 const EMPTY_THREAD_REPLIES: MainTimelineEntry[] = [];
+
 const THREAD_PANEL_SUMMARY_INDENT_OFFSET_REM = 0;
-
-function hasLaterVisibleSibling(
-  entries: readonly MainTimelineEntry[],
-  entryIndex: number,
-): boolean {
-  const depth = entries[entryIndex]?.message.depth;
-  if (depth == null) {
-    return false;
-  }
-
-  for (let index = entryIndex + 1; index < entries.length; index += 1) {
-    const nextDepth = entries[index].message.depth;
-    if (nextDepth <= depth) {
-      return nextDepth === depth;
-    }
-  }
-
-  return false;
-}
-
-function getActiveContinuationDepths({
-  ancestors,
-  entries,
-  index,
-  message,
-}: {
-  ancestors: readonly { index: number; message: TimelineMessage }[];
-  entries: readonly MainTimelineEntry[];
-  index: number;
-  message: TimelineMessage;
-}): number[] {
-  const depths: number[] = [];
-
-  for (const ancestor of ancestors) {
-    if (ancestor.message.depth === 0) {
-      continue;
-    }
-
-    const childDepth = ancestor.message.depth + 1;
-    const pathChild =
-      message.depth === childDepth
-        ? { index, message }
-        : ancestors.find((candidate) => candidate.message.depth === childDepth);
-
-    if (pathChild && hasLaterVisibleSibling(entries, pathChild.index)) {
-      depths.push(ancestor.message.depth);
-    }
-  }
-
-  return depths;
-}
 
 export function MessageThreadPanel({
   channel,
@@ -218,6 +174,7 @@ export function MessageThreadPanel({
   onScrollTargetSettled,
   onSelectReplyTarget,
   onSend,
+  onSendToChannel,
   onToggleReaction,
   onUnfollowThread,
   profiles,
@@ -225,7 +182,7 @@ export function MessageThreadPanel({
   scrollTargetId,
   scrollTargetHighlights = true,
   threadHead,
-  threadHeadVideoReviewContext,
+  videoReviewPresentation,
   threadReplies,
   threadRepliesPending = false,
   threadUnreadCount,
@@ -521,7 +478,6 @@ export function MessageThreadPanel({
     "padding",
     settleAtBottomAfterLayout,
   );
-
   const knownAgentPubkeys = useKnownAgentPubkeys();
   const initialAgentPubkeys = React.useMemo(() => {
     if (
@@ -545,10 +501,16 @@ export function MessageThreadPanel({
         knownAgentPubkeys.has(pubkey) || profiles?.[pubkey]?.isAgent === true,
     );
   }, [currentPubkey, knownAgentPubkeys, profiles, threadHead]);
-
+  const stableSendToChannel = useStableSendToChannel(
+    channelId,
+    threadHead,
+    onSendToChannel,
+  );
   if (!threadHead) {
     return null;
   }
+
+  const canonicalTaskId = extractCanonicalTaskId(threadHead.tags ?? []);
 
   const threadScrollRegion = (
     <AuxiliaryPanelBody
@@ -580,6 +542,7 @@ export function MessageThreadPanel({
               <MessageRow
                 actionBarPlacement="inside"
                 channelId={channelId}
+                currentPubkey={currentPubkey}
                 huddleMemberPubkeys={huddleMemberPubkeys}
                 huddleMemberPubkeysPending={huddleMemberPubkeysPending}
                 isFollowingThread={isFollowingThread}
@@ -617,7 +580,12 @@ export function MessageThreadPanel({
                 }
                 profiles={profiles}
                 showDepthGuides={shouldShowThreadBranchGuides}
-                videoReviewContext={threadHeadVideoReviewContext}
+                videoReviewCommentRootId={videoReviewPresentation?.commentRootIdsByMessageId.get(
+                  threadHead.id,
+                )}
+                videoReviewContext={videoReviewPresentation?.contextsByMessageId.get(
+                  threadHead.id,
+                )}
               />
             </div>
           </div>
@@ -629,6 +597,18 @@ export function MessageThreadPanel({
             data-testid="message-thread-head-divider"
           >
             <Separator className="bg-border/60" />
+          </div>
+        ) : null}
+
+        {canonicalTaskId && channelId ? (
+          <div className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS)}>
+            <TaskThreadContext
+              channelId={channelId}
+              channelName={channelName}
+              profiles={profiles}
+              taskId={canonicalTaskId}
+              threadId={threadHead.id}
+            />
           </div>
         ) : null}
 
@@ -707,6 +687,7 @@ export function MessageThreadPanel({
                       {showUnreadDivider ? <UnreadDivider /> : null}
                       <MessageRow
                         channelId={channelId}
+                        currentPubkey={currentPubkey}
                         collapseDepthGuideActions={collapseDepthGuideActions}
                         collapseDescendantsLabel="Collapse replies"
                         connectDescendants={
@@ -771,9 +752,16 @@ export function MessageThreadPanel({
                         onMarkUnread={onMarkUnread}
                         onMarkRead={onMarkRead}
                         onReply={onSelectReplyTarget}
+                        onSendToChannel={stableSendToChannel}
                         onToggleReaction={onToggleReaction}
                         profiles={profiles}
                         showDepthGuides={shouldShowThreadBranchGuides}
+                        videoReviewCommentRootId={videoReviewPresentation?.commentRootIdsByMessageId.get(
+                          entry.message.id,
+                        )}
+                        videoReviewContext={videoReviewPresentation?.contextsByMessageId.get(
+                          entry.message.id,
+                        )}
                       />
                       {entry.summary ? (
                         <MessageThreadSummaryRow
@@ -946,28 +934,36 @@ export function MessageThreadPanel({
       >
         <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
       </AuxiliaryPanelHeaderGroup>
+      <ThreadReadStateToggle
+        isUnread={(threadUnreadCount ?? 0) > 0}
+        message={threadHead}
+        onMarkRead={onMarkRead}
+        onMarkUnread={onMarkUnread}
+      />
     </>
   );
 
   return (
-    <AuxiliaryPanel
-      className="relative"
-      // The focus drawer animates itself; a second slide here would compound.
-      enterMotion={!isFocusMode}
-      footer={threadFooter}
-      header={
-        isHuddleTranscript ? undefined : (
-          <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
-        )
-      }
-      isSinglePanelView={isSinglePanelView}
-      layout={layout}
-      onClose={onClose}
-      testId="message-thread-panel"
-      transparentChrome={transparentChrome}
-      widthPx={widthPx}
-    >
-      {threadScrollRegion}
-    </AuxiliaryPanel>
+    <VideoReviewNavigationProvider>
+      <AuxiliaryPanel
+        className="relative"
+        // The focus drawer animates itself; a second slide here would compound.
+        enterMotion={!isFocusMode}
+        footer={threadFooter}
+        header={
+          isHuddleTranscript ? undefined : (
+            <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
+          )
+        }
+        isSinglePanelView={isSinglePanelView}
+        layout={layout}
+        onClose={onClose}
+        testId="message-thread-panel"
+        transparentChrome={transparentChrome}
+        widthPx={widthPx}
+      >
+        {threadScrollRegion}
+      </AuxiliaryPanel>
+    </VideoReviewNavigationProvider>
   );
 }

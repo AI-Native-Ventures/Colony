@@ -1,6 +1,6 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { mockWindows } from "@tauri-apps/api/mocks";
-import { decode } from "nostr-tools/nip19";
+import { decode, npubEncode, nsecEncode } from "nostr-tools/nip19";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
 import {
@@ -19,6 +19,7 @@ import {
   type NativeUpdate,
 } from "@/shared/api/nativeBridge";
 import { relayClient } from "@/shared/api/relayClient";
+import { activateRateLimit } from "@/shared/api/relayRateLimitGate";
 import {
   STARTER_PERSONA_IDS,
   starterPersonaName,
@@ -56,6 +57,7 @@ import {
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
+  KIND_PROJECT_ANNOUNCEMENT,
   KIND_REPO_ANNOUNCEMENT,
   KIND_REPO_STATE,
   KIND_STREAM_MESSAGE_EDIT,
@@ -73,6 +75,14 @@ import type {
   RuntimeFileConfigSubset,
 } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import {
+  ensureRelayOriginFetch,
+  resetMediaCaches,
+} from "@/shared/lib/mediaUrl";
+import {
+  isValidLinkPreviewSnapshotCanonicalUrl,
+  parseLinkPreviewSnapshots,
+} from "@/shared/lib/linkPreviewSnapshot";
 import {
   isAuthorizedBlockReceipt,
   parseBlockInstance,
@@ -182,6 +192,18 @@ type MockHuddleSeed = {
   transcriptionEnabled?: boolean;
   ttsEnabled?: boolean;
   isCreator?: boolean;
+};
+
+type MockWorkflowRunSeed = {
+  workflowId: string;
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "waiting_approval";
+  errorMessage?: string | null;
 };
 
 type E2eConfig = {
@@ -345,6 +367,7 @@ type E2eConfig = {
     channelMembersReadDelayMs?: number;
     createManagedAgentDelayMs?: number;
     channelTemplates?: ChannelTemplate[];
+    workflowRunSeeds?: MockWorkflowRunSeed[];
     channelsReadError?: string;
     /** Reject successive mock `get_channels` calls, then resume. */
     channelsReadErrors?: (string | null)[];
@@ -381,6 +404,36 @@ type E2eConfig = {
     profileReadError?: string;
     profileUpdateError?: string;
     profileUpdateErrors?: string[];
+    linkPreviewMetadata?: {
+      title: string;
+      siteName: string | null;
+      description: string | null;
+      imageDataUrl: string | null;
+      imageDomain: string | null;
+      imageFetchState?: "none" | "image" | "transient_failure" | "rejected";
+      imageRetryAfterMs?: number | null;
+      faviconDataUrl?: string | null;
+    } | null;
+    linkPreviewMetadataByHref?: Record<
+      string,
+      {
+        title: string;
+        siteName: string | null;
+        description: string | null;
+        imageDataUrl: string | null;
+        imageDomain: string | null;
+        imageFetchState?: "none" | "image" | "transient_failure" | "rejected";
+        imageRetryAfterMs?: number | null;
+        faviconDataUrl?: string | null;
+      } | null
+    >;
+    linkPreviewMetadataDelayMs?: number;
+    /** Simulates native cold-cache startup work before the async response. */
+    linkPreviewMetadataStartBlockMs?: number;
+    /** Delays link-preview snapshot media uploads for settling tests. */
+    linkPreviewUploadDelayMs?: number;
+    /** Filenames that should fail during link-preview media upload. */
+    linkPreviewUploadErrorFilenames?: string[];
     searchProfiles?: MockSearchProfileSeed[];
     updateAvailable?: boolean;
     updateChannelDelayMs?: number;
@@ -439,6 +492,10 @@ type E2eConfig = {
     // (e.g. a generic PDF) without a real upload pipeline. See
     // tests/helpers/bridge.ts:MockBridgeOptions.uploadDescriptors.
     uploadDelayMs?: number;
+    /** Start the mocked media proxy unavailable, then release it from E2E. */
+    mediaProxyInitiallyUnavailable?: boolean;
+    /** Exercise the production composer path that queues files until send. */
+    deferredComposerUploads?: boolean;
     /** Delay (ms) applied to `encode_agent_snapshot_for_send` so E2E tests can
      *  observe the "preparing" phase before the upload begins. 0/undefined = instant. */
     encodeDelayMs?: number;
@@ -530,6 +587,8 @@ type E2eConfig = {
       model: string | null;
       preferred_runtime?: string | null;
     };
+    /** Explicit owner-only agent-access capability; independent of baked defaults. */
+    ownerOnlyAccessBuild?: boolean;
     /** Volatile Colony Credits account response used by settings specs. */
     colonyCreditsAccount?: {
       balance_nanousd: string;
@@ -550,9 +609,25 @@ type E2eConfig = {
      *  initial render gating around build defaults. 0/undefined = instant. */
     bakedBuildEnvDelayMs?: number;
     /** Delay (ms) applied to `set_global_agent_config` so tests can observe
-     *  autosave behaviour while a request is in flight. 0/undefined = instant.
-     *  Alias of `globalConfigSaveDelayMs` (kept for onboarding specs). */
+     *  pending save behaviour. 0/undefined = instant. Alias of
+     *  `globalConfigSaveDelayMs` (kept for onboarding specs). */
     setGlobalAgentConfigDelayMs?: number;
+    /** Errors returned by successive backup verification attempts. Null succeeds. */
+    backupVerificationErrors?: (string | null)[];
+    /** Public identities returned by successive successful backup verifications. */
+    backupVerificationPubkeys?: string[];
+    /** Delay (ms) applied to backup encryption so specs can observe pending UI. */
+    backupEncryptionDelayMs?: number;
+    /** Native paths returned by successive backup saves; null models cancel. */
+    backupSavePaths?: Array<string | null>;
+    /** Sequenced save errors for the native backup picker seam. */
+    backupSaveErrors?: (string | null)[];
+    /** Sequenced deterministic passphrases for backup generator tests. */
+    backupPassphrases?: string[];
+    /** Sequenced generated-passphrase errors. Null succeeds. */
+    backupPassphraseErrors?: (string | null)[];
+    /** Sequenced save failures. A string rejects that call; null succeeds. */
+    setGlobalAgentConfigErrors?: (string | null)[];
     /**
      * When set, `get_nsec` throws with this message instead of returning the
      * mock nsec string. Use `nsecErrors` for sequenced failure/success.
@@ -1141,6 +1216,16 @@ declare global {
       command: string;
       payload: unknown;
     }>;
+    __BUZZ_E2E_EMIT_MEDIA_UPLOAD_PHASE__?: (input: {
+      id: string;
+      phase: string;
+    }) => Promise<void>;
+    __BUZZ_E2E_EMIT_MEDIA_UPLOAD_PROGRESS__?: (input: {
+      id: string;
+      sent: number;
+      total: number;
+    }) => Promise<void>;
+    __BUZZ_E2E_RELEASE_MEDIA_PROXY__?: () => number;
     __BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?: (payload: {
       pubkey: string | null;
       level: number;
@@ -1233,6 +1318,25 @@ declare global {
       kind: number;
       tags: string[][];
     }>;
+    /** Project-scoped events accepted by the mock relay. */
+    __BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__?: Array<{
+      content: string;
+      kind: number;
+      tags: string[][];
+    }>;
+    /** Makes the mock relay reject project announcements as an unknown kind. */
+    __BUZZ_E2E_UNSUPPORTED_PROJECT_ANNOUNCEMENTS__?: boolean;
+    /** Project event kinds accepted once but reported as failed to test lost acknowledgements. */
+    __BUZZ_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__?: number[];
+    /** Extra project events appended to the mock store on first access. */
+    __BUZZ_E2E_EXTRA_PROJECT_EVENTS__?: Array<{
+      id: string;
+      kind: number;
+      pubkey: string;
+      created_at: number;
+      content: string;
+      tags: string[][];
+    }>;
     /** Project event kinds rejected once, in order, to exercise retry flows. */
     __BUZZ_E2E_REJECT_PROJECT_EVENT_KINDS__?: number[];
     /** Structured merge error returned by the mock native merge command. */
@@ -1272,9 +1376,23 @@ declare global {
     };
     __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: ConnectionState) => void;
     __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => ConnectionState;
+    /** Queue deterministic mock AUTH outcomes, consumed in order. */
+    __BUZZ_E2E_QUEUE_AUTH_RESPONSES__?: (
+      responses: Array<{ success: boolean; message: string }>,
+    ) => void;
+    /** Inject CLOSED into every active mock live subscription. */
+    __BUZZ_E2E_CLOSE_LIVE_SUBSCRIPTIONS__?: (reason: string) => number;
+    /** Queue CLOSED responses for channel history REQs. */
+    __BUZZ_E2E_QUEUE_CHANNEL_HISTORY_CLOSES__?: (reasons: string[]) => void;
     __BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
     __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
+    __BUZZ_E2E_SET_MOCK_WEBSOCKET_UNAVAILABLE__?: (
+      unavailable: boolean,
+    ) => void;
+    __BUZZ_E2E_GET_WEBSOCKET_CONNECT_ATTEMPTS__?: () => number[];
+    __BUZZ_E2E_ACTIVATE_RELAY_RATE_LIMIT__?: (seconds: number) => void;
+    __BUZZ_E2E_RESET_WEBSOCKET_CONNECT_ATTEMPTS__?: () => void;
     __BUZZ_E2E_SET_MESH__?: (mesh: {
       admitted?: boolean;
       models?: Array<{ id: string; name: string | null }>;
@@ -1354,6 +1472,7 @@ declare global {
     __BUZZ_E2E_MUTATE_CHANNEL__?: (opts: {
       channelId: string;
       channelType?: "stream" | "forum" | "dm";
+      description?: string;
       removeMemberPubkey?: string;
     }) => void;
     /**
@@ -1372,6 +1491,19 @@ declare global {
     /** Count of `get_event` invocations for the current defer-target ID since
      *  the last time `__BUZZ_E2E_DEFER_GET_EVENT__` was set. */
     __BUZZ_E2E_GET_EVENT_CALL_COUNT__?: number;
+    /** Mutations issued before the async mock bridge finishes installing. */
+    __BUZZ_E2E_PENDING_CHANNEL_MUTATIONS__?: Array<{
+      channelId: string;
+      channelType?: "stream" | "forum" | "dm";
+      description?: string;
+      removeMemberPubkey?: string;
+    }>;
+    /** Hold the next channel read until released. */
+    __BUZZ_E2E_DEFER_NEXT_CHANNELS_READ__?: () => void;
+    /** Disarm the latch and release the held channel read, if any. */
+    __BUZZ_E2E_RELEASE_CHANNELS_READ__?: () => number;
+    /** Number of channel reads currently held by the seam. */
+    __BUZZ_E2E_CHANNELS_READ_PENDING__?: number;
   }
 }
 
@@ -1400,6 +1532,7 @@ const CHANNEL_WINDOW_AUX_DELETION_KINDS = new Set([
 // in e2e (instead of the `buzz-media://` fallback). The reaction guard
 // asserts against this exact port.
 const MOCK_MEDIA_PROXY_PORT = 54321;
+let mockMediaProxyPort = MOCK_MEDIA_PROXY_PORT;
 
 // A relay-hosted custom emoji used by the reaction guard. Its URL matches
 // `rewriteRelayUrl()`'s `/media/{64-hex}.{ext}` pattern on the relay origin, so
@@ -1421,10 +1554,30 @@ const REACTION_TARGET_CONTENT = "React to me with a custom emoji";
 // REACTION_TARGET_EVENT_ID.
 const SYSTEM_REACTION_TARGET_EVENT_ID = "e".repeat(64);
 const E2E_IDENTITY_OVERRIDE_STORAGE_KEY = "buzz:e2e-identity-override.v1";
+/** Stands in for tauri.conf.json's version, which no mock IPC call can read. */
+const MOCK_APP_VERSION = "0.0.0-e2e";
 const DEFAULT_MOCK_IDENTITY = {
   pubkey: "deadbeef".repeat(8),
   display_name: "npub1mock...",
 };
+// Stable NIP-49-shaped fixture used by the browser backup ceremony. The
+// browser harness cannot run the native scrypt/save dialog, but it should still
+// exercise the real frontend state machine and wrong-password paths.
+const MOCK_NCRYPTSEC =
+  "ncryptsec1qgg9947rlpvqu76pj5ecreduf9jxhselq2nae2kghhvd5g7dgjtcxfqtd67p9m0w57lspw8gsq6yphnm8623nsl8xn9j4jdzz84zm3frztj3z7s35vpzmqf6ksu8r89qk5z2zxfmu5gv8th8wclt0h4p";
+const MOCK_BACKUP_PASSPHRASE = "mock horse battery staple lake orbit";
+const MOCK_PASSPHRASE_WORDS = [
+  "mock",
+  "horse",
+  "battery",
+  "staple",
+  "lake",
+  "orbit",
+  "cedar",
+  "plume",
+  "raven",
+  "tundra",
+];
 const DEFAULT_REAL_IDENTITY = {
   privateKey:
     "3dbaebadb5dfd777ff25149ee230d907a15a9e1294b40b830661e65bb42f6c03",
@@ -1475,6 +1628,8 @@ type DeferredGetEvent = {
   run: () => Promise<string>;
 };
 let deferredGetEventQueue: DeferredGetEvent[] = [];
+let deferNextChannelsRead = false;
+let deferredChannelsReadResolve: (() => void) | null = null;
 
 const mockDisplayNames = new Map<string, string>([
   [MOCK_IDENTITY_PUBKEY, DEFAULT_MOCK_IDENTITY.display_name],
@@ -1767,10 +1922,10 @@ function buildMockConfigSurface(pubkey: string): {
   extensions: unknown[];
   sources: Record<string, unknown>;
 } {
-  // Goose running — mixed origins, override on model
-  const gooseSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+  // Oh My Pi running — mixed origins, override on model
+  const ompSurface = {
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: false,
     normalized: {
       model: {
@@ -1788,8 +1943,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.provider",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.provider",
         },
       },
       mode: {
@@ -1798,7 +1953,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_PROVIDER" },
       },
       thinkingEffort: {
         value: "medium",
@@ -1807,8 +1962,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.thinkingEffort",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.thinkingEffort",
         },
       },
       maxOutputTokens: null,
@@ -1835,8 +1990,8 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
@@ -1906,8 +2061,8 @@ function buildMockConfigSurface(pubkey: string): {
 
   // Pre-spawn — model from config file, ACP fields pending
   const preSpawnSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: true,
     normalized: {
       model: {
@@ -1916,7 +2071,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "gooseNativeConfigWrite", configKey: "goose.model" },
+        writeVia: { type: "ompNativeConfigWrite", configKey: "omp.model" },
       },
       provider: {
         value: "openai",
@@ -1925,8 +2080,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.provider",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.provider",
         },
       },
       mode: {
@@ -1956,8 +2111,8 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "pending",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
@@ -1973,7 +2128,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "gooseNativeConfigWrite", configKey: "goose.model" },
+        writeVia: { type: "ompNativeConfigWrite", configKey: "omp.model" },
       },
       provider: {
         value: "openai",
@@ -1982,8 +2137,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.provider",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.provider",
         },
       },
       mode: {
@@ -1992,7 +2147,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "gooseNativeConfigWrite", configKey: "goose.mode" },
+        writeVia: { type: "ompNativeConfigWrite", configKey: "omp.mode" },
       },
       thinkingEffort: null,
       maxOutputTokens: null,
@@ -2010,8 +2165,8 @@ function buildMockConfigSurface(pubkey: string): {
           options: ["suggest", "auto-edit", "full-auto", "unless-allow-listed"],
         },
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.approval_policy",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.approval_policy",
         },
       },
       {
@@ -2023,7 +2178,7 @@ function buildMockConfigSurface(pubkey: string): {
           type: "enum",
           options: ["container", "host", "none"],
         },
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_SANDBOX_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_MODE" },
       },
     ],
     extensions: [
@@ -2044,8 +2199,8 @@ function buildMockConfigSurface(pubkey: string): {
   // switched at runtime. The live model rides over the persona baseline as a
   // secondary value WITHOUT strikethrough (the headline runtimeOverride render).
   const runtimeOverrideSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: false,
     normalized: {
       model: {
@@ -2070,7 +2225,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_PROVIDER" },
       },
       thinkingEffort: {
         value: "high",
@@ -2079,8 +2234,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.thinkingEffort",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.thinkingEffort",
         },
       },
       maxOutputTokens: null,
@@ -2094,8 +2249,8 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
@@ -2104,8 +2259,8 @@ function buildMockConfigSurface(pubkey: string): {
   // "Inherited from template", "From config file (...)" and
   // "From environment variable (...)".
   const multiOriginSurface = {
-    runtimeId: "goose",
-    runtimeLabel: "Goose",
+    runtimeId: "omp",
+    runtimeLabel: "Oh My Pi",
     isPreSpawn: false,
     normalized: {
       model: {
@@ -2130,7 +2285,7 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenValue: null,
         overriddenOrigin: null,
         isRequired: false,
-        writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_MODE" },
+        writeVia: { type: "respawnWithEnvVar", envKey: "BUZZ_ACP_PROVIDER" },
       },
       thinkingEffort: {
         value: "medium",
@@ -2139,8 +2294,8 @@ function buildMockConfigSurface(pubkey: string): {
         overriddenOrigin: null,
         isRequired: false,
         writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.thinkingEffort",
+          type: "ompNativeConfigWrite",
+          configKey: "omp.thinkingEffort",
         },
       },
       maxOutputTokens: null,
@@ -2154,19 +2309,19 @@ function buildMockConfigSurface(pubkey: string): {
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
-      configFilePath: "~/.config/goose/config.yaml",
-      mcpConfigFilePath: "~/.config/goose/config.yaml",
+      configFilePath: null,
+      mcpConfigFilePath: null,
     },
   };
 
   const buzzAgentSurface = {
-    ...gooseSurface,
+    ...ompSurface,
     runtimeId: "buzz-agent",
     runtimeLabel: "Colony Agent",
     advanced: [],
     extensions: [],
     sources: {
-      ...gooseSurface.sources,
+      ...ompSurface.sources,
       configFilePath: null,
       mcpConfigFilePath: null,
     },
@@ -2193,7 +2348,7 @@ function buildMockConfigSurface(pubkey: string): {
     case PUBKEY_BUZZ_AGENT:
       return buzzAgentSurface;
     default:
-      return gooseSurface;
+      return ompSurface;
   }
 }
 
@@ -2210,7 +2365,7 @@ function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
     runtime: seed.runtime ?? null,
     relay_url: DEFAULT_RELAY_WS_URL,
     acp_command: "buzz-acp",
-    agent_command: "goose",
+    agent_command: "omp",
     agent_args: ["acp"],
     mcp_command: "",
     turn_timeout_seconds: 320,
@@ -2265,7 +2420,7 @@ function resetMockRelayAgents(config?: E2eConfig) {
     mockRelayAgents.push({
       pubkey: seed.pubkey,
       name: seed.name,
-      agent_type: seed.agentType ?? "goose",
+      agent_type: seed.agentType ?? "omp",
       channels: channels.map((channel) => channel.name),
       channel_ids: channels.map((channel) => channel.id),
       capabilities: seed.capabilities ?? ["messages", "channels", "mcp"],
@@ -3280,6 +3435,10 @@ function filterMockCompanyEvents(filter: MockFilter): RelayEvent[] {
 }
 
 const mockSockets = new Map<number, MockSocket>();
+const mockAuthResponses: Array<{ success: boolean; message: string }> = [];
+const mockChannelHistoryCloses: string[] = [];
+let mockWebsocketUnavailable = false;
+const relayWebsocketConnectAttemptStarts: number[] = [];
 let mockWebsocketSendMutexWedged = false;
 let mockClosedChannelLiveSubscription = false;
 const realSockets = new Map<number, WebSocket>();
@@ -3501,8 +3660,12 @@ class E2eNativeBridge implements NativeBridge {
     return this.mockCommand(command, args ?? {}) as Promise<T>;
   }
 
-  invokeRawBinary(command: string, payload: Uint8Array): Promise<unknown> {
-    return this.mockCommand(command, payload);
+  invokeRawBinary<T = unknown>(
+    command: string,
+    payload: Uint8Array,
+    _options?: { headers?: Record<string, string> },
+  ): Promise<T> {
+    return this.mockCommand(command, payload) as Promise<T>;
   }
 
   async listen<T>(
@@ -3862,7 +4025,7 @@ const defaultMockRelayAgents: RawRelayAgent[] = [
   {
     pubkey: ALICE_PUBKEY,
     name: "alice",
-    agent_type: "goose",
+    agent_type: "omp",
     channels: ["general", "agents"],
     channel_ids: [
       "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
@@ -3870,7 +4033,10 @@ const defaultMockRelayAgents: RawRelayAgent[] = [
     ],
     capabilities: ["search", "summaries", "workflows"],
     status: "online",
-    respond_to: "anyone",
+    // The stock Alice fixture is a relay-directory member, not a runnable
+    // agent for the mock viewer. Specs that need an invocable Alice seed it as
+    // a managed agent (or supplies an explicit relay policy).
+    respond_to: "owner-only",
     respond_to_allowlist: [],
   },
   {
@@ -3941,6 +4107,49 @@ function resetMockWorkflows() {
   mockWorkflows.length = 0;
   mockWorkflowRuns = [];
   mockWorkflowIdCounter = 0;
+}
+
+function seedMockWorkflowRuns(seeds: MockWorkflowRunSeed[] | undefined) {
+  if (!seeds?.length) return;
+  const now = Math.floor(Date.now() / 1000);
+  for (const [index, seed] of seeds.entries()) {
+    const workflow =
+      mockWorkflows.find((candidate) => candidate.id === seed.workflowId) ??
+      (() => {
+        const created: MockWorkflow = {
+          id: seed.workflowId,
+          name: "Recovery test workflow",
+          owner_pubkey: MOCK_IDENTITY_PUBKEY,
+          channel_id: STARTER_GENERAL_CHANNEL_ID,
+          definition: {
+            name: "Recovery test workflow",
+            trigger: { on: "manual" },
+            steps: [{ id: "step_1", action: "notify" }],
+          },
+          status: "active",
+          created_at: now,
+          updated_at: now,
+        };
+        mockWorkflows.push(created);
+        return created;
+      })();
+    mockWorkflowRuns.push({
+      id: `mock-seeded-run-${index + 1}`,
+      workflow_id: workflow.id,
+      status: seed.status,
+      current_step: null,
+      execution_trace: [],
+      started_at: seed.status === "pending" ? null : now,
+      completed_at:
+        seed.status === "failed" ||
+        seed.status === "cancelled" ||
+        seed.status === "completed"
+          ? now
+          : null,
+      error_message: seed.errorMessage ?? null,
+      created_at: now - index,
+    });
+  }
 }
 
 function parseWorkflowDefinition(
@@ -5907,6 +6116,7 @@ const MOCK_PROJECT_SEEDS = [
     name: "buzz",
     description:
       "Relay, desktop, and mobile clients for the Buzz community platform.",
+    cloneUrl: `${DEFAULT_RELAY_HTTP_URL}/git/${MOCK_IDENTITY_PUBKEY}/buzz`,
     owner: MOCK_IDENTITY_PUBKEY,
     contributors: [ALICE_PUBKEY, BOB_PUBKEY, CHARLIE_PUBKEY],
     activityLevel: 4,
@@ -5915,6 +6125,7 @@ const MOCK_PROJECT_SEEDS = [
     dtag: "relay-tools",
     name: "relay-tools",
     description: "Operator tooling and admin CLI for relay deployments.",
+    cloneUrl: "https://github.com/block/relay-tools.git",
     owner: ALICE_PUBKEY,
     contributors: [MOCK_IDENTITY_PUBKEY, BOB_PUBKEY],
     activityLevel: 2,
@@ -5923,6 +6134,7 @@ const MOCK_PROJECT_SEEDS = [
     dtag: "design-system",
     name: "design-system",
     description: "Shared UI tokens, typography ramps, and component library.",
+    cloneUrl: `${DEFAULT_RELAY_HTTP_URL}/git/${BOB_PUBKEY}/design-system`,
     owner: BOB_PUBKEY,
     contributors: [ALICE_PUBKEY],
     activityLevel: 1,
@@ -5941,6 +6153,7 @@ const MOCK_PROJECT_SUBJECTS = [
 ];
 
 const MOCK_PROJECT_KINDS = new Set<number>([
+  KIND_PROJECT_ANNOUNCEMENT,
   KIND_REPO_ANNOUNCEMENT,
   KIND_REPO_STATE,
   KIND_GIT_PATCH,
@@ -6019,7 +6232,8 @@ function buildMockProjectEvents(): RelayEvent[] {
           ["d", seed.dtag],
           ["name", seed.name],
           ["description", seed.description],
-          ["clone", `https://relay.example.com/git/${owner}/${seed.dtag}`],
+          ["buzz-channel", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
+          ["clone", seed.cloneUrl],
           ...seed.contributors.map((pubkey) => ["p", pubkey]),
         ],
         owner,
@@ -6084,10 +6298,7 @@ function buildMockProjectEvents(): RelayEvent[] {
             ? [
                 ["h", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
                 ["branch-name", `feature/mock-${dayOffset}-${index}`],
-                [
-                  "clone",
-                  `https://relay.example.com/git/${owner}/${seed.dtag}`,
-                ],
+                ["clone", seed.cloneUrl],
               ]
             : []),
         ];
@@ -6097,11 +6308,36 @@ function buildMockProjectEvents(): RelayEvent[] {
     }
   }
 
+  const projectOwner =
+    window.__BUZZ_E2E_PROJECT_OWNER_OVERRIDE__ ?? MOCK_PROJECT_SEEDS[0].owner;
+  events.push(
+    createMockEvent(
+      KIND_PROJECT_ANNOUNCEMENT,
+      "",
+      [
+        ["d", "buzz"],
+        ["name", "buzz"],
+        ["description", "The complete Buzz community platform."],
+        ["a", `${KIND_REPO_ANNOUNCEMENT}:${projectOwner}:buzz`],
+        ["a", `${KIND_REPO_ANNOUNCEMENT}:${ALICE_PUBKEY}:relay-tools`],
+      ],
+      projectOwner,
+      now,
+      "project-buzz".padEnd(64, "0"),
+    ),
+  );
+
   return events;
 }
 
 function getMockProjectEventStore(): RelayEvent[] {
-  mockProjectEventStore ??= buildMockProjectEvents();
+  if (!mockProjectEventStore) {
+    mockProjectEventStore = buildMockProjectEvents();
+    const extras = window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__;
+    if (extras && extras.length > 0) {
+      mockProjectEventStore.push(...(extras as RelayEvent[]));
+    }
+  }
   return mockProjectEventStore;
 }
 
@@ -6113,16 +6349,19 @@ function isMockProjectScopedEvent(event: RelayEvent): boolean {
     (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30617:"),
   );
   return (
-    hasRepoAddressTag &&
+    (event.kind === KIND_REPO_ANNOUNCEMENT || hasRepoAddressTag) &&
     (event.kind === 1 || MOCK_PROJECT_KINDS.has(event.kind))
   );
 }
 
 function filterMockProjectEvents(filter: MockFilter): RelayEvent[] {
   const authors = filter.authors?.map((author) => author.toLowerCase());
+  const idsSet =
+    filter.ids && filter.ids.length > 0 ? new Set(filter.ids) : null;
   return getMockProjectEventStore()
     .filter((event) => {
       if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
+      if (idsSet && !idsSet.has(event.id)) return false;
       if (authors && !authors.includes(event.pubkey.toLowerCase())) {
         return false;
       }
@@ -6160,7 +6399,7 @@ function createMockEvent(
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
   createdAt = Math.floor(Date.now() / 1000),
-  id = crypto.randomUUID().replace(/-/g, ""),
+  id = mockEventId(),
 ): RelayEvent {
   return {
     id,
@@ -6275,6 +6514,19 @@ async function submitSignedEvent(
   });
 }
 
+/** Build the channel-id → last-message-at map from the returned channel list. */
+function buildLastMessages(
+  channels: Array<{ id: string; last_message_at: string | null }>,
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const ch of channels) {
+    if (ch.last_message_at !== null) {
+      map[ch.id] = ch.last_message_at;
+    }
+  }
+  return map;
+}
+
 async function handleGetChannels(config: E2eConfig | undefined) {
   const channelsReadDelayMs = config?.mock?.channelsReadDelayMs ?? 0;
   if (channelsReadDelayMs > 0) {
@@ -6292,7 +6544,17 @@ async function handleGetChannels(config: E2eConfig | undefined) {
 
   const identity = getIdentity(config);
   if (!identity) {
-    return listMockChannels(config);
+    // The hash is constant ("mock-hash") and channels are always returned in
+    // full — the not-modified short-circuit is intentionally never exercised
+    // here: mock channel data mutates during tests (last_message_at updates on
+    // message emission) while the hash never changes, so honoring knownHash
+    // would wrongly short-circuit after mutations.
+    const channels = listMockChannels(config);
+    return {
+      hash: "mock-hash",
+      channels,
+      last_messages: buildLastMessages(channels),
+    };
   }
 
   // Pure Nostr: query kind:39002 (membership) for our pubkey, extract channel
@@ -6338,7 +6600,7 @@ async function handleGetChannels(config: E2eConfig | undefined) {
   );
 
   // Convert kind:39000 events to the RawChannel shape the frontend expects.
-  return metaEvents
+  const channels = metaEvents
     .map((ev) => {
       const tags = (ev.tags ?? []) as string[][];
       const getTag = (name: string) =>
@@ -6385,6 +6647,12 @@ async function handleGetChannels(config: E2eConfig | undefined) {
       };
     })
     .filter((c) => c.channel_type !== "dm" || !hiddenDms.has(c.id));
+
+  return {
+    hash: "mock-hash",
+    channels,
+    last_messages: buildLastMessages(channels),
+  };
 }
 
 async function handleGetProfile(config: E2eConfig | undefined) {
@@ -8019,24 +8287,24 @@ function withMockRuntimeConfigMetadata(
         ? runtime.model_env_var
         : runtime.id === "buzz-agent"
           ? "BUZZ_AGENT_MODEL"
-          : runtime.id === "goose"
-            ? "GOOSE_MODEL"
+          : runtime.id === "omp"
+            ? "BUZZ_ACP_MODEL"
             : null,
     provider_env_var:
       "provider_env_var" in runtime
         ? runtime.provider_env_var
         : runtime.id === "buzz-agent"
           ? "BUZZ_AGENT_PROVIDER"
-          : runtime.id === "goose"
-            ? "GOOSE_PROVIDER"
+          : runtime.id === "omp"
+            ? "BUZZ_ACP_PROVIDER"
             : null,
     thinking_env_var:
       "thinking_env_var" in runtime
         ? runtime.thinking_env_var
         : runtime.id === "buzz-agent"
           ? "BUZZ_AGENT_THINKING_EFFORT"
-          : runtime.id === "goose"
-            ? "GOOSE_THINKING_EFFORT"
+          : runtime.id === "omp"
+            ? "BUZZ_AGENT_THINKING_EFFORT"
             : null,
   };
 }
@@ -8087,22 +8355,22 @@ async function handleDiscoverAcpRuntimes(
   }
   const defaultCatalog: RawAcpRuntimeCatalogEntry[] = [
     {
-      id: "goose",
-      label: "Goose",
+      id: "omp",
+      label: "Oh My Pi",
       avatar_url: "",
       availability: "available",
-      command: "goose",
-      binary_path: "/usr/local/bin/goose",
+      command: "omp",
+      binary_path: "/usr/local/bin/omp",
       default_args: ["acp"],
       mcp_command: null,
-      install_hint: "Install Goose via the official install script.",
-      install_instructions_url: "https://block.github.io/goose/",
-      can_auto_install: true,
-      requires_external_cli: true,
+      install_hint: "Install Oh My Pi via the official install script.",
+      install_instructions_url: "https://github.com/can1357/oh-my-pi",
+      can_auto_install: false,
+      requires_external_cli: false,
       underlying_cli_path: null,
       node_required: false,
       auth_status: { status: "not_applicable" },
-      source: "builtin",
+      source: "preset",
       login_hint: undefined,
     },
     {
@@ -8212,6 +8480,7 @@ let installCallCount = 0;
 /** Per-runtime call counters for `installAcpRuntimeByRuntime` sequences. */
 const installCallCountByRuntime: Record<string, number> = {};
 let addChannelMembersCallCount = 0;
+let setGlobalAgentConfigCallCount = 0;
 let mockGlobalAgentConfig: {
   credential_mode?: "byok" | "colony_credits";
   env_vars: Record<string, string>;
@@ -8231,6 +8500,10 @@ let mockColonyCreditsAccount: {
 
 // Per-page get_nsec call counter for sequenced error testing.
 let nsecCallCount = 0;
+let backupPassphraseCallCount = 0;
+let backupVerificationCallCount = 0;
+let backupSaveCallCount = 0;
+let backupSaveErrorCallCount = 0;
 
 // Per-page explicit catalog publication outcomes.
 let personaSharePublicationCallCount = 0;
@@ -8992,7 +9265,7 @@ async function handleCreateManagedAgent(
   const agentArgs =
     args.input.agentArgs && args.input.agentArgs.length > 0
       ? [...args.input.agentArgs]
-      : agentCommand === "goose"
+      : agentCommand === "omp"
         ? ["acp"]
         : [];
   const managedAgent: MockManagedAgent = {
@@ -9528,9 +9801,20 @@ async function resolveMockUploadDescriptors(
 }
 
 async function resolveMockUploadDescriptorForBytes(
-  args: { data: number[]; filename?: string | null },
+  args: { data: number[] | Uint8Array; filename?: string | null },
   config: E2eConfig | undefined,
 ): Promise<RawBlobDescriptor> {
+  const uploadDelayMs = config?.mock?.linkPreviewUploadDelayMs ?? 0;
+  if (args.filename?.startsWith("link-preview-")) {
+    if (uploadDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, uploadDelayMs));
+    }
+    const errorFilenames = config?.mock?.linkPreviewUploadErrorFilenames;
+    if (errorFilenames?.some((needle) => args.filename?.includes(needle))) {
+      throw new Error(`mock upload failed for ${args.filename}`);
+    }
+  }
+
   const configured = config?.mock?.uploadDescriptors;
   if (configured !== undefined) {
     const descriptors = await resolveMockUploadDescriptors(config);
@@ -9545,12 +9829,30 @@ async function resolveMockUploadDescriptorForBytes(
     value.toString(16).padStart(2, "0"),
   ).join("");
   const filename = args.filename ?? "upload.bin";
-  const isAgentJson = filename.toLowerCase().endsWith(".agent.json");
+  const normalizedFilename = filename.toLowerCase();
+  const isAgentJson = normalizedFilename.endsWith(".agent.json");
+  const extension = isAgentJson
+    ? "json"
+    : normalizedFilename.endsWith(".png")
+      ? "png"
+      : normalizedFilename.endsWith(".jpg") ||
+          normalizedFilename.endsWith(".jpeg")
+        ? "jpg"
+        : normalizedFilename.endsWith(".gif")
+          ? "gif"
+          : normalizedFilename.endsWith(".webp")
+            ? "webp"
+            : "bin";
+  const type = isAgentJson
+    ? "application/json"
+    : extension === "bin"
+      ? "application/octet-stream"
+      : `image/${extension === "jpg" ? "jpeg" : extension}`;
   return {
-    url: `https://mock.relay/media/${sha256}${isAgentJson ? ".json" : ".bin"}`,
+    url: `${getRelayHttpUrl(config)}/media/${sha256}.${extension}`,
     sha256,
     size: bytes.length,
-    type: isAgentJson ? "application/json" : "application/octet-stream",
+    type,
     uploaded: Math.floor(Date.now() / 1000),
     filename,
   };
@@ -9566,6 +9868,9 @@ async function handleSendChannelMessage(
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
     referenceTags?: string[][] | null;
+    linkPreviewTags?: string[][] | null;
+    mentionTags?: string[][] | null;
+    sentFromThreadTag?: string[] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -9589,8 +9894,47 @@ async function handleSendChannelMessage(
   // are validated by the native command before signing. Mirror the accepted
   // tag set in mock mode so E2E tests exercise the actual send contract.
   const referenceTags = args.referenceTags ?? [];
-  // Both kinds end up on the stored event's tag set, just like the real relay.
-  const extraTags = [...mediaTags, ...emojiTags, ...referenceTags];
+  // Sender-authored link preview snapshots are independently validated by the
+  // real command and echoed on the stored event. Preserve them in the mock so
+  // E2E recipient rendering exercises the same authored-snapshot path.
+  const linkPreviewTags = args.linkPreviewTags ?? [];
+  const mentionTags = args.mentionTags ?? [];
+  const sentFromThreadTag = args.sentFromThreadTag ?? null;
+  if (linkPreviewTags.length > 0) {
+    const suppression = linkPreviewTags.some(
+      (tag) =>
+        tag.length === 2 && tag[0] === "link-preview" && tag[1] === "none",
+    );
+    const snapshots = linkPreviewTags.filter(
+      (tag) => tag[0] === "link-preview" && tag[1] === "snapshot",
+    );
+    const validSnapshots = parseLinkPreviewSnapshots(
+      snapshots,
+      args.content,
+      new URL(getRelayHttpUrl(config)).origin,
+    );
+    if (
+      (suppression && linkPreviewTags.length !== 1) ||
+      (!suppression &&
+        (snapshots.length !== linkPreviewTags.length ||
+          validSnapshots.length !== snapshots.length ||
+          snapshots.some(
+            (tag) => !isValidLinkPreviewSnapshotCanonicalUrl(tag[3] ?? ""),
+          )))
+    ) {
+      throw new Error("invalid link-preview snapshot tag");
+    }
+  }
+  // All independently validated kinds end up on the stored event's tag set,
+  // just like the real relay.
+  const extraTags = [
+    ...mediaTags,
+    ...emojiTags,
+    ...referenceTags,
+    ...linkPreviewTags,
+    ...mentionTags,
+    ...(sentFromThreadTag ? [sentFromThreadTag] : []),
+  ];
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
@@ -10060,6 +10404,7 @@ async function resolveGetEvent(
 }
 
 async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
+  relayWebsocketConnectAttemptStarts.push(Date.now());
   const wsId = nextSocketId++;
   const ws = new WebSocket(args.url ?? DEFAULT_RELAY_WS_URL);
   const handler = resolveHandler(args.onMessage);
@@ -10088,6 +10433,10 @@ async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
 }
 
 async function connectMockSocket(args: { onMessage: unknown }) {
+  relayWebsocketConnectAttemptStarts.push(Date.now());
+  if (mockWebsocketUnavailable) {
+    throw new Error("mock relay unavailable");
+  }
   const connectError = getConfig()?.mock?.websocketConnectErrors?.shift();
   if (connectError) {
     throw new Error(connectError);
@@ -10171,7 +10520,16 @@ function sendToMockSocket(args: {
 
   if (type === "AUTH") {
     const event = rest[0] as RelayEvent;
-    sendWsText(socket.handler, ["OK", event.id, true, ""]);
+    const response = mockAuthResponses.shift() ?? {
+      success: true,
+      message: "",
+    };
+    sendWsText(socket.handler, [
+      "OK",
+      event.id,
+      response.success,
+      response.message,
+    ]);
     return;
   }
 
@@ -10389,6 +10747,13 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (subId.startsWith("history-")) {
+      const closeReason = mockChannelHistoryCloses.shift();
+      if (closeReason) {
+        sendWsText(socket.handler, ["CLOSED", subId, closeReason]);
+        return;
+      }
+    }
     emitMockHistory(socket, subId, channelIds[0], filter);
     return;
   }
@@ -10520,6 +10885,18 @@ function sendToMockSocket(args: {
         ]);
         return;
       }
+      if (
+        event.kind === KIND_PROJECT_ANNOUNCEMENT &&
+        window.__BUZZ_E2E_UNSUPPORTED_PROJECT_ANNOUNCEMENTS__
+      ) {
+        sendWsText(socket.handler, [
+          "OK",
+          event.id,
+          false,
+          "restricted: unknown event kind",
+        ]);
+        return;
+      }
       const rejectionIndex =
         window.__BUZZ_E2E_REJECT_PROJECT_EVENT_KINDS__?.indexOf(event.kind) ??
         -1;
@@ -10537,6 +10914,30 @@ function sendToMockSocket(args: {
         return;
       }
       getMockProjectEventStore().push(event);
+      const acceptedProjectEvents =
+        window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__ ?? [];
+      acceptedProjectEvents.push({
+        content: event.content,
+        kind: event.kind,
+        tags: event.tags,
+      });
+      window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__ = acceptedProjectEvents;
+      const failedAckIndex =
+        window.__BUZZ_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__?.indexOf(event.kind) ??
+        -1;
+      if (failedAckIndex >= 0) {
+        window.__BUZZ_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__?.splice(
+          failedAckIndex,
+          1,
+        );
+        sendWsText(socket.handler, [
+          "OK",
+          event.id,
+          false,
+          "mock lost project acknowledgement",
+        ]);
+        return;
+      }
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
       return;
     }
@@ -10606,6 +11007,10 @@ export function maybeInstallE2eTauriMocks() {
   }
 
   mockClosedChannelLiveSubscription = false;
+  mockWebsocketUnavailable = false;
+  mockAuthResponses.length = 0;
+  mockChannelHistoryCloses.length = 0;
+  relayWebsocketConnectAttemptStarts.length = 0;
   if (config.mock?.activeIdentityInDefaultChannels) {
     const activeIdentity = getActiveIdentity(config);
     if (activeIdentity) {
@@ -10624,6 +11029,7 @@ export function maybeInstallE2eTauriMocks() {
       }
     }
   }
+  setGlobalAgentConfigCallCount = 0;
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? {
         ...config.mock.globalAgentConfig,
@@ -10643,6 +11049,7 @@ export function maybeInstallE2eTauriMocks() {
   seedMockCompanyRecords(config.mock?.companyWorkContext);
   seedMockSearchProfiles(config);
   resetMockWorkflows();
+  seedMockWorkflowRuns(config.mock?.workflowRunSeeds);
   resetMockMesh();
   resetMockUserStatuses();
   resetMockPersonaCatalogEvents(config);
@@ -10659,12 +11066,28 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMANDS__ = [];
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
+  mockMediaProxyPort = config.mock?.mediaProxyInitiallyUnavailable
+    ? 0
+    : MOCK_MEDIA_PROXY_PORT;
+  window.__BUZZ_E2E_RELEASE_MEDIA_PROXY__ = () => {
+    mockMediaProxyPort = MOCK_MEDIA_PROXY_PORT;
+    resetMediaCaches();
+    ensureRelayOriginFetch();
+    return mockMediaProxyPort;
+  };
   window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__ = (payload) =>
     emit("huddle-tts-speaker-level", payload);
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
+  window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__ = [];
   window.__BUZZ_E2E_PUBLISHED_EVENTS__ = [];
   window.__BUZZ_E2E_MOCK_COMPANY_BROKER__ = readMockCompanyBrokerLog;
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
+  window.__BUZZ_E2E_EMIT_MEDIA_UPLOAD_PHASE__ = async (input) => {
+    await emit("media-upload-phase", input);
+  };
+  window.__BUZZ_E2E_EMIT_MEDIA_UPLOAD_PROGRESS__ = async (input) => {
+    await emit("media-upload-progress", input);
+  };
   for (const fixture of config.mock?.blockTimelineEvents ?? []) {
     const channel = mockChannels.find(
       (candidate) => candidate.name === fixture.channelName,
@@ -10827,15 +11250,21 @@ export function maybeInstallE2eTauriMocks() {
       queryKey: ["channels"],
     });
   };
+  const pendingChannelMutations =
+    window.__BUZZ_E2E_PENDING_CHANNEL_MUTATIONS__ ?? [];
   window.__BUZZ_E2E_MUTATE_CHANNEL__ = ({
     channelId,
     channelType,
+    description,
     removeMemberPubkey,
   }) => {
     const channel = mockChannels.find((ch) => ch.id === channelId);
     if (!channel) return;
     if (channelType !== undefined) {
       channel.channel_type = channelType;
+    }
+    if (description !== undefined) {
+      channel.description = description;
     }
     if (removeMemberPubkey !== undefined) {
       channel.members = channel.members.filter(
@@ -10845,10 +11274,31 @@ export function maybeInstallE2eTauriMocks() {
     }
     touchMockChannel(channel);
   };
+  for (const mutation of pendingChannelMutations) {
+    window.__BUZZ_E2E_MUTATE_CHANNEL__?.(mutation);
+  }
+  pendingChannelMutations.length = 0;
   // get_event defer/release seam — reset counter and queue on each install.
   window.__BUZZ_E2E_GET_EVENT_CALL_COUNT__ = 0;
   window.__BUZZ_E2E_DEFER_GET_EVENT__ = null;
   deferredGetEventQueue = [];
+  deferNextChannelsRead = false;
+  deferredChannelsReadResolve = null;
+  window.__BUZZ_E2E_CHANNELS_READ_PENDING__ = 0;
+  window.__BUZZ_E2E_DEFER_NEXT_CHANNELS_READ__ = () => {
+    if (deferredChannelsReadResolve) {
+      throw new Error("a channel read is already deferred");
+    }
+    deferNextChannelsRead = true;
+  };
+  window.__BUZZ_E2E_RELEASE_CHANNELS_READ__ = () => {
+    deferNextChannelsRead = false;
+    const resolve = deferredChannelsReadResolve;
+    deferredChannelsReadResolve = null;
+    window.__BUZZ_E2E_CHANNELS_READ_PENDING__ = 0;
+    resolve?.();
+    return resolve ? 1 : 0;
+  };
   window.__BUZZ_E2E_RELEASE_GET_EVENT__ = () => {
     const queued = deferredGetEventQueue.splice(0);
     for (const entry of queued) {
@@ -10898,6 +11348,36 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__ = () =>
     relayClient.getConnectionState();
+  window.__BUZZ_E2E_QUEUE_AUTH_RESPONSES__ = (responses) => {
+    mockAuthResponses.push(...responses);
+  };
+  window.__BUZZ_E2E_QUEUE_CHANNEL_HISTORY_CLOSES__ = (reasons) => {
+    mockChannelHistoryCloses.push(...reasons);
+  };
+  window.__BUZZ_E2E_CLOSE_LIVE_SUBSCRIPTIONS__ = (reason) => {
+    let closed = 0;
+    for (const socket of mockSockets.values()) {
+      for (const subId of [...socket.subscriptions.keys()]) {
+        sendWsText(socket.handler, ["CLOSED", subId, reason]);
+        socket.subscriptions.delete(subId);
+        closed += 1;
+      }
+    }
+    return closed;
+  };
+  window.__BUZZ_E2E_SET_MOCK_WEBSOCKET_UNAVAILABLE__ = (unavailable) => {
+    mockWebsocketUnavailable = unavailable;
+    if (unavailable) relayWebsocketConnectAttemptStarts.length = 0;
+  };
+  window.__BUZZ_E2E_GET_WEBSOCKET_CONNECT_ATTEMPTS__ = () => [
+    ...relayWebsocketConnectAttemptStarts,
+  ];
+  window.__BUZZ_E2E_ACTIVATE_RELAY_RATE_LIMIT__ = (seconds) => {
+    activateRateLimit(seconds);
+  };
+  window.__BUZZ_E2E_RESET_WEBSOCKET_CONNECT_ATTEMPTS__ = () => {
+    relayWebsocketConnectAttemptStarts.length = 0;
+  };
 
   window.__BUZZ_E2E_SEED_MOCK_REMINDERS__ = (reminders) => {
     mockReminderEvents.length = 0;
@@ -11003,6 +11483,9 @@ export function maybeInstallE2eTauriMocks() {
     const identity = getActiveIdentity(activeConfig);
     window.__BUZZ_E2E_COMMANDS__?.push(command);
     const loggedPayload = (() => {
+      if (payload instanceof Uint8Array) {
+        return { rawByteLength: payload.byteLength };
+      }
       try {
         return JSON.parse(JSON.stringify(payload ?? null));
       } catch {
@@ -11636,6 +12119,25 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "mesh_installed_models":
         return mockMeshState.models;
+      case "mesh_model_catalog":
+        return {
+          gpuName: "Mock Apple GPU",
+          vramDisplay: "32 GB",
+          vramGb: 32,
+          recommended: "Gemma-4-E4B-it-Q4_K_M",
+          entries: [
+            {
+              name: "Gemma-4-E4B-it-Q4_K_M",
+              size: "3.5GB",
+              sizeGb: 3.5,
+              description: "Colony-curated local agent model",
+              fit: "comfortable",
+              installed: true,
+              recommended: true,
+              curated: true,
+            },
+          ],
+        };
       case "mesh_node_status":
         return meshNodeStatus(mockMeshState.nodeState, mockMeshState.nodeMode);
       case "mesh_serving_usage":
@@ -11711,6 +12213,105 @@ export function maybeInstallE2eTauriMocks() {
         // harness there is nothing to wipe; resolving is enough — specs
         // assert invocation via __BUZZ_E2E_COMMANDS__ and the pending UI.
         return;
+      case "generate_backup_passphrase": {
+        const request = payload as {
+          words?: number;
+          separator?: string;
+        } | null;
+        const errors = activeConfig?.mock?.backupPassphraseErrors;
+        const errorIndex = Math.min(
+          backupPassphraseCallCount,
+          Math.max((errors?.length ?? 1) - 1, 0),
+        );
+        const generatedError = errors?.[errorIndex];
+        backupPassphraseCallCount += 1;
+        if (generatedError) {
+          throw new Error(generatedError);
+        }
+        const configuredPassphrases = activeConfig?.mock?.backupPassphrases;
+        if (configuredPassphrases?.length) {
+          return configuredPassphrases[
+            Math.min(
+              backupPassphraseCallCount - 1,
+              configuredPassphrases.length - 1,
+            )
+          ];
+        }
+        const wordCount = Math.min(Math.max(request?.words ?? 3, 3), 10);
+        const separator = request?.separator ?? " ";
+        return MOCK_PASSPHRASE_WORDS.slice(0, wordCount).join(separator);
+      }
+      case "create_ncryptsec_backup": {
+        const password = (payload as { password?: string } | null)?.password;
+        if (!password) {
+          throw new Error("A passphrase is required.");
+        }
+        const delayMs = activeConfig?.mock?.backupEncryptionDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) =>
+            window.setTimeout(resolve, delayMs),
+          );
+        }
+        return MOCK_NCRYPTSEC;
+      }
+      case "verify_ncryptsec_backup": {
+        const request = payload as {
+          ncryptsec?: string;
+          password?: string;
+        } | null;
+        const errors = activeConfig?.mock?.backupVerificationErrors;
+        const errorIndex = Math.min(
+          backupVerificationCallCount,
+          Math.max((errors?.length ?? 1) - 1, 0),
+        );
+        const configuredError = errors?.[errorIndex];
+        backupVerificationCallCount += 1;
+        if (configuredError) {
+          throw new Error(configuredError);
+        }
+        if (
+          request?.password !== MOCK_BACKUP_PASSPHRASE ||
+          !request.ncryptsec?.startsWith("ncryptsec1")
+        ) {
+          throw new Error("Wrong backup password or damaged key backup.");
+        }
+        const configuredPubkeys = activeConfig?.mock?.backupVerificationPubkeys;
+        const pubkey =
+          configuredPubkeys?.[
+            Math.min(errorIndex, configuredPubkeys.length - 1)
+          ] ??
+          (request.ncryptsec === MOCK_NCRYPTSEC
+            ? DEFAULT_MOCK_IDENTITY.pubkey
+            : "f".repeat(64));
+        return {
+          pubkey,
+          npub: npubEncode(pubkey),
+          matchesCurrentIdentity:
+            pubkey === (identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey),
+        };
+      }
+      case "save_ncryptsec_copy": {
+        const blob = (payload as { ncryptsec?: string } | null)?.ncryptsec;
+        if (!blob?.startsWith("ncryptsec1")) {
+          throw new Error("Not a valid key backup.");
+        }
+        const errors = activeConfig?.mock?.backupSaveErrors;
+        const errorIndex = Math.min(
+          backupSaveErrorCallCount,
+          Math.max((errors?.length ?? 1) - 1, 0),
+        );
+        const configuredError = errors?.[errorIndex];
+        backupSaveErrorCallCount += 1;
+        if (configuredError) {
+          throw new Error(configuredError);
+        }
+        const paths = activeConfig?.mock?.backupSavePaths ?? [
+          "/mock/backups/identity.ncryptsec",
+        ];
+        const pathIndex = Math.min(backupSaveCallCount, paths.length - 1);
+        backupSaveCallCount += 1;
+        return paths[pathIndex] ?? null;
+      }
       case "get_nsec": {
         const nsecSequence = activeConfig?.mock?.nsecErrors;
         if (nsecSequence && nsecSequence.length > 0) {
@@ -11743,12 +12344,29 @@ export function maybeInstallE2eTauriMocks() {
           locked: false,
         };
       }
-      case "import_identity":
+      case "import_identity": {
+        const request = payload as {
+          nsec?: string;
+          password?: string;
+        } | null;
+        const input = request?.nsec ?? "";
+        if (input.trim().startsWith("ncryptsec1")) {
+          if (
+            input.trim() !== MOCK_NCRYPTSEC ||
+            request?.password !== MOCK_BACKUP_PASSPHRASE
+          ) {
+            throw new Error("Wrong backup password or damaged key backup.");
+          }
+          mockIdentityLostCleared = true;
+          mockIdentityLockedCleared = true;
+          return importMockIdentity(
+            nsecEncode(hexToBytes(DEFAULT_REAL_IDENTITY.privateKey)),
+          );
+        }
         mockIdentityLostCleared = true;
         mockIdentityLockedCleared = true;
-        return importMockIdentity(
-          (payload as { nsec?: string } | null)?.nsec ?? "",
-        );
+        return importMockIdentity(input);
+      }
       case "validate_repos_dir":
         // The browser harness has no host filesystem to validate. Treat the
         // seeded empty/default path as valid so Add Community can continue to
@@ -11756,6 +12374,26 @@ export function maybeInstallE2eTauriMocks() {
         return;
       case "fetch_join_policy":
         return activeConfig?.mock?.joinPolicy ?? null;
+      case "fetch_link_preview_metadata": {
+        const startBlockMs =
+          activeConfig?.mock?.linkPreviewMetadataStartBlockMs ?? 0;
+        if (startBlockMs > 0) {
+          const stopAt = performance.now() + startBlockMs;
+          while (performance.now() < stopAt) {
+            // Deliberately block to model uncached native command startup.
+          }
+        }
+        const delayMs = activeConfig?.mock?.linkPreviewMetadataDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        const href = (payload as { href?: string }).href;
+        const metadataByHref = activeConfig?.mock?.linkPreviewMetadataByHref;
+        if (href && metadataByHref && Object.hasOwn(metadataByHref, href)) {
+          return metadataByHref[href];
+        }
+        return activeConfig?.mock?.linkPreviewMetadata ?? null;
+      }
       case "apply_workspace": {
         const applyDelayMs = activeConfig?.mock?.applyCommunityDelayMs ?? 0;
         if (applyDelayMs > 0) {
@@ -12378,8 +13016,19 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleDiscoverManagedAgentPrereqs>[0],
           activeConfig,
         );
-      case "get_channels":
-        return handleGetChannels(activeConfig);
+      case "get_channels": {
+        // Consume the one-shot before reading so only the intended request is held.
+        const deferred = deferNextChannelsRead;
+        deferNextChannelsRead = false;
+        const channels = handleGetChannels(activeConfig);
+        if (deferred) {
+          await new Promise<void>((resolve) => {
+            deferredChannelsReadResolve = resolve;
+            window.__BUZZ_E2E_CHANNELS_READ_PENDING__ = 1;
+          });
+        }
+        return channels;
+      }
       case "get_feed":
         return handleGetFeed(
           (payload as Parameters<typeof handleGetFeed>[0]) ?? {},
@@ -12505,6 +13154,50 @@ export function maybeInstallE2eTauriMocks() {
           created_at: template.createdAt,
           updated_at: template.updatedAt,
         }));
+      case "create_channel_template": {
+        const { input } = payload as {
+          input: {
+            name: string;
+            description?: string;
+            channelType?: "stream" | "forum";
+            visibility?: "open" | "private";
+            canvasTemplate?: string;
+            agents?: ChannelTemplate["agents"];
+          };
+        };
+        const timestamp = new Date().toISOString();
+        const created: ChannelTemplate = {
+          id: `template-${Date.now()}`,
+          name: input.name,
+          description: input.description ?? null,
+          channelType: input.channelType ?? "stream",
+          visibility: input.visibility ?? "open",
+          canvasTemplate: input.canvasTemplate ?? null,
+          agents: input.agents ?? { personas: [], teams: [] },
+          isBuiltin: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          activeConfig.mock.channelTemplates = [
+            ...(activeConfig.mock.channelTemplates ?? []),
+            created,
+          ];
+        }
+        return {
+          id: created.id,
+          name: created.name,
+          description: created.description,
+          channel_type: created.channelType,
+          visibility: created.visibility,
+          canvas_template: created.canvasTemplate,
+          agents: created.agents,
+          is_builtin: created.isBuiltin,
+          created_at: created.createdAt,
+          updated_at: created.updatedAt,
+        };
+      }
       case "create_team":
         return handleCreateTeam(
           payload as Parameters<typeof handleCreateTeam>[0],
@@ -12597,7 +13290,7 @@ export function maybeInstallE2eTauriMocks() {
           displayName: "Imported Agent",
           isBuiltIn: true,
           model: "claude-opus-4-5",
-          runtime: "goose",
+          runtime: "omp",
           systemPrompt: null,
           avatarUrl: null,
           memoryLevel: "none",
@@ -12811,12 +13504,12 @@ export function maybeInstallE2eTauriMocks() {
         ];
         const anthropicModels = [
           {
-            id: "goose-claude-4-6-opus",
+            id: "omp-claude-4-6-opus",
             name: "Claude Opus 4.6",
             description: null,
           },
           {
-            id: "goose-claude-4-6-sonnet",
+            id: "omp-claude-4-6-sonnet",
             name: "Claude Sonnet 4.6",
             description: null,
           },
@@ -12911,7 +13604,16 @@ export function maybeInstallE2eTauriMocks() {
         }
         return null;
       }
+      case "get_global_agent_config_set_call_count":
+        return setGlobalAgentConfigCallCount;
       case "set_global_agent_config": {
+        setGlobalAgentConfigCallCount += 1;
+        const saveErrors = activeConfig?.mock?.setGlobalAgentConfigErrors;
+        const saveError =
+          saveErrors?.[
+            Math.min(setGlobalAgentConfigCallCount - 1, saveErrors.length - 1)
+          ];
+        if (saveError) throw new Error(saveError);
         // Echo back the submitted config as the saved value (mirrors the
         // backend's strip-on-write pass in tests where all values are already
         // non-empty). The invoke payload wraps it as { config }.
@@ -12961,6 +13663,8 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "get_baked_build_env_keys":
         return (config?.mock?.bakedBuildEnv ?? []).map((entry) => entry.key);
+      case "agent_access_owner_only":
+        return config?.mock?.ownerOnlyAccessBuild ?? false;
       case "update_managed_agent":
         return handleUpdateManagedAgent(
           payload as Parameters<typeof handleUpdateManagedAgent>[0],
@@ -13104,7 +13808,7 @@ export function maybeInstallE2eTauriMocks() {
         return null;
       case "edit_message":
         return handleEditMessage(
-          payload as Parameters<typeof handleEditMessage>[0],
+          (payload as { input: Parameters<typeof handleEditMessage>[0] }).input,
           activeConfig,
         );
       case "add_reaction":
@@ -13118,7 +13822,7 @@ export function maybeInstallE2eTauriMocks() {
           activeConfig,
         );
       case "get_media_proxy_port":
-        return MOCK_MEDIA_PROXY_PORT;
+        return mockMediaProxyPort;
       case "pick_and_upload_media":
         return await resolveMockUploadDescriptors(activeConfig);
       case "pick_and_upload_image":
@@ -13126,6 +13830,11 @@ export function maybeInstallE2eTauriMocks() {
       case "upload_media_bytes":
         return resolveMockUploadDescriptorForBytes(
           payload as { data: number[]; filename?: string | null },
+          activeConfig,
+        );
+      case "upload_media_bytes_raw":
+        return resolveMockUploadDescriptorForBytes(
+          { data: payload as Uint8Array },
           activeConfig,
         );
       case "fetch_media_bytes": {
@@ -13171,7 +13880,14 @@ export function maybeInstallE2eTauriMocks() {
       case "copy_text_to_clipboard":
         await navigator.clipboard.writeText((payload as { text: string }).text);
         return;
+      case "read_clipboard_text":
+        return navigator.clipboard.readText();
       case "get_event":
+        return handleGetEvent(
+          payload as Parameters<typeof handleGetEvent>[0],
+          activeConfig,
+        );
+      case "get_task_artifact_event":
         return handleGetEvent(
           payload as Parameters<typeof handleGetEvent>[0],
           activeConfig,
@@ -13313,6 +14029,13 @@ export function maybeInstallE2eTauriMocks() {
       case "clear_e2e_opened_external_urls":
         openedExternalUrls.length = 0;
         return null;
+      case "plugin:event|emit": {
+        const eventPayload = payload as { event?: string; payload?: unknown };
+        if (typeof eventPayload.event === "string") {
+          await emit(eventPayload.event, eventPayload.payload);
+        }
+        return null;
+      }
       case "plugin:window|show":
       case "plugin:window|unminimize":
       case "plugin:window|set_focus":
@@ -13383,8 +14106,19 @@ export function maybeInstallE2eTauriMocks() {
         }
         return "nostrpair://8f4b8db31967ce14fef970a1ff1e8eecf19a430aa1c83875e2f5be68dcac0f1a?relay=wss%3A%2F%2Frelay.example.com&secret=87d5a8cfd5807a0cb44f728b67d88d6dcb8daf99be137c158f21a50c1e913c0a&v=1";
       }
+      case "start_identity_recovery_pairing": {
+        const delayMs = activeConfig?.mock?.pairingStartDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
+        return "nostrpair://8f4b8db31967ce14fef970a1ff1e8eecf19a430aa1c83875e2f5be68dcac0f1a?relay=wss%3A%2F%2Frelay.example.com&secret=87d5a8cfd5807a0cb44f728b67d88d6dcb8daf99be137c158f21a50c1e913c0a&v=1&mode=recover";
+      }
       case "cancel_pairing":
       case "confirm_pairing_sas":
+        return null;
+      case "complete_identity_recovery_pairing":
+        mockIdentityLostCleared = true;
+        await emit("pairing-complete", {});
         return null;
       // ── NIP-IA identity archival ────────────────────────────────────────
       // These mocks drive the archive-button gate matrix in
@@ -13515,8 +14249,12 @@ export function maybeInstallE2eTauriMocks() {
         return activeConfig?.mock?.agentMetricArchiveDefaultEnabled ?? false;
       case "set_prevent_sleep_active":
         return null;
+      case "set_window_vibrancy":
+        return null;
       case "plugin:window|is_fullscreen":
         return false;
+      case "plugin:app|version":
+        return MOCK_APP_VERSION;
       case "merge_save_subscription_kinds": {
         // Mirrors `merge_owner_p_kinds`: union `kind` into the owner_p row's
         // kinds, creating the row if it doesn't exist yet.
@@ -13577,6 +14315,15 @@ export function maybeInstallE2eTauriMocks() {
   // which is unrelated to IPC. Only mockIPC and the __TAURI_INTERNALS__.listen
   // patch are gone, replaced by the NativeBridge the app now talks to.
   const e2eNativeBridge = new E2eNativeBridge(handleMockCommand);
+  const tauriInternals = (
+    window as unknown as { __TAURI_INTERNALS__?: unknown }
+  ).__TAURI_INTERNALS__ as {
+    invoke?: (command: string, payload?: unknown) => Promise<unknown>;
+  };
+  // Keep direct `window.__TAURI_INTERNALS__.invoke` calls working for legacy
+  // E2E seams while production code uses the shared NativeBridge above.
+  tauriInternals.invoke = (command, payload) =>
+    handleMockCommand(command, payload ?? {});
   window.__BUZZ_E2E_EMIT_NATIVE_EVENT__ = (event, payload) =>
     e2eNativeBridge.emit(event, payload);
   window.__BUZZ_E2E_HAS_NATIVE_EVENT_LISTENER__ = (event) =>

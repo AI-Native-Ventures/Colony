@@ -30,6 +30,12 @@ export const PERSONA_FIELD_CONTROL_CLASS =
 export const PERSONA_LABEL_OPTIONAL_CLASS =
   "ml-1 text-xs font-normal text-muted-foreground/50";
 
+/** Shared advanced-fields expand/collapse easing for the agent dialogs. */
+export const ADVANCED_FIELDS_MOTION_TRANSITION = {
+  duration: 0.18,
+  ease: [0.23, 1, 0.32, 1],
+} as const;
+
 export const AUTO_MODEL_DROPDOWN_VALUE = "__auto_model__";
 export const CUSTOM_MODEL_DROPDOWN_VALUE = "__custom_model__";
 export const AUTO_PROVIDER_DROPDOWN_VALUE = "__auto_provider__";
@@ -40,6 +46,7 @@ const KNOWN_LLM_PROVIDER_IDS = [
   "anthropic",
   "databricks",
   "databricks_v2",
+  "deepseek",
   "openai",
   "openai-compat",
   "openrouter",
@@ -63,19 +70,30 @@ export type PersonaDropdownOption = {
  *
  * `requiredEnvKeys`: keys that must be present in the agent's effective env for
  *   the provider to work (surfaced as amber required rows in EnvVarsEditor).
- * `secretEnvVar`: the one env key that holds a user-typed secret (API key).
- *   Only set for providers where the credential is a plaintext secret the user
- *   pastes in. Cleared automatically when the user switches away from the
- *   provider. Databricks uses OAuth PKCE (no typed secret), so it has no
- *   secretEnvVar.
+ * `secretEnvVar` + `apiKeyLabel`: paired — either both are present or neither
+ *   is. `secretEnvVar` is the env key holding the user-typed secret; clearing
+ *   it when the user switches providers ensures no orphaned credentials remain.
+ *   Databricks uses OAuth PKCE (no typed secret), so it carries neither field.
+ *   `apiKeyLabel` is the human-readable label shown in the credential field;
+ *   derived by `getProviderApiKeyLabel` — single source of truth for all UI
+ *   surfaces so they never drift.
  *
  * Mirrors the Rust `readiness::buzz_agent_requirements` /
  * `readiness::goose_requirements` logic — keep in sync.
  */
-export type ProviderCredentialConfig = {
-  requiredEnvKeys: readonly string[];
-  secretEnvVar?: string;
-};
+export type ProviderCredentialConfig =
+  | {
+      requiredEnvKeys: readonly string[];
+      secretEnvVar?: undefined;
+      apiKeyLabel?: undefined;
+    }
+  | {
+      requiredEnvKeys: readonly string[];
+      /** The env key holding the user-typed API secret. */
+      secretEnvVar: string;
+      /** Display label for the credential input field, e.g. "Anthropic API Key". */
+      apiKeyLabel?: string;
+    };
 
 /**
  * Unified provider credential config table.  Single source of truth for both
@@ -87,20 +105,23 @@ const PROVIDER_CREDENTIAL_CONFIG: Partial<
   anthropic: {
     requiredEnvKeys: ["ANTHROPIC_API_KEY"],
     secretEnvVar: "ANTHROPIC_API_KEY",
+    apiKeyLabel: "Anthropic API Key",
   },
   openai: {
     requiredEnvKeys: ["OPENAI_COMPAT_API_KEY"],
     secretEnvVar: "OPENAI_COMPAT_API_KEY",
+    apiKeyLabel: "OpenAI Runtime API Key",
   },
   "openai-compat": {
     requiredEnvKeys: ["OPENAI_COMPAT_API_KEY"],
     secretEnvVar: "OPENAI_COMPAT_API_KEY",
+    apiKeyLabel: "OpenAI-compatible Runtime API Key",
   },
   databricks: {
     // DATABRICKS_TOKEN is NOT required — OAuth PKCE is the normal path.
     requiredEnvKeys: ["DATABRICKS_HOST"],
-    // No secretEnvVar: DATABRICKS_HOST is a URL, not a secret credential, and
-    // is not cleared on provider switch (unlike API keys).
+    // No secretEnvVar / apiKeyLabel: DATABRICKS_HOST is a URL, not a secret
+    // credential, and is not cleared on provider switch (unlike API keys).
   },
   databricks_v2: {
     // DATABRICKS_TOKEN is NOT required — OAuth PKCE is the normal path.
@@ -113,6 +134,17 @@ const PROVIDER_CREDENTIAL_CONFIG: Partial<
   openrouter: {
     requiredEnvKeys: ["OPENROUTER_API_KEY"],
     secretEnvVar: "OPENROUTER_API_KEY",
+    apiKeyLabel: "OpenRouter API Key",
+  },
+  deepseek: {
+    // DeepSeek's API is OpenAI-compatible (base URL defaults to
+    // https://api.deepseek.com in discovery), but the Pi-family harnesses
+    // (Oh My Pi, Prime Agent) resolve their native deepseek provider's
+    // credential from DEEPSEEK_API_KEY — so that is the env var the field
+    // writes. buzz-agent and the HTTP discovery fall back to
+    // OPENAI_COMPAT_API_KEY for legacy configs.
+    requiredEnvKeys: ["DEEPSEEK_API_KEY"],
+    secretEnvVar: "DEEPSEEK_API_KEY",
   },
 };
 
@@ -123,6 +155,7 @@ const DEFAULT_MODEL_OPTION: PersonaModelOption = {
 
 export const PERSONA_LLM_PROVIDER_OPTIONS: readonly PersonaModelOption[] = [
   { id: "anthropic", label: "Anthropic" },
+  { id: "deepseek", label: "DeepSeek" },
   { id: "openai", label: "OpenAI" },
   { id: "openai-compat", label: "OpenAI-compatible" },
   { id: "openrouter", label: "OpenRouter" },
@@ -135,7 +168,6 @@ const PERSONA_MODEL_OPTIONS_BY_RUNTIME: Record<
   string,
   readonly PersonaModelOption[]
 > = {
-  goose: [DEFAULT_MODEL_OPTION],
   "buzz-agent": [DEFAULT_MODEL_OPTION],
   claude: [DEFAULT_MODEL_OPTION],
   codex: [DEFAULT_MODEL_OPTION],
@@ -165,7 +197,13 @@ export function requiredCredentialEnvKeys(
   provider: string,
 ): readonly string[] {
   const normalizedRuntime = runtimeId.trim();
-  if (normalizedRuntime !== "buzz-agent" && normalizedRuntime !== "goose") {
+  // Oh My Pi and OpenCode take provider credentials through the same
+  // OpenAI-compatible / vendor env vars as buzz-agent.
+  if (
+    normalizedRuntime !== "buzz-agent" &&
+    normalizedRuntime !== "omp" &&
+    normalizedRuntime !== "opencode"
+  ) {
     return [];
   }
   const config = PROVIDER_CREDENTIAL_CONFIG[provider.trim().toLowerCase()];
@@ -180,7 +218,15 @@ export function isMissingRequiredDropdownField(
 }
 
 export function runtimeSupportsLlmProviderSelection(runtimeId: string) {
-  return runtimeId === "buzz-agent" || runtimeId === "goose";
+  // Oh My Pi and OpenCode select their LLM through the same provider switcher
+  // as Colony Agent: the provider is applied via the universal
+  // BUZZ_ACP_PROVIDER env var and model ids are provider-qualified
+  // (`provider/model`) for the harness's ACP model catalog.
+  return (
+    runtimeId === "buzz-agent" ||
+    runtimeId === "omp" ||
+    runtimeId === "opencode"
+  );
 }
 
 /** Clears values whose meaning or support changes with the selected harness. */
@@ -284,6 +330,7 @@ export function providerRequiresExplicitModel(
   const trimmedProvider = providerId?.trim() ?? "";
   return (
     trimmedProvider === "anthropic" ||
+    trimmedProvider === "deepseek" ||
     trimmedProvider === "openai" ||
     trimmedProvider === "openai-compat" ||
     trimmedProvider === "openrouter"
@@ -294,7 +341,9 @@ export function providerDisplayLabel(providerId: string) {
   const trimmedProvider = providerId.trim();
   return trimmedProvider === "relay-mesh"
     ? "Colony shared compute"
-    : trimmedProvider;
+    : trimmedProvider === "deepseek"
+      ? "DeepSeek"
+      : trimmedProvider;
 }
 
 export function getDefaultLlmProviderLabel(
@@ -402,6 +451,31 @@ export function getProviderApiKeyEnvVar(providerId: string): string | null {
   );
 }
 
+/**
+ * Returns the display label for the provider's API key field, if any.
+ * Derived from PROVIDER_CREDENTIAL_CONFIG.apiKeyLabel — single source of truth
+ * for all credential field labels so every surface stays in sync.
+ *
+ * Returns null when the provider has no typed-secret credential (e.g.,
+ * Databricks, which uses OAuth PKCE).
+ */
+export function getProviderApiKeyLabel(providerId: string): string | null {
+  return (
+    PROVIDER_CREDENTIAL_CONFIG[providerId.trim().toLowerCase()]?.apiKeyLabel ??
+    null
+  );
+}
+
+/**
+ * Muted contextual hint for the `OPENAI_API_KEY` row in env editors.
+ * Pass as `keyAnnotations` to every `EnvVarsEditor` that may surface this key
+ * (Agent Defaults, agent edit dialog, persona definition dialog).  Exported
+ * so the constant is defined once and never duplicated across surfaces.
+ */
+export const CARD_MINT_KEY_ANNOTATIONS: Readonly<Record<string, string>> = {
+  OPENAI_API_KEY: "Used for minting agent trading cards",
+};
+
 export function shouldClearKnownModelForSelectionScope({
   model,
   provider,
@@ -508,10 +582,8 @@ function runtimePreferenceSortRank(runtimeId: string) {
   switch (runtimeId) {
     case "buzz-agent":
       return 0;
-    case "goose":
-      return 1;
     default:
-      return 2;
+      return 1;
   }
 }
 

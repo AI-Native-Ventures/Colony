@@ -80,6 +80,11 @@ impl Default for DiscoveryConfig {
     }
 }
 
+/// Maximum configured drain jitter, leaving ten seconds of the hard-drain
+/// budget for WebSocket close-frame delivery after the final delayed
+/// cancellation.
+pub const MAX_DRAIN_JITTER_MS: u64 = 20_000;
+
 /// Relay runtime configuration, loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -94,6 +99,19 @@ pub struct Config {
     /// `0` (the default) disables bounded-staleness replica routing; see
     /// [`buzz_db::DbConfig::replica_read_max_age_ms`].
     pub replica_read_max_age_ms: u64,
+    /// Upper bound, in milliseconds, of the per-connection random delay applied
+    /// when sending the `1012 Service Restart` close frame during graceful
+    /// shutdown (`BUZZ_DRAIN_JITTER_MS`). Each live connection is closed after
+    /// an independent delay drawn uniformly from `[1, drain_jitter_ms]` when
+    /// jitter is enabled, which spreads client reconnects across the window
+    /// instead of releasing the whole pod's sockets in one instant (the
+    /// reconnect thundering herd that drives DB pool-timeout bursts on rolling
+    /// deploys).
+    ///
+    /// Default `0` reproduces the previous all-at-once close. Values above
+    /// [`MAX_DRAIN_JITTER_MS`] are capped, leaving headroom under the relay's
+    /// 30-second hard-drain timeout for close-frame delivery.
+    pub drain_jitter_ms: u64,
     /// Redis connection URL used by the pub/sub manager.
     pub redis_url: String,
     /// Maximum connections in the shared Redis pool. Defaults to 16.
@@ -592,6 +610,25 @@ impl Config {
                     "BUZZ_REPLICA_READ_MAX_AGE_MS must be a non-negative integer".to_string(),
                 )
             })?,
+            Err(_) => 0,
+        };
+
+        // Drain jitter: 0 = off (default). Clamp oversized values so every
+        // delayed close is initiated with ten seconds left in the relay's
+        // hard-drain budget. An empty/whitespace-only value is treated as unset
+        // (jitter off), matching the sibling vars in this file - so setting the
+        // var to "" is a valid kill switch, not a crashloop.
+        let drain_jitter_ms = match std::env::var("BUZZ_DRAIN_JITTER_MS") {
+            Ok(raw) if raw.trim().is_empty() => 0,
+            Ok(raw) => raw
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "BUZZ_DRAIN_JITTER_MS must be a non-negative integer".to_string(),
+                    )
+                })?
+                .min(MAX_DRAIN_JITTER_MS),
             Err(_) => 0,
         };
 
@@ -1148,6 +1185,7 @@ impl Config {
             database_url,
             read_database_url,
             replica_read_max_age_ms,
+            drain_jitter_ms,
             redis_url,
             redis_pool_size,
             db_pool_size,

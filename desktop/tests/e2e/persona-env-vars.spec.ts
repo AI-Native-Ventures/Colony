@@ -259,10 +259,9 @@ test("env vars editor renders in PersonaDialog new-persona form", async ({
 }) => {
   await gotoApp(page);
 
-  // Open the Agents view, then choose Create agent from the new-agent menu.
+  // Open the Agents view; the new-agent card opens the embedded create pane.
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
-  await page.getByRole("menuitem", { name: "Create agent" }).click();
 
   // Scope all env-vars queries to the dialog: AgentDefaultsSettingsCard
   // also renders an EnvVarsEditor in the background settings pane (introduced
@@ -307,13 +306,12 @@ test("persona model options follow the selected LLM provider", async ({
 
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("new-agent-card").click();
-  await page.getByRole("menuitem", { name: "Create agent" }).click();
 
   const provider = page.locator("#persona-runtime");
   await page.getByRole("tab", { name: "Customize for this agent" }).click();
   const llmProvider = page.locator("#persona-llm-provider");
   const model = page.locator("#persona-model");
-  await expect(provider).toContainText("Colony Agent (default)");
+  await expect(provider).toContainText("Oh My Pi (default)");
   await expect(llmProvider).toBeVisible();
   await expect(model).toBeVisible();
   // Custom mode requires a model selection until a provider is chosen.
@@ -321,7 +319,7 @@ test("persona model options follow the selected LLM provider", async ({
 
   await selectDropdownOption(page, llmProvider, "OpenAI");
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel("OpenAI API Key")).toBeVisible();
+  await expect(dialog.getByLabel("OpenAI Runtime API Key")).toBeVisible();
   await expect(
     dialog.getByRole("button", { name: "Advanced", exact: true }),
   ).toHaveAttribute("aria-expanded", "false");
@@ -335,7 +333,7 @@ test("persona model options follow the selected LLM provider", async ({
 
   await selectDropdownOption(page, llmProvider, "Anthropic");
   await expect(dialog.getByLabel("Anthropic API Key")).toBeVisible();
-  await expect(dialog.getByLabel("OpenAI API Key")).not.toBeVisible();
+  await expect(dialog.getByLabel("OpenAI Runtime API Key")).not.toBeVisible();
   await expect(model).toBeVisible();
 
   // Switch back to inherited defaults — per-agent provider, credential, and

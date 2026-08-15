@@ -991,7 +991,7 @@ test("declared owner sees runtime tab for a remote relay agent", async ({
         pubkey:
           "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00",
         name: "nadia",
-        agentType: "goose",
+        agentType: "omp",
         capabilities: ["search", "summaries"],
         channelNames: ["agents"],
         respondTo: "anyone",
@@ -1017,9 +1017,7 @@ test("declared owner sees runtime tab for a remote relay agent", async ({
   await expect(panel.getByTestId("user-profile-runtime")).toContainText(
     "Runtime",
   );
-  await expect(panel.getByTestId("user-profile-runtime")).toContainText(
-    "Goose",
-  );
+  await expect(panel.getByTestId("user-profile-runtime")).toContainText("omp");
   await expect(panel.getByTestId("user-profile-respond-to")).toContainText(
     "Anyone",
   );
@@ -1543,5 +1541,7 @@ test("shows agent runtimes in agent settings", async ({ page }) => {
   await openSettings(page, "agents");
 
   await expect(page.getByTestId("settings-harnesses")).toBeVisible();
-  await expect(page.getByTestId("doctor-runtime-goose")).toContainText("Goose");
+  await expect(page.getByTestId("doctor-runtime-omp")).toContainText(
+    "Oh My Pi",
+  );
 });

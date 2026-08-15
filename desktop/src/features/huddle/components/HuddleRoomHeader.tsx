@@ -1,4 +1,5 @@
 import { invoke, listen } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
 
 import { useProfileQuery, useSelfProfileCache } from "@/features/profile/hooks";
