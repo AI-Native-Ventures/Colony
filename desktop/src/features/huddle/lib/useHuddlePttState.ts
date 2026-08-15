@@ -1,4 +1,5 @@
 import { invoke, listen } from "@/shared/api/nativeBridge";
+
 import * as React from "react";
 
 export type VoiceInputMode = "push_to_talk" | "voice_activity";

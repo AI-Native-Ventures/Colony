@@ -5,6 +5,7 @@ import { useActionCenterItems } from "@/features/action-center/useActionCenterIt
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 import type { Community } from "@/features/communities/types";
+import type { LeaveCommunityResult } from "@/features/communities/leaveCommunity";
 import { AddCommunityDialog } from "@/features/communities/ui/AddCommunityDialog";
 import type { AddCommunityPrefillRequest } from "@/features/communities/addCommunityPrefill";
 import { useIsMobile } from "@/shared/hooks/use-mobile";
@@ -133,7 +134,7 @@ type AppSidebarProps = {
     id: string,
     updates: Partial<Pick<Community, "name" | "relayUrl" | "token">>,
   ) => void;
-  onRemoveCommunity: (id: string) => void;
+  onRemoveCommunity: (id: string) => Promise<LeaveCommunityResult | undefined>;
   onCreateAgent: () => void;
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
@@ -153,6 +154,7 @@ type AppSidebarProps = {
    */
   searchChannels: Channel[];
   searchFocusRequest: number;
+  scopeSearchFocusRequest: number;
   onSelectSettings: (section?: SettingsSection) => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
   onSetUserStatus: (text: string, emoji: string) => void;
@@ -224,6 +226,7 @@ export function AppSidebar({
   onOpenSearchResult,
   searchChannels,
   searchFocusRequest,
+  scopeSearchFocusRequest,
   onSelectSettings,
   onSetPresenceStatus,
   onSetUserStatus,
@@ -540,6 +543,9 @@ export function AppSidebar({
       >
         <AppSidebarPinnedHeader
           channelLabels={dmChannelLabels}
+          currentChannelId={
+            selectedView === "channel" ? selectedChannelId : null
+          }
           currentPubkey={currentPubkey}
           onBrowseChannels={onBrowseChannels}
           onCreateAgent={onCreateAgent}
@@ -550,6 +556,7 @@ export function AppSidebar({
           onSelectChannel={onSelectChannel}
           searchChannels={searchChannels}
           searchFocusRequest={searchFocusRequest}
+          scopeSearchFocusRequest={scopeSearchFocusRequest}
           suggestionChannels={channels}
         />
 
@@ -909,7 +916,6 @@ export function AppSidebar({
         }}
         onCreate={handleCreateFromDialog}
       />
-
       <AddCommunityDialog
         prefill={addCommunityPrefill}
         onOpenChange={onAddCommunityOpenChange ?? (() => {})}

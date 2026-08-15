@@ -545,9 +545,21 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_RELAY_OBSERVER", default_value_t = false)]
     pub relay_observer: bool,
 
+    /// Exit after this many seconds with no dispatched events and no turn in flight.
+    /// 0 disables inactivity self-termination.
+    #[arg(long, env = "BUZZ_ACP_EXIT_AFTER_INACTIVITY", default_value_t = 0)]
+    pub exit_after_inactivity: u64,
+
     /// Connect and subscribe before starting the ACP/LLM subprocess pool.
     #[arg(long, env = "BUZZ_ACP_LAZY_POOL", default_value_t = false)]
     pub lazy_pool: bool,
+
+    /// Tear the woken pool back down to the lazy empty-slot state after this
+    /// many seconds with no dispatched turn in flight and an empty queue,
+    /// releasing worker subprocesses until the next accepted event re-wakes.
+    /// Requires `--lazy-pool`; ignored otherwise. 0 disables idle re-sleep.
+    #[arg(long, env = "BUZZ_ACP_IDLE_POOL_SLEEP", default_value_t = 0)]
+    pub idle_pool_sleep: u64,
 }
 
 impl fmt::Debug for CliArgs {
@@ -685,8 +697,14 @@ pub struct Config {
     pub has_generated_codex_config: bool,
     /// Whether to publish encrypted observer frames through the relay.
     pub relay_observer: bool,
+    /// Seconds without dispatched events before an idle harness exits. 0 = disabled.
+    pub exit_after_inactivity_secs: u64,
     /// Whether ACP/LLM subprocess initialization is deferred until accepted work arrives.
     pub lazy_pool: bool,
+    /// Seconds with no dispatched turn in flight and an empty queue before a
+    /// woken lazy pool is torn back down to the empty-slot state. 0 = disabled.
+    /// Only meaningful when `lazy_pool` is true.
+    pub idle_pool_sleep_secs: u64,
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
     /// Replaces the old REST-based owner lookup.
     pub agent_owner: Option<String>,
@@ -1283,7 +1301,9 @@ impl Config {
             persona_env_vars,
             has_generated_codex_config,
             relay_observer: args.relay_observer,
+            exit_after_inactivity_secs: args.exit_after_inactivity,
             lazy_pool: args.lazy_pool,
+            idle_pool_sleep_secs: args.idle_pool_sleep,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
@@ -1652,7 +1672,9 @@ mod tests {
             persona_env_vars: vec![],
             has_generated_codex_config: false,
             relay_observer: false,
+            exit_after_inactivity_secs: 0,
             lazy_pool: false,
+            idle_pool_sleep_secs: 0,
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,

@@ -80,7 +80,11 @@ class TauriNativeBridge implements NativeBridge {
     return tauriInvoke<T>(command, toTauriArgs(args));
   }
 
-  invokeRawBinary(command: string, payload: Uint8Array): Promise<unknown> {
+  invokeRawBinary<T = unknown>(
+    command: string,
+    payload: Uint8Array,
+    options?: { headers?: Record<string, string> },
+  ): Promise<T> {
     // Raw binary invoke — Tauri's typed API does not support InvokeBody::Raw
     // payloads, so this goes through the internal IPC like the pre-bridge
     // `huddle/lib/audioWorklet.ts` call did. Tested against Tauri v2; if this
@@ -90,7 +94,7 @@ class TauriNativeBridge implements NativeBridge {
     if (!internals?.invoke) {
       return Promise.reject(new Error("Tauri internals not available"));
     }
-    return internals.invoke(command, payload);
+    return internals.invoke(command, payload, options);
   }
 
   listen<T>(

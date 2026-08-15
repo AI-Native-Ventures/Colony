@@ -80,7 +80,11 @@ export interface NativeBridge {
   /** Plain request/response command (252 commands). */
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   /** Raw binary command payload (1 command: `push_audio_pcm`). */
-  invokeRawBinary(command: string, payload: Uint8Array): Promise<unknown>;
+  invokeRawBinary<T = unknown>(
+    command: string,
+    payload: Uint8Array,
+    options?: { headers?: Record<string, string> },
+  ): Promise<T>;
   /** Subscribe to a backend-emitted event (18 names). */
   listen<T>(
     event: string,
@@ -174,11 +178,12 @@ export function invoke<T>(
   return getNativeBridge().invoke<T>(command, args);
 }
 
-export function invokeRawBinary(
+export function invokeRawBinary<T = unknown>(
   command: string,
   payload: Uint8Array,
-): Promise<unknown> {
-  return getNativeBridge().invokeRawBinary(command, payload);
+  options?: { headers?: Record<string, string> },
+): Promise<T> {
+  return getNativeBridge().invokeRawBinary<T>(command, payload, options);
 }
 
 export function listen<T>(

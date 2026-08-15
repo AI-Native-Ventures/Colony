@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   deriveShellRoute,
+  markAllReadSources,
   shouldBounceForChannelNotification,
 } from "./AppShell.helpers.ts";
 
@@ -31,11 +32,44 @@ test("shouldBounceForChannelNotification_allowsBroadcastReplies", () => {
   );
 });
 
-test("blocks route derives the Blocks sidebar selection", () => {
-  assert.deepEqual(deriveShellRoute("/blocks"), {
-    selectedChannelId: null,
-    selectedView: "blocks",
+test("markAllReadSources clears Inbox overrides and active thread activity", () => {
+  const calls = [];
+
+  markAllReadSources({
+    activeChannelId: "active-channel",
+    channelActivityItems: [
+      { channelId: "another-channel", createdAt: 100 },
+      { channelId: "active-channel", createdAt: 200 },
+      { channelId: "active-channel", createdAt: 300 },
+    ],
+    unreadFeedItemIds: new Set(["first-inbox-item", "second-inbox-item"]),
+    undoUnreadFeedItem: (itemId) => calls.push(`inbox:${itemId}`),
+    markAllChannelReadMarkers: () => calls.push("channels"),
+    markActiveChannelRead: (channelId, createdAt) =>
+      calls.push(`active:${channelId}:${createdAt}`),
   });
+
+  assert.deepEqual(calls, [
+    "inbox:first-inbox-item",
+    "inbox:second-inbox-item",
+    "channels",
+    "active:active-channel:300",
+  ]);
+});
+
+test("markAllReadSources skips the active marker without projected activity", () => {
+  const calls = [];
+
+  markAllReadSources({
+    activeChannelId: "active-channel",
+    channelActivityItems: [],
+    unreadFeedItemIds: new Set(),
+    undoUnreadFeedItem: () => calls.push("inbox"),
+    markAllChannelReadMarkers: () => calls.push("channels"),
+    markActiveChannelRead: () => calls.push("active"),
+  });
+
+  assert.deepEqual(calls, ["channels"]);
 });
 test("action center route derives the Action Center sidebar selection", () => {
   assert.deepEqual(deriveShellRoute("/action-center?filter=all&item=ask:1"), {

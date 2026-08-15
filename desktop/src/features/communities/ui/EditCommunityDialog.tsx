@@ -121,7 +121,6 @@ export function EditCommunityDialog({
     },
     [community, name, relayUrl, token, reposDir, onSave, handleClose],
   );
-
   const handleRemove = React.useCallback(() => {
     if (community && onRemove) {
       onRemove(community.id);

@@ -549,6 +549,20 @@ type MockBridgeOptions = {
   /** Delay (ms) for `set_global_agent_config` — hold saves open in tests.
    *  Alias of `globalConfigSaveDelayMs` (kept for onboarding specs). */
   setGlobalAgentConfigDelayMs?: number;
+  /** Errors returned by successive backup verification attempts. Null succeeds. */
+  backupVerificationErrors?: (string | null)[];
+  /** Public identities returned by successive successful backup verifications. */
+  backupVerificationPubkeys?: string[];
+  /** Delay (ms) applied to backup encryption. */
+  backupEncryptionDelayMs?: number;
+  /** Native paths returned by successive backup saves; null models cancel. */
+  backupSavePaths?: Array<string | null>;
+  /** Sequenced native backup save errors. Null succeeds. */
+  backupSaveErrors?: (string | null)[];
+  /** Deterministic passphrases returned by successive generator calls. */
+  backupPassphrases?: string[];
+  /** Sequenced passphrase-generator errors. Null succeeds. */
+  backupPassphraseErrors?: (string | null)[];
   /**
    * When set, `get_nsec` throws with this message. For a single always-fail
    * scenario. Use `nsecErrors` for sequenced fail/succeed.
@@ -911,6 +925,19 @@ export async function installBridge(page: Page, options: BridgeOptions) {
           body: string | null;
           title: string;
         }>;
+        __BUZZ_E2E_PENDING_CHANNEL_MUTATIONS__?: Array<{
+          channelId: string;
+          channelType?: "stream" | "forum" | "dm";
+          description?: string;
+          removeMemberPubkey?: string;
+        }>;
+        __BUZZ_E2E_MUTATE_CHANNEL__?: (options: {
+          channelId: string;
+          channelType?: "stream" | "forum" | "dm";
+          description?: string;
+          removeMemberPubkey?: string;
+        }) => void;
+        __BUZZ_E2E_INVALIDATE_CHANNELS__?: () => Promise<void>;
       };
       const currentConfig = testWindow.__BUZZ_E2E__ ?? {};
 
@@ -924,6 +951,18 @@ export async function installBridge(page: Page, options: BridgeOptions) {
         autoConnectDefaultRelay:
           autoConnectDefaultRelay ?? currentConfig.autoConnectDefaultRelay,
       };
+
+      // Bootstrap installs the module-backed mock bridge asynchronously. Keep
+      // channel mutations issued immediately after page.goto instead of
+      // dropping them in the small window before that bridge is ready.
+      const pendingChannelMutations =
+        testWindow.__BUZZ_E2E_PENDING_CHANNEL_MUTATIONS__ ?? [];
+      testWindow.__BUZZ_E2E_PENDING_CHANNEL_MUTATIONS__ =
+        pendingChannelMutations;
+      testWindow.__BUZZ_E2E_MUTATE_CHANNEL__ = (options) => {
+        pendingChannelMutations.push(options);
+      };
+      testWindow.__BUZZ_E2E_INVALIDATE_CHANNELS__ = async () => {};
       testWindow.__BUZZ_E2E_APP_BADGE_COUNT__ = 0;
       testWindow.__BUZZ_E2E_APP_BADGE_STATE__ = "none";
       testWindow.__BUZZ_E2E_CLICK_NOTIFICATION__ = (index: number) => {

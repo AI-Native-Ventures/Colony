@@ -496,7 +496,10 @@ test("real repo: every emit site resolves to a name", async () => {
   // missing from the EventSink contract.
   const data = await buildInventory("desktop");
   assert.deepEqual(data.events.unresolved_emit_sites, []);
-  assert.equal(data.events.emit_sites, data.apphandle_usage[".emit("]);
+  assert.equal(
+    data.events.emit_sites,
+    data.apphandle_usage[".emit("] + data.apphandle_usage[".emit_to("],
+  );
 });
 
 test("drift check: renaming a registered command makes the inventory stale", async () => {

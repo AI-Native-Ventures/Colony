@@ -1,25 +1,26 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
-import { deriveShellRoute } from "@/app/AppShell.helpers";
+import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { AppShellProvider } from "@/app/AppShellContext";
 import { AppShellOverlays } from "@/app/AppShellOverlays";
 import { AppShellChannelSurface } from "@/app/AppShellChannelSurface";
 import { AppHuddleShell } from "@/app/AppHuddleShell";
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { useAppShellKeyboardShortcuts } from "@/app/useAppShellKeyboardShortcuts";
+import { useChannelActivityProjection } from "@/app/useChannelActivityProjection";
 import { useNavigationCommands } from "@/app/navigation/navigationCommands";
-import { useAppShellReadFrontier } from "@/app/useAppShellReadFrontier";
 import { useSettingsPanelHandlers } from "@/app/useSettingsPanelHandlers";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useCommunityNavigationTransitions } from "@/app/useCommunityNavigationTransitions";
 import { useLiveHomeFeedActions } from "@/app/useLiveHomeFeedActions";
 import { useChannelBrowserDialog } from "@/app/useChannelBrowserDialog";
+import { useCommunityDestinationRestore } from "@/app/useCommunityDestinationRestore";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useAppShellDesktopNotifications } from "@/app/useAppShellDesktopNotifications";
 import { useAppShellLifecycleEffects } from "@/app/useAppShellLifecycleEffects";
-import { useThreadActivityFeedItems } from "@/app/useThreadActivityFeedItems";
 import { useTauriWindowDrag } from "@/app/useTauriWindowDrag";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import { useHuddlePresentation } from "@/app/useHuddlePresentation";
@@ -78,11 +79,6 @@ import { CommunityRail } from "@/features/sidebar/ui/CommunityRail";
 import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
 import { useCommunities } from "@/features/communities/useCommunities";
-import {
-  consumePendingCommunityRestore,
-  loadCommunityDestination,
-  saveCommunityDestination,
-} from "@/features/communities/communityNavigationStorage";
 import { useAddCommunityDialogState } from "@/features/communities/addCommunityPrefill";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
@@ -94,7 +90,6 @@ import { useWorkspaceExpanded } from "@/features/workspace/lib/channelSurfaceMod
 import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, ChannelVisibility, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
-import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { SidebarProvider } from "@/shared/ui/sidebar";
 import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
@@ -135,6 +130,8 @@ export function AppShell() {
     null,
   );
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
+  const [scopeSearchFocusRequest, setScopeSearchFocusRequest] =
+    React.useState(0);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = React.useState(false);
   const [isSendFeedbackOpen, setIsSendFeedbackOpen] = React.useState(false);
   const mainInsetRef = React.useRef<HTMLElement>(null);
@@ -185,9 +182,11 @@ export function AppShell() {
   const identityQuery = useIdentityQuery();
   const { mutedChannelIds, muteChannel, unmuteChannel } = useChannelMutes(
     identityQuery.data?.pubkey,
+    communitiesHook.activeCommunity?.relayUrl,
   );
   const { starredChannelIds, starChannel, unstarChannel } = useChannelStars(
     identityQuery.data?.pubkey,
+    communitiesHook.activeCommunity?.relayUrl,
   );
   usePersonaSync(
     identityQuery.data?.pubkey,
@@ -274,53 +273,15 @@ export function AppShell() {
       ),
     [huddleBackingChannelIds, memberChannels, revealedHuddleChannelIds],
   );
-  const hasRestoredCommunityDestinationRef = React.useRef(false);
-  React.useEffect(() => {
-    const activeCommunityId = communitiesHook.activeCommunity?.id;
-    if (
-      hasRestoredCommunityDestinationRef.current ||
-      !channelsQuery.isSuccess ||
-      channelsQuery.dataUpdatedAt === 0 ||
-      !activeCommunityId
-    ) {
-      return;
-    }
-    hasRestoredCommunityDestinationRef.current = true;
-    // Restoration belongs to an explicit community transition. Cold boot and
-    // reconnect remounts must preserve the route the user explicitly opened.
-    if (!consumePendingCommunityRestore(activeCommunityId)) {
-      return;
-    }
-
-    const destination = loadCommunityDestination(activeCommunityId);
-    if (!destination || destination.kind === "home") {
-      return;
-    }
-
-    const channelIsAvailable = sidebarChannels.some(
-      (channel) => channel.id === destination.channelId,
-    );
-    if (!channelIsAvailable) {
-      saveCommunityDestination(activeCommunityId, { kind: "home" });
-      void goHome({ replace: true });
-      return;
-    }
-
-    // The normal switch path writes the remembered channel into the hash before
-    // the target community mounts, so no intermediate Inbox frame is painted.
-    // Older transition callers may still arrive at neutral Home; repair those.
-    if (selectedView === "home") {
-      void goChannel(destination.channelId, { replace: true });
-    }
-  }, [
-    channelsQuery.dataUpdatedAt,
-    channelsQuery.isSuccess,
-    communitiesHook.activeCommunity?.id,
+  useCommunityDestinationRestore({
+    activeCommunityId: communitiesHook.activeCommunity?.id,
+    channelsReady: channelsQuery.isSuccess,
+    channelsDataUpdatedAt: channelsQuery.dataUpdatedAt,
+    sidebarChannels,
+    isHomeView: selectedView === "home",
     goChannel,
     goHome,
-    selectedView,
-    sidebarChannels,
-  ]);
+  });
   const activeChannel = React.useMemo(
     () =>
       selectedChannelId
@@ -359,10 +320,12 @@ export function AppShell() {
   } = useThreadFollows(identityQuery.data?.pubkey);
 
   const {
-    markAllChannelsRead,
+    markAllChannelsRead: markAllChannelReadMarkers,
     markChannelRead,
     markChannelUnread,
+    clearChannelUnreadSource,
     unreadChannelIds,
+    topLevelUnreadChannelIds,
     unreadChannelCounts,
     highPriorityUnreadChannelIds,
     unreadChannelNotificationCount,
@@ -373,6 +336,7 @@ export function AppShell() {
     participatedRootIds,
     authoredRootIds,
     mentionedRootIds,
+    recordThreadInteraction,
     threadActivityItems,
     mutedRootIds,
     muteThread,
@@ -395,18 +359,45 @@ export function AppShell() {
     },
   );
 
-  const { getMessageReadAt, getThreadReadAt, markMessageRead, markThreadRead } =
-    useAppShellReadFrontier({
-      getChannelReadAt,
-      getOwnReadAt,
-      markChannelRead,
-    });
-  const threadActivityFeedItems = useThreadActivityFeedItems(
+  const {
+    getThreadReadAt,
+    markThreadRead,
+    getMessageReadAt,
+    getChannelActivityItemReadAt,
+    markMessageRead,
+    threadActivityFeedItems,
+    locallyUnreadFeedItems,
+    unreadThreadFeedItems,
+    unreadThreadChannelIds,
+  } = useChannelActivityProjection({
+    channels,
+    feed: homeFeedQuery.data?.feed,
+    unreadFeedItemIds: feedItemState.unreadSet,
+    getChannelReadAt,
+    getOwnReadAt,
+    markChannelRead,
+    readStateVersion,
     threadActivityItems,
     mutedRootIds,
-    channels,
-  );
-
+  });
+  const markAllChannelsRead = React.useCallback(() => {
+    markAllReadSources({
+      activeChannelId: activeChannel?.id ?? null,
+      channelActivityItems: unreadThreadFeedItems,
+      markAllChannelReadMarkers,
+      markActiveChannelRead: (channelId, createdAt) =>
+        markChannelRead(channelId, new Date(createdAt * 1_000).toISOString()),
+      undoUnreadFeedItem: feedItemState.undoUnread,
+      unreadFeedItemIds: feedItemState.unreadSet,
+    });
+  }, [
+    activeChannel?.id,
+    feedItemState.undoUnread,
+    feedItemState.unreadSet,
+    markAllChannelReadMarkers,
+    markChannelRead,
+    unreadThreadFeedItems,
+  ]);
   const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
     useHomeFeedNotificationState(
       homeFeedQuery.data,
@@ -475,6 +466,10 @@ export function AppShell() {
   } = useChannelBrowserDialog(() => void refetchChannels());
   const handleOpenSearch = React.useCallback(() => {
     setSearchFocusRequest((request) => request + 1);
+    void refetchChannels();
+  }, [refetchChannels]);
+  const handleOpenChannelSearch = React.useCallback(() => {
+    setScopeSearchFocusRequest((request) => request + 1);
     void refetchChannels();
   }, [refetchChannels]);
 
@@ -646,70 +641,17 @@ export function AppShell() {
     pulseEnabled,
     workflowsEnabled,
   });
-  React.useLayoutEffect(() => {
-    if (settingsOpen || isHuddleRoom) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (!hasPrimaryShortcutModifier(event) || event.altKey || event.repeat) {
-        return;
-      }
-
-      // A focused surface may claim the shortcut first — e.g. the composer
-      // consumes ⌘K to open the link editor when text is selected. Its
-      // element-level handler runs before this window-level bubble listener
-      // and calls `preventDefault()`; respect that instead of also opening
-      // the global dialog.
-      if (event.defaultPrevented) {
-        return;
-      }
-
-      const key = event.key.toLowerCase();
-      if (key === "k" && !event.shiftKey) {
-        event.preventDefault();
-        handleOpenSearch();
-        return;
-      }
-
-      if (key === "k" && event.shiftKey) {
-        event.preventDefault();
-        handleOpenNewDm();
-        return;
-      }
-
-      if (key === "n" && event.shiftKey) {
-        event.preventDefault();
-        handleOpenCreateChannel();
-        return;
-      }
-
-      if (key === "o" && event.shiftKey) {
-        event.preventDefault();
-        handleOpenBrowseChannels();
-        return;
-      }
-
-      if (key === "a" && event.shiftKey) {
-        event.preventDefault();
-        void goHome();
-        return;
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [
-    handleOpenBrowseChannels,
-    handleOpenNewDm,
-    handleOpenCreateChannel,
-    handleOpenSearch,
-    goHome,
-    isHuddleRoom,
-    settingsOpen,
-  ]);
+  useAppShellKeyboardShortcuts({
+    canSearchCurrentChannel:
+      selectedView === "channel" && activeChannel !== null,
+    disabled: settingsOpen || isHuddleRoom,
+    onBrowseChannels: handleOpenBrowseChannels,
+    onCreateChannel: handleOpenCreateChannel,
+    onGoHome: goHome,
+    onNewMessage: handleOpenNewDm,
+    onSearchCurrentChannel: handleOpenChannelSearch,
+    onSearchEverything: handleOpenSearch,
+  });
   useSettingsShortcuts({
     onClose: handleCloseSettings,
     onOpenSettings: handleOpenSettings,
@@ -730,6 +672,7 @@ export function AppShell() {
             markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
+            clearChannelUnreadSource,
             openBrowseChannels: handleOpenBrowseChannels,
             openCreateChannel: handleOpenCreateChannel,
             openChannelManagement: (channelId?: string) => {
@@ -743,16 +686,23 @@ export function AppShell() {
             markThreadRead,
             getMessageReadAt,
             markMessageRead,
+            getChannelActivityItemReadAt,
             readStateVersion,
             setContextParentResolver,
             followThread: handleFollowThread,
             unfollowThread: handleUnfollowThread,
             isFollowingThread,
             isNotifiedForThread,
+            recordThreadInteraction,
             isThreadMuted: (rootId) => mutedRootIds.has(rootId),
             threadActivityItems,
             threadActivityFeedItems,
             feedItemState,
+            locallyUnreadFeedItems,
+            unreadThreadFeedItems,
+            unreadThreadChannelIds,
+            topLevelUnreadChannelIds,
+            hasSidebarUnreadProjections: true,
             onOpenSettings: handleOpenSettings,
           }}
         >
@@ -772,12 +722,11 @@ export function AppShell() {
               <CommunityRail
                 activeCommunityId={communitiesHook.activeCommunity?.id ?? null}
                 onAddCommunity={addCommunityDialog.openDialog}
-                onRemoveCommunity={(id) => void handleRemoveCommunity(id)}
                 onReorderCommunities={communitiesHook.reorderCommunities}
                 onSwitchCommunity={handleSwitchCommunity}
                 onUpdateCommunity={communitiesHook.updateCommunity}
                 communities={communitiesHook.communities}
-                workspaceExpanded={workspaceExpanded}
+                onRemoveCommunity={(id) => void handleRemoveCommunity(id)}
               />
             ) : null}
             <SidebarProvider
@@ -866,9 +815,7 @@ export function AppShell() {
                         onOpenAddCommunity={addCommunityDialog.openDialog}
                         onSendFeedback={() => setIsSendFeedbackOpen(true)}
                         onUpdateCommunity={communitiesHook.updateCommunity}
-                        onRemoveCommunity={(id) =>
-                          void handleRemoveCommunity(id)
-                        }
+                        onRemoveCommunity={handleRemoveCommunity}
                         onSwitchCommunity={handleSwitchCommunity}
                         onCreateAgent={() => requestOpenCreateAgent()}
                         commandActions={commandActions}
@@ -899,6 +846,7 @@ export function AppShell() {
                         onOpenSearchResult={handleOpenSearchResult}
                         searchChannels={channels}
                         searchFocusRequest={searchFocusRequest}
+                        scopeSearchFocusRequest={scopeSearchFocusRequest}
                         onSelectHome={() => void goHome()}
                         onSelectProjects={() => void goProjects()}
                         onSelectPulse={() => void goPulse()}

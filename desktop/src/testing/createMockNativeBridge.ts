@@ -14,8 +14,11 @@ export function createMockNativeBridge(
       command: string,
       args?: Record<string, unknown>,
     ): Promise<T> => (await invokeHandler(command, args ?? null)) as T,
-    invokeRawBinary: async (command: string, payload: Uint8Array) =>
-      invokeHandler(command, payload),
+    invokeRawBinary: async <T = unknown>(
+      command: string,
+      payload: Uint8Array,
+      _options?: { headers?: Record<string, string> },
+    ) => invokeHandler(command, payload) as Promise<T>,
     listen: async () => () => {},
     emit: async () => {},
     isTauri: () => false,

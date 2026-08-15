@@ -208,7 +208,7 @@ async fn load_head_authored_by(
             // visibility gate every other read path enforces. Without it the
             // owner gains an existence-and-version oracle on other members'
             // private personas.
-            persona_reader: reader.map(|key| key.to_bytes().to_vec()),
+            shared_gated_reader: reader.map(|key| key.to_bytes().to_vec()),
             ..buzz_db::event::EventQuery::for_community(tenant.community())
         })
         .await

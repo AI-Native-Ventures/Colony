@@ -6,11 +6,12 @@ use std::time::{Duration, Instant};
 
 use crate::managed_agents::{
     buzz_managed_command_path, buzz_managed_node_bin_dir, buzz_managed_npm_bin_dir,
-    AcpAvailabilityStatus, AcpRuntimeCatalogEntry, AuthStatus, CommandAvailabilityInfo,
-    HarnessSource,
+    harness_max_parallelism, AcpAvailabilityStatus, AcpRuntimeCatalogEntry, AuthStatus,
+    CommandAvailabilityInfo, HarnessSource,
 };
 
 mod nvm;
+mod presets;
 mod runtime_metadata;
 
 // Re-exported so every existing path to these keeps working: `runtime.rs`
@@ -21,9 +22,13 @@ pub use nvm::find_nvm_default_bin;
 pub(crate) use nvm::{is_safe_nvm_tag, parse_semver_tag};
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
+// `persona_events` (upstream snapshot-apply path) classifies pins through
+// these two; `parallelism` keys caps on the normalizer below.
+pub(crate) use presets::{canonical_harness_command, command_for_runtime_id};
 
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
+const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const BUZZ_AGENT_AVATAR_URL: &str =
     "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
 fn common_binary_paths() -> &'static [PathBuf] {
@@ -72,6 +77,41 @@ fn common_binary_paths() -> &'static [PathBuf] {
 
 const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
     KnownAcpRuntime {
+        id: "goose",
+        label: "Goose",
+        commands: &["goose"],
+        aliases: &[],
+        avatar_url: GOOSE_AVATAR_URL,
+        mcp_command: None,
+        mcp_hooks: false,
+        underlying_cli: Some("goose"),
+        cli_install_commands: &["curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash"],
+        // Goose's stable release currently publishes only the Unix installer;
+        // its official Windows instructions intentionally point at this main-branch script.
+        cli_install_commands_windows: &["powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$env:CONFIGURE='false'; irm https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 | iex\""],
+        adapter_install_commands: &[],
+        cli_install_instructions_url: "https://goose-docs.ai/docs/getting-started/installation/",
+        adapter_install_instructions_url: "",
+        cli_install_hint: "Colony talks to Goose through the Goose CLI.",
+        adapter_install_hint: "",
+        skill_dir: Some(".goose/skills"),
+        supports_acp_model_switching: false,
+        model_env_var: Some("GOOSE_MODEL"),
+        provider_env_var: Some("GOOSE_PROVIDER"),
+        provider_locked: false,
+        default_env: &[("GOOSE_MODE", "auto")],
+        config_file_path: Some("~/.config/goose/config.yaml"),
+        config_file_format: Some("yaml"),
+        supports_acp_native_config: true,
+        thinking_env_var: Some("GOOSE_THINKING_EFFORT"),
+        max_tokens_env_var: Some("GOOSE_MAX_TOKENS"),
+        context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
+        max_rounds_env_var: None,
+        required_normalized_fields: &["model", "provider"],
+        login_hint: None,
+        auth_probe_args: None,
+    },
+    KnownAcpRuntime {
         id: "claude",
         label: "Claude Code",
         commands: &["claude-agent-acp", "claude-code-acp"],
@@ -99,6 +139,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: None,
         max_tokens_env_var: None,
         context_limit_env_var: None,
+        max_rounds_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run the Claude CLI to complete authentication."),
         auth_probe_args: Some(&["claude", "auth", "status"]),
@@ -131,6 +172,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: None,
         max_tokens_env_var: None,
         context_limit_env_var: None,
+        max_rounds_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run `codex login` to authenticate."),
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
@@ -164,6 +206,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         thinking_env_var: Some("BUZZ_AGENT_THINKING_EFFORT"),
         max_tokens_env_var: Some("BUZZ_AGENT_MAX_OUTPUT_TOKENS"),
         context_limit_env_var: Some("BUZZ_AGENT_MAX_CONTEXT_TOKENS"),
+        max_rounds_env_var: Some("BUZZ_AGENT_MAX_ROUNDS"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
         auth_probe_args: None,
@@ -193,7 +236,7 @@ fn executable_basename(command: &str) -> String {
     }
 }
 
-fn normalize_command_identity(command: &str) -> String {
+pub(crate) fn normalize_command_identity(command: &str) -> String {
     let normalized = command.trim().replace('\\', "/");
     let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     let lower = basename
@@ -1315,6 +1358,9 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             model_env_var: runtime.model_env_var.map(str::to_string),
             provider_env_var: runtime.provider_env_var.map(str::to_string),
             thinking_env_var: runtime.thinking_env_var.map(str::to_string),
+            max_tokens_env_var: runtime.max_tokens_env_var.map(str::to_string),
+            context_limit_env_var: runtime.context_limit_env_var.map(str::to_string),
+            max_rounds_env_var: runtime.max_rounds_env_var.map(str::to_string),
             install_hint,
             install_instructions_url: install_instructions_url.to_string(),
             can_auto_install,
@@ -1327,6 +1373,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             source: HarnessSource::Builtin,
             // Builtin entries have no user-editable env; definition_env is empty.
             definition_env: Default::default(),
+            max_parallelism: harness_max_parallelism(runtime.id),
         },
     }
 }
@@ -1348,176 +1395,9 @@ pub(crate) fn discover_acp_runtime_availability(runtime_id: &str) -> Option<AcpA
 // not editable or deletable by users. Logos are bundled assets referenced
 // by id in the frontend `RUNTIME_LOGOS` map.
 
-struct PresetHarness {
-    id: &'static str,
-    label: &'static str,
-    command: &'static str,
-    args: &'static [&'static str],
-    install_instructions_url: &'static str,
-    install_hint: &'static str,
-    /// Env var the harness reads to select its LLM provider, when it has one.
-    /// `None` for harnesses whose provider is fixed or embedded in the model
-    /// id (Claude Code, Codex). `Some` renders the provider switcher and
-    /// gates provider-scoped model discovery.
-    provider_env_var: Option<&'static str>,
-    /// Vendor CLI the ACP command wraps, when the preset is an adapter
-    /// (e.g. Amp's `amp-acp` wraps the separately-installed `amp` CLI).
-    /// Consulted only when the adapter is absent, so `AdapterMissing`
-    /// replaces the misleading `NotInstalled` when the CLI is present but
-    /// the adapter is not. Deliberately NOT fed through the builtins'
-    /// full `classify_runtime` predicate: that would flip
-    /// adapter-present/CLI-absent from today's `Available` to `CliMissing`
-    /// (unselectable), and presets carry a single flat `install_hint`, so
-    /// the `CliMissing` copy would tell the user to install the adapter
-    /// they already have. `None` when the command IS the vendor CLI.
-    underlying_cli: Option<&'static str>,
-}
-
-/// Build the catalog entry for one preset harness through an injectable
-/// resolver — the seam the preset loop consumes and tests bind.
-///
-/// Availability consumes only the adapter-missing arm of the builtin
-/// predicate: adapter presence alone decides `Available` (exactly today's
-/// behavior — an `amp-acp` without `amp` stays selectable), and
-/// `underlying_cli` is consulted only when the adapter is absent, to
-/// distinguish `AdapterMissing` (vendor CLI present) from `NotInstalled`
-/// (neither found). See the `underlying_cli` field doc for why the full
-/// `classify_runtime` predicate is deliberately not used here.
-fn preset_catalog_entry(
-    def: &PresetHarness,
-    resolve: impl Fn(&str) -> Option<PathBuf>,
-) -> AcpRuntimeCatalogEntry {
-    let (availability, command, binary_path) = match resolve(def.command) {
-        Some(path) => (
-            AcpAvailabilityStatus::Available,
-            Some(def.command.to_string()),
-            Some(path.display().to_string()),
-        ),
-        None => {
-            let underlying_cli_found = def
-                .underlying_cli
-                .map(|cli| resolve(cli).is_some())
-                .unwrap_or(false);
-            if underlying_cli_found {
-                (AcpAvailabilityStatus::AdapterMissing, None, None)
-            } else {
-                (AcpAvailabilityStatus::NotInstalled, None, None)
-            }
-        }
-    };
-    let underlying_cli_path = def
-        .underlying_cli
-        .and_then(resolve)
-        .map(|p| p.display().to_string());
-
-    let default_args = normalize_agent_args(
-        def.command,
-        def.args.iter().map(|s| s.to_string()).collect(),
-    );
-
-    AcpRuntimeCatalogEntry {
-        id: def.id.to_string(),
-        label: def.label.to_string(),
-        // No remote URL — all preset icons are bundled assets.
-        avatar_url: String::new(),
-        availability,
-        command,
-        binary_path,
-        default_args,
-        mcp_command: None,
-        model_env_var: None,
-        provider_env_var: def.provider_env_var.map(str::to_string),
-        thinking_env_var: None,
-        install_hint: def.install_hint.to_string(),
-        install_instructions_url: def.install_instructions_url.to_string(),
-        can_auto_install: false,
-        // Kept false even for adapter presets: presets carry one flat
-        // install_hint (the adapter's), so the requiresExternalCli
-        // "CLI is missing" wording would pair the wrong noun with it.
-        // The builtin path, with per-availability hints, is the only
-        // consumer of the true case.
-        requires_external_cli: false,
-        underlying_cli_path,
-        node_required: false,
-        auth_status: AuthStatus::NotApplicable,
-        login_hint: None,
-        source: HarnessSource::Preset,
-        // Preset entries have static, non-editable env; definition_env is empty.
-        definition_env: Default::default(),
-    }
-}
-
-const PRESET_HARNESSES: &[PresetHarness] = &[
-    PresetHarness {
-        id: "omp",
-        label: "Oh My Pi",
-        command: "omp",
-        args: &["acp"],
-        install_instructions_url: "https://github.com/can1357/oh-my-pi",
-        install_hint: "Colony talks to Oh My Pi through its CLI's ACP mode (omp acp).",
-        // BUZZ_ACP_PROVIDER is injected by the desktop for every harness and
-        // consumed by buzz-acp to qualify unqualified model ids against
-        // provider-prefixed ACP catalogs (omp model ids are `provider/model`).
-        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
-        underlying_cli: None,
-    },
-    PresetHarness {
-        id: "opencode",
-        label: "OpenCode",
-        command: "opencode",
-        args: &["acp"],
-        install_instructions_url: "https://opencode.ai/docs",
-        install_hint: "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
-        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
-        underlying_cli: None,
-    },
-    PresetHarness {
-        id: "prime-agent",
-        label: "Prime Agent",
-        command: "prime-agent",
-        args: &["--mode", "acp"],
-        install_instructions_url: "https://github.com/PrimeIntellect-ai/prime-agent",
-        install_hint: "Colony talks to Prime Agent through its native ACP mode. Install with: npm install -g prime-agent",
-        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
-        underlying_cli: None,
-    },
-];
-
-/// Return the static preset harness definitions as `HarnessDefinition` values.
-///
-/// Used by `warm_harness_registry_from_dir` to seed the loaded-harness registry
-/// at startup before the frontend triggers a full discovery run.
-pub(crate) fn preset_harness_definitions(
-) -> Vec<crate::managed_agents::custom_harnesses::HarnessDefinition> {
-    PRESET_HARNESSES
-        .iter()
-        .map(
-            |p| crate::managed_agents::custom_harnesses::HarnessDefinition {
-                id: p.id.to_string(),
-                label: p.label.to_string(),
-                command: p.command.to_string(),
-                args: p.args.iter().map(|s| s.to_string()).collect(),
-                env: std::collections::BTreeMap::new(),
-                install_instructions_url: p.install_instructions_url.to_string(),
-                install_hint: p.install_hint.to_string(),
-            },
-        )
-        .collect()
-}
-
-/// Return the static slice of preset harness IDs.
-///
-/// Used by `check_id_collision` in `custom_harnesses` to derive the reserved-ID
-/// set from the single source of truth (`PRESET_HARNESSES`) rather than a
-/// hand-maintained copy.  Adding a preset automatically reserves its ID.
-pub(crate) fn preset_harness_ids() -> &'static [&'static str] {
-    // `PRESET_HARNESSES` is `'static`; we project its `id` fields.
-    // Computed once via OnceLock to avoid repeated allocations on hot paths.
-    use std::sync::OnceLock;
-    static IDS: OnceLock<Vec<&'static str>> = OnceLock::new();
-    IDS.get_or_init(|| PRESET_HARNESSES.iter().map(|p| p.id).collect())
-        .as_slice()
-}
+pub(crate) use presets::{
+    preset_catalog_entry, preset_harness_definitions, preset_harness_ids, PRESET_HARNESSES,
+};
 
 /// Discover all ACP runtimes, optionally merging user-defined custom harnesses
 /// from `custom_harnesses_dir`.
@@ -1657,6 +1537,9 @@ pub fn discover_acp_runtimes_from(
                 model_env_var: None,
                 provider_env_var: Some("BUZZ_ACP_PROVIDER".to_string()),
                 thinking_env_var: None,
+                max_tokens_env_var: None,
+                context_limit_env_var: None,
+                max_rounds_env_var: None,
                 install_hint: def.install_hint.clone(),
                 install_instructions_url: def.install_instructions_url.clone(),
                 // Security line: custom definitions carry no install scripts.
@@ -1671,6 +1554,7 @@ pub fn discover_acp_runtimes_from(
                 // Carry definition env into the catalog so the edit form can
                 // read it back — prevents silently erasing env on save.
                 definition_env: def.env.clone(),
+                max_parallelism: harness_max_parallelism(&def.command),
             });
         }
     }

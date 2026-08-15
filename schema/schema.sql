@@ -54,8 +54,14 @@ CREATE TABLE communities (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     host            VARCHAR(255) NOT NULL,
     signing_key     BYTEA,
+    icon            TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     archived_at     TIMESTAMPTZ,
+    deleted_at      TIMESTAMPTZ,
+    deletion_state  TEXT NOT NULL DEFAULT 'active'
+        CHECK (deletion_state IN ('active', 'quiescing', 'fenced', 'tombstone')),
+    deletion_fence_generation BIGINT NOT NULL DEFAULT 0
+        CHECK (deletion_fence_generation >= 0),
     CONSTRAINT chk_communities_id_not_nil CHECK (id <> '00000000-0000-0000-0000-000000000000'::uuid)
 );
 
@@ -1275,7 +1281,8 @@ CREATE TABLE discovery_workspace_action_claims (
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL CHECK (operation IN (
         'access', 'create_campaign', 'update_campaign_sources',
-        'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts'
+        'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts',
+        'get_lead', 'update_lead'
     )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
@@ -1819,6 +1826,37 @@ CREATE INDEX discovery_business_observations_name_locality_dedupe_idx
     ON discovery_business_observations (community_id, normalized_name_locality_digest)
     WHERE normalized_name_locality_digest IS NOT NULL;
 
+-- Phase B: mutable lead state for the Discovery CRM surface. The observation
+-- row stays immutable; this profile carries human/agent edits and the funnel
+-- status, whose vocabulary and transitions come from the Party contract.
+CREATE TABLE discovery_lead_profiles (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    lead_id UUID NOT NULL,
+    status TEXT NOT NULL DEFAULT 'candidate'
+        CHECK (status IN (
+            'candidate', 'accepted', 'qualified', 'dormant', 'disqualified',
+            'client_active'
+        )),
+    owner_persona_id TEXT,
+    website TEXT,
+    email TEXT,
+    phone TEXT,
+    linkedin_url TEXT,
+    contact_name TEXT,
+    contact_title TEXT,
+    notes TEXT CHECK (notes IS NULL OR octet_length(notes) <= 8000),
+    score SMALLINT CHECK (score IS NULL OR score BETWEEN 0 AND 100),
+    updated_by BYTEA NOT NULL CHECK (octet_length(updated_by) = 32),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, lead_id),
+    FOREIGN KEY (community_id, lead_id)
+        REFERENCES discovery_business_observations(community_id, id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_lead_profiles_status_idx
+    ON discovery_lead_profiles (community_id, status);
+
 CREATE TABLE discovery_usage (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     run_id UUID NOT NULL,
@@ -2130,6 +2168,88 @@ CREATE UNIQUE INDEX IF NOT EXISTS employees_hire_event_uniq
 CREATE UNIQUE INDEX IF NOT EXISTS employees_active_role_uniq
     ON employees (community_id, role_id) WHERE status = 'active';
 
+-- 0044/0058: durable employee job queue and task-linked recovery state.
+-- The lease row is the authority for one machine at a time; checkpoint and
+-- outcome evidence make Task-linked jobs restart-safe without a second queue.
+CREATE TABLE jobs (
+    community_id     UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    job_id           BYTEA NOT NULL,
+    employee         BYTEA NOT NULL,
+    filed_by         BYTEA NOT NULL,
+    originator       BYTEA NOT NULL,
+    channel_id       UUID,
+    thread           BYTEA,
+    instruction      TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'open'
+                     CHECK (status IN ('open','leased','done','failed','abandoned')),
+    lease_holder     BYTEA,
+    lease_expires_at BIGINT,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    result           TEXT,
+    failure          TEXT,
+    escalated_ask    BYTEA,
+    head_at          BIGINT NOT NULL DEFAULT 0,
+    created_at       BIGINT NOT NULL,
+    updated_at       BIGINT NOT NULL,
+    task_id          TEXT,
+    checkpoint_seq   BIGINT NOT NULL DEFAULT 0,
+    checkpoint       JSONB,
+    checkpoint_event BYTEA,
+    checkpoint_at    BIGINT,
+    artifacts        JSONB,
+    outcome_event    BYTEA,
+    PRIMARY KEY (community_id, job_id),
+    CHECK (LENGTH(job_id) = 32),
+    CHECK (LENGTH(employee) = 32),
+    CHECK (LENGTH(filed_by) = 32),
+    CHECK (LENGTH(originator) = 32),
+    CHECK (thread IS NULL OR LENGTH(thread) = 32),
+    CHECK (lease_holder IS NULL OR LENGTH(lease_holder) = 32),
+    CHECK (escalated_ask IS NULL OR LENGTH(escalated_ask) = 32),
+    CHECK (
+        (status = 'open' AND lease_holder IS NULL AND lease_expires_at IS NULL)
+        OR (status = 'leased' AND lease_holder IS NOT NULL AND lease_expires_at IS NOT NULL)
+        OR status IN ('done','failed','abandoned')
+    ),
+    CONSTRAINT jobs_task_id_bounded
+        CHECK (task_id IS NULL OR (LENGTH(BTRIM(task_id)) BETWEEN 1 AND 128)),
+    CONSTRAINT jobs_checkpoint_sequence_nonnegative
+        CHECK (checkpoint_seq >= 0),
+    CONSTRAINT jobs_checkpoint_event_shape
+        CHECK (checkpoint_event IS NULL OR LENGTH(checkpoint_event) = 32),
+    CONSTRAINT jobs_outcome_event_shape
+        CHECK (outcome_event IS NULL OR LENGTH(outcome_event) = 32),
+    CONSTRAINT jobs_checkpoint_complete
+        CHECK (
+            (checkpoint_seq = 0 AND checkpoint IS NULL
+                AND checkpoint_event IS NULL AND checkpoint_at IS NULL)
+            OR
+            (checkpoint_seq > 0 AND checkpoint IS NOT NULL
+                AND checkpoint_event IS NOT NULL AND checkpoint_at IS NOT NULL)
+        ),
+    CONSTRAINT jobs_artifacts_nonempty_array
+        CHECK (
+            artifacts IS NULL
+            OR (jsonb_typeof(artifacts) = 'array' AND jsonb_array_length(artifacts) > 0)
+        ),
+    CONSTRAINT jobs_task_delivery_has_evidence
+        CHECK (
+            task_id IS NULL OR status <> 'done'
+            OR (artifacts IS NOT NULL AND outcome_event IS NOT NULL)
+        )
+);
+
+CREATE INDEX jobs_originator_status_idx
+    ON jobs (community_id, originator, status);
+CREATE INDEX jobs_employee_status_idx
+    ON jobs (community_id, employee, status);
+CREATE INDEX jobs_expiring_leases_idx
+    ON jobs (lease_expires_at) WHERE status = 'leased';
+CREATE INDEX jobs_unclaimed_idx
+    ON jobs (created_at) WHERE status = 'open';
+CREATE INDEX jobs_community_task_idx
+    ON jobs (community_id, task_id) WHERE task_id IS NOT NULL;
+
 -- Durable idempotency claims for relay-brokered Colony Company Actions
 -- (migration 0029).
 --
@@ -2148,6 +2268,30 @@ CREATE TABLE IF NOT EXISTS company_action_claims (
     head_event_id    BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
     receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);
+
+-- Durable idempotency claims for relay-brokered Colony party actions.
+-- Merge actions retain both the surviving head and the retired-handle alias.
+CREATE TABLE party_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    alias_event_id BYTEA CHECK (alias_event_id IS NULL OR octet_length(alias_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, idempotency_key)
+);
+
+-- Durable idempotency claims for relay-brokered Colony ledger actions.
+CREATE TABLE ledger_action_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
+    head_event_id BYTEA NOT NULL CHECK (octet_length(head_event_id) = 32),
+    receipt_event_id BYTEA NOT NULL CHECK (octet_length(receipt_event_id) = 32),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, idempotency_key)
 );
 
@@ -2262,3 +2406,481 @@ CREATE TABLE operator_access_log (
 
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('operator_access_log', 'deployment-wide operator accountability; filter and target values are stored only as digests');
+
+-- Ported from migrations/0059_community_deletion.sql (upstream community-deletion + storage-sweep tables)
+CREATE TABLE community_deletion_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    community_id UUID NOT NULL UNIQUE REFERENCES communities(id),
+    community_host TEXT NOT NULL,
+    stage TEXT NOT NULL DEFAULT 'submitted' CHECK (stage IN (
+        'submitted', 'inventoried', 'approved', 'fenced', 'drained',
+        'bindings_removed', 'postgres_purged', 'cache_purged',
+        'logically_verified', 'retention_pending'
+    )),
+    requested_by TEXT NOT NULL,
+    reason TEXT,
+    schema_manifest JSONB,
+    storage_manifest JSONB,
+    destructive_storage_manifest JSONB,
+    destructive_storage_frozen_at TIMESTAMPTZ,
+    inventory_manifest JSONB,
+    inventory_digest BYTEA CHECK (inventory_digest IS NULL OR length(inventory_digest) = 32),
+    inventory_frozen_at TIMESTAMPTZ,
+    fence_generation BIGINT CHECK (fence_generation IS NULL OR fence_generation > 0),
+    lease_owner TEXT,
+    lease_generation BIGINT NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+    lease_until TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    retry_stage TEXT CHECK (retry_stage IS NULL OR retry_stage IN (
+        'approved', 'fenced', 'drained', 'bindings_removed',
+        'postgres_purged', 'cache_purged', 'logically_verified'
+    )),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error TEXT,
+    last_error_at TIMESTAMPTZ,
+    blocked_at TIMESTAMPTZ,
+    blocked_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL)),
+    CHECK ((inventory_frozen_at IS NULL) = (inventory_digest IS NULL)),
+    UNIQUE (id, community_id, inventory_digest)
+);;
+
+CREATE TABLE community_deletion_checkpoints (
+    request_id UUID NOT NULL REFERENCES community_deletion_requests(id) ON DELETE RESTRICT,
+    sequence BIGINT GENERATED ALWAYS AS IDENTITY,
+    stage TEXT NOT NULL,
+    unit_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+    lease_generation BIGINT NOT NULL CHECK (lease_generation > 0),
+    attempts INTEGER NOT NULL DEFAULT 1 CHECK (attempts > 0),
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    PRIMARY KEY (request_id, sequence),
+    UNIQUE (request_id, stage, unit_key),
+    CHECK ((status = 'completed') = (completed_at IS NOT NULL)),
+    CHECK ((status = 'failed') = (error IS NOT NULL))
+);;
+
+CREATE TABLE community_deletion_manifest_keys (
+    request_id UUID NOT NULL REFERENCES community_deletion_requests(id) ON DELETE CASCADE,
+    chunk_no BIGINT NOT NULL CHECK (chunk_no >= 0),
+    prefix TEXT NOT NULL,
+    keys JSONB NOT NULL,
+    deleted_at TIMESTAMPTZ,
+    PRIMARY KEY (request_id, chunk_no)
+);;
+
+CREATE TABLE storage_taxonomy_sweeps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    started_at TIMESTAMPTZ NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    listed_objects BIGINT NOT NULL CHECK (listed_objects >= 0),
+    unknown_object_count BIGINT NOT NULL CHECK (unknown_object_count >= 0),
+    unknown_key_sample JSONB NOT NULL DEFAULT '[]'::jsonb,
+    object_cap BIGINT NOT NULL CHECK (object_cap > 0),
+    CHECK (completed_at >= started_at)
+);;
+
+CREATE TABLE community_serving_write_leases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    community_id UUID NOT NULL REFERENCES communities(id),
+    operation TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 1 CHECK (generation > 0),
+    -- Community fence generation observed when this lease was acquired.
+    fence_generation BIGINT NOT NULL CHECK (fence_generation >= 0),
+    lease_until TIMESTAMPTZ NOT NULL,
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);;
+
+CREATE TABLE community_deletion_executor_heartbeats (
+    executor_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL CHECK (mode IN ('run', 'drain', 'worker')),
+    request_id UUID REFERENCES community_deletion_requests(id) ON DELETE SET NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    draining BOOLEAN NOT NULL DEFAULT false,
+    stopped_at TIMESTAMPTZ
+);;
+
+CREATE INDEX community_deletion_requests_runnable
+    ON community_deletion_requests (next_attempt_at, created_at)
+    WHERE blocked_at IS NULL
+      AND stage IN ('approved', 'fenced', 'drained', 'bindings_removed',
+                    'postgres_purged', 'cache_purged', 'logically_verified');
+CREATE INDEX community_deletion_requests_lease
+    ON community_deletion_requests (lease_until)
+    WHERE lease_owner IS NOT NULL;
+CREATE INDEX storage_taxonomy_sweeps_latest
+    ON storage_taxonomy_sweeps (completed_at DESC);
+CREATE INDEX community_serving_write_leases_active
+    ON community_serving_write_leases (community_id, lease_until);
+
+
+-- Ported from migrations/0059_community_deletion.sql (community-deletion approvals)
+CREATE TABLE community_deletion_approvals (
+    request_id UUID PRIMARY KEY,
+    community_id UUID NOT NULL,
+    inventory_digest BYTEA NOT NULL CHECK (length(inventory_digest) = 32),
+    approved_by TEXT NOT NULL,
+    note TEXT,
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (request_id, community_id, inventory_digest)
+        REFERENCES community_deletion_requests(id, community_id, inventory_digest)
+        ON DELETE RESTRICT
+);;
+
+-- ── Git repo name registry (NIP-34 kind:30617) ───────────────────────────────
+-- Ported from migrations/0002_git_repo_names.sql (was KNOWN_DRIFT; needed by the
+-- community serving-fence catalog, which requires every scoped table to exist
+-- with a write fence).
+CREATE TABLE git_repo_names (
+    community_id  UUID NOT NULL REFERENCES communities(id),
+    repo_id       TEXT NOT NULL,
+    owner_pubkey  TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, repo_id)
+);;
+
+-- Backs the per-pubkey repo quota: COUNT(*) WHERE community_id = $1 AND owner_pubkey = $2.
+CREATE INDEX idx_git_repo_names_owner ON git_repo_names (community_id, owner_pubkey);
+
+-- ── Parameterized (NIP-33 LWW) read-state watermarks ─────────────────────────
+-- Ported from migrations/0007_nip_rs_retention.sql (was KNOWN_DRIFT; required by
+-- the community serving-fence catalog).
+CREATE TABLE parameterized_event_watermarks (
+    community_id  UUID NOT NULL REFERENCES communities(id),
+    kind          INT NOT NULL,
+    pubkey        BYTEA NOT NULL,
+    d_tag         TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    event_id      BYTEA NOT NULL,
+    PRIMARY KEY (community_id, kind, pubkey, d_tag)
+);;
+
+INSERT INTO _operator_global_tables (table_name, reason) VALUES
+    ('community_deletion_requests', 'deployment deletion lifecycle and frozen inventory'),
+    ('community_deletion_approvals', 'deployment operator destructive approvals'),
+    ('community_deletion_checkpoints', 'deployment deletion executor checkpoints and failures'),
+    ('community_deletion_manifest_keys', 'deployment deletion frozen destructive key chunks'),
+    ('storage_taxonomy_sweeps', 'deployment object-store taxonomy sweep evidence'),
+    ('community_serving_write_leases', 'deployment serving side-effect leases drained by deletion'),
+    ('community_deletion_executor_heartbeats', 'deployment deletion worker liveness');
+
+CREATE FUNCTION community_deletion_lock_key(target UUID) RETURNS BIGINT
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT hashtextextended('buzz-community-deletion:' || target::text, 0)
+$$;
+-- Keep the deletion control plane writable while its target tenant is fenced.
+-- This predicate is the single SQL source of truth used by attachment and live
+-- catalog validation.
+CREATE FUNCTION community_write_fence_excluded_table(target NAME) RETURNS BOOLEAN
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT target::TEXT = ANY (ARRAY[
+        'community_deletion_requests',
+        'community_deletion_approvals',
+        'community_deletion_checkpoints',
+        'community_serving_write_leases',
+        'community_deletion_executor_heartbeats',
+        'product_feedback',
+        'rate_limit_violations'
+    ]::TEXT[])
+$$;
+
+-- Fleet-wide writers filter candidates through this VOLATILE predicate in
+-- the mutating statement so fenced tenants are skipped before row triggers run.
+CREATE FUNCTION community_write_allowed(target UUID) RETURNS BOOLEAN
+LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+    lifecycle TEXT;
+BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'community writes require READ COMMITTED isolation'
+            USING ERRCODE = 'invalid_transaction_state';
+    END IF;
+
+    IF target IS NULL THEN
+        RETURN true;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock_shared(community_deletion_lock_key(target));
+    SELECT deletion_state
+      INTO lifecycle
+      FROM communities
+     WHERE id = target;
+    RETURN FOUND AND lifecycle = 'active';
+END
+$$;
+
+CREATE FUNCTION assert_community_write_allowed(target UUID) RETURNS VOID
+LANGUAGE plpgsql AS $$
+DECLARE
+    lifecycle TEXT;
+    generation BIGINT;
+    executor_community TEXT;
+    executor_generation TEXT;
+    serving_community TEXT;
+    serving_lease_id TEXT;
+    serving_owner TEXT;
+    serving_generation TEXT;
+    serving_fence_generation TEXT;
+    serving_lease_valid BOOLEAN := false;
+BEGIN
+    -- The fence proof requires a fresh statement snapshot after lock grant;
+    -- pinned RR/Serializable snapshots can retain pre-fence authorization.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'community writes require READ COMMITTED isolation'
+            USING ERRCODE = 'invalid_transaction_state';
+    END IF;
+
+    -- Nullable operator-attribution rows without a tenant are unrelated.
+    IF target IS NULL THEN
+        RETURN;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock_shared(community_deletion_lock_key(target));
+    SELECT deletion_state, deletion_fence_generation
+      INTO lifecycle, generation
+      FROM communities
+     WHERE id = target;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'community write rejected: community % is missing', target
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+
+    -- Authorization is evaluated independently for every community checked.
+    executor_community := current_setting('buzz.deletion_executor_community', true);
+    executor_generation := current_setting('buzz.deletion_fence_generation', true);
+    IF executor_community = target::TEXT
+       AND executor_generation ~ '^[0-9]+$'
+       AND executor_generation::BIGINT = generation THEN
+        RETURN;
+    END IF;
+
+    -- A serving mutation admitted before quiescing may finish only while its
+    -- exact durable lease remains current and bound to this fence generation.
+    serving_community := current_setting('buzz.serving_write_community', true);
+    serving_lease_id := current_setting('buzz.serving_write_lease_id', true);
+    serving_owner := current_setting('buzz.serving_write_owner', true);
+    serving_generation := current_setting('buzz.serving_write_generation', true);
+    serving_fence_generation := current_setting('buzz.serving_write_fence_generation', true);
+    IF lifecycle IN ('active', 'quiescing')
+       AND serving_community = target::TEXT
+       AND serving_lease_id ~ '^[0-9a-fA-F-]{36}$'
+       AND serving_generation ~ '^[0-9]+$'
+       AND serving_fence_generation ~ '^[0-9]+$'
+       AND serving_fence_generation::BIGINT = generation THEN
+        SELECT EXISTS(
+            SELECT 1 FROM community_serving_write_leases lease
+             WHERE lease.id = serving_lease_id::UUID
+               AND lease.community_id = target
+               AND lease.owner = serving_owner
+               AND lease.generation = serving_generation::BIGINT
+               AND lease.fence_generation = serving_fence_generation::BIGINT
+               AND lease.lease_until >= now()
+        ) INTO serving_lease_valid;
+        IF serving_lease_valid THEN
+            RETURN;
+        END IF;
+    END IF;
+
+    IF lifecycle <> 'active' THEN
+        RAISE EXCEPTION 'community write fenced: community % generation %', target, generation
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+END
+$$;
+
+CREATE FUNCTION enforce_community_write_fence() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM assert_community_write_allowed(NEW.community_id);
+    ELSIF TG_OP = 'DELETE' THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    ELSIF OLD.community_id IS NOT DISTINCT FROM NEW.community_id THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    ELSIF OLD.community_id IS NULL THEN
+        PERFORM assert_community_write_allowed(NEW.community_id);
+    ELSIF NEW.community_id IS NULL THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    ELSIF OLD.community_id < NEW.community_id THEN
+        PERFORM assert_community_write_allowed(OLD.community_id);
+        PERFORM assert_community_write_allowed(NEW.community_id);
+    ELSE
+        PERFORM assert_community_write_allowed(NEW.community_id);
+        PERFORM assert_community_write_allowed(OLD.community_id);
+    END IF;
+
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END
+$$;
+
+CREATE FUNCTION enforce_community_tombstone() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+    executor_community TEXT := current_setting('buzz.deletion_executor_community', true);
+    executor_generation TEXT := current_setting('buzz.deletion_fence_generation', true);
+    expected_generation BIGINT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.deletion_state <> 'active' OR OLD.deleted_at IS NOT NULL THEN
+            RAISE EXCEPTION 'community tombstones are permanent'
+                USING ERRCODE = 'object_not_in_prerequisite_state';
+        END IF;
+        RETURN OLD;
+    END IF;
+    expected_generation := CASE WHEN NEW.deletion_fence_generation > OLD.deletion_fence_generation
+        THEN NEW.deletion_fence_generation ELSE OLD.deletion_fence_generation END;
+    IF executor_community = OLD.id::text AND executor_generation ~ '^[0-9]+$'
+       AND executor_generation::BIGINT = expected_generation THEN RETURN NEW; END IF;
+    IF OLD.deletion_state <> 'active' OR NEW.deletion_state <> OLD.deletion_state
+       OR NEW.deletion_fence_generation <> OLD.deletion_fence_generation
+       OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+        RAISE EXCEPTION 'community tombstone mutation rejected: community % generation %',
+            OLD.id, OLD.deletion_fence_generation
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER communities_deletion_tombstone BEFORE UPDATE OR DELETE ON communities
+FOR EACH ROW EXECUTE FUNCTION enforce_community_tombstone();
+-- Attach the universal fence to one community-scoped relation. Future
+-- migrations must invoke this helper explicitly after CREATE/ALTER introduces
+-- community_id; the migration lint enforces that contract.
+CREATE FUNCTION attach_community_write_fence(target REGCLASS) RETURNS VOID
+LANGUAGE plpgsql AS $$
+DECLARE
+    relation_name NAME;
+BEGIN
+    SELECT c.relname
+      INTO relation_name
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = target
+       AND n.nspname = current_schema()
+       AND c.relkind IN ('r', 'p')
+       AND NOT c.relispartition;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'community write fence target % is not a table in the current schema', target
+            USING ERRCODE = 'wrong_object_type';
+    END IF;
+    IF community_write_fence_excluded_table(relation_name) THEN
+        RETURN;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+         WHERE attrelid = target AND attname = 'community_id' AND NOT attisdropped
+    ) THEN
+        RAISE EXCEPTION 'community write fence target % has no community_id', target
+            USING ERRCODE = 'undefined_column';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+         WHERE tgrelid = target
+           AND tgname = 'community_write_fence_' || relation_name
+           AND NOT tgisinternal
+    ) THEN
+        EXECUTE format(
+            'CREATE TRIGGER %I BEFORE INSERT OR UPDATE OR DELETE ON %s '
+            'FOR EACH ROW EXECUTE FUNCTION enforce_community_write_fence()',
+            'community_write_fence_' || relation_name,
+            target
+        );
+    END IF;
+END
+$$;
+
+-- Attach the universal fence to every existing table carrying community_id,
+-- including deployment-private sidecars whose community_id is provenance.
+DO $$
+DECLARE
+    target REGCLASS;
+BEGIN
+    FOR target IN
+        SELECT c.oid::REGCLASS
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_attribute a ON a.attrelid = c.oid
+         WHERE n.nspname = current_schema()
+           AND c.relkind IN ('r', 'p')
+           AND NOT c.relispartition
+           AND a.attname = 'community_id'
+           AND NOT a.attisdropped
+           AND NOT community_write_fence_excluded_table(c.relname)
+         ORDER BY c.oid::REGCLASS::TEXT
+    LOOP
+        PERFORM attach_community_write_fence(target);
+    END LOOP;
+END
+$$;
+
+-- Desired-state schema application does not replay migration history, so keep
+-- these explicit calls as first-class catalog declarations. They also make the
+-- fence contract visible to migration linting instead of hiding it only in the
+-- dynamic bootstrap loop above.
+SELECT attach_community_write_fence('api_tokens');
+SELECT attach_community_write_fence('archived_identities');
+SELECT attach_community_write_fence('asks');
+SELECT attach_community_write_fence('audit_log');
+SELECT attach_community_write_fence('block_action_claims');
+SELECT attach_community_write_fence('block_catalog_action_claims');
+SELECT attach_community_write_fence('channel_members');
+SELECT attach_community_write_fence('channels');
+SELECT attach_community_write_fence('community_bans');
+SELECT attach_community_write_fence('company_action_claims');
+SELECT attach_community_write_fence('delivery_log');
+SELECT attach_community_write_fence('discovery_action_claims');
+SELECT attach_community_write_fence('discovery_actor_grants');
+SELECT attach_community_write_fence('discovery_business_observations');
+SELECT attach_community_write_fence('discovery_campaigns');
+SELECT attach_community_write_fence('discovery_entitlements');
+SELECT attach_community_write_fence('discovery_lead_profiles');
+SELECT attach_community_write_fence('discovery_observation_batches');
+SELECT attach_community_write_fence('discovery_run_business_searches');
+SELECT attach_community_write_fence('discovery_run_checkpoints');
+SELECT attach_community_write_fence('discovery_run_source_plans');
+SELECT attach_community_write_fence('discovery_run_sources');
+SELECT attach_community_write_fence('discovery_runs');
+SELECT attach_community_write_fence('discovery_source_observation_batches');
+SELECT attach_community_write_fence('discovery_source_usage');
+SELECT attach_community_write_fence('discovery_usage');
+SELECT attach_community_write_fence('discovery_worker_action_claims');
+SELECT attach_community_write_fence('discovery_workspace_action_claims');
+SELECT attach_community_write_fence('discovery_workspace_protocols');
+SELECT attach_community_write_fence('employees');
+SELECT attach_community_write_fence('event_mentions');
+SELECT attach_community_write_fence('events');
+SELECT attach_community_write_fence('git_repo_names');
+SELECT attach_community_write_fence('jobs');
+SELECT attach_community_write_fence('join_policy_acceptances');
+SELECT attach_community_write_fence('ledger_action_claims');
+SELECT attach_community_write_fence('moderation_actions');
+SELECT attach_community_write_fence('moderation_reports');
+SELECT attach_community_write_fence('operator_activity_cursor');
+SELECT attach_community_write_fence('operator_activity_daily');
+SELECT attach_community_write_fence('parameterized_event_watermarks');
+SELECT attach_community_write_fence('party_action_claims');
+SELECT attach_community_write_fence('pubkey_allowlist');
+SELECT attach_community_write_fence('push_leases');
+SELECT attach_community_write_fence('push_match_queue');
+SELECT attach_community_write_fence('push_wake_outbox');
+SELECT attach_community_write_fence('reactions');
+SELECT attach_community_write_fence('relay_invites');
+SELECT attach_community_write_fence('relay_members');
+SELECT attach_community_write_fence('scheduled_workflow_fires');
+SELECT attach_community_write_fence('subscriptions');
+SELECT attach_community_write_fence('thread_metadata');
+SELECT attach_community_write_fence('users');
+SELECT attach_community_write_fence('workflow_approvals');
+SELECT attach_community_write_fence('workflow_runs');
+SELECT attach_community_write_fence('workflows');
+SELECT attach_community_write_fence('workspace_tabs');

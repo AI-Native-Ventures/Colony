@@ -22,6 +22,7 @@ type UseHomeInboxContextMessagesOptions = {
   selectedChannel: Channel | null;
   selectedEventId: string | null;
   selectedItem: InboxItem | null;
+  structuralEvents?: RelayEvent[];
 };
 
 export function useHomeInboxContextMessages({
@@ -35,6 +36,7 @@ export function useHomeInboxContextMessages({
   selectedChannel,
   selectedEventId,
   selectedItem,
+  structuralEvents = [],
 }: UseHomeInboxContextMessagesOptions): InboxContextMessage[] {
   return React.useMemo(() => {
     if (!selectedItem) return [];
@@ -53,7 +55,7 @@ export function useHomeInboxContextMessages({
       ? (profiles?.[currentPubkey.toLowerCase()]?.avatarUrl ?? null)
       : null;
     const timelineMessages = formatTimelineMessages(
-      [...events, ...contextReactions],
+      [...events, ...structuralEvents, ...contextReactions],
       selectedChannel,
       currentPubkey,
       currentUserAvatarUrl,
@@ -84,5 +86,6 @@ export function useHomeInboxContextMessages({
     selectedChannel,
     selectedEventId,
     selectedItem,
+    structuralEvents,
   ]);
 }

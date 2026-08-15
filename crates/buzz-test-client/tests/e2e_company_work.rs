@@ -1371,6 +1371,7 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
         cumulative: None,
         delta_reliable: true,
         stop_reason: Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+        pricing_identity: None,
         work_context: Some(work.clone()),
     };
 

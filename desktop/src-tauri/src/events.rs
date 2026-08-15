@@ -295,6 +295,7 @@ pub fn build_remove_member(channel_id: Uuid, target_pubkey: &str) -> Result<Even
 // ── Messages ─────────────────────────────────────────────────────────────────
 
 /// Kind 9 — stream message.
+#[allow(clippy::too_many_arguments)]
 pub fn build_message(
     channel_id: Uuid,
     content: &str,
@@ -303,8 +304,11 @@ pub fn build_message(
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
     mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
 ) -> Result<EventBuilder, String> {
-    build_message_with_reference_tags(
+    build_message_with_client_tags(
         channel_id,
         content,
         thread_ref,
@@ -312,12 +316,15 @@ pub fn build_message(
         media_tags,
         custom_emoji_tags,
         mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
         &[],
     )
 }
 
 /// Kind 9 — stream message with a closed set of safe Block reference tags.
-#[allow(clippy::too_many_arguments)]
+#[allow(dead_code, clippy::too_many_arguments)]
 pub fn build_message_with_reference_tags(
     channel_id: Uuid,
     content: &str,
@@ -337,6 +344,42 @@ pub fn build_message_with_reference_tags(
         custom_emoji_tags,
         mention_ref_tags,
         &[],
+        None,
+        &crate::relay::relay_api_base_url(),
+        &[],
+        reference_tags,
+    )
+}
+
+/// Kind 9 — stream message with link previews, provenance, client markers, and
+/// validated Block reference tags.
+#[allow(clippy::too_many_arguments)]
+pub fn build_message_with_reference_and_client_tags(
+    channel_id: Uuid,
+    content: &str,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
+    client_tags: &[Vec<String>],
+    reference_tags: &[Vec<String>],
+) -> Result<EventBuilder, String> {
+    build_message_with_client_and_reference_tags(
+        channel_id,
+        content,
+        thread_ref,
+        mentions,
+        media_tags,
+        custom_emoji_tags,
+        mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
+        client_tags,
         reference_tags,
     )
 }
@@ -355,8 +398,14 @@ pub fn build_message_with_client_tags(
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
     mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
     client_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
+    if sent_from_thread_tag.is_some() && thread_ref.is_some() {
+        return Err("sent-from-thread provenance requires a top-level message".into());
+    }
     build_message_with_client_and_reference_tags(
         channel_id,
         content,
@@ -365,6 +414,9 @@ pub fn build_message_with_client_tags(
         media_tags,
         custom_emoji_tags,
         mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
         client_tags,
         &[],
     )
@@ -379,6 +431,9 @@ fn build_message_with_client_and_reference_tags(
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
     mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
     client_tags: &[Vec<String>],
     reference_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
@@ -391,6 +446,8 @@ fn build_message_with_client_and_reference_tags(
     imeta_tags(media_tags, &mut tags)?;
     emoji_tags(custom_emoji_tags, &mut tags)?;
     mention_reference_tags(mention_ref_tags, &mut tags)?;
+    crate::link_preview_tags::append(link_preview_tags, relay_base, &mut tags)?;
+    append_sent_from_thread_tag(sent_from_thread_tag, &mut tags)?;
     append_client_tags(client_tags, &mut tags)?;
     append_block_reference_tags(reference_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
@@ -477,6 +534,41 @@ fn append_block_reference_tags(
     Ok(())
 }
 
+const SENT_FROM_THREAD_TAG: &str = "buzz:sent-from-thread";
+const MAX_THREAD_ROOT_EXCERPT_CHARS: usize = 64;
+
+/// Attach a validated `buzz:sent-from-thread` provenance tag, or nothing when
+/// the message was sent from the thread it belongs to.
+fn append_sent_from_thread_tag(
+    source_tag: Option<&[String]>,
+    tags: &mut Vec<Tag>,
+) -> Result<(), String> {
+    let Some(source_tag) = source_tag else {
+        return Ok(());
+    };
+    if !matches!(source_tag.len(), 2 | 3)
+        || source_tag.first().map(String::as_str) != Some(SENT_FROM_THREAD_TAG)
+    {
+        return Err("invalid sent-from-thread tag shape".into());
+    }
+
+    EventId::from_hex(source_tag[1].trim())
+        .map_err(|_| "sent-from-thread tag has invalid root event ID")?;
+
+    if let Some(excerpt) = source_tag.get(2) {
+        if excerpt.trim().is_empty()
+            || excerpt.chars().count() > MAX_THREAD_ROOT_EXCERPT_CHARS
+            || excerpt.chars().any(char::is_control)
+        {
+            return Err("sent-from-thread tag has invalid root excerpt".into());
+        }
+    }
+
+    let parts: Vec<&str> = source_tag.iter().map(String::as_str).collect();
+    tags.push(Tag::parse(parts).map_err(|e| format!("invalid sent-from-thread tag: {e}"))?);
+    Ok(())
+}
+
 fn append_client_tags(client_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
     for client_tag in client_tags {
         if client_tag.first().map(String::as_str) != Some("client") {
@@ -540,22 +632,38 @@ pub fn build_forum_comment(
 /// edit that leaves the mention set unchanged emits no `p` tags and never
 /// re-wakes anyone. This mirrors the send path's `mention_tags` (dedup +
 /// lowercase); the receiver overlays these onto the original event's audience.
+/// Edit tags grouped so the edit path and its callers share one shape.
+pub struct MessageEditTags<'a> {
+    pub media: &'a [Vec<String>],
+    pub custom_emoji: &'a [Vec<String>],
+    pub mentions: &'a [&'a str],
+    pub mention_refs: Option<&'a [Vec<String>]>,
+}
+
+/// Kind 40003 — edit a message with full content, media, emoji, mentions,
+/// and optional monotonic link-preview suppression.
 pub fn build_message_edit(
     channel_id: Uuid,
     target_event_id: EventId,
     content: &str,
-    media_tags: &[Vec<String>],
-    custom_emoji_tags: &[Vec<String>],
-    mentions: &[&str],
+    edit_tags: MessageEditTags<'_>,
+    suppress_link_previews: bool,
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![
         tag(vec!["h", &channel_id.to_string()])?,
         tag(vec!["e", &target_event_id.to_hex()])?,
     ];
-    tags.extend(mention_tags(mentions)?);
-    imeta_tags(media_tags, &mut tags)?;
-    emoji_tags(custom_emoji_tags, &mut tags)?;
+    tags.extend(mention_tags(edit_tags.mentions)?);
+    imeta_tags(edit_tags.media, &mut tags)?;
+    emoji_tags(edit_tags.custom_emoji, &mut tags)?;
+    if let Some(mention_refs) = edit_tags.mention_refs {
+        mention_reference_tags(mention_refs, &mut tags)?;
+        tags.push(tag(vec!["buzz:mention-snapshot"])?);
+    }
+    if suppress_link_previews {
+        tags.push(tag(vec!["link-preview", "none"])?);
+    }
     Ok(EventBuilder::new(Kind::Custom(40003), content).tags(tags))
 }
 
@@ -768,126 +876,13 @@ pub fn build_relay_admin_change_role(
     Ok(EventBuilder::new(Kind::Custom(9032), "").tags(tags))
 }
 
-// ── NIP-IA identity archival ─────────────────────────────────────────────────
-//
-// kind:9035 archive request, kind:9036 unarchive request.
-// Both protected by NIP-70 (`["-"]`), p-tag the target, and may carry
-// optional `reason` (machine-readable code), `replaced-by` (9035 only),
-// and a NIP-OA `auth` tag for owner-of-agent requests.
-//
-// See docs/nips/NIP-IA.md §Event Formats. The relay verifies; the desktop's
-// job is to produce a well-formed, signed request — consent path is selected
-// by the relay, not declared here.
-
-fn check_reason(reason: &str) -> Result<(), String> {
-    // Reason codes are machine-readable strings; the spec doesn't cap length
-    // but we keep them short to discourage stuffing prose where `content` goes.
-    if reason.len() > 64 {
-        return Err(format!(
-            "reason code exceeds maximum length of 64 chars (got {})",
-            reason.len()
-        ));
-    }
-    if reason.chars().any(|c| c.is_control()) {
-        return Err("reason code must not contain control characters".into());
-    }
-    Ok(())
-}
-
-fn identity_archive_tags(
-    target_pubkey: &str,
-    reason: Option<&str>,
-    replaced_by: Option<&str>,
-    auth_tag: Option<&[String; 4]>,
-) -> Result<Vec<Tag>, String> {
-    check_pubkey(target_pubkey)?;
-    let target_lower = target_pubkey.to_ascii_lowercase();
-
-    let mut tags = Vec::with_capacity(5);
-    // NIP-70: mark as protected administrative state.
-    tags.push(tag(vec!["-"])?);
-    tags.push(tag(vec!["p", &target_lower])?);
-
-    if let Some(r) = reason {
-        check_reason(r)?;
-        tags.push(tag(vec!["reason", r])?);
-    }
-
-    if let Some(rb) = replaced_by {
-        check_pubkey(rb)?;
-        let rb_lower = rb.to_ascii_lowercase();
-        if rb_lower == target_lower {
-            return Err("replaced-by must differ from the target".into());
-        }
-        tags.push(tag(vec!["replaced-by", &rb_lower])?);
-    }
-
-    if let Some(auth) = auth_tag {
-        // Structural check only — the relay performs full NIP-OA verification.
-        // We require the label, a 64-hex owner pubkey, and a 128-hex signature.
-        if auth[0] != "auth" {
-            return Err(format!(
-                "auth tag label must be \"auth\" (got \"{}\")",
-                auth[0]
-            ));
-        }
-        check_pubkey(&auth[1])?;
-        if auth[3].len() != 128 || !auth[3].chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err("auth tag signature must be 128-character hex".into());
-        }
-        tags.push(tag(vec!["auth", &auth[1], &auth[2], &auth[3]])?);
-    }
-
-    Ok(tags)
-}
-
-/// Kind 9035 — NIP-IA archive request.
-///
-/// `content` is an optional human-readable reason (clients MUST NOT parse
-/// authorization semantics from it). `reason` is the machine-readable code
-/// (`rotated`, `retired`, `bot-rebuilt`, `left-organization`, `spam`, ...).
-/// `replaced_by` is the rotation pointer. `auth` is a NIP-OA owner-attestation
-/// tag required only for the owner-of-agent consent path.
-///
-/// `.allow_self_tagging()` is required: NIP-IA's self path has `actor==target`,
-/// which means the request's `["p", target]` matches the signer. nostr 0.44
-/// strips matching `p` tags by default — we need the wire form intact.
-pub fn build_archive_identity_request(
-    target_pubkey: &str,
-    content: &str,
-    reason: Option<&str>,
-    replaced_by: Option<&str>,
-    auth: Option<&[String; 4]>,
-) -> Result<EventBuilder, String> {
-    check_content(content)?;
-    let tags = identity_archive_tags(target_pubkey, reason, replaced_by, auth)?;
-    Ok(
-        EventBuilder::new(Kind::Custom(KIND_IA_ARCHIVE_REQUEST as u16), content)
-            .tags(tags)
-            .allow_self_tagging(),
-    )
-}
-
-/// Kind 9036 — NIP-IA unarchive request.
-///
-/// Same shape as 9035 minus `replaced-by` (which has no defined meaning on
-/// unarchive per spec). `auth` is used for owner-of-agent unarchive paths.
-/// See `build_archive_identity_request` for the rationale on
-/// `.allow_self_tagging()`.
-pub fn build_unarchive_identity_request(
-    target_pubkey: &str,
-    content: &str,
-    reason: Option<&str>,
-    auth: Option<&[String; 4]>,
-) -> Result<EventBuilder, String> {
-    check_content(content)?;
-    let tags = identity_archive_tags(target_pubkey, reason, None, auth)?;
-    Ok(
-        EventBuilder::new(Kind::Custom(KIND_IA_UNARCHIVE_REQUEST as u16), content)
-            .tags(tags)
-            .allow_self_tagging(),
-    )
-}
+// NIP-IA identity archival builders live in `events/identity_archive.rs`:
+// kind:9035 archive request and kind:9036 unarchive request. Kept in a
+// sibling module for the file-size discipline; the section was moved here
+// whole and its public builders are re-exported unchanged.
+#[path = "events/identity_archive.rs"]
+mod identity_archive;
+pub use identity_archive::{build_archive_identity_request, build_unarchive_identity_request};
 
 /// Maximum contacts per contact list event.
 const MAX_CONTACTS: usize = 10_000;

@@ -8,19 +8,34 @@ use buzz_core::discovery_worker::{
     canonical_business_domain_digest, normalized_business_name_locality_digest,
     normalized_business_phone_digest,
 };
-use sqlx::{PgPool, Row};
+use std::future::Future;
 
+use sqlx::{Connection, PgConnection, PgPool, Row};
+
+use crate::deletion::SCHEMA_DESTRUCTION_LOCK_KEY;
 use crate::Result;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 /// Run all pending Buzz database migrations.
+///
+/// The entire run holds the exclusive [`SCHEMA_DESTRUCTION_LOCK_KEY`] session
+/// advisory lock, so migrations can never interleave with a community
+/// destruction that drops or rewrites schema objects.
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
+    with_exclusive_schema_destruction_lock(pool, |lock_conn| async move {
+        let outcome = run_migrations_locked(pool).await;
+        (lock_conn, outcome)
+    })
+    .await
+}
+
+async fn run_migrations_locked(pool: &PgPool) -> Result<()> {
     reject_legacy_nip_rs_cardinality_ambiguity(pool).await?;
     MIGRATOR.run(pool).await?;
     backfill_discovery_dedupe_digests(pool).await?;
     // The replica-fence proof (see `replica_fence`) requires the commit-time
-    // `created_at` floor trigger from migration 0021 — correctly shaped — on
+    // `created_at` floor trigger from migration 0021 - correctly shaped - on
     // the `events` parent and every partition. `CREATE TABLE .. PARTITION OF`
     // clones parent triggers, but a partition attached with `ATTACH
     // PARTITION` or created by an older code path would silently escape the
@@ -28,6 +43,39 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     // re-runs this same check at startup on non-migrating relays.)
     crate::replica_fence::verify_floor_guard_catalog(pool).await?;
     Ok(())
+}
+
+/// Run `op` on a dedicated pool-detached connection while holding the
+/// exclusive session advisory lock [`SCHEMA_DESTRUCTION_LOCK_KEY`].
+///
+/// Destructive migration statements must run under this lock: it serializes
+/// them against community destruction, whose catalog drop/rewrite steps take
+/// the same lock. The connection is detached from the pool, so the lock lives
+/// for the duration of `op` regardless of pool contention, and is released
+/// explicitly on completion (success and error alike) before the connection
+/// is closed, never returning a locked session to the pool.
+pub(crate) async fn with_exclusive_schema_destruction_lock<T, F, Fut>(
+    pool: &PgPool,
+    op: F,
+) -> Result<T>
+where
+    F: FnOnce(PgConnection) -> Fut,
+    Fut: Future<Output = (PgConnection, Result<T>)>,
+{
+    let mut lock_conn = pool.acquire().await?.detach();
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
+        .execute(&mut lock_conn)
+        .await?;
+    let (mut lock_conn, outcome) = op(lock_conn).await;
+    let unlock = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(SCHEMA_DESTRUCTION_LOCK_KEY)
+        .execute(&mut lock_conn)
+        .await;
+    let _ = lock_conn.close().await;
+    let value = outcome?;
+    unlock?;
+    Ok(value)
 }
 
 /// Apply migrations unless the database was already provisioned from
@@ -459,6 +507,13 @@ mod tests {
             "push_gateway_delivery_request_replays",
             "product_feedback",
             "replica_heartbeat",
+            "community_deletion_requests",
+            "community_deletion_approvals",
+            "community_deletion_checkpoints",
+            "community_deletion_manifest_keys",
+            "storage_taxonomy_sweeps",
+            "community_serving_write_leases",
+            "community_deletion_executor_heartbeats",
             "accounts",
             "credit_ledger",
             "gateway_tokens",
@@ -679,7 +734,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 58);
+        assert_eq!(migrations.len(), 60);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1257,8 +1312,20 @@ mod tests {
             assert!(catalog_action_claims.contains(event_id));
         }
         assert!(!catalog_action_claims.contains("_operator_global_tables"));
+        // Upstream community-deletion migrations renumbered to 0059/0060:
+        // Colony's develop already occupies 0029 (company_action_claims) and
+        // 0030 (party_action_claims), and the upstream 0027/0028 duplicates of
+        // 0048/0049 were dropped at the port.
+        assert_eq!(migrations[58].version, 59);
+        let deletion = migrations[58].sql.as_str();
+        assert!(deletion.contains("CREATE TABLE community_deletion_requests"));
+        assert!(deletion.contains("CREATE FUNCTION enforce_community_write_fence"));
+        assert_eq!(migrations[59].version, 60);
+        let recovery = migrations[59].sql.as_str();
+        assert!(
+            recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
+        );
     }
-
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
         let migration = MIGRATOR

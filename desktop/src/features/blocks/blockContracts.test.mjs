@@ -14,6 +14,7 @@ import {
 } from "./contracts.ts";
 import { loadBlockData } from "./blockData.ts";
 import {
+  isBlockMessage,
   parseBlockAction,
   parseBlockInstance,
   parseBlockReceipt,
@@ -38,6 +39,12 @@ const EVENT_B = "b".repeat(64);
 const PUBKEY = "c".repeat(64);
 const INSTANCE_ID = "018f47a0-5db0-7ab1-8c6a-73d5ac1a69b1";
 const IDEMPOTENCY_KEY = "018f47a0-5db0-7ab1-8c6a-73d5ac1a69b2";
+
+test("isBlockMessage keeps Block rendering scoped to stream events", () => {
+  assert.equal(isBlockMessage({ kind: 9, tags: [["block", "1"]] }), true);
+  assert.equal(isBlockMessage({ kind: 40010, tags: [["block", "1"]] }), false);
+  assert.equal(isBlockMessage({ kind: 9, tags: [] }), false);
+});
 
 function objectSchema(properties = {}, required = []) {
   return {
