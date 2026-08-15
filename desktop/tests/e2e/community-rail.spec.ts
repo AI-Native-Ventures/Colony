@@ -360,6 +360,20 @@ test.describe("community rail", () => {
 
     await page.goto("/");
 
+    await expect(
+      page.getByTestId("community-lifecycle-marker"),
+    ).toHaveAttribute("data-community-state", "ready");
+    const initialWorkspaceResets = await page.evaluate(() =>
+      (window.__BUZZ_E2E_COMMAND_LOG__ ?? [])
+        .filter(
+          ({ command }) =>
+            command === "workspace_terminal_close_all" ||
+            command === "workspace_web_close_all",
+        )
+        .map(({ command }) => command),
+    );
+    expect(initialWorkspaceResets).toEqual([]);
+
     await page.getByTestId(`community-rail-button-${COMMUNITY_B.id}`).click();
 
     // Switching persists the newly active community id (the app then remounts

@@ -240,8 +240,6 @@ export function useCommunityInit(
           return;
         }
       }
-      hasInitializedRef.current = true;
-      appliedRelayUrlRef.current = activeCommunity.relayUrl;
 
       // Apply community config to the Tauri backend.
       //
@@ -286,6 +284,13 @@ export function useCommunityInit(
       }
 
       if (!cancelled) {
+        // Mark initialization complete only after the backend accepted this
+        // community. React StrictMode re-runs effects on the initial mount;
+        // setting this before the first await makes that replay look like a
+        // community switch and needlessly tears down native workspace sessions.
+        hasInitializedRef.current = true;
+        appliedRelayUrlRef.current = activeCommunity.relayUrl;
+
         // Refresh relay-derived media state only after the backend has installed
         // this community's relay override. On cold launch, mediaUrl.ts may have
         // eagerly cached the default relay origin before applyCommunity ran;
