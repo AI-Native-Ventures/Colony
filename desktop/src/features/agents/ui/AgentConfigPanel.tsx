@@ -141,7 +141,7 @@ function provenanceSentence(
     case "buzzExplicit":
       return "Set in Colony";
     case "personaDefault":
-      return null;
+      return "Inherited from template";
     case "runtimeOverride":
       return "Live override (this session only)";
     case "harnessConstraint":
@@ -415,7 +415,7 @@ export function AgentConfigPanel({
   const flatStateTitle = sections.includes("model")
     ? "Model settings"
     : sections.includes("mcp")
-      ? "MCP servers"
+      ? "MCP Servers"
       : "Advanced";
 
   if (isLoading) {
@@ -535,7 +535,7 @@ export function AgentConfigSurfaceRows({
         {showMcpSection && showMcpServers ? (
           <ProfileConfigSection
             testId="user-profile-mcp-servers-section"
-            title="MCP servers"
+            title="MCP Servers"
           >
             <McpServersSection
               extensions={extensions}

@@ -7,7 +7,7 @@ import {
   ProfileFieldGroup,
   ProfileSectionGroup,
 } from "@/features/profile/ui/UserProfilePanelFields";
-import { ProfileIngressRow } from "@/features/profile/ui/UserProfilePanelTabs";
+import { ProfileIngressRow } from "@/features/profile/ui/ProfileIngressRow";
 import type { ProfileChannelLink } from "@/features/profile/ui/UserProfilePanelUtils";
 import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";

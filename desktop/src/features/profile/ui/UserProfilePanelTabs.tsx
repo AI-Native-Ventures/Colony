@@ -1,5 +1,4 @@
 import * as React from "react";
-import type { LucideIcon } from "lucide-react";
 import { Archive, ChevronRight, Info, RefreshCw, Wrench } from "lucide-react";
 
 import type { IdentityArchiveActions } from "@/features/identity-archive/hooks";
@@ -10,6 +9,15 @@ import {
   RestartDiffList,
 } from "@/features/agents/ui/RestartDiffBadge";
 import type { ActiveTurnSummary } from "@/features/agents/activeAgentTurnsStore";
+import {
+  COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
+  COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
+  friendlyAgentLastError,
+} from "@/features/agents/lib/friendlyAgentLastError";
+import {
+  getLatestColonyCreditsDenial,
+  subscribeAgentObserverStore,
+} from "@/features/agents/observerRelayStore";
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
 import type { ProfileActivityAgent } from "@/features/profile/lib/profileActivityAgent";
 import { resolveActivityChannelId } from "@/features/profile/lib/profileActivityCarousel";
@@ -18,12 +26,15 @@ import {
   useProfileActivityFeedScope,
 } from "@/features/profile/lib/profileActivityFeedScope";
 import { UserProfileAgentManagementRows } from "@/features/profile/ui/UserProfileAgentManagementRows";
+import { AgentInstructionRow } from "@/features/profile/ui/UserProfilePanelAgentDetails";
+import { ProfileIngressRow } from "@/features/profile/ui/ProfileIngressRow";
 import {
   type ProfileField,
   ProfileFieldRows,
   ProfileSectionGroup,
 } from "@/features/profile/ui/UserProfilePanelFields";
 import type { ProfilePanelTab } from "@/features/profile/ui/UserProfilePanelUtils";
+import { reconnectColonyCredits } from "@/shared/api/tauriProvisionedCredits";
 import { cn } from "@/shared/lib/cn";
 import { useNow } from "@/shared/lib/useNow";
 import { Button } from "@/shared/ui/button";
@@ -34,88 +45,8 @@ import {
   CarouselItem,
 } from "@/shared/ui/carousel";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
-import { PanelSectionGroup } from "@/shared/ui/PanelSectionGroup";
 import { Switch } from "@/shared/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
-
-export function ProfileIngressRow({
-  disabled,
-  disclosureIcon: DisclosureIcon = ChevronRight,
-  grouped = false,
-  icon: Icon,
-  label,
-  onClick,
-  testId,
-  trailing,
-}: {
-  disabled?: boolean;
-  disclosureIcon?: LucideIcon;
-  grouped?: boolean;
-  icon?: LucideIcon;
-  label: string;
-  onClick?: () => void;
-  testId: string;
-  trailing?: React.ReactNode;
-}) {
-  const trailingTitle = typeof trailing === "string" ? trailing : undefined;
-
-  const content = (
-    <>
-      {Icon ? (
-        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      ) : null}
-      <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-        {label}
-      </span>
-      {trailing ? (
-        <span
-          className="max-w-[45%] truncate text-right text-sm text-muted-foreground"
-          title={trailingTitle}
-        >
-          {trailing}
-        </span>
-      ) : null}
-      {onClick ? (
-        <DisclosureIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-      ) : null}
-    </>
-  );
-  const className = cn(
-    "flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left",
-    onClick &&
-      "transition-colors hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50",
-  );
-
-  let row: React.ReactNode;
-  if (!onClick) {
-    row = (
-      <div className={className} data-testid={testId}>
-        {content}
-      </div>
-    );
-  } else {
-    row = (
-      <button
-        className={cn(
-          className,
-          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-        )}
-        data-testid={testId}
-        disabled={disabled}
-        onClick={onClick}
-        type="button"
-      >
-        {content}
-      </button>
-    );
-  }
-
-  return grouped ? (
-    row
-  ) : (
-    <PanelSectionGroup testId={`${testId}-section`}>{row}</PanelSectionGroup>
-  );
-}
 
 export function ProfileTabBar({
   activeTab,
@@ -285,7 +216,7 @@ export function ProfileInfoTabContent({
               grouped
               label="Agent instructions"
               onClick={onEditAgent}
-              testId="user-profile-agent-instruction-row"
+              testId="user-profile-agent-instruction-ingress"
             />
           ) : null}
           <ProfileFieldRows fields={infoFields} />
@@ -752,7 +683,9 @@ function ArchiveStatusTooltip() {
 }
 
 export function ProfileRuntimeTabContent({
+  agentInstruction = null,
   autoRestartEnabled = false,
+  colonyCreditsAgentPubkey = null,
   currentPubkey,
   diagnosticsFields,
   diagnosticsSummary,
@@ -765,12 +698,16 @@ export function ProfileRuntimeTabContent({
   startOnLaunchPending = false,
   onOpenDiagnostics,
   onOpenInstance,
+  onOpenInstructions,
   onToggleStartOnLaunch,
   showDiagnosticsIngress,
   showPreviewHarnessLog = false,
 }: {
+  agentInstruction?: string | null;
   /** Whether the per-agent auto-restart toggle is ON. */
   autoRestartEnabled?: boolean;
+  /** Local managed agent whose observer denial can expose one recovery action. */
+  colonyCreditsAgentPubkey?: string | null;
   currentPubkey: string | null;
   diagnosticsFields: ProfileField[];
   diagnosticsSummary: React.ReactNode;
@@ -785,10 +722,63 @@ export function ProfileRuntimeTabContent({
   startOnLaunchPending?: boolean;
   onOpenDiagnostics: () => void;
   onOpenInstance: (pubkey: string) => void;
+  onOpenInstructions?: () => void;
   onToggleStartOnLaunch?: () => void;
   showDiagnosticsIngress: boolean;
   showPreviewHarnessLog?: boolean;
 }) {
+  const [isReconnecting, setIsReconnecting] = React.useState(false);
+  const [reconnectError, setReconnectError] = React.useState<string | null>(
+    null,
+  );
+  const subscribeToDenial = React.useCallback(
+    (listener: () => void) =>
+      colonyCreditsAgentPubkey
+        ? subscribeAgentObserverStore(listener)
+        : () => {},
+    [colonyCreditsAgentPubkey],
+  );
+  const liveDenial = React.useSyncExternalStore(
+    subscribeToDenial,
+    () => getLatestColonyCreditsDenial(colonyCreditsAgentPubkey),
+    () => getLatestColonyCreditsDenial(colonyCreditsAgentPubkey),
+  );
+  const liveDenialFriendlyError = liveDenial
+    ? friendlyAgentLastError(
+        (() => {
+          const payload =
+            typeof liveDenial.payload === "object" &&
+            liveDenial.payload !== null
+              ? (liveDenial.payload as {
+                  error?: unknown;
+                  gateway_status?: unknown;
+                })
+              : {};
+          const status = String(payload.gateway_status ?? "401");
+          const marker =
+            status === "402"
+              ? COLONY_CREDITS_GATEWAY_STATUS_402_MARKER
+              : COLONY_CREDITS_GATEWAY_STATUS_401_MARKER;
+          const detail =
+            typeof payload.error === "string" ? `: ${payload.error}` : "";
+          return `${marker}${detail}`;
+        })(),
+      )
+    : null;
+
+  async function handleReconnect() {
+    if (isReconnecting) return;
+    setIsReconnecting(true);
+    setReconnectError(null);
+    try {
+      await reconnectColonyCredits();
+    } catch {
+      setReconnectError("Reconnect failed — try again.");
+    } finally {
+      setIsReconnecting(false);
+    }
+  }
+
   const startOnLaunchFieldIndex = configurationFields.findIndex(
     (field) => field.label === "Start on launch",
   );
@@ -826,6 +816,9 @@ export function ProfileRuntimeTabContent({
     showPreviewHarnessLog;
   const hasConfigurationRows = configurationFields.length > 0;
   const hasInstances = instances.length > 0;
+  const showColonyCreditsRecovery =
+    liveDenialFriendlyError?.severity === "actionable" &&
+    liveDenialFriendlyError.action === "reconnect";
 
   if (
     statusDiagnosticsFields.length === 0 &&
@@ -833,13 +826,21 @@ export function ProfileRuntimeTabContent({
     !hasConfigurationRows &&
     !modelSettings &&
     !hasInstances &&
-    !needsRestart
+    !(agentInstruction && onOpenInstructions) &&
+    !needsRestart &&
+    !showColonyCreditsRecovery
   ) {
     return null;
   }
 
   return (
     <div className="space-y-4" data-testid="user-profile-runtime-sections">
+      {agentInstruction && onOpenInstructions ? (
+        <AgentInstructionRow
+          instruction={agentInstruction}
+          onOpenInstructions={onOpenInstructions}
+        />
+      ) : null}
       {needsRestart ? (
         <div
           className="flex items-start gap-3 rounded-2xl bg-amber-500/10 px-4 py-3"
@@ -859,6 +860,31 @@ export function ProfileRuntimeTabContent({
                 where all entries show without truncation. */}
             <RestartDiffList restartDiff={restartDiff} />
           </div>
+        </div>
+      ) : null}
+      {showColonyCreditsRecovery ? (
+        <div className="space-y-1" data-testid="colony-credits-recovery">
+          <p className="text-xs text-destructive">
+            {liveDenialFriendlyError.copy}
+          </p>
+          <Button
+            data-testid="managed-agent-colony-credits-reconnect"
+            disabled={isReconnecting}
+            onClick={() => void handleReconnect()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {isReconnecting ? "Reconnecting…" : "Reconnect"}
+          </Button>
+          {reconnectError ? (
+            <p
+              className="text-xs text-destructive"
+              data-testid="managed-agent-colony-credits-reconnect-error"
+            >
+              {reconnectError}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {hasActivityRows ? (

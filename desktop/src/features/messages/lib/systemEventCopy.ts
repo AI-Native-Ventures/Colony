@@ -20,7 +20,7 @@ export type ChannelTextField = "topic" | "purpose";
  * rather than the ungrammatical "You added by".
  */
 export function addedByActionPrefix(isCurrentUser: boolean): string {
-  return isCurrentUser ? "were added by" : "added by";
+  return isCurrentUser ? "were added by" : "was added by";
 }
 
 /**

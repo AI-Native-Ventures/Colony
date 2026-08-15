@@ -114,6 +114,10 @@ const MEDIAPIPE_WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const SELFIE_SEGMENTER_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+// Camera capture must remain usable when a CDN is slow or unavailable. The
+// segmentation pass is an enhancement; recording can safely fall back to the
+// original frames while the model load times out.
+const SEGMENTER_LOAD_TIMEOUT_MS = 5_000;
 
 export type AnimatedAvatarRecording = {
   /** Square RGBA cut-out frames, mirrored like a selfie preview. */
@@ -182,10 +186,36 @@ let segmenterPromise: Promise<SegmenterHandle | null> | null = null;
  */
 function loadSegmenter(): Promise<SegmenterHandle | null> {
   if (!segmenterPromise) {
-    segmenterPromise = createSegmenter().catch(() => {
-      segmenterPromise = null;
-      return null;
+    let timedOut = false;
+    const timeout = new Promise<null>((resolve) => {
+      window.setTimeout(() => {
+        timedOut = true;
+        resolve(null);
+      }, SEGMENTER_LOAD_TIMEOUT_MS);
     });
+    const createAttempt = createSegmenter();
+    let pendingAttempt: Promise<SegmenterHandle | null>;
+    pendingAttempt = Promise.race([createAttempt, timeout])
+      .then((handle) => {
+        // A timed-out request may eventually finish in the background, but do
+        // not pin future recordings to the stale null result. A later retry
+        // can use a warm CDN cache without making the current capture wait.
+        if (
+          handle === null &&
+          timedOut &&
+          segmenterPromise === pendingAttempt
+        ) {
+          segmenterPromise = null;
+        }
+        return handle;
+      })
+      .catch(() => {
+        if (segmenterPromise === pendingAttempt) {
+          segmenterPromise = null;
+        }
+        return null;
+      });
+    segmenterPromise = pendingAttempt;
   }
   return segmenterPromise;
 }

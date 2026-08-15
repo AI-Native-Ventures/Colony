@@ -69,6 +69,8 @@ function MessageComposerImpl({
   layoutMode = "standalone",
   disabled = false,
   draftKey,
+  initialBlockReference,
+  initialContent,
   autoSubmitDraftKey = null,
   onAutoSubmitComplete,
   editTarget = null,
@@ -167,6 +169,8 @@ function MessageComposerImpl({
   useDraftPersistLifecycle({
     effectiveDraftKey,
     channelId,
+    initialContent,
+    initialBlockReference,
     loadDraft: drafts.loadDraft,
     persistDraft: drafts.persistDraft,
     getMentionRefs: mentions.getDraftMentionRefs,

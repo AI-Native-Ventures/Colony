@@ -7,6 +7,7 @@ import { flushSync } from "react-dom";
 
 import { AnimatedAvatarCapture } from "@/features/profile/ui/AnimatedAvatarCapture";
 import { AvatarCustomColorPanel } from "@/features/profile/ui/AvatarCustomColorPanel";
+import { ProfileAvatarUploadPreview } from "@/features/profile/ui/ProfileAvatarUploadPreview";
 import { ProfileAvatarModeTabs } from "@/features/profile/ui/ProfileAvatarModeTabs";
 import { useAvatarSelection } from "@/features/profile/avatarPresentationStore";
 import { useAvatarUpload } from "@/features/profile/useAvatarUpload";
@@ -65,6 +66,7 @@ function randomInitialEmojiAvatarColor() {
 
 export function ProfileAvatarEditor({
   avatarUrl,
+  previewName,
   donePending = false,
   emojiPickerTheme = "dark",
   emojiPickerThemeVars,
@@ -85,6 +87,7 @@ export function ProfileAvatarEditor({
   onAnimatedPreviewActiveChange,
   onAnimatedPreviewCaptionChange,
   presentation = "default",
+  showInlineUploadPreview = false,
 }: ProfileAvatarEditorProps) {
   const { burstEmoji } = useEmojiBurst();
   const shouldReduceMotion = useReducedMotion();
@@ -247,18 +250,14 @@ export function ProfileAvatarEditor({
     }
     onDone?.();
   }, [mode, onDone]);
-
   React.useEffect(() => {
     if (!isAnimatedDoneQueued) return;
     setIsAnimatedDoneQueued(false);
     onDone?.();
   }, [isAnimatedDoneQueued, onDone]);
-
   useEmojiMartStyles(emojiPickerContainerRef, mode === "emoji");
-
   React.useEffect(() => {
     if (mode !== "emoji") return;
-
     let animationFrame = 0;
     let observer: MutationObserver | null = null;
     const syncSelectedEmojiButton = () => {
@@ -270,7 +269,6 @@ export function ProfileAvatarEditor({
         animationFrame = window.requestAnimationFrame(syncSelectedEmojiButton);
         return;
       }
-
       shadowRoot
         .querySelectorAll('button[data-buzz-selected="true"]')
         .forEach((button) => {
@@ -283,11 +281,9 @@ export function ProfileAvatarEditor({
           }
         });
       }
-
       observer ??= new MutationObserver(syncSelectedEmojiButton);
       observer.observe(shadowRoot, { childList: true, subtree: true });
     };
-
     animationFrame = window.requestAnimationFrame(syncSelectedEmojiButton);
     return () => {
       window.cancelAnimationFrame(animationFrame);
@@ -616,6 +612,14 @@ export function ProfileAvatarEditor({
                     onClick={openPicker}
                     type="button"
                   >
+                    {showInlineUploadPreview &&
+                    (localPreview.previewUrl || avatarUrl) ? (
+                      <ProfileAvatarUploadPreview
+                        avatarUrl={localPreview.previewUrl || avatarUrl}
+                        label={previewName}
+                        testId={`${testIdPrefix}-upload-preview`}
+                      />
+                    ) : null}
                     <span
                       aria-hidden="true"
                       className={cn(
@@ -741,6 +745,7 @@ export function ProfileAvatarEditor({
                   onPreviewCaptionChange={onAnimatedPreviewCaptionChange}
                   previewContainer={animatedPreviewContainer}
                   registerApply={registerAnimatedApply}
+                  autoStartCamera={isOnboardingModal}
                   compactReview={isOnboardingModal}
                   showApplyButton={!onDone}
                   testIdPrefix={testIdPrefix}

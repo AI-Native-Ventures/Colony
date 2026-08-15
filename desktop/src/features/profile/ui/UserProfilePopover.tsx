@@ -38,6 +38,8 @@ type UserProfilePopoverProps = {
   children: React.ReactNode;
   pubkey: string;
   triggerElement?: "div" | "span";
+  /** Optional test hook applied to the actual hover trigger element. */
+  triggerTestId?: string;
   /** Accessible name for interactive trigger content that is visually hidden. */
   triggerAriaLabel?: string;
   /** Set false when the trigger is inside another interactive control. */
@@ -119,6 +121,7 @@ export function UserProfilePopover({
   children,
   pubkey,
   triggerElement = "div",
+  triggerTestId,
   triggerAriaLabel,
   enableProfilePanel = true,
   enableHoverPopover = true,
@@ -348,6 +351,7 @@ export function UserProfilePopover({
       <PopoverAnchor asChild>
         <TriggerElement
           aria-label={triggerAriaLabel}
+          data-testid={triggerTestId}
           role={canOpenProfilePanel ? "button" : undefined}
           tabIndex={canOpenProfilePanel ? 0 : undefined}
           onClick={handleTriggerClick}

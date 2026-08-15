@@ -268,7 +268,7 @@ async function expectWelcomeComposerBannerLayout(page: Page) {
     await composer.getByTestId("welcome-composer-guide-banner").count(),
   ).toBe(0);
   expect(bannerBox.y).toBeLessThan(composerBox.y);
-  expect(bannerBox.y + bannerBox.height).toBeGreaterThan(composerBox.y);
+  expect(bannerBox.y + bannerBox.height).toBeLessThanOrEqual(composerBox.y);
 
   const radii = await banner.evaluate((element) => {
     const styles = window.getComputedStyle(element);
@@ -466,15 +466,28 @@ async function getMockChannels(page: Page) {
       throw new Error("Mock invoke bridge is unavailable.");
     }
 
-    return (await invoke("get_channels")) as Array<{
-      id: string;
-      name: string;
-      channel_type: string;
-      visibility: "open" | "private";
-      member_count: number;
-      is_member: boolean;
-      ttl_seconds: number | null;
-    }>;
+    const response = (await invoke("get_channels")) as
+      | Array<{
+          id: string;
+          name: string;
+          channel_type: string;
+          visibility: "open" | "private";
+          member_count: number;
+          is_member: boolean;
+          ttl_seconds: number | null;
+        }>
+      | {
+          channels?: Array<{
+            id: string;
+            name: string;
+            channel_type: string;
+            visibility: "open" | "private";
+            member_count: number;
+            is_member: boolean;
+            ttl_seconds: number | null;
+          }>;
+        };
+    return Array.isArray(response) ? response : (response.channels ?? []);
   });
 }
 

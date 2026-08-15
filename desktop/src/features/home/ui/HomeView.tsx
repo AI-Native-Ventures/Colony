@@ -843,6 +843,7 @@ export function HomeView({
                     undefined,
                     emojiTags,
                     mentionTags,
+                    undefined,
                   );
                   const authorPubkey = currentPubkey ?? itemToReply.item.pubkey;
                   const reply: InboxReply = {

@@ -9,7 +9,7 @@ import {
 
 test("an add to the reader uses passive wording", () => {
   assert.equal(addedByActionPrefix(true), "were added by");
-  assert.equal(addedByActionPrefix(false), "added by");
+  assert.equal(addedByActionPrefix(false), "was added by");
 });
 
 test("a set topic is quoted verbatim", () => {

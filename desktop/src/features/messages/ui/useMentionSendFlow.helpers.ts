@@ -1,4 +1,7 @@
 import type { ManagedAgent } from "@/shared/api/types";
+import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
+import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
+import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown";
 import { attachWorkContext } from "@/features/company/attachWorkContext";
 import { mergeOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
@@ -75,6 +78,50 @@ export async function attachOutgoingWorkContext(
     agentPubkeys,
     outgoingTags: mergeOutgoingTags(mediaTags, outgoingTags ?? []) ?? [],
   });
+}
+
+export function buildTypedMentionRouting({
+  content,
+  pendingImeta,
+  spoileredAttachmentUrls,
+  mentionPubkeys,
+  createdPersonaAgentPubkeys,
+  customEmoji,
+  linkPreviewTags,
+  routeTypedMentionReferences,
+}: {
+  content: string;
+  pendingImeta: ImetaMedia[];
+  spoileredAttachmentUrls: ReadonlySet<string>;
+  mentionPubkeys: string[];
+  createdPersonaAgentPubkeys: string[];
+  customEmoji: CustomEmoji[];
+  linkPreviewTags: string[][];
+  routeTypedMentionReferences: (
+    content: string,
+    actorPubkeys: readonly string[],
+  ) => { actorPubkeys: string[]; referenceTags: string[][] };
+}) {
+  const { content: routedContent } = buildOutgoingMessage(
+    content,
+    pendingImeta,
+    spoileredAttachmentUrls,
+  );
+  const routed = routeTypedMentionReferences(
+    routedContent,
+    uniqueNormalizedPubkeys([...mentionPubkeys, ...createdPersonaAgentPubkeys]),
+  );
+  const ordinaryOutgoingTags = [
+    ...buildCustomEmojiTags(routedContent, customEmoji),
+    ...linkPreviewTags,
+  ];
+  return {
+    ...routed,
+    outgoingTags:
+      ordinaryOutgoingTags.length > 0 || routed.referenceTags.length > 0
+        ? [...ordinaryOutgoingTags, ...routed.referenceTags]
+        : undefined,
+  };
 }
 
 export function getErrorMessage(error: unknown, fallback: string) {

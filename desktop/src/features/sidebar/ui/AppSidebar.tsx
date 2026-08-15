@@ -150,6 +150,7 @@ type AppSidebarProps = {
    */
   searchChannels: Channel[];
   searchFocusRequest: number;
+  scopeSearchFocusRequest: number;
   onSelectSettings: (section?: SettingsSection) => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
   onSetUserStatus: (text: string, emoji: string) => void;
@@ -220,6 +221,7 @@ export function AppSidebar({
   onOpenSearchResult,
   searchChannels,
   searchFocusRequest,
+  scopeSearchFocusRequest,
   onSelectSettings,
   onSetPresenceStatus,
   onSetUserStatus,
@@ -576,7 +578,7 @@ export function AppSidebar({
           onSelectChannel={onSelectChannel}
           searchChannels={searchChannels}
           searchFocusRequest={searchFocusRequest}
-          scopeSearchFocusRequest={searchFocusRequest}
+          scopeSearchFocusRequest={scopeSearchFocusRequest}
           suggestionChannels={channels}
         />
 
@@ -934,7 +936,6 @@ export function AppSidebar({
         }}
         onCreate={handleCreateFromDialog}
       />
-
       <AddCommunityDialog
         prefill={addCommunityPrefill}
         onOpenChange={onAddCommunityOpenChange ?? (() => {})}

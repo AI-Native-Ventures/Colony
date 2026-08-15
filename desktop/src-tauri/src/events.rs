@@ -357,6 +357,39 @@ pub fn build_message_with_reference_tags(
 /// only `["client", ...]` tags, which are useful for idempotency markers but
 /// cannot forge channel/thread/mention metadata.
 #[allow(clippy::too_many_arguments)]
+/// Kind 9 — stream message with link previews, provenance, client markers, and
+/// validated Block reference tags.
+#[allow(clippy::too_many_arguments)]
+pub fn build_message_with_reference_and_client_tags(
+    channel_id: Uuid,
+    content: &str,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+    link_preview_tags: &[Vec<String>],
+    sent_from_thread_tag: Option<&[String]>,
+    relay_base: &str,
+    client_tags: &[Vec<String>],
+    reference_tags: &[Vec<String>],
+) -> Result<EventBuilder, String> {
+    build_message_with_client_and_reference_tags(
+        channel_id,
+        content,
+        thread_ref,
+        mentions,
+        media_tags,
+        custom_emoji_tags,
+        mention_ref_tags,
+        link_preview_tags,
+        sent_from_thread_tag,
+        relay_base,
+        client_tags,
+        reference_tags,
+    )
+}
+
 pub fn build_message_with_client_tags(
     channel_id: Uuid,
     content: &str,

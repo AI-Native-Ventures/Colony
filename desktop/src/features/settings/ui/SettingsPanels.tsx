@@ -473,6 +473,12 @@ function ThemeSettingsCard() {
 
   const handleModeSelect = (mode: AppearanceMode) => {
     setSelectedMode(mode);
+    // When leaving the default Buzz system theme, reveal the available theme
+    // choices so the mode switch immediately exposes a concrete light/dark
+    // selection. Keep the picker collapsed for an already-selected theme.
+    if (mode !== "system" && isBuzzTheme(themeName)) {
+      setThemeStyleExpanded(true);
+    }
     if (mode === "system") {
       setFollowSystem(true);
       // If the current theme is unpaired, resolveSystemTheme can't switch it

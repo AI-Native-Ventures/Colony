@@ -75,29 +75,23 @@ function truncateResultText(content: string, maxLength = 96) {
   if (trimmed.length <= maxLength) {
     return trimmed;
   }
-
   return `${trimmed.slice(0, maxLength - 3).trimEnd()}...`;
 }
 
 function formatRelativeTime(unixSeconds: number) {
   const diff = Math.floor(Date.now() / 1_000) - unixSeconds;
-
   if (diff < 60) {
     return "just now";
   }
-
   if (diff < 60 * 60) {
     return `${Math.floor(diff / 60)}m ago`;
   }
-
   if (diff < 60 * 60 * 24) {
     return `${Math.floor(diff / (60 * 60))}h ago`;
   }
-
   if (diff < 60 * 60 * 24 * 7) {
     return `${Math.floor(diff / (60 * 60 * 24))}d ago`;
   }
-
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
@@ -514,7 +508,7 @@ export function TopbarSearch({
     [currentPubkeyNormalized, results],
   );
   const filteredCommandResults = React.useMemo(() => {
-    if (isShowingSuggestions) return [];
+    if (isShowingSuggestions || scopeChannelId) return [];
     const normalizedQuery = trimmedQuery.toLocaleLowerCase();
     return suggestionActionResults.filter((result) => {
       if (result.kind !== "action") return false;
@@ -522,7 +516,12 @@ export function TopbarSearch({
         .toLocaleLowerCase()
         .includes(normalizedQuery);
     });
-  }, [isShowingSuggestions, suggestionActionResults, trimmedQuery]);
+  }, [
+    isShowingSuggestions,
+    scopeChannelId,
+    suggestionActionResults,
+    trimmedQuery,
+  ]);
   const searchResultSections = React.useMemo(
     () => groupSearchResults([...filteredCommandResults, ...searchableResults]),
     [filteredCommandResults, searchableResults],
@@ -538,9 +537,9 @@ export function TopbarSearch({
     : groupedSearchResults;
   const isSearchLoading =
     isWaitingOnFromResolution ||
-    searchQuery.isLoading ||
-    fuzzyUserCandidatesQuery.isLoading ||
-    userSearchQuery.isLoading;
+    searchQuery.isFetching ||
+    fuzzyUserCandidatesQuery.isFetching ||
+    userSearchQuery.isFetching;
 
   const openSearchDialog = React.useCallback(
     (nextScopeChannelId: string | null = null) => {
@@ -873,7 +872,8 @@ export function TopbarSearch({
         </div>
       </div>
     )
-  ) : isSearchLoading && activeResults.length === 0 ? (
+  ) : isSearchLoading &&
+    (activeResults.length === 0 || searchQuery.isFetching) ? (
     <div className="max-h-[min(60vh,32rem)] overflow-y-auto">
       {currentChannelSearchAction}
       <SearchResultsSkeleton />

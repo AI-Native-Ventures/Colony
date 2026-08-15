@@ -112,6 +112,7 @@ export function didPrependVirtualizedTimeline(
   // `shift` only when every previous slot is the exact suffix it expects.
   return (
     prependedCount > 0 &&
+    previousKeys.length > 0 &&
     previousKeys.every((key, index) => key === keys[index + prependedCount])
   );
 }

@@ -490,6 +490,7 @@ pub async fn send_channel_message(
     media_tags: Option<Vec<Vec<String>>>,
     emoji_tags: Option<Vec<Vec<String>>>,
     mention_tags: Option<Vec<Vec<String>>>,
+    reference_tags: Option<Vec<Vec<String>>>,
     link_preview_tags: Option<Vec<Vec<String>>>,
     sent_from_thread_tag: Option<Vec<String>>,
     mention_pubkeys: Option<Vec<String>>,
@@ -503,11 +504,15 @@ pub async fn send_channel_message(
     let media = media_tags.unwrap_or_default();
     let emoji = emoji_tags.unwrap_or_default();
     let mention_refs_only = mention_tags.unwrap_or_default();
+    let block_references = reference_tags.unwrap_or_default();
     let link_previews = link_preview_tags.unwrap_or_default();
     let relay_base = crate::relay::relay_api_base_url_with_override(&state);
     let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
     if sent_from_thread_tag.is_some() && kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE {
         return Err("sent-from-thread provenance requires a stream message".into());
+    }
+    if kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE && !block_references.is_empty() {
+        return Err("Block reference tags are only supported on stream messages".into());
     }
 
     let mut resolved_root: Option<String> = None;
@@ -544,7 +549,7 @@ pub async fn send_channel_message(
                 }
                 None => None,
             };
-            events::build_message(
+            events::build_message_with_reference_and_client_tags(
                 channel_uuid,
                 content.trim(),
                 thread_ref.as_ref(),
@@ -555,6 +560,8 @@ pub async fn send_channel_message(
                 &link_previews,
                 sent_from_thread_tag.as_deref(),
                 &relay_base,
+                &[],
+                &block_references,
             )?
         }
     };

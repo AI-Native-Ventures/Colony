@@ -165,30 +165,35 @@ export function MembershipAvatarStack({
           preferResolvedSelfLabel: true,
         });
         return (
-          <div
-            className={cn("relative", index > 0 && "-ml-1")}
-            data-testid="system-message-avatar"
+          <UserProfilePopover
             key={pubkey}
-            style={{ zIndex: index + 1 }}
+            pubkey={pubkey}
+            role={isKnownAgentPubkey(pubkey, profiles) ? "bot" : undefined}
+            triggerTestId="system-message-avatar"
           >
-            <span
-              className="block"
-              style={{
-                ...(index < visiblePubkeys.length - 1 && {
-                  mask: "radial-gradient(circle 14px at calc(100% + 6px) 50%, transparent 99%, #fff 100%)",
-                  WebkitMask:
-                    "radial-gradient(circle 14px at calc(100% + 6px) 50%, transparent 99%, #fff 100%)",
-                }),
-              }}
+            <div
+              className={cn("relative", index > 0 && "-ml-1")}
+              style={{ zIndex: index + 1 }}
             >
-              <UserAvatar
-                avatarUrl={resolveAvatarUrl(pubkey, profiles)}
-                className="h-6 w-6 text-2xs"
-                displayName={label}
-                size="sm"
-              />
-            </span>
-          </div>
+              <span
+                className="block"
+                style={{
+                  ...(index < visiblePubkeys.length - 1 && {
+                    mask: "radial-gradient(circle 14px at calc(100% + 6px) 50%, transparent 99%, #fff 100%)",
+                    WebkitMask:
+                      "radial-gradient(circle 14px at calc(100% + 6px) 50%, transparent 99%, #fff 100%)",
+                  }),
+                }}
+              >
+                <UserAvatar
+                  avatarUrl={resolveAvatarUrl(pubkey, profiles)}
+                  className="h-6 w-6 text-2xs"
+                  displayName={label}
+                  size="sm"
+                />
+              </span>
+            </div>
+          </UserProfilePopover>
         );
       })}
     </div>

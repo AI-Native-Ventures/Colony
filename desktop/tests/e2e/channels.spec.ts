@@ -2768,7 +2768,6 @@ test("channel settings only prompt editors to add an empty description", async (
       randomChannelId: RANDOM_CHANNEL_ID,
     },
   );
-
   await openChannelManagement(page, "general");
   await expect(page.getByTestId("channel-management-edit")).toBeVisible();
   await expect(page.getByTestId("channel-management-description")).toHaveText(

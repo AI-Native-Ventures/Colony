@@ -417,15 +417,24 @@ const MessageTimelineBase = React.forwardRef<
         } else if (!semanticAtBottomRef.current) {
           queueSemanticBottom(true);
         }
-      } else if (hasConfirmedVirtualizerBottomRef.current) {
+      } else {
+        if (hasConfirmedVirtualizerBottomRef.current) {
+          timelineVirtualizerApi?.cancelBottomIntent();
+        }
         onVirtualizerAtBottomStateChange(false);
-        if (semanticAtBottomRef.current) {
-          suppressNextSemanticBottomRef.current = true;
-          queueSemanticBottom(false);
+        if (hasConfirmedVirtualizerBottomRef.current) {
+          if (semanticAtBottomRef.current) {
+            suppressNextSemanticBottomRef.current = true;
+            queueSemanticBottom(false);
+          }
         }
       }
     },
-    [onVirtualizerAtBottomStateChange, queueSemanticBottom],
+    [
+      onVirtualizerAtBottomStateChange,
+      queueSemanticBottom,
+      timelineVirtualizerApi,
+    ],
   );
 
   const timelineIntroSurface = selectTimelineIntroSurface({

@@ -35,9 +35,9 @@ import { invokeTauri } from "@/shared/api/tauri";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 import type { AcpRuntime, ChannelType, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
-import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
 import {
   attachOutgoingWorkContext,
+  buildTypedMentionRouting,
   getErrorMessage,
   isManagedAgentRunning,
   isProviderBackedAgent,
@@ -704,7 +704,6 @@ export function useMentionSendFlow({
       mentions.memberPubkeys,
     ],
   );
-
   const sendMessageWithMentionFlow = React.useCallback(
     async ({
       capturedChannelId,
@@ -722,7 +721,6 @@ export function useMentionSendFlow({
       if (isMentionSendPendingRef.current) {
         return;
       }
-
       isMentionSendPendingRef.current = true;
       setIsMentionSendPending(true);
       try {
@@ -735,7 +733,6 @@ export function useMentionSendFlow({
           toast.error(dmThreadAgentMentionError);
           return;
         }
-
         let effectiveChannelId = capturedChannelId;
         if (!effectiveChannelId && onPrepareSendChannel) {
           effectiveChannelId = await onPrepareSendChannel();
@@ -743,7 +740,6 @@ export function useMentionSendFlow({
             return;
           }
         }
-
         const personaMentionResult = await createMentionedPersonaAgents(
           trimmed,
           effectiveChannelId ?? "",
@@ -764,20 +760,23 @@ export function useMentionSendFlow({
         const createdPersonaAgentPubkeySet = new Set(
           createdPersonaAgentPubkeys.map(normalizePubkey),
         );
-        const explicitMentionPubkeys = uniqueNormalizedPubkeys([
-          ...mentions.extractMentionPubkeys(trimmed),
-          ...createdPersonaAgentPubkeys,
-        ]);
+        const { actorPubkeys: explicitMentionPubkeys, outgoingTags } =
+          buildTypedMentionRouting({
+            content: trimmed,
+            createdPersonaAgentPubkeys,
+            customEmoji,
+            linkPreviewTags,
+            mentionPubkeys: mentions.extractMentionPubkeys(trimmed),
+            pendingImeta,
+            routeTypedMentionReferences: mentions.routeTypedMentionReferences,
+            spoileredAttachmentUrls,
+          });
         const explicitAgentPubkeys = explicitMentionPubkeys.filter(
           (pubkey) =>
             mentions.isAgentPubkey(pubkey) ||
             createdPersonaAgentPubkeySet.has(pubkey),
         );
         const pubkeys = explicitMentionPubkeys;
-        const outgoingTags = [
-          ...buildCustomEmojiTags(trimmed, customEmoji),
-          ...linkPreviewTags,
-        ];
         const nonMemberPubkeys = getNonMemberMentionPubkeys(pubkeys);
         let promptNonMemberPubkeys = nonMemberPubkeys.filter(
           (pubkey) =>
@@ -845,6 +844,7 @@ export function useMentionSendFlow({
       mentions.isAgentPubkey,
       mentions.isManagedAgentPubkey,
       mentions.getDraftMentionRefs,
+      mentions.routeTypedMentionReferences,
       onPrepareSendChannel,
     ],
   );

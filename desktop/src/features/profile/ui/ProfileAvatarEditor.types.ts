@@ -30,4 +30,6 @@ export type ProfileAvatarEditorProps = {
   onAnimatedPreviewActiveChange?: (active: boolean) => void;
   onAnimatedPreviewCaptionChange?: (caption: string | null) => void;
   presentation?: AvatarEditorPresentation;
+  /** Render the compact upload preview inside the image picker control. */
+  showInlineUploadPreview?: boolean;
 };

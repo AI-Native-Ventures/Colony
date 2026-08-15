@@ -105,6 +105,7 @@ export type ProfileSummaryViewProps = {
   onDuplicateAgent?: () => void;
   onExportAgent?: () => void;
   onOpenInstance: (pubkey: string) => void;
+  onOpenInstructions: () => void;
   onOpenActivity: (channelId?: string | null) => void;
   onOpenChannel: (channelId: string) => void;
   onOpenDiagnostics: () => void;
@@ -134,6 +135,43 @@ const PROFILE_HERO_PRESENCE_BADGE = {
     width: PROFILE_HERO_SPACING["6"],
   },
 } as const;
+
+type RuntimeTabStatus = "running" | "stopped" | "error";
+
+function resolveRuntimeTabStatus({
+  diagnosticsError,
+  managedAgent,
+}: {
+  diagnosticsError: boolean;
+  managedAgent: ManagedAgent | undefined;
+}): RuntimeTabStatus | undefined {
+  if (diagnosticsError || managedAgent?.lastError) return "error";
+  if (!managedAgent) return undefined;
+  return managedAgent.status === "running" || managedAgent.status === "deployed"
+    ? "running"
+    : "stopped";
+}
+
+function RuntimeTabStatusDot({ status }: { status: RuntimeTabStatus }) {
+  const label =
+    status === "error" ? "Error" : status === "running" ? "Running" : "Stopped";
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "block h-1.5 w-1.5 rounded-full ring-1 ring-background",
+        status === "error"
+          ? "bg-destructive"
+          : status === "running"
+            ? "bg-emerald-500"
+            : "bg-muted-foreground/50",
+      )}
+      data-status={status}
+      data-testid="user-profile-runtime-status"
+      title={label}
+    />
+  );
+}
 
 export function ProfileSummaryView({
   activityAgent,
@@ -180,6 +218,7 @@ export function ProfileSummaryView({
   onDuplicateAgent,
   onExportAgent,
   onOpenInstance,
+  onOpenInstructions,
   onOpenActivity,
   onOpenChannel,
   onOpenDiagnostics,
@@ -279,6 +318,10 @@ export function ProfileSummaryView({
         Error
       </Badge>
     ) : null;
+  const runtimeTabStatus = resolveRuntimeTabStatus({
+    diagnosticsError: diagnosticsErrorField !== undefined,
+    managedAgent,
+  });
   const tabs = React.useMemo(() => {
     const items: Array<{
       id: ProfilePanelTab;
@@ -289,7 +332,13 @@ export function ProfileSummaryView({
       items.push({ id: "info", label: "Info" });
     }
     if (showRuntimeTab) {
-      items.push({ id: "runtime", label: "Runtime" });
+      items.push({
+        id: "runtime",
+        label: "Runtime",
+        trailing: runtimeTabStatus ? (
+          <RuntimeTabStatusDot status={runtimeTabStatus} />
+        ) : undefined,
+      });
     }
     if (showChannelsTab) {
       items.push({ id: "channels", label: "Channels" });
@@ -301,7 +350,13 @@ export function ProfileSummaryView({
       });
     }
     return items;
-  }, [showChannelsTab, showInfoTab, showMemoriesTab, showRuntimeTab]);
+  }, [
+    runtimeTabStatus,
+    showChannelsTab,
+    showInfoTab,
+    showMemoriesTab,
+    showRuntimeTab,
+  ]);
 
   const showTabSection = tabs.length > 0;
   const showTabBar = !(tabs.length === 1 && tabs[0]?.id === "info");
@@ -548,9 +603,11 @@ export function ProfileSummaryView({
                   <UserProfileRuntimePreviewNotice />
                 ) : null}
                 <ProfileRuntimeTabContent
+                  agentInstruction={agentInstruction}
                   autoRestartEnabled={
                     managedAgent?.autoRestartOnConfigChange ?? false
                   }
+                  colonyCreditsAgentPubkey={managedAgent?.pubkey ?? null}
                   currentPubkey={pubkey}
                   diagnosticsFields={displayedDiagnosticsFields}
                   diagnosticsSummary={diagnosticsTrailing}
@@ -582,6 +639,7 @@ export function ProfileSummaryView({
                   startOnLaunchPending={isAgentActionPending}
                   onOpenDiagnostics={onOpenDiagnostics}
                   onOpenInstance={onOpenInstance}
+                  onOpenInstructions={onOpenInstructions}
                   showDiagnosticsIngress={showDiagnosticsIngress}
                   showPreviewHarnessLog={
                     showRuntimePreview && !showDiagnosticsIngress

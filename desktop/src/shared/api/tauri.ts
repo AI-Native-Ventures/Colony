@@ -542,6 +542,7 @@ export async function sendChannelMessage(
   kind?: number,
   emojiTags?: string[][],
   mentionTags?: string[][],
+  referenceTags?: string[][],
   linkPreviewTags?: string[][],
   sentFromThreadTag?: string[],
 ): Promise<SendChannelMessageResult> {
@@ -554,6 +555,7 @@ export async function sendChannelMessage(
       mediaTags: mediaTags ?? null,
       emojiTags: emojiTags ?? null,
       mentionTags: mentionTags ?? null,
+      referenceTags: referenceTags ?? null,
       linkPreviewTags,
       sentFromThreadTag: sentFromThreadTag ?? null,
       mentionPubkeys: mentionPubkeys ?? null,

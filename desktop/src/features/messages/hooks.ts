@@ -499,6 +499,7 @@ export function useSendMessageMutation(
         mediaTags: imetaTags,
         emojiTags,
         mentionTags,
+        referenceTags,
         linkPreviewTags,
       } = splitOutgoingTags(mediaTags);
       const recipientPubkeys = messageMentionPubkeys(
@@ -526,6 +527,7 @@ export function useSendMessageMutation(
         parentEventId ||
         imetaTags.length > 0 ||
         emojiTags.length > 0 ||
+        referenceTags.length > 0 ||
         linkPreviewTags.length > 0
       ) {
         const cachedMessages =
@@ -541,6 +543,7 @@ export function useSendMessageMutation(
           undefined,
           emojiTags,
           mentionTags,
+          referenceTags,
           linkPreviewTags,
           sentFromThreadTag,
         );
@@ -580,6 +583,7 @@ export function useSendMessageMutation(
             ...imetaTags,
             ...emojiTags,
             ...mentionTags,
+            ...referenceTags,
             ...linkPreviewTags,
             ...(sentFromThreadTag ? [sentFromThreadTag] : []),
           ],

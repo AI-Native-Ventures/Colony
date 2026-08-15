@@ -719,7 +719,8 @@ export function UserProfilePanel({
   const handleDeleteProfileAgent =
     viewerIsOwner && managedAgent ? handleDeleteAgent : handleDeletePersona;
   const archiveActions = useIdentityArchive(effectivePubkey);
-  const agentSettingsMenu = isBot ? null : (
+  const showAgentSettingsMenu = !isBot || personaInstances.length <= 1;
+  const agentSettingsMenu = showAgentSettingsMenu ? (
     <UserProfileAgentSettingsMenuSlot
       archiveActions={archiveActions}
       canInstantiateAgent={canInstantiateAgent}
@@ -733,7 +734,7 @@ export function UserProfilePanel({
       personaActionKey={resolvedPersona?.id}
       viewerIsOwner={viewerIsOwner}
     />
-  );
+  ) : null;
   const { agentInfoFields, agentSettingsFields, diagnosticsFields } =
     useProfileFieldBuckets({
       isBot,
@@ -830,6 +831,7 @@ export function UserProfilePanel({
             isBot && canManagePersona ? handleExportPersona : undefined
           }
           onOpenInstance={(instancePubkey) => onOpenProfile?.(instancePubkey)}
+          onOpenInstructions={() => setView("instructions")}
           onOpenActivity={handleOpenActivity}
           onOpenChannel={handleOpenChannel}
           onOpenDiagnostics={() => setView("diagnostics")}

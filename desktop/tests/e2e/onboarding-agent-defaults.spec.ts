@@ -691,7 +691,7 @@ test("Back preserves incomplete defaults draft without writing", async ({
       .getByTestId("onboarding-page-config")
       .locator(".buzz-onboarding-transition-line"),
   ).toHaveAttribute("data-onboarding-direction", "forward");
-  await expect(harness).toHaveText("Buzz");
+  await expect(harness).toHaveText("Colony Agent");
   await expect(page.getByTestId("global-agent-provider")).toHaveText(
     "Anthropic",
   );

@@ -40,7 +40,7 @@ export function McpServersSection({
       )}
     >
       {variant === "compact" ? (
-        <p className="py-2 text-xs font-medium text-foreground">MCP servers</p>
+        <p className="py-2 text-xs font-medium text-foreground">MCP Servers</p>
       ) : null}
 
       {isBuzzAgent && buzzAgentSlot ? buzzAgentSlot : null}
@@ -64,7 +64,7 @@ export function McpServersSection({
               : "flex min-h-16 items-center px-4 py-3",
           )}
         >
-          No custom servers configured.
+          No custom servers configured
         </p>
       )}
     </div>
