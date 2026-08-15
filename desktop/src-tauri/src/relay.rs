@@ -54,21 +54,10 @@ pub fn relay_api_base_url_with_override(state: &AppState) -> String {
     }
 }
 
-/// Selects the relay a managed agent should use for a relay operation.
-///
-/// Always the active workspace relay. The legacy per-record `relay_url` pin is
-/// deliberately IGNORED (agents-everywhere, #2122): every agent is eligible on
-/// every community, and the pair the caller is acting on is identified by the
-/// workspace relay, never by a stored pin. The record field is still parsed
-/// and persisted untouched — old records need no migration and a rollback to a
-/// pin-honoring build reads the same file — so the parameter stays in the
-/// signature as documentation of what is being ignored at the one choke point
-/// all agent relay resolution flows through. Resolving at read-time also means
-/// a stale stored value can never leak into reconcile, spawn, or profile sync.
-/// Uniform for both Local and Provider backends.
-pub fn effective_agent_relay_url(_record_relay: &str, workspace_relay: &str) -> String {
-    workspace_relay.to_string()
-}
+// ── Agent community boundary ────────────────────────────────────────────────
+
+mod agent_boundary;
+pub use agent_boundary::{agent_belongs_to_workspace, effective_agent_relay_url};
 
 pub fn relay_http_base_url(relay_url: &str) -> String {
     let trimmed = relay_url.trim().trim_end_matches('/');
@@ -617,9 +606,8 @@ mod profile_role_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        build_profile_event, classify_intercepted_response, effective_agent_relay_url,
-        extract_retry_in_hint, parse_command_response, relay_http_base_url,
-        MALFORMED_RESPONSE_MESSAGE,
+        build_profile_event, classify_intercepted_response, extract_retry_in_hint,
+        parse_command_response, relay_http_base_url, MALFORMED_RESPONSE_MESSAGE,
     };
     use serde::Deserialize;
 
@@ -720,37 +708,6 @@ mod tests {
             "raw oversized hint must not appear in the message string"
         );
         reset_rate_limit_gate();
-    }
-
-    // ── effective_agent_relay_url: legacy pin ignored ─────────────────────────
-
-    #[test]
-    fn stored_relay_pin_is_ignored() {
-        // Zero-touch cutover (#2122): a creation-era per-record relay pin is
-        // parsed and persisted but never consulted — the workspace relay wins.
-        assert_eq!(
-            effective_agent_relay_url("wss://relay.other.com", "wss://staging.example.com"),
-            "wss://staging.example.com"
-        );
-    }
-
-    #[test]
-    fn empty_relay_resolves_to_workspace() {
-        // A never-set record resolves to the active workspace relay at read-time,
-        // so a stale stored default can never make it load-bearing.
-        assert_eq!(
-            effective_agent_relay_url("", "wss://staging.example.com"),
-            "wss://staging.example.com"
-        );
-    }
-
-    #[test]
-    fn whitespace_only_relay_resolves_to_workspace() {
-        // Whitespace-only behaves identically — no value survives.
-        assert_eq!(
-            effective_agent_relay_url("   ", "wss://staging.example.com"),
-            "wss://staging.example.com"
-        );
     }
 
     // ── relay_http_base_url scheme conversion ────────────────────────────────

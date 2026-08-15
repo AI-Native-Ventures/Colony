@@ -200,15 +200,24 @@ fn persona_prompt_edit_changes_snapshot() {
 }
 
 #[test]
-fn workspace_relay_change_trips_snapshot_even_for_stored_record_relay() {
-    // The legacy per-record relay pin is ignored (#2122): every record spawns
-    // against the active workspace relay, so a workspace relay change means a
-    // restart would change what runs — pinned records included.
+fn workspace_relay_change_does_not_trip_snapshot_for_a_pinned_record() {
+    // A pinned record spawns against its own community whatever workspace is
+    // open, so switching communities does not change what a restart would run
+    // and must not badge one.
     let rec = record();
-    assert!(
-        !rec.relay_url.is_empty(),
-        "fixture should carry a legacy pin"
+    assert!(!rec.relay_url.is_empty(), "fixture should carry a pin");
+    assert_eq!(
+        snapshot(&rec, &[], &[], "wss://relay-a.example", &Default::default()),
+        snapshot(&rec, &[], &[], "wss://relay-b.example", &Default::default())
     );
+}
+
+#[test]
+fn workspace_relay_change_trips_snapshot_for_an_unpinned_record() {
+    // An unassigned record still resolves to the open community, so switching
+    // communities genuinely changes what a restart would run.
+    let mut rec = record();
+    rec.relay_url = String::new();
     assert_ne!(
         snapshot(&rec, &[], &[], "wss://relay-a.example", &Default::default()),
         snapshot(&rec, &[], &[], "wss://relay-b.example", &Default::default())
@@ -216,14 +225,14 @@ fn workspace_relay_change_trips_snapshot_even_for_stored_record_relay() {
 }
 
 #[test]
-fn stored_record_relay_does_not_affect_snapshot() {
-    // Editing the (ignored) stored pin must not badge a restart: what a
-    // restart would run is identical either way.
+fn assigning_a_record_to_a_community_affects_the_snapshot() {
+    // The pin is load-bearing now: assigning an unpinned record to a community
+    // changes the relay a restart would spawn against, so it must badge.
     let mut a = record();
     let mut b = record();
     a.relay_url = String::new();
-    b.relay_url = "wss://legacy-pin.example".into();
-    assert_eq!(
+    b.relay_url = "wss://assigned.example".into();
+    assert_ne!(
         snapshot(&a, &[], &[], "wss://ws.example", &Default::default()),
         snapshot(&b, &[], &[], "wss://ws.example", &Default::default())
     );
