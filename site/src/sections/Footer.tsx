@@ -1,7 +1,9 @@
 // site/src/sections/Footer.tsx
 import { AntMark } from "@/brand/AntMark";
 
-const GITHUB_URL = "https://github.com/AI-Native-Ventures/colony-releases";
+// Points at the source repo, not `colony-releases`: while the site says coming
+// soon, no path from it should land a visitor on a downloadable build.
+const GITHUB_URL = "https://github.com/AI-Native-Ventures/Colony";
 
 export function Footer() {
   return (

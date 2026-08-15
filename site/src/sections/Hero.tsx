@@ -39,10 +39,10 @@ export function Hero() {
           </p>
           <div className="mt-10 flex flex-col items-start gap-4 sm:mt-12 sm:flex-row sm:items-center lg:mt-14">
             <a
-              href="#download"
+              href="#coming-soon"
               className="rounded-full bg-colony-ink px-8 py-3 text-base font-medium text-colony-canvas transition hover:opacity-90 lg:px-10 lg:py-4 lg:text-lg"
             >
-              Download Colony
+              Coming soon
             </a>
             <a
               href="#story"
