@@ -35,19 +35,40 @@ fn record_with_relay(relay_url: &str) -> super::super::ManagedAgentRecord {
 }
 
 #[test]
-fn legacy_relay_pin_is_ignored_for_fan_out() {
-    // Zero-touch cutover (#2122): a record carrying a creation-era
-    // `relay_url` pin must fan out exactly like an unpinned one — the
-    // stored field is parsed but never consulted. See
-    // `effective_agent_relay_url`.
-    let unpinned = record_with_relay("");
+fn relay_pin_confines_an_agent_to_its_own_community() {
+    // A pinned record resolves to its own relay no matter which community is
+    // open, and reports that it does not belong to any other one. Together
+    // those two are the boundary: reconcile skips it elsewhere, and a direct
+    // start elsewhere is refused.
     let pinned = record_with_relay("wss://one.example");
-    for record in [&unpinned, &pinned] {
-        assert_eq!(
-            crate::relay::effective_agent_relay_url(&record.relay_url, "wss://two.example"),
-            "wss://two.example"
-        );
-    }
+    assert_eq!(
+        crate::relay::effective_agent_relay_url(&pinned.relay_url, "wss://two.example"),
+        "wss://one.example"
+    );
+    assert!(crate::relay::agent_belongs_to_workspace(
+        &pinned.relay_url,
+        "wss://one.example"
+    ));
+    assert!(!crate::relay::agent_belongs_to_workspace(
+        &pinned.relay_url,
+        "wss://two.example"
+    ));
+}
+
+#[test]
+fn unpinned_record_still_fans_out() {
+    // An unassigned record has nothing on disk saying where it belongs, so it
+    // keeps resolving to whichever community is open until the user assigns
+    // it. Upgrading must not silently stop these.
+    let unpinned = record_with_relay("");
+    assert_eq!(
+        crate::relay::effective_agent_relay_url(&unpinned.relay_url, "wss://two.example"),
+        "wss://two.example"
+    );
+    assert!(crate::relay::agent_belongs_to_workspace(
+        &unpinned.relay_url,
+        "wss://two.example"
+    ));
 }
 
 #[test]

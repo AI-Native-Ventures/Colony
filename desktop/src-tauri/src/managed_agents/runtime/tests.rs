@@ -998,10 +998,11 @@ fn unpinned_record_resolves_pair_key_per_workspace() {
 }
 
 #[test]
-fn stored_relay_pin_is_ignored_in_pair_key_resolution() {
-    // Legacy pins are ignored (#2122): a record carrying a creation-era
-    // `relay_url` resolves the same per-workspace pair key an unpinned record
-    // does, so summaries/stop act on the community being viewed.
+fn stored_relay_pin_resolves_to_one_pair_key_whatever_is_open() {
+    // A pinned record has exactly one pair, in its own community. Viewing a
+    // different community must not mint a second key for it: that key is what
+    // spawn, summary and stop all act on, so a per-workspace key is what let
+    // one agent run in several communities at once.
     let pubkey = "aa".repeat(32);
     let from_a =
         super::resolve_workspace_pair_key(&pubkey, "wss://pinned.example", "wss://one.example")
@@ -1009,6 +1010,17 @@ fn stored_relay_pin_is_ignored_in_pair_key_resolution() {
     let from_b =
         super::resolve_workspace_pair_key(&pubkey, "wss://pinned.example", "wss://two.example")
             .unwrap();
+    assert_eq!(from_a, from_b);
+    assert_eq!(from_a.relay_url, "wss://pinned.example");
+}
+
+#[test]
+fn unpinned_record_still_resolves_per_workspace() {
+    // Unassigned records keep the old per-workspace behavior until the user
+    // assigns them, so they do not stop working on upgrade.
+    let pubkey = "aa".repeat(32);
+    let from_a = super::resolve_workspace_pair_key(&pubkey, "", "wss://one.example").unwrap();
+    let from_b = super::resolve_workspace_pair_key(&pubkey, "", "wss://two.example").unwrap();
     assert_ne!(from_a, from_b);
     assert_eq!(from_a.relay_url, "wss://one.example");
     assert_eq!(from_b.relay_url, "wss://two.example");
