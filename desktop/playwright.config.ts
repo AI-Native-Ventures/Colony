@@ -59,6 +59,7 @@ export default defineConfig({
         "**/timeline-settle-helper.spec.ts",
         "**/ledger.spec.ts",
         "**/blocks-faults.spec.ts",
+        "**/sidebar-offcanvas-rail.spec.ts",
         "**/onboarding-docked-cta-screenshots.spec.ts",
         "**/identity-key-help.spec.ts",
         "**/key-import-reveal.spec.ts",
