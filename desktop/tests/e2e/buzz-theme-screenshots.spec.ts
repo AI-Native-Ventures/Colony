@@ -102,6 +102,30 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
   );
   expect(pinnedSpacerColor).toBe("rgba(0, 0, 0, 0)");
   await expect(sidebarScroller.getByTestId("open-agents-view")).toBeVisible();
+  // The primary menu scrolls with the channel list; only the search header is
+  // pinned. openChannel() clicks a channel row, and once the sidebar is taller
+  // than the viewport that click scrolls the menu up, so the offsets below
+  // would measure a scrolled list instead of the layout under test. Return
+  // every scrollable ancestor to the top first.
+  await primaryMenu.evaluate((element) => {
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      if (node.scrollHeight > node.clientHeight) node.scrollTop = 0;
+    }
+  });
+  await expect
+    .poll(async () =>
+      primaryMenu.evaluate((element) => {
+        for (
+          let node = element.parentElement;
+          node;
+          node = node.parentElement
+        ) {
+          if (node.scrollHeight > node.clientHeight) return node.scrollTop;
+        }
+        return 0;
+      }),
+    )
+    .toBe(0);
   const searchBox = await search.boundingBox();
   const pinnedHeaderBox = await pinnedHeader.boundingBox();
   const primaryMenuBox = await primaryMenu.boundingBox();
