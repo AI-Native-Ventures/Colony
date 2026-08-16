@@ -6,6 +6,13 @@
 
 - Rebrand: the app is now Colony. New ant mark, landing, loading animations, icons, and marketing site. Internal names (crates, env vars, protocol) are unchanged.
 
+## v0.10.18
+
+### Desktop and shared changes
+
+- feat(desktop): pin a managed agent to the community it was created in, so an agent runs against one relay instead of whichever community happened to be open ([#263](https://github.com/AI-Native-Ventures/Colony/pull/263))
+- fix(desktop): keep a `p` tag that names the signer. `EventBuilder` silently dropped any `p` tag equal to the author, so every Block action whose decision maker was the clicking user was rejected by the relay with `Block event must include exactly one processor p tag`. Agent Proposal cards could not be approved or declined ([#264](https://github.com/AI-Native-Ventures/Colony/pull/264))
+
 ## v0.10.17
 
 ### Desktop and shared changes
