@@ -56,6 +56,9 @@ import {
 
 export { canonicalDiscoveryJson } from "./relayBroker";
 
+/** The relay's per-request lead page size, shared by every paginated read. */
+const LEAD_PAGE_LIMIT = 100;
+
 type RawLeadDetail = LeadProjection & {
   status?: string;
   owner_persona_id?: string | null;
@@ -124,6 +127,17 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     entitlement: "not_entitled",
   });
   private entitlementPromise: Promise<DiscoveryEntitlement> | null = null;
+  /**
+   * The in-flight `list_lead_counts` read, shared by every concurrent caller.
+   *
+   * One screen load asks for counts twice, once through `getIndustries` and
+   * again through `getVerticals`, and both reads answer the same question. The
+   * promise is held only while the request is in flight and is cleared as soon
+   * as it settles, so this coalesces the duplicate round trip without ever
+   * serving a cached count. Freshness is unchanged; only the second identical
+   * request in the same tick disappears.
+   */
+  private leadCountsPromise: Promise<LeadCounts> | null = null;
   private readonly activeRuns = new Map<string, string>();
   private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
   private readonly relaySupportsDiscovery: () => Promise<boolean>;
@@ -168,7 +182,16 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
   private async live(): Promise<boolean> {
     return (await this.getEntitlement()).experience === "live";
   }
-  async getLeadCounts(): Promise<LeadCounts> {
+  getLeadCounts(): Promise<LeadCounts> {
+    if (this.leadCountsPromise) return this.leadCountsPromise;
+    const pending = this.readLeadCounts().finally(() => {
+      if (this.leadCountsPromise === pending) this.leadCountsPromise = null;
+    });
+    this.leadCountsPromise = pending;
+    return pending;
+  }
+
+  private async readLeadCounts(): Promise<LeadCounts> {
     if (!(await this.live())) return this.demo.getLeadCounts();
     const result = await this.broker.workspace("list_lead_counts", {
       operation: "list_lead_counts",
@@ -657,32 +680,59 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     return campaigns.map(mapCampaign);
   }
 
+  /**
+   * Every lead matching `scope`, read one bounded page at a time.
+   *
+   * The first page reports the relay's `total`, so the remaining pages are
+   * known up front and are fetched concurrently rather than one after another.
+   * A serial loop cost one full round trip per hundred leads, which is what
+   * made the Leads workspace take seconds to open.
+   *
+   * `total` can move between the first page and the rest. A short read is
+   * accepted rather than retried: this is a list view, and the next open reads
+   * it again.
+   */
   private async listLeadProjections(
     scope: LeadScope,
   ): Promise<LeadProjection[]> {
-    const leads: LeadProjection[] = [];
-    let offset = 0;
-    for (;;) {
-      const result = await this.broker.workspace("list_leads", {
-        operation: "list_leads",
-        request: {
-          campaign_id:
-            (scope.scope ?? scope.kind ?? scope.type) === "campaign"
-              ? (scope.campaignId ?? null)
-              : null,
-          industry_id: scope.industryId ?? null,
-          vertical_id: scope.verticalId ?? null,
-          status: scope.status ?? null,
-          offset,
-          limit: 100,
-        },
-      });
-      if (result.result !== "leads") throw new Error("Lead list failed.");
-      leads.push(...result.page.leads);
-      offset += result.page.leads.length;
-      if (offset >= result.page.total || result.page.leads.length === 0) break;
+    const first = await this.listLeadPage(scope, 0);
+    if (first.leads.length === 0 || first.leads.length >= first.total) {
+      return first.leads;
     }
-    return leads;
+    const offsets: number[] = [];
+    for (
+      let offset = first.leads.length;
+      offset < first.total;
+      offset += LEAD_PAGE_LIMIT
+    ) {
+      offsets.push(offset);
+    }
+    const rest = await Promise.all(
+      offsets.map((offset) => this.listLeadPage(scope, offset)),
+    );
+    return [...first.leads, ...rest.flatMap((page) => page.leads)];
+  }
+
+  private async listLeadPage(
+    scope: LeadScope,
+    offset: number,
+  ): Promise<{ leads: LeadProjection[]; total: number }> {
+    const result = await this.broker.workspace("list_leads", {
+      operation: "list_leads",
+      request: {
+        campaign_id:
+          (scope.scope ?? scope.kind ?? scope.type) === "campaign"
+            ? (scope.campaignId ?? null)
+            : null,
+        industry_id: scope.industryId ?? null,
+        vertical_id: scope.verticalId ?? null,
+        status: scope.status ?? null,
+        offset,
+        limit: LEAD_PAGE_LIMIT,
+      },
+    });
+    if (result.result !== "leads") throw new Error("Lead list failed.");
+    return { leads: result.page.leads, total: result.page.total };
   }
 }
 
