@@ -123,6 +123,7 @@ export function AppShell() {
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
+  const contentEnabled = useFeatureEnabled("contentCalendar");
   const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
@@ -143,6 +144,7 @@ export function AppShell() {
     goAgents,
     goBlocks,
     goChannel,
+    goContent,
     goDiscovery,
     goHome,
     goNewMessage,
@@ -638,6 +640,8 @@ export function AppShell() {
     goWorkflows,
     openBrowseChannels: handleOpenBrowseChannels,
     projectsEnabled,
+    contentEnabled,
+    goContent,
     pulseEnabled,
     workflowsEnabled,
   });
@@ -849,6 +853,7 @@ export function AppShell() {
                         scopeSearchFocusRequest={scopeSearchFocusRequest}
                         onSelectHome={() => void goHome()}
                         onSelectProjects={() => void goProjects()}
+                        onSelectContent={() => void goContent()}
                         onSelectPulse={() => void goPulse()}
                         onSelectSettings={handleOpenSettings}
                         onSelectSpend={() => void goSpend()}

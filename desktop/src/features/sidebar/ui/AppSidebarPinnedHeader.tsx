@@ -2,6 +2,7 @@ import {
   Activity,
   Blocks,
   Bot,
+  CalendarRange,
   Compass,
   FolderGit2,
   Inbox,
@@ -50,6 +51,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
   onSelectProjects: () => void;
+  onSelectContent: () => void;
   onSelectPulse: () => void;
   onSelectSpend: () => void;
   onSelectWorkflows: () => void;
@@ -106,6 +108,7 @@ export function AppSidebarPrimaryMenu({
   onSelectDiscovery,
   onSelectHome,
   onSelectProjects,
+  onSelectContent,
   onSelectPulse,
   onSelectSpend,
   onSelectWorkflows,
@@ -239,6 +242,20 @@ export function AppSidebarPrimaryMenu({
             <SidebarMenuLabel>Spend</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        <FeatureGate feature="contentCalendar">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-content-view"
+              isActive={selectedView === "content"}
+              onClick={onSelectContent}
+              tooltip="Content"
+              type="button"
+            >
+              <CalendarRange className="h-4 w-4" />
+              <SidebarMenuLabel>Content</SidebarMenuLabel>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </FeatureGate>
         <FeatureGate feature="workflows">
           <SidebarMenuItem>
             <SidebarMenuButton

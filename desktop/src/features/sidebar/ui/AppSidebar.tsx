@@ -141,6 +141,7 @@ type AppSidebarProps = {
   onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
   onSelectProjects: () => void;
+  onSelectContent: () => void;
   onSelectPulse: () => void;
   onSelectSpend: () => void;
   onSelectWorkflows: () => void;
@@ -218,6 +219,7 @@ export function AppSidebar({
   onSelectBlocks,
   onSelectDiscovery,
   onSelectProjects,
+  onSelectContent,
   onSelectPulse,
   onSelectSpend,
   onSelectWorkflows,
@@ -592,6 +594,7 @@ export function AppSidebar({
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}
+                onSelectContent={onSelectContent}
                 onSelectPulse={onSelectPulse}
                 onSelectSpend={onSelectSpend}
                 onSelectWorkflows={onSelectWorkflows}

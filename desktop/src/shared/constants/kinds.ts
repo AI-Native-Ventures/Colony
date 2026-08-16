@@ -111,6 +111,15 @@ export const KIND_DISCOVERY_WORKER_ACTION = 40019;
 export const KIND_DISCOVERY_WORKER_RECEIPT = 40020;
 export const KIND_DISCOVERY_WORKSPACE_ACTION = 40021;
 export const KIND_DISCOVERY_WORKSPACE_RECEIPT = 40022;
+// Colony content calendar. Campaign, post, and house-style are NIP-33 heads
+// authored by the content agent; the decision is a regular event signed by the
+// owner. Approval is a separate event rather than a field on the post, because
+// the post belongs to the agent that made it and the sign-off belongs to the
+// owner. Mirror of buzz-core's KIND_CONTENT_CAMPAIGN etc.
+export const KIND_CONTENT_CAMPAIGN = 30195;
+export const KIND_CONTENT_POST = 30196;
+export const KIND_CONTENT_STYLE = 30197;
+export const KIND_CONTENT_DECISION = 40025;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;
 export const KIND_AGENT_TURN_METRIC = 44200;

@@ -12,6 +12,7 @@ import { Route as remindersRouteImport } from "./routes/reminders";
 import { Route as pulseRouteImport } from "./routes/pulse";
 import { Route as projectsRouteImport } from "./routes/projects";
 import { Route as discoveryRouteImport } from "./routes/discovery";
+import { Route as contentRouteImport } from "./routes/content";
 import { Route as blocksRouteImport } from "./routes/blocks";
 import { Route as agentsRouteImport } from "./routes/agents";
 import { Route as actionCenterRouteImport } from "./routes/action-center";
@@ -55,6 +56,11 @@ const projectsRoute = projectsRouteImport.update({
 const discoveryRoute = discoveryRouteImport.update({
   id: "/discovery",
   path: "/discovery",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const contentRoute = contentRouteImport.update({
+  id: "/content",
+  path: "/content",
   getParentRoute: () => rootRouteImport,
 } as any);
 const blocksRoute = blocksRouteImport.update({
@@ -109,6 +115,7 @@ export interface FileRoutesByFullPath {
   "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/blocks": typeof blocksRoute;
+  "/content": typeof contentRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/blocks": typeof blocksRoute;
+  "/content": typeof contentRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -146,6 +154,7 @@ export interface FileRoutesById {
   "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/blocks": typeof blocksRoute;
+  "/content": typeof contentRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -166,6 +175,7 @@ export interface FileRouteTypes {
     | "/action-center"
     | "/agents"
     | "/blocks"
+    | "/content"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -184,6 +194,7 @@ export interface FileRouteTypes {
     | "/action-center"
     | "/agents"
     | "/blocks"
+    | "/content"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -202,6 +213,7 @@ export interface FileRouteTypes {
     | "/action-center"
     | "/agents"
     | "/blocks"
+    | "/content"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -221,6 +233,7 @@ export interface RootRouteChildren {
   actionCenterRoute: typeof actionCenterRoute;
   agentsRoute: typeof agentsRoute;
   blocksRoute: typeof blocksRoute;
+  contentRoute: typeof contentRoute;
   discoveryRoute: typeof discoveryRoute;
   projectsRoute: typeof projectsRoute;
   pulseRoute: typeof pulseRoute;
@@ -284,6 +297,13 @@ declare module "@tanstack/react-router" {
       path: "/discovery";
       fullPath: "/discovery";
       preLoaderRoute: typeof discoveryRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/content": {
+      id: "/content";
+      path: "/content";
+      fullPath: "/content";
+      preLoaderRoute: typeof contentRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/blocks": {
@@ -357,6 +377,7 @@ const rootRouteChildren: RootRouteChildren = {
   actionCenterRoute: actionCenterRoute,
   agentsRoute: agentsRoute,
   blocksRoute: blocksRoute,
+  contentRoute: contentRoute,
   discoveryRoute: discoveryRoute,
   projectsRoute: projectsRoute,
   pulseRoute: pulseRoute,
