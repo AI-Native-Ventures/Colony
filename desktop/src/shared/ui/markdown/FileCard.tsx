@@ -53,10 +53,14 @@ export function FileCard({
   mime: string;
   size?: number;
 }) {
-  const cardRef = React.useRef<HTMLElement | null>(null);
   const openInWorkspace = useWorkspaceAttachmentOpener();
   const sizeLabel = size != null ? formatFileSize(size) : "";
-  useSmoothCorners(cardRef);
+  // One ref per shape of the card. Only one is mounted at a time, and the
+  // hook no-ops on the ref that is null.
+  const downloadOnlyRef = React.useRef<HTMLButtonElement>(null);
+  const openableRef = React.useRef<HTMLSpanElement>(null);
+  useSmoothCorners(downloadOnlyRef);
+  useSmoothCorners(openableRef);
 
   const download = React.useCallback(() => {
     invokeTauri("download_file", { url: href, filename }).catch(
@@ -88,7 +92,7 @@ export function FileCard({
   if (!openInWorkspace) {
     return (
       <button
-        ref={cardRef as React.RefObject<HTMLButtonElement | null>}
+        ref={downloadOnlyRef}
         type="button"
         onClick={download}
         data-testid="file-card"
@@ -103,7 +107,7 @@ export function FileCard({
 
   return (
     <span
-      ref={cardRef as React.RefObject<HTMLSpanElement | null>}
+      ref={openableRef}
       className={cn(CARD_CLASS, "pr-2")}
       data-testid="file-card"
       style={{ borderRadius: "1rem" }}
