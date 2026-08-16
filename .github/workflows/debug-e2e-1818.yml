@@ -1,0 +1,67 @@
+name: Debug E2E 1818
+# TEMPORARY. Reproduces the Linux-only messaging.spec.ts:1818 failure that
+# `retries: 2` has been masking as flaky, and prints the store/DOM diagnostics
+# the CI artifacts do not carry. Delete with the branch.
+on:
+  push:
+    branches: ["debug/**"]
+
+env:
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+jobs:
+  repro:
+    name: Repro 1818
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: ./scripts/ci-pnpm-store-path.sh
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(cd desktop && node -e "console.log(require('@playwright/test/package.json').version)")" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd desktop && pnpm exec playwright install chromium
+      - name: Install Playwright system dependencies
+        run: cd desktop && pnpm exec playwright install-deps chromium
+      - name: Desktop E2E build
+        run: pnpm -C desktop build:e2e
+      - name: Instrumented repro
+        continue-on-error: true
+        run: cd desktop && pnpm exec playwright test --project=smoke tests/e2e/debug-1818.spec.ts --repeat-each=8 --retries=0 --reporter=list
+      - name: Unmodified test, no retries
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: cd desktop && pnpm exec playwright test --project=smoke tests/e2e/messaging.spec.ts:1818 --repeat-each=8 --retries=0 --reporter=list
+      - name: Upload artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: debug-1818-artifacts
+          path: |
+            desktop/playwright-report
+            desktop/test-results
+          if-no-files-found: ignore
+          retention-days: 3
