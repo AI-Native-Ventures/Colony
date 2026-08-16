@@ -1,10 +1,11 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { createFixtureDiscoveryDataSource } from "../data/FixtureDiscoveryDataSource";
 import { createRelayDiscoveryDataSource } from "../data/RelayDiscoveryDataSource";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
+import { withWriteInvalidation } from "../data/writeInvalidation";
 import type { DiscoveryEntitlementState } from "../entitlement";
 import type {
   CampaignDetail,
@@ -214,7 +215,24 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
           })
         : createRelayDiscoveryDataSource();
   }
-  const dataSource = dataSourceRef.current;
+  const queryClient = useQueryClient();
+  /**
+   * Reads are cached, so a write has to say so. Without this a surface
+   * revisited after editing a lead or a campaign's sources would render the
+   * answer from before the edit.
+   */
+  const dataSource = React.useMemo(
+    () =>
+      withWriteInvalidation(
+        dataSourceRef.current as DiscoveryDataSource,
+        () => {
+          void queryClient.invalidateQueries({
+            queryKey: [DISCOVERY_QUERY_ROOT],
+          });
+        },
+      ),
+    [queryClient],
+  );
 
   const entitlementQuery = useQuery({
     queryKey: [DISCOVERY_QUERY_ROOT, "entitlement"],
