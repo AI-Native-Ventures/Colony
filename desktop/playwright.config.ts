@@ -39,6 +39,7 @@ export default defineConfig({
         "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
         "**/channel-workspace.spec.ts",
+        "**/workspace-message-file-path.spec.ts",
         "**/workspace-message-link.spec.ts",
         "**/workspace-terminal.spec.ts",
         "**/workspace-web.spec.ts",

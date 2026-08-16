@@ -5158,6 +5158,32 @@ function resetMockUserStatuses() {
   mockUserStatuses.length = 0;
 }
 
+// A tiny stand-in for the on-disk workspace the file commands read (see
+// desktop/src-tauri/src/commands/workspace_files.rs), so a file path written
+// in a message has something real to open in e2e.
+const MOCK_WORKSPACE_ROOT = "/mock-workspace";
+
+const MOCK_WORKSPACE_FILES: Record<string, { mime: string; text: string }> = {
+  "PLANS/FOO.md": {
+    mime: "text/markdown",
+    text: "# Foo plan\n\nStep one: prove the path opens.",
+  },
+};
+
+/** Look a mocked workspace file up by either its relative or absolute path. */
+function mockWorkspaceFile(path: string) {
+  const relative = path.startsWith(`${MOCK_WORKSPACE_ROOT}/`)
+    ? path.slice(MOCK_WORKSPACE_ROOT.length + 1)
+    : path;
+  const file = MOCK_WORKSPACE_FILES[relative];
+  if (!file) {
+    throw new Error(
+      `${path} is not a file in the Buzz workspace or your repos folder`,
+    );
+  }
+  return { ...file, path: `${MOCK_WORKSPACE_ROOT}/${relative}`, relative };
+}
+
 // Mocked Rust-side pending deep-link queue (see desktop/src-tauri/src/deep_link.rs).
 let mockPendingCommunityDeepLinks: Array<{
   id: string;
@@ -12932,6 +12958,23 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "auto_connect_default_relay_enabled":
         return activeConfig?.autoConnectDefaultRelay ?? false;
+      case "resolve_workspace_path": {
+        const { path } = payload as { path: string };
+        const file = mockWorkspaceFile(path);
+        return { path: file.path, mime: file.mime, is_text: true };
+      }
+      case "read_workspace_file": {
+        const { path } = payload as { path: string };
+        const file = mockWorkspaceFile(path);
+        return {
+          path: file.path,
+          name: file.relative.split("/").pop() ?? file.relative,
+          mime: file.mime,
+          bytes_base64: btoa(file.text),
+          size: file.text.length,
+          is_text: true,
+        };
+      }
       case "get_legacy_workspace_storage":
         return {
           workspaces: null,

@@ -9,10 +9,14 @@ import {
   type ThemedToken,
 } from "shiki";
 
+import { parseMessageFilePath } from "@/features/workspace/lib/messageFilePath";
+import { useWorkspacePathOpener } from "@/features/workspace/ui/WorkspaceLinkContext";
+import { cn } from "@/shared/lib/cn";
 import { useTheme } from "@/shared/theme/ThemeProvider";
 import { resolveShikiThemeName } from "@/shared/theme/theme-loader";
 import { copyCodeBlockToClipboard } from "@/shared/lib/codeBlockClipboard";
 import { Button } from "@/shared/ui/button";
+import { INLINE_CODE_CHIP_CLASS } from "@/shared/ui/mentionChip";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
@@ -265,5 +269,75 @@ export function SyntaxHighlightedCode({
         );
       })}
     </code>
+  );
+}
+
+/**
+ * Every `code` node markdown produces: a fenced block, or an inline span.
+ *
+ * An inline span that names a workspace file (`PLANS/FOO.md`) becomes a click
+ * target that opens the file as a workspace tab. Agents hand people files by
+ * writing the path, and until this the reader had to retype it somewhere else
+ * to see the file.
+ *
+ * Everything else renders exactly as it always did, and so does every path on
+ * a surface with no channel workspace (project readmes, the agent screens) or
+ * in a non-interactive render such as an inbox preview. A path that turns out
+ * not to resolve reports that as a toast from the opener, so a chip is never a
+ * click that silently does nothing.
+ */
+export function MarkdownCode({
+  children,
+  className,
+  interactive,
+  ...props
+}: { interactive: boolean } & React.ComponentProps<"code">) {
+  const openPath = useWorkspacePathOpener();
+  const rawCode = String(children);
+  const code = rawCode.replace(/\n$/, "");
+  const isFencedCodeBlock =
+    typeof className === "string" && className.includes("language-");
+
+  if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
+    const language = extractLanguage(className);
+
+    if (language) {
+      return (
+        <SyntaxHighlightedCode code={code} language={language} {...props} />
+      );
+    }
+
+    const lines = code.split("\n");
+    return (
+      <code {...props} className={CODE_BLOCK_CLASS}>
+        {lines.map((line, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional
+          <span key={i} data-line="">
+            {line}
+          </span>
+        ))}
+      </code>
+    );
+  }
+
+  const path = interactive && openPath ? parseMessageFilePath(code) : null;
+  if (!path || !openPath) {
+    return (
+      <code {...props} className={cn(INLINE_CODE_CHIP_CLASS, className)}>
+        {children}
+      </code>
+    );
+  }
+
+  return (
+    <button
+      className={cn(INLINE_CODE_CHIP_CLASS, "file-path-chip", className)}
+      data-testid="file-path-chip"
+      onClick={() => openPath(path)}
+      title={`Open ${path} in the workspace`}
+      type="button"
+    >
+      {children}
+    </button>
   );
 }
