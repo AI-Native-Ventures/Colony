@@ -1509,11 +1509,7 @@ mod tests {
 
         // Campaign, post, and style are current state, addressed by d tag:
         // republishing the same coordinate is how an agent revises a card.
-        for head in [
-            KIND_CONTENT_CAMPAIGN,
-            KIND_CONTENT_POST,
-            KIND_CONTENT_STYLE,
-        ] {
+        for head in [KIND_CONTENT_CAMPAIGN, KIND_CONTENT_POST, KIND_CONTENT_STYLE] {
             assert!(is_parameterized_replaceable(head));
         }
 

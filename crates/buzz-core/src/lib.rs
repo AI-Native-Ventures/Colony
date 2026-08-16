@@ -13,9 +13,9 @@ pub mod block;
 pub mod channel;
 /// Company, initiative, task, and agent work-attribution contracts.
 pub mod company;
+pub mod company_roster;
 /// Colony content calendar — campaigns, posts, house style, owner decisions.
 pub mod content;
-pub mod company_roster;
 /// Core contracts for Colony business Discovery runs.
 pub mod discovery;
 /// Core contracts for trusted local Colony Discovery workers.

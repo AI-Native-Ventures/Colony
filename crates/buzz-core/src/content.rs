@@ -1,26 +1,43 @@
 //! Colony content calendar — campaigns, posts, house style, and owner decisions.
 //!
 //! The four records behind the Content surface. A content agent authors the
-//! first three; the owner authors the fourth. None of them is relay-authored,
-//! so every rule in this module is a parse rule: the relay runs the same
-//! parser the CLI runs before it signs, and an event that fails here never
-//! reaches storage.
+//! first three; the owner authors the fourth. None is relay-authored, so every
+//! rule here is a parse rule: the relay runs the same parser the CLI runs
+//! before it signs, and an event that fails here never reaches storage.
 //!
 //! The design point worth stating, because it is the whole feature: **the app
 //! never renders a card.** The agent renders on its own machine, measures its
 //! own gates, and writes the measurements into the post record. What this
-//! module enforces is that a post cannot claim to be ready unless every gate
-//! in [`REQUIRED_GATES`] is present and passing and every claim on it carries
-//! a source. A missing measurement is a failure, not an absence: an agent that
-//! cannot run the contrast gate cannot route around it by omitting the field.
+//! module enforces is that those measurements cannot be routed around.
 //!
-//! [`parse_content_decision`] carries the same idea into approval. An approval
-//! names the image hash and the gate verdict it is approving, so approving a
-//! card whose gates failed is rejected here, and a card edited after approval
-//! is detectable by the reader rather than silently re-blessed.
+//! Three rules carry that weight, and each closes a way the system could
+//! otherwise lie:
+//!
+//! 1. **A missing gate is not a passing gate.** A post marked ready must carry
+//!    every gate in [`REQUIRED_GATES`], so an agent that cannot run one cannot
+//!    omit it. A gate it could not run reports [`GateStatus::Skip`], never
+//!    silence.
+//! 2. **`skip` is not `pass`.** Three statuses give three verdicts, and
+//!    [`GateVerdict::Incomplete`] is the honest state for a card whose claims
+//!    were never checked. Collapsing skip into pass would show every card in
+//!    the system as fully gated while the gate that protects the owner had
+//!    never run once.
+//! 3. **The report binds to bytes, not to a name.** The gate report carries the
+//!    SHA-256 of the image it measured, and it must equal the image the post
+//!    carries. Without that, re-rendering a card silently keeps its old passing
+//!    report, which is the easiest way for this whole system to lie.
+//!
+//! [`parse_content_decision`] carries the same idea into approval: an approval
+//! names the image hash and the verdict it was issued against, so a card edited
+//! after approval does not inherit the sign-off.
+//!
+//! Style parameters are deliberately opaque. `family`, `hues`, `variant` and
+//! `layout` mean something to Colony's own brand kit and nothing to the next
+//! business onboarded, so they travel in a blob under a `style_version` the
+//! relay stores and never interprets. If the relay knew what `family: "dawn"`
+//! meant, every new template family would be a relay schema change.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::kind::{
@@ -36,31 +53,42 @@ pub const SCHEMA_CONTENT_STYLE: &str = "colony/content-style/v1";
 /// Pinned `schema` value for an owner decision (kind 40025).
 pub const SCHEMA_CONTENT_DECISION: &str = "colony/content-decision/v1";
 
-/// Gate ids a post must carry, all passing, before it may be marked ready.
+/// Gate ids a post must carry, in any status, before it may be marked ready.
 ///
-/// Four of these are ported from the launch build's own tooling and have each
+/// Five of these are ported from the launch build's own tooling and have each
 /// already caught a real defect. `claims` is the one that did not exist as
-/// code: the agent asserting that every line on the card traces to a source it
-/// registered. It is listed here rather than left advisory because it is the
-/// gate that protects the owner rather than the taste.
-pub const REQUIRED_GATES: &[&str] = &["contrast", "grain", "fonts", "canvas", "claims"];
+/// code: every line on the card tracing to a source the agent registered. It
+/// is required here rather than left advisory because it is the gate that
+/// protects the owner rather than the taste, and a gate nobody is obliged to
+/// report is a gate that quietly stops being run.
+pub const REQUIRED_GATES: &[&str] = &[
+    "contrast",
+    "grain",
+    "fonts",
+    "canvas",
+    "housestyle",
+    "claims",
+];
 
 /// Longest accepted free-text field (caption, alt text, rule text).
-///
-/// Generous for a caption and nowhere near a relay row limit. It exists so a
-/// malformed generation cannot write an unbounded record.
 pub const MAX_TEXT_LEN: usize = 8_000;
 
-/// Largest number of posts one campaign record may declare weeks for.
+/// Largest number of weeks one campaign may declare.
 pub const MAX_WEEKS: usize = 104;
 
 /// Largest number of claims one post may carry.
 pub const MAX_CLAIMS: usize = 64;
 
+/// Largest number of gates one report may carry.
+pub const MAX_GATES: usize = 32;
+
+/// Largest number of assets one post may carry.
+pub const MAX_ASSETS: usize = 16;
+
 /// Largest number of accumulated house rules.
 ///
-/// The rule list is the owner's taste written down, and it is meant to be
-/// read and pruned by a human. Past a few hundred entries nobody can audit it,
+/// The rule list is the owner's taste written down, and it is meant to be read
+/// and pruned by a human. Past a few hundred entries nobody can audit it,
 /// which is the failure this cap exists to make visible rather than silent.
 pub const MAX_RULES: usize = 256;
 
@@ -100,7 +128,7 @@ pub enum ContentParseError {
         /// The cap it exceeded.
         max: usize,
     },
-    /// A slug did not match `[a-z0-9-]{1,64}`.
+    /// A slug did not match its grammar.
     #[error("{field} must match [a-z0-9-]{{1,64}}, got: {value}")]
     InvalidSlug {
         /// Name of the offending field.
@@ -132,7 +160,7 @@ pub enum ContentParseError {
         /// The cap it exceeded.
         max: usize,
     },
-    /// A status/enum string was not in the pinned vocabulary.
+    /// A status or enum string was not in the pinned vocabulary.
     #[error("unknown {field}: {value}")]
     UnknownVariant {
         /// Name of the field carrying the vocabulary.
@@ -140,19 +168,55 @@ pub enum ContentParseError {
         /// The offending value.
         value: String,
     },
+    /// Two gates in one report shared an id.
+    #[error("gate `{0}` appears twice in one report")]
+    DuplicateGate(String),
+    /// Two claims on one post shared an id.
+    #[error("claim `{0}` appears twice on one post")]
+    DuplicateClaim(String),
+    /// The report's declared verdict disagreed with its own gate statuses.
+    #[error("report declares verdict `{declared}` but its gates say `{derived}`")]
+    VerdictDisagreesWithGates {
+        /// What the report claimed.
+        declared: &'static str,
+        /// What its gates actually add up to.
+        derived: &'static str,
+    },
+    /// The gate report measured an image other than the one the post carries.
+    #[error("gate report measured image {report}, but the post carries {post}")]
+    ReportImageMismatch {
+        /// Hash the report says it measured.
+        report: String,
+        /// Hash of the image actually on the post.
+        post: String,
+    },
+    /// A post carried a gate report but no image for it to describe.
+    #[error("a gate report needs the image it measured")]
+    ReportWithoutImage,
+    /// A claim id was referenced by a field but never defined.
+    #[error("field `{field}` cites claim `{claim}`, which is not defined on this post")]
+    UndefinedClaimReference {
+        /// The post field doing the citing.
+        field: String,
+        /// The claim id it cited.
+        claim: String,
+    },
     /// A post claimed ready without a rendered image.
     #[error("a ready post must carry an image")]
     ReadyWithoutImage,
+    /// A post claimed ready without a gate report.
+    #[error("a ready post must carry a gate report")]
+    ReadyWithoutReport,
     /// A post claimed ready with a gate missing from its report.
-    #[error("a ready post must carry the `{0}` gate")]
+    #[error("a ready post must report the `{0}` gate, as pass, fail, or skip")]
     ReadyMissingGate(String),
-    /// A post claimed ready with a gate that did not pass.
-    #[error("a ready post must pass every gate; `{0}` failed")]
+    /// A post claimed ready with a gate that failed.
+    #[error("a ready post may not carry a failing gate; `{0}` failed")]
     ReadyFailedGate(String),
     /// A post claimed ready carrying a claim with no source.
     #[error("a ready post must source every claim; claim `{0}` has none")]
     ReadyUnsourcedClaim(String),
-    /// An approval named a gate verdict that was not a pass.
+    /// An approval was issued against a failing gate report.
     #[error("an approval may not be issued against a failing gate report")]
     ApprovalOfFailedGates,
     /// A decision referenced no post coordinate.
@@ -224,9 +288,9 @@ fn required_str(content: &serde_json::Value, field: &str) -> Result<String, Cont
 /// Read a required string under `key`, reporting failures as `label`.
 ///
 /// The two are separate because nested fields want a dotted error label
-/// (`image.url`) and a plain lookup key (`url`). Collapsing them silently
-/// looks up the dotted string and finds nothing, which reads as "the field was
-/// empty" for a field that was in fact populated.
+/// (`image.url`) and a plain lookup key (`url`). Collapsing them silently looks
+/// up the dotted string, finds nothing, and reports "empty" for a field that
+/// was in fact populated.
 fn required_str_at(
     content: &serde_json::Value,
     key: &str,
@@ -270,13 +334,32 @@ fn bounded(value: &str, field: &str) -> Result<String, ContentParseError> {
     Ok(value.to_string())
 }
 
-/// `[a-z0-9-]{1,64}`, the slug grammar shared by campaign ids and post slugs.
+/// `[a-z0-9-]{1,64}`, the grammar for campaign ids, post slugs, and gate ids.
 fn require_slug(value: &str, field: &str) -> Result<String, ContentParseError> {
+    require_id(value, field, false)
+}
+
+/// `[a-z0-9_-]{1,64}`, the grammar for claim ids.
+///
+/// Claim ids are written by hand alongside the copy (`clm_hero_h1`), and the
+/// underscore reads better there than a hyphen. Nothing else accepts one.
+fn require_claim_id(value: &str, field: &str) -> Result<String, ContentParseError> {
+    require_id(value, field, true)
+}
+
+fn require_id(
+    value: &str,
+    field: &str,
+    allow_underscore: bool,
+) -> Result<String, ContentParseError> {
     let ok = !value.is_empty()
         && value.len() <= 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        && value.bytes().all(|b| {
+            b.is_ascii_lowercase()
+                || b.is_ascii_digit()
+                || b == b'-'
+                || (allow_underscore && b == b'_')
+        });
     if ok {
         Ok(value.to_string())
     } else {
@@ -289,9 +372,9 @@ fn require_slug(value: &str, field: &str) -> Result<String, ContentParseError> {
 
 /// ISO `YYYY-MM-DD`, validated as a real calendar date rather than a shape.
 ///
-/// A shape-only check accepts 2026-02-31, which then silently sorts into the
-/// wrong week on the calendar. Leap years are handled: the campaign that
-/// exposes this is any February in a divisible-by-four year.
+/// A shape-only check accepts 2026-02-31, which then sorts into the wrong week
+/// on the calendar. Leap years are handled: the campaign that exposes this is
+/// any February in a divisible-by-four year.
 fn require_date(value: &str, field: &str) -> Result<String, ContentParseError> {
     let invalid = || ContentParseError::InvalidDate {
         field: field.to_string(),
@@ -314,7 +397,7 @@ fn require_date(value: &str, field: &str) -> Result<String, ContentParseError> {
     if !(1..=12).contains(&month) || day == 0 {
         return Err(invalid());
     }
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
     let last = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -325,6 +408,28 @@ fn require_date(value: &str, field: &str) -> Result<String, ContentParseError> {
         return Err(invalid());
     }
     Ok(value.to_string())
+}
+
+/// Normalize a SHA-256 to bare lowercase hex, accepting a `sha256:` prefix.
+///
+/// The gate reports the kit already writes spell it `sha256:9f2c…`; a Blossom
+/// descriptor spells it bare. Accepting both and storing one means the hash
+/// comparison that voids a stale report is a string equality rather than a
+/// place where two spellings of the same digest silently differ.
+fn require_sha256(value: &str, field: &str) -> Result<String, ContentParseError> {
+    let bare = value.strip_prefix("sha256:").unwrap_or(value);
+    let ok = bare.len() == 64
+        && bare
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if ok {
+        Ok(bare.to_string())
+    } else {
+        Err(ContentParseError::InvalidHex {
+            field: field.to_string(),
+            value: value.to_string(),
+        })
+    }
 }
 
 fn require_hex64(value: &str, field: &str) -> Result<String, ContentParseError> {
@@ -387,7 +492,7 @@ impl CampaignStatus {
 /// A validated campaign record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedContentCampaign {
-    /// Campaign id, from the `d` tag. Slug grammar.
+    /// Campaign id, from the `d` tag.
     pub id: String,
     /// Display name.
     pub name: String,
@@ -420,12 +525,12 @@ pub fn parse_content_campaign(
 
     let status = match content.get("status").and_then(|v| v.as_str()) {
         None => CampaignStatus::Active,
-        Some(value) => CampaignStatus::parse(value).ok_or_else(|| {
-            ContentParseError::UnknownVariant {
+        Some(value) => {
+            CampaignStatus::parse(value).ok_or_else(|| ContentParseError::UnknownVariant {
                 field: "status".to_string(),
                 value: value.to_string(),
-            }
-        })?,
+            })?
+        }
     };
 
     let raw_weeks = content
@@ -469,27 +574,31 @@ pub fn parse_content_campaign(
     })
 }
 
-// ── Post (kind 30196) ─────────────────────────────────────────────────────
+// ── Gates ─────────────────────────────────────────────────────────────────
 
-/// Where a claim's supporting evidence lives.
+/// One gate's outcome.
+///
+/// Three states, not two. A gate the renderer could not run reports `Skip`
+/// rather than staying silent, because silence is indistinguishable from a
+/// pass once the record is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ClaimSourceKind {
-    /// A live page. `locator` is the URL.
-    Url,
-    /// A file in a repository. `locator` is `path:line` or `path`.
-    Repo,
-    /// The owner said so, in a message. `locator` is the event id.
-    Owner,
+pub enum GateStatus {
+    /// Measured and cleared its bar.
+    Pass,
+    /// Measured and did not clear its bar.
+    Fail,
+    /// Not run. The report says why in `detail`.
+    Skip,
 }
 
-impl ClaimSourceKind {
+impl GateStatus {
     /// Parse the wire string.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "url" => Some(Self::Url),
-            "repo" => Some(Self::Repo),
-            "owner" => Some(Self::Owner),
+            "pass" => Some(Self::Pass),
+            "fail" => Some(Self::Fail),
+            "skip" => Some(Self::Skip),
             _ => None,
         }
     }
@@ -497,55 +606,363 @@ impl ClaimSourceKind {
     /// The wire string.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Url => "url",
-            Self::Repo => "repo",
-            Self::Owner => "owner",
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Skip => "skip",
         }
     }
 }
 
-/// The evidence behind one claim.
+/// What a whole report adds up to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GateVerdict {
+    /// Every gate passed.
+    Pass,
+    /// At least one gate failed.
+    Fail,
+    /// Nothing failed, but something was not run.
+    Incomplete,
+}
+
+impl GateVerdict {
+    /// Parse the wire string.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pass" => Some(Self::Pass),
+            "fail" => Some(Self::Fail),
+            "incomplete" => Some(Self::Incomplete),
+            _ => None,
+        }
+    }
+
+    /// The wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Incomplete => "incomplete",
+        }
+    }
+}
+
+/// One gate result.
+///
+/// Every gate is the same object: an id, a status, the bar it was measured
+/// against, what was measured, and an opaque detail blob. The bar carries its
+/// own operator, so a floor (contrast), a range (grain) and an equality
+/// (canvas) are one type rather than three, and a seventh gate later is a new
+/// id rather than a schema change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateResult {
+    /// Gate id, e.g. `contrast`.
+    pub id: String,
+    /// Pass, fail, or skip.
+    pub status: GateStatus,
+    /// The bar, with its own operator. Opaque to the relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar: Option<serde_json::Value>,
+    /// What was measured, in the gate's own units. Opaque to the relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured: Option<serde_json::Value>,
+    /// Everything a human might want behind the number. Opaque to the relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+}
+
+/// The gate report for one rendered card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GateReport {
+    /// SHA-256 of the PNG the gates actually measured, bare lowercase hex.
+    pub image_hash: String,
+    /// When the render happened, as the renderer reported it.
+    pub rendered_at: Option<String>,
+    /// Which engine produced these pixels. Opaque, but never absent in
+    /// practice: two Chromium builds do not agree on subpixel output, and
+    /// contrast is measured in pixels, so a re-render by another agent must
+    /// write a new report rather than inherit one.
+    pub renderer: Option<serde_json::Value>,
+    /// The locked style version this card was rendered against.
+    pub style_version: Option<String>,
+    /// What the gates add up to.
+    pub verdict: GateVerdict,
+    /// The gates, in report order.
+    pub gates: Vec<GateResult>,
+}
+
+impl GateReport {
+    /// Look up one gate by id.
+    pub fn gate(&self, id: &str) -> Option<&GateResult> {
+        self.gates.iter().find(|gate| gate.id == id)
+    }
+
+    /// The verdict implied by the gate statuses themselves.
+    pub fn derived_verdict(gates: &[GateResult]) -> GateVerdict {
+        if gates.iter().any(|gate| gate.status == GateStatus::Fail) {
+            GateVerdict::Fail
+        } else if gates.iter().any(|gate| gate.status == GateStatus::Skip) {
+            GateVerdict::Incomplete
+        } else {
+            GateVerdict::Pass
+        }
+    }
+}
+
+fn parse_gate_report(raw: &serde_json::Value) -> Result<GateReport, ContentParseError> {
+    let image_hash = require_sha256(
+        &required_str_at(raw, "image_hash", "gate_report.image_hash")?,
+        "gate_report.image_hash",
+    )?;
+
+    let raw_gates = raw
+        .get("gates")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if raw_gates.len() > MAX_GATES {
+        return Err(ContentParseError::TooManyEntries {
+            field: "gate_report.gates".to_string(),
+            max: MAX_GATES,
+        });
+    }
+
+    let mut gates: Vec<GateResult> = Vec::with_capacity(raw_gates.len());
+    for raw_gate in &raw_gates {
+        let id = require_slug(
+            &required_str_at(raw_gate, "id", "gate_report.gates[].id")?,
+            "gate_report.gates[].id",
+        )?;
+        if gates.iter().any(|held| held.id == id) {
+            return Err(ContentParseError::DuplicateGate(id));
+        }
+        let status_str = required_str_at(raw_gate, "status", "gate_report.gates[].status")?;
+        let status =
+            GateStatus::parse(&status_str).ok_or_else(|| ContentParseError::UnknownVariant {
+                field: "gate_report.gates[].status".to_string(),
+                value: status_str,
+            })?;
+        gates.push(GateResult {
+            id,
+            status,
+            bar: raw_gate.get("bar").cloned(),
+            measured: raw_gate.get("measured").cloned(),
+            detail: raw_gate.get("detail").cloned(),
+        });
+    }
+
+    // A report may state its own verdict, but it does not get to disagree with
+    // its gates. A renderer that writes "pass" over a failing gate would
+    // otherwise be believed by every reader that trusts the summary.
+    let derived = GateReport::derived_verdict(&gates);
+    if let Some(declared) = raw.get("verdict").and_then(|v| v.as_str()) {
+        let declared =
+            GateVerdict::parse(declared).ok_or_else(|| ContentParseError::UnknownVariant {
+                field: "gate_report.verdict".to_string(),
+                value: declared.to_string(),
+            })?;
+        if declared != derived {
+            return Err(ContentParseError::VerdictDisagreesWithGates {
+                declared: declared.as_str(),
+                derived: derived.as_str(),
+            });
+        }
+    }
+
+    Ok(GateReport {
+        image_hash,
+        rendered_at: optional_str_at(raw, "rendered_at", "gate_report.rendered_at")?,
+        renderer: raw.get("renderer").cloned(),
+        style_version: optional_str_at(raw, "style_version", "gate_report.style_version")?,
+        verdict: derived,
+        gates,
+    })
+}
+
+// ── Claims ────────────────────────────────────────────────────────────────
+
+/// How closely a claim tracks its source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClaimKind {
+    /// The asserted text equals the source text.
+    Verbatim,
+    /// A shortening or light rewording of the source.
+    Trim,
+    /// Drawn from the source but not literal. Never auto-passes.
+    Derived,
+}
+
+impl ClaimKind {
+    /// Parse the wire string.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "verbatim" => Some(Self::Verbatim),
+            "trim" => Some(Self::Trim),
+            "derived" => Some(Self::Derived),
+            _ => None,
+        }
+    }
+
+    /// The wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Verbatim => "verbatim",
+            Self::Trim => "trim",
+            Self::Derived => "derived",
+        }
+    }
+}
+
+/// Where a claim's evidence lives.
+///
+/// Three arms, and the third is the one that makes this useful outside a
+/// software company. `page` and `repo` are re-checkable by fetching. `owner`
+/// is the owner asserting something with nothing else behind it, pointing at a
+/// signed event, and it is the only arm a plumber's "fully insured" can ever
+/// use. Two arms would not extend, because `owner` verifies by signature
+/// rather than by fetch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClaimSource {
-    /// Kind of source.
-    pub kind: ClaimSourceKind,
-    /// Where to look: URL, repo path, or event id.
-    pub locator: String,
-    /// The words at that location that support the claim.
-    pub excerpt: Option<String>,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ClaimSource {
+    /// A live page, optionally narrowed by CSS selector.
+    Page {
+        /// URL to fetch.
+        url: String,
+        /// Selector that isolates the supporting text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selector: Option<String>,
+    },
+    /// A file in a repository.
+    Repo {
+        /// Repository, e.g. `github.com/AI-Native-Ventures/Colony`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo: Option<String>,
+        /// Path within the repository.
+        path: String,
+        /// 1-based line number.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<u32>,
+        /// Revision the line was read at.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rev: Option<String>,
+    },
+    /// The owner said so, in a signed event.
+    Owner {
+        /// Event id of the message that asserted it.
+        event: String,
+        /// When they said it, unix seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        said_at: Option<u64>,
+    },
+}
+
+impl ClaimSource {
+    /// Whether this source can be re-checked by fetching rather than by
+    /// trusting a signature.
+    pub fn is_fetch_verifiable(&self) -> bool {
+        matches!(self, Self::Page { .. } | Self::Repo { .. })
+    }
 }
 
 /// One assertion made on a card or in its caption.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentClaim {
-    /// Stable id within the post, referenced by the caption and the UI.
+    /// Stable id, cited by the post's field index.
     pub id: String,
     /// What is being asserted, in the words that will be published.
-    pub text: String,
+    pub asserts: String,
+    /// How closely it tracks its source.
+    pub kind: ClaimKind,
     /// The evidence. `None` is legal on a draft and fatal on a ready post.
     pub source: Option<ClaimSource>,
+    /// Hash of the source text at verification time, so a later edit to the
+    /// source is detectable rather than silently inherited.
+    pub source_hash: Option<String>,
+    /// When it was last verified.
+    pub verified_at: Option<String>,
+    /// Who verified it.
+    pub verified_by: Option<String>,
 }
 
-/// One gate's measured outcome, as reported by the agent that rendered.
-///
-/// `measured` and `bar` are free JSON on purpose. The gate table will grow,
-/// and a gate whose bar is a range rather than a number should not need a
-/// schema change to be storable. What is not free is [`GateResult::pass`]:
-/// every gate answers the same yes/no, and that is what [`REQUIRED_GATES`]
-/// is checked against.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GateResult {
-    /// Whether the card cleared this gate.
-    pub pass: bool,
-    /// What was measured, in the gate's own units.
+fn parse_claim(raw: &serde_json::Value) -> Result<ContentClaim, ContentParseError> {
+    let id = require_claim_id(&required_str_at(raw, "id", "claims[].id")?, "claims[].id")?;
+    let asserts = required_str_at(raw, "asserts", "claims[].asserts")?;
+    let kind_str = required_str_at(raw, "kind", "claims[].kind")?;
+    let kind = ClaimKind::parse(&kind_str).ok_or_else(|| ContentParseError::UnknownVariant {
+        field: "claims[].kind".to_string(),
+        value: kind_str,
+    })?;
+
+    let source = match raw.get("source") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(raw_source) => {
+            let type_str = required_str_at(raw_source, "type", "claims[].source.type")?;
+            Some(match type_str.as_str() {
+                "page" => ClaimSource::Page {
+                    url: required_str_at(raw_source, "url", "claims[].source.url")?,
+                    selector: optional_str_at(raw_source, "selector", "claims[].source.selector")?,
+                },
+                "repo" => ClaimSource::Repo {
+                    repo: optional_str_at(raw_source, "repo", "claims[].source.repo")?,
+                    path: required_str_at(raw_source, "path", "claims[].source.path")?,
+                    line: raw_source
+                        .get("line")
+                        .and_then(serde_json::Value::as_u64)
+                        .map(|n| n as u32),
+                    rev: optional_str_at(raw_source, "rev", "claims[].source.rev")?,
+                },
+                "owner" => ClaimSource::Owner {
+                    event: require_hex64(
+                        &required_str_at(raw_source, "event", "claims[].source.event")?,
+                        "claims[].source.event",
+                    )?,
+                    said_at: raw_source
+                        .get("said_at")
+                        .and_then(serde_json::Value::as_u64),
+                },
+                other => {
+                    return Err(ContentParseError::UnknownVariant {
+                        field: "claims[].source.type".to_string(),
+                        value: other.to_string(),
+                    })
+                }
+            })
+        }
+    };
+
+    Ok(ContentClaim {
+        id,
+        asserts,
+        kind,
+        source,
+        source_hash: match optional_str_at(raw, "source_hash", "claims[].source_hash")? {
+            Some(value) => Some(require_sha256(&value, "claims[].source_hash")?),
+            None => None,
+        },
+        verified_at: optional_str_at(raw, "verified_at", "claims[].verified_at")?,
+        verified_by: optional_str_at(raw, "verified_by", "claims[].verified_by")?,
+    })
+}
+
+// ── Post (kind 30196) ─────────────────────────────────────────────────────
+
+/// A file the card was built from, e.g. a product screenshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostAsset {
+    /// Where the asset lives.
+    pub path: String,
+    /// SHA-256 of its bytes, bare lowercase hex.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub measured: Option<serde_json::Value>,
-    /// The bar it was measured against.
+    pub hash: Option<String>,
+    /// What it is, e.g. `screenshot`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bar: Option<serde_json::Value>,
-    /// Anything a human should read alongside the number.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub kind: Option<String>,
+    /// Whether every name and number visible in it is invented.
+    ///
+    /// The house rule is that a product shot never exposes a real customer.
+    /// A boolean an author has to set is at least somewhere for a gate to
+    /// stand; today the rule lives in one agent's memory.
+    pub fictional: bool,
 }
 
 /// The rendered image a post carries.
@@ -553,7 +970,7 @@ pub struct GateResult {
 pub struct PostImage {
     /// Where the PNG lives, as returned by `buzz upload file`.
     pub url: String,
-    /// SHA-256 of the exact bytes. This is what an approval names.
+    /// SHA-256 of the exact bytes, bare lowercase hex.
     pub sha256: String,
     /// Pixel width.
     pub width: u32,
@@ -563,16 +980,16 @@ pub struct PostImage {
 
 /// How finished a post is.
 ///
-/// Deliberately two states, not three. "Approved" is not a status on the post:
-/// it is a separate event the owner signs, because the post belongs to the
-/// agent and the approval belongs to the owner. Folding approval into the post
-/// would let the agent that wrote the card also write its own sign-off.
+/// Two states, not three. "Approved" is not a status on the post: it is a
+/// separate event the owner signs, because the post belongs to the agent and
+/// the approval belongs to the owner. Folding approval in would let the author
+/// of a card write its own sign-off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PostStatus {
-    /// Still being worked on. Gates may be missing or failing.
+    /// Still being worked on. Gates may be missing.
     Draft,
-    /// Rendered, measured, sourced, and offered to the owner.
+    /// Rendered, measured, and offered to the owner.
     Ready,
 }
 
@@ -608,12 +1025,14 @@ pub struct ParsedContentPost {
     pub week: u32,
     /// ISO date the post is scheduled for.
     pub scheduled_for: String,
-    /// This post's job in the running order: who, what, why, proof, when.
+    /// This post's job in the running order: who, what, why, proof, when for a
+    /// launch week; service, finished-work, mistake, price, ask for a trade
+    /// week. The single largest correction in the launch build was structural,
+    /// and without this field the calendar cannot show why Tuesday follows
+    /// Monday or hand the pattern to the next campaign.
     pub job: Option<String>,
     /// Network the caption is written for.
     pub channel: Option<String>,
-    /// Template id the card was composed with.
-    pub template: Option<String>,
     /// The words on the image.
     pub headline: Option<String>,
     /// The words under the image.
@@ -622,37 +1041,73 @@ pub struct ParsedContentPost {
     pub alt: Option<String>,
     /// Hashtags, without the `#`, for repurposing to other networks.
     pub hashtags: Vec<String>,
+    /// Which locked style rendered this card.
+    pub style_version: Option<String>,
+    /// Brand-kit style parameters. Opaque: their meaning belongs to the kit at
+    /// `style_version`, not to the relay.
+    pub style: Option<serde_json::Value>,
     /// The rendered card.
     pub image: Option<PostImage>,
+    /// Files the card was built from.
+    pub assets: Vec<PostAsset>,
     /// Every assertion this post makes, with its evidence.
     pub claims: Vec<ContentClaim>,
-    /// Measured gate outcomes, keyed by gate id.
-    pub gates: BTreeMap<String, GateResult>,
+    /// Which claims back which field, e.g. `headline` to `["clm_hero_h1"]`.
+    /// Lets the gate fail with a locator rather than a verdict: not "this card
+    /// has an unsourced claim" but "the caption does".
+    pub claim_fields: Vec<(String, Vec<String>)>,
+    /// The measured gate report, when the card has been rendered.
+    pub gate_report: Option<GateReport>,
     /// Draft or ready.
     pub status: PostStatus,
 }
 
 impl ParsedContentPost {
-    /// Whether every gate in [`REQUIRED_GATES`] is present and passing.
-    pub fn gates_pass(&self) -> bool {
-        REQUIRED_GATES
-            .iter()
-            .all(|id| self.gates.get(*id).is_some_and(|gate| gate.pass))
+    /// The verdict the gates add up to, or `None` when nothing was measured.
+    pub fn verdict(&self) -> Option<GateVerdict> {
+        self.gate_report.as_ref().map(|report| report.verdict)
+    }
+
+    /// Whether every gate in [`REQUIRED_GATES`] passed.
+    ///
+    /// Distinct from "did not fail". A card whose claims gate was skipped is
+    /// not gated, and this returns false for it.
+    pub fn fully_gated(&self) -> bool {
+        self.gate_report.as_ref().is_some_and(|report| {
+            REQUIRED_GATES.iter().all(|id| {
+                report
+                    .gate(id)
+                    .is_some_and(|g| g.status == GateStatus::Pass)
+            })
+        })
+    }
+
+    /// Claim ids cited by a field that this post never defines.
+    fn undefined_claim_reference(&self) -> Option<(&str, &str)> {
+        for (field, ids) in &self.claim_fields {
+            for id in ids {
+                if !self.claims.iter().any(|claim| &claim.id == id) {
+                    return Some((field.as_str(), id.as_str()));
+                }
+            }
+        }
+        None
     }
 }
 
 /// Split a post `d` tag into its campaign and slug halves.
 ///
-/// The `d` tag is `<campaign>:<slug>` so that one relay filter on the campaign
+/// The `d` tag is `<campaign>:<slug>` so one relay filter on the campaign
 /// prefix fetches a whole campaign's posts, and so a post can never be
 /// silently re-parented by editing a content field.
 pub fn split_post_address(address: &str) -> Result<(String, String), ContentParseError> {
-    let (campaign, slug) = address
-        .split_once(':')
-        .ok_or_else(|| ContentParseError::InvalidSlug {
-            field: "d".to_string(),
-            value: address.to_string(),
-        })?;
+    let (campaign, slug) =
+        address
+            .split_once(':')
+            .ok_or_else(|| ContentParseError::InvalidSlug {
+                field: "d".to_string(),
+                value: address.to_string(),
+            })?;
     Ok((
         require_slug(campaign, "d.campaign")?,
         require_slug(slug, "d.slug")?,
@@ -666,11 +1121,18 @@ pub fn post_address(campaign: &str, slug: &str) -> String {
 
 /// Parse and validate a post record (kind [`KIND_CONTENT_POST`]).
 ///
-/// A `draft` is permissive: it may have no image, no gates, and unsourced
-/// claims, because that is what a work in progress looks like. A `ready` post
-/// is the one that is offered to the owner, and it must carry a rendered
-/// image, every gate in [`REQUIRED_GATES`] passing, and a source on every
-/// claim. There is no flag that relaxes this.
+/// A `draft` is permissive: no image, no gates, unsourced claims, because that
+/// is what a work in progress looks like. A `ready` post is the one offered to
+/// the owner, and it must carry a rendered image, a gate report measured
+/// against exactly those bytes, every gate in [`REQUIRED_GATES`] reported in
+/// some status, no gate failing, and a source on every claim. There is no flag
+/// that relaxes this.
+///
+/// A skipped gate does not block ready. It produces
+/// [`GateVerdict::Incomplete`], which is the honest state for a card whose
+/// claims were never machine-checked, and it is the owner's call whether to
+/// approve one. What is not the owner's call is being told a card was fully
+/// gated when it was not.
 pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, ContentParseError> {
     require_kind(event, KIND_CONTENT_POST)?;
     let address = single_tag_value(event, "d")?;
@@ -694,14 +1156,12 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         Some(value) => Some(require_slug(&value, "channel")?),
         None => None,
     };
-    let template = match optional_str(&content, "template")? {
-        Some(value) => Some(require_slug(&value, "template")?),
-        None => None,
-    };
 
     let headline = optional_str(&content, "headline")?;
     let caption = optional_str(&content, "caption")?;
     let alt = optional_str(&content, "alt")?;
+    let style_version = optional_str(&content, "style_version")?;
+    let style = content.get("style").cloned();
 
     let hashtags = content
         .get("hashtags")
@@ -720,7 +1180,7 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         None | Some(serde_json::Value::Null) => None,
         Some(raw) => Some(PostImage {
             url: required_str_at(raw, "url", "image.url")?,
-            sha256: require_hex64(
+            sha256: require_sha256(
                 &required_str_at(raw, "sha256", "image.sha256")?,
                 "image.sha256",
             )?,
@@ -739,6 +1199,33 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         }),
     };
 
+    let raw_assets = content
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if raw_assets.len() > MAX_ASSETS {
+        return Err(ContentParseError::TooManyEntries {
+            field: "assets".to_string(),
+            max: MAX_ASSETS,
+        });
+    }
+    let mut assets = Vec::with_capacity(raw_assets.len());
+    for raw in &raw_assets {
+        assets.push(PostAsset {
+            path: required_str_at(raw, "path", "assets[].path")?,
+            hash: match optional_str_at(raw, "hash", "assets[].hash")? {
+                Some(value) => Some(require_sha256(&value, "assets[].hash")?),
+                None => None,
+            },
+            kind: optional_str_at(raw, "kind", "assets[].kind")?,
+            fictional: raw
+                .get("fictional")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+
     let raw_claims = content
         .get("claims")
         .and_then(|v| v.as_array())
@@ -750,46 +1237,50 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
             max: MAX_CLAIMS,
         });
     }
-    let mut claims = Vec::with_capacity(raw_claims.len());
+    let mut claims: Vec<ContentClaim> = Vec::with_capacity(raw_claims.len());
     for raw in &raw_claims {
-        let id = require_slug(&required_str_at(raw, "id", "claims[].id")?, "claims[].id")?;
-        let text = required_str_at(raw, "text", "claims[].text")?;
-        let source = match raw.get("source") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(raw_source) => {
-                let kind_str = required_str_at(raw_source, "kind", "claims[].source.kind")?;
-                let kind = ClaimSourceKind::parse(&kind_str).ok_or_else(|| {
-                    ContentParseError::UnknownVariant {
-                        field: "claims[].source.kind".to_string(),
-                        value: kind_str.clone(),
-                    }
-                })?;
-                Some(ClaimSource {
-                    kind,
-                    locator: required_str_at(raw_source, "locator", "claims[].source.locator")?,
-                    excerpt: optional_str_at(raw_source, "excerpt", "claims[].source.excerpt")?,
-                })
-            }
-        };
-        claims.push(ContentClaim { id, text, source });
+        let claim = parse_claim(raw)?;
+        if claims.iter().any(|held| held.id == claim.id) {
+            return Err(ContentParseError::DuplicateClaim(claim.id));
+        }
+        claims.push(claim);
     }
 
-    let mut gates = BTreeMap::new();
-    if let Some(raw_gates) = content.get("gates").and_then(|v| v.as_object()) {
-        for (id, raw) in raw_gates {
-            let pass = raw
-                .get("pass")
-                .and_then(serde_json::Value::as_bool)
-                .ok_or_else(|| ContentParseError::EmptyField(format!("gates.{id}.pass")))?;
-            gates.insert(
-                id.clone(),
-                GateResult {
-                    pass,
-                    measured: raw.get("measured").cloned(),
-                    bar: raw.get("bar").cloned(),
-                    note: optional_str(raw, "note")?,
-                },
-            );
+    let mut claim_fields: Vec<(String, Vec<String>)> = Vec::new();
+    if let Some(raw_fields) = content.get("claim_fields").and_then(|v| v.as_object()) {
+        for (field, raw_ids) in raw_fields {
+            let ids = raw_ids
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            claim_fields.push((field.clone(), ids));
+        }
+    }
+
+    let gate_report = match content.get("gate_report") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(raw) => Some(parse_gate_report(raw)?),
+    };
+
+    // The report describes an image, so it needs one, and it must be the image
+    // the post carries. Without this a re-render silently keeps the old
+    // passing report, which is the easiest way for the whole system to lie.
+    if let Some(report) = &gate_report {
+        match &image {
+            None => return Err(ContentParseError::ReportWithoutImage),
+            Some(image) if image.sha256 != report.image_hash => {
+                return Err(ContentParseError::ReportImageMismatch {
+                    report: report.image_hash.clone(),
+                    post: image.sha256.clone(),
+                })
+            }
+            Some(_) => {}
         }
     }
 
@@ -803,25 +1294,7 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         }
     };
 
-    if status == PostStatus::Ready {
-        if image.is_none() {
-            return Err(ContentParseError::ReadyWithoutImage);
-        }
-        for gate_id in REQUIRED_GATES {
-            match gates.get(*gate_id) {
-                None => return Err(ContentParseError::ReadyMissingGate((*gate_id).to_string())),
-                Some(gate) if !gate.pass => {
-                    return Err(ContentParseError::ReadyFailedGate((*gate_id).to_string()))
-                }
-                Some(_) => {}
-            }
-        }
-        if let Some(unsourced) = claims.iter().find(|claim| claim.source.is_none()) {
-            return Err(ContentParseError::ReadyUnsourcedClaim(unsourced.id.clone()));
-        }
-    }
-
-    Ok(ParsedContentPost {
+    let parsed = ParsedContentPost {
         address,
         campaign,
         slug,
@@ -829,16 +1302,57 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         scheduled_for,
         job,
         channel,
-        template,
         headline,
         caption,
         alt,
         hashtags,
+        style_version,
+        style,
         image,
+        assets,
         claims,
-        gates,
+        claim_fields,
+        gate_report,
         status,
-    })
+    };
+
+    if let Some((field, claim)) = parsed.undefined_claim_reference() {
+        return Err(ContentParseError::UndefinedClaimReference {
+            field: field.to_string(),
+            claim: claim.to_string(),
+        });
+    }
+
+    if parsed.status == PostStatus::Ready {
+        if parsed.image.is_none() {
+            return Err(ContentParseError::ReadyWithoutImage);
+        }
+        let report = parsed
+            .gate_report
+            .as_ref()
+            .ok_or(ContentParseError::ReadyWithoutReport)?;
+        for gate_id in REQUIRED_GATES {
+            match report.gate(gate_id) {
+                None => return Err(ContentParseError::ReadyMissingGate((*gate_id).to_string())),
+                Some(gate) if gate.status == GateStatus::Fail => {
+                    return Err(ContentParseError::ReadyFailedGate((*gate_id).to_string()))
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(gate) = report
+            .gates
+            .iter()
+            .find(|gate| gate.status == GateStatus::Fail)
+        {
+            return Err(ContentParseError::ReadyFailedGate(gate.id.clone()));
+        }
+        if let Some(unsourced) = parsed.claims.iter().find(|claim| claim.source.is_none()) {
+            return Err(ContentParseError::ReadyUnsourcedClaim(unsourced.id.clone()));
+        }
+    }
+
+    Ok(parsed)
 }
 
 // ── House style (kind 30197) ──────────────────────────────────────────────
@@ -873,9 +1387,13 @@ pub struct StyleRule {
 pub struct ParsedContentStyle {
     /// Scope of the style: `house`, or a campaign id.
     pub scope: String,
+    /// The version posts name in `style_version`. Bumping it is what makes a
+    /// style change visible: without it you cannot tell which cards predate
+    /// the change and therefore which need re-rendering.
+    pub version: Option<String>,
     /// The rule list, in the order it will be applied.
     pub rules: Vec<StyleRule>,
-    /// Named values the renderer reads, e.g. grain target.
+    /// Named values the renderer reads. Opaque to the relay.
     pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -902,19 +1420,21 @@ pub fn parse_content_style(event: &nostr::Event) -> Result<ParsedContentStyle, C
             max: MAX_RULES,
         });
     }
-    let mut rules = Vec::with_capacity(raw_rules.len());
+    let mut rules: Vec<StyleRule> = Vec::with_capacity(raw_rules.len());
     for raw in &raw_rules {
         let origin = raw
             .get("origin")
             .ok_or_else(|| ContentParseError::EmptyField("rules[].origin".to_string()))?;
         rules.push(StyleRule {
-            id: require_slug(&required_str_at(raw, "id", "rules[].id")?, "rules[].id")?,
+            id: require_claim_id(&required_str_at(raw, "id", "rules[].id")?, "rules[].id")?,
             text: required_str_at(raw, "text", "rules[].text")?,
             origin: RuleOrigin {
                 at: origin
                     .get("at")
                     .and_then(serde_json::Value::as_u64)
-                    .ok_or_else(|| ContentParseError::EmptyField("rules[].origin.at".to_string()))?,
+                    .ok_or_else(|| {
+                        ContentParseError::EmptyField("rules[].origin.at".to_string())
+                    })?,
                 quote: required_str_at(origin, "quote", "rules[].origin.quote")?,
                 event: match optional_str_at(origin, "event", "rules[].origin.event")? {
                     Some(value) => Some(require_hex64(&value, "rules[].origin.event")?),
@@ -936,6 +1456,7 @@ pub fn parse_content_style(event: &nostr::Event) -> Result<ParsedContentStyle, C
 
     Ok(ParsedContentStyle {
         scope,
+        version: optional_str(&content, "version")?,
         rules,
         settings,
     })
@@ -1021,9 +1542,9 @@ pub struct Correction {
 
 /// Exactly what a decision was made against.
 ///
-/// The image hash is not decoration. Without it, an approval points at a
+/// The image hash is not decoration. Without it an approval points at a
 /// coordinate whose contents can change afterwards, and a replaceable event
-/// means they can change without anyone noticing. With it, a reader can tell
+/// means they can change without anyone noticing. With it, a reader tells
 /// "approved" from "approved, then edited" by comparing two strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionTarget {
@@ -1032,14 +1553,14 @@ pub struct DecisionTarget {
     /// SHA-256 of the image that was on screen when the decision was made.
     pub image_sha256: Option<String>,
     /// The gate verdict the decision was made against.
-    pub gates_pass: bool,
+    pub verdict: GateVerdict,
 }
 
 /// A validated owner decision.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedContentDecision {
     /// Approve or change.
-    pub verdict: DecisionVerdict,
+    pub decision: DecisionVerdict,
     /// What was decided on.
     pub target: DecisionTarget,
     /// The owner's words. Required on a change request.
@@ -1050,10 +1571,12 @@ pub struct ParsedContentDecision {
 
 /// Parse and validate an owner decision (kind [`KIND_CONTENT_DECISION`]).
 ///
-/// Rejects an approval whose own asserted gate verdict is a failure. That
-/// check is local and cheap and it closes the obvious hole: a client that
-/// draws the gates but does not enforce them cannot mint an approval the relay
-/// will store.
+/// Rejects an approval whose own asserted verdict is a failure. The check is
+/// local and cheap and it closes the obvious hole: a client that draws the
+/// gates but does not enforce them cannot mint an approval the relay will
+/// store. An `incomplete` verdict is approvable, because a skipped gate is the
+/// owner taking responsibility for a claim nothing machine-checked, and that
+/// is a decision they are allowed to make as long as it is on the record.
 pub fn parse_content_decision(
     event: &nostr::Event,
 ) -> Result<ParsedContentDecision, ContentParseError> {
@@ -1068,25 +1591,26 @@ pub fn parse_content_decision(
     let content = parse_json(event)?;
     require_schema(&content, SCHEMA_CONTENT_DECISION)?;
 
-    let verdict_str = required_str(&content, "decision")?;
-    let verdict =
-        DecisionVerdict::parse(&verdict_str).ok_or_else(|| ContentParseError::UnknownVariant {
+    let decision_str = required_str(&content, "decision")?;
+    let decision =
+        DecisionVerdict::parse(&decision_str).ok_or_else(|| ContentParseError::UnknownVariant {
             field: "decision".to_string(),
-            value: verdict_str.clone(),
+            value: decision_str,
         })?;
 
     let raw_target = content
         .get("target")
         .ok_or_else(|| ContentParseError::EmptyField("target".to_string()))?;
-    let gates_pass = raw_target
-        .get("gates_pass")
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| ContentParseError::EmptyField("target.gates_pass".to_string()))?;
-    let image_sha256 =
-        match optional_str_at(raw_target, "image_sha256", "target.image_sha256")? {
-            Some(value) => Some(require_hex64(&value, "target.image_sha256")?),
-            None => None,
-        };
+    let verdict_str = required_str_at(raw_target, "verdict", "target.verdict")?;
+    let verdict =
+        GateVerdict::parse(&verdict_str).ok_or_else(|| ContentParseError::UnknownVariant {
+            field: "target.verdict".to_string(),
+            value: verdict_str,
+        })?;
+    let image_sha256 = match optional_str_at(raw_target, "image_sha256", "target.image_sha256")? {
+        Some(value) => Some(require_sha256(&value, "target.image_sha256")?),
+        None => None,
+    };
 
     let note = optional_str(&content, "note")?;
 
@@ -1095,11 +1619,12 @@ pub fn parse_content_decision(
         Some(raw) => {
             let bin_str = optional_str_at(raw, "bin", "correction.bin")?
                 .ok_or(ContentParseError::CorrectionWithoutBin)?;
-            let bin =
-                CorrectionBin::parse(&bin_str).ok_or_else(|| ContentParseError::UnknownVariant {
+            let bin = CorrectionBin::parse(&bin_str).ok_or_else(|| {
+                ContentParseError::UnknownVariant {
                     field: "correction.bin".to_string(),
-                    value: bin_str.clone(),
-                })?;
+                    value: bin_str,
+                }
+            })?;
             Some(Correction {
                 bin,
                 text: required_str_at(raw, "text", "correction.text")?,
@@ -1107,9 +1632,9 @@ pub fn parse_content_decision(
         }
     };
 
-    match verdict {
+    match decision {
         DecisionVerdict::Approve => {
-            if !gates_pass {
+            if verdict == GateVerdict::Fail {
                 return Err(ContentParseError::ApprovalOfFailedGates);
             }
             if image_sha256.is_none() {
@@ -1126,11 +1651,11 @@ pub fn parse_content_decision(
     }
 
     Ok(ParsedContentDecision {
-        verdict,
+        decision,
         target: DecisionTarget {
             coordinate,
             image_sha256,
-            gates_pass,
+            verdict,
         },
         note,
         correction,
@@ -1154,6 +1679,10 @@ mod tests {
             .expect("sign")
     }
 
+    fn image_hash() -> String {
+        "a".repeat(64)
+    }
+
     // ── dates ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -1173,6 +1702,66 @@ mod tests {
         assert!(require_date("2026-8-17", "f").is_err());
         assert!(require_date("2100-02-29", "f").is_err()); // century, not leap
         assert!(require_date("not-a-date", "f").is_err());
+    }
+
+    #[test]
+    fn require_sha256_accepts_both_spellings() {
+        let bare = "b".repeat(64);
+        assert_eq!(require_sha256(&bare, "f").expect("bare"), bare);
+        assert_eq!(
+            require_sha256(&format!("sha256:{bare}"), "f").expect("prefixed"),
+            bare
+        );
+        assert!(require_sha256("sha256:short", "f").is_err());
+    }
+
+    // ── verdict derivation ────────────────────────────────────────────────
+
+    fn gate(id: &str, status: GateStatus) -> GateResult {
+        GateResult {
+            id: id.to_string(),
+            status,
+            bar: None,
+            measured: None,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn verdict_is_pass_only_when_every_gate_passed() {
+        assert_eq!(
+            GateReport::derived_verdict(&[
+                gate("a", GateStatus::Pass),
+                gate("b", GateStatus::Pass)
+            ]),
+            GateVerdict::Pass
+        );
+    }
+
+    #[test]
+    fn a_skipped_gate_makes_the_report_incomplete_not_passing() {
+        // The failure this prevents: the claims gate does not exist yet, so it
+        // is skipped on every card. If skip collapsed into pass, every card in
+        // the system would read as fully gated while the gate with the most
+        // customer value had never run.
+        assert_eq!(
+            GateReport::derived_verdict(&[
+                gate("contrast", GateStatus::Pass),
+                gate("claims", GateStatus::Skip)
+            ]),
+            GateVerdict::Incomplete
+        );
+    }
+
+    #[test]
+    fn a_failure_outranks_a_skip() {
+        assert_eq!(
+            GateReport::derived_verdict(&[
+                gate("contrast", GateStatus::Fail),
+                gate("claims", GateStatus::Skip)
+            ]),
+            GateVerdict::Fail
+        );
     }
 
     // ── campaign ──────────────────────────────────────────────────────────
@@ -1257,86 +1846,156 @@ mod tests {
 
     // ── post ──────────────────────────────────────────────────────────────
 
-    fn full_gates() -> serde_json::Value {
-        serde_json::json!({
-            "contrast": { "pass": true, "measured": 6.5, "bar": 4.5 },
-            "grain":    { "pass": true, "measured": 1.4, "bar": [0.5, 2.5] },
-            "fonts":    { "pass": true },
-            "canvas":   { "pass": true, "measured": "1080x1350" },
-            "claims":   { "pass": true, "measured": "4/4" }
-        })
+    /// Shaped after the real report in `PLANS/CONTENT_RECORD_SCHEMAS.md`.
+    fn gate_list(claims_status: &str) -> serde_json::Value {
+        serde_json::json!([
+            {
+                "id": "contrast",
+                "status": "pass",
+                "bar": { "op": "gte", "value": 4.5, "unit": "ratio" },
+                "measured": 8.18,
+                "detail": { "worst": { "label": "wordmark", "ratio": 8.18, "rawRatio": 7.73 } }
+            },
+            {
+                "id": "grain",
+                "status": "pass",
+                "bar": { "op": "between", "min": 0.5, "max": 3.5, "unit": "rms" },
+                "measured": 1.89,
+                "detail": { "grain": 1.89, "band": 0.7 }
+            },
+            { "id": "fonts", "status": "pass", "bar": { "op": "equals", "value": 0, "unit": "fallbacks" }, "measured": 0 },
+            { "id": "canvas", "status": "pass", "bar": { "op": "equals", "value": [1080, 1350], "unit": "px" }, "measured": [1080, 1350] },
+            { "id": "housestyle", "status": "pass", "bar": { "op": "equals", "value": 0, "unit": "violations" }, "measured": 0 },
+            { "id": "claims", "status": claims_status, "measured": null, "detail": { "reason": "no claim index in this render" } }
+        ])
     }
 
-    fn post_json(status: &str, gates: serde_json::Value, image: bool) -> String {
+    fn post_body(status: &str, gates: Option<serde_json::Value>, image: bool) -> serde_json::Value {
         let mut body = serde_json::json!({
             "schema": SCHEMA_CONTENT_POST,
             "week": 1,
             "scheduled_for": "2026-08-17",
             "job": "who",
             "channel": "linkedin",
-            "template": "statement",
+            "style_version": "colony-launch/3",
+            "style": { "family": "dawn", "hues": ["violet", "pink"], "layout": "wordmark" },
             "headline": "Run your company with AI agents.",
             "caption": "Most AI tools give you a faster way to do your own work.",
             "alt": "A violet card reading: Run your company with AI agents.",
             "hashtags": ["#AI", "agents"],
             "claims": [{
-                "id": "apache",
-                "text": "The repo is public under Apache 2.0.",
+                "id": "clm_hero_h1",
+                "asserts": "Run your company with AI agents.",
+                "kind": "verbatim",
                 "source": {
-                    "kind": "repo",
-                    "locator": "LICENSE:1",
-                    "excerpt": "Apache License, Version 2.0"
+                    "type": "repo",
+                    "repo": "github.com/AI-Native-Ventures/Colony",
+                    "path": "site/src/sections/Hero.tsx",
+                    "line": 42,
+                    "rev": "a1b2c3d"
                 }
             }],
-            "gates": gates,
+            "claim_fields": { "headline": ["clm_hero_h1"], "alt": [] },
             "status": status
         });
         if image {
             body["image"] = serde_json::json!({
                 "url": "https://example.test/media/abc.png",
-                "sha256": "a".repeat(64),
+                "sha256": image_hash(),
                 "width": 1080,
                 "height": 1350
             });
         }
-        body.to_string()
+        if let Some(gates) = gates {
+            body["gate_report"] = serde_json::json!({
+                "image_hash": format!("sha256:{}", image_hash()),
+                "rendered_at": "2026-08-16T15:40:12Z",
+                "renderer": { "engine": "chromium", "version": "129.0.6668.29" },
+                "style_version": "colony-launch/3",
+                "gates": gates
+            });
+        }
+        body
     }
 
-    fn post_event(status: &str, gates: serde_json::Value, image: bool) -> nostr::Event {
+    fn post_event_from(body: serde_json::Value) -> nostr::Event {
         sign(
             KIND_CONTENT_POST,
             vec![t(&["d", "colony-launch:w1-mon-colony"])],
-            &post_json(status, gates, image),
+            &body.to_string(),
         )
     }
 
-    #[test]
-    fn ready_post_round_trips() {
-        let parsed = parse_content_post(&post_event("ready", full_gates(), true)).expect("parse");
-        assert_eq!(parsed.campaign, "colony-launch");
-        assert_eq!(parsed.slug, "w1-mon-colony");
-        assert_eq!(parsed.week, 1);
-        assert_eq!(parsed.status, PostStatus::Ready);
-        assert_eq!(parsed.hashtags, vec!["AI", "agents"]);
-        assert!(parsed.gates_pass());
-        assert_eq!(parsed.claims[0].source.as_ref().expect("source").kind, ClaimSourceKind::Repo);
+    fn post_event(status: &str, gates: Option<serde_json::Value>, image: bool) -> nostr::Event {
+        post_event_from(post_body(status, gates, image))
     }
 
     #[test]
-    fn ready_post_requires_an_image() {
+    fn a_ready_post_round_trips_with_the_real_report_shape() {
+        let parsed =
+            parse_content_post(&post_event("ready", Some(gate_list("skip")), true)).expect("parse");
+        assert_eq!(parsed.campaign, "colony-launch");
+        assert_eq!(parsed.slug, "w1-mon-colony");
+        assert_eq!(parsed.job.as_deref(), Some("who"));
+        assert_eq!(parsed.hashtags, vec!["AI", "agents"]);
+        assert_eq!(parsed.style_version.as_deref(), Some("colony-launch/3"));
+
+        // Ten launch cards have no claims gate, so the honest verdict is
+        // incomplete, and the card is emphatically not "fully gated".
+        assert_eq!(parsed.verdict(), Some(GateVerdict::Incomplete));
+        assert!(!parsed.fully_gated());
+
+        let report = parsed.gate_report.as_ref().expect("report");
+        assert_eq!(report.image_hash, image_hash());
         assert_eq!(
-            parse_content_post(&post_event("ready", full_gates(), false)),
-            Err(ContentParseError::ReadyWithoutImage)
+            report.gate("contrast").expect("contrast").measured,
+            Some(serde_json::json!(8.18))
         );
     }
 
     #[test]
-    fn ready_post_requires_every_gate() {
+    fn a_fully_measured_post_reports_pass() {
+        let parsed =
+            parse_content_post(&post_event("ready", Some(gate_list("pass")), true)).expect("parse");
+        assert_eq!(parsed.verdict(), Some(GateVerdict::Pass));
+        assert!(parsed.fully_gated());
+    }
+
+    #[test]
+    fn ready_requires_an_image() {
+        assert_eq!(
+            parse_content_post(&post_event("ready", Some(gate_list("skip")), false)),
+            // No image means the report has nothing to bind to, and that is
+            // caught before the ready check.
+            Err(ContentParseError::ReportWithoutImage)
+        );
+    }
+
+    #[test]
+    fn ready_requires_a_gate_report() {
+        assert_eq!(
+            parse_content_post(&post_event("ready", None, true)),
+            Err(ContentParseError::ReadyWithoutReport)
+        );
+    }
+
+    #[test]
+    fn ready_requires_every_gate_to_be_reported() {
         for missing in REQUIRED_GATES {
-            let mut gates = full_gates();
-            gates.as_object_mut().expect("object").remove(*missing);
+            let gates = gate_list("skip");
+            let kept: Vec<serde_json::Value> = gates
+                .as_array()
+                .expect("array")
+                .iter()
+                .filter(|g| g.get("id").and_then(|v| v.as_str()) != Some(*missing))
+                .cloned()
+                .collect();
             assert_eq!(
-                parse_content_post(&post_event("ready", gates, true)),
+                parse_content_post(&post_event(
+                    "ready",
+                    Some(serde_json::Value::Array(kept)),
+                    true
+                )),
                 Err(ContentParseError::ReadyMissingGate((*missing).to_string())),
                 "gate {missing} must be required"
             );
@@ -1344,36 +2003,155 @@ mod tests {
     }
 
     #[test]
-    fn ready_post_rejects_a_failing_gate() {
-        let mut gates = full_gates();
-        gates["contrast"] = serde_json::json!({ "pass": false, "measured": 2.7, "bar": 4.5 });
+    fn ready_rejects_a_failing_gate() {
+        let mut gates = gate_list("skip");
+        gates[0]["status"] = serde_json::json!("fail");
+        gates[0]["measured"] = serde_json::json!(2.7);
         assert_eq!(
-            parse_content_post(&post_event("ready", gates, true)),
+            parse_content_post(&post_event("ready", Some(gates), true)),
             Err(ContentParseError::ReadyFailedGate("contrast".to_string()))
         );
     }
 
     #[test]
-    fn ready_post_rejects_an_unsourced_claim() {
-        let mut body: serde_json::Value =
-            serde_json::from_str(&post_json("ready", full_gates(), true)).expect("json");
+    fn ready_rejects_an_unsourced_claim() {
+        let mut body = post_body("ready", Some(gate_list("skip")), true);
         body["claims"][0]
             .as_object_mut()
             .expect("object")
             .remove("source");
-        let event = sign(
-            KIND_CONTENT_POST,
-            vec![t(&["d", "colony-launch:w1-mon-colony"])],
-            &body.to_string(),
-        );
         assert_eq!(
-            parse_content_post(&event),
-            Err(ContentParseError::ReadyUnsourcedClaim("apache".to_string()))
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::ReadyUnsourcedClaim(
+                "clm_hero_h1".to_string()
+            ))
         );
     }
 
     #[test]
-    fn draft_post_may_be_unfinished() {
+    fn a_report_measuring_other_bytes_is_refused() {
+        // The stale-report hole: re-render the card, keep the old passing
+        // report, and every reader believes gates that never saw these pixels.
+        let mut body = post_body("ready", Some(gate_list("pass")), true);
+        body["image"]["sha256"] = serde_json::json!("c".repeat(64));
+        assert!(matches!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::ReportImageMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_report_declaring_a_verdict_its_gates_contradict_is_refused() {
+        let mut body = post_body("draft", Some(gate_list("skip")), true);
+        body["gate_report"]["verdict"] = serde_json::json!("pass");
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::VerdictDisagreesWithGates {
+                declared: "pass",
+                derived: "incomplete",
+            })
+        );
+    }
+
+    #[test]
+    fn a_report_agreeing_with_its_gates_is_accepted() {
+        let mut body = post_body("ready", Some(gate_list("skip")), true);
+        body["gate_report"]["verdict"] = serde_json::json!("incomplete");
+        assert_eq!(
+            parse_content_post(&post_event_from(body))
+                .expect("parse")
+                .verdict(),
+            Some(GateVerdict::Incomplete)
+        );
+    }
+
+    #[test]
+    fn a_field_citing_an_undefined_claim_is_refused() {
+        let mut body = post_body("draft", None, false);
+        body["claim_fields"]["caption"] = serde_json::json!(["clm_does_not_exist"]);
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::UndefinedClaimReference {
+                field: "caption".to_string(),
+                claim: "clm_does_not_exist".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_claim_ids_are_refused() {
+        let mut body = post_body("draft", None, false);
+        let claim = body["claims"][0].clone();
+        body["claims"] = serde_json::json!([claim.clone(), claim]);
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::DuplicateClaim("clm_hero_h1".to_string()))
+        );
+    }
+
+    #[test]
+    fn duplicate_gate_ids_are_refused() {
+        let mut body = post_body("draft", Some(gate_list("skip")), true);
+        let gates = body["gate_report"]["gates"]
+            .as_array()
+            .expect("array")
+            .clone();
+        let mut doubled = gates.clone();
+        doubled.push(gates[0].clone());
+        body["gate_report"]["gates"] = serde_json::Value::Array(doubled);
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::DuplicateGate("contrast".to_string()))
+        );
+    }
+
+    #[test]
+    fn all_three_claim_source_arms_parse() {
+        let page = parse_claim(&serde_json::json!({
+            "id": "clm_page",
+            "asserts": "Colony launches on Monday.",
+            "kind": "trim",
+            "source": { "type": "page", "url": "https://colony.ainative.ventures", "selector": "h1" }
+        }))
+        .expect("page");
+        assert!(page.source.as_ref().expect("source").is_fetch_verifiable());
+
+        let repo = parse_claim(&serde_json::json!({
+            "id": "clm_repo",
+            "asserts": "Apache 2.0",
+            "kind": "derived",
+            "source": { "type": "repo", "path": "LICENSE", "line": 1 }
+        }))
+        .expect("repo");
+        assert!(repo.source.as_ref().expect("source").is_fetch_verifiable());
+
+        // The arm that makes this work for a business with no public evidence:
+        // an unverifiable claim becomes an attributable one.
+        let owner = parse_claim(&serde_json::json!({
+            "id": "clm_insured",
+            "asserts": "Fully insured.",
+            "kind": "derived",
+            "source": { "type": "owner", "event": "d".repeat(64), "said_at": 1_755_000_000 }
+        }))
+        .expect("owner");
+        assert!(!owner.source.as_ref().expect("source").is_fetch_verifiable());
+    }
+
+    #[test]
+    fn an_unknown_claim_source_type_is_refused() {
+        assert!(matches!(
+            parse_claim(&serde_json::json!({
+                "id": "clm_x",
+                "asserts": "x",
+                "kind": "verbatim",
+                "source": { "type": "vibes" }
+            })),
+            Err(ContentParseError::UnknownVariant { .. })
+        ));
+    }
+
+    #[test]
+    fn a_draft_post_may_be_unfinished() {
         // The whole point of draft: no image, no gates, no sources, still stored.
         let event = sign(
             KIND_CONTENT_POST,
@@ -1389,52 +2167,33 @@ mod tests {
         );
         let parsed = parse_content_post(&event).expect("parse");
         assert_eq!(parsed.status, PostStatus::Draft);
-        assert!(!parsed.gates_pass());
+        assert_eq!(parsed.verdict(), None);
+        assert!(!parsed.fully_gated());
         assert!(parsed.image.is_none());
     }
 
     #[test]
-    fn post_defaults_to_draft_when_status_absent() {
-        let mut body: serde_json::Value =
-            serde_json::from_str(&post_json("ready", full_gates(), true)).expect("json");
+    fn a_post_defaults_to_draft_when_status_is_absent() {
+        let mut body = post_body("ready", Some(gate_list("skip")), true);
         body.as_object_mut().expect("object").remove("status");
-        let event = sign(
-            KIND_CONTENT_POST,
-            vec![t(&["d", "colony-launch:w1-mon-colony"])],
-            &body.to_string(),
-        );
         assert_eq!(
-            parse_content_post(&event).expect("parse").status,
+            parse_content_post(&post_event_from(body))
+                .expect("parse")
+                .status,
             PostStatus::Draft
         );
     }
 
     #[test]
-    fn post_rejects_an_address_without_a_campaign() {
+    fn a_post_address_without_a_campaign_is_refused() {
         let event = sign(
             KIND_CONTENT_POST,
             vec![t(&["d", "w1-mon-colony"])],
-            &post_json("draft", full_gates(), true),
+            &post_body("draft", None, false).to_string(),
         );
         assert!(matches!(
             parse_content_post(&event),
             Err(ContentParseError::InvalidSlug { .. })
-        ));
-    }
-
-    #[test]
-    fn post_rejects_a_short_image_hash() {
-        let mut body: serde_json::Value =
-            serde_json::from_str(&post_json("ready", full_gates(), true)).expect("json");
-        body["image"]["sha256"] = serde_json::json!("abc");
-        let event = sign(
-            KIND_CONTENT_POST,
-            vec![t(&["d", "colony-launch:w1-mon-colony"])],
-            &body.to_string(),
-        );
-        assert!(matches!(
-            parse_content_post(&event),
-            Err(ContentParseError::InvalidHex { .. })
         ));
     }
 
@@ -1448,6 +2207,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assets_carry_the_fictional_flag() {
+        let mut body = post_body("draft", None, false);
+        body["assets"] = serde_json::json!([
+            { "path": "shots/tender.png", "kind": "screenshot", "fictional": true }
+        ]);
+        let parsed = parse_content_post(&post_event_from(body)).expect("parse");
+        assert!(parsed.assets[0].fictional);
+    }
+
     // ── style ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -1457,6 +2226,7 @@ mod tests {
             vec![t(&["d", "house"])],
             &serde_json::json!({
                 "schema": SCHEMA_CONTENT_STYLE,
+                "version": "colony-launch/3",
                 "rules": [
                     {
                         "id": "no-opens-monday",
@@ -1477,10 +2247,14 @@ mod tests {
         );
         let parsed = parse_content_style(&event).expect("parse");
         assert_eq!(parsed.scope, "house");
+        assert_eq!(parsed.version.as_deref(), Some("colony-launch/3"));
         assert_eq!(parsed.rules.len(), 2);
         assert!(parsed.rules[0].active);
         assert!(!parsed.rules[1].active);
-        assert_eq!(parsed.settings.get("grain").and_then(|v| v.as_f64()), Some(1.4));
+        assert_eq!(
+            parsed.settings.get("grain").and_then(|v| v.as_f64()),
+            Some(1.4)
+        );
     }
 
     #[test]
@@ -1501,7 +2275,7 @@ mod tests {
     }
 
     #[test]
-    fn style_rule_defaults_to_active() {
+    fn a_style_rule_defaults_to_active() {
         let event = sign(
             KIND_CONTENT_STYLE,
             vec![t(&["d", "house"])],
@@ -1521,7 +2295,10 @@ mod tests {
     // ── decision ──────────────────────────────────────────────────────────
 
     fn coordinate() -> String {
-        format!("{KIND_CONTENT_POST}:{}:colony-launch:w1-mon-colony", "b".repeat(64))
+        format!(
+            "{KIND_CONTENT_POST}:{}:colony-launch:w1-mon-colony",
+            "b".repeat(64)
+        )
     }
 
     fn decision_event(body: serde_json::Value) -> nostr::Event {
@@ -1533,37 +2310,51 @@ mod tests {
     }
 
     #[test]
-    fn approval_round_trips() {
+    fn an_approval_round_trips() {
         let parsed = parse_content_decision(&decision_event(serde_json::json!({
             "schema": SCHEMA_CONTENT_DECISION,
             "decision": "approve",
-            "target": { "image_sha256": "a".repeat(64), "gates_pass": true }
+            "target": { "image_sha256": image_hash(), "verdict": "pass" }
         })))
         .expect("parse");
-        assert_eq!(parsed.verdict, DecisionVerdict::Approve);
-        assert!(parsed.target.gates_pass);
-        assert_eq!(parsed.target.image_sha256, Some("a".repeat(64)));
+        assert_eq!(parsed.decision, DecisionVerdict::Approve);
+        assert_eq!(parsed.target.verdict, GateVerdict::Pass);
+        assert_eq!(parsed.target.image_sha256, Some(image_hash()));
     }
 
     #[test]
-    fn approval_of_failing_gates_is_rejected() {
+    fn an_incomplete_card_may_still_be_approved() {
+        // The owner taking responsibility for a claim nothing checked is a
+        // decision they are allowed to make. What they may not do is make it
+        // without it being on the record, which is why the verdict is stored.
+        let parsed = parse_content_decision(&decision_event(serde_json::json!({
+            "schema": SCHEMA_CONTENT_DECISION,
+            "decision": "approve",
+            "target": { "image_sha256": image_hash(), "verdict": "incomplete" }
+        })))
+        .expect("parse");
+        assert_eq!(parsed.target.verdict, GateVerdict::Incomplete);
+    }
+
+    #[test]
+    fn an_approval_of_a_failing_report_is_refused() {
         assert_eq!(
             parse_content_decision(&decision_event(serde_json::json!({
                 "schema": SCHEMA_CONTENT_DECISION,
                 "decision": "approve",
-                "target": { "image_sha256": "a".repeat(64), "gates_pass": false }
+                "target": { "image_sha256": image_hash(), "verdict": "fail" }
             }))),
             Err(ContentParseError::ApprovalOfFailedGates)
         );
     }
 
     #[test]
-    fn approval_must_name_the_image_it_approves() {
+    fn an_approval_must_name_the_image_it_approves() {
         assert_eq!(
             parse_content_decision(&decision_event(serde_json::json!({
                 "schema": SCHEMA_CONTENT_DECISION,
                 "decision": "approve",
-                "target": { "gates_pass": true }
+                "target": { "verdict": "pass" }
             }))),
             Err(ContentParseError::EmptyField(
                 "target.image_sha256".to_string()
@@ -1572,16 +2363,16 @@ mod tests {
     }
 
     #[test]
-    fn change_request_carries_a_note_and_a_bin() {
+    fn a_change_request_carries_a_note_and_a_bin() {
         let parsed = parse_content_decision(&decision_event(serde_json::json!({
             "schema": SCHEMA_CONTENT_DECISION,
             "decision": "change",
-            "target": { "gates_pass": false },
+            "target": { "verdict": "fail" },
             "note": "Nobody says opens Monday.",
             "correction": { "bin": "rule", "text": "Never write 'opens Monday'." }
         })))
         .expect("parse");
-        assert_eq!(parsed.verdict, DecisionVerdict::Change);
+        assert_eq!(parsed.decision, DecisionVerdict::Change);
         assert_eq!(
             parsed.correction.expect("correction").bin,
             CorrectionBin::Rule
@@ -1589,26 +2380,29 @@ mod tests {
     }
 
     #[test]
-    fn change_request_without_a_note_or_correction_is_rejected() {
+    fn a_change_request_without_a_note_or_correction_is_refused() {
         assert_eq!(
             parse_content_decision(&decision_event(serde_json::json!({
                 "schema": SCHEMA_CONTENT_DECISION,
                 "decision": "change",
-                "target": { "gates_pass": true }
+                "target": { "verdict": "pass" }
             }))),
             Err(ContentParseError::ChangeWithoutNote)
         );
     }
 
     #[test]
-    fn decision_must_address_a_post() {
+    fn a_decision_must_address_a_post() {
         let event = sign(
             KIND_CONTENT_DECISION,
-            vec![t(&["a", &format!("{KIND_CONTENT_CAMPAIGN}:abc:colony-launch")])],
+            vec![t(&[
+                "a",
+                &format!("{KIND_CONTENT_CAMPAIGN}:abc:colony-launch"),
+            ])],
             &serde_json::json!({
                 "schema": SCHEMA_CONTENT_DECISION,
                 "decision": "approve",
-                "target": { "image_sha256": "a".repeat(64), "gates_pass": true }
+                "target": { "image_sha256": image_hash(), "verdict": "pass" }
             })
             .to_string(),
         );
@@ -1619,14 +2413,14 @@ mod tests {
     }
 
     #[test]
-    fn decision_without_a_target_tag_is_rejected() {
+    fn a_decision_without_a_target_tag_is_refused() {
         let event = sign(
             KIND_CONTENT_DECISION,
             vec![],
             &serde_json::json!({
                 "schema": SCHEMA_CONTENT_DECISION,
                 "decision": "approve",
-                "target": { "image_sha256": "a".repeat(64), "gates_pass": true }
+                "target": { "image_sha256": image_hash(), "verdict": "pass" }
             })
             .to_string(),
         );
@@ -1637,12 +2431,12 @@ mod tests {
     }
 
     #[test]
-    fn correction_bin_must_be_known() {
+    fn a_correction_bin_must_be_known() {
         assert!(matches!(
             parse_content_decision(&decision_event(serde_json::json!({
                 "schema": SCHEMA_CONTENT_DECISION,
                 "decision": "change",
-                "target": { "gates_pass": false },
+                "target": { "verdict": "fail" },
                 "note": "n",
                 "correction": { "bin": "forever", "text": "x" }
             }))),

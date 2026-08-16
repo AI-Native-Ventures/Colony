@@ -15,7 +15,7 @@ use nostr::{EventBuilder, Kind, Tag};
 
 use buzz_core::content::{
     parse_content_campaign, parse_content_decision, parse_content_post, parse_content_style,
-    post_address, ParsedContentPost, SCHEMA_CONTENT_CAMPAIGN, SCHEMA_CONTENT_DECISION,
+    post_address, GateVerdict, ParsedContentPost, SCHEMA_CONTENT_CAMPAIGN, SCHEMA_CONTENT_DECISION,
     SCHEMA_CONTENT_POST, SCHEMA_CONTENT_STYLE,
 };
 use buzz_core::kind::{
@@ -64,9 +64,9 @@ fn apply_schema(
     mut body: serde_json::Value,
     schema: &'static str,
 ) -> Result<serde_json::Value, CliError> {
-    let object = body.as_object_mut().ok_or_else(|| {
-        CliError::Usage("the --data document must be a JSON object".to_string())
-    })?;
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| CliError::Usage("the --data document must be a JSON object".to_string()))?;
     match object.get("schema").and_then(|v| v.as_str()) {
         None => {
             object.insert("schema".to_string(), serde_json::json!(schema));
@@ -110,11 +110,7 @@ fn validation_error(error: impl std::fmt::Display) -> CliError {
 
 // ── campaigns ─────────────────────────────────────────────────────────────
 
-async fn cmd_campaign_set(
-    client: &BuzzClient,
-    id: &str,
-    data: &str,
-) -> Result<(), CliError> {
+async fn cmd_campaign_set(client: &BuzzClient, id: &str, data: &str) -> Result<(), CliError> {
     let body = apply_schema(read_json_arg(data)?, SCHEMA_CONTENT_CAMPAIGN)?;
     let builder = EventBuilder::new(Kind::Custom(KIND_CONTENT_CAMPAIGN as u16), body.to_string())
         .tags(vec![tag(&["d", id])?]);
@@ -150,7 +146,9 @@ async fn cmd_post_set(
     let builder = EventBuilder::new(Kind::Custom(KIND_CONTENT_POST as u16), body.to_string())
         .tags(vec![tag(&["d", &address])?]);
     submit(client, builder, |event| {
-        parse_content_post(event).map(|_| ()).map_err(validation_error)
+        parse_content_post(event)
+            .map(|_| ())
+            .map_err(validation_error)
     })
     .await
 }
@@ -162,9 +160,7 @@ async fn cmd_post_list(client: &BuzzClient, campaign: Option<&str>) -> Result<()
     let mut heads = newest_heads(events);
     if let Some(campaign) = campaign {
         let prefix = format!("{campaign}:");
-        heads.retain(|event| {
-            crate::client::extract_d_tag(event).starts_with(&prefix)
-        });
+        heads.retain(|event| crate::client::extract_d_tag(event).starts_with(&prefix));
     }
     println!(
         "{}",
@@ -242,7 +238,11 @@ async fn cmd_decide(
         post_address(campaign, slug)
     );
 
-    let mut target = serde_json::json!({ "gates_pass": parsed.gates_pass() });
+    // A post with no gate report has had nothing measured, which is exactly
+    // what `incomplete` means. Reporting it as anything else would let an
+    // unrendered card be approved as though its gates had run.
+    let verdict = parsed.verdict().unwrap_or(GateVerdict::Incomplete);
+    let mut target = serde_json::json!({ "verdict": verdict.as_str() });
     if let Some(image) = &parsed.image {
         target["image_sha256"] = serde_json::json!(image.sha256);
     }
@@ -329,9 +329,7 @@ fn newest_heads(events: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
             None => heads.push(event),
         }
     }
-    heads.sort_by(|a, b| {
-        crate::client::extract_d_tag(a).cmp(&crate::client::extract_d_tag(b))
-    });
+    heads.sort_by(|a, b| crate::client::extract_d_tag(a).cmp(&crate::client::extract_d_tag(b)));
     heads
 }
 
@@ -375,7 +373,12 @@ pub async fn dispatch(cmd: crate::ContentCmd, client: &BuzzClient) -> Result<(),
         ContentCmd::PostList { campaign } => cmd_post_list(client, campaign.as_deref()).await,
         ContentCmd::PostGet { campaign, slug } => cmd_post_get(client, &campaign, &slug).await,
         ContentCmd::StyleSet { scope, data } => {
-            cmd_style_set(client, scope.as_deref().unwrap_or(DEFAULT_STYLE_SCOPE), &data).await
+            cmd_style_set(
+                client,
+                scope.as_deref().unwrap_or(DEFAULT_STYLE_SCOPE),
+                &data,
+            )
+            .await
         }
         ContentCmd::StyleGet { scope } => {
             cmd_style_get(client, scope.as_deref().unwrap_or(DEFAULT_STYLE_SCOPE)).await
