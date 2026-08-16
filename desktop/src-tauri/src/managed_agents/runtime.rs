@@ -133,11 +133,10 @@ fn persona_drift_state(
     (out_of_date, false)
 }
 
-/// Resolve the runtime-pair key this record maps to for the active
-/// workspace: always the active workspace relay (the legacy per-record relay
-/// pin is ignored — see `effective_agent_relay_url`). Returns `None` for
-/// records that cannot form a valid pair key yet (e.g. key-less agents that
-/// mint keys on first start).
+/// Resolve the runtime-pair key this record maps to: its own community's
+/// relay when pinned, the active workspace relay when not (see
+/// `effective_agent_relay_url`). Returns `None` for records that cannot form a
+/// valid pair key yet (e.g. key-less agents that mint keys on first start).
 pub(crate) fn workspace_pair_key(
     app: &AppHandle,
     record: &ManagedAgentRecord,
@@ -151,9 +150,9 @@ pub(crate) fn workspace_pair_key(
     )
 }
 
-/// Pure core of [`workspace_pair_key`]: workspace-relay resolution (legacy
-/// record pins ignored) plus canonical key construction, kept `AppHandle`-free
-/// so summary/stop scoping semantics are unit-testable.
+/// Pure core of [`workspace_pair_key`]: pin-first relay resolution plus
+/// canonical key construction, kept `AppHandle`-free so summary/stop scoping
+/// semantics are unit-testable.
 pub(crate) fn resolve_workspace_pair_key(
     pubkey: &str,
     record_relay_url: &str,

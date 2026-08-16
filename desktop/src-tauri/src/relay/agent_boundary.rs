@@ -22,7 +22,7 @@
 /// and pair logs show they genuinely ran in several communities, so there is
 /// no honest value to infer. Those fall back to the workspace relay (the
 /// pre-existing behavior) rather than silently refusing to run. Assigning one
-/// is an explicit user action; see `assign_managed_agent_community`.
+/// is an explicit user action; see `assign_managed_agents_to_community`.
 ///
 /// Uniform for both Local and Provider backends.
 pub fn effective_agent_relay_url(record_relay: &str, workspace_relay: &str) -> String {
@@ -50,13 +50,27 @@ pub fn agent_belongs_to_workspace(record_relay: &str, workspace_relay: &str) -> 
     canonical(pinned) == canonical(workspace_relay)
 }
 
+/// The `relay_url` a newly minted agent record should carry.
+///
+/// An explicit value wins (snapshot import and tests supply one); otherwise
+/// the community being created in becomes the pin. Every new agent is born
+/// assigned, so the unassigned state is strictly a legacy population that
+/// shrinks to zero rather than something the app keeps producing.
+pub fn creation_relay_pin(explicit: Option<&str>, workspace_relay: &str) -> String {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| workspace_relay.to_string())
+}
+
 fn canonical(url: &str) -> String {
     buzz_core_pkg::relay::normalize_relay_url(url).unwrap_or_else(|_| url.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_belongs_to_workspace, effective_agent_relay_url};
+    use super::{agent_belongs_to_workspace, creation_relay_pin, effective_agent_relay_url};
 
     // ── effective_agent_relay_url: community boundary ────────────────────────
 
@@ -126,5 +140,43 @@ mod tests {
         // Until the user assigns it, an unpinned agent keeps its old behavior.
         assert!(agent_belongs_to_workspace("", "wss://one.example.com"));
         assert!(agent_belongs_to_workspace("  ", "wss://two.example.com"));
+    }
+
+    // ── creation_relay_pin ───────────────────────────────────────────────────
+
+    #[test]
+    fn new_agent_is_pinned_to_the_community_it_was_created_in() {
+        // The bug this closes: a blank pin at mint time is what made one
+        // record show up in every community's roster.
+        assert_eq!(
+            creation_relay_pin(None, "wss://one.example.com"),
+            "wss://one.example.com"
+        );
+        assert_eq!(
+            creation_relay_pin(Some("   "), "wss://one.example.com"),
+            "wss://one.example.com"
+        );
+    }
+
+    #[test]
+    fn explicit_creation_pin_wins() {
+        // Snapshot import and tests carry the pin the record already had.
+        assert_eq!(
+            creation_relay_pin(Some("wss://two.example.com"), "wss://one.example.com"),
+            "wss://two.example.com"
+        );
+        assert_eq!(
+            creation_relay_pin(Some("  wss://two.example.com  "), "wss://one.example.com"),
+            "wss://two.example.com"
+        );
+    }
+
+    #[test]
+    fn a_freshly_created_agent_belongs_to_its_own_community_only() {
+        // The two functions have to agree, or an agent is invisible in the
+        // community that just created it.
+        let pin = creation_relay_pin(None, "wss://one.example.com");
+        assert!(agent_belongs_to_workspace(&pin, "wss://one.example.com"));
+        assert!(!agent_belongs_to_workspace(&pin, "wss://two.example.com"));
     }
 }

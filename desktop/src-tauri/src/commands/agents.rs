@@ -464,8 +464,17 @@ pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSumma
         // not re-read it per record.
         let global_config =
             crate::managed_agents::load_global_agent_config(&app).unwrap_or_default();
+        // A community is a hard boundary, and the roster is where you see it.
+        // Sync above still runs over every record so a process started in
+        // another community is still reaped here; only what is *shown* is
+        // scoped. Unassigned records (blank pin) belong to whoever is asking
+        // and still appear everywhere — see `agent_belongs_to_workspace`.
+        let workspace_relay = crate::relay::relay_ws_url_with_override(&state);
         records
             .iter()
+            .filter(|record| {
+                crate::relay::agent_belongs_to_workspace(&record.relay_url, &workspace_relay)
+            })
             .map(|record| {
                 build_managed_agent_summary(&app, record, &runtimes, &personas, &global_config)
             })
@@ -554,15 +563,17 @@ pub(crate) async fn create_managed_agent_with_creation_request(
             .to_bech32()
             .map_err(|error| format!("failed to encode private key: {error}"))?;
 
-        // Store the relay override exactly as supplied (trimmed). An explicit
-        // value pins the agent; empty stays empty and resolves to the active
-        // workspace relay at read-time. Uniform for Local and Provider.
-        let resolved_relay_url = input
-            .relay_url
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string();
+        // Pin the agent to the community it is being created in. An explicit
+        // input wins (snapshot import and tests supply one); otherwise the
+        // active workspace relay is the pin. Writing it at mint time is what
+        // keeps the boundary from needing a guess later: a record with no pin
+        // has nothing on disk saying where it belongs, and that is exactly the
+        // state the pre-boundary builds left behind. Uniform for Local and
+        // Provider.
+        let resolved_relay_url = crate::relay::creation_relay_pin(
+            input.relay_url.as_deref(),
+            &relay_ws_url_with_override(state),
+        );
 
         (keys, private_key_nsec, pubkey, resolved_relay_url, input)
     };

@@ -57,7 +57,9 @@ pub fn relay_api_base_url_with_override(state: &AppState) -> String {
 // ── Agent community boundary ────────────────────────────────────────────────
 
 mod agent_boundary;
-pub use agent_boundary::{agent_belongs_to_workspace, effective_agent_relay_url};
+pub use agent_boundary::{
+    agent_belongs_to_workspace, creation_relay_pin, effective_agent_relay_url,
+};
 
 pub fn relay_http_base_url(relay_url: &str) -> String {
     let trimmed = relay_url.trim().trim_end_matches('/');
