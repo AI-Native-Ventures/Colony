@@ -992,16 +992,17 @@ fn unpinned_record_resolves_pair_key_per_workspace() {
     let key_a = super::resolve_workspace_pair_key(&pubkey, "", "wss://one.example").unwrap();
     let key_b = super::resolve_workspace_pair_key(&pubkey, "", "wss://two.example").unwrap();
 
+    assert_eq!(key_a.relay_url, "wss://one.example");
+    assert_eq!(key_b.relay_url, "wss://two.example");
     let runtimes = std::collections::HashMap::from([(key_a.clone(), ())]);
     assert!(runtimes.contains_key(&key_a));
     assert!(!runtimes.contains_key(&key_b));
 }
 
 #[test]
-fn stored_relay_pin_is_ignored_in_pair_key_resolution() {
-    // Legacy pins are ignored (#2122): a record carrying a creation-era
-    // `relay_url` resolves the same per-workspace pair key an unpinned record
-    // does, so summaries/stop act on the community being viewed.
+fn stored_relay_pin_resolves_to_one_pair_key_whatever_is_open() {
+    // A pinned record has exactly one pair, in its own community. A second key
+    // minted per open workspace is what let one agent run in several at once.
     let pubkey = "aa".repeat(32);
     let from_a =
         super::resolve_workspace_pair_key(&pubkey, "wss://pinned.example", "wss://one.example")
@@ -1009,9 +1010,8 @@ fn stored_relay_pin_is_ignored_in_pair_key_resolution() {
     let from_b =
         super::resolve_workspace_pair_key(&pubkey, "wss://pinned.example", "wss://two.example")
             .unwrap();
-    assert_ne!(from_a, from_b);
-    assert_eq!(from_a.relay_url, "wss://one.example");
-    assert_eq!(from_b.relay_url, "wss://two.example");
+    assert_eq!(from_a, from_b);
+    assert_eq!(from_a.relay_url, "wss://pinned.example");
 }
 
 #[test]

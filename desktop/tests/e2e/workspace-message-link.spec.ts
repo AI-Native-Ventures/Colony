@@ -50,3 +50,40 @@ test("opens the first safe message link in the channel workspace browser", async
     "https://docs.example.com/guide",
   );
 });
+
+test("clicking a message link opens that link in the workspace browser", async ({
+  page,
+}) => {
+  await installMockBridge(page);
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await waitForSubscription(page);
+
+  const message = await page.evaluate(
+    ({ pubkey }) =>
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content:
+          "First https://docs.example.com/guide, then [the second](https://second.example.com/page).",
+        pubkey,
+        createdAt: Math.floor(Date.now() / 1000) + 60,
+      }),
+    { pubkey: TEST_IDENTITIES.alice.pubkey },
+  );
+  if (!message) throw new Error("Mock message emitter is unavailable");
+
+  const row = page.locator(`[data-message-id="${message.id}"]`);
+  await expect(row).toBeVisible();
+
+  // The second link, so a pass cannot come from the action bar's
+  // first-URL-in-the-body behaviour.
+  await row.getByRole("link", { name: "the second" }).click();
+
+  await expect(page.getByTestId("channel-workspace")).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "second.example.com" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("workspace-web-url")).toHaveValue(
+    "https://second.example.com/page",
+  );
+});

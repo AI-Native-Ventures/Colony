@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 401,
-    "rust_lines": 162007,
-    "tauri_coupled": 158,
-    "portable": 243,
-    "portable_lines": 91593,
+    "rust_total": 404,
+    "rust_lines": 162438,
+    "tauri_coupled": 160,
+    "portable": 244,
+    "portable_lines": 91768,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -26,8 +26,10 @@
       "src-tauri/src/commands/agents.rs",
       "src-tauri/src/commands/agents/provider_access.rs",
       "src-tauri/src/commands/agents_archive.rs",
+      "src-tauri/src/commands/agents_assign.rs",
       "src-tauri/src/commands/agents_deploy.rs",
       "src-tauri/src/commands/agents_profile.rs",
+      "src-tauri/src/commands/agents_roster.rs",
       "src-tauri/src/commands/block_data.rs",
       "src-tauri/src/commands/canvas.rs",
       "src-tauri/src/commands/channel_templates.rs",
@@ -396,6 +398,7 @@
       "src-tauri/src/nostr_convert/user_search.rs",
       "src-tauri/src/nostr_convert/users_batch.rs",
       "src-tauri/src/relay.rs",
+      "src-tauri/src/relay/agent_boundary.rs",
       "src-tauri/src/relay/profile_role_tests.rs",
       "src-tauri/src/relay/submit.rs",
       "src-tauri/src/relay_admission.rs",
@@ -415,10 +418,10 @@
     ]
   },
   "commands": {
-    "registered": 336,
-    "defined": 336,
+    "registered": 337,
+    "defined": 337,
     "by_reach": {
-      "frontend": 332,
+      "frontend": 333,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -428,7 +431,7 @@
     ]
   },
   "params": {
-    "AppHandle": 349,
+    "AppHandle": 350,
     "State": 252,
     "Window": 7,
     "ipc::Request": 1,
@@ -436,7 +439,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 346,
+      "AppHandle": 347,
       "State": 252,
       "Window": 7,
       "ipc::Request": 1,
@@ -455,7 +458,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 108,
+    ".state::<": 109,
     ".emit(": 47,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -543,9 +546,9 @@
     "src-tauri/src/commands/team_snapshot.rs": 4,
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
-    "src-tauri/src/commands/agents.rs": 4,
     "src-tauri/src/commands/media_raw.rs": 3,
     "src-tauri/src/discovery_credentials.rs": 3,
+    "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
@@ -578,6 +581,7 @@
     "src-tauri/src/commands/personas/sharing.rs": 2,
     "src-tauri/src/commands/agent_access.rs": 1,
     "src-tauri/src/commands/agent_metric_archive.rs": 1,
+    "src-tauri/src/commands/agents_assign.rs": 1,
     "src-tauri/src/huddle/pipeline.rs": 1,
     "src-tauri/src/commands/openrouter_connect.rs": 1,
     "src-tauri/src/commands/agent_creation.rs": 1,
@@ -593,6 +597,7 @@
     "src-tauri/src/commands/os_idle.rs": 1,
     "src-tauri/src/commands/task_artifacts.rs": 1,
     "src-tauri/src/commands/updater.rs": 1,
+    "src-tauri/src/commands/agents_roster.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
@@ -728,6 +733,15 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriIdentityArchive.ts:55"
+      ]
+    },
+    "assign_managed_agents_to_community": {
+      "defining_file": "src-tauri/src/commands/agents_assign.rs",
+      "module": "agents_assign",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriManagedAgents.ts:65"
       ]
     },
     "auto_connect_default_relay_enabled": {
@@ -2413,12 +2427,12 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1424",
-        "src/shared/api/tauriManagedAgents.ts:57"
+        "src/shared/api/tauriManagedAgents.ts:75"
       ]
     },
     "list_managed_agents": {
-      "defining_file": "src-tauri/src/commands/agents.rs",
-      "module": "agents",
+      "defining_file": "src-tauri/src/commands/agents_roster.rs",
+      "module": "agents_roster",
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
@@ -2453,7 +2467,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/hooks.ts:345",
+        "src/features/agents/hooks.ts:349",
         "src/parity/session/script.ts:1498",
         "src/shared/api/tauri.ts:816"
       ]
@@ -2837,7 +2851,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1427",
-        "src/shared/api/tauriManagedAgents.ts:86"
+        "src/shared/api/tauriManagedAgents.ts:104"
       ]
     },
     "read_archived_events": {
@@ -2906,7 +2920,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1433",
-        "src/shared/api/tauriManagedAgents.ts:95"
+        "src/shared/api/tauriManagedAgents.ts:113"
       ]
     },
     "reconnect_colony_credits": {
@@ -3047,7 +3061,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1442",
-        "src/shared/api/tauriManagedAgents.ts:79"
+        "src/shared/api/tauriManagedAgents.ts:97"
       ]
     },
     "save_agent_card": {
@@ -3479,7 +3493,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1436",
-        "src/shared/api/tauriManagedAgents.ts:65"
+        "src/shared/api/tauriManagedAgents.ts:83"
       ]
     },
     "start_pairing": {
@@ -3516,7 +3530,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1439",
-        "src/shared/api/tauriManagedAgents.ts:72"
+        "src/shared/api/tauriManagedAgents.ts:90"
       ]
     },
     "sync_agents_to_active_huddle": {
@@ -3525,7 +3539,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/hooks.ts:668",
+        "src/features/agents/hooks.ts:694",
         "src/features/channels/hooks.ts:628",
         "src/features/messages/ui/useMentionSendFlow.ts:469"
       ]

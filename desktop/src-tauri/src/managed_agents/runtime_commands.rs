@@ -569,6 +569,16 @@ fn start_pair(
         if record.backend != BackendKind::Local {
             return Err("managed runtime pairs require a local agent".into());
         }
+        // The boundary is enforced here as well as in reconcile, because a
+        // start can also arrive straight from the UI with whatever community
+        // is open. An agent pinned elsewhere must not spawn against this
+        // relay, publish a profile on it, or read its channels.
+        if !crate::relay::agent_belongs_to_workspace(&record.relay_url, &relay_url) {
+            return Err(format!(
+                "{} belongs to another community ({}) and cannot run on {relay_url}",
+                record.name, record.relay_url
+            ));
+        }
         if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
             return Err("managed agent changed while runtime reconciliation was in flight".into());
         }
@@ -866,13 +876,19 @@ pub async fn reconcile_managed_agent_runtimes(
     let records = load_managed_agents(&app)?;
     let mut jobs = Vec::new();
     for community in communities {
-        for record in records
-            .iter()
-            .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
-        // The legacy per-record relay pin is deliberately ignored here — see
-        // `effective_agent_relay_url`. Every local auto-start agent fans out
-        // to every configured community.
-        {
+        for record in records.iter().filter(|record| {
+            record.start_on_app_launch
+                && record.backend == BackendKind::Local
+                // A community is a hard boundary: an agent auto-starts only in
+                // the community it was created in. Unpinned records are not yet
+                // assigned to one and keep fanning out until the user assigns
+                // them, which is what `agent_belongs_to_workspace` returns true
+                // for. Reverses the fan-out-to-everything behavior of #2122.
+                && crate::relay::agent_belongs_to_workspace(
+                    &record.relay_url,
+                    &community.relay_url,
+                )
+        }) {
             jobs.push((record.clone(), community.relay_url.clone()));
         }
     }

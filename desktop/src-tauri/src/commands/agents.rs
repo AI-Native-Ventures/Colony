@@ -14,7 +14,10 @@ use crate::{
         CreateManagedAgentResponse, ManagedAgentRecord, ManagedAgentSummary, RelayMeshConfig,
         DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
-    relay::{effective_agent_relay_url, relay_ws_url_with_override, sync_managed_agent_profile},
+    relay::{
+        creation_relay_pin, effective_agent_relay_url, relay_ws_url_with_override,
+        sync_managed_agent_profile,
+    },
     util::now_iso,
 };
 
@@ -428,53 +431,6 @@ async fn deploy_to_provider(
     Ok(())
 }
 
-// Async so the blocking body (disk reads of agent/persona records, per-agent
-// process-liveness syscalls, and a possible save) runs on Tauri's worker pool
-// via spawn_blocking instead of the main UI thread — it was a beachball on the
-// agents menu mount and after every start/stop/edit refetch. State is re-derived
-// from the owned AppHandle inside the closure because `State<'_, _>` is borrowed
-// and `std::sync::MutexGuard` is not `Send`.
-#[tauri::command]
-pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSummary>, String> {
-    use tauri::Manager;
-    tokio::task::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let _store_guard = state
-            .managed_agents_store_lock
-            .lock()
-            .map_err(|error| error.to_string())?;
-        let mut records = load_managed_agents(&app)?;
-        let mut runtimes = state
-            .managed_agent_processes
-            .lock()
-            .map_err(|error| error.to_string())?;
-
-        let (sync_changed, exited_pubkeys) =
-            sync_managed_agent_processes(&mut records, &mut runtimes, &current_instance_id(&app));
-        if sync_changed {
-            save_managed_agents(&app, &records)?;
-        }
-        for pubkey in &exited_pubkeys {
-            state.clear_agent_session_caches(pubkey);
-        }
-
-        let personas = load_personas(&app).unwrap_or_default();
-        // One disk read for the whole list — build_managed_agent_summary takes
-        // the config as a parameter precisely so this poll-every-5s call does
-        // not re-read it per record.
-        let global_config =
-            crate::managed_agents::load_global_agent_config(&app).unwrap_or_default();
-        records
-            .iter()
-            .map(|record| {
-                build_managed_agent_summary(&app, record, &runtimes, &personas, &global_config)
-            })
-            .collect()
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking failed: {e}"))?
-}
-
 pub(crate) async fn create_managed_agent_with_creation_request(
     input: CreateManagedAgentRequest,
     app: AppHandle,
@@ -554,15 +510,11 @@ pub(crate) async fn create_managed_agent_with_creation_request(
             .to_bech32()
             .map_err(|error| format!("failed to encode private key: {error}"))?;
 
-        // Store the relay override exactly as supplied (trimmed). An explicit
-        // value pins the agent; empty stays empty and resolves to the active
-        // workspace relay at read-time. Uniform for Local and Provider.
-        let resolved_relay_url = input
-            .relay_url
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string();
+        // Born pinned to its community: see `creation_relay_pin`.
+        let resolved_relay_url = creation_relay_pin(
+            input.relay_url.as_deref(),
+            &relay_ws_url_with_override(state),
+        );
 
         (keys, private_key_nsec, pubkey, resolved_relay_url, input)
     };
