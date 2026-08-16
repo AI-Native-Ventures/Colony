@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 402,
-    "rust_lines": 162237,
-    "tauri_coupled": 158,
+    "rust_total": 404,
+    "rust_lines": 162438,
+    "tauri_coupled": 160,
     "portable": 244,
-    "portable_lines": 91710,
+    "portable_lines": 91768,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -26,8 +26,10 @@
       "src-tauri/src/commands/agents.rs",
       "src-tauri/src/commands/agents/provider_access.rs",
       "src-tauri/src/commands/agents_archive.rs",
+      "src-tauri/src/commands/agents_assign.rs",
       "src-tauri/src/commands/agents_deploy.rs",
       "src-tauri/src/commands/agents_profile.rs",
+      "src-tauri/src/commands/agents_roster.rs",
       "src-tauri/src/commands/block_data.rs",
       "src-tauri/src/commands/canvas.rs",
       "src-tauri/src/commands/channel_templates.rs",
@@ -416,20 +418,21 @@
     ]
   },
   "commands": {
-    "registered": 336,
-    "defined": 336,
+    "registered": 337,
+    "defined": 337,
     "by_reach": {
       "frontend": 332,
-      "frontend-plugin-prefixed": 2,
-      "NO CALLER FOUND": 2
+      "NO CALLER FOUND": 3,
+      "frontend-plugin-prefixed": 2
     },
     "no_caller": [
+      "assign_managed_agents_to_community",
       "download_voice_models",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 349,
+    "AppHandle": 350,
     "State": 252,
     "Window": 7,
     "ipc::Request": 1,
@@ -437,7 +440,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 346,
+      "AppHandle": 347,
       "State": 252,
       "Window": 7,
       "ipc::Request": 1,
@@ -456,7 +459,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 108,
+    ".state::<": 109,
     ".emit(": 47,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -544,9 +547,9 @@
     "src-tauri/src/commands/team_snapshot.rs": 4,
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
-    "src-tauri/src/commands/agents.rs": 4,
     "src-tauri/src/commands/media_raw.rs": 3,
     "src-tauri/src/discovery_credentials.rs": 3,
+    "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
@@ -579,6 +582,7 @@
     "src-tauri/src/commands/personas/sharing.rs": 2,
     "src-tauri/src/commands/agent_access.rs": 1,
     "src-tauri/src/commands/agent_metric_archive.rs": 1,
+    "src-tauri/src/commands/agents_assign.rs": 1,
     "src-tauri/src/huddle/pipeline.rs": 1,
     "src-tauri/src/commands/openrouter_connect.rs": 1,
     "src-tauri/src/commands/agent_creation.rs": 1,
@@ -594,6 +598,7 @@
     "src-tauri/src/commands/os_idle.rs": 1,
     "src-tauri/src/commands/task_artifacts.rs": 1,
     "src-tauri/src/commands/updater.rs": 1,
+    "src-tauri/src/commands/agents_roster.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
@@ -730,6 +735,13 @@
       "example_sites": [
         "src/shared/api/tauriIdentityArchive.ts:55"
       ]
+    },
+    "assign_managed_agents_to_community": {
+      "defining_file": "src-tauri/src/commands/agents_assign.rs",
+      "module": "agents_assign",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "auto_connect_default_relay_enabled": {
       "defining_file": "src-tauri/src/commands/identity.rs",
@@ -2418,8 +2430,8 @@
       ]
     },
     "list_managed_agents": {
-      "defining_file": "src-tauri/src/commands/agents.rs",
-      "module": "agents",
+      "defining_file": "src-tauri/src/commands/agents_roster.rs",
+      "module": "agents_roster",
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
