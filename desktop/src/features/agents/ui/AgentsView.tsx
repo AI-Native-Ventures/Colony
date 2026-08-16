@@ -19,6 +19,7 @@ import { TeamShareDialog } from "./TeamShareDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamsSection } from "./TeamsSection";
+import { UnassignedAgentsBanner } from "./UnassignedAgentsBanner";
 import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
@@ -208,6 +209,7 @@ export function AgentsView() {
             title="Agents"
           />
           <div className="flex flex-col gap-8">
+            <UnassignedAgentsBanner agents={agents.managedAgents} />
             <UnifiedAgentsSection
               defaultModel={inheritedDefaults.model.value}
               actionErrorMessage={agents.actionErrorMessage}

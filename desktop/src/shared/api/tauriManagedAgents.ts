@@ -50,6 +50,24 @@ export async function setManagedAgentAutoRestart(
   return fromRawManagedAgent(response);
 }
 
+/**
+ * Pin agents that carry no community to the active one.
+ *
+ * Only blank -> assigned is offered: the backend refuses a record that already
+ * belongs somewhere, because an agent has published under that relay and holds
+ * membership there. Every runtime pair for the agent is stopped first, so the
+ * caller should expect the returned agents to be idle.
+ */
+export async function assignManagedAgentsToCommunity(
+  pubkeys: string[],
+): Promise<ManagedAgent[]> {
+  const response = await invokeTauri<RawManagedAgent[]>(
+    "assign_managed_agents_to_community",
+    { pubkeys },
+  );
+  return response.map(fromRawManagedAgent);
+}
+
 export async function listManagedAgentRuntimes(): Promise<
   ManagedAgentRuntimeStatus[]
 > {
