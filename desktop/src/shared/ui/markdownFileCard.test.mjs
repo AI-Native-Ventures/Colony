@@ -46,6 +46,7 @@ test("resolveFileCard: builds a card for a generic file, preferring imeta filena
   assert.deepEqual(card, {
     href: PDF_URL,
     filename: "Q3-budget.pdf",
+    mime: "application/pdf",
     size: 2048,
   });
 });
@@ -63,6 +64,11 @@ test("resolveFileCard: falls back to link child text when imeta has no filename"
 test("resolveFileCard: falls back to URL tail when no filename or child text", () => {
   const card = resolveFileCard({ m: "application/octet-stream" }, PDF_URL, "");
   assert.equal(card?.filename, `${"a".repeat(64)}.pdf`);
+});
+
+test("resolveFileCard: carries the upload MIME so a viewer can be chosen", () => {
+  const card = resolveFileCard({ m: "text/markdown" }, PDF_URL, "notes.md");
+  assert.equal(card?.mime, "text/markdown");
 });
 
 test("resolveFileCard: octet-stream (no magic bytes) is treated as a file", () => {

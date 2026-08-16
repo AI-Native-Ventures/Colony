@@ -1,6 +1,10 @@
 import * as React from "react";
 import { toast } from "sonner";
 
+import {
+  openAttachmentInWorkspace,
+  type WorkspaceAttachment,
+} from "@/features/workspace/lib/openAttachmentInWorkspace";
 import { openPathInWorkspace } from "@/features/workspace/lib/openPathInWorkspace";
 import { openLinkInWorkspace } from "@/features/workspace/lib/openUrlInWorkspace";
 
@@ -23,6 +27,16 @@ export type WorkspaceLinkOpener = (href: string) => boolean;
  */
 export type WorkspacePathOpener = (path: string) => void;
 
+/**
+ * Opens a message attachment as a channel workspace tab.
+ *
+ * Reports failure as a toast rather than to the caller: unlike a link, an
+ * attachment card has no second behaviour to fall back to.
+ */
+export type WorkspaceAttachmentOpener = (
+  attachment: WorkspaceAttachment,
+) => void;
+
 const WorkspaceLinkContext = React.createContext<WorkspaceLinkOpener | null>(
   null,
 );
@@ -31,10 +45,13 @@ const WorkspacePathContext = React.createContext<WorkspacePathOpener | null>(
   null,
 );
 
+const WorkspaceAttachmentContext =
+  React.createContext<WorkspaceAttachmentOpener | null>(null);
+
 /**
  * Makes links rendered below this provider open in `channelId`'s workspace
- * instead of the OS browser, and file paths open there instead of being dead
- * text.
+ * instead of the OS browser, file paths open there instead of being dead
+ * text, and attachments open there instead of only downloading.
  *
  * Only surfaces that have a channel workspace mount it. Everywhere else
  * (project readmes, the agent screens) reads null and keeps the OS-browser
@@ -65,10 +82,20 @@ export function WorkspaceLinkProvider({
     };
   }, [channelId]);
 
+  const openAttachment = React.useMemo<WorkspaceAttachmentOpener | null>(() => {
+    if (!channelId) return null;
+    return (attachment: WorkspaceAttachment) => {
+      const result = openAttachmentInWorkspace({ attachment, channelId });
+      if (!result.ok) toast.error(result.message);
+    };
+  }, [channelId]);
+
   return (
     <WorkspaceLinkContext.Provider value={openLink}>
       <WorkspacePathContext.Provider value={openPath}>
-        {children}
+        <WorkspaceAttachmentContext.Provider value={openAttachment}>
+          {children}
+        </WorkspaceAttachmentContext.Provider>
       </WorkspacePathContext.Provider>
     </WorkspaceLinkContext.Provider>
   );
@@ -82,4 +109,9 @@ export function useWorkspaceLinkOpener(): WorkspaceLinkOpener | null {
 /** The workspace file-path opener for this surface, or null when it has none. */
 export function useWorkspacePathOpener(): WorkspacePathOpener | null {
   return React.useContext(WorkspacePathContext);
+}
+
+/** The workspace attachment opener for this surface, or null when it has none. */
+export function useWorkspaceAttachmentOpener(): WorkspaceAttachmentOpener | null {
+  return React.useContext(WorkspaceAttachmentContext);
 }
