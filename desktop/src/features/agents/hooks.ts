@@ -44,12 +44,16 @@ import {
 } from "@/shared/api/tauri";
 import type { HarnessDefinitionInput } from "@/shared/api/tauri";
 import {
+  assignManagedAgentsToCommunity,
   setManagedAgentAutoRestart,
   setManagedAgentStartOnAppLaunch,
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
-import { bootstrapManagedAgentRuntimePairs } from "@/features/agents/managedAgentRuntimeHooks";
+import {
+  bootstrapManagedAgentRuntimePairs,
+  managedAgentRuntimesQueryKey,
+} from "@/features/agents/managedAgentRuntimeHooks";
 import {
   createPersona,
   deletePersona,
@@ -631,6 +635,28 @@ export function useDeleteManagedAgentMutation() {
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    },
+  });
+}
+
+/**
+ * Pin community-less agents to the active community.
+ *
+ * Assignment stops every runtime pair for each agent, so the runtime queries
+ * are invalidated alongside the roster: a row left showing "running" after its
+ * process was drained is the one wrong state this could produce.
+ */
+export function useAssignManagedAgentsToCommunityMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (pubkeys: string[]) => assignManagedAgentsToCommunity(pubkeys),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+      await queryClient.invalidateQueries({
+        queryKey: managedAgentRuntimesQueryKey,
+      });
     },
   });
 }
