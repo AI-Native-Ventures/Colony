@@ -3,23 +3,18 @@ import { invoke } from "@/shared/api/nativeBridge";
 
 import type { TabKindDefinition } from "@/features/workspace/lib/tabKindRegistry";
 import {
-  readFilePath,
+  readFileSource,
   titleForPath,
 } from "@/features/workspace/lib/filePayload";
+import {
+  loadWorkspaceFile,
+  type LoadedWorkspaceFile,
+} from "@/features/workspace/lib/workspaceFileContent";
 import {
   renameTab,
   updateTabPayload,
 } from "@/features/workspace/lib/workspaceTabs";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
-
-type WorkspaceFile = {
-  path: string;
-  name: string;
-  mime: string;
-  bytes_base64: string;
-  size: number;
-  is_text: boolean;
-};
 
 export const fileKindDefinition: TabKindDefinition = {
   kind: "file",
@@ -35,21 +30,32 @@ function decodeText(bytesBase64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-/** Read-only file viewer. Editing and saving land in a later phase. */
+/**
+ * Read-only file viewer. Editing and saving land in a later phase.
+ *
+ * The file is either one on disk or a message attachment, which has no local
+ * copy until someone downloads it; `loadWorkspaceFile` hides which.
+ */
 export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
-  const path = readFilePath(tab.payload);
-  const [file, setFile] = React.useState<WorkspaceFile | null>(null);
+  // Memoized on the stored payload so the load effect runs once per file, not
+  // once per render.
+  const source = React.useMemo(
+    () => readFileSource(tab.payload),
+    [tab.payload],
+  );
+  const [file, setFile] = React.useState<LoadedWorkspaceFile | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!path) {
+    if (!source) {
       setFile(null);
       setError(null);
       return;
     }
     let cancelled = false;
     setError(null);
-    invoke<WorkspaceFile>("read_workspace_file", { path })
+    setFile(null);
+    loadWorkspaceFile(source)
       .then((result) => {
         if (!cancelled) setFile(result);
       })
@@ -59,7 +65,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [source]);
 
   const handlePick = React.useCallback(async () => {
     const picked = await invoke<string | null>("pick_workspace_file", {
@@ -70,7 +76,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     renameTab(channelId, tab.id, titleForPath(picked));
   }, [channelId, tab.id]);
 
-  if (!path) {
+  if (!source) {
     return (
       <div className="flex h-full items-center justify-center p-8">
         <button
@@ -98,11 +104,13 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
 
   if (!file) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">Loading {path}…</div>
+      <div className="p-4 text-sm text-muted-foreground">
+        Loading {source.kind === "path" ? source.path : source.name}…
+      </div>
     );
   }
 
-  if (!file.is_text) {
+  if (!file.isText) {
     return (
       <div
         className="p-4 text-sm text-muted-foreground"
@@ -118,7 +126,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       className="h-full overflow-auto p-4 font-mono text-xs text-foreground"
       data-testid="workspace-file-body"
     >
-      {decodeText(file.bytes_base64)}
+      {decodeText(file.bytesBase64)}
     </pre>
   );
 }

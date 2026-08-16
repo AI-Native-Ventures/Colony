@@ -15,6 +15,8 @@ export type ResolvedFileCard = {
   href: string;
   filename: string;
   size?: number;
+  /** Upload MIME from the imeta `m` field, used to pick a workspace viewer. */
+  mime: string;
 };
 
 /**
@@ -142,5 +144,10 @@ export function resolveFileCard(
   }
   const filename =
     entry.filename || childText.trim() || href.split("/").pop() || "file";
-  return { href: rewriteRelayUrl(href), filename, size: entry.size };
+  return {
+    href: rewriteRelayUrl(href),
+    filename,
+    size: entry.size,
+    mime: entry.m,
+  };
 }
