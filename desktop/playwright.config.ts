@@ -46,7 +46,6 @@ export default defineConfig({
         "**/add-community-screenshots.spec.ts",
         "**/invites-settings-screenshots.spec.ts",
         "**/messaging.spec.ts",
-        "**/debug-1818.spec.ts",
         "**/custom-emoji.spec.ts",
         "**/profile-custom-emoji-status.spec.ts",
         "**/custom-emoji-ui.spec.ts",

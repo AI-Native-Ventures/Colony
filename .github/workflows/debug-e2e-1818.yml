@@ -48,13 +48,15 @@ jobs:
         run: cd desktop && pnpm exec playwright install-deps chromium
       - name: Desktop E2E build
         run: pnpm -C desktop build:e2e
-      - name: Instrumented repro
+      # In isolation it passes 8/8 on Linux, so the failure needs the tests
+      # that run before it. Narrow from the file first, then the whole shard.
+      - name: Whole messaging file, no retries
         continue-on-error: true
-        run: cd desktop && pnpm exec playwright test --project=smoke tests/e2e/debug-1818.spec.ts --repeat-each=8 --retries=0 --reporter=list
-      - name: Unmodified test, no retries
+        run: cd desktop && pnpm exec playwright test --project=smoke tests/e2e/messaging.spec.ts --retries=0 --reporter=list
+      - name: Full shard 3, no retries
         if: ${{ !cancelled() }}
         continue-on-error: true
-        run: cd desktop && pnpm exec playwright test --project=smoke tests/e2e/messaging.spec.ts:1818 --repeat-each=8 --retries=0 --reporter=list
+        run: cd desktop && pnpm exec playwright test --project=smoke --shard=3/4 --retries=0 --reporter=list
       - name: Upload artifacts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
