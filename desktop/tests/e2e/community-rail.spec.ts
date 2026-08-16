@@ -1131,8 +1131,31 @@ test.describe("community rail", () => {
         }),
       );
     }, `community-rail-button-${COMMUNITY_B.id}`);
+    // Wait for the drag to actually start before steering it. The overlay only
+    // renders while dnd-kit holds an active item, so its presence is the
+    // pickup. Without this, ArrowUp can arrive before the KeyboardSensor has
+    // activated on a loaded runner and the reorder silently never happens.
+    const dragOverlay = page.getByTestId(
+      `community-rail-drag-overlay-${COMMUNITY_B.id}`,
+    );
+    await expect(dragOverlay).toBeVisible();
+
     // ArrowUp moves the active item one slot up.
     await page.keyboard.press("ArrowUp");
+    // Wait for the move to register before dropping: dnd-kit reorders the
+    // rail visually on drag-over, so B sitting above A is the proof that the
+    // ArrowUp landed. Dropping early commits the original order.
+    await expect
+      .poll(async () => {
+        const [boxA, boxB] = await Promise.all([
+          buttonA.boundingBox(),
+          buttonB.boundingBox(),
+        ]);
+        if (!boxA || !boxB) return false;
+        return boxB.y < boxA.y;
+      })
+      .toBe(true);
+
     // Space drops the item — same synthetic dispatch for consistency.
     await page.evaluate((testId) => {
       const el = document.querySelector(`[data-testid="${testId}"]`);

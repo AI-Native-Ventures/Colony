@@ -183,17 +183,20 @@ test("missing, invalid, untrusted, unsupported, oversized, integrity, and unavai
       extraTags: fixture.tags,
       kind: 9,
     });
+    // The "jump to latest" button unmounts the moment the timeline reaches the
+    // bottom, so `isVisible()` then `click()` is a check-then-act race: the
+    // button can detach between the two and the click then waits out the whole
+    // test timeout. Ask for the outcome instead — the message on screen — and
+    // treat the button as a best-effort nudge that is allowed to vanish.
     const jumpToLatest = page.getByTestId("message-scroll-to-latest");
+    const messageText = page.getByText(fixture.content, { exact: true });
     await expect
-      .poll(
-        async () =>
-          (await page.getByText(fixture.content, { exact: true }).count()) >
-            0 || (await jumpToLatest.isVisible()),
-      )
+      .poll(async () => {
+        if ((await messageText.count()) > 0) return true;
+        await jumpToLatest.click({ timeout: 1_000 }).catch(() => {});
+        return (await messageText.count()) > 0;
+      })
       .toBe(true);
-    if (await jumpToLatest.isVisible()) {
-      await jumpToLatest.click();
-    }
     const message = page
       .locator("article")
       .filter({
