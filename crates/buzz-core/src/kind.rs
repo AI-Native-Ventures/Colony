@@ -380,6 +380,41 @@ pub const KIND_LEDGER_ACTION: u32 = 40023;
 /// Colony cost ledger: relay-signed receipt for a ledger action.
 pub const KIND_LEDGER_RECEIPT: u32 = 40024;
 
+/// Colony content calendar: a campaign (NIP-33 head, `d={campaign id}`).
+///
+/// A named run of posts with its weeks and its running order. Authored by the
+/// content agent, not by the relay: the calendar is the agent's account of
+/// what it plans to make, and the owner's authority over it is expressed by
+/// [`KIND_CONTENT_DECISION`] rather than by owning the record. See
+/// [`crate::content`].
+pub const KIND_CONTENT_CAMPAIGN: u32 = 30195;
+
+/// Colony content calendar: one post (NIP-33 head, `d={campaign}:{slug}`).
+///
+/// Carries the words, the rendered image, the claims with their sources, and
+/// the gate measurements taken at render time. The compound `d` tag means one
+/// filter fetches a campaign's posts and a post can never be silently
+/// re-parented by editing a content field.
+pub const KIND_CONTENT_POST: u32 = 30196;
+
+/// Colony content calendar: accumulated house style (NIP-33 head,
+/// `d=house` or `d={campaign id}`).
+///
+/// The owner's corrections, written down: an ordered rule list where each
+/// entry cites the date and the sentence that caused it, plus the named
+/// settings the renderer reads. Revoked rules stay in the list, inactive, so
+/// the record of why a rule existed survives its deletion.
+pub const KIND_CONTENT_STYLE: u32 = 30197;
+
+/// Colony content calendar: the owner approving a post or sending it back.
+///
+/// Separate from the post on purpose. The post belongs to the agent that made
+/// it and the approval belongs to the owner, so folding approval into the post
+/// record would let the author of a card also write its own sign-off. Regular
+/// (non-replaceable) because each decision is evidence of one moment, and it
+/// names the image hash and gate verdict it was made against.
+pub const KIND_CONTENT_DECISION: u32 = 40025;
+
 /// Kinds that use the author-only-unless-shared read model.
 ///
 /// Events of these kinds may only be delivered to foreign readers when the
@@ -943,6 +978,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_JOB_CHECKPOINT,
     KIND_LEDGER_ACTION,
     KIND_LEDGER_RECEIPT,
+    KIND_CONTENT_CAMPAIGN,
+    KIND_CONTENT_POST,
+    KIND_CONTENT_STYLE,
+    KIND_CONTENT_DECISION,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_TEAM_CATALOG,
@@ -1187,6 +1226,9 @@ const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT));
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_PROJECT)); // 30621 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_CAMPAIGN)); // 30195 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_POST)); // 30196 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_STYLE)); // 30197 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
@@ -1433,6 +1475,65 @@ mod tests {
             KIND_LEDGER_BUDGET,
         ] {
             assert!(!P_GATED_KINDS.contains(&plaintext_head));
+        }
+    }
+
+    #[test]
+    fn content_calendar_kinds_have_exact_classifications() {
+        assert_eq!(KIND_CONTENT_CAMPAIGN, 30195);
+        assert_eq!(KIND_CONTENT_POST, 30196);
+        assert_eq!(KIND_CONTENT_STYLE, 30197);
+        assert_eq!(KIND_CONTENT_DECISION, 40025);
+
+        for kind in [
+            KIND_CONTENT_CAMPAIGN,
+            KIND_CONTENT_POST,
+            KIND_CONTENT_STYLE,
+            KIND_CONTENT_DECISION,
+        ] {
+            assert!(
+                ALL_KINDS.contains(&kind),
+                "kind {kind} missing from registry"
+            );
+            // Every content record is client-authored. Making one relay-only
+            // would silently stop the content agent writing its own calendar,
+            // and the refusal would read like an authorization failure.
+            assert!(
+                !is_relay_only_kind(kind),
+                "content kind {kind} must stay client-authored"
+            );
+            // None of them is brokered, so none goes through the transactional
+            // command executor.
+            assert!(!is_command_kind(kind));
+        }
+
+        // Campaign, post, and style are current state, addressed by d tag:
+        // republishing the same coordinate is how an agent revises a card.
+        for head in [
+            KIND_CONTENT_CAMPAIGN,
+            KIND_CONTENT_POST,
+            KIND_CONTENT_STYLE,
+        ] {
+            assert!(is_parameterized_replaceable(head));
+        }
+
+        // A decision is evidence of one moment. Replaceable would let a second
+        // decision overwrite the first, and the history of who approved what
+        // is the point of storing it at all.
+        assert!(!is_parameterized_replaceable(KIND_CONTENT_DECISION));
+        assert!(!is_replaceable(KIND_CONTENT_DECISION));
+        assert!(!is_ephemeral(KIND_CONTENT_DECISION));
+
+        // The calendar is workspace-visible, like the party heads: everyone in
+        // the workspace can see what is scheduled and what was approved.
+        for kind in [
+            KIND_CONTENT_CAMPAIGN,
+            KIND_CONTENT_POST,
+            KIND_CONTENT_STYLE,
+            KIND_CONTENT_DECISION,
+        ] {
+            assert!(!P_GATED_KINDS.contains(&kind));
+            assert!(!AUTHOR_ONLY_KINDS.contains(&kind));
         }
     }
 

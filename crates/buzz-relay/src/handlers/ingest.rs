@@ -16,7 +16,8 @@ use buzz_core::kind::{
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL,
     KIND_AUTH, KIND_BLOCK_ACTION, KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST,
     KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION,
-    KIND_CONTACT_LIST, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
+    KIND_CONTACT_LIST, KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION, KIND_CONTENT_POST,
+    KIND_CONTENT_STYLE, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
     KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
     KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EMPLOYEE,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
@@ -632,6 +633,17 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // the employee that owes it. Same forgery gate as the employee head,
         // in the job-head arm of `validate_event`.
         KIND_JOB_HEAD => Ok(Scope::MessagesWrite),
+        // Colony content calendar (30195-30197): the content agent's own
+        // account of what it plans to post, what it rendered, and the house
+        // style it accumulated. Ordinary member writes; the schema and the
+        // ready-state gates are enforced past this point by `buzz_core::content`.
+        KIND_CONTENT_CAMPAIGN | KIND_CONTENT_POST | KIND_CONTENT_STYLE => {
+            Ok(Scope::MessagesWrite)
+        }
+        // Colony content decision (40025): the owner approving a post or
+        // sending it back. Message-shaped; the refusal to approve a failing
+        // gate report is in `parse_content_decision`.
+        KIND_CONTENT_DECISION => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -775,6 +787,15 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // KIND_TEAM/KIND_MANAGED_AGENT above -- a stray `h` tag must not
             // channel-scope a company-wide policy record.
             | KIND_DELEGATION_GRANT
+            // Colony content calendar (30195-30197, 40025): workspace-wide
+            // records keyed by (pubkey, kind, d_tag), and decisions that
+            // address a post by `a` tag. A campaign is not owned by whichever
+            // channel its Block happened to be posted in, so a stray `h` tag
+            // must not channel-scope it.
+            | KIND_CONTENT_CAMPAIGN
+            | KIND_CONTENT_POST
+            | KIND_CONTENT_STYLE
+            | KIND_CONTENT_DECISION
             // Block manifests and relay-authored catalog heads are immutable or
             // addressable global definitions. Instances remain kind:9 messages.
             | KIND_BLOCK_MANIFEST
@@ -2763,6 +2784,32 @@ async fn ingest_event_inner(
     if kind_u32 == KIND_PERSONA {
         validate_persona_envelope(&event)
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    // Colony content calendar: the gates are the product, so they are enforced
+    // where a client cannot route around them. A post that says `ready` must
+    // carry a rendered image, every gate in `REQUIRED_GATES` passing, and a
+    // source on every claim; an approval may not be issued against a failing
+    // gate report. A client that draws the checks but does not enforce them
+    // still cannot store a card that skipped them.
+    match kind_u32 {
+        KIND_CONTENT_CAMPAIGN => {
+            buzz_core::content::parse_content_campaign(&event)
+                .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        }
+        KIND_CONTENT_POST => {
+            buzz_core::content::parse_content_post(&event)
+                .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        }
+        KIND_CONTENT_STYLE => {
+            buzz_core::content::parse_content_style(&event)
+                .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        }
+        KIND_CONTENT_DECISION => {
+            buzz_core::content::parse_content_decision(&event)
+                .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        }
+        _ => {}
     }
 
     // Colony interrupt-core: a delegation grant is the founder's promise
