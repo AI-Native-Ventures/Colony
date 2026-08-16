@@ -1,9 +1,8 @@
 // site/src/sections/Footer.tsx
+// The footer carries no outbound links while the site says coming soon: the
+// GitHub link used to live here, but it walked a visitor from "not available
+// yet" straight to a repo they could build themselves.
 import { AntMark } from "@/brand/AntMark";
-
-// Points at the source repo, not `colony-releases`: while the site says coming
-// soon, no path from it should land a visitor on a downloadable build.
-const GITHUB_URL = "https://github.com/AI-Native-Ventures/Colony";
 
 export function Footer() {
   return (
@@ -18,12 +17,6 @@ export function Footer() {
           </span>
         </div>
         <div className="flex flex-col items-center gap-1 text-sm text-colony-ink/60 sm:items-end">
-          <a
-            href={GITHUB_URL}
-            className="text-colony-ink/70 underline underline-offset-4 transition hover:text-colony-ink"
-          >
-            GitHub
-          </a>
           <p>Built on Buzz</p>
           <p>AI Native Ventures</p>
         </div>
