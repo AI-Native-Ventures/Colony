@@ -102,7 +102,9 @@ export function ExternalLinkAnchor({
           dataAttributes={["data-link-context-menu"]}
           items={[
             {
-              label: onOpenInWorkspace ? "Open in browser" : "Open link",
+              // Stays "Open link" even when left-click opens the workspace:
+              // this item has always meant the OS browser and still does.
+              label: "Open link",
               onSelect: () => {
                 closeMenu();
                 openExternally();
