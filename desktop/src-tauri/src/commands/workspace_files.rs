@@ -2,6 +2,7 @@
 
 use base64::Engine as _;
 use serde::Serialize;
+use std::path::PathBuf;
 
 /// Largest file a workspace tab will load. Bodies are base64 in an IPC
 /// response, so this is a memory bound, not a policy.
@@ -77,6 +78,77 @@ async fn read_file(path: &str) -> Result<WorkspaceFile, String> {
 #[tauri::command]
 pub async fn read_workspace_file(path: String) -> Result<WorkspaceFile, String> {
     read_file(&path).await
+}
+
+/// A path written in a message, resolved to a real file in the workspace.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedWorkspacePath {
+    pub path: String,
+    pub mime: String,
+    pub is_text: bool,
+}
+
+/// Directories a path written in a message is allowed to resolve inside.
+///
+/// The agent working directory is what a bare `PLANS/FOO.md` is relative to,
+/// and `REPOS` inside it is usually a symlink to a repos folder elsewhere on
+/// disk, so its canonical target is a second root rather than a child of the
+/// first. Both are canonicalized here so containment can be checked against
+/// resolved paths.
+fn message_path_roots() -> Vec<PathBuf> {
+    let Some(workdir) = crate::managed_agents::default_agent_workdir() else {
+        return Vec::new();
+    };
+    [workdir.clone(), workdir.join("REPOS")]
+        .iter()
+        .filter_map(|candidate| std::fs::canonicalize(candidate).ok())
+        .collect()
+}
+
+/// Resolve a message-supplied path to an existing file inside one of `roots`.
+///
+/// A message is untrusted input: anyone in a channel can write a path, and a
+/// person who clicks it should not be able to be steered into opening
+/// `~/.ssh/id_rsa` in a tab. So resolution is containment-checked after
+/// canonicalization, which is what makes both `..` traversal and a symlink
+/// pointing outside the workspace fail. With no roots (no resolvable home
+/// directory) nothing resolves, including absolute paths.
+pub fn resolve_under_roots(roots: &[PathBuf], raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("no path given".to_string());
+    }
+    let requested = std::path::Path::new(trimmed);
+    let candidates: Vec<PathBuf> = if requested.is_absolute() {
+        vec![requested.to_path_buf()]
+    } else {
+        roots.iter().map(|root| root.join(requested)).collect()
+    };
+
+    for candidate in candidates {
+        let Ok(resolved) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        if resolved.is_file() && roots.iter().any(|root| resolved.starts_with(root)) {
+            return Ok(resolved);
+        }
+    }
+    Err(format!(
+        "{trimmed} is not a file in the Buzz workspace or your repos folder"
+    ))
+}
+
+/// Resolve a path written in a message so a workspace tab can open it.
+#[tauri::command]
+pub async fn resolve_workspace_path(path: String) -> Result<ResolvedWorkspacePath, String> {
+    let resolved = resolve_under_roots(&message_path_roots(), &path)?;
+    let display = resolved.to_string_lossy().into_owned();
+    let mime = sniff_mime(&display).to_string();
+    Ok(ResolvedWorkspacePath {
+        is_text: is_text_mime(&mime),
+        mime,
+        path: display,
+    })
 }
 
 /// Open a native file picker for a workspace tab.
@@ -170,5 +242,96 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("too large"), "unexpected error: {err}");
+    }
+
+    /// A workspace root holding `PLANS/FOO.md`, plus a directory outside it.
+    fn message_path_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(workspace.join("PLANS")).unwrap();
+        std::fs::write(workspace.join("PLANS/FOO.md"), b"# plan").unwrap();
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        (dir, workspace, outside)
+    }
+
+    #[test]
+    fn a_relative_path_resolves_against_the_workspace_root() {
+        let (_dir, workspace, _outside) = message_path_fixture();
+        let roots = vec![workspace.clone()];
+        assert_eq!(
+            resolve_under_roots(&roots, " PLANS/FOO.md ").unwrap(),
+            workspace.join("PLANS/FOO.md")
+        );
+    }
+
+    #[test]
+    fn a_second_root_is_tried_when_the_first_has_no_such_file() {
+        let (_dir, workspace, outside) = message_path_fixture();
+        let roots = vec![workspace, outside.clone()];
+        assert_eq!(
+            resolve_under_roots(&roots, "secret.txt").unwrap(),
+            outside.join("secret.txt")
+        );
+    }
+
+    #[test]
+    fn traversal_out_of_every_root_is_refused() {
+        let (_dir, workspace, _outside) = message_path_fixture();
+        let roots = vec![workspace];
+        let err = resolve_under_roots(&roots, "PLANS/../../outside/secret.txt").unwrap_err();
+        assert!(err.contains("secret.txt"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn an_absolute_path_outside_every_root_is_refused() {
+        let (_dir, workspace, outside) = message_path_fixture();
+        let roots = vec![workspace];
+        let absolute = outside.join("secret.txt");
+        let err = resolve_under_roots(&roots, absolute.to_string_lossy().as_ref()).unwrap_err();
+        assert!(err.contains("secret.txt"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn an_absolute_path_inside_a_root_resolves() {
+        let (_dir, workspace, _outside) = message_path_fixture();
+        let roots = vec![workspace.clone()];
+        let absolute = workspace.join("PLANS/FOO.md");
+        assert_eq!(
+            resolve_under_roots(&roots, absolute.to_string_lossy().as_ref()).unwrap(),
+            absolute
+        );
+    }
+
+    #[test]
+    fn a_symlink_escaping_the_root_is_refused() {
+        let (_dir, workspace, outside) = message_path_fixture();
+        let link = workspace.join("escape.txt");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.join("secret.txt"), &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(outside.join("secret.txt"), &link).unwrap();
+        let roots = vec![workspace];
+        let err = resolve_under_roots(&roots, "escape.txt").unwrap_err();
+        assert!(err.contains("escape.txt"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_directory_is_not_a_file_to_open() {
+        let (_dir, workspace, _outside) = message_path_fixture();
+        let roots = vec![workspace];
+        let err = resolve_under_roots(&roots, "PLANS").unwrap_err();
+        assert!(err.contains("PLANS"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn nothing_resolves_without_a_root() {
+        let (_dir, workspace, _outside) = message_path_fixture();
+        let absolute = workspace.join("PLANS/FOO.md");
+        assert!(resolve_under_roots(&[], "PLANS/FOO.md").is_err());
+        assert!(resolve_under_roots(&[], absolute.to_string_lossy().as_ref()).is_err());
+        assert!(resolve_under_roots(&[workspace], "  ").is_err());
     }
 }
