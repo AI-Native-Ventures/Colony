@@ -700,11 +700,44 @@ test("assigns distinct agent voices and exposes compact per-agent controls", asy
   });
   expect(new Set(assignedVoices).size).toBe(2);
 
-  await page.getByRole("button", { name: "Voice settings for alice" }).click();
-  await waitForAnimations(page);
+  // The composer reclaims focus when it flips from disabled to enabled at
+  // huddle start (useRichTextEditor's hadFocusBeforeDisable restore). If that
+  // lands after this popover opens, Radix sees focus leave and dismisses it:
+  // the click is never lost, the menu is opened and then closed out from under
+  // it. Wait for the composer to have taken focus first so the grab is already
+  // spent, then reopen on the residual rather than assuming one click sticks,
+  // reading the real data-state so a retry never toggles an open menu shut.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.activeElement?.getAttribute("data-testid") ?? null,
+      ),
+    )
+    .toBe("message-input");
+
+  const voiceTrigger = page.getByRole("button", {
+    name: "Voice settings for alice",
+  });
   const voiceMenu = page.locator(
     '[data-testid="huddle-agent-voice-menu-content"][data-state="open"]',
   );
+  await expect
+    .poll(
+      async () => {
+        const state = await page.evaluate(
+          () =>
+            document
+              .querySelector('[data-testid="huddle-agent-voice-menu-content"]')
+              ?.getAttribute("data-state") ?? "none",
+        );
+        if (state === "open") return true;
+        await voiceTrigger.click({ timeout: 2_000 }).catch(() => {});
+        return false;
+      },
+      { intervals: [100, 250, 500, 500, 500, 500, 500], timeout: 20_000 },
+    )
+    .toBe(true);
+  await waitForAnimations(page);
   await expect(voiceMenu).toBeVisible();
   await expect(
     voiceMenu.getByText("Agent text-to-speech", { exact: true }),

@@ -1504,6 +1504,12 @@ declare global {
     __BUZZ_E2E_RELEASE_CHANNELS_READ__?: () => number;
     /** Number of channel reads currently held by the seam. */
     __BUZZ_E2E_CHANNELS_READ_PENDING__?: number;
+    /** Hold every `install_acp_runtime` call for this runtime until released. */
+    __BUZZ_E2E_HOLD_INSTALL__?: (runtimeId: string) => void;
+    /** Release the installs held for this runtime; returns how many were held. */
+    __BUZZ_E2E_RELEASE_INSTALL__?: (runtimeId: string) => number;
+    /** Number of installs currently held, keyed by runtime id. */
+    __BUZZ_E2E_INSTALL_PENDING__?: Record<string, number>;
   }
 }
 
@@ -8505,6 +8511,31 @@ async function handleConnectAcpRuntime(
 let installCallCount = 0;
 /** Per-runtime call counters for `installAcpRuntimeByRuntime` sequences. */
 const installCallCountByRuntime: Record<string, number> = {};
+
+/** Runtimes whose installs are currently latched open by a test. */
+const heldInstallRuntimes = new Set<string>();
+/** Resolvers for installs parked on the latch, keyed by runtime id. */
+const heldInstallResolvers: Record<string, Array<() => void>> = {};
+
+/**
+ * Parks an install for as long as the test holds `runtimeId`.
+ *
+ * A timed mock delay makes "while the install is in flight" a wall-clock race:
+ * on a loaded CI runner the install can settle before the assertion about the
+ * in-flight UI even starts. Holding the call instead makes that window last
+ * exactly as long as the test says it does.
+ */
+async function awaitInstallRelease(runtimeId: string): Promise<void> {
+  if (!heldInstallRuntimes.has(runtimeId)) return;
+  await new Promise<void>((resolve) => {
+    const resolvers = heldInstallResolvers[runtimeId] ?? [];
+    resolvers.push(resolve);
+    heldInstallResolvers[runtimeId] = resolvers;
+    const pending = window.__BUZZ_E2E_INSTALL_PENDING__ ?? {};
+    pending[runtimeId] = (pending[runtimeId] ?? 0) + 1;
+    window.__BUZZ_E2E_INSTALL_PENDING__ = pending;
+  });
+}
 let addChannelMembersCallCount = 0;
 let setGlobalAgentConfigCallCount = 0;
 let mockGlobalAgentConfig: {
@@ -8544,6 +8575,7 @@ async function handleInstallAcpRuntime(
   config: E2eConfig | undefined,
 ): Promise<RawInstallRuntimeResult> {
   const runtimeId = args.runtimeId ?? "";
+  await awaitInstallRelease(runtimeId);
   const perRuntime = config?.mock?.installAcpRuntimeByRuntime?.[runtimeId];
 
   if (perRuntime) {
@@ -11324,6 +11356,25 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_CHANNELS_READ_PENDING__ = 0;
     resolve?.();
     return resolve ? 1 : 0;
+  };
+  // install_acp_runtime hold/release seam — reset latches on each install.
+  heldInstallRuntimes.clear();
+  for (const key of Object.keys(heldInstallResolvers)) {
+    delete heldInstallResolvers[key];
+  }
+  window.__BUZZ_E2E_INSTALL_PENDING__ = {};
+  window.__BUZZ_E2E_HOLD_INSTALL__ = (runtimeId: string) => {
+    heldInstallRuntimes.add(runtimeId);
+  };
+  window.__BUZZ_E2E_RELEASE_INSTALL__ = (runtimeId: string) => {
+    heldInstallRuntimes.delete(runtimeId);
+    const resolvers = heldInstallResolvers[runtimeId] ?? [];
+    delete heldInstallResolvers[runtimeId];
+    const pending = window.__BUZZ_E2E_INSTALL_PENDING__ ?? {};
+    pending[runtimeId] = 0;
+    window.__BUZZ_E2E_INSTALL_PENDING__ = pending;
+    for (const resolve of resolvers) resolve();
+    return resolvers.length;
   };
   window.__BUZZ_E2E_RELEASE_GET_EVENT__ = () => {
     const queued = deferredGetEventQueue.splice(0);
