@@ -1,3 +1,4 @@
+// Baseline probe: runs the Blocks live gate against develop with no behaviour change.
 import type { TimelineMessage } from "@/features/messages/types";
 import type {
   BlockInstanceRef,
