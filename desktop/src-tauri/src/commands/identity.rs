@@ -109,6 +109,41 @@ pub fn get_media_proxy_port(state: State<'_, AppState>) -> u16 {
         .load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Sign the exact tags the caller asked for.
+///
+/// `.allow_self_tagging()` is required. Without it, `EventBuilder` silently
+/// drops every `p` tag whose value equals the signer's own pubkey, and the
+/// caller has no way to see that it happened. Buzz has kinds where the signer
+/// legitimately p-tags itself: a Block action on an attention Block carries
+/// the decision maker as its processor, and the decision maker is the person
+/// clicking. Stripping that tag produced a Block action with zero `p` tags,
+/// which the relay rejects with "Block event must include exactly one
+/// processor `p` tag", a message that points at the relay for a bug that
+/// happened here, in the signer.
+fn build_signed_event(
+    keys: &Keys,
+    kind: u16,
+    content: String,
+    created_at: Option<u64>,
+    tags: Vec<Vec<String>>,
+) -> Result<Event, String> {
+    let nostr_tags = tags
+        .into_iter()
+        .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut builder = EventBuilder::new(Kind::Custom(kind), content)
+        .tags(nostr_tags)
+        .allow_self_tagging();
+    if let Some(created_at) = created_at {
+        builder = builder.custom_created_at(Timestamp::from(created_at));
+    }
+
+    builder
+        .sign_with_keys(keys)
+        .map_err(|error| format!("sign failed: {error}"))
+}
+
 #[tauri::command]
 pub async fn sign_event(
     kind: u16,
@@ -120,21 +155,7 @@ pub async fn sign_event(
     let keys = state.signing_keys()?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let nostr_tags = tags
-            .into_iter()
-            .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut builder = EventBuilder::new(Kind::Custom(kind), content).tags(nostr_tags);
-        if let Some(created_at) = created_at {
-            builder = builder.custom_created_at(Timestamp::from(created_at));
-        }
-
-        let event = builder
-            .sign_with_keys(&keys)
-            .map_err(|error| format!("sign failed: {error}"))?;
-
-        Ok(event.as_json())
+        build_signed_event(&keys, kind, content, created_at, tags).map(|event| event.as_json())
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
@@ -787,6 +808,82 @@ mod nostr_identity_binding_tests {
         .unwrap_err();
 
         assert_eq!(error, "expires_at is expired");
+    }
+}
+
+#[cfg(test)]
+mod sign_event_tests {
+    use super::build_signed_event;
+    use nostr::Keys;
+
+    const KIND_BLOCK_ACTION: u16 = 40010;
+
+    fn tag_values(event: &nostr::Event) -> Vec<Vec<String>> {
+        event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect()
+    }
+
+    /// A Block action on an attention Block names the decision maker as its
+    /// processor, and the decision maker signs it. Without
+    /// `.allow_self_tagging()` the `p` tag is dropped here and the relay
+    /// rejects the action for having no processor.
+    #[test]
+    fn sign_event_keeps_a_p_tag_that_names_the_signer() {
+        let keys = Keys::generate();
+        let signer = keys.public_key().to_hex();
+
+        let event = build_signed_event(
+            &keys,
+            KIND_BLOCK_ACTION,
+            "{}".to_owned(),
+            None,
+            vec![
+                vec!["h".into(), "0f73df98-c648-4689-bf76-32942c480e00".into()],
+                vec!["p".into(), signer.clone()],
+            ],
+        )
+        .unwrap();
+
+        let tags = tag_values(&event);
+        assert_eq!(
+            tags.iter().filter(|tag| tag[0] == "p").count(),
+            1,
+            "self `p` tag was stripped: {tags:?}"
+        );
+        assert!(tags.contains(&vec!["p".into(), signer]));
+        assert!(event.verify_signature());
+    }
+
+    #[test]
+    fn sign_event_preserves_every_tag_it_was_given() {
+        let keys = Keys::generate();
+        let processor = Keys::generate().public_key().to_hex();
+        let requested = vec![
+            vec!["h".into(), "0f73df98-c648-4689-bf76-32942c480e00".into()],
+            vec!["p".into(), processor],
+            vec![
+                "block-action".into(),
+                "1".into(),
+                "question.submit".into(),
+                "9e41ab63-f56d-43d4-aee5-6f7feaf3f189".into(),
+                "b61f8504-b4b8-4e18-94ac-e3d03360bb70".into(),
+            ],
+        ];
+
+        let event = build_signed_event(
+            &keys,
+            KIND_BLOCK_ACTION,
+            "{}".to_owned(),
+            Some(1_786_831_119),
+            requested.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(tag_values(&event), requested);
+        assert_eq!(event.created_at.as_secs(), 1_786_831_119);
     }
 }
 
