@@ -96,15 +96,18 @@ export const HUE_SCATTER_TONES: Record<HueName, string[]> = {
 };
 
 /** Reads the hue index.html's inline script already picked and stamped
- * onto <html data-hue> before this module ever evaluates. Falls back to
- * violet if the attribute is somehow missing (script blocked, non-browser
- * render, e.g. during `tsc`/build-time type checks). */
-/** Colony's single brand hue. The site previously rolled a random hue per
- * page load, so the same page rendered pink, then amber, then green between
- * refreshes; a brand that changes color on every visit reads as broken, not
- * playful. Kept as a function (rather than inlining the constant at every
- * call site) so a future themed surface can reintroduce variation
- * deliberately, in one place. */
+ * onto <html data-hue> before this module ever evaluates. Never re-rolls:
+ * the canvas custom properties are already painted from that pick, so a
+ * second roll here would put the scatter field on a different hue than the
+ * background behind it. Falls back to violet when the attribute is missing
+ * or unrecognised (script blocked, non-browser render, e.g. during
+ * `tsc`/build-time type checks). */
 export function getActiveHue(): HueName {
-  return "violet";
+  const stamped =
+    typeof document === "undefined"
+      ? undefined
+      : document.documentElement.dataset.hue;
+  return HUE_NAMES.includes(stamped as HueName)
+    ? (stamped as HueName)
+    : "violet";
 }
