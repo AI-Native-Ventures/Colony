@@ -4,6 +4,7 @@ pub mod blocks;
 pub mod channel_templates;
 pub mod channels;
 pub mod company;
+pub mod content;
 pub mod decisions;
 pub mod discovery;
 pub mod dms;
