@@ -68,6 +68,9 @@ function titleForUrl(url: URL): string {
   return url.hostname || "Web";
 }
 
+const UNSUPPORTED_WEB_KIND_MESSAGE =
+  "This build cannot open web links in the workspace. Enable the workspace web tab to use this action.";
+
 /** Decide whether a message has an in-app web action without mutating state. */
 export function decideWorkspaceUrlOpening(
   body: string,
@@ -82,28 +85,38 @@ export function decideWorkspaceUrlOpening(
     };
   }
   if (!hasWebKind("web")) {
-    return {
-      supported: false,
-      message:
-        "This build cannot open web links in the workspace. Enable the workspace web tab to use this action.",
-    };
+    return { supported: false, message: UNSUPPORTED_WEB_KIND_MESSAGE };
   }
   return { supported: true, title: titleForUrl(url), url: url.href };
 }
 
-/** Open the first safe message URL in the current channel's web workspace tab. */
-export function openUrlInWorkspace(
-  input: { body: string; channelId: string },
-  dependencies: OpenUrlDependencies = DEFAULT_DEPENDENCIES,
+/** Decide whether one already-known link can open in the workspace. */
+export function decideWorkspaceLinkOpening(
+  href: string,
+  hasWebKind: (kind: string) => boolean,
+): WorkspaceUrlDecision {
+  const url = parseWorkspaceUrl(href);
+  if (!url) {
+    return {
+      supported: false,
+      message: "This is not a safe HTTP or HTTPS link.",
+    };
+  }
+  if (!hasWebKind("web")) {
+    return { supported: false, message: UNSUPPORTED_WEB_KIND_MESSAGE };
+  }
+  return { supported: true, title: titleForUrl(url), url: url.href };
+}
+
+function openDecidedUrl(
+  decision: WorkspaceUrlDecision,
+  channelId: string,
+  dependencies: OpenUrlDependencies,
 ): OpenUrlInWorkspaceResult {
-  const decision = decideWorkspaceUrlOpening(
-    input.body,
-    (kind) => dependencies.getKind(kind) !== undefined,
-  );
   if (!decision.supported) return { ok: false, message: decision.message };
 
   try {
-    const tabId = dependencies.openTab(input.channelId, {
+    const tabId = dependencies.openTab(channelId, {
       kind: "web",
       title: decision.title,
       createdBy: "local",
@@ -113,7 +126,7 @@ export function openUrlInWorkspace(
         url: decision.url,
       },
     });
-    dependencies.setSurfaceMode(input.channelId, "workspace");
+    dependencies.setSurfaceMode(channelId, "workspace");
     return { ok: true, tabId, title: decision.title, url: decision.url };
   } catch (error) {
     return {
@@ -121,4 +134,39 @@ export function openUrlInWorkspace(
       message: `This link could not be opened in the workspace: ${String(error)}`,
     };
   }
+}
+
+/**
+ * Open one clicked link in the current channel's web workspace tab.
+ *
+ * Unlike `openUrlInWorkspace`, the caller already knows which link was
+ * chosen, so no URL is extracted from message text.
+ */
+export function openLinkInWorkspace(
+  input: { href: string; channelId: string },
+  dependencies: OpenUrlDependencies = DEFAULT_DEPENDENCIES,
+): OpenUrlInWorkspaceResult {
+  return openDecidedUrl(
+    decideWorkspaceLinkOpening(
+      input.href,
+      (kind) => dependencies.getKind(kind) !== undefined,
+    ),
+    input.channelId,
+    dependencies,
+  );
+}
+
+/** Open the first safe message URL in the current channel's web workspace tab. */
+export function openUrlInWorkspace(
+  input: { body: string; channelId: string },
+  dependencies: OpenUrlDependencies = DEFAULT_DEPENDENCIES,
+): OpenUrlInWorkspaceResult {
+  return openDecidedUrl(
+    decideWorkspaceUrlOpening(
+      input.body,
+      (kind) => dependencies.getKind(kind) !== undefined,
+    ),
+    input.channelId,
+    dependencies,
+  );
 }
