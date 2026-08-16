@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
+import { useWorkspaceLinkOpener } from "@/features/workspace/ui/WorkspaceLinkContext";
 
 import { MaskedLinkTooltip } from "./MaskedLinkTooltip";
 import {
@@ -17,9 +18,13 @@ import {
  *
  * Buzz renders inside a native webview whose default context menu has no
  * useful link actions, so a plain right-click on a link is a no-op. This adds
- * an in-app menu with "Open link" (via the OS opener, matching the anchor's
- * left-click `target="_blank"` behavior) and "Copy link" (the real href, not
- * the masked display text).
+ * an in-app menu with "Open link" (via the OS opener) and "Copy link" (the
+ * real href, not the masked display text).
+ *
+ * Left-click opens the channel workspace's web tab when `onOpenInWorkspace`
+ * is supplied and accepts the href. Surfaces without a channel workspace pass
+ * nothing and keep the historical `target="_blank"` OS-browser behavior, and
+ * so does a workspace open that the handler declines.
  */
 export function ExternalLinkAnchor({
   anchorProps,
@@ -34,9 +39,17 @@ export function ExternalLinkAnchor({
   isLinearLink: boolean;
   label: string;
 }) {
+  const onOpenInWorkspace = useWorkspaceLinkOpener();
   const [menu, setMenu] = React.useState<MediaContextMenuPosition | null>(null);
   const closeMenu = React.useCallback(() => setMenu(null), []);
   useDismissMediaContextMenu(Boolean(menu), closeMenu);
+
+  const openExternally = React.useCallback(() => {
+    if (!href) return;
+    void openUrl(href).catch(() => {
+      toast.error("Failed to open link");
+    });
+  }, [href]);
 
   const anchor = (
     <a
@@ -46,6 +59,27 @@ export function ExternalLinkAnchor({
         isLinearLink ? "linear-link" : "text-primary hover:text-primary/80",
       )}
       href={href}
+      onClick={(event) => {
+        // Modified clicks keep their platform meaning (new window, download,
+        // save) and middle-click never reaches onClick, so only handle a
+        // plain left-click.
+        if (
+          !href ||
+          !onOpenInWorkspace ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+        // Claim the click before deciding: if the workspace declines, this
+        // falls back to the OS opener rather than the webview's own
+        // target="_blank", which would open a blank native window.
+        event.preventDefault();
+        if (!onOpenInWorkspace(href)) openExternally();
+      }}
       onContextMenuCapture={(event) => {
         if (!href) return;
         event.preventDefault();
@@ -68,12 +102,10 @@ export function ExternalLinkAnchor({
           dataAttributes={["data-link-context-menu"]}
           items={[
             {
-              label: "Open link",
+              label: onOpenInWorkspace ? "Open in browser" : "Open link",
               onSelect: () => {
                 closeMenu();
-                void openUrl(href).catch(() => {
-                  toast.error("Failed to open link");
-                });
+                openExternally();
               },
             },
             {

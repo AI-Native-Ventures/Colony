@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   decideWorkspaceUrlOpening,
   extractFirstHttpUrl,
+  openLinkInWorkspace,
   openUrlInWorkspace,
   parseWorkspaceUrl,
 } from "./openUrlInWorkspace.ts";
@@ -97,6 +98,80 @@ test("opens the safe URL as a web tab and switches the channel to workspace", ()
     ],
     ["mode", "channel-1", "workspace"],
   ]);
+});
+
+test("opens a clicked link without re-scanning the message for a URL", () => {
+  const calls = [];
+  const result = openLinkInWorkspace(
+    { channelId: "channel-1", href: "https://second.example.com/page?q=1" },
+    {
+      getKind: (kind) => (kind === "web" ? {} : undefined),
+      openTab: (channelId, tab) => {
+        calls.push(["tab", channelId, tab]);
+        return "tab-2";
+      },
+      setSurfaceMode: (channelId, mode) => {
+        calls.push(["mode", channelId, mode]);
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    tabId: "tab-2",
+    title: "second.example.com",
+    url: "https://second.example.com/page?q=1",
+  });
+  assert.deepEqual(calls, [
+    [
+      "tab",
+      "channel-1",
+      {
+        kind: "web",
+        title: "second.example.com",
+        createdBy: "local",
+        payload: {
+          endpoint: null,
+          targetId: null,
+          url: "https://second.example.com/page?q=1",
+        },
+      },
+    ],
+    ["mode", "channel-1", "workspace"],
+  ]);
+});
+
+test("declines a clicked link the workspace browser must not load", () => {
+  const reject = () => {
+    throw new Error("must not open a tab");
+  };
+  for (const href of [
+    "javascript:alert(1)",
+    "file:///tmp/report",
+    "https://user:password@example.com",
+    "buzz://message?channel=c&id=1",
+  ]) {
+    assert.deepEqual(
+      openLinkInWorkspace(
+        { channelId: "channel-1", href },
+        { getKind: () => ({}), openTab: reject, setSurfaceMode: reject },
+      ),
+      { ok: false, message: "This is not a safe HTTP or HTTPS link." },
+      `expected ${href} to be declined`,
+    );
+  }
+
+  assert.deepEqual(
+    openLinkInWorkspace(
+      { channelId: "channel-1", href: "https://example.com" },
+      { getKind: () => undefined, openTab: reject, setSurfaceMode: reject },
+    ),
+    {
+      ok: false,
+      message:
+        "This build cannot open web links in the workspace. Enable the workspace web tab to use this action.",
+    },
+  );
 });
 
 test("returns a user-facing error when opening the tab fails", () => {
