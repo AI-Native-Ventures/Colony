@@ -11,7 +11,7 @@ function targets(overrides = {}) {
     createChannel: target,
     goActionCenter: target,
     goAgents: target,
-    goBlocks: target,
+    goBlocksSettings: target,
     goDiscovery: target,
     goHome: target,
     goNewMessage: target,

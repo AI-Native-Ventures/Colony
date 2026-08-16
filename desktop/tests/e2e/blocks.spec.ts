@@ -321,7 +321,10 @@ test("the visible Blocks catalog hands a typed Block reference into chat", async
   });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Blocks" }).click();
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("profile-popover-settings").click();
+  await expect(page.getByTestId("settings-view")).toBeVisible();
+  await page.getByTestId("settings-nav-blocks").click();
   const catalogPage = page.getByTestId("blocks-catalog-page");
   const catalogCard = page.getByTestId("block-catalog-card-lead-card");
   await expect(catalogPage).toBeVisible();

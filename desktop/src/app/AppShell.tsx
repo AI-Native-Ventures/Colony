@@ -142,7 +142,6 @@ export function AppShell() {
   const {
     goActionCenter,
     goAgents,
-    goBlocks,
     goChannel,
     goContent,
     goDiscovery,
@@ -629,7 +628,7 @@ export function AppShell() {
     createChannel: handleOpenCreateChannel,
     goActionCenter,
     goAgents,
-    goBlocks,
+    goBlocksSettings: () => handleOpenSettings("blocks"),
     goDiscovery,
     goHome,
     goNewMessage: handleOpenNewDm,
@@ -842,7 +841,6 @@ export function AppShell() {
                         }}
                         onSelectActionCenter={() => void goActionCenter()}
                         onSelectAgents={() => void goAgents()}
-                        onSelectBlocks={() => void goBlocks()}
                         onSelectDiscovery={() =>
                           void goDiscovery({ surface: "leads" })
                         }

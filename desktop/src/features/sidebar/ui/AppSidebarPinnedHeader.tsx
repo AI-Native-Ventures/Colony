@@ -1,6 +1,5 @@
 import {
   Activity,
-  Blocks,
   Bot,
   CalendarRange,
   Compass,
@@ -47,7 +46,6 @@ type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
-  onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
   onSelectProjects: () => void;
@@ -104,7 +102,6 @@ export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectActionCenter,
   onSelectAgents,
-  onSelectBlocks,
   onSelectDiscovery,
   onSelectHome,
   onSelectProjects,
@@ -216,18 +213,6 @@ export function AppSidebarPrimaryMenu({
             >
               Agents
             </SidebarMenuLabel>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            data-testid="open-blocks-view"
-            isActive={selectedView === "blocks"}
-            onClick={onSelectBlocks}
-            tooltip="Blocks"
-            type="button"
-          >
-            <Blocks className="h-4 w-4" />
-            <SidebarMenuLabel>Blocks</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>

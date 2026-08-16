@@ -138,17 +138,6 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
-  const goBlocks = React.useCallback(
-    (behavior?: NavigationBehavior) =>
-      commitNavigation(
-        {
-          to: "/blocks",
-        },
-        behavior,
-      ),
-    [commitNavigation],
-  );
-
   const goSpend = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -441,7 +430,6 @@ export function useAppNavigation() {
     closeWorkflowDetail,
     goActionCenter,
     goAgents,
-    goBlocks,
     goChannel,
     goContent,
     goDiscovery,
