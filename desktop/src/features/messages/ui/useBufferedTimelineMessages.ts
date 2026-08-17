@@ -30,7 +30,18 @@ export function selectBufferedTimelineMessages<T extends { id: string }>({
   const firstFrozenIndex = messages.findIndex(
     (message) => message.id === frozenMessageIds[0],
   );
-  const prepended = messages.slice(0, firstFrozenIndex);
+  // Everything before the frozen head is an older-history prepend — unless the
+  // source array reordered and carried a frozen id ahead of that head. Two
+  // events sharing a `created_at` can swap places between projections, because
+  // the window projection breaks that tie by descending id while the cache sort
+  // breaks it by ascending id. Admitting such an id here as well as from the
+  // frozen list emits it twice, and the timeline renders one row per entry: the
+  // same message appears again, once as a fresh row and once as a grouping
+  // continuation. Keep the frozen order, which is what freezing is for.
+  const frozenIds = new Set(frozenMessageIds);
+  const prepended = messages
+    .slice(0, firstFrozenIndex)
+    .filter((message) => !frozenIds.has(message.id));
   const frozen = frozenMessageIds.map((id) => currentById.get(id) as T);
   const buffered = [...prepended, ...frozen];
   if (
