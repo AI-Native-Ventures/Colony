@@ -123,6 +123,110 @@ function timelineRow(page: import("@playwright/test").Page, messageId: string) {
   );
 }
 
+// LOCAL PROBE, NOT FOR COMMIT.
+async function dumpRowMatches(
+  page: import("@playwright/test").Page,
+  messageId: string,
+  label: string,
+) {
+  const detail = await page.evaluate((id) => {
+    const nodes = Array.from(
+      document.querySelectorAll(`[data-message-id="${id}"]`),
+    );
+    return nodes.map((node, index) => {
+      const parent = node.parentElement;
+      return {
+        index,
+        tag: node.tagName,
+        testId: node.getAttribute("data-testid"),
+        parentTag: parent?.tagName ?? null,
+        parentTestId: parent?.getAttribute("data-testid") ?? null,
+        parentDataset: parent ? JSON.stringify({ ...parent.dataset }) : null,
+        siblingIndex: parent ? Array.from(parent.children).indexOf(node) : -1,
+        siblingCount: parent ? parent.children.length : -1,
+        text: (node.textContent ?? "").replace(/\s+/g, " ").slice(0, 120),
+      };
+    });
+  }, messageId);
+  console.log(
+    `ROWDUMP ${label} ${messageId} count=${detail.length} ${JSON.stringify(detail)}`,
+  );
+}
+
+// LOCAL PROBE, NOT FOR COMMIT.
+// Records every moment the DOM holds more than one element for one
+// `data-message-id`, including transient windows a single point-in-time count
+// would miss. Installed before navigation so it survives `page.reload()`.
+async function installDuplicateRowWatcher(
+  page: import("@playwright/test").Page,
+) {
+  await page.addInitScript(() => {
+    const store = { hits: [] as unknown[], seen: new Set<string>() };
+    (window as unknown as { __DUP_ROWS__: typeof store }).__DUP_ROWS__ = store;
+    let queued = false;
+    const check = () => {
+      queued = false;
+      const counts = new Map<string, number>();
+      for (const node of document.querySelectorAll("[data-message-id]")) {
+        const id = node.getAttribute("data-message-id") ?? "";
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      for (const [id, count] of counts) {
+        if (count < 2) continue;
+        const key = `${id}:${count}`;
+        if (store.seen.has(key)) continue;
+        store.seen.add(key);
+        if (store.hits.length >= 30) continue;
+        store.hits.push({
+          at: new Date().toISOString(),
+          id,
+          count,
+          url: location.pathname,
+          nodes: Array.from(
+            document.querySelectorAll(`[data-message-id="${id}"]`),
+          ).map((node) => {
+            const parent = node.parentElement;
+            return {
+              tag: node.tagName,
+              testId: node.getAttribute("data-testid"),
+              parentTag: parent?.tagName ?? null,
+              parentTestId: parent?.getAttribute("data-testid") ?? null,
+              parentDataset: parent ? { ...parent.dataset } : null,
+              siblingIndex: parent
+                ? Array.from(parent.children).indexOf(node)
+                : -1,
+              classes: (node.getAttribute("class") ?? "").slice(0, 90),
+              text: (node.textContent ?? "").replace(/\s+/g, " ").slice(0, 110),
+            };
+          }),
+        });
+      }
+    };
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(check);
+    };
+    new MutationObserver(schedule).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+    schedule();
+  });
+}
+
+async function reportDuplicateRows(
+  page: import("@playwright/test").Page,
+  label: string,
+) {
+  const hits = await page.evaluate(
+    () =>
+      (window as unknown as { __DUP_ROWS__?: { hits: unknown[] } }).__DUP_ROWS__
+        ?.hits ?? [],
+  );
+  console.log(`DUPROWS ${label} hits=${hits.length} ${JSON.stringify(hits)}`);
+}
+
 /**
  * Gate C intentionally owns neither relay nor ACP lifecycle.  The invoking
  * harness provides a running relay, an ACP fixture configured with
@@ -494,6 +598,7 @@ test.describe("Blocks live Gate C", () => {
         ],
       },
     });
+    await installDuplicateRowWatcher(page);
     await page.goto("/");
     await expect(page.getByTestId("app-sidebar")).toBeVisible({
       timeout: 30_000,
@@ -558,6 +663,8 @@ test.describe("Blocks live Gate C", () => {
     ).toBeVisible();
     await screenshot(page, evidence, "03-proposals-survive-close-restart.png");
     await page.getByText(name, { exact: true }).click();
+    for (const id of proposalIds) await dumpRowMatches(page, id, "after-inbox");
+    await reportDuplicateRows(page, "after-inbox");
 
     const multiSelectAction = await runCli(cli, relayHttpUrl, [
       "blocks",
@@ -669,6 +776,8 @@ test.describe("Blocks live Gate C", () => {
     // Browser mode reaches the real relay but its native command boundary is
     // intentionally deterministic. Double invocation must still reserve one
     // browser command; the Rust tests run by prove-blocks cover the real store.
+    for (const id of proposalIds)
+      await dumpRowMatches(page, id, "before-approve");
     await proposalRows[0].getByRole("button", { name: "Review agent" }).click();
     await expect(proposalDialog.getByLabel("Agent name")).toHaveValue(
       "Gate C Researcher",
@@ -699,9 +808,14 @@ test.describe("Blocks live Gate C", () => {
         ),
       )
       .toBe(1);
+    for (const id of proposalIds)
+      await dumpRowMatches(page, id, "after-approve");
     await expect(proposalRows[0].getByText("Completed.")).toBeVisible({
       timeout: 30_000,
     });
+    for (const id of proposalIds)
+      await dumpRowMatches(page, id, "before-decline");
+    await reportDuplicateRows(page, "before-decline");
     await proposalRows[1].getByRole("button", { name: "Review agent" }).click();
     const decline = proposalDialog.getByRole("button", { name: "Decline" });
     await expect(decline).toBeEnabled();
@@ -740,6 +854,7 @@ test.describe("Blocks live Gate C", () => {
       page.getByTestId(`home-inbox-item-${proposalIds[1]}`),
     ).toHaveCount(0);
     await screenshot(page, evidence, "05-proposals-resolved.png");
+    await reportDuplicateRows(page, "end-of-test");
 
     test.info().annotations.push(
       { type: "gate-c-evidence", description: evidence },
