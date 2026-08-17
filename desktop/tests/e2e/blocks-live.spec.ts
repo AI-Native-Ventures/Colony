@@ -106,6 +106,24 @@ async function screenshot(
 }
 
 /**
+ * Resolve one timeline row by the message it renders.
+ *
+ * `data-message-id` is not unique to the conversation timeline: the Inbox
+ * renders the same attribute on its own rows (`InboxMessageRow`), so a bare
+ * `[data-message-id="..."]` locator matches two elements whenever both
+ * surfaces happen to be mounted for the same message. This gate visits the
+ * Inbox partway through and then returns to the channel, so every row locator
+ * held across that navigation is a strict-mode violation waiting to happen.
+ * Pin the row to the timeline's own `message-row` test id, which `MessageRow`
+ * always renders on the element that carries `data-message-id`.
+ */
+function timelineRow(page: import("@playwright/test").Page, messageId: string) {
+  return page.locator(
+    `[data-testid="message-row"][data-message-id="${messageId}"]`,
+  );
+}
+
+/**
  * Gate C intentionally owns neither relay nor ACP lifecycle.  The invoking
  * harness provides a running relay, an ACP fixture configured with
  * BUZZ_E2E_ACP_PROMPT_LOG, and memberships for the test identities.
@@ -484,8 +502,8 @@ test.describe("Blocks live Gate C", () => {
       timeout: 30_000,
     });
     await page.getByText(name, { exact: true }).click();
-    const oldLeadRow = page.locator(`[data-message-id="${oldLeadEventId}"]`);
-    const newLeadRow = page.locator(`[data-message-id="${newLeadEventId}"]`);
+    const oldLeadRow = timelineRow(page, oldLeadEventId);
+    const newLeadRow = timelineRow(page, newLeadEventId);
     await expect(
       oldLeadRow.getByText("Gate C Lead", { exact: true }),
     ).toBeVisible({ timeout: 30_000 });
@@ -511,9 +529,7 @@ test.describe("Blocks live Gate C", () => {
     ).toBeVisible({ timeout: 30_000 });
     await screenshot(page, evidence, "02-after-desktop-restart.png");
 
-    const proposalRows = proposalIds.map((id) =>
-      page.locator(`[data-message-id="${id}"]`),
-    );
+    const proposalRows = proposalIds.map((id) => timelineRow(page, id));
     await expect(
       proposalRows[0].getByRole("button", { name: "Review agent" }),
     ).toBeVisible({ timeout: 30_000 });
@@ -637,7 +653,13 @@ test.describe("Blocks live Gate C", () => {
     });
     await writeFile(path.join(evidence, "acp-prompt.log"), prompts, "utf8");
     await writeEvidence(evidence, "multi-select.json", { multiSelectAction });
-    const approvalCompleted = page.getByText("Completed.", { exact: true });
+    // Scoped to the approval instance's own row for the same reason as
+    // `timelineRow`: page-wide text here would also match the Inbox copy of
+    // this message, and the proposal receipts below reuse the same wording.
+    const approvalCompleted = timelineRow(page, approvalEventId).getByText(
+      "Completed.",
+      { exact: true },
+    );
     await expect(approvalCompleted).toBeVisible({
       timeout: 30_000,
     });
