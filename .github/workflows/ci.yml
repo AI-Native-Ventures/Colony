@@ -85,6 +85,15 @@ jobs:
               - 'scripts/create-required-extensions.sql'
               - 'scripts/attach-schema-partitions.sql'
               - 'justfile'
+            # Never put a negated pattern (`!foo/**`) in one of these lists.
+            # dorny/paths-filter ORs the patterns in a rule, and picomatch
+            # reads `!desktop/src-tauri/**` as "matches every path that is not
+            # under desktop/src-tauri" — so a single negation makes the whole
+            # rule true for every file in the repo. This list carried
+            # `!desktop/src-tauri/**` until 2026-08-17, which meant `desktop`
+            # was true on every pull request and the four Desktop Smoke E2E
+            # shards ran on README-only diffs. Excluding a subtree needs a
+            # separate rule (see `desktop-rust`), not a negation here.
             desktop:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
@@ -94,7 +103,6 @@ jobs:
               - 'scripts/bundle-sidecars.sh'
               - 'scripts/run-real-shell-e2e.sh'
               - 'desktop/**'
-              - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
               - '.github/workflows/ci.yml'
               - 'scripts/ci-pnpm-store-path.sh'
@@ -195,6 +203,12 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Paths filter contract
+        # A negated pattern makes its whole paths-filter rule match every file
+        # in the repo, so CI silently stops skipping anything. Runs here
+        # because this job is required and unconditional -- a path filter
+        # cannot skip the guard that checks the path filters.
+        run: node --test scripts/paths-filter-contract.test.mjs
       - name: Desktop dev instance identity contract
         # Runs in this job for the same reason the schema drift guard does:
         # `Detect Changed Paths` is required and unconditional, so a path
