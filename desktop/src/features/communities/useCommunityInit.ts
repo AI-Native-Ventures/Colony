@@ -17,6 +17,7 @@ import {
   clearAllDrafts,
   initDraftStore,
 } from "@/features/messages/lib/useDrafts";
+import { resetContentRepositoryState } from "@/features/content/contentRepository";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
 import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
@@ -78,6 +79,7 @@ function resetCommunityState({
   resetBlockActionQueue();
   resetBlockRepository();
   resetCompanyRepositoryState();
+  resetContentRepositoryState();
   resetTaskRunRepositoryState();
   resetPartyRepositoryState();
   resetLedgerRepositoryState();

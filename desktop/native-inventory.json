@@ -699,7 +699,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:262",
+        "src/features/communities/useCommunityInit.ts:264",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -2242,7 +2242,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:248",
+        "src/features/communities/useCommunityInit.ts:250",
         "src/parity/session/script.ts:321",
         "src/shared/api/tauriIdentity.ts:37"
       ]

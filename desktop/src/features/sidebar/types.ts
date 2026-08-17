@@ -19,4 +19,5 @@ export type SidebarSelectedView =
   | "workflows"
   | "pulse"
   | "projects"
-  | "spend";
+  | "spend"
+  | "content";

@@ -10,6 +10,7 @@ export type NavigationCommandTargets = {
   goActionCenter: NavigationCommandTarget;
   goAgents: NavigationCommandTarget;
   goBlocks: NavigationCommandTarget;
+  goContent: NavigationCommandTarget;
   goDiscovery: DiscoveryCommandTarget;
   goHome: NavigationCommandTarget;
   goNewMessage: NavigationCommandTarget;
@@ -20,6 +21,7 @@ export type NavigationCommandTargets = {
   goWorkflows: NavigationCommandTarget;
   openBrowseChannels: NavigationCommandTarget;
   projectsEnabled: boolean;
+  contentEnabled: boolean;
   pulseEnabled: boolean;
   workflowsEnabled: boolean;
 };
@@ -149,6 +151,16 @@ export function buildNavigationCommands(
       title: "Open Workflows",
     });
   }
+  if (targets.contentEnabled) {
+    actions.push({
+      description: "Review and approve social posts",
+      id: "open-content",
+      onSelect: () => {
+        void targets.goContent();
+      },
+      title: "Open Content",
+    });
+  }
 
   return actions;
 }
@@ -158,11 +170,13 @@ export function useNavigationCommands(
   targets: NavigationCommandTargets,
 ): SearchCommand[] {
   const {
+    contentEnabled,
     createAgent,
     createChannel,
     goActionCenter,
     goAgents,
     goBlocks,
+    goContent,
     goDiscovery,
     goHome,
     goNewMessage,
@@ -180,11 +194,13 @@ export function useNavigationCommands(
   return React.useMemo(
     () =>
       buildNavigationCommands({
+        contentEnabled,
         createAgent,
         createChannel,
         goActionCenter,
         goAgents,
         goBlocks,
+        goContent,
         goDiscovery,
         goHome,
         goNewMessage,
@@ -199,11 +215,13 @@ export function useNavigationCommands(
         workflowsEnabled,
       }),
     [
+      contentEnabled,
       createAgent,
       createChannel,
       goActionCenter,
       goAgents,
       goBlocks,
+      goContent,
       goDiscovery,
       goHome,
       goNewMessage,

@@ -183,6 +183,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goContent = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/content",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProfile = React.useCallback(
     (pubkey: string, behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -432,6 +443,7 @@ export function useAppNavigation() {
     goAgents,
     goBlocks,
     goChannel,
+    goContent,
     goDiscovery,
     goForumPost,
     goHome,
