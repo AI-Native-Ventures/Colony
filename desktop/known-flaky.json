@@ -17,6 +17,21 @@
       "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
     },
     {
+      "test": "custom-emoji.spec.ts › reacting with a custom emoji renders via the loopback media proxy",
+      "since": "2026-08-17",
+      "why": "Diagnosed, not guessed: `expect.poll` at custom-emoji.spec.ts:395 timed out on 'Timeout 5000ms exceeded while waiting on the predicate', expected \"0\" and got \"1\", then passed on retry in 3.4s. 5000ms is Playwright's default, not a choice: playwright.config.ts sets `expect.timeout` to 15s on CI for the `integration` project only, so every polled assertion in `smoke` gets 5s while four shards share a free runner. Delete this entry by giving `smoke` the same expect timeout, not by touching the test."
+    },
+    {
+      "test": "mentions.spec.ts › groups member additions and joins with hidden names in the standard tooltip",
+      "since": "2026-08-17",
+      "why": "Same 5000ms smoke-project poll budget as the custom-emoji entry above. mentions.spec.ts:1244 waited for the grouped join tooltip text and reported 'element(s) not found' after 5000ms, then passed on retry. Observed on PR #281, whose diff contains no desktop code at all."
+    },
+    {
+      "test": "messaging.spec.ts › sends a thread message to its parent channel with a root-thread link",
+      "since": "2026-08-17",
+      "why": "READ THIS BEFORE TRUSTING THE ENTRY. This is the exact test the header comment of desktop/scripts/summarize-flaky-tests.mjs names as reason #1 the gate exists: messaging.spec.ts:1818 passed on retry on the run that green-lit a promotion candidate, then failed three attempts in a row three hours later and stopped a release. Allowlisting it is deliberately shipping past the case the gate was built for, taken as an owner call on 2026-08-17 to unblock the path-filter fix. Same signature as the two entries above: `expect.poll` at messaging.spec.ts:2010, 'Timeout 5000ms exceeded while waiting on the predicate'. This entry should be the first one deleted."
+    },
+    {
       "test": "overscroll-boundary.spec.ts › locks viewport rubber-band outside conversation scrollers",
       "since": "2026-08-16",
       "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
