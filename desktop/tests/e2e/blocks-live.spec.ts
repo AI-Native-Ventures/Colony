@@ -514,6 +514,17 @@ test.describe("Blocks live Gate C", () => {
     const proposalRows = proposalIds.map((id) =>
       page.locator(`[data-message-id="${id}"]`),
     );
+    // Every assertion below chains off these two locators, so a timeline that
+    // renders one proposal twice does not report a duplicate row: the chained
+    // locator matches in both copies and Playwright fails somewhere else with
+    // "element(s) not found" or a strict-mode violation, minutes away from the
+    // real cause. Pin uniqueness here so the gate names the duplicate itself.
+    for (const [index, row] of proposalRows.entries()) {
+      await expect(
+        row,
+        `proposal row ${index} must render exactly once`,
+      ).toHaveCount(1);
+    }
     await expect(
       proposalRows[0].getByRole("button", { name: "Review agent" }),
     ).toBeVisible({ timeout: 30_000 });
