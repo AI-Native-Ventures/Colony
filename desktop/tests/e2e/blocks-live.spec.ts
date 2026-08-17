@@ -207,7 +207,9 @@ async function installDuplicateRowWatcher(
       queued = true;
       requestAnimationFrame(check);
     };
-    new MutationObserver(schedule).observe(document.documentElement, {
+    // `addInitScript` runs before the document exists, so observe `document`
+    // itself rather than `document.documentElement`, which is still null here.
+    new MutationObserver(schedule).observe(document, {
       childList: true,
       subtree: true,
     });
