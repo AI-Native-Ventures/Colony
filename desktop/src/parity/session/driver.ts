@@ -208,6 +208,7 @@ async function runParitySessionInner(
     messageId: "",
     messageCreatedAt: 0,
     workflowId: "",
+    workflowRevision: "",
     teamId: "",
     templateId: "",
     personaId: "",
