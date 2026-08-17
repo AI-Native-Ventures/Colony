@@ -57,9 +57,25 @@ Cloudflare account. No manual DNS records are needed for routine deploys. Zone-l
 
 ## CI/CD
 
-Deliberately out of scope for this phase. Deploys are manual, run from a developer machine
-with `wrangler`. Automating this (GitHub Actions, Pages' native Git integration, or similar)
-is a separate follow-up, not assumed by this runbook.
+Automated. `.github/workflows/site-deploy.yml` rebuilds and deploys on every push to `main`
+that touches `site/`, and the run only goes green once `scripts/verify-site-live.sh` proves
+`https://colony.ainative.ventures` is serving that exact build. `workflow_dispatch` redeploys
+the current `main` without needing a commit.
+
+The manual procedure above still works and is still the fallback, but it should no longer be
+the routine path. A hand-run deploy is now a signal that something is wrong with the
+workflow.
+
+**Requires the `CLOUDFLARE_API_TOKEN` repository secret**, scoped to `Cloudflare Pages:Edit`
+on account `828c27dca37f41abb7d43603228ea05d`. Without it the deploy step fails with an
+explicit message rather than silently skipping. The account ID itself is not a secret and is
+set inline in the workflow.
+
+Scope limits, deliberate: it does not deploy from `develop` or from pull requests, and it
+does not touch DNS, the zone cache, or the Pages project settings. Those stay owner actions.
+
+Because it triggers on `main`, a change to the workflow only takes effect once it has been
+promoted from `develop` to `main`; it does nothing while it sits on `develop` alone.
 
 ## Resolved issues
 
