@@ -660,7 +660,13 @@ test.describe("Blocks live Gate C", () => {
       (element as HTMLElement).click();
       (element as HTMLElement).click();
     });
-    await expect(proposalDialog).toBeHidden();
+    // The dialog closes only after the signed Block action is published, and
+    // the client gives that publish PUBLISH_TIMEOUT_MS (25s) before it gives
+    // up. The integration project's default expect timeout is 15s, so the
+    // assertion could fire while the publish was still inside its own budget
+    // and report a hung dialog for a round trip that was merely slow. Wait
+    // past the publish deadline, like the receipt assertions below already do.
+    await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
     await expect
       .poll(() =>
         page.evaluate(
@@ -678,7 +684,7 @@ test.describe("Blocks live Gate C", () => {
     const decline = proposalDialog.getByRole("button", { name: "Decline" });
     await expect(decline).toBeEnabled();
     await decline.click();
-    await expect(proposalDialog).toBeHidden();
+    await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
     await expect(proposalRows[1].getByText("Declined.")).toBeVisible({
       timeout: 30_000,
     });
