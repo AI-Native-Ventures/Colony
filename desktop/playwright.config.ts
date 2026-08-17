@@ -12,6 +12,10 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "playwright-report" }],
+    // scripts/summarize-flaky-tests.mjs reads this to fail the job on any
+    // retry-masked failure. Without it that script only ever printed
+    // "Skipping flaky-test summary: ENOENT" and every flake stayed invisible.
+    ["json", { outputFile: "playwright-report.json" }],
   ],
   use: {
     baseURL: previewUrl,
