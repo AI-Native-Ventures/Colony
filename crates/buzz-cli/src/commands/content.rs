@@ -329,7 +329,7 @@ fn newest_heads(events: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
             None => heads.push(event),
         }
     }
-    heads.sort_by_key(|head| crate::client::extract_d_tag(head));
+    heads.sort_by_key(crate::client::extract_d_tag);
     heads
 }
 
