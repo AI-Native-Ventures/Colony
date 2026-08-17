@@ -159,14 +159,8 @@ function InboxMenuItem({
         tooltip="Inbox"
         type="button"
       >
-        <Inbox
-          className={selectedView !== "home" ? "h-4 w-4 opacity-80" : "h-4 w-4"}
-        />
-        <SidebarMenuLabel
-          className={selectedView !== "home" ? "opacity-80" : undefined}
-        >
-          Inbox
-        </SidebarMenuLabel>
+        <Inbox className="h-4 w-4" />
+        <SidebarMenuLabel>Inbox</SidebarMenuLabel>
       </SidebarMenuButton>
       {badgeCount > 0 ? (
         <SidebarMenuBadge
@@ -280,7 +274,11 @@ export function AppSidebarPrimaryMenu({
       data-tauri-drag-region
       data-testid="sidebar-primary-menu"
     >
-      <SidebarMenu className={moreNav ? "pb-0" : "pb-2"}>
+      <SidebarMenu
+        className={
+          moreNav ? "sidebar-primary-menu pb-0" : "sidebar-primary-menu pb-2"
+        }
+      >
         <InboxMenuItem
           dueReminderEventIds={dueReminderEventIds}
           homeBadgeFeedIds={homeBadgeFeedIds}
@@ -310,16 +308,8 @@ export function AppSidebarPrimaryMenu({
             tooltip="Agents"
             type="button"
           >
-            <Bot
-              className={
-                selectedView !== "agents" ? "h-4 w-4 opacity-80" : "h-4 w-4"
-              }
-            />
-            <SidebarMenuLabel
-              className={selectedView !== "agents" ? "opacity-80" : undefined}
-            >
-              Agents
-            </SidebarMenuLabel>
+            <Bot className="h-4 w-4" />
+            <SidebarMenuLabel>Agents</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
