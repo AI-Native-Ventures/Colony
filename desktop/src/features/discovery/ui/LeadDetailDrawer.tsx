@@ -30,11 +30,13 @@ import {
 import { Textarea } from "@/shared/ui/textarea";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import { publishLeadUpdate } from "../data/leadUpdates";
+import { leadMailtoUrl, leadTelUrl, leadWebUrl } from "../lib/leadLinks";
 import {
   PIPELINE_COLUMN_LABELS,
   pipelineMoveTargets,
   statusMoveOptions,
 } from "../lib/pipelineTransitions";
+import { LeadLink } from "./LeadLink";
 import type { LeadDetail, LeadFunnelStatus } from "../types";
 import {
   buildLeadUpdateInput,
@@ -108,16 +110,14 @@ function ContactLink({
   label: string;
 }) {
   return (
-    <a
+    <LeadLink
       className="inline-flex min-w-0 items-center gap-2 text-sm text-foreground hover:text-primary"
       href={href}
-      rel="noreferrer"
-      target="_blank"
     >
       {icon}
       <span className="truncate">{label}</span>
       <ExternalLink aria-hidden="true" className="h-3 w-3 shrink-0" />
-    </a>
+    </LeadLink>
   );
 }
 
@@ -199,6 +199,10 @@ function StatusControl({
 function LeadDetailBody({ lead }: { lead: LeadDetail }) {
   const name = leadName(lead);
   const isPerson = lead.entityType === "person" || Boolean(lead.personName);
+  const websiteUrl = leadWebUrl(lead.website);
+  const linkedinUrl = leadWebUrl(lead.linkedinUrl);
+  const mailtoUrl = leadMailtoUrl(lead.email);
+  const telUrl = leadTelUrl(lead.phone);
   return (
     <div className="space-y-6">
       <div className="flex items-start gap-4">
@@ -223,30 +227,30 @@ function LeadDetailBody({ lead }: { lead: LeadDetail }) {
       </div>
 
       <div className="space-y-2">
-        {lead.website ? (
+        {websiteUrl ? (
           <ContactLink
-            href={lead.website}
+            href={websiteUrl}
             icon={<Globe2 aria-hidden="true" className="h-4 w-4 shrink-0" />}
-            label={lead.website}
+            label={lead.website ?? websiteUrl}
           />
         ) : null}
-        {lead.email ? (
+        {mailtoUrl ? (
           <ContactLink
-            href={`mailto:${lead.email}`}
+            href={mailtoUrl}
             icon={<Mail aria-hidden="true" className="h-4 w-4 shrink-0" />}
-            label={lead.email}
+            label={lead.email ?? mailtoUrl}
           />
         ) : null}
-        {lead.phone ? (
+        {telUrl ? (
           <ContactLink
-            href={`tel:${lead.phone}`}
+            href={telUrl}
             icon={<Phone aria-hidden="true" className="h-4 w-4 shrink-0" />}
-            label={lead.phone}
+            label={lead.phone ?? telUrl}
           />
         ) : null}
-        {lead.linkedinUrl ? (
+        {linkedinUrl ? (
           <ContactLink
-            href={lead.linkedinUrl}
+            href={linkedinUrl}
             icon={<Link2 aria-hidden="true" className="h-4 w-4 shrink-0" />}
             label="LinkedIn"
           />

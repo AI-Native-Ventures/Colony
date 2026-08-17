@@ -9,7 +9,7 @@ export type NavigationCommandTargets = {
   createChannel: NavigationCommandTarget;
   goActionCenter: NavigationCommandTarget;
   goAgents: NavigationCommandTarget;
-  goBlocks: NavigationCommandTarget;
+  goBlocksSettings: NavigationCommandTarget;
   goContent: NavigationCommandTarget;
   goDiscovery: DiscoveryCommandTarget;
   goHome: NavigationCommandTarget;
@@ -96,10 +96,10 @@ export function buildNavigationCommands(
       title: "Create a new agent",
     },
     {
-      description: "Open the Blocks library",
+      description: "Open the Blocks library in settings",
       id: "open-blocks",
       onSelect: () => {
-        void targets.goBlocks();
+        void targets.goBlocksSettings();
       },
       title: "Open Blocks",
     },
@@ -175,7 +175,7 @@ export function useNavigationCommands(
     createChannel,
     goActionCenter,
     goAgents,
-    goBlocks,
+    goBlocksSettings,
     goContent,
     goDiscovery,
     goHome,
@@ -199,7 +199,7 @@ export function useNavigationCommands(
         createChannel,
         goActionCenter,
         goAgents,
-        goBlocks,
+        goBlocksSettings,
         goContent,
         goDiscovery,
         goHome,
@@ -220,7 +220,7 @@ export function useNavigationCommands(
       createChannel,
       goActionCenter,
       goAgents,
-      goBlocks,
+      goBlocksSettings,
       goContent,
       goDiscovery,
       goHome,

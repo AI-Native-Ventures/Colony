@@ -6,11 +6,20 @@ import {
   resolveBlockCatalogHandoff,
   useBlockCatalogQuery,
 } from "@/features/blocks/blockCatalog";
-import { BlocksCatalogScreen } from "@/features/blocks/ui/BlocksCatalogScreen";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
 
-export function BlocksRouteScreen() {
+import { BlocksCatalogList } from "./BlocksCatalogList";
+
+/**
+ * The Blocks catalog, as a Settings section.
+ *
+ * Picking a Block is a navigation into chat, which leaves Settings: the
+ * catalog is a place to look up what exists, and the work itself happens in a
+ * conversation.
+ */
+export function BlocksSettingsCard() {
   const { activeCommunity } = useCommunities();
   const channelsQuery = useChannelsQuery();
   const channelIds = React.useMemo(
@@ -48,8 +57,13 @@ export function BlocksRouteScreen() {
   );
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <BlocksCatalogScreen
+    <section className="min-w-0" data-testid="blocks-catalog-page">
+      <SettingsSectionHeader
+        description="The reusable views agents can place inside a conversation. Open one to continue working on it in chat."
+        title="Blocks"
+      />
+
+      <BlocksCatalogList
         error={catalogQuery.error instanceof Error ? catalogQuery.error : null}
         isLoading={
           activeCommunity !== null &&
@@ -58,6 +72,6 @@ export function BlocksRouteScreen() {
         items={catalogQuery.data ?? []}
         onSelect={handleSelect}
       />
-    </div>
+    </section>
   );
 }

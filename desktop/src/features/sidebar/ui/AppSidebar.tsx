@@ -138,7 +138,6 @@ type AppSidebarProps = {
   onCreateAgent: () => void;
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
-  onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
   onSelectProjects: () => void;
   onSelectContent: () => void;
@@ -216,7 +215,6 @@ export function AppSidebar({
   commandActions,
   onSelectActionCenter,
   onSelectAgents,
-  onSelectBlocks,
   onSelectDiscovery,
   onSelectProjects,
   onSelectContent,
@@ -590,7 +588,6 @@ export function AppSidebar({
                 homeBadgeCount={homeBadgeCount}
                 onSelectActionCenter={onSelectActionCenter}
                 onSelectAgents={onSelectAgents}
-                onSelectBlocks={onSelectBlocks}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}

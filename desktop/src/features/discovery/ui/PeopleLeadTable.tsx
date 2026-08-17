@@ -5,9 +5,11 @@ import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import type { DiscoverySearch } from "@/app/routes/discovery";
+import { leadWebUrl } from "../lib/leadLinks";
 import type { Lead } from "../types";
 import { stableLeadOrder } from "./LeadFilters";
 import type { LeadTableView } from "./LeadTable";
+import { LeadLink } from "./LeadLink";
 
 type PeopleLeadTableProps = {
   leads: readonly Lead[];
@@ -56,6 +58,27 @@ function PersonIdentity({ lead }: { lead: Lead }) {
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * A person's LinkedIn profile, or nothing when the stored value is not a web
+ * address. The card itself is clickable, so the link stops the click from
+ * also opening the lead drawer.
+ */
+function LinkedInLink({ value }: { value: string | null | undefined }) {
+  const href = leadWebUrl(value);
+  if (!href) return null;
+  return (
+    <LeadLink
+      className="inline-flex items-center gap-1 text-primary hover:underline"
+      href={href}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Link2 className="h-3.5 w-3.5" />
+      LinkedIn
+      <ExternalLink className="h-3 w-3" />
+    </LeadLink>
   );
 }
 
@@ -118,19 +141,7 @@ function PeopleGrid({
                 {lead.email}
               </span>
             ) : null}
-            {lead.linkedinUrl ? (
-              <a
-                className="inline-flex items-center gap-1 text-primary hover:underline"
-                href={lead.linkedinUrl}
-                onClick={(event) => event.stopPropagation()}
-                rel="noreferrer"
-                target="_blank"
-              >
-                <Link2 className="h-3.5 w-3.5" />
-                LinkedIn
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            ) : null}
+            <LinkedInLink value={lead.linkedinUrl} />
           </div>
         </Card>
       ))}
