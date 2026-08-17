@@ -696,6 +696,49 @@ test.describe("Blocks live Gate C", () => {
     await expect(decline).toBeEnabled();
     await decline.click();
     await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
+    // Probe, not an assertion. The decline receipt is published by the
+    // owner-side broker (useAgentProposalBroker), so "Declined." never
+    // appearing has two very different causes: the broker never published a
+    // kind:40011 receipt, or it published one the client then filtered out.
+    // The DOM cannot tell those apart and the failure below reads the same
+    // either way. Ask the relay's own store directly, and print it before the
+    // assertion so a red run carries the answer.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const { stdout: blockEvents } = await execFile(
+        "docker",
+        [
+          "compose",
+          "-p",
+          harnessProject,
+          "-f",
+          "docker-compose.harness.yml",
+          "exec",
+          "-T",
+          "postgres",
+          "psql",
+          "-U",
+          "buzz",
+          "-d",
+          "buzz",
+          "-tAc",
+          "SELECT kind, encode(id, 'hex'), tags::text FROM events " +
+            "WHERE kind IN (40010, 40011) ORDER BY created_at, id",
+        ],
+        { cwd: path.resolve("..") },
+      );
+      const receipts = blockEvents
+        .split("\n")
+        .filter((line) => line.startsWith("40011"));
+      console.log(
+        `BLOCKEVENTS attempt=${attempt} receipts=${receipts.length}\n${blockEvents.trim()}`,
+      );
+      if (
+        receipts.some((line) => line.includes(proposalIds[1] ?? "no-proposal"))
+      ) {
+        break;
+      }
+      await page.waitForTimeout(2_500);
+    }
     await expect(proposalRows[1].getByText("Declined.")).toBeVisible({
       timeout: 30_000,
     });
