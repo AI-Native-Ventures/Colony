@@ -109,6 +109,7 @@ export function CommunitySwitcher({
   const [leaveError, setLeaveError] = React.useState<string | null>(null);
   const [isLeaving, setIsLeaving] = React.useState(false);
   const profileMenuHoverTimer = React.useRef<number | null>(null);
+  const profileMenuTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const connectionState = useRelayConnection();
   const degraded = isRelayConnectionDegraded(connectionState);
   const connectionLabel = CONNECTION_STATE_LABEL[connectionState];
@@ -251,8 +252,18 @@ export function CommunitySwitcher({
             }
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-popover-foreground outline-hidden transition-colors hover:bg-muted/50 focus:bg-muted/50 focus:outline-none focus-visible:bg-muted/50 focus-visible:outline-none data-[state=open]:bg-muted/50 data-[state=open]:text-popover-foreground"
             data-testid="community-switcher"
+            onClick={(event) => {
+              // Hover already opens this submenu, so a press on the row means
+              // "open", never "toggle". preventDefault suppresses Radix's own
+              // toggle, which would otherwise close the menu right after the
+              // dismiss below has been vetoed.
+              event.preventDefault();
+              clearProfileMenuHoverTimer();
+              setDropdownOpen(true);
+            }}
             onMouseEnter={() => scheduleProfileMenu(true)}
             onMouseLeave={() => scheduleProfileMenu(false)}
+            ref={profileMenuTriggerRef}
             role="menuitem"
             type="button"
           >
@@ -265,6 +276,19 @@ export function CommunitySwitcher({
           onMouseEnter={() => scheduleProfileMenu(true)}
           onMouseLeave={() => scheduleProfileMenu(false)}
           onOpenAutoFocus={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => {
+            // The submenu opens flush against this row and slides in, so a
+            // press aimed at one of its items can land back on the row while
+            // the content is still moving. Radix reports that as an outside
+            // interaction and dismisses the menu the pointer was aiming at.
+            // The row is the menu's own trigger, so it is never "outside".
+            if (
+              event.target instanceof Node &&
+              profileMenuTriggerRef.current?.contains(event.target)
+            ) {
+              event.preventDefault();
+            }
+          }}
           side="right"
           sideOffset={0}
         >
