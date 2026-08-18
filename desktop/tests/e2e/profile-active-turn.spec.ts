@@ -71,11 +71,21 @@ async function seedActiveTurns(
 
 // The agent's avatar is the popover trigger inside its message row; clicking it
 // opens the profile panel, hovering opens the popover.
+//
+// Address Charlie's row by content, never by
+// position: #agents also seeds nadia and one message per managed agent that is
+// a member, so which row is last depends on seeding order. Test 02 failed on
+// CI (run 32149059338, Desktop Smoke E2E shard 5) with nadia's profile open
+// and Charlie's live-activity card, correctly, nowhere in it. The same
+// position-based selector caused the same failure in ant-mark-sizing.spec.ts,
+// fixed in #303.
+const AGENT_MESSAGE_CONTENT = "Indexing the channel catalog now.";
+
 function agentAvatar(page: import("@playwright/test").Page) {
   return page
     .getByTestId("message-row")
-    .filter({ has: page.locator('[data-testid^="message-avatar-"]') })
-    .last()
+    .filter({ hasText: AGENT_MESSAGE_CONTENT })
+    .first()
     .getByRole("button")
     .first();
 }
@@ -97,7 +107,7 @@ test.describe("profile active turn indicator", () => {
     const liveActivity = panel.getByTestId(
       `user-profile-live-activity-${AGENT_PUBKEY}`,
     );
-    await expect(liveActivity).toBeVisible({ timeout: 5_000 });
+    await expect(liveActivity).toBeVisible();
     await expect(liveActivity).toContainText("Latest Activity");
     await expect(
       liveActivity.getByTestId("user-profile-activity-channel-label"),
@@ -121,7 +131,7 @@ test.describe("profile active turn indicator", () => {
     const liveActivity = panel.getByTestId(
       `user-profile-live-activity-${AGENT_PUBKEY}`,
     );
-    await expect(liveActivity).toBeVisible({ timeout: 5_000 });
+    await expect(liveActivity).toBeVisible();
     await expect(liveActivity).toContainText("Latest Activity");
     // One carousel dot per working channel.
     await expect(
@@ -142,7 +152,7 @@ test.describe("profile active turn indicator", () => {
     await agentAvatar(page).hover();
 
     const popover = page.getByTestId("user-profile-popover");
-    await expect(popover).toBeVisible({ timeout: 5_000 });
+    await expect(popover).toBeVisible();
     await expect(popover).toContainText("Working in #general");
   });
 });

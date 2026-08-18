@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { settleDeepLink } from "../helpers/readiness";
 
 const SHOTS = "test-results/persistent-agent-audience";
 const OWNER = "deadbeef".repeat(8);
@@ -278,6 +279,7 @@ for (const theme of ["buzz", "buzz-dark"]) {
     await seedAudience(page, [AGENT_A, AGENT_B], theme);
     await installAudienceFixtures(page);
     await openThread(page);
+    await settleDeepLink(page);
     const overlay = threadComposer(page);
     const composer = overlay.getByTestId("message-composer");
     await overlay.getByTestId("message-input").focus();
@@ -293,6 +295,7 @@ test("native persistent mentions fit the narrow composer", async ({ page }) => {
   await seedAudience(page, [AGENT_A, AGENT_B]);
   await installAudienceFixtures(page);
   await openThread(page);
+  await settleDeepLink(page);
   const overlay = threadComposer(page);
   const composer = overlay.getByTestId("message-composer");
   await expect(overlay.getByTestId("message-input")).toContainText(

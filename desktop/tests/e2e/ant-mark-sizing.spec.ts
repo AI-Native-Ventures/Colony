@@ -70,10 +70,15 @@ test.describe("ant mark sizing", () => {
       { pubkey: AGENT_PUBKEY, channelId: CHANNEL_GENERAL },
     );
 
+    // Address Charlie's row by its content, not by position. #agents seeds
+    // Charlie, nadia, and one message per managed agent that is a member, and
+    // which of those is last depends on seeding order: a CI failure on
+    // 2026-08-18 opened nadia's profile instead and then looked for Charlie's
+    // live-activity card in it.
     await page
       .getByTestId("message-row")
-      .filter({ has: page.locator('[data-testid^="message-avatar-"]') })
-      .last()
+      .filter({ hasText: "Indexing the channel catalog now." })
+      .first()
       .getByRole("button")
       .first()
       .click();

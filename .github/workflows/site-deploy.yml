@@ -1,0 +1,116 @@
+name: Deploy marketing site
+
+# The marketing site had no automation at all: `main` moved and production
+# stayed on whatever build a developer last pushed by hand. That is not a
+# theoretical gap. Commit 18fc5a86d removed the footer GitHub link on
+# 16 Aug; production kept serving the old bundle with the link in it for
+# 17 hours, until a person noticed and ran wrangler manually. Nothing in the
+# repo could have told anyone the two had diverged.
+#
+# So: every push to `main` that touches `site/` rebuilds and deploys, and the
+# run only goes green once the custom domain is proven to be serving that
+# exact build. Deploys stay reproducible from source; `site/dist` is
+# gitignored and rebuilt here every time.
+#
+# Deliberately narrow. This does not deploy from `develop` or from pull
+# requests, and it does not touch DNS, the zone cache, or the Pages project
+# settings. Those are owner actions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/site-deploy.yml"
+      - "scripts/verify-site-live.sh"
+  # Lets an operator redeploy the current `main` without an empty commit, e.g.
+  # after rotating the API token or recovering from a failed run.
+  workflow_dispatch:
+
+# Two pushes in quick succession must not deploy concurrently: Pages promotes
+# whichever finishes last, which can leave production on the older commit.
+# Queued rather than cancelled, because a cancelled run tells you nothing
+# about what production is serving.
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  SITE_URL: https://colony.ainative.ventures
+  PAGES_PROJECT: colony-site
+  # Not a secret. This account ID is already published in site/README.md and
+  # is useless without the API token.
+  CLOUDFLARE_ACCOUNT_ID: 828c27dca37f41abb7d43603228ea05d
+  # Pinned so a wrangler release cannot change deploy behaviour underneath a
+  # push to main. Bump deliberately.
+  WRANGLER_VERSION: 4.76.0
+
+jobs:
+  deploy:
+    name: Build and deploy site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: ./scripts/ci-pnpm-store-path.sh
+
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and typecheck site
+        run: |
+          pnpm -C site check
+          pnpm -C site typecheck
+
+      - name: Build site
+        run: pnpm -C site build
+
+      - name: Check the build produced what index.html references
+        # `vite build` succeeds even when a root-absolute asset is missing from
+        # the output, and the miss only shows up as a 404 in production.
+        run: |
+          set -euo pipefail
+          for f in site/dist/index.html site/dist/favicon.svg site/dist/og.png; do
+            test -s "$f" || { echo "::error::$f missing or empty after build"; exit 1; }
+          done
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set. Add a repository secret with a token scoped to Cloudflare Pages:Edit on account ${CLOUDFLARE_ACCOUNT_ID}."
+            exit 1
+          fi
+          # --branch main matters: wrangler deploys to preview unless the
+          # branch matches the project's production branch, so without it a
+          # green run would leave production untouched.
+          pnpm dlx "wrangler@${WRANGLER_VERSION}" pages deploy site/dist \
+            --project-name "${PAGES_PROJECT}" \
+            --branch main \
+            --commit-dirty=true
+
+      - name: Verify the live site is serving this build
+        run: ./scripts/verify-site-live.sh "${SITE_URL}" site/dist

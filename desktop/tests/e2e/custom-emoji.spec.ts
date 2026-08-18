@@ -380,6 +380,16 @@ test("reacting with a custom emoji renders via the loopback media proxy", async 
   // The picker closes with the pointer/focus position depending on animation
   // timing. Put the row into a deterministic idle state before checking the
   // pill's pre-existing hidden behavior.
+  //
+  // Wait for the picker to unmount FIRST. Radix returns focus to the trigger
+  // it opened from, and that trigger ("Open reactions") lives inside this row,
+  // so a blur issued while the popover is still closing is undone by the
+  // restore that lands after it. The row then matches focus-within and the
+  // inline button stays at opacity 1 forever, which is how this test failed on
+  // CI (run 32144038518, shard 2). Forcing the order proves it: blurring
+  // immediately failed 3 of 8 runs at 6x CPU throttle, blurring after the
+  // picker unmounted passed 8 of 8.
+  await expect(picker).toHaveCount(0);
   await page.mouse.move(0, 0);
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) {

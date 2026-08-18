@@ -85,6 +85,15 @@ jobs:
               - 'scripts/create-required-extensions.sql'
               - 'scripts/attach-schema-partitions.sql'
               - 'justfile'
+            # Never put a negated pattern (`!foo/**`) in one of these lists.
+            # dorny/paths-filter ORs the patterns in a rule, and picomatch
+            # reads `!desktop/src-tauri/**` as "matches every path that is not
+            # under desktop/src-tauri" — so a single negation makes the whole
+            # rule true for every file in the repo. This list carried
+            # `!desktop/src-tauri/**` until 2026-08-17, which meant `desktop`
+            # was true on every pull request and the four Desktop Smoke E2E
+            # shards ran on README-only diffs. Excluding a subtree needs a
+            # separate rule (see `desktop-rust`), not a negation here.
             desktop:
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
@@ -94,7 +103,6 @@ jobs:
               - 'scripts/bundle-sidecars.sh'
               - 'scripts/run-real-shell-e2e.sh'
               - 'desktop/**'
-              - '!desktop/src-tauri/**'
               - 'pnpm-lock.yaml'
               - '.github/workflows/ci.yml'
               - 'scripts/ci-pnpm-store-path.sh'
@@ -195,6 +203,12 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Paths filter contract
+        # A negated pattern makes its whole paths-filter rule match every file
+        # in the repo, so CI silently stops skipping anything. Runs here
+        # because this job is required and unconditional -- a path filter
+        # cannot skip the guard that checks the path filters.
+        run: node --test scripts/paths-filter-contract.test.mjs
       - name: Desktop dev instance identity contract
         # Runs in this job for the same reason the schema drift guard does:
         # `Detect Changed Paths` is required and unconditional, so a path
@@ -236,9 +250,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Format check
         run: just fmt-check
       - name: Desktop Tauri format check
@@ -260,9 +271,6 @@ jobs:
         with:
           cache: "true"
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cargo-nextest
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
         with:
@@ -285,8 +293,14 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - name: Cache sherpa-onnx native archive
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      # Restore only. A save here ran on every pull request and wrote a 21 MB
+      # copy scoped to that pull request's own ref, which no other run can
+      # read: the cache store held twenty-odd identical copies of the same
+      # hash. Tauri Cache Warm writes the one copy on develop that every
+      # branch restores from. A miss still falls back to downloading the
+      # archive, so this is a speed path, not a correctness one.
+      - name: Restore sherpa-onnx native archive
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .cache/sherpa-onnx
           key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
@@ -296,7 +310,16 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: desktop/src-tauri
-          save-if: ${{ github.event_name != 'pull_request' }}
+          # Shared namespace with the Tauri Cache Warm job, which is the only
+          # run that can ever write it: this job is gated on core-enabled,
+          # which ci.yml sets to false for every push, and a cache written on
+          # a refs/pull/N/merge ref is readable only by that one pull request.
+          # The effect was measurable -- the live cache store held rust caches
+          # for windows-rust, blocks-live-gate and desktop-e2e-relay, every
+          # job reachable on a develop push, and none for this one, so the
+          # Tauri crate compiled cold on every single pull request.
+          shared-key: colony-tauri
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
       - name: Install Tauri dependencies (Linux)
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -351,10 +374,6 @@ jobs:
         run: just desktop-tauri-test
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-      - name: Desktop Tauri compiled-flag verification
-        run: just desktop-tauri-test-compiled-flags
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload desktop e2e artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -383,7 +402,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        # Six, not four. Measured smoke execution across the four shards on
+        # run 32102146379 was 12.8 / 10.6 / 11.6 / 14.8 minutes, so the split
+        # itself was already even and reordering testMatch buys nothing. The
+        # remaining spread is retry cost. Spreading 49.8 minutes of test time
+        # over six shards puts every shard near 8 minutes instead of one at 15.
+        shard: [1, 2, 3, 4, 5, 6]
     permissions:
       contents: read
     steps:
@@ -425,7 +449,7 @@ jobs:
       - name: Desktop E2E build
         run: pnpm -C desktop build:e2e
       - name: Desktop smoke e2e
-        run: cd desktop && pnpm exec playwright test --project=smoke --shard=${{ matrix.shard }}/4
+        run: cd desktop && pnpm exec playwright test --project=smoke --shard=${{ matrix.shard }}/6
       - name: Summarize flaky tests
         if: ${{ !cancelled() }}
         run: node scripts/summarize-flaky-tests.mjs playwright-report.json "Desktop Smoke E2E (${{ matrix.shard }})"
@@ -442,11 +466,97 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  desktop-tauri-flags:
+    # Split out of Desktop Core, where it was the single most expensive step
+    # in all of CI at 10.3 minutes. `just desktop-tauri-test-compiled-flags`
+    # flips BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY and
+    # BUZZ_BUILD_AGENT_ACCESS_OWNER_ONLY between invocations; both are
+    # declared rerun-if-env-changed in desktop/src-tauri/build.rs, so each
+    # flip evicts the previous state's artifacts from the shared target dir
+    # and the crate rebuilds. Three build states, one target dir, no way to
+    # avoid the rebuilds without duplicating every dependency on disk.
+    #
+    # So run it beside Desktop Core rather than after it. Same shared-key, so
+    # both restore the same warm cache, and the roll-up below still requires
+    # it. The test itself is unchanged.
+    name: Desktop Tauri Flags
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [changes]
+    if: needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 2
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Restore sherpa-onnx native archive
+        id: sherpa-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .cache/sherpa-onnx
+          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      - name: Prepare sherpa-onnx native archive
+        run: ./scripts/ci-prepare-sherpa-onnx.sh
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: desktop/src-tauri
+          shared-key: colony-tauri
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+      - name: Install Tauri dependencies (Linux)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
+            build-essential \
+            curl \
+            file \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: ./scripts/ci-pnpm-store-path.sh
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      # tauri-build validates frontendDist at compile time, so the Tauri crate
+      # will not build without desktop/dist on disk.
+      - name: Desktop build
+        run: just desktop-build
+      - name: Desktop Tauri compiled-flag verification
+        run: just desktop-tauri-test-compiled-flags
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
   desktop:
     name: Desktop
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, desktop-core, desktop-smoke-e2e]
+    needs: [changes, desktop-core, desktop-smoke-e2e, desktop-tauri-flags]
     if: always() && needs.changes.outputs.core-enabled == 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true')
     permissions:
       contents: read
@@ -459,6 +569,10 @@ jobs:
           fi
           if [ "${{ needs.desktop-smoke-e2e.result }}" != "success" ]; then
             echo "Desktop Smoke E2E shards finished with: ${{ needs.desktop-smoke-e2e.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.desktop-tauri-flags.result }}" != "success" ]; then
+            echo "Desktop Tauri Flags finished with: ${{ needs.desktop-tauri-flags.result }}"
             exit 1
           fi
           echo "Desktop jobs passed"
@@ -525,8 +639,13 @@ jobs:
             --test interrupt_gate \
             --test interrupt_runtime \
             --archive-file target/ci/backend-integration-tests.tar.zst
+      # develop only. On a pull request this wrote a 131 MB entry scoped to
+      # refs/pull/N/merge that no other run could read; eight such copies were
+      # live at once, and the eviction pressure they created is what made this
+      # job's own cache disappear between runs (0 min on one run, 20 min on
+      # the next, same day).
       - name: Save relay artifacts cache
-        if: steps.relay-artifacts-cache.outputs.cache-hit != 'true'
+        if: steps.relay-artifacts-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/develop'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -793,8 +912,14 @@ jobs:
       - name: Retry Hermit activation
         if: steps.activate-hermit.outcome == 'failure'
         run: ./scripts/ci-activate-hermit.sh
-      - name: Cache sherpa-onnx native archive
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      # Restore only. A save here ran on every pull request and wrote a 21 MB
+      # copy scoped to that pull request's own ref, which no other run can
+      # read: the cache store held twenty-odd identical copies of the same
+      # hash. Tauri Cache Warm writes the one copy on develop that every
+      # branch restores from. A miss still falls back to downloading the
+      # archive, so this is a speed path, not a correctness one.
+      - name: Restore sherpa-onnx native archive
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .cache/sherpa-onnx
           key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
@@ -1109,9 +1234,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       # Reuse the relay + git-credential-nostr built by Desktop E2E Relay
       # instead of compiling them a second time.
       - name: Download relay binary
@@ -1177,9 +1299,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       # Reuse the relay artifact, but start a fresh relay and database on this
       # job's own runner so no other E2E suite can seed its community.
       - name: Download relay binary
@@ -1415,10 +1534,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          key: cross-${{ matrix.target }}
-          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cross
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
         with:
@@ -1600,6 +1715,154 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Test (Tauri crate)
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --target $env:TARGET
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+  rust-post-merge:
+    # Post-merge re-proof of the Rust core, which a develop push otherwise
+    # skips entirely: core-enabled is false for every push that is not on
+    # `release`, and this repository has no `release` branch, so Rust Lint and
+    # Unit Tests never run against the merged tree.
+    #
+    # This job used to also claim to warm a shared Rust cache. It cannot, and
+    # neither can anything else, for the ROOT workspace. Hermit sets
+    # CARGO_HOME to <repo>/.hermit/rust, so every dependency's manifest_path
+    # lives inside the repository. Swatinem/rust-cache decides what to keep
+    # with `getPackagesOutsideWorkspaceRoot`, which filters on
+    # `!manifest_path.startsWith(workspaceRoot)` (src/workspace.ts:41). For the
+    # root workspace that filter matches nothing, so `cleanTargetDir` and
+    # `cleanRegistry` are handed an empty keep-set and delete the entire target
+    # directory and registry before the save. Measured on this repository:
+    #
+    #   root workspace   1091 packages, 0 kept  -> cache saved 0 bytes
+    #   desktop/src-tauri 1284 packages, 1282 kept -> cache saved 1676 MB
+    #
+    # The tauri workspace escapes it only because its root is a subdirectory,
+    # so .hermit/rust is outside it. Same reason windows-rust caches 3 GB: that
+    # runner has no hermit, so CARGO_HOME is ~/.cargo. It also explains the two
+    # v0-rust-cross-* entries that have sat at 0 bytes since 2026-08-15.
+    #
+    # Caching the root target by hand instead is not worth it: the directory
+    # measures 8.6 GB against a 10 GB repository-wide cache limit, the registry
+    # download it would also cover takes 5.5 seconds, and the jobs it would
+    # speed up (Rust Lint 4.3 min, Unit Tests 6.5 min) are not on the critical
+    # path -- Desktop Core, Desktop Tauri Flags and the smoke shards are. Doing
+    # it would re-create exactly the eviction pressure that made Desktop E2E
+    # Relay take 20 minutes instead of 0 on 2026-08-17.
+    #
+    # The only real fix is to move CARGO_HOME out of the repository, which is a
+    # hermit-wide change affecting every developer, not a CI tweak.
+    name: Rust Post-Merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
+        with:
+          tool: cargo-nextest@0.9.136
+      - name: Clippy
+        run: just clippy
+      - name: Unit tests
+        run: just test-unit
+
+  tauri-cache-warm:
+    # This one genuinely works, for the reason spelled out on rust-post-merge
+    # above: the desktop/src-tauri workspace root is a subdirectory, so hermit's
+    # in-repo CARGO_HOME sits outside it and rust-cache keeps 1282 of 1284
+    # packages instead of none. First run saved 1676 MB.
+    #
+    # Desktop Core and Desktop Tauri Flags restore it through shared-key
+    # colony-tauri, and it is also the sole writer of the sherpa-onnx archive
+    # cache now that both consumers restore only.
+    name: Tauri Cache Warm
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+      - name: Restore sherpa-onnx native archive
+        id: sherpa-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .cache/sherpa-onnx
+          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      - name: Prepare sherpa-onnx native archive
+        run: ./scripts/ci-prepare-sherpa-onnx.sh
+      - name: Save sherpa-onnx native archive
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .cache/sherpa-onnx
+          key: sherpa-onnx-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: desktop/src-tauri
+          shared-key: colony-tauri
+          save-if: "true"
+      - name: Install Tauri dependencies (Linux)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
+            build-essential \
+            curl \
+            file \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: ./scripts/ci-pnpm-store-path.sh
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      # tauri-build validates frontendDist at compile time, so the Tauri crate
+      # will not build without desktop/dist on disk.
+      - name: Desktop build
+        run: just desktop-build
+      - name: Warm Tauri clippy artifacts
+        run: just desktop-tauri-clippy
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      - name: Warm Tauri test artifacts
+        run: just desktop-tauri-test
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      - name: Warm compiled-flag artifacts
+        run: just desktop-tauri-test-compiled-flags
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 

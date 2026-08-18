@@ -403,6 +403,14 @@ test("Enter with no matches jumps to create", async ({ page }) => {
 
   await openChannelBrowser(page);
   await page.getByTestId("channel-browser-search").fill(channelName);
+  // Wait for the no-match state before pressing Enter. Filling the box does not
+  // synchronously re-filter the list, so an Enter sent too early lands on a row
+  // from the PREVIOUS results, which opens that channel and closes the browser:
+  // the create form never appears and the assertion below waits out its budget
+  // against a page with no dialog on it at all. Reproduced 1 in 20 at 4x CPU
+  // throttle. The other keyboard tests in this file already gate on the create
+  // row for the same reason.
+  await expect(page.getByTestId("channel-browser-create-row")).toBeVisible();
   await page.keyboard.press("Enter");
 
   await expect(page.getByTestId("create-channel-name")).toHaveValue(
