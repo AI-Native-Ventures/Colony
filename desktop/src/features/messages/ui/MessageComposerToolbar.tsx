@@ -95,7 +95,14 @@ export const MessageComposerToolbar = React.memo(
                         aria-pressed={isFormattingOpen}
                         disabled={composerDisabled}
                         onClick={() => onFormattingToggle(!isFormattingOpen)}
-                        onMouseDown={onCaptureSelection}
+                        onMouseDown={(event) => {
+                          // Keep focus in the editor: a focus steal here means
+                          // the browser restores a stale selection when a later
+                          // formatting command refocuses, and ProseMirror syncs
+                          // that stale caret back over the command's result.
+                          event.preventDefault();
+                          onCaptureSelection();
+                        }}
                         size="icon"
                         type="button"
                         variant={isFormattingOpen ? "default" : "ghost"}
@@ -213,7 +220,14 @@ export const MessageComposerToolbar = React.memo(
                         aria-pressed={isFormattingOpen}
                         disabled={composerDisabled}
                         onClick={() => onFormattingToggle(!isFormattingOpen)}
-                        onMouseDown={onCaptureSelection}
+                        onMouseDown={(event) => {
+                          // Keep focus in the editor: a focus steal here means
+                          // the browser restores a stale selection when a later
+                          // formatting command refocuses, and ProseMirror syncs
+                          // that stale caret back over the command's result.
+                          event.preventDefault();
+                          onCaptureSelection();
+                        }}
                         size="icon"
                         type="button"
                         variant={isFormattingOpen ? "default" : "ghost"}
