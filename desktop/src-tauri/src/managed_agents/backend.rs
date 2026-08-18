@@ -82,17 +82,33 @@ pub fn invoke_provider(
         serde_json::to_string(request).map_err(|e| e.to_string())?
     );
 
-    let mut cmd = std::process::Command::new(binary);
-    if let Some(home) = super::default_agent_workdir() {
-        cmd.current_dir(home);
-    }
-    crate::util::configure_no_window(&mut cmd);
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn {}: {e}", binary.display()))?;
+    // ETXTBSY (os error 26): a fork elsewhere in this process — another
+    // provider being staged, any concurrent Command::spawn — briefly inherits
+    // the staged binary's write descriptor between its fork and exec, and
+    // Linux refuses to exec a file anyone holds open for writing. The writer
+    // always closes within the other spawn's fork→exec window, so retry
+    // briefly instead of failing the deploy.
+    let mut attempts = 0u32;
+    let mut child = loop {
+        let mut cmd = std::process::Command::new(binary);
+        if let Some(home) = super::default_agent_workdir() {
+            cmd.current_dir(home);
+        }
+        crate::util::configure_no_window(&mut cmd);
+        match cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => break child,
+            Err(e) if e.raw_os_error() == Some(26) && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => return Err(format!("failed to spawn {}: {e}", binary.display())),
+        }
+    };
 
     // Write request and close stdin immediately so the provider sees EOF.
     let stdin_result = if let Some(mut stdin) = child.stdin.take() {
