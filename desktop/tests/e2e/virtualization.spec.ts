@@ -285,17 +285,30 @@ test.describe("list virtualization", () => {
         let previousScrollTop = s.scrollTop;
         let maxBoundaryRollback = 0;
         let minScrollTop = s.scrollTop;
+        const startHeight = s.scrollHeight;
+        let growthAt = -1;
+        let rollbackAtGrowth = 0;
         const deadline = performance.now() + 120;
+        const startedAt = performance.now();
         while (performance.now() < deadline) {
           maxBoundaryRollback = Math.max(
             maxBoundaryRollback,
             s.scrollTop - previousScrollTop,
           );
+          if (growthAt < 0 && s.scrollHeight > startHeight + 400) {
+            growthAt = Math.round(performance.now() - startedAt);
+            rollbackAtGrowth = maxBoundaryRollback;
+          }
           previousScrollTop = s.scrollTop;
           minScrollTop = Math.min(minScrollTop, s.scrollTop);
           await new Promise((resolve) => requestAnimationFrame(resolve));
         }
-        return { maxBoundaryRollback, minScrollTop };
+        return {
+          maxBoundaryRollback,
+          minScrollTop,
+          growthAt,
+          rollbackAtGrowth,
+        };
       });
       const box = await timeline.boundingBox();
       if (!box) throw new Error("timeline has no bounding box");
@@ -306,7 +319,19 @@ test.describe("list virtualization", () => {
       }
       const wheelTrace = await wheelTracePromise;
       expect(wheelTrace.minScrollTop).toBeLessThanOrEqual(350);
-      expect(wheelTrace.maxBoundaryRollback).toBeLessThan(5);
+      // Measure the reversal this assertion is about: the pre-prepend one. The
+      // 120ms window above assumes the 300ms relay delay keeps input boundary
+      // and prepend commit in separate phases, and on Linux CI that assumption
+      // broke: the prepend landed inside the window and Virtua's shift
+      // compensation, which RAISES scrollTop by the inserted height, was
+      // recorded as a boundary rollback (run 32139432795 read 452, about one
+      // page of rows). Post-prepend movement is not left unguarded, it is what
+      // `motion.maxDrift` and the `bottomDistance` check below assert on.
+      const preprependRollback =
+        wheelTrace.growthAt < 0
+          ? wheelTrace.maxBoundaryRollback
+          : wheelTrace.rollbackAtGrowth;
+      expect(preprependRollback, JSON.stringify(wheelTrace)).toBeLessThan(5);
       // Linux Chromium delivers CDP wheel input with more latency than macOS,
       // so the burst's final delta can land AFTER the anchor baseline sample
       // below. maxDrift then reports the reader's own last wheel event as
