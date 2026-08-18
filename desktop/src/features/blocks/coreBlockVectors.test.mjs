@@ -173,3 +173,35 @@ test("starter block gallery renders every exact bundled example natively", async
   );
   assert.doesNotMatch(html, /\{\{prompt\}\}/);
 });
+
+test("the handover vector renders natively and pins the link it must carry", async () => {
+  const handover = await readStarterManifest("handover");
+
+  assertContains(
+    nodeTypes(handover),
+    ["card", "details", "card-list", "status", "actions"],
+    "Handover",
+  );
+  assertContains(
+    actionIds(handover),
+    ["handover.pick-up", "handover.decline"],
+    "Handover",
+  );
+  assert.equal(handover.validation.requires_attention, true);
+  assertContains(
+    new Set(handover.input_schema.required),
+    ["source_channel", "source_event_id", "target_channel", "assignee"],
+    "Handover schema",
+  );
+
+  const html = renderToStaticMarkup(
+    React.createElement(StarterBlockGallery, {
+      entries: [{ manifest: handover, data: handover.examples[0].data }],
+    }),
+  );
+  assert.match(html, /data-starter-block="handover"/);
+  assert.doesNotMatch(html, /unsupported|unknown primitive/i);
+  assert.match(html, /Tennant Group/);
+  assert.match(html, /Live rebuild/);
+  assert.doesNotMatch(html, /\{\{/);
+});
