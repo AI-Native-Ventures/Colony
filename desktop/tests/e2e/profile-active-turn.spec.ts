@@ -97,7 +97,7 @@ test.describe("profile active turn indicator", () => {
     const liveActivity = panel.getByTestId(
       `user-profile-live-activity-${AGENT_PUBKEY}`,
     );
-    await expect(liveActivity).toBeVisible({ timeout: 5_000 });
+    await expect(liveActivity).toBeVisible();
     await expect(liveActivity).toContainText("Latest Activity");
     await expect(
       liveActivity.getByTestId("user-profile-activity-channel-label"),
@@ -121,7 +121,7 @@ test.describe("profile active turn indicator", () => {
     const liveActivity = panel.getByTestId(
       `user-profile-live-activity-${AGENT_PUBKEY}`,
     );
-    await expect(liveActivity).toBeVisible({ timeout: 5_000 });
+    await expect(liveActivity).toBeVisible();
     await expect(liveActivity).toContainText("Latest Activity");
     // One carousel dot per working channel.
     await expect(
@@ -142,7 +142,7 @@ test.describe("profile active turn indicator", () => {
     await agentAvatar(page).hover();
 
     const popover = page.getByTestId("user-profile-popover");
-    await expect(popover).toBeVisible({ timeout: 5_000 });
+    await expect(popover).toBeVisible();
     await expect(popover).toContainText("Working in #general");
   });
 });
