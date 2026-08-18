@@ -27,6 +27,41 @@ async function dispatchWheelPrevented(
   );
 }
 
+/**
+ * The viewport lock only spares a wheel when something in the event path is a
+ * scroll container that actually has somewhere to go: isScrollableY requires
+ * scrollHeight > clientHeight + 1 (useWebviewScrollBoundaryLock.ts). A visible
+ * timeline is not necessarily a scrollable one. Before its seeded messages have
+ * laid out, scrollHeight equals clientHeight, nothing in the path qualifies,
+ * firstScrollable stays null and the lock calls preventDefault on a gesture the
+ * test expects to pass through.
+ *
+ * That is the failure CI recorded on 2026-08-16 (run 31955085804, smoke shard
+ * 4) at line 66: expected false, received true, then a pass on retry. It is
+ * also why waiting on visibility alone is not enough, and it reproduces here:
+ * sampling at the dispatch point caught scrollHeight === clientHeight (671 ===
+ * 671) in 1 of 12 local runs, where an already-scrolled ancestor happened to
+ * absorb the gesture instead.
+ */
+async function waitForScrollableTimeline(
+  page: import("@playwright/test").Page,
+) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const timeline = document.querySelector(
+            '[data-testid="message-timeline"]',
+          );
+          return timeline instanceof HTMLElement
+            ? timeline.scrollHeight > timeline.clientHeight + 1
+            : false;
+        }),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -37,6 +72,7 @@ test("locks viewport rubber-band outside conversation scrollers", async ({
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("message-timeline")).toBeVisible();
+  await waitForScrollableTimeline(page);
 
   await expect(
     dispatchWheelPrevented(page, '[data-testid="app-top-chrome"]', {
@@ -85,6 +121,7 @@ test("locks horizontal viewport pan everywhere", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("message-timeline")).toBeVisible();
+  await waitForScrollableTimeline(page);
 
   for (const deltaX of [-120, 120]) {
     await expect(
