@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { expectDialogClosed } from "../helpers/readiness";
 
 const ORIGINAL_SHA = "a".repeat(64);
 const EDITED_SHA = "b".repeat(64);
@@ -203,7 +204,7 @@ test("spoiler marking survives drawing on the attachment", async ({ page }) => {
   // lightbox'> from <div role='dialog' data-state='open'> subtree intercepts
   // pointer events" until the test timed out, and it passed on the retry. That
   // failure is what put this test in known-flaky.json on the same day.
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expectDialogClosed(page);
   await expect(composer.locator("[data-composer-media-spoiler]")).toBeVisible();
 
   await composer.getByTestId("composer-media-attachment").hover();
@@ -223,7 +224,7 @@ test("spoiler marking survives drawing on the attachment", async ({ page }) => {
   await page.getByTestId("composer-image-editor-save").click();
 
   // Saving closes the lightbox.
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expectDialogClosed(page);
 
   // The annotated replacement is still marked as a spoiler.
   await expect(composer.getByAltText("Attachment bbbb")).toBeVisible();
