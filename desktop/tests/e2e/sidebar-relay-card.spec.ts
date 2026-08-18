@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { waitForBridgeSeam } from "../helpers/readiness";
 
 const CONNECT_ERROR = "relay unreachable: could not connect to relay";
 const PROXY_ERROR =
@@ -56,16 +57,9 @@ async function setRelayConnectionState(
       );
     });
   } else {
-    // When driving to "connected", just wait for the seam to be installed —
+    // When driving to "connected", just wait for the seam to be installed:
     // no need to gate on the current state since we're overriding it directly.
-    await page.waitForFunction(
-      () =>
-        typeof (
-          window as Window & {
-            __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: unknown;
-          }
-        ).__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ === "function",
-    );
+    await waitForBridgeSeam(page, "__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__");
   }
   await page.evaluate((nextState) => {
     const testWindow = window as Window & {
