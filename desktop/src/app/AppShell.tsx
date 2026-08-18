@@ -931,6 +931,7 @@ export function AppShell() {
                         </div>
                       ) : null}
                       <AppShellChannelSurface
+                        hasCommunityRail={effectiveCommunityRail}
                         isHuddleRoom={isHuddleRoom}
                         isHuddleRoomStarting={isHuddleRoomStarting}
                         mainInsetRef={mainInsetRef}
