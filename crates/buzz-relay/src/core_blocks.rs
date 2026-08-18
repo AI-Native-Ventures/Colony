@@ -438,12 +438,49 @@ mod tests {
             "source_event_id",
             "target_channel",
             "assignee",
+            "links",
         ] {
             assert!(
                 required.contains(field),
                 "a handover without {field} cannot be linked back to its origin"
             );
         }
+
+        let links = manifest
+            .pointer("/input_schema/properties/links")
+            .expect("handover links schema");
+        assert_eq!(
+            links.get("minItems").and_then(Value::as_u64),
+            Some(1),
+            "a handover with no links hands over nothing"
+        );
+        assert_eq!(
+            links
+                .pointer("/contains/properties/role/const")
+                .and_then(Value::as_str),
+            Some("deliverable"),
+            "the finished work itself must be one of the links, not an optional extra"
+        );
+        let roles: BTreeSet<_> = links
+            .pointer("/items/properties/role/enum")
+            .and_then(Value::as_array)
+            .expect("link role enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            roles,
+            BTreeSet::from(["deliverable", "reference", "source"]),
+            "link roles must be typed, or the assignee cannot tell one URL from another"
+        );
+        let link_required: BTreeSet<_> = links
+            .pointer("/items/required")
+            .and_then(Value::as_array)
+            .expect("link required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(link_required.contains("role"));
 
         let states: BTreeSet<_> = manifest
             .pointer("/input_schema/properties/status/enum")

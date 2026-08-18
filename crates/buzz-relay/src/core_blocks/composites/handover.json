@@ -18,6 +18,7 @@
       "source_event_id",
       "target_channel",
       "assignee",
+      "links",
       "status"
     ],
     "properties": {
@@ -30,12 +31,22 @@
       "assignee": { "type": "string", "minLength": 1, "maxLength": 160 },
       "links": {
         "type": "array",
+        "minItems": 1,
         "maxItems": 10,
+        "contains": {
+          "type": "object",
+          "required": ["role"],
+          "properties": { "role": { "const": "deliverable" } }
+        },
         "items": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["label", "url"],
+          "required": ["role", "label", "url"],
           "properties": {
+            "role": {
+              "type": "string",
+              "enum": ["deliverable", "source", "reference"]
+            },
             "label": { "type": "string", "minLength": 1, "maxLength": 80 },
             "url": { "type": "string", "format": "uri", "pattern": "^https?://" }
           }
@@ -66,7 +77,7 @@
         "card": {
           "type": "card",
           "title": "{{label}}",
-          "description": "{{url}}",
+          "description": "{{role}}: {{url}}",
           "children": []
         }
       },
@@ -162,8 +173,16 @@
         "target_channel": "70580e75-e0cd-4559-ab53-36d9a0b3470c",
         "assignee": "Sarah",
         "links": [
-          { "label": "Live rebuild", "url": "https://example.com/tennant-rebuild" },
-          { "label": "Original site", "url": "https://example.com" }
+          {
+            "role": "deliverable",
+            "label": "Live rebuild",
+            "url": "https://example.com/tennant-rebuild"
+          },
+          {
+            "role": "source",
+            "label": "Original site",
+            "url": "https://example.com"
+          }
         ],
         "status": "open"
       }

@@ -6,7 +6,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { BLOCK_STARTER_COMPOSITE_HANDLES } from "./contracts.ts";
-import { validateBlockManifest } from "./blockValidation.ts";
+import { validateBlockData, validateBlockManifest } from "./blockValidation.ts";
 import { StarterBlockGallery } from "./ui/StarterBlockGallery.tsx";
 import { supportsBlockPrimitiveType } from "./ui/primitives/BlockPrimitive.tsx";
 
@@ -190,9 +190,23 @@ test("the handover vector renders natively and pins the link it must carry", asy
   assert.equal(handover.validation.requires_attention, true);
   assertContains(
     new Set(handover.input_schema.required),
-    ["source_channel", "source_event_id", "target_channel", "assignee"],
+    [
+      "source_channel",
+      "source_event_id",
+      "target_channel",
+      "assignee",
+      "links",
+    ],
     "Handover schema",
   );
+  const links = handover.input_schema.properties.links;
+  assert.equal(links.minItems, 1);
+  assert.equal(links.contains.properties.role.const, "deliverable");
+  assert.deepEqual(links.items.properties.role.enum, [
+    "deliverable",
+    "source",
+    "reference",
+  ]);
 
   const html = renderToStaticMarkup(
     React.createElement(StarterBlockGallery, {
@@ -204,4 +218,33 @@ test("the handover vector renders natively and pins the link it must carry", asy
   assert.match(html, /Tennant Group/);
   assert.match(html, /Live rebuild/);
   assert.doesNotMatch(html, /\{\{/);
+});
+
+test("a handover without the finished work itself is rejected at invoke time", async () => {
+  const handover = await readStarterManifest("handover");
+  const example = handover.examples[0].data;
+
+  assert.equal(validateBlockData(handover, example).ok, true);
+
+  const withoutLinks = { ...example };
+  delete withoutLinks.links;
+  assert.equal(validateBlockData(handover, withoutLinks).ok, false);
+
+  assert.equal(
+    validateBlockData(handover, {
+      ...example,
+      links: example.links.filter((link) => link.role !== "deliverable"),
+    }).ok,
+    false,
+    "a handover carrying only context and no deliverable must not validate",
+  );
+
+  assert.equal(
+    validateBlockData(handover, {
+      ...example,
+      links: [{ label: "Live rebuild", url: "https://example.com/rebuild" }],
+    }).ok,
+    false,
+    "an untyped link cannot stand in for the deliverable",
+  );
 });
