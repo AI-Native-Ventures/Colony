@@ -34,6 +34,7 @@ import {
   type DirectMessageIntroParticipant,
 } from "./DirectMessageIntroAvatarStack";
 import { useSettleGatedPrependMessages } from "./useSettleGatedPrependMessages";
+import { useWithheldTailRelease } from "./useWithheldTailRelease";
 
 export type MessageTimelineHandle = {
   scrollToBottomOnNextUpdate: () => void;
@@ -444,6 +445,19 @@ const MessageTimelineBase = React.forwardRef<
       timelineVirtualizerApi,
     ],
   );
+
+  // A frozen tail whose scroller is physically at the bottom is unreachable;
+  // useWithheldTailRelease and shouldReleaseWithheldTail carry the reasoning.
+  const releaseWithheldTail = React.useCallback(
+    () => setIsSemanticallyAtBottom(true),
+    [],
+  );
+  useWithheldTailRelease({
+    onRelease: releaseWithheldTail,
+    pendingCount: bufferedTimeline.pendingCount,
+    scrollElementRef: activeScrollContainerRef,
+    semanticAtBottom: isSemanticallyAtBottom,
+  });
 
   const timelineIntroSurface = selectTimelineIntroSurface({
     hasChannelIntro: channelIntro !== null && directMessageIntro === null,
