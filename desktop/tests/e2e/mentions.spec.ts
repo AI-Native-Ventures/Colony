@@ -162,6 +162,33 @@ async function waitForTimelineSettled(page: import("@playwright/test").Page) {
   await expect(page.locator("[data-render-pending]")).toHaveCount(0);
 }
 
+/**
+ * Closes any open tooltip before the pointer travels to the next trigger.
+ *
+ * Radix arms a "pointer in transit" grace area when the pointer leaves a
+ * trigger whose tooltip is open, and `TooltipTrigger.onPointerMove` refuses to
+ * open while that flag is set (@radix-ui/react-tooltip: `if
+ * (!hasPointerMoveOpenedRef.current && !isPointerInTransitRef.current)`). Only
+ * a later document `pointermove` clears it. A real user generates those
+ * continuously; `locator.hover()` jumps from one trigger to the next in a
+ * single synthetic move, so when the first tooltip is still open at that
+ * moment the second trigger's only pointer event is swallowed and its tooltip
+ * never appears, with the pointer resting on it.
+ *
+ * That is what made this file's grouped-tooltip test flaky (6/40 at 4x CPU
+ * throttle): whether the first tooltip had already closed decided the outcome.
+ * The grace area is only created while the tooltip's content is mounted, so
+ * dismissing it first removes the condition entirely. Parking the pointer
+ * somewhere neutral is not equivalent: every candidate resting spot in this
+ * app is itself a tooltip trigger, which re-arms the same flag. Moving to
+ * (4, 4) lands on the sidebar toggle and made this test worse, 9/40, with two
+ * tooltips open at once.
+ */
+async function dismissOpenTooltip(page: import("@playwright/test").Page) {
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+}
+
 async function expectOwnedAgentProfileActions(
   profilePopover: import("@playwright/test").Locator,
   pubkey: string,
@@ -1250,6 +1277,7 @@ test("groups member additions and joins with hidden names in the standard toolti
     name: "2 others",
   });
   await expect(joinedOthersTrigger).toHaveCSS("text-decoration-line", "none");
+  await dismissOpenTooltip(page);
   await joinedOthersTrigger.hover();
   await expect(page.getByRole("tooltip")).toContainText("Olivia Park");
   await expect(page.getByRole("tooltip")).toContainText("Sam Rivera");
