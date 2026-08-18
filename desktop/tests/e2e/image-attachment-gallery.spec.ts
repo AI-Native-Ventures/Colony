@@ -680,7 +680,19 @@ test("multi-image mosaics keep a fixed width and grow by rows", async ({
       "data-image-mosaic-count",
       String(count),
     );
-    const box = await mosaic.boundingBox();
+    // The mosaic's box is only measurable once it has laid out. A message that
+    // just arrived can still be a zero-height node for a frame or two while its
+    // images resolve, and `boundingBox()` reports null for that, which read as
+    // "Expected 2-image mosaic layout box" on CI (run 32146143774, shard 4)
+    // even though the count attribute above had already matched. Poll for a
+    // real box instead of sampling once.
+    let box: Awaited<ReturnType<typeof mosaic.boundingBox>> = null;
+    await expect
+      .poll(async () => {
+        box = await mosaic.boundingBox();
+        return box !== null && box.height > 0 && box.width > 0;
+      })
+      .toBe(true);
     if (!box) throw new Error(`Expected ${count}-image mosaic layout box`);
     mosaics.push({ count, height: box.height, width: box.width });
   }
