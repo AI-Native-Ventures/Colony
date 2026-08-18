@@ -6897,6 +6897,7 @@ mod tests {
     // while another member's join was being processed. A reader racing a
     // stream of replacements must never observe the entity disappear.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires Postgres"]
     async fn addressable_replacement_stays_visible_to_p_tag_readers() {
         let db = setup_db().await;
         let community = CommunityId::from_uuid(make_community(&db.pool).await);
