@@ -6557,13 +6557,18 @@ impl Db {
             ));
         }
 
-        tx.commit().await?;
+        // Mention rows are how `#p`-filtered readers find this event, and the
+        // replacement soft-deletes the previous version in this same
+        // transaction. Indexing after commit opened a window in which the old
+        // version was already dead while the new one had no mention row yet,
+        // so a concurrent `#p` query saw neither — observed live as a channel
+        // owner's kind:39002 membership query returning nothing mid-join,
+        // which the desktop rendered as "Join to participate" on the owner's
+        // own channel. Index inside the transaction so readers see the swap
+        // atomically.
+        crate::insert_mentions_tx(&mut tx, community_id, event, channel_id).await?;
 
-        // Mentions are a denormalized index — safe outside the transaction.
-        // insert_event() normally handles this, but we inlined the INSERT above.
-        if let Err(e) = crate::insert_mentions(&self.pool, community_id, event, channel_id).await {
-            tracing::warn!(event_id = %event.id, "Failed to insert mentions: {e}");
-        }
+        tx.commit().await?;
 
         Ok((
             StoredEvent::with_received_at(event.clone(), received_at, channel_id, true),
@@ -6882,6 +6887,84 @@ mod tests {
     use uuid::Uuid;
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    // Regression guard for the addressable-replacement visibility window.
+    // Mention rows used to be indexed after the replacement transaction
+    // committed, so between the two commits a `#p`-filtered reader saw
+    // neither version of the entity: the old event's row was soft-deleted in
+    // the replacement and the new event had no mention row yet. Observed live
+    // as a channel owner's kind:39002 membership query returning nothing
+    // while another member's join was being processed. A reader racing a
+    // stream of replacements must never observe the entity disappear.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn addressable_replacement_stays_visible_to_p_tag_readers() {
+        let db = setup_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let relay_keys = Keys::generate();
+        let target_hex = hex::encode(Keys::generate().public_key().to_bytes());
+        let d_tag = format!("p-visibility-{}", Uuid::new_v4().simple());
+        let base = Timestamp::now().as_u64();
+
+        let build = move |n: u64, keys: &Keys, d: &str, target: &str| {
+            EventBuilder::new(Kind::Custom(39002), "")
+                .tags([
+                    Tag::parse(["d", d]).unwrap(),
+                    Tag::parse(["p", target, "", "owner"]).unwrap(),
+                ])
+                .custom_created_at(Timestamp::from(base + n))
+                .sign_with_keys(keys)
+                .unwrap()
+        };
+
+        let v1 = build(0, &relay_keys, &d_tag, &target_hex);
+        db.replace_addressable_event(community, &v1, None)
+            .await
+            .expect("seed v1");
+
+        let writer_pool = db.pool.clone();
+        let writer_keys = relay_keys.clone();
+        let writer_d = d_tag.clone();
+        let writer_target = target_hex.clone();
+        let writer = tokio::spawn(async move {
+            let writer_db = Db::from_pool(writer_pool);
+            for n in 1..=150u64 {
+                let event = build(n, &writer_keys, &writer_d, &writer_target);
+                writer_db
+                    .replace_addressable_event(community, &event, None)
+                    .await
+                    .expect("replacement");
+            }
+        });
+
+        let query = crate::event::EventQuery {
+            kinds: Some(vec![39002]),
+            p_tag_hex: Some(target_hex.clone()),
+            limit: Some(1000),
+            ..crate::event::EventQuery::for_community(community)
+        };
+        let mut checks = 0u32;
+        while !writer.is_finished() {
+            let events = crate::event::query_events(&db.pool, &query)
+                .await
+                .expect("reader query");
+            let visible = events.iter().any(|stored| {
+                stored.event.tags.iter().any(|tag| {
+                    let parts = tag.as_slice();
+                    parts.len() >= 2 && parts[0] == "d" && parts[1] == d_tag
+                })
+            });
+            assert!(
+                visible,
+                "replacement window hid the entity from #p readers after {checks} clean reads"
+            );
+            checks += 1;
+        }
+        writer.await.expect("writer task");
+        assert!(
+            checks >= 20,
+            "reader barely overlapped the writer ({checks} reads) — result not meaningful"
+        );
+    }
 
     async fn setup_db() -> Db {
         let database_url =
