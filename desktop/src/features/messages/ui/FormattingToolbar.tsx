@@ -396,7 +396,16 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
               aria-pressed={item.active}
               disabled={disabled}
               onClick={() => item.action()}
-              onMouseDown={captureSelection}
+              onMouseDown={(event) => {
+                // Keep focus in the editor. Without this the button steals
+                // focus on mousedown, and the browser's focus-restore fires a
+                // selectionchange carrying the pre-toggle caret; when that
+                // lands after the toggle's transaction, ProseMirror syncs the
+                // stale DOM selection back into state and the next keystrokes
+                // go to the old block instead of the newly created one.
+                event.preventDefault();
+                captureSelection();
+              }}
               className={cn(
                 "inline-flex h-7 w-7 min-w-7 items-center justify-center rounded-md text-sm font-medium transition-colors",
                 "hover:bg-muted hover:text-foreground",

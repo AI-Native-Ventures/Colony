@@ -305,6 +305,45 @@ for (const format of [
   });
 }
 
+// Regression guard for the CI-only caret-theft flake. A formatting control
+// that takes focus on mousedown makes the browser restore the pre-toggle DOM
+// selection when the command chain refocuses the editor; on a loaded runner
+// that restore lands after the toggle's transaction, ProseMirror syncs the
+// stale caret back into state, and the next keystrokes go to the old block
+// (observed as <p>beforeinside</p> beside an empty list). Toolbar controls
+// must preventDefault on mousedown so the editor never loses focus at all.
+test("formatting controls never take focus from the composer", async ({
+  page,
+}) => {
+  await openGeneral(page);
+
+  const input = page.getByTestId("message-input");
+  await input.click();
+  await input.pressSequentially("before");
+  await input.press("Shift+Enter");
+
+  const composerHasFocus = () =>
+    input.evaluate((element) =>
+      Boolean(
+        document.activeElement === element ||
+          element.contains(document.activeElement),
+      ),
+    );
+
+  await page.getByRole("button", { name: "Toggle formatting" }).first().click();
+  expect(await composerHasFocus()).toBe(true);
+
+  const bullet = page.getByRole("button", { name: "Bullet list", exact: true });
+  await bullet.hover();
+  await page.mouse.down();
+  expect(await composerHasFocus()).toBe(true);
+  await page.mouse.up();
+
+  await input.pressSequentially("inside");
+  await expect(input.locator(":scope > p").first()).toHaveText("before");
+  await expect(input.locator(":scope > ul")).toHaveText("inside");
+});
+
 test("Code block uses the restored multiline selection after mouseup collapse", async ({
   page,
 }) => {
