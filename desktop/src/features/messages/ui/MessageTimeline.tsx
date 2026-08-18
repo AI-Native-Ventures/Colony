@@ -9,6 +9,10 @@ import {
 import { preloadTimelineImages } from "@/features/messages/lib/timelineImagePreload";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import {
+  resolveSemanticBottomTransition,
+  type TimelineAtBottomReason,
+} from "@/features/messages/lib/semanticBottomTransition";
 import type { ChannelWindowThreadSummary } from "@/features/messages/lib/channelWindowStore";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
@@ -401,33 +405,37 @@ const MessageTimelineBase = React.forwardRef<
     [],
   );
   const handleVirtualizerAtBottomStateChange = React.useCallback(
-    (atBottom: boolean) => {
+    (atBottom: boolean, reason: TimelineAtBottomReason) => {
       // Virtua can emit an intermediate non-bottom offset while its initial
       // scroll-to-end is still converging. Do not turn that mount transient
       // into a semantic dataset freeze: wait until this channel has reached a
-      // confirmed bottom once, then track genuine bottom -> history movement.
-      if (atBottom) {
-        hasConfirmedVirtualizerBottomRef.current = true;
-        onVirtualizerAtBottomStateChange(true);
-        if (suppressNextSemanticBottomRef.current) {
-          // Freezing the tail shortens Virtua's model and can itself make the
-          // current offset report "at bottom". That synthetic transition must
-          // not immediately release the snapshot and oscillate forever.
-          suppressNextSemanticBottomRef.current = false;
-        } else if (!semanticAtBottomRef.current) {
-          queueSemanticBottom(true);
-        }
-      } else {
-        if (hasConfirmedVirtualizerBottomRef.current) {
-          timelineVirtualizerApi?.cancelBottomIntent();
-        }
-        onVirtualizerAtBottomStateChange(false);
-        if (hasConfirmedVirtualizerBottomRef.current) {
-          if (semanticAtBottomRef.current) {
-            suppressNextSemanticBottomRef.current = true;
-            queueSemanticBottom(false);
-          }
-        }
+      // confirmed bottom once, then track genuine bottom to history movement.
+      // resolveSemanticBottomTransition owns the rest of the rules, including
+      // why a resize is not a reader movement.
+      const transition = resolveSemanticBottomTransition(
+        {
+          hasConfirmedBottom: hasConfirmedVirtualizerBottomRef.current,
+          suppressNext: suppressNextSemanticBottomRef.current,
+          semanticAtBottom: semanticAtBottomRef.current,
+        },
+        { atBottom, reason },
+      );
+      hasConfirmedVirtualizerBottomRef.current =
+        transition.next.hasConfirmedBottom;
+      suppressNextSemanticBottomRef.current = transition.next.suppressNext;
+      // Only the virtualizer's own scroll callback drives the anchored-scroll
+      // notion of "at bottom". A resize re-measure exists to correct the
+      // semantic tail state; routing it here too would synthesize bottom
+      // transitions the reader never made, and the unread pill dismisses
+      // itself on exactly that transition.
+      if (reason === "scroll") {
+        onVirtualizerAtBottomStateChange(atBottom);
+      }
+      if (transition.cancelBottomIntent) {
+        timelineVirtualizerApi?.cancelBottomIntent();
+      }
+      if (transition.commit !== null) {
+        queueSemanticBottom(transition.commit);
       }
     },
     [
@@ -871,7 +879,14 @@ const MessageTimelineBase = React.forwardRef<
           )}
         </div>
 
-        {!isAtBottom ? (
+        {/*
+          Also render while messages are held back. This pill is the only way
+          to release a frozen tail, and a frozen tail whose scroller happens to
+          sit at the bottom would otherwise hide it and strand every held
+          message. See resolveSemanticBottomTransition for the sequence that
+          produced exactly that state.
+        */}
+        {!isAtBottom || bufferedTimeline.pendingCount > 0 ? (
           <div
             className={cn(
               "pointer-events-none absolute inset-x-0 bottom-4 z-50 flex justify-center px-4",
