@@ -6903,7 +6903,7 @@ mod tests {
         let relay_keys = Keys::generate();
         let target_hex = hex::encode(Keys::generate().public_key().to_bytes());
         let d_tag = format!("p-visibility-{}", Uuid::new_v4().simple());
-        let base = Timestamp::now().as_u64();
+        let base = Timestamp::now().as_secs();
 
         let build = move |n: u64, keys: &Keys, d: &str, target: &str| {
             EventBuilder::new(Kind::Custom(39002), "")
