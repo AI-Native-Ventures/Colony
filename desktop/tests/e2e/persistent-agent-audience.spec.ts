@@ -40,6 +40,24 @@ async function openThread(page: Page, threadRootId = THREAD_ROOT_ID) {
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 }
 
+// The app drops `messageId` from the URL once the deep-linked row is centered
+// (useAnchoredScroll's onTargetReached, consumed in ChannelRouteScreen). That
+// rewrite is a same-document navigation, and Playwright rejects whatever
+// page.evaluate is in flight when it lands, reporting it as "Execution context
+// was destroyed, most likely because of a navigation". Nothing is actually
+// destroyed: a concurrent evaluate resolves through it and a window marker set
+// before the rewrite survives it. waitForAnimations holds exactly such an
+// evaluate for up to a second, so capturing before the deep link settles is a
+// coin flip. The rewrite landed inside that window in 6 of 15 local runs at
+// BUZZ_E2E_CPU_THROTTLE=6, and killed this test once on CI (shard 5 of run
+// 32129293431). Waiting for it first drops that to 0 of 15, and the frame we
+// capture is then the settled one rather than a mid-scroll one.
+async function settleDeepLink(page: Page) {
+  await expect
+    .poll(() => page.url().includes("messageId="), { timeout: 15_000 })
+    .toBe(false);
+}
+
 async function emitRootMessage(
   page: Page,
   content: string,
@@ -278,6 +296,7 @@ for (const theme of ["buzz", "buzz-dark"]) {
     await seedAudience(page, [AGENT_A, AGENT_B], theme);
     await installAudienceFixtures(page);
     await openThread(page);
+    await settleDeepLink(page);
     const overlay = threadComposer(page);
     const composer = overlay.getByTestId("message-composer");
     await overlay.getByTestId("message-input").focus();
@@ -293,6 +312,7 @@ test("native persistent mentions fit the narrow composer", async ({ page }) => {
   await seedAudience(page, [AGENT_A, AGENT_B]);
   await installAudienceFixtures(page);
   await openThread(page);
+  await settleDeepLink(page);
   const overlay = threadComposer(page);
   const composer = overlay.getByTestId("message-composer");
   await expect(overlay.getByTestId("message-input")).toContainText(
