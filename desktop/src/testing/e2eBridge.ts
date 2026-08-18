@@ -548,6 +548,10 @@ type E2eConfig = {
     nostrBindSignDelayMs?: number;
     /** Reject successive mock WebSocket connect attempts, then resume. */
     websocketConnectErrors?: string[];
+    /** Deliver AUTH synchronously, before the mock connect command resolves. */
+    websocketAuthBeforeConnectResolves?: boolean;
+    /** Stall the first AUTH signing command forever; later attempts complete. */
+    stallFirstAuthSigning?: boolean;
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
@@ -3764,6 +3768,7 @@ const mockChannelHistoryCloses: string[] = [];
 let mockWebsocketUnavailable = false;
 let mockAppliedRelayWsUrl: string | null = null;
 const relayWebsocketConnectAttemptStarts: number[] = [];
+let mockAuthSigningAttempts = 0;
 let mockWebsocketSendMutexWedged = false;
 let mockClosedChannelLiveSubscription = false;
 const realSockets = new Map<number, WebSocket>();
@@ -10849,9 +10854,14 @@ async function connectMockSocket(args: { onMessage: unknown }) {
     subscriptions: new Map(),
   });
 
-  window.setTimeout(() => {
+  if (getConfig()?.mock?.websocketAuthBeforeConnectResolves) {
     sendWsText(handler, ["AUTH", `mock-challenge-${wsId}`]);
-  }, 0);
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+  } else {
+    window.setTimeout(() => {
+      sendWsText(handler, ["AUTH", `mock-challenge-${wsId}`]);
+    }, 0);
+  }
 
   return wsId;
 }
@@ -11560,6 +11570,7 @@ export function maybeInstallE2eTauriMocks() {
     }
   }
   setGlobalAgentConfigCallCount = 0;
+  mockAuthSigningAttempts = 0;
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? {
         ...config.mock.globalAgentConfig,
@@ -14949,6 +14960,13 @@ export function maybeInstallE2eTauriMocks() {
       case "nip44_decrypt_from_self":
         return (payload as { ciphertext: string }).ciphertext;
       case "create_auth_event":
+        mockAuthSigningAttempts++;
+        if (
+          getConfig()?.mock?.stallFirstAuthSigning &&
+          mockAuthSigningAttempts === 1
+        ) {
+          return new Promise<string>(() => {});
+        }
         if (identity) {
           return JSON.stringify(
             await signWithIdentity(identity, {
