@@ -503,6 +503,42 @@ shasum -a 256 test-results/<dir>/*.png   # every hash must be unique
 Identical hashes mean two shots captured the same state — fix the spec, do
 not post. This catches the most common screenshot regression.
 
+**Three Playwright behaviours that read as product bugs.** Each of these cost
+a day on 2026-08-18, each is proven with a counter or a probe, and each
+produced an error message that pointed at the wrong thing.
+
+1. **`expect.poll` does not retry a callback that throws.** It rethrows on the
+   first call (verified with a call counter: 5 of 5, one call each). So a seam
+   check written as ``if (!seam) throw new Error("... not installed")`` inside a
+   poll is a hard failure, not a wait. The e2e bridge installs its
+   `__BUZZ_E2E_*` globals from a lazily loaded chunk, absent at the first read
+   in 3 of 5 runs and landing 25ms to 55ms later, so this fails whenever the
+   bundle is a few tens of milliseconds behind. Wait for the seam with
+   `page.waitForFunction` first, then poll its value. Have the poll callback
+   *return* a value; keep throws out of it.
+
+2. **`toBeVisible()` ignores occlusion.** An assertion on something behind an
+   open dialog passes happily, so it never proves an overlay closed. Then the
+   next `hover()` spends the entire 30s test budget retrying against the
+   overlay, and the failure names the element you were hovering rather than the
+   dialog covering it. After dismissing a dialog, assert
+   `await expect(page.getByRole("dialog")).toHaveCount(0)` before acting again.
+
+3. **An in-flight `page.evaluate` is rejected by any navigation, including a
+   same-document one**, and Playwright reports it as "Execution context was
+   destroyed, most likely because of a navigation". Nothing is destroyed: a
+   marker set on `window` survives it and a concurrent evaluate resolves
+   through it. The app rewrites its own URL (e.g. dropping `messageId` once a
+   deep-linked row centres), and any long-lived evaluate that the rewrite lands
+   on dies. `waitForAnimations` holds one for up to a second. If a spec
+   deep-links, let the route settle before capturing.
+
+When a flake resists a local repro, **read the CI log before theorising**. The
+job log for the run that first listed it is usually still there, and the call
+log inside a Playwright timeout names the element that intercepted the action.
+Two of the three above were sitting in a log for two days while local runs came
+back clean 50+ times.
+
 **`general` has pre-seeded messages** making `hasUnread` always true. Use
 `engineering` for "muted + no unread" visual states.
 
