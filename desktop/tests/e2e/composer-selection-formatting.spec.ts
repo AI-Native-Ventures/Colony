@@ -194,11 +194,15 @@ for (const platform of [
         value: navigatorPlatform,
       });
     }, platform.navigatorPlatform);
+    // Grant for every origin rather than a hardcoded one. playwright.config.ts
+    // honours PLAYWRIGHT_PORT so several agents can run suites side by side,
+    // and pinning this to 4173 silently denies the grant on every other port:
+    // the test then fails with "Write permission denied" from
+    // navigator.clipboard, which reads like a product bug rather than a
+    // fixture that was pointed at the wrong address.
     await page
       .context()
-      .grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: "http://127.0.0.1:4173",
-      });
+      .grantPermissions(["clipboard-read", "clipboard-write"]);
     await openGeneral(page);
 
     await page.evaluate(async () => {
@@ -304,6 +308,45 @@ for (const format of [
     await expect(input.locator(":scope > p").last()).toHaveText("after");
   });
 }
+
+// Regression guard for the CI-only caret-theft flake. A formatting control
+// that takes focus on mousedown makes the browser restore the pre-toggle DOM
+// selection when the command chain refocuses the editor; on a loaded runner
+// that restore lands after the toggle's transaction, ProseMirror syncs the
+// stale caret back into state, and the next keystrokes go to the old block
+// (observed as <p>beforeinside</p> beside an empty list). Toolbar controls
+// must preventDefault on mousedown so the editor never loses focus at all.
+test("formatting controls never take focus from the composer", async ({
+  page,
+}) => {
+  await openGeneral(page);
+
+  const input = page.getByTestId("message-input");
+  await input.click();
+  await input.pressSequentially("before");
+  await input.press("Shift+Enter");
+
+  const composerHasFocus = () =>
+    input.evaluate((element) =>
+      Boolean(
+        document.activeElement === element ||
+          element.contains(document.activeElement),
+      ),
+    );
+
+  await page.getByRole("button", { name: "Toggle formatting" }).first().click();
+  expect(await composerHasFocus()).toBe(true);
+
+  const bullet = page.getByRole("button", { name: "Bullet list", exact: true });
+  await bullet.hover();
+  await page.mouse.down();
+  expect(await composerHasFocus()).toBe(true);
+  await page.mouse.up();
+
+  await input.pressSequentially("inside");
+  await expect(input.locator(":scope > p").first()).toHaveText("before");
+  await expect(input.locator(":scope > ul")).toHaveText("inside");
+});
 
 test("Code block uses the restored multiline selection after mouseup collapse", async ({
   page,
@@ -443,16 +486,7 @@ test("selected hard-break lines stay newline-separated in one code block", async
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("```\none\ntwo\nthree\n```");
 });
 
@@ -486,18 +520,32 @@ test("selected list items become one multiline code block and keep neighbors", a
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("- before\n\n```\none\ntwo\n```\n\n- after");
 });
+
+/**
+ * Content of the most recent message the composer sent.
+ *
+ * Reading `__BUZZ_E2E_SIGNED_EVENTS__.at(-1)` is not the same thing. The app
+ * signs other events on its own schedule, and a read-state event landing after
+ * the send makes the last entry something like
+ * `{"v":1,"client_id":"...","contexts":{...}}`. The poll then compares that to
+ * the expected markdown until it times out, which is how this file failed once
+ * in 216 local runs at 4x CPU throttle. Select by kind, not by position.
+ */
+async function lastComposerMessageContent(page: Page) {
+  return page.evaluate(() => {
+    const messageKinds = new Set([9, 40002]);
+    return (
+      window as Window & {
+        __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string; kind: number }>;
+      }
+    ).__BUZZ_E2E_SIGNED_EVENTS__
+      ?.filter((event) => messageKinds.has(event.kind))
+      .at(-1)?.content;
+  });
+}
 
 test("caret-only block formatting serializes the prior draft unchanged", async ({
   page,
@@ -513,16 +561,7 @@ test("caret-only block formatting serializes the prior draft unchanged", async (
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("before\n\n- item");
 });
 
@@ -546,16 +585,7 @@ test("block formatting preserves the lines around a selected composer line", asy
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("before\n\n- selected\n\nafter");
 });
 

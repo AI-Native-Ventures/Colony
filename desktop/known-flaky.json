@@ -7,21 +7,6 @@
       "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
     },
     {
-      "test": "composer-image-draw.spec.ts › spoiler marking survives drawing on the attachment",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
-      "test": "composer-selection-formatting.spec.ts › Ordered list starts at a collapsed caret on a new line",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
-      "test": "overscroll-boundary.spec.ts › locks viewport rubber-band outside conversation scrollers",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
       "test": "relay-reconnect.spec.ts › failed initial relay dial retries automatically",
       "since": "2026-08-16",
       "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."

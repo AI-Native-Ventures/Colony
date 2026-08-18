@@ -450,3 +450,37 @@ fn resolve_provider_binary_accepts_valid_id_format() {
         ),
     }
 }
+
+// Linux refuses to exec a file any process holds open for writing (ETXTBSY),
+// and a concurrent fork elsewhere in this process briefly inherits a staged
+// provider's write descriptor between its fork and exec. This held-writer is
+// the deterministic version of that window; the spawn must retry through it
+// instead of failing the deploy. Linux-only: macOS does not enforce ETXTBSY
+// for this case, so the guard would pass vacuously there.
+#[cfg(target_os = "linux")]
+#[test]
+fn invoke_provider_retries_while_a_writer_briefly_holds_the_binary() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = directory.path().join("provider");
+    write_test_provider(
+        &provider,
+        r#"read request
+printf '%s\n' '{"ok":true,"name":"busy","version":"1.0.0","protocol_version":1,"description":"busy provider","config_schema":{}}'"#,
+    );
+
+    let writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&provider)
+        .unwrap();
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        drop(writer);
+    });
+
+    let request = serde_json::json!({"op": "info", "request_id": "etxtbsy-window"});
+    let response = invoke_provider(&provider, &request, std::time::Duration::from_secs(10))
+        .expect("spawn must retry through the transient ETXTBSY window");
+    assert_eq!(response["ok"], serde_json::Value::Bool(true));
+
+    holder.join().unwrap();
+}

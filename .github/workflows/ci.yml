@@ -250,9 +250,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Format check
         run: just fmt-check
       - name: Desktop Tauri format check
@@ -274,9 +271,6 @@ jobs:
         with:
           cache: "true"
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cargo-nextest
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
         with:
@@ -1240,9 +1234,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       # Reuse the relay + git-credential-nostr built by Desktop E2E Relay
       # instead of compiling them a second time.
       - name: Download relay binary
@@ -1308,9 +1299,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          save-if: ${{ github.event_name != 'pull_request' }}
       # Reuse the relay artifact, but start a fresh relay and database on this
       # job's own runner so no other E2E suite can seed its community.
       - name: Download relay binary
@@ -1546,10 +1534,6 @@ jobs:
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
         with:
           cache: "true"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          key: cross-${{ matrix.target }}
-          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cross
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
         with:
@@ -1734,25 +1718,41 @@ jobs:
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
-  rust-cache-warm:
-    # The one run that can populate the workspace Rust cache.
+  rust-post-merge:
+    # Post-merge re-proof of the Rust core, which a develop push otherwise
+    # skips entirely: core-enabled is false for every push that is not on
+    # `release`, and this repository has no `release` branch, so Rust Lint and
+    # Unit Tests never run against the merged tree.
     #
-    # Rust Lint, Unit Tests, Relay E2E and Agent Ask E2E are all gated on
-    # core-enabled, which ci.yml sets to false for every push that is not on
-    # `release`, and this repository has no `release` branch. Their
-    # rust-cache steps therefore only ever executed on pull requests, where
-    # save-if was false; and even had it been true, GitHub scopes a cache
-    # written on refs/pull/N/merge to that pull request alone. The result was
-    # measurable: the live cache store held rust caches for windows-rust,
-    # blocks-live-gate and desktop-e2e-relay -- every job reachable on a
-    # develop push -- and none at all for the four above, which compiled cold
-    # on every pull request forever (clippy 4.3 min, unit tests 6.5 min).
+    # This job used to also claim to warm a shared Rust cache. It cannot, and
+    # neither can anything else, for the ROOT workspace. Hermit sets
+    # CARGO_HOME to <repo>/.hermit/rust, so every dependency's manifest_path
+    # lives inside the repository. Swatinem/rust-cache decides what to keep
+    # with `getPackagesOutsideWorkspaceRoot`, which filters on
+    # `!manifest_path.startsWith(workspaceRoot)` (src/workspace.ts:41). For the
+    # root workspace that filter matches nothing, so `cleanTargetDir` and
+    # `cleanRegistry` are handed an empty keep-set and delete the entire target
+    # directory and registry before the save. Measured on this repository:
     #
-    # This job runs the same compilation once on develop, where the default
-    # branch scope makes the cache readable from every branch. It is not a
-    # required check and blocks nothing; it also serves as the post-merge
-    # re-proof of core that a develop push otherwise skips entirely.
-    name: Rust Cache Warm
+    #   root workspace   1091 packages, 0 kept  -> cache saved 0 bytes
+    #   desktop/src-tauri 1284 packages, 1282 kept -> cache saved 1676 MB
+    #
+    # The tauri workspace escapes it only because its root is a subdirectory,
+    # so .hermit/rust is outside it. Same reason windows-rust caches 3 GB: that
+    # runner has no hermit, so CARGO_HOME is ~/.cargo. It also explains the two
+    # v0-rust-cross-* entries that have sat at 0 bytes since 2026-08-15.
+    #
+    # Caching the root target by hand instead is not worth it: the directory
+    # measures 8.6 GB against a 10 GB repository-wide cache limit, the registry
+    # download it would also cover takes 5.5 seconds, and the jobs it would
+    # speed up (Rust Lint 4.3 min, Unit Tests 6.5 min) are not on the critical
+    # path -- Desktop Core, Desktop Tauri Flags and the smoke shards are. Doing
+    # it would re-create exactly the eviction pressure that made Desktop E2E
+    # Relay take 20 minutes instead of 0 on 2026-08-17.
+    #
+    # The only real fix is to move CARGO_HOME out of the repository, which is a
+    # hermit-wide change affecting every developer, not a CI tweak.
+    name: Rust Post-Merge
     runs-on: ubuntu-latest
     timeout-minutes: 60
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
@@ -1764,23 +1764,24 @@ jobs:
         with:
           cache: "true"
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: colony-workspace
-          save-if: "true"
       - name: Install cargo-nextest
         uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
         with:
           tool: cargo-nextest@0.9.136
-      - name: Warm clippy artifacts
+      - name: Clippy
         run: just clippy
-      - name: Warm unit-test artifacts
+      - name: Unit tests
         run: just test-unit
 
   tauri-cache-warm:
-    # Same problem, same fix, for the desktop/src-tauri workspace consumed by
-    # Desktop Core and Desktop Tauri Flags. Also the sole writer of the
-    # sherpa-onnx archive cache now that both consumers restore only.
+    # This one genuinely works, for the reason spelled out on rust-post-merge
+    # above: the desktop/src-tauri workspace root is a subdirectory, so hermit's
+    # in-repo CARGO_HOME sits outside it and rust-cache keeps 1282 of 1284
+    # packages instead of none. First run saved 1676 MB.
+    #
+    # Desktop Core and Desktop Tauri Flags restore it through shared-key
+    # colony-tauri, and it is also the sole writer of the sherpa-onnx archive
+    # cache now that both consumers restore only.
     name: Tauri Cache Warm
     runs-on: ubuntu-latest
     timeout-minutes: 60
