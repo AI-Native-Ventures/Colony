@@ -2,31 +2,6 @@
   "comment": "Tests allowed to fail once and pass on retry without failing the job. Everything else that flakes fails CI. This list is debt: each entry is a test that is lying about the product, and it should shrink, never grow. Adding an entry is a deliberate decision that needs a reason and a date, not a way to get a red build green.",
   "allow": [
     {
-      "test": "channel-browser.spec.ts › Enter with no matches jumps to create",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
-      "test": "composer-image-draw.spec.ts › spoiler marking survives drawing on the attachment",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
-      "test": "composer-selection-formatting.spec.ts › Ordered list starts at a collapsed caret on a new line",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
-      "test": "messaging.spec.ts › sends a thread message to its parent channel with a root-thread link",
-      "since": "2026-08-18",
-      "why": "NOT a timeout-budget flake, and this entry exists to record that. It was allowlisted once on 2026-08-17 on the theory that it shared the 5000ms default expect budget with two other flakes. Raising the budget to 15s fixed those two and did nothing here: on this pull request's own CI it failed again with 'Timeout 15000ms exceeded while waiting on the predicate' at messaging.spec.ts:2010, then passed on retry. The poll waits for a thread reply sent to its parent channel to appear in that channel's timeline; sharedRow never enters the DOM. That is a real intermittent race in the send-to-channel path, product or harness, and it matches this test's history: the header comment of scripts/summarize-flaky-tests.mjs cites it as reason #1 the gate exists, after it passed on retry on a run that green-lit a promotion candidate and then failed three attempts in a row three hours later. Do not raise a timeout to close this. Pull the trace and video from a failed attempt and find why the row never renders."
-    },
-    {
-      "test": "overscroll-boundary.spec.ts › locks viewport rubber-band outside conversation scrollers",
-      "since": "2026-08-16",
-      "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."
-    },
-    {
       "test": "relay-reconnect.spec.ts › failed initial relay dial retries automatically",
       "since": "2026-08-16",
       "why": "Pre-existing at the audit that added this gate. Not yet diagnosed."

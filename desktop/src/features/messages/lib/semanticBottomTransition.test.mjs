@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveSemanticBottomTransition } from "./semanticBottomTransition.ts";
+import {
+  resolveSemanticBottomTransition,
+  shouldReleaseWithheldTail,
+} from "./semanticBottomTransition.ts";
 
 const atBottomState = {
   hasConfirmedBottom: true,
@@ -89,4 +92,53 @@ test("a mount-transient non-bottom before any confirmed bottom does not freeze",
   assert.equal(transition.commit, null);
   assert.equal(transition.next.semanticAtBottom, true);
   assert.equal(transition.cancelBottomIntent, false);
+});
+
+// A tail can freeze with nobody having scrolled (an append's re-measure
+// reports a non-bottom offset, and the freeze's own at-bottom echo is
+// swallowed), leaving withheld output at a scroller already on the floor. CI
+// showed that state on 2026-08-18: a "6 new messages" pill with the six rows
+// it counted absent from the DOM.
+test("withheld output at the bottom releases the tail", () => {
+  assert.equal(
+    shouldReleaseWithheldTail({
+      distanceFromBottom: 0,
+      pendingCount: 6,
+      semanticAtBottom: false,
+    }),
+    true,
+  );
+});
+
+test("a reader who scrolled up keeps their freeze", () => {
+  assert.equal(
+    shouldReleaseWithheldTail({
+      distanceFromBottom: 900,
+      pendingCount: 6,
+      semanticAtBottom: false,
+    }),
+    false,
+  );
+});
+
+test("nothing withheld is nothing to release", () => {
+  assert.equal(
+    shouldReleaseWithheldTail({
+      distanceFromBottom: 0,
+      pendingCount: 0,
+      semanticAtBottom: false,
+    }),
+    false,
+  );
+});
+
+test("an unmounted scroller proves nothing, so it releases nothing", () => {
+  assert.equal(
+    shouldReleaseWithheldTail({
+      distanceFromBottom: null,
+      pendingCount: 6,
+      semanticAtBottom: false,
+    }),
+    false,
+  );
 });
