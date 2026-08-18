@@ -11,7 +11,6 @@ import type { TimelineMessage } from "@/features/messages/types";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import {
   resolveSemanticBottomTransition,
-  shouldReleaseWithheldTail,
   type TimelineAtBottomReason,
 } from "@/features/messages/lib/semanticBottomTransition";
 import type { ChannelWindowThreadSummary } from "@/features/messages/lib/channelWindowStore";
@@ -35,6 +34,7 @@ import {
   type DirectMessageIntroParticipant,
 } from "./DirectMessageIntroAvatarStack";
 import { useSettleGatedPrependMessages } from "./useSettleGatedPrependMessages";
+import { useWithheldTailRelease } from "./useWithheldTailRelease";
 
 export type MessageTimelineHandle = {
   scrollToBottomOnNextUpdate: () => void;
@@ -448,28 +448,18 @@ const MessageTimelineBase = React.forwardRef<
     ],
   );
 
-  // A frozen tail whose scroller is physically at the bottom is unreachable.
-  // See shouldReleaseWithheldTail for why this releases on withheld output
-  // rather than on a reading of which scroll callbacks the reader caused.
-  React.useEffect(() => {
-    const scroller = activeScrollContainerRef.current;
-    if (
-      !shouldReleaseWithheldTail({
-        distanceFromBottom: scroller
-          ? scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop
-          : null,
-        pendingCount: bufferedTimeline.pendingCount,
-        semanticAtBottom: isSemanticallyAtBottom,
-      })
-    ) {
-      return;
-    }
-    setIsSemanticallyAtBottom(true);
-  }, [
-    activeScrollContainerRef,
-    bufferedTimeline.pendingCount,
-    isSemanticallyAtBottom,
-  ]);
+  // A frozen tail whose scroller is physically at the bottom is unreachable;
+  // useWithheldTailRelease and shouldReleaseWithheldTail carry the reasoning.
+  const releaseWithheldTail = React.useCallback(
+    () => setIsSemanticallyAtBottom(true),
+    [],
+  );
+  useWithheldTailRelease({
+    onRelease: releaseWithheldTail,
+    pendingCount: bufferedTimeline.pendingCount,
+    scrollElementRef: activeScrollContainerRef,
+    semanticAtBottom: isSemanticallyAtBottom,
+  });
 
   const timelineIntroSurface = selectTimelineIntroSurface({
     hasChannelIntro: channelIntro !== null && directMessageIntro === null,
