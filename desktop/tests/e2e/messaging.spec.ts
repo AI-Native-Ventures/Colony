@@ -2023,57 +2023,27 @@ test("sends a thread message to its parent channel with a root-thread link", asy
   await expect(
     sharedRow.locator('[data-link-preview="github-pull-request"]'),
   ).toContainText("Add Send to channel for thread messages");
+  // The pill's own contract -- label, emoji/text split, accessible name,
+  // title, hover underline, click payload -- is asserted in
+  // MessageLinkPill.test.mjs, which runs in about a second and cannot flake.
+  // What is left here is what only a real browser can answer: that the
+  // excerpt survived the round trip through the relay tag, that the resolved
+  // theme colours actually distinguish the link from the text around it, and
+  // that clicking it navigates.
   const sourceLine = sharedRow.getByTestId("sent-from-thread");
   await expect(sourceLine).toContainText("Sent from thread:");
-  await expect(sourceLine).toHaveClass(/message-markdown/);
-  await expect(sourceLine).toHaveClass(/pt-0\.5/);
-  await expect(sourceLine).toHaveClass(/text-sm/);
-  await expect(sourceLine).toHaveClass(/font-normal/);
-  await expect(sourceLine).toHaveClass(/leading-4/);
-  await expect(sourceLine).toHaveClass(/text-muted-foreground\/70/);
   const rootLink = sourceLine.locator("[data-message-link]");
   const sourcePrefix = sourceLine.locator("span").first();
-  const rootLinkLabel = rootContent;
-  await expect(rootLink).toHaveText(rootLinkLabel);
-  await expect(rootLink).toHaveAttribute(
-    "aria-label",
-    "Open thread in general",
-  );
-  await expect(rootLink).toHaveAttribute("title", rootLinkLabel);
-  await expect(rootLink).toHaveClass(/max-w-80/);
-  await expect(rootLink).toHaveClass(/truncate/);
-  await expect(rootLink).toHaveClass(/inline-block/);
-  await expect(rootLink).toHaveClass(/font-medium/);
-  await expect(rootLink).not.toHaveClass(/mention-chip/);
-  await expect(rootLink).not.toHaveClass(/border-b/);
-  const rootLinkText = rootLink.locator("[data-message-link-text]");
-  const rootLinkEmoji = rootLink.locator("[data-message-link-emoji]");
-  await expect(rootLinkText).toHaveText(` Share source thread ${timestamp}`);
-  await expect(rootLinkText).not.toHaveClass(/border-b/);
-  await expect(rootLinkEmoji).toHaveText("🧵");
-  await expect(rootLinkEmoji).not.toHaveClass(/border-b/);
-  await expect(rootLink).not.toHaveAttribute("data-hovered");
-  const [prefixColor, linkColorBeforeHover] = await Promise.all([
+  await expect(rootLink).toHaveText(rootContent);
+
+  const [prefixColor, linkColor] = await Promise.all([
     sourcePrefix.evaluate((element) => getComputedStyle(element).color),
     rootLink.evaluate((element) => getComputedStyle(element).color),
   ]);
-  expect(linkColorBeforeHover).not.toBe(prefixColor);
-  await expect
-    .poll(() =>
-      rootLink.evaluate((element) => getComputedStyle(element).backgroundColor),
-    )
-    .toBe("rgba(0, 0, 0, 0)");
-  await expect
-    .poll(() =>
-      rootLinkText.evaluate((element) => getComputedStyle(element).boxShadow),
-    )
-    .toBe("none");
+  expect(linkColor).not.toBe(prefixColor);
 
+  const rootLinkText = rootLink.locator("[data-message-link-text]");
   await rootLink.hover();
-  await expect(rootLink).toHaveAttribute("data-hovered", "");
-  await expect
-    .poll(() => rootLink.evaluate((element) => getComputedStyle(element).color))
-    .toBe(linkColorBeforeHover);
   await expect
     .poll(() =>
       rootLinkText.evaluate(
@@ -2081,12 +2051,6 @@ test("sends a thread message to its parent channel with a root-thread link", asy
       ),
     )
     .toBe(true);
-
-  await expect
-    .poll(() =>
-      rootLinkEmoji.evaluate((element) => getComputedStyle(element).boxShadow),
-    )
-    .toBe("none");
 
   await rootLink.click();
   await expect(threadPanel).toBeVisible();

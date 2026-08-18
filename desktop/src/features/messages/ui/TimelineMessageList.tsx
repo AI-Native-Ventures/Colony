@@ -27,7 +27,9 @@ import {
   buildVideoReviewContextForMessage,
   hasVideoAttachment,
 } from "@/features/messages/lib/videoReviewContext";
+import type { TimelineAtBottomReason } from "@/features/messages/lib/semanticBottomTransition";
 import type { TimelineMessage } from "@/features/messages/types";
+import { useTimelineScrollerResize } from "@/features/messages/ui/useTimelineScrollerResize";
 import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManageMessage";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
@@ -130,7 +132,10 @@ type TimelineMessageListProps = {
   /** The virtualized timeline owns its scroll node when enabled. */
   useVirtualizer?: boolean;
   onStartReached?: () => boolean;
-  onAtBottomStateChange?: (atBottom: boolean) => void;
+  onAtBottomStateChange?: (
+    atBottom: boolean,
+    reason: TimelineAtBottomReason,
+  ) => void;
   onVirtualizerApiChange?: (api: TimelineVirtualizerApi | null) => void;
   onVirtualizerRangeChanged?: () => void;
   onVirtualizerScrollerChange?: (element: HTMLDivElement | null) => void;
@@ -413,7 +418,10 @@ type VirtualizedTimelineRowsProps = {
   historyExhausted: boolean;
   hideDayDividers: boolean;
   leadingContent?: React.ReactNode;
-  onAtBottomStateChange?: (atBottom: boolean) => void;
+  onAtBottomStateChange?: (
+    atBottom: boolean,
+    reason: TimelineAtBottomReason,
+  ) => void;
   onStartReached?: () => boolean;
   onVirtualizerApiChange?: (api: TimelineVirtualizerApi | null) => void;
   onVirtualizerRangeChanged?: () => void;
@@ -465,9 +473,6 @@ function VirtualizedTimelineRows({
   const itemsLengthRef = React.useRef(0);
   const messageItemIndexByIdRef = React.useRef<ReadonlyMap<string, number>>(
     new Map(),
-  );
-  const [offscreenBufferSize, setOffscreenBufferSize] = React.useState(() =>
-    typeof window === "undefined" ? 1_000 : window.innerHeight,
   );
   const hasInitialPositionedRef = React.useRef(false);
   const lastReaderScrollOffsetRef = React.useRef<number | null>(null);
@@ -629,19 +634,12 @@ function VirtualizedTimelineRows({
     return () => onVirtualizerApiChange(null);
   }, [cancelBottomSettle, onVirtualizerApiChange, settleAtBottom]);
 
-  React.useLayoutEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const updateBufferSize = () => {
-      // Measure three viewports ahead so WebKit momentum does not outrun
-      // Virtua's first ResizeObserver pass.
-      setOffscreenBufferSize(host.clientHeight * 3);
-    };
-    updateBufferSize();
-    const resizeObserver = new ResizeObserver(updateBufferSize);
-    resizeObserver.observe(host);
-    return () => resizeObserver.disconnect();
-  }, []);
+  const offscreenBufferSize = useTimelineScrollerResize({
+    hasInitialPositionedRef,
+    hostRef,
+    listRef,
+    onAtBottomStateChange,
+  });
 
   const { retainedIndices, onScrollEnd: handleScrollEnd } =
     useTimelineRetention(keys, listRef, isPrepend);
@@ -684,7 +682,7 @@ function VirtualizedTimelineRows({
         }
       }
       // Keep the reader's non-bottom offset until an actual gesture claims it.
-      onAtBottomStateChange?.(distanceFromBottom <= 32);
+      onAtBottomStateChange?.(distanceFromBottom <= 32, "scroll");
       updatePinnedDayLabel(offset);
       if (offset <= 200) {
         // Layout scrolls near the top must not poison the reader's next input.
