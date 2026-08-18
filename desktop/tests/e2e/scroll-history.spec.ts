@@ -1350,8 +1350,17 @@ test("fast middle-page scroll settles with continuous mounted coverage", async (
   const viewportCoverage = () =>
     timeline.evaluate((element) => {
       const viewport = element.getBoundingClientRect();
+      // Day headings and the unread divider are rendered timeline content, not
+      // blank space, but they carry no data-message-id. Counting only message
+      // rows made them read as a hole: a run where the unread divider sat in
+      // view reported a 198px gap and failed this 100px bar, with nothing
+      // actually missing (CI run 32172347906, shard 6). The bar is here to
+      // catch a stale range, which is viewport-scale, so measure against
+      // everything the timeline drew.
       const rows = Array.from(
-        element.querySelectorAll<HTMLElement>("[data-message-id]"),
+        element.querySelectorAll<HTMLElement>(
+          '[data-message-id], [data-testid="message-timeline-day-group"], [data-testid="message-unread-divider"]',
+        ),
       )
         .map((row) => row.getBoundingClientRect())
         .filter(
