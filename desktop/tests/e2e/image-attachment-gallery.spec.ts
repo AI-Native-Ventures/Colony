@@ -327,6 +327,86 @@ test("hidden spoiler images are excluded from gallery navigation until revealed"
   await expect(page.getByRole("button", { name: "Next image" })).toBeVisible();
 });
 
+// Regression guard for the CI-only flake where the gallery froze at one image
+// after a reveal. The reveal flips data-revealed instantly, but the content
+// fades in over 500ms starting from computed opacity 0. A click that lands on
+// the first animation frame (a busy runner stalls exactly like this) used to
+// hit the gallery builder's opacity===0 exclusion, and membership is captured
+// once per lightbox open, so "Next image" stayed absent for the dialog's whole
+// life. Pinning the content at opacity 0 makes that frame deterministic:
+// membership must follow the reveal state, not the paint state.
+test("a just-revealed spoiler image joins the gallery before its fade-in paints", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await page.evaluate(
+    ({ content, extraTags }) => {
+      (
+        window as Window & {
+          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+            channelName: string;
+            content: string;
+            extraTags?: string[][];
+          }) => unknown;
+        }
+      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content,
+        extraTags,
+      });
+    },
+    {
+      content: [
+        "spoiler first frame",
+        `![visible](${SPOILER_VISIBLE_URL})`,
+        `||![hidden](${SPOILER_HIDDEN_URL})||`,
+      ].join("\n"),
+      extraTags: [
+        imageImetaTag({
+          dim: "160x100",
+          filename: "visible.png",
+          sha: SPOILER_VISIBLE_SHA,
+          url: SPOILER_VISIBLE_URL,
+        }),
+        imageImetaTag({
+          dim: "100x160",
+          filename: "hidden.png",
+          sha: SPOILER_HIDDEN_SHA,
+          url: SPOILER_HIDDEN_URL,
+        }),
+      ],
+    },
+  );
+
+  const row = page
+    .getByTestId("message-row")
+    .filter({ hasText: "spoiler first frame" })
+    .last();
+  await expect(row).toBeVisible();
+
+  const spoiler = row.locator(".buzz-spoiler[data-spoiler]").first();
+  await spoiler.click();
+  await expect(spoiler).toHaveAttribute("data-revealed", "true");
+
+  // Hold the reveal animation at its first frame.
+  await spoiler.evaluate((element) => {
+    element.querySelectorAll(".buzz-spoiler__content").forEach((content) => {
+      (content as HTMLElement).style.opacity = "0";
+      content.querySelectorAll("*").forEach((child) => {
+        (child as HTMLElement).style.opacity = "0";
+      });
+    });
+  });
+
+  await row.locator(`img[src*="${SPOILER_VISIBLE_SHA}"]`).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next image" })).toBeVisible();
+});
+
 test("message images load a thumbnail before requesting the original", async ({
   page,
 }) => {
