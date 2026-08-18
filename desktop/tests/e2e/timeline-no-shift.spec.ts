@@ -858,3 +858,72 @@ test("thread panel stays put while replies stream in mid-scroll", async ({
   // is the "content jumps around like crazy" bug.
   expect(drift.maxDrift).toBeLessThanOrEqual(2);
 });
+
+test("a non-gesture scroll must not strand live arrivals behind the pill", async ({
+  page,
+}) => {
+  // Regression net for a stranded tail, seen on CI on 2026-08-18 as
+  // mentions.spec.ts grouped join rows: the failure artifact showed a
+  // "6 new messages" pill with the six rows it counted absent from the DOM.
+  //
+  // The timeline freezes its logical tail when the reader leaves the bottom.
+  // Deciding that from a scroll callback alone is wrong, because the list also
+  // moves itself: a re-measure after an append can report a non-bottom offset
+  // with no reader gesture anywhere. Treating that as a reader movement froze
+  // the tail AND cancelled the settle that would have returned to the bottom,
+  // and the freeze's own at-bottom echo is deliberately swallowed, so a
+  // stationary reader never produced another event and every later arrival
+  // buffered forever.
+  //
+  // Forcing the condition rather than waiting for it: assigning scrollTop
+  // produces exactly that shape, a genuine scroll callback with no gesture
+  // behind it, which is why this test does not touch the mouse or keyboard.
+  await installMockBridge(page);
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockTimelineBridge(page);
+
+  const timeline = page.getByTestId("message-timeline");
+  await page.evaluate(() => {
+    for (let index = 0; index < 40; index += 1) {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content: `tail freeze seed ${index}`,
+        createdAt: 1_700_200_000 + index,
+      });
+    }
+  });
+  await expect(page.locator("[data-render-pending]")).toHaveCount(0);
+  await expect(
+    timeline.locator("[data-message-id]").filter({ hasText: "seed 39" }),
+  ).toBeVisible();
+
+  // The list moves itself away from the bottom and back, with no gesture.
+  // Repeated, because whether the freeze latches depends on which callback
+  // lands first: one cycle caught the unfixed code 3 times in 6, three cycles
+  // catch it every time.
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    await timeline.evaluate((element) => {
+      element.scrollTop = Math.max(0, element.scrollTop - 400);
+    });
+    await timeline.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+  }
+
+  await page.evaluate(() => {
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "general",
+      content: "arrival after a non-gesture scroll",
+      createdAt: 1_700_200_100,
+    });
+  });
+
+  // The arrival must reach the timeline, not sit behind the pill counting it.
+  await expect(
+    timeline
+      .locator("[data-message-id]")
+      .filter({ hasText: "arrival after a non-gesture scroll" }),
+  ).toBeVisible({ timeout: 10_000 });
+});

@@ -4,10 +4,13 @@
  * rows under the reading position. This resolves the state machine behind that
  * freeze.
  *
- * Two reports feed it, and they are not interchangeable:
+ * Three reports feed it, and they are not interchangeable:
  *
- * - `"scroll"` is the virtualizer's own scroll callback, which is the reader
- *   moving (or a programmatic scroll settling).
+ * - `"scroll"` is the virtualizer's scroll callback for a movement the reader
+ *   made: a wheel, touch, pointer, or key gesture preceded it.
+ * - `"layout"` is that same callback with no reader gesture behind it. Row
+ *   re-measurement, shift compensation, or a programmatic settle moved the
+ *   offset. The box reading is real; the reader did not move.
  * - `"resize"` is a re-measure taken because the scroller's box changed -
  *   opening or closing the thread panel, the composer growing. Geometry moved;
  *   the reader did not.
@@ -32,8 +35,25 @@
  * So a resize report never freezes, and a resize report that lands at the
  * bottom releases even when `suppressNext` is armed: it is a fresh reading of
  * the box, not the echo of a freeze.
+ *
+ * `"layout"` exists because a second stranding class survived that fix, found
+ * on CI on 2026-08-18 (mentions.spec.ts grouped join rows, artifact shows a
+ * "6 new messages" pill with the rows it counts never rendered):
+ *
+ *   1. Reader is at the bottom, tail live. A batch of arrivals appends.
+ *   2. The append grows `scrollSize` before the settle-to-bottom lands, and a
+ *      re-measure emits a scroll callback inside that window. It computes a
+ *      non-bottom distance with no gesture anywhere.
+ *   3. Reported as `"scroll"`, that froze the tail AND cancelled the pending
+ *      settle that would have returned to the bottom. `suppressNext` then
+ *      swallowed the freeze's own at-bottom echo, and a stationary reader
+ *      produced no further events, so every later arrival buffered forever.
+ *
+ * A reader movement always carries a gesture (wheel, pointer, touch, key). A
+ * callback without one is the list moving itself, so it never freezes, and at
+ * the bottom it releases like a resize does.
  */
-export type TimelineAtBottomReason = "scroll" | "resize";
+export type TimelineAtBottomReason = "scroll" | "layout" | "resize";
 
 export type SemanticBottomState = {
   /** The virtualizer has reported a real bottom at least once this channel. */
@@ -79,8 +99,11 @@ export function resolveSemanticBottomTransition(
     };
   }
 
-  // Geometry changed under a stationary reader. Never freeze on that.
-  if (report.reason === "resize") {
+  // Geometry changed under a stationary reader (`"resize"`), or the offset
+  // moved with no gesture behind it (`"layout"`). Never freeze on either, and
+  // never cancel the pending settle: in the layout case that settle is exactly
+  // what carries the view back to the bottom.
+  if (report.reason !== "scroll") {
     return { next: state, commit: null, cancelBottomIntent: false };
   }
 

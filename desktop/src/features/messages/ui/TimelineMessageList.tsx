@@ -651,6 +651,8 @@ function VirtualizedTimelineRows({
       if (!list || !(scroller instanceof HTMLDivElement)) return;
       onVirtualizerRangeChanged?.();
       const distanceFromBottom = list.scrollSize - list.viewportSize - offset;
+      // No gesture means the list moved itself; see semanticBottomTransition.
+      const reason = userScrollGestureRef.current ? "scroll" : "layout";
       if (programmaticBottomSettleRef.current) {
         if (distanceFromBottom <= 32) {
           programmaticBottomSettleRef.current = false;
@@ -682,7 +684,7 @@ function VirtualizedTimelineRows({
         }
       }
       // Keep the reader's non-bottom offset until an actual gesture claims it.
-      onAtBottomStateChange?.(distanceFromBottom <= 32, "scroll");
+      onAtBottomStateChange?.(distanceFromBottom <= 32, reason);
       updatePinnedDayLabel(offset);
       if (offset <= 200) {
         // Layout scrolls near the top must not poison the reader's next input.

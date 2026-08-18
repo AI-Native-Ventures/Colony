@@ -90,3 +90,33 @@ test("a mount-transient non-bottom before any confirmed bottom does not freeze",
   assert.equal(transition.next.semanticAtBottom, true);
   assert.equal(transition.cancelBottomIntent, false);
 });
+
+// The second stranding class, found on CI on 2026-08-18: an append's
+// re-measure emitted a scroll callback before the settle-to-bottom landed.
+// Classified as a reader scroll it froze the tail and cancelled the very
+// settle that would have released it, and the arrivals it counted then sat
+// behind a pill that the reader never sees a reason to click.
+test("a layout movement with no reader gesture never freezes the tail", () => {
+  const transition = resolveSemanticBottomTransition(atBottomState, {
+    atBottom: false,
+    reason: "layout",
+  });
+  assert.equal(transition.commit, null);
+  assert.equal(transition.next.semanticAtBottom, true);
+  assert.equal(transition.next.suppressNext, false);
+  assert.equal(transition.cancelBottomIntent, false);
+});
+
+test("a layout report at the bottom releases a frozen tail even with the guard armed", () => {
+  const frozenWithGuard = {
+    hasConfirmedBottom: true,
+    suppressNext: true,
+    semanticAtBottom: false,
+  };
+  const transition = resolveSemanticBottomTransition(frozenWithGuard, {
+    atBottom: true,
+    reason: "layout",
+  });
+  assert.equal(transition.commit, true);
+  assert.equal(transition.next.semanticAtBottom, true);
+});

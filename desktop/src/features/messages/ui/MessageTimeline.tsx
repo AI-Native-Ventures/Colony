@@ -424,11 +424,13 @@ const MessageTimelineBase = React.forwardRef<
         transition.next.hasConfirmedBottom;
       suppressNextSemanticBottomRef.current = transition.next.suppressNext;
       // Only the virtualizer's own scroll callback drives the anchored-scroll
-      // notion of "at bottom". A resize re-measure exists to correct the
-      // semantic tail state; routing it here too would synthesize bottom
-      // transitions the reader never made, and the unread pill dismisses
-      // itself on exactly that transition.
-      if (reason === "scroll") {
+      // notion of "at bottom" - both the gesture-driven ("scroll") and the
+      // list-moved-itself ("layout") classes, which together are every scroll
+      // event. A resize re-measure exists to correct the semantic tail state;
+      // routing it here too would synthesize bottom transitions the reader
+      // never made, and the unread pill dismisses itself on exactly that
+      // transition.
+      if (reason !== "resize") {
         onVirtualizerAtBottomStateChange(atBottom);
       }
       if (transition.cancelBottomIntent) {
