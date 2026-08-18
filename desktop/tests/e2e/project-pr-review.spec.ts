@@ -151,12 +151,17 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
     path: `${SHOTS}/00-add-reviewer-dialog.png`,
   });
   await page.getByTestId("project-reviewer-search").fill("bob");
+  // Click through Playwright rather than an evaluate on a resolved handle. The
+  // results list re-renders as the search query settles, and a handle grabbed
+  // before that points at a detached node, so the clicks land nowhere: the
+  // dialog stays open with "bob" still typed and no toast, which is exactly
+  // the state CI captured (run 32153129885, shard 5). Playwright re-resolves
+  // the locator on each attempt instead. The double click this replaces was
+  // also redundant, PullRequestReviewersRow guards re-entry with
+  // requestInFlightRef and disables the button while the mutation is pending.
   await page
     .getByTestId(`project-reviewer-result-${TEST_IDENTITIES.bob.pubkey}`)
-    .evaluate((button) => {
-      button.click();
-      button.click();
-    });
+    .click();
   await expect(page.getByText("Review requested.")).toBeVisible();
   await expect
     .poll(() =>
@@ -1353,6 +1358,50 @@ test("pushed local branch can open a pull request", async ({ page }) => {
     "subject",
     "Complete the Projects git workflow",
   ]);
+});
+
+test("the create-issue dialog does not steal focus from the description", async ({
+  page,
+}) => {
+  // The dialog focuses its title input on a 50ms timer so it wins against the
+  // dialog's own mount-time focus handling. It must not fire once the user has
+  // moved on: yanking the caret back mid-word appends what they were typing to
+  // the title instead. That is how a subject tag ended up reading
+  // "Document the broken workflowThe project workflow needs a clear repair
+  // path." on CI (run 32153129885, shard 5).
+  await enableProjectsFeature(page);
+  await installMockBridge(page);
+  await openBuzzProject(page);
+
+  await page.getByRole("tab", { name: "Issues", exact: true }).click();
+  await page.getByRole("button", { name: "Issues", exact: true }).click();
+
+  // Claim the description INSIDE the 50ms window, the way a fast typist does.
+  // Done in one evaluate: a Playwright round trip is slow enough that the
+  // timer often fires first, and then there is no steal left to catch.
+  await page.evaluate(async () => {
+    const field = await new Promise((resolve) => {
+      const poll = setInterval(() => {
+        const element = document.querySelector(
+          '[data-testid="create-issue-body"]',
+        );
+        if (element) {
+          clearInterval(poll);
+          resolve(element);
+        }
+      }, 5);
+    });
+    (field as HTMLTextAreaElement).focus();
+  });
+  const body = page.getByTestId("create-issue-body");
+  await body.fill("Typed straight into the description.");
+
+  // Well past the 50ms timer.
+  await page.waitForTimeout(300);
+
+  await expect(body).toBeFocused();
+  await expect(body).toHaveValue("Typed straight into the description.");
+  await expect(page.getByTestId("create-issue-title")).toHaveValue("");
 });
 
 test("project issue can be created from the issues header", async ({
