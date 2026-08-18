@@ -194,11 +194,15 @@ for (const platform of [
         value: navigatorPlatform,
       });
     }, platform.navigatorPlatform);
+    // Grant for every origin rather than a hardcoded one. playwright.config.ts
+    // honours PLAYWRIGHT_PORT so several agents can run suites side by side,
+    // and pinning this to 4173 silently denies the grant on every other port:
+    // the test then fails with "Write permission denied" from
+    // navigator.clipboard, which reads like a product bug rather than a
+    // fixture that was pointed at the wrong address.
     await page
       .context()
-      .grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: "http://127.0.0.1:4173",
-      });
+      .grantPermissions(["clipboard-read", "clipboard-write"]);
     await openGeneral(page);
 
     await page.evaluate(async () => {
@@ -482,16 +486,7 @@ test("selected hard-break lines stay newline-separated in one code block", async
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("```\none\ntwo\nthree\n```");
 });
 
@@ -525,18 +520,32 @@ test("selected list items become one multiline code block and keep neighbors", a
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("- before\n\n```\none\ntwo\n```\n\n- after");
 });
+
+/**
+ * Content of the most recent message the composer sent.
+ *
+ * Reading `__BUZZ_E2E_SIGNED_EVENTS__.at(-1)` is not the same thing. The app
+ * signs other events on its own schedule, and a read-state event landing after
+ * the send makes the last entry something like
+ * `{"v":1,"client_id":"...","contexts":{...}}`. The poll then compares that to
+ * the expected markdown until it times out, which is how this file failed once
+ * in 216 local runs at 4x CPU throttle. Select by kind, not by position.
+ */
+async function lastComposerMessageContent(page: Page) {
+  return page.evaluate(() => {
+    const messageKinds = new Set([9, 40002]);
+    return (
+      window as Window & {
+        __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string; kind: number }>;
+      }
+    ).__BUZZ_E2E_SIGNED_EVENTS__
+      ?.filter((event) => messageKinds.has(event.kind))
+      .at(-1)?.content;
+  });
+}
 
 test("caret-only block formatting serializes the prior draft unchanged", async ({
   page,
@@ -552,16 +561,7 @@ test("caret-only block formatting serializes the prior draft unchanged", async (
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("before\n\n- item");
 });
 
@@ -585,16 +585,7 @@ test("block formatting preserves the lines around a selected composer line", asy
 
   await page.getByTestId("send-message").click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (
-            window as Window & {
-              __BUZZ_E2E_SIGNED_EVENTS__?: Array<{ content: string }>;
-            }
-          ).__BUZZ_E2E_SIGNED_EVENTS__?.at(-1)?.content,
-      ),
-    )
+    .poll(() => lastComposerMessageContent(page))
     .toBe("before\n\n- selected\n\nafter");
 });
 
