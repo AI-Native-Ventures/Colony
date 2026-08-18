@@ -28,7 +28,12 @@
       "source_channel": { "type": "string", "minLength": 1, "maxLength": 64 },
       "source_event_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
       "target_channel": { "type": "string", "minLength": 1, "maxLength": 64 },
-      "assignee": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "assignee": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "description": "Who the card names as taking this on. Attention routes on the p tag of the invoke, not on this string, so p tag the same person or the card lands in one queue under another name."
+      },
       "links": {
         "type": "array",
         "minItems": 1,
