@@ -193,6 +193,17 @@ test("spoiler marking survives drawing on the attachment", async ({ page }) => {
   await page.getByTestId("composer-attachment-annotate").click();
   await page.getByTestId("composer-attachment-spoiler").click();
   await page.keyboard.press("Escape");
+  // Wait for the lightbox to actually go before touching the composer again.
+  // The spoiler assertion below does NOT establish that: toBeVisible ignores
+  // occlusion, so it passes while the dialog still covers the composer. When
+  // the close is late, the next hover burns the whole 30s test budget retrying
+  // against the lightbox's full-screen "Close lightbox" button. That is what
+  // CI reported on 2026-08-16, run 31955085804, smoke shard 2: the hover
+  // resolved its target, then logged 53 retries of "<button aria-label='Close
+  // lightbox'> from <div role='dialog' data-state='open'> subtree intercepts
+  // pointer events" until the test timed out, and it passed on the retry. That
+  // failure is what put this test in known-flaky.json on the same day.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(composer.locator("[data-composer-media-spoiler]")).toBeVisible();
 
   await composer.getByTestId("composer-media-attachment").hover();
