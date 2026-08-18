@@ -119,3 +119,45 @@ export function resolveSemanticBottomTransition(
     cancelBottomIntent: true,
   };
 }
+
+/**
+ * Whether a frozen tail should be released because it is withholding output at
+ * a scroller that is already at the bottom.
+ *
+ * The freeze protects a reader who scrolled up: arrivals queue behind the pill
+ * instead of shifting rows under them. It can also latch when nobody scrolled,
+ * because the virtualizer reports a non-bottom offset while it re-measures an
+ * append, and the freeze's own at-bottom echo is deliberately swallowed. With
+ * the reader stationary no further report arrives, so the tail stays frozen at
+ * a scroller sitting on the floor and every later arrival buffers forever. CI
+ * showed exactly that state on 2026-08-18: a "6 new messages" pill with the
+ * six rows it counts absent from the DOM.
+ *
+ * This deliberately does NOT try to work out which scroll callbacks the reader
+ * caused. That cannot be done reliably from the events: find-in-page assigns
+ * scrollTop with no event on the scroller at all, Page Down with focus
+ * elsewhere can scroll it without a keydown on it, and assistive technology
+ * navigates by focus and scrollIntoView. Any rule that treats "no gesture" as
+ * "the list moved itself" keeps the tail live while a reader is deliberately
+ * reading history, which is the regression the freeze exists to prevent.
+ *
+ * The condition here cannot misread intent in that direction: a reader who
+ * genuinely scrolled up is not at the bottom, so their freeze is untouched.
+ * The only state it acts on is one no reader can be in on purpose, output
+ * withheld from a viewport that is already showing the end of the timeline.
+ */
+export function shouldReleaseWithheldTail({
+  distanceFromBottom,
+  pendingCount,
+  semanticAtBottom,
+}: {
+  /** Null when the scroll element is not mounted yet. */
+  distanceFromBottom: number | null;
+  pendingCount: number;
+  semanticAtBottom: boolean;
+}): boolean {
+  if (semanticAtBottom) return false;
+  if (pendingCount === 0) return false;
+  if (distanceFromBottom === null) return false;
+  return distanceFromBottom <= 32;
+}
