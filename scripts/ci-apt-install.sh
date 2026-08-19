@@ -46,12 +46,15 @@ run_apt() {
     sudo env DEBIAN_FRONTEND=noninteractive apt-get "$@" "${apt_opts[@]}"
 }
 
+
 for attempt in $(seq 1 "$ATTEMPTS"); do
   if run_apt update && run_apt install -y --no-install-recommends "$@"; then
     exit 0
   fi
   echo "::warning::apt attempt ${attempt}/${ATTEMPTS} failed (idle limit ${IDLE_LIMIT}s)" >&2
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    # Only useful once; after the first rewrite there is no azure entry left.
+    "$HERE/ci-drop-azure-mirror.sh" || true
     sleep "$RETRY_DELAY"
   fi
 done

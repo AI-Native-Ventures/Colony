@@ -25,6 +25,9 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   fi
   echo "::warning::playwright install-deps attempt ${attempt}/${ATTEMPTS} failed (idle limit ${IDLE_LIMIT}s)" >&2
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    # install-deps shells out to apt, so it hits the same dead mirror. Take that
+    # mirror out before spending another attempt on it.
+    "$HERE/ci-drop-azure-mirror.sh" || true
     sleep "$RETRY_DELAY"
   fi
 done
