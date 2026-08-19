@@ -33,36 +33,71 @@ fi
 IDLE="$1"
 shift
 
-stamp="$(mktemp)"
-trap 'rm -f "$stamp"' EXIT
+out="$(mktemp)"
+trap 'rm -f "$out"' EXIT
 
-# Each line of output refreshes the stamp's mtime. The subshell keeps pipefail
-# so the command's status, not `read`'s, decides success.
-(
-  set -o pipefail
-  "$@" 2>&1 | while IFS= read -r line; do
-    printf '%s\n' "$line"
-    : > "$stamp"
-  done
-) &
+# The command runs in its own process group so the whole tree can be killed.
+#
+# Killing only the direct child is not enough and cost a full CI run to learn:
+# the chain here is `sudo` -> `env` -> `apt-get`, so terminating the wrapper
+# leaves apt-get alive holding /var/lib/dpkg/lock-frontend. Every later attempt
+# then dies instantly with
+#
+#   E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process N
+#
+# which looks like a fast, different failure and is really the first attempt's
+# corpse. setsid makes the command a group leader, so `kill -- -PID` reaches
+# the wrapper and apt-get together.
+#
+# Output goes to a file rather than a pipe: the file's mtime is the idleness
+# signal, and a file survives the kill so nothing is lost from the log.
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$@" >"$out" 2>&1 &
+elif command -v perl >/dev/null 2>&1; then
+  # macOS ships no setsid. perl's setpgrp gives the same guarantee, and keeping
+  # this path real means the group-kill can be exercised off CI too.
+  perl -e 'setpgrp(0,0); exec @ARGV or die $!' -- "$@" >"$out" 2>&1 &
+else
+  "$@" >"$out" 2>&1 &
+fi
 worker=$!
+
+# Stream the output live so the CI log looks the same as before.
+tail -n +1 -f "$out" &
+tailer=$!
 
 mtime() {
   # GNU stat and BSD stat disagree on the flag; CI is Linux, dev machines are not.
-  stat -c %Y "$stamp" 2>/dev/null || stat -f %m "$stamp" 2>/dev/null || echo 0
+  stat -c %Y "$out" 2>/dev/null || stat -f %m "$out" 2>/dev/null || echo 0
+}
+
+stop_tailer() {
+  sleep 1
+  kill "$tailer" 2>/dev/null || true
+  wait "$tailer" 2>/dev/null || true
+}
+
+kill_tree() {
+  # Negative pid targets the whole process group, which is the point.
+  kill -TERM -- -"$worker" 2>/dev/null || kill -TERM "$worker" 2>/dev/null || true
+  sleep 5
+  kill -KILL -- -"$worker" 2>/dev/null || kill -KILL "$worker" 2>/dev/null || true
+  wait "$worker" 2>/dev/null || true
 }
 
 while kill -0 "$worker" 2>/dev/null; do
   now="$(date +%s)"
   last="$(mtime)"
   if [ "$((now - last))" -gt "$IDLE" ]; then
-    echo "::warning::no output for ${IDLE}s, killing $1" >&2
-    pkill -P "$worker" 2>/dev/null || true
-    kill -9 "$worker" 2>/dev/null || true
-    wait "$worker" 2>/dev/null || true
+    echo "::warning::no output for ${IDLE}s, killing $1 and its process group" >&2
+    kill_tree
+    stop_tailer
     exit 124
   fi
   sleep 5
 done
 
 wait "$worker"
+rc=$?
+stop_tailer
+exit "$rc"

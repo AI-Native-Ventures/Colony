@@ -7,9 +7,18 @@
 # 2026-08-19 one smoke shard burned all three attempts against it while five
 # sibling shards on healthy runners finished the same step in 15s to 156s.
 #
-# Ubuntu 24.04 runner images use the deb822 `ubuntu.sources` file; older images
-# use the one-line `sources.list`. Both are handled because which one is
-# present has changed across images.
+# Where the hostname actually lives took a CI run to establish. The runner's
+# sources use a mirrorlist indirection:
+#
+#   Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+#   Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+#
+# so `sources.list` holds `mirror+file:/etc/apt/apt-mirrors.txt` and contains no
+# azure hostname at all. Rewriting only the sources files therefore changed
+# nothing while appearing to succeed. /etc/apt/apt-mirrors.txt is the file that
+# matters; the deb822 `ubuntu.sources` and the one-line `sources.list` are kept
+# in the list because which of them carries a literal host has varied across
+# runner images.
 #
 # Exits 0 if it rewrote something, 1 if there was nothing left to rewrite, so
 # callers can tell a first fallback from a repeat.
@@ -20,8 +29,8 @@ set -uo pipefail
 ROOT="${APT_ROOT:-}"
 
 changed=0
-for f in "$ROOT"/etc/apt/sources.list "$ROOT"/etc/apt/sources.list.d/*.sources \
-  "$ROOT"/etc/apt/sources.list.d/*.list; do
+for f in "$ROOT"/etc/apt/apt-mirrors.txt "$ROOT"/etc/apt/sources.list \
+  "$ROOT"/etc/apt/sources.list.d/*.sources "$ROOT"/etc/apt/sources.list.d/*.list; do
   [ -f "$f" ] || continue
   if grep -q 'azure\.archive\.ubuntu\.com' "$f" 2>/dev/null; then
     sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$f"
