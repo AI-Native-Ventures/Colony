@@ -268,4 +268,5 @@ expect_mutation_failure \
   "$noop" "$noop" "sed -i.bak '/scripts\/verify-relay-live.sh/d' '$tmp/fly.yml'"
 
 # Temporary live acceptance probe: this branch is never merged.
+# Second push exercises the main-targeted promotion concurrency group.
 echo "release pipeline contract passed"
