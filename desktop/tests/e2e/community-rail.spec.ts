@@ -300,6 +300,35 @@ test.describe("community rail", () => {
     await expect(page).toHaveURL(/#\/settings\?section=community-members$/);
   });
 
+  test("pressing the community switcher row again keeps its submenu open", async ({
+    page,
+  }) => {
+    await installMockBridge(
+      page,
+      { relayRequiresMembership: true, relayRole: "admin" },
+      { skipCommunitySeed: true },
+    );
+    await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
+    await page.goto("/");
+
+    await page.getByTestId("sidebar-profile-avatar-button").click();
+    const communityTrigger = page.getByTestId("community-switcher");
+    const menu = page.getByRole("menu", { name: "Community actions" });
+
+    await communityTrigger.click();
+    await expect(menu).toBeVisible();
+
+    // The submenu slides in from the trigger row, so a press aimed at one of
+    // its items can land back on the row while the content is still moving.
+    // That press must not dismiss the submenu: treating it as a toggle is
+    // what closed the menu mid-aim and made this file's tests flake.
+    await communityTrigger.click();
+    await expect(menu).toBeVisible();
+    await expect(
+      menu.getByRole("menuitem", { name: "Community settings" }),
+    ).toBeVisible();
+  });
+
   test("keeps profile community actions available to members without invite access", async ({
     page,
   }) => {
@@ -1131,8 +1160,31 @@ test.describe("community rail", () => {
         }),
       );
     }, `community-rail-button-${COMMUNITY_B.id}`);
+    // Wait for the drag to actually start before steering it. The overlay only
+    // renders while dnd-kit holds an active item, so its presence is the
+    // pickup. Without this, ArrowUp can arrive before the KeyboardSensor has
+    // activated on a loaded runner and the reorder silently never happens.
+    const dragOverlay = page.getByTestId(
+      `community-rail-drag-overlay-${COMMUNITY_B.id}`,
+    );
+    await expect(dragOverlay).toBeVisible();
+
     // ArrowUp moves the active item one slot up.
     await page.keyboard.press("ArrowUp");
+    // Wait for the move to register before dropping: dnd-kit reorders the
+    // rail visually on drag-over, so B sitting above A is the proof that the
+    // ArrowUp landed. Dropping early commits the original order.
+    await expect
+      .poll(async () => {
+        const [boxA, boxB] = await Promise.all([
+          buttonA.boundingBox(),
+          buttonB.boundingBox(),
+        ]);
+        if (!boxA || !boxB) return false;
+        return boxB.y < boxA.y;
+      })
+      .toBe(true);
+
     // Space drops the item — same synthetic dispatch for consistency.
     await page.evaluate((testId) => {
       const el = document.querySelector(`[data-testid="${testId}"]`);

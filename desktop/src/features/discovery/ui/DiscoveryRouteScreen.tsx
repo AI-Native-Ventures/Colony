@@ -1,9 +1,11 @@
 import * as React from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { createFixtureDiscoveryDataSource } from "../data/FixtureDiscoveryDataSource";
 import { createRelayDiscoveryDataSource } from "../data/RelayDiscoveryDataSource";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
+import { withWriteInvalidation } from "../data/writeInvalidation";
 import type { DiscoveryEntitlementState } from "../entitlement";
 import type {
   CampaignDetail,
@@ -24,14 +26,37 @@ type DiscoveryRouteScreenProps = {
   search: DiscoverySearch;
 };
 
-type DiscoveryRouteState = {
-  entitlement: Awaited<
-    ReturnType<DiscoveryDataSource["getEntitlement"]>
-  > | null;
-  error: Error | null;
-  isLoading: boolean;
-  readModel: DiscoveryRouteReadModel | null;
-};
+/**
+ * The React Query namespace for Discovery reads.
+ *
+ * `CommunityQueryProvider` builds a fresh client per community, so these keys
+ * are already community-scoped and must not be reused outside that provider.
+ */
+const DISCOVERY_QUERY_ROOT = "colony-discovery" as const;
+
+/**
+ * How long a loaded surface is served from cache before it is read again.
+ *
+ * Long enough that moving between Leads, Pipeline and Discover is instant,
+ * short enough that a campaign run's new leads appear without a reload.
+ */
+const DISCOVERY_STALE_TIME_MS = 30_000;
+
+/** The addressable identity of a read model: every input `loadReadModel` reads. */
+function readModelQueryKey(search: DiscoverySearch) {
+  return [
+    DISCOVERY_QUERY_ROOT,
+    "read-model",
+    search.entity ?? null,
+    search.surface ?? null,
+    search.industryId ?? null,
+    search.verticalId ?? null,
+    search.fieldId ?? null,
+    search.roleId ?? null,
+    search.campaignId ?? null,
+    search.tab ?? null,
+  ] as const;
+}
 
 const EMPTY_READ_MODEL: DiscoveryRouteReadModel = {
   industries: [],
@@ -98,56 +123,64 @@ function fixtureEmptyLeadsOverride(): boolean | undefined {
   return (window as DiscoveryE2eWindow).__BUZZ_E2E_DISCOVERY_EMPTY_LEADS__;
 }
 
+/**
+ * Every read the active surface needs, issued concurrently.
+ *
+ * These eight reads do not depend on each other: each one is decided by the
+ * search alone. Awaiting them in sequence cost one relay round trip per read
+ * before the screen could paint, which is most of what made switching tabs
+ * take seconds.
+ */
 async function loadReadModel(
   dataSource: DiscoveryDataSource,
   search: DiscoverySearch,
 ): Promise<DiscoveryRouteReadModel> {
-  const industries = await dataSource.getIndustries();
-  const fields = await dataSource.getFields();
-  const verticals = search.industryId
-    ? await dataSource.getVerticals(search.industryId)
-    : [];
-  const roles = search.fieldId ? await dataSource.getRoles(search.fieldId) : [];
-  let vertical: VerticalDetail | null = null;
-  let role: ProfessionalRoleDetail | null = null;
-  let campaign: CampaignDetail | null = null;
-  let leads: LeadPage | null = null;
-
-  if (routeNeedsVertical(search)) {
-    vertical = await dataSource.getVertical(
-      search.industryId as string,
-      search.verticalId as string,
-    );
-  }
-
-  if (routeNeedsRole(search)) {
-    role = await dataSource.getRole(
-      search.fieldId as string,
-      search.roleId as string,
-    );
-  }
-
-  if (routeNeedsCampaign(search)) {
-    campaign = await dataSource.getCampaign(search.campaignId as string);
-  }
-
-  if (routeNeedsLeads(search)) {
-    leads = await dataSource.getLeads({
-      scope: search.campaignId ? "campaign" : "global",
-      campaignId: search.campaignId,
-      industryId: search.industryId,
-      verticalId: search.verticalId,
-      targetType: search.campaignId
-        ? search.entity === "people"
-          ? "individual"
-          : "business"
-        : undefined,
-      fieldId: search.fieldId,
-      roleId: search.roleId,
-      page: 1,
-      pageSize: search.campaignId ? 100 : 500,
-    });
-  }
+  const [
+    industries,
+    fields,
+    verticals,
+    roles,
+    vertical,
+    role,
+    campaign,
+    leads,
+  ] = await Promise.all([
+    dataSource.getIndustries(),
+    dataSource.getFields(),
+    search.industryId
+      ? dataSource.getVerticals(search.industryId)
+      : Promise.resolve([]),
+    search.fieldId ? dataSource.getRoles(search.fieldId) : Promise.resolve([]),
+    routeNeedsVertical(search)
+      ? dataSource.getVertical(
+          search.industryId as string,
+          search.verticalId as string,
+        )
+      : Promise.resolve<VerticalDetail | null>(null),
+    routeNeedsRole(search)
+      ? dataSource.getRole(search.fieldId as string, search.roleId as string)
+      : Promise.resolve<ProfessionalRoleDetail | null>(null),
+    routeNeedsCampaign(search)
+      ? dataSource.getCampaign(search.campaignId as string)
+      : Promise.resolve<CampaignDetail | null>(null),
+    routeNeedsLeads(search)
+      ? dataSource.getLeads({
+          scope: search.campaignId ? "campaign" : "global",
+          campaignId: search.campaignId,
+          industryId: search.industryId,
+          verticalId: search.verticalId,
+          targetType: search.campaignId
+            ? search.entity === "people"
+              ? "individual"
+              : "business"
+            : undefined,
+          fieldId: search.fieldId,
+          roleId: search.roleId,
+          page: 1,
+          pageSize: search.campaignId ? 100 : 500,
+        })
+      : Promise.resolve<LeadPage | null>(null),
+  ]);
 
   return {
     industries,
@@ -182,50 +215,48 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
           })
         : createRelayDiscoveryDataSource();
   }
-  const dataSource = dataSourceRef.current;
-  const [state, setState] = React.useState<DiscoveryRouteState>(() => ({
-    entitlement: null,
-    error: null,
-    isLoading: true,
-    readModel: null,
-  }));
+  const queryClient = useQueryClient();
+  /**
+   * Reads are cached, so a write has to say so. Without this a surface
+   * revisited after editing a lead or a campaign's sources would render the
+   * answer from before the edit.
+   */
+  const dataSource = React.useMemo(
+    () =>
+      withWriteInvalidation(
+        dataSourceRef.current as DiscoveryDataSource,
+        () => {
+          void queryClient.invalidateQueries({
+            queryKey: [DISCOVERY_QUERY_ROOT],
+          });
+        },
+      ),
+    [queryClient],
+  );
 
-  React.useEffect(() => {
-    let cancelled = false;
-    setState({
-      entitlement: null,
-      error: null,
-      isLoading: true,
-      readModel: null,
-    });
+  const entitlementQuery = useQuery({
+    queryKey: [DISCOVERY_QUERY_ROOT, "entitlement"],
+    queryFn: () => dataSource.getEntitlement(),
+    staleTime: DISCOVERY_STALE_TIME_MS,
+  });
 
-    void Promise.all([
-      dataSource.getEntitlement(),
-      loadReadModel(dataSource, readModelSearch),
-    ])
-      .then(([entitlement, readModel]) => {
-        if (cancelled) return;
-        setState({
-          entitlement,
-          error: null,
-          isLoading: false,
-          readModel,
-        });
-      })
-      .catch((cause: unknown) => {
-        if (cancelled) return;
-        setState({
-          entitlement: null,
-          error: cause instanceof Error ? cause : new Error(String(cause)),
-          isLoading: false,
-          readModel: EMPTY_READ_MODEL,
-        });
-      });
+  const readModelQuery = useQuery({
+    queryKey: readModelQueryKey(readModelSearch),
+    queryFn: () => loadReadModel(dataSource, readModelSearch),
+    staleTime: DISCOVERY_STALE_TIME_MS,
+  });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [dataSource, readModelSearch]);
+  /**
+   * A surface already visited renders from cache with no request and no
+   * skeleton, which is what makes switching tabs feel instant. Only a surface
+   * with nothing cached shows the loading state.
+   */
+  const error = readModelQuery.error ?? entitlementQuery.error;
+  const readModel = error
+    ? EMPTY_READ_MODEL
+    : (readModelQuery.data ?? EMPTY_READ_MODEL);
+  const isLoading =
+    !error && (readModelQuery.isPending || entitlementQuery.isPending);
 
   return (
     <div
@@ -234,18 +265,18 @@ export function DiscoveryRouteScreen({ search }: DiscoveryRouteScreenProps) {
     >
       <DiscoveryTopTabs
         showPipeline={showPipelineTab({
-          experience: state.entitlement?.experience,
-          leadTotal: state.readModel?.leads?.total ?? 0,
+          experience: entitlementQuery.data?.experience,
+          leadTotal: readModel.leads?.total ?? 0,
           surface: discoverySurface(search),
         })}
         surface={discoverySurface(search)}
       />
       <DiscoveryWorkspace
         dataSource={dataSource}
-        entitlement={state.entitlement}
-        error={state.error}
-        isLoading={state.isLoading}
-        readModel={state.readModel}
+        entitlement={entitlementQuery.data ?? null}
+        error={error instanceof Error ? error : (error ?? null)}
+        isLoading={isLoading}
+        readModel={isLoading ? null : readModel}
         search={search}
       />
       <LeadDetailDrawer dataSource={dataSource} search={search} />

@@ -1,7 +1,7 @@
 import {
   Activity,
-  Blocks,
   Bot,
+  CalendarRange,
   Compass,
   FolderGit2,
   Inbox,
@@ -46,10 +46,10 @@ type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
-  onSelectBlocks: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
   onSelectProjects: () => void;
+  onSelectContent: () => void;
   onSelectPulse: () => void;
   onSelectSpend: () => void;
   onSelectWorkflows: () => void;
@@ -102,10 +102,10 @@ export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectActionCenter,
   onSelectAgents,
-  onSelectBlocks,
   onSelectDiscovery,
   onSelectHome,
   onSelectProjects,
+  onSelectContent,
   onSelectPulse,
   onSelectSpend,
   onSelectWorkflows,
@@ -217,18 +217,6 @@ export function AppSidebarPrimaryMenu({
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
-            data-testid="open-blocks-view"
-            isActive={selectedView === "blocks"}
-            onClick={onSelectBlocks}
-            tooltip="Blocks"
-            type="button"
-          >
-            <Blocks className="h-4 w-4" />
-            <SidebarMenuLabel>Blocks</SidebarMenuLabel>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
             data-testid="open-spend-view"
             isActive={selectedView === "spend"}
             onClick={onSelectSpend}
@@ -239,6 +227,20 @@ export function AppSidebarPrimaryMenu({
             <SidebarMenuLabel>Spend</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        <FeatureGate feature="contentCalendar">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-content-view"
+              isActive={selectedView === "content"}
+              onClick={onSelectContent}
+              tooltip="Content"
+              type="button"
+            >
+              <CalendarRange className="h-4 w-4" />
+              <SidebarMenuLabel>Content</SidebarMenuLabel>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </FeatureGate>
         <FeatureGate feature="workflows">
           <SidebarMenuItem>
             <SidebarMenuButton

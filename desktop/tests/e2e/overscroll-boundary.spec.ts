@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { waitForScrollableTimeline } from "../helpers/readiness";
 
 async function dispatchWheelPrevented(
   page: import("@playwright/test").Page,
@@ -37,6 +38,7 @@ test("locks viewport rubber-band outside conversation scrollers", async ({
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("message-timeline")).toBeVisible();
+  await waitForScrollableTimeline(page);
 
   await expect(
     dispatchWheelPrevented(page, '[data-testid="app-top-chrome"]', {
@@ -85,6 +87,7 @@ test("locks horizontal viewport pan everywhere", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("message-timeline")).toBeVisible();
+  await waitForScrollableTimeline(page);
 
   for (const deltaX of [-120, 120]) {
     await expect(

@@ -50,3 +50,29 @@ test("accepts an authoritative replacement when its old tail disappeared", () =>
     messages,
   );
 });
+
+test("does not duplicate a frozen row that reorders ahead of the frozen head", () => {
+  // Same-second events can swap places between two projections of the same
+  // data. A frozen id that moves ahead of `frozenMessageIds[0]` must not be
+  // emitted twice: the timeline renders one row per array entry, so a repeat
+  // is a visible duplicate message.
+  assert.deepEqual(
+    selectBufferedTimelineMessages({
+      frozenMessageIds: ["a", "b"],
+      isAtBottom: false,
+      messages: rows("b", "a"),
+    }).map(({ id }) => id),
+    ["a", "b"],
+  );
+});
+
+test("keeps a reordered prepend without repeating the frozen tail", () => {
+  assert.deepEqual(
+    selectBufferedTimelineMessages({
+      frozenMessageIds: ["a", "b", "c"],
+      isAtBottom: false,
+      messages: rows("older", "c", "a", "b", "live"),
+    }).map(({ id }) => id),
+    ["older", "a", "b", "c"],
+  );
+});

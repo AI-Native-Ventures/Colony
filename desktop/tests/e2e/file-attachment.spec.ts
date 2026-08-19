@@ -215,17 +215,19 @@ test("upload a file and see a FileCard in the timeline", async ({ page }) => {
   await page.getByTestId("send-message").click();
   await expect(page.getByText("Sending")).toHaveCount(0);
 
-  // A FileCard renders in the timeline: a button carrying the filename. It
-  // downloads via the native `download_file` command (HTTP inside the app's
-  // tunnel + save dialog), NOT a plain `<a download>` link — a bare link
+  // A FileCard renders in the timeline, carrying the filename. Its download
+  // action goes through the native `download_file` command (HTTP inside the
+  // app's tunnel + save dialog), NOT a plain `<a download>` link — a bare link
   // escapes the webview to the OS browser and hits a corporate CDN page.
+  // Clicking the card itself opens the file in the workspace instead, which
+  // the workspace-attachment spec covers.
   const card = page.getByTestId("file-card").last();
   await expect(card).toBeVisible();
   await expectCornerRadiusPx(card, 16);
   await expectSmoothCorners(card);
   await expect(card).toContainText("quarterly-report.pdf");
 
-  await card.click();
+  await page.getByTestId("file-card-download").last().click();
   await expect
     .poll(() =>
       page.evaluate(

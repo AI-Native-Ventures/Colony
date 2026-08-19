@@ -292,6 +292,111 @@ enum Cmd {
     /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
+    /// Plan, render, and approve social content (kinds 30195-30197, 40025)
+    #[command(subcommand)]
+    Content(ContentCmd),
+}
+
+/// Subcommands for `buzz content`: the content calendar.
+///
+/// Campaigns, posts, and house style are the content agent's records; a
+/// decision is the owner's. The agent renders and measures on its own machine
+/// and stores the result here, so nothing in this command generates anything.
+#[derive(clap::Subcommand)]
+pub enum ContentCmd {
+    /// Create or replace a campaign head (kind 30195)
+    CampaignSet {
+        /// Campaign id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the campaign JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// List campaigns, newest head per id
+    CampaignList {},
+    /// Create or replace a post head (kind 30196)
+    ///
+    /// A post that declares `"status": "ready"` must carry a rendered image,
+    /// every required gate passing, and a source on every claim. The relay
+    /// enforces the same rule, so a ready post that skipped a gate is refused
+    /// rather than stored.
+    PostSet {
+        /// Campaign this post belongs to
+        #[arg(long)]
+        campaign: String,
+        /// Post slug, unique within the campaign
+        #[arg(long)]
+        slug: String,
+        /// Path to the post JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// List posts, newest head per address
+    PostList {
+        /// Only posts in this campaign
+        #[arg(long)]
+        campaign: Option<String>,
+    },
+    /// Read one post head
+    PostGet {
+        /// Campaign this post belongs to
+        #[arg(long)]
+        campaign: String,
+        /// Post slug
+        #[arg(long)]
+        slug: String,
+    },
+    /// Create or replace the house style head (kind 30197)
+    StyleSet {
+        /// Style scope: `house` (default) or a campaign id
+        #[arg(long)]
+        scope: Option<String>,
+        /// Path to the style JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read the house style head
+    StyleGet {
+        /// Style scope: `house` (default) or a campaign id
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Approve a post or send it back (kind 40025)
+    ///
+    /// Built from the post as it currently stands on the relay: the decision
+    /// records the image hash and gate verdict that were actually there when
+    /// it was signed, so a card edited afterwards does not inherit the
+    /// sign-off.
+    Decide {
+        /// Campaign the post belongs to
+        #[arg(long)]
+        campaign: String,
+        /// Post slug
+        #[arg(long)]
+        slug: String,
+        /// `approve` or `change`
+        #[arg(long)]
+        decision: String,
+        /// What to change, in the owner's words. Required on a change
+        #[arg(long)]
+        note: Option<String>,
+        /// How long the correction lives: `rule`, `setting`, or `card`
+        #[arg(long)]
+        correction_bin: Option<String>,
+        /// The correction to file under that bin
+        #[arg(long)]
+        correction_text: Option<String>,
+    },
+    /// List decisions, newest first
+    Decisions {
+        /// Only decisions on posts in this campaign
+        #[arg(long)]
+        campaign: Option<String>,
+        /// Only decisions on this post; requires --campaign
+        #[arg(long)]
+        slug: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -3146,6 +3251,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Asks(sub) => commands::asks::dispatch(sub, &client).await,
         Cmd::Grants(sub) => commands::grants::dispatch(sub, &client).await,
         Cmd::Decisions(sub) => commands::decisions::dispatch(sub, &client).await,
+        Cmd::Content(sub) => commands::content::dispatch(sub, &client).await,
         Cmd::Employees(sub) => commands::employees::dispatch(sub, &client).await,
         Cmd::Jobs(sub) => commands::jobs::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
@@ -3641,6 +3747,7 @@ mod tests {
             "canvas",
             "channels",
             "company",
+            "content",
             "decisions",
             "discovery",
             "dms",
@@ -3861,6 +3968,20 @@ mod tests {
         );
         assert_eq!(names(&cmd, "grants"), vec!["create", "list", "revoke"]);
         assert_eq!(names(&cmd, "decisions"), vec!["list", "log"]);
+        assert_eq!(
+            names(&cmd, "content"),
+            vec![
+                "campaign-list",
+                "campaign-set",
+                "decide",
+                "decisions",
+                "post-get",
+                "post-list",
+                "post-set",
+                "style-get",
+                "style-set"
+            ]
+        );
         assert_eq!(names(&cmd, "workspace"), vec!["tabs"]);
     }
 

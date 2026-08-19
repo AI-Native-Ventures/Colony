@@ -9,7 +9,8 @@ export type NavigationCommandTargets = {
   createChannel: NavigationCommandTarget;
   goActionCenter: NavigationCommandTarget;
   goAgents: NavigationCommandTarget;
-  goBlocks: NavigationCommandTarget;
+  goBlocksSettings: NavigationCommandTarget;
+  goContent: NavigationCommandTarget;
   goDiscovery: DiscoveryCommandTarget;
   goHome: NavigationCommandTarget;
   goNewMessage: NavigationCommandTarget;
@@ -20,6 +21,7 @@ export type NavigationCommandTargets = {
   goWorkflows: NavigationCommandTarget;
   openBrowseChannels: NavigationCommandTarget;
   projectsEnabled: boolean;
+  contentEnabled: boolean;
   pulseEnabled: boolean;
   workflowsEnabled: boolean;
 };
@@ -94,10 +96,10 @@ export function buildNavigationCommands(
       title: "Create a new agent",
     },
     {
-      description: "Open the Blocks library",
+      description: "Open the Blocks library in settings",
       id: "open-blocks",
       onSelect: () => {
-        void targets.goBlocks();
+        void targets.goBlocksSettings();
       },
       title: "Open Blocks",
     },
@@ -149,6 +151,16 @@ export function buildNavigationCommands(
       title: "Open Workflows",
     });
   }
+  if (targets.contentEnabled) {
+    actions.push({
+      description: "Review and approve social posts",
+      id: "open-content",
+      onSelect: () => {
+        void targets.goContent();
+      },
+      title: "Open Content",
+    });
+  }
 
   return actions;
 }
@@ -158,11 +170,13 @@ export function useNavigationCommands(
   targets: NavigationCommandTargets,
 ): SearchCommand[] {
   const {
+    contentEnabled,
     createAgent,
     createChannel,
     goActionCenter,
     goAgents,
-    goBlocks,
+    goBlocksSettings,
+    goContent,
     goDiscovery,
     goHome,
     goNewMessage,
@@ -180,11 +194,13 @@ export function useNavigationCommands(
   return React.useMemo(
     () =>
       buildNavigationCommands({
+        contentEnabled,
         createAgent,
         createChannel,
         goActionCenter,
         goAgents,
-        goBlocks,
+        goBlocksSettings,
+        goContent,
         goDiscovery,
         goHome,
         goNewMessage,
@@ -199,11 +215,13 @@ export function useNavigationCommands(
         workflowsEnabled,
       }),
     [
+      contentEnabled,
       createAgent,
       createChannel,
       goActionCenter,
       goAgents,
-      goBlocks,
+      goBlocksSettings,
+      goContent,
       goDiscovery,
       goHome,
       goNewMessage,

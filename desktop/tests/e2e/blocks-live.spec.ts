@@ -514,6 +514,17 @@ test.describe("Blocks live Gate C", () => {
     const proposalRows = proposalIds.map((id) =>
       page.locator(`[data-message-id="${id}"]`),
     );
+    // Every assertion below chains off these two locators, so a timeline that
+    // renders one proposal twice does not report a duplicate row: the chained
+    // locator matches in both copies and Playwright fails somewhere else with
+    // "element(s) not found" or a strict-mode violation, minutes away from the
+    // real cause. Pin uniqueness here so the gate names the duplicate itself.
+    for (const [index, row] of proposalRows.entries()) {
+      await expect(
+        row,
+        `proposal row ${index} must render exactly once`,
+      ).toHaveCount(1);
+    }
     await expect(
       proposalRows[0].getByRole("button", { name: "Review agent" }),
     ).toBeVisible({ timeout: 30_000 });
@@ -660,7 +671,13 @@ test.describe("Blocks live Gate C", () => {
       (element as HTMLElement).click();
       (element as HTMLElement).click();
     });
-    await expect(proposalDialog).toBeHidden();
+    // The dialog closes only after the signed Block action is published, and
+    // the client gives that publish PUBLISH_TIMEOUT_MS (25s) before it gives
+    // up. The integration project's default expect timeout is 15s, so the
+    // assertion could fire while the publish was still inside its own budget
+    // and report a hung dialog for a round trip that was merely slow. Wait
+    // past the publish deadline, like the receipt assertions below already do.
+    await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
     await expect
       .poll(() =>
         page.evaluate(
@@ -678,7 +695,50 @@ test.describe("Blocks live Gate C", () => {
     const decline = proposalDialog.getByRole("button", { name: "Decline" });
     await expect(decline).toBeEnabled();
     await decline.click();
-    await expect(proposalDialog).toBeHidden();
+    await expect(proposalDialog).toBeHidden({ timeout: 30_000 });
+    // Probe, not an assertion. The decline receipt is published by the
+    // owner-side broker (useAgentProposalBroker), so "Declined." never
+    // appearing has two very different causes: the broker never published a
+    // kind:40011 receipt, or it published one the client then filtered out.
+    // The DOM cannot tell those apart and the failure below reads the same
+    // either way. Ask the relay's own store directly, and print it before the
+    // assertion so a red run carries the answer.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const { stdout: blockEvents } = await execFile(
+        "docker",
+        [
+          "compose",
+          "-p",
+          harnessProject,
+          "-f",
+          "docker-compose.harness.yml",
+          "exec",
+          "-T",
+          "postgres",
+          "psql",
+          "-U",
+          "buzz",
+          "-d",
+          "buzz",
+          "-tAc",
+          "SELECT kind, encode(id, 'hex'), tags::text FROM events " +
+            "WHERE kind IN (40010, 40011) ORDER BY created_at, id",
+        ],
+        { cwd: path.resolve("..") },
+      );
+      const receipts = blockEvents
+        .split("\n")
+        .filter((line) => line.startsWith("40011"));
+      console.log(
+        `BLOCKEVENTS attempt=${attempt} receipts=${receipts.length}\n${blockEvents.trim()}`,
+      );
+      if (
+        receipts.some((line) => line.includes(proposalIds[1] ?? "no-proposal"))
+      ) {
+        break;
+      }
+      await page.waitForTimeout(2_500);
+    }
     await expect(proposalRows[1].getByText("Declined.")).toBeVisible({
       timeout: 30_000,
     });

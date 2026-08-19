@@ -30,6 +30,31 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
+/**
+ * Opens a channel from the sidebar and parks the pointer off the sidebar.
+ *
+ * Clicking a sidebar row leaves the pointer resting on it, and the
+ * channel-activity popover opens over the timeline 250ms later
+ * (HOVER_OPEN_DELAY_MS in ChannelActivityPopover.tsx). A fast run clicks the
+ * timeline before that timer fires; a slow one does not, and the popover then
+ * intercepts every click retry until the test times out. That is what failed
+ * on CI as `11-thread-reply-lights-sidebar-badge-after-channel-view` and
+ * `16-thread-header-read-state-toggle`.
+ *
+ * Proven by forcing the condition: waiting out the open delay with the pointer
+ * left on the sidebar failed 4 of 4 runs with the popover mounted, and parking
+ * it on the channel title first passed 4 of 4 with no popover.
+ */
+async function openChannel(
+  page: import("@playwright/test").Page,
+  channelTestId: string,
+  title: string,
+) {
+  await page.getByTestId(`channel-${channelTestId}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(title);
+  await page.getByTestId("chat-title").hover();
+}
+
 async function emitMockMessage(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -115,8 +140,7 @@ test.describe("thread unread indicator", () => {
     await page.goto("/");
 
     // Open general — catch-up adds mock-general-welcome to authoredRootIds
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Emit an initial reply so the thread summary row appears
@@ -145,8 +169,7 @@ test.describe("thread unread indicator", () => {
     await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
 
     // Switch away so general becomes inactive
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
 
     // Emit new thread replies (these will be unread)
     const base = unreadTimestamp();
@@ -159,8 +182,7 @@ test.describe("thread unread indicator", () => {
     }
 
     // Switch back — thread summary should show unread badge
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
 
     const badge = page.getByTestId("thread-unread-badge");
     await expect(badge).toBeVisible();
@@ -171,8 +193,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Emit an initial reply so the thread summary appears
@@ -191,8 +212,7 @@ test.describe("thread unread indicator", () => {
     await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
 
     // Switch away
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
 
     // Emit new unread replies
     const base = unreadTimestamp();
@@ -205,8 +225,7 @@ test.describe("thread unread indicator", () => {
     }
 
     // Switch back and open the thread panel
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await page.getByTestId("message-thread-summary").first().click();
     await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 
@@ -222,8 +241,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Emit a root message from alice (tyler has NO stake in this thread)
@@ -272,8 +290,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Build a genuinely nested branch by chaining parentEventId: each reply's
@@ -327,8 +344,7 @@ test.describe("thread unread indicator", () => {
 
     // Switch away, then emit the deeper replies past the frontier — these are
     // the unread ones living inside the nested structure.
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
 
     const base = unreadTimestamp();
     const r4 = await emitMockMessage(page, "general", "New nested follow-up", {
@@ -345,8 +361,7 @@ test.describe("thread unread indicator", () => {
     // Switch back, open the thread, and expand every level down to the
     // unread tail. Each expandReply asserts a row appeared, so green here
     // means the nesting genuinely rendered — not just that a divider exists.
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await page.getByTestId("message-thread-summary").first().click();
     await expect(page.getByTestId("message-thread-panel")).toBeVisible();
     await expandReply(page, r1.id);
@@ -405,8 +420,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // A branch p (with a child c) plus a leaf sibling of p, all dated in the
@@ -442,8 +456,7 @@ test.describe("thread unread indicator", () => {
 
     // Switch away, then emit two unread replies deep under p (children of c) —
     // p's subtree gains unread descendants while p itself stays collapsed.
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
 
     const base = unreadTimestamp();
     const c2 = await emitMockMessage(
@@ -464,8 +477,7 @@ test.describe("thread unread indicator", () => {
 
     // Switch back and open the panel WITHOUT expanding p. The collapsed p row
     // must show its subtree unread count (the two unread descendants).
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await page.getByTestId("message-thread-summary").first().click();
     await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 
@@ -506,8 +518,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Collapsed branch p with one read child, plus an unread descendant so the
@@ -531,8 +542,7 @@ test.describe("thread unread indicator", () => {
     await page.getByTestId("auxiliary-panel-close").click();
     await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
 
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
 
     const base = unreadTimestamp();
     await emitMockMessage(page, "general", "First unread under branch", {
@@ -542,8 +552,7 @@ test.describe("thread unread indicator", () => {
     });
 
     // Reopen WITHOUT expanding p: badge shows the single unread descendant.
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await page.getByTestId("message-thread-summary").first().click();
     await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 
@@ -571,8 +580,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Two collapsed sibling branches, each with one read child. branchOld will
@@ -606,8 +614,7 @@ test.describe("thread unread indicator", () => {
     await page.getByTestId("auxiliary-panel-close").click();
     await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
 
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
 
     // Each branch gains its own unread reply, nested one level under the
     // branch's child (branchNew -> newChild -> unread; branchOld -> oldChild ->
@@ -628,8 +635,7 @@ test.describe("thread unread indicator", () => {
       createdAt: base + 30,
     });
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await page.getByTestId("message-thread-summary").first().click();
     await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 
@@ -666,8 +672,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Read frontier over an initial reply, then close the thread.
@@ -684,8 +689,7 @@ test.describe("thread unread indicator", () => {
     await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
 
     // Leave, emit unread replies, return — badge appears (same as test 01).
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
     const base = unreadTimestamp();
     for (let i = 0; i < 3; i++) {
       await emitMockMessage(page, "general", `Unread reply ${i + 1}`, {
@@ -694,8 +698,7 @@ test.describe("thread unread indicator", () => {
         createdAt: base + i,
       });
     }
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     const badge = page.getByTestId("thread-unread-badge");
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("3");
@@ -703,10 +706,8 @@ test.describe("thread unread indicator", () => {
     // The crux: the first entry above marked the channel read WHILE the unread
     // replies were present. Leave and re-enter WITHOUT opening the thread. If
     // the channel marker had absorbed the replies, the badge would be gone now.
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "random", "random");
+    await openChannel(page, "general", "general");
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("3");
   });
@@ -721,8 +722,7 @@ test.describe("thread unread indicator", () => {
 
     // Open general and read its thread frontier, so the only thing that can be
     // unread afterward is a NEW reply — not the channel timeline.
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
     await emitMockMessage(page, "general", "First reply to welcome", {
       parentEventId: "mock-general-welcome",
@@ -737,20 +737,17 @@ test.describe("thread unread indicator", () => {
 
     // Leave, emit an unread reply (thread-reply-only unread), then RE-ENTER
     // general so the channel-open marker fires while the reply is unread.
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
     await emitMockMessage(page, "general", "Unread reply", {
       parentEventId: "mock-general-welcome",
       pubkey: TEST_IDENTITIES.alice.pubkey,
       createdAt: unreadTimestamp(),
     });
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
 
     // The crux: leave general. The unopened thread reply should still keep a
     // channel sidebar dot until the thread itself is read.
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
     await expect(page.getByTestId("channel-unread-dot-general")).toBeVisible();
   });
 
@@ -769,8 +766,7 @@ test.describe("thread unread indicator", () => {
     // so the loaded window is all-replies: no top-level message exists for
     // `latestActiveMessage` to find. The reply mentions the current user so it
     // clears the notify gate and creates Inbox thread activity.
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "all-replies");
     await emitMockMessage(page, "all-replies", "Orphan reply mentioning you", {
       parentEventId: "mock-root-scrolled-past-window",
@@ -783,13 +779,11 @@ test.describe("thread unread indicator", () => {
     ).toBeVisible();
 
     // View all-replies while the reply is unread.
-    await page.getByTestId("channel-all-replies").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("all-replies");
+    await openChannel(page, "all-replies", "all-replies");
 
     // The crux: leave the channel. Its unopened thread reply should still keep
     // a channel sidebar dot until the thread itself is read.
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await expect(
       page.getByTestId("channel-unread-dot-all-replies"),
     ).toBeVisible();
@@ -810,8 +804,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Read frontier over an initial reply, then close the thread (same setup as
@@ -829,8 +822,7 @@ test.describe("thread unread indicator", () => {
     await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
 
     // Leave, emit unread replies, return — badge appears (same as test 01).
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
     const base = unreadTimestamp();
     for (let i = 0; i < 3; i++) {
       await emitMockMessage(page, "general", `Unread reply ${i + 1}`, {
@@ -839,8 +831,7 @@ test.describe("thread unread indicator", () => {
         createdAt: base + i,
       });
     }
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     const badge = page.getByTestId("thread-unread-badge");
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("3");
@@ -874,8 +865,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // The viewer never replies, authors, or follows Alice's thread — they are a
@@ -888,8 +878,7 @@ test.describe("thread unread indicator", () => {
     const aliceSummary = page.locator(
       '[data-thread-head-id="mock-general-alice"]',
     );
-    await page.getByTestId("channel-random").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    await openChannel(page, "random", "random");
     const base = unreadTimestamp();
     const replyA = await emitMockMessage(page, "general", "Reply A (depth 1)", {
       parentEventId: "mock-general-alice",
@@ -907,8 +896,7 @@ test.describe("thread unread indicator", () => {
     // Alice's root — proving the gate now honors mentions — and the count must
     // span the subtree (A + B = 2), proving the count walks past direct
     // children. Pre-fix: no badge; post-gate-only: badge "1"; both fixes: "2".
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
 
     const badge = aliceSummary.getByTestId("thread-unread-badge");
     await expect(badge).toBeVisible();
@@ -952,8 +940,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     await emitMockMessage(page, "general", "Initial thread reply", {
@@ -980,8 +967,7 @@ test.describe("thread unread indicator", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("channel-general").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await openChannel(page, "general", "general");
     await waitForMockLiveSubscription(page, "general");
 
     // Emit an Alice-authored (non-self) top-level message, read-on-open.

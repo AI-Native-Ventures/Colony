@@ -5,6 +5,7 @@ import { Badge } from "@/shared/ui/badge";
 import { Card } from "@/shared/ui/card";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import type { DiscoverySearch } from "@/app/routes/discovery";
+import { leadWebUrl } from "../lib/leadLinks";
 import { DISCOVERY_SOURCE_LABELS } from "../sourceConfig";
 import type { Lead } from "../types";
 import {
@@ -13,6 +14,7 @@ import {
   stableLeadOrder,
   type LeadRowColumn,
 } from "./LeadFilters";
+import { LeadLink } from "./LeadLink";
 
 export type LeadTableView = "list" | "grid";
 
@@ -80,20 +82,19 @@ function LeadContact({
   lead: Lead;
   onInteract?: (event: React.MouseEvent) => void;
 }) {
+  const websiteUrl = leadWebUrl(lead.website);
   return (
     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-muted-foreground">
-      {lead.website ? (
-        <a
+      {websiteUrl ? (
+        <LeadLink
           className="inline-flex items-center gap-1 hover:text-foreground"
-          href={lead.website}
+          href={websiteUrl}
           onClick={onInteract}
-          rel="noreferrer"
-          target="_blank"
         >
           <Globe2 aria-hidden="true" className="h-3 w-3" />
           Website
           <ExternalLink aria-hidden="true" className="h-3 w-3" />
-        </a>
+        </LeadLink>
       ) : null}
       {lead.email ? (
         <span className="inline-flex items-center gap-1">

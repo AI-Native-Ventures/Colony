@@ -159,6 +159,21 @@
   color: inherit;
 }
 
+/* A code span naming a workspace file: same chip, but it opens something, so
+   it reads as a control rather than as quoted text. */
+.message-markdown .file-path-chip {
+  cursor: pointer;
+  text-align: left;
+  transition-property: background-color, color;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+.message-markdown .file-path-chip:hover {
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+}
+
 /* Code block content — higher specificity than the inline chips above; kept
    after them so descending-specificity ordering stays clean. */
 .rich-text-composer .tiptap pre code {

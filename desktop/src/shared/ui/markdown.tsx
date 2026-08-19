@@ -34,7 +34,6 @@ import {
   selectProseOrNudge,
 } from "@/shared/lib/computeConfigNudge";
 import {
-  INLINE_CODE_CHIP_CLASS,
   MENTION_CHIP_BASE_CLASSES,
   MENTION_CHIP_HOVER_CLASSES,
   MENTION_CHIP_PREFIX_CLASS,
@@ -49,10 +48,9 @@ import {
   shallowRecordEqual,
 } from "./markdownUtils";
 import {
-  CODE_BLOCK_CLASS,
   extractLanguage,
+  MarkdownCode,
   MarkdownCodeBlock,
-  SyntaxHighlightedCode,
 } from "./markdown/CodeBlock";
 import {
   renderEntityLinkAnchor,
@@ -1343,9 +1341,7 @@ function createMarkdownComponents(
       label,
     );
     if (card) {
-      return (
-        <FileCard href={card.href} filename={card.filename} size={card.size} />
-      );
+      return <FileCard {...card} />;
     }
 
     // Intercept `buzz://message?channel=…&id=…` links so a click navigates
@@ -1436,40 +1432,9 @@ function createMarkdownComponents(
       </blockquote>
     ),
     br: () => <br />,
-    code: ({ children, className, ...props }: React.ComponentProps<"code">) => {
-      const rawCode = String(children);
-      const code = rawCode.replace(/\n$/, "");
-      const isFencedCodeBlock =
-        typeof className === "string" && className.includes("language-");
-
-      if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
-        const language = extractLanguage(className);
-
-        if (language) {
-          return (
-            <SyntaxHighlightedCode code={code} language={language} {...props} />
-          );
-        }
-
-        const lines = code.split("\n");
-        return (
-          <code {...props} className={CODE_BLOCK_CLASS}>
-            {lines.map((line, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional
-              <span key={i} data-line="">
-                {line}
-              </span>
-            ))}
-          </code>
-        );
-      }
-
-      return (
-        <code {...props} className={cn(INLINE_CODE_CHIP_CLASS, className)}>
-          {children}
-        </code>
-      );
-    },
+    code: (props: React.ComponentProps<"code">) => (
+      <MarkdownCode {...props} interactive={interactive} />
+    ),
     h1: ({ children }) => (
       <h1 className="text-xl font-semibold leading-8 tracking-tight">
         {children}

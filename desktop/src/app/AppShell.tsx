@@ -123,6 +123,7 @@ export function AppShell() {
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
+  const contentEnabled = useFeatureEnabled("contentCalendar");
   const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
@@ -141,8 +142,8 @@ export function AppShell() {
   const {
     goActionCenter,
     goAgents,
-    goBlocks,
     goChannel,
+    goContent,
     goDiscovery,
     goHome,
     goNewMessage,
@@ -627,7 +628,7 @@ export function AppShell() {
     createChannel: handleOpenCreateChannel,
     goActionCenter,
     goAgents,
-    goBlocks,
+    goBlocksSettings: () => handleOpenSettings("blocks"),
     goDiscovery,
     goHome,
     goNewMessage: handleOpenNewDm,
@@ -638,6 +639,8 @@ export function AppShell() {
     goWorkflows,
     openBrowseChannels: handleOpenBrowseChannels,
     projectsEnabled,
+    contentEnabled,
+    goContent,
     pulseEnabled,
     workflowsEnabled,
   });
@@ -838,7 +841,6 @@ export function AppShell() {
                         }}
                         onSelectActionCenter={() => void goActionCenter()}
                         onSelectAgents={() => void goAgents()}
-                        onSelectBlocks={() => void goBlocks()}
                         onSelectDiscovery={() =>
                           void goDiscovery({ surface: "leads" })
                         }
@@ -849,6 +851,7 @@ export function AppShell() {
                         scopeSearchFocusRequest={scopeSearchFocusRequest}
                         onSelectHome={() => void goHome()}
                         onSelectProjects={() => void goProjects()}
+                        onSelectContent={() => void goContent()}
                         onSelectPulse={() => void goPulse()}
                         onSelectSettings={handleOpenSettings}
                         onSelectSpend={() => void goSpend()}

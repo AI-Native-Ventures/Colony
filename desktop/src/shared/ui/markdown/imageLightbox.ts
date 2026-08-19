@@ -337,6 +337,14 @@ function isVisibleImageLightboxTrigger(trigger: HTMLElement): boolean {
     return false;
   }
 
+  // A revealed spoiler's content fades in from computed opacity 0 over
+  // 500ms, and gallery membership is captured once per lightbox open. Judging
+  // that content by paint state instead of reveal state froze "Next image"
+  // out of the dialog whenever the open landed on the fade's first frame, so
+  // the opacity heuristic must not apply inside a revealed spoiler.
+  const insideRevealedSpoiler =
+    trigger.closest('.buzz-spoiler[data-revealed="true"]') !== null;
+
   const image = trigger.querySelector("img");
   for (const element of [trigger, image]) {
     if (!element) {
@@ -347,7 +355,7 @@ function isVisibleImageLightboxTrigger(trigger: HTMLElement): boolean {
     if (
       style.display === "none" ||
       style.visibility === "hidden" ||
-      Number(style.opacity) === 0
+      (!insideRevealedSpoiler && Number(style.opacity) === 0)
     ) {
       return false;
     }

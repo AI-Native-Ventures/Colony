@@ -14,9 +14,9 @@ export type SidebarSelectedView =
   | "channel"
   | "messages"
   | "agents"
-  | "blocks"
   | "discovery"
   | "workflows"
   | "pulse"
   | "projects"
-  | "spend";
+  | "spend"
+  | "content";

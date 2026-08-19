@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Blocks,
   Bot,
+  CalendarRange,
   Compass,
   FileText,
   FolderGit2,
@@ -37,6 +38,7 @@ export type SearchCommandId =
   | "open-action-center"
   | "open-agents"
   | "open-blocks"
+  | "open-content"
   | "open-discovery"
   | "open-home"
   | "open-projects"
@@ -112,6 +114,8 @@ export function resultIcon(
         return MessageCircle;
       case "open-blocks":
         return Blocks;
+      case "open-content":
+        return CalendarRange;
       case "open-discovery":
         return Compass;
       case "open-home":

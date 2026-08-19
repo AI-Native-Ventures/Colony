@@ -287,11 +287,17 @@ test.describe("config bridge screenshots", () => {
     await page.getByTestId("channel-agents").click();
     await expect(page.getByTestId("chat-title")).toHaveText("agents");
 
-    // Click an agent avatar in a full message row to open the profile side panel.
+    // Click Charlie's avatar to open the profile side panel. Address his row by
+    // content: #agents also seeds nadia and one message per managed agent that
+    // is a member, so which row is last depends on seeding order, and nadia is
+    // an owned RELAY agent whose Runtime tab does not carry the local config
+    // this capture is about. Not yet observed failing here, but the identical
+    // selector did fail this way in ant-mark-sizing.spec.ts (#303) and
+    // profile-active-turn.spec.ts.
     await page
       .getByTestId("message-row")
-      .filter({ has: page.locator('[data-testid^="message-avatar-"]') })
-      .last()
+      .filter({ hasText: "Indexing the channel catalog now." })
+      .first()
       .getByRole("button")
       .first()
       .click();

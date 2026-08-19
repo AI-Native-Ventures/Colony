@@ -55,10 +55,30 @@ export function CreateProjectWorkItemDialog({
     setWorkItemTitle("");
     setBody("");
     setErrorMessage(null);
-    const timerId = globalThis.setTimeout(
-      () => titleInputRef.current?.focus(),
-      50,
-    );
+    // Deferred so it wins against the dialog's own mount-time focus handling.
+    // Only take focus if nothing inside the dialog has it yet: by the time this
+    // fires the user may already be typing in the description, and yanking the
+    // caret back mid-word loses their text into the title. That is also what
+    // made project-pr-review.spec.ts flaky, with a subject tag that read
+    // "Document the broken workflowThe project workflow needs a clear repair
+    // path." (CI run 32153129885).
+    const timerId = globalThis.setTimeout(() => {
+      const title = titleInputRef.current;
+      const active = title?.ownerDocument.activeElement ?? null;
+      // Stand down only if the user is already typing in another FIELD. The
+      // dialog itself takes focus on open (Radix focuses its content), so
+      // checking "is focus anywhere inside the dialog" would cancel the very
+      // autofocus this timer exists for.
+      const typingElsewhere =
+        active !== null &&
+        active !== title &&
+        (active instanceof HTMLInputElement ||
+          active instanceof HTMLTextAreaElement ||
+          active instanceof HTMLSelectElement ||
+          (active as HTMLElement).isContentEditable);
+      if (typingElsewhere) return;
+      title?.focus();
+    }, 50);
     return () => globalThis.clearTimeout(timerId);
   }, [open]);
 

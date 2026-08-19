@@ -948,12 +948,13 @@ test("concurrent installs each keep their own state — one fails, one succeeds"
     page,
     {
       acpRuntimesCatalog: [claudeNotInstalled, codexNotInstalled],
-      // Claude: long delay then failure with multiline stderr + hint.
+      // Claude: held open by the test, then failure with multiline stderr + hint.
       // Codex: short delay then success.
       // Per-runtime config lets both be in flight simultaneously.
       installAcpRuntimeByRuntime: {
         claude: {
-          delayMs: 600,
+          // No delay: the test holds this install open through the seam below,
+          // so the in-flight window lasts exactly as long as the assertions do.
           result: {
             success: false,
             steps: [
@@ -995,6 +996,18 @@ test("concurrent installs each keep their own state — one fails, one succeeds"
   await page.goto("/");
   await navigateToSetupPage(page);
 
+  // Hold claude's install open instead of timing it. A mock delay makes
+  // "while the install is in flight" a wall-clock race the test loses on a
+  // loaded runner: the install settles, its button comes back, and the
+  // in-flight assertions below see the settled UI instead.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        __BUZZ_E2E_HOLD_INSTALL__?: (runtimeId: string) => void;
+      }
+    ).__BUZZ_E2E_HOLD_INSTALL__?.("claude"),
+  );
+
   const claudeInstall = page.getByTestId("onboarding-runtime-install-claude");
   const codexInstall = page.getByTestId("onboarding-runtime-install-codex");
 
@@ -1016,6 +1029,15 @@ test("concurrent installs each keep their own state — one fails, one succeeds"
 
   // Claude still in flight: its install button must still be absent.
   await expect(claudeInstall).toHaveCount(0);
+
+  // Let claude settle, on the test's schedule rather than a timer's.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        __BUZZ_E2E_RELEASE_INSTALL__?: (runtimeId: string) => number;
+      }
+    ).__BUZZ_E2E_RELEASE_INSTALL__?.("claude"),
+  );
 
   // Claude settles: failure error visible; codex still shows ready (not reset).
   const claudeError = page.getByTestId("onboarding-runtime-error-claude");

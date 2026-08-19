@@ -7,11 +7,30 @@ const previewUrl =
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
+  // Playwright's default expect timeout is 5s. That default, not any
+  // considered value, is what three CI flakes on 2026-08-17 were: every one
+  // of them failed with "Timeout 5000ms exceeded while waiting on the
+  // predicate", then passed on retry in a few seconds
+  // (custom-emoji.spec.ts:395, mentions.spec.ts:1244, messaging.spec.ts:2010).
+  // The `integration` project had already been given 15s on CI for exactly
+  // this reason; `smoke` and the engine projects were still on 5s while four
+  // shards competed for free runners.
+  //
+  // This sets it once for every project instead. It costs nothing on a green
+  // run -- the budget only elapses on an assertion that was going to fail --
+  // and the per-test `timeout` above still caps a genuinely hung test at 30s.
+  expect: {
+    timeout: process.env.CI ? 15_000 : 10_000,
+  },
   retries: process.env.CI ? 2 : 0,
   workers: 1,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "playwright-report" }],
+    // scripts/summarize-flaky-tests.mjs reads this to fail the job on any
+    // retry-masked failure. Without it that script only ever printed
+    // "Skipping flaky-test summary: ENOENT" and every flake stayed invisible.
+    ["json", { outputFile: "playwright-report.json" }],
   ],
   use: {
     baseURL: previewUrl,
@@ -39,6 +58,8 @@ export default defineConfig({
         "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
         "**/channel-workspace.spec.ts",
+        "**/workspace-message-file-path.spec.ts",
+        "**/workspace-attachment.spec.ts",
         "**/workspace-message-link.spec.ts",
         "**/workspace-terminal.spec.ts",
         "**/workspace-web.spec.ts",
@@ -185,9 +206,6 @@ export default defineConfig({
       ],
       use: {
         ...devices["Desktop Chrome"],
-      },
-      expect: {
-        timeout: process.env.CI ? 15_000 : 10_000,
       },
     },
     // Engine-parity projects. The packaged macOS app renders in WKWebView, so

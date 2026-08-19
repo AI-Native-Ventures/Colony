@@ -1504,6 +1504,12 @@ declare global {
     __BUZZ_E2E_RELEASE_CHANNELS_READ__?: () => number;
     /** Number of channel reads currently held by the seam. */
     __BUZZ_E2E_CHANNELS_READ_PENDING__?: number;
+    /** Hold every `install_acp_runtime` call for this runtime until released. */
+    __BUZZ_E2E_HOLD_INSTALL__?: (runtimeId: string) => void;
+    /** Release the installs held for this runtime; returns how many were held. */
+    __BUZZ_E2E_RELEASE_INSTALL__?: (runtimeId: string) => number;
+    /** Number of installs currently held, keyed by runtime id. */
+    __BUZZ_E2E_INSTALL_PENDING__?: Record<string, number>;
   }
 }
 
@@ -5158,6 +5164,32 @@ function resetMockUserStatuses() {
   mockUserStatuses.length = 0;
 }
 
+// A tiny stand-in for the on-disk workspace the file commands read (see
+// desktop/src-tauri/src/commands/workspace_files.rs), so a file path written
+// in a message has something real to open in e2e.
+const MOCK_WORKSPACE_ROOT = "/mock-workspace";
+
+const MOCK_WORKSPACE_FILES: Record<string, { mime: string; text: string }> = {
+  "PLANS/FOO.md": {
+    mime: "text/markdown",
+    text: "# Foo plan\n\nStep one: prove the path opens.",
+  },
+};
+
+/** Look a mocked workspace file up by either its relative or absolute path. */
+function mockWorkspaceFile(path: string) {
+  const relative = path.startsWith(`${MOCK_WORKSPACE_ROOT}/`)
+    ? path.slice(MOCK_WORKSPACE_ROOT.length + 1)
+    : path;
+  const file = MOCK_WORKSPACE_FILES[relative];
+  if (!file) {
+    throw new Error(
+      `${path} is not a file in the Buzz workspace or your repos folder`,
+    );
+  }
+  return { ...file, path: `${MOCK_WORKSPACE_ROOT}/${relative}`, relative };
+}
+
 // Mocked Rust-side pending deep-link queue (see desktop/src-tauri/src/deep_link.rs).
 let mockPendingCommunityDeepLinks: Array<{
   id: string;
@@ -8479,6 +8511,31 @@ async function handleConnectAcpRuntime(
 let installCallCount = 0;
 /** Per-runtime call counters for `installAcpRuntimeByRuntime` sequences. */
 const installCallCountByRuntime: Record<string, number> = {};
+
+/** Runtimes whose installs are currently latched open by a test. */
+const heldInstallRuntimes = new Set<string>();
+/** Resolvers for installs parked on the latch, keyed by runtime id. */
+const heldInstallResolvers: Record<string, Array<() => void>> = {};
+
+/**
+ * Parks an install for as long as the test holds `runtimeId`.
+ *
+ * A timed mock delay makes "while the install is in flight" a wall-clock race:
+ * on a loaded CI runner the install can settle before the assertion about the
+ * in-flight UI even starts. Holding the call instead makes that window last
+ * exactly as long as the test says it does.
+ */
+async function awaitInstallRelease(runtimeId: string): Promise<void> {
+  if (!heldInstallRuntimes.has(runtimeId)) return;
+  await new Promise<void>((resolve) => {
+    const resolvers = heldInstallResolvers[runtimeId] ?? [];
+    resolvers.push(resolve);
+    heldInstallResolvers[runtimeId] = resolvers;
+    const pending = window.__BUZZ_E2E_INSTALL_PENDING__ ?? {};
+    pending[runtimeId] = (pending[runtimeId] ?? 0) + 1;
+    window.__BUZZ_E2E_INSTALL_PENDING__ = pending;
+  });
+}
 let addChannelMembersCallCount = 0;
 let setGlobalAgentConfigCallCount = 0;
 let mockGlobalAgentConfig: {
@@ -8518,6 +8575,7 @@ async function handleInstallAcpRuntime(
   config: E2eConfig | undefined,
 ): Promise<RawInstallRuntimeResult> {
   const runtimeId = args.runtimeId ?? "";
+  await awaitInstallRelease(runtimeId);
   const perRuntime = config?.mock?.installAcpRuntimeByRuntime?.[runtimeId];
 
   if (perRuntime) {
@@ -11299,6 +11357,25 @@ export function maybeInstallE2eTauriMocks() {
     resolve?.();
     return resolve ? 1 : 0;
   };
+  // install_acp_runtime hold/release seam — reset latches on each install.
+  heldInstallRuntimes.clear();
+  for (const key of Object.keys(heldInstallResolvers)) {
+    delete heldInstallResolvers[key];
+  }
+  window.__BUZZ_E2E_INSTALL_PENDING__ = {};
+  window.__BUZZ_E2E_HOLD_INSTALL__ = (runtimeId: string) => {
+    heldInstallRuntimes.add(runtimeId);
+  };
+  window.__BUZZ_E2E_RELEASE_INSTALL__ = (runtimeId: string) => {
+    heldInstallRuntimes.delete(runtimeId);
+    const resolvers = heldInstallResolvers[runtimeId] ?? [];
+    delete heldInstallResolvers[runtimeId];
+    const pending = window.__BUZZ_E2E_INSTALL_PENDING__ ?? {};
+    pending[runtimeId] = 0;
+    window.__BUZZ_E2E_INSTALL_PENDING__ = pending;
+    for (const resolve of resolvers) resolve();
+    return resolvers.length;
+  };
   window.__BUZZ_E2E_RELEASE_GET_EVENT__ = () => {
     const queued = deferredGetEventQueue.splice(0);
     for (const entry of queued) {
@@ -12932,6 +13009,23 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "auto_connect_default_relay_enabled":
         return activeConfig?.autoConnectDefaultRelay ?? false;
+      case "resolve_workspace_path": {
+        const { path } = payload as { path: string };
+        const file = mockWorkspaceFile(path);
+        return { path: file.path, mime: file.mime, is_text: true };
+      }
+      case "read_workspace_file": {
+        const { path } = payload as { path: string };
+        const file = mockWorkspaceFile(path);
+        return {
+          path: file.path,
+          name: file.relative.split("/").pop() ?? file.relative,
+          mime: file.mime,
+          bytes_base64: btoa(file.text),
+          size: file.text.length,
+          is_text: true,
+        };
+      }
       case "get_legacy_workspace_storage":
         return {
           workspaces: null,

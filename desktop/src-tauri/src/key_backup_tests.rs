@@ -238,10 +238,32 @@ fn generated_passphrase_respects_word_count_and_separator() {
         if separator.is_empty() {
             // No separator to split on; length gate below still applies.
         } else {
-            let parts: Vec<&str> = phrase.split(separator).collect();
-            assert_eq!(parts.len(), count);
+            // Rejoin fragments before checking. The EFF list contains exactly
+            // one word with a separator character in it, "yo-yo", so splitting
+            // a hyphen-joined phrase that drew it yields count + 1 parts and
+            // two fragments that are not words. Asserting on the raw split
+            // failed about once in 190 runs (7 hyphen-joined draws per run,
+            // 1 in 1296 words), which is what the Desktop Tauri Flags job kept
+            // going red on. The sibling clamp test avoids this by choosing a
+            // separator that cannot occur; this one keeps "-" covered instead,
+            // and reassembles.
+            let mut parts: Vec<String> = Vec::new();
+            for fragment in phrase.split(separator) {
+                let joined = parts
+                    .last()
+                    .map(|prev| format!("{prev}{separator}{fragment}"));
+                match joined {
+                    Some(candidate)
+                        if !words.contains(fragment) && words.contains(candidate.as_str()) =>
+                    {
+                        *parts.last_mut().expect("checked above") = candidate;
+                    }
+                    _ => parts.push(fragment.to_string()),
+                }
+            }
+            assert_eq!(parts.len(), count, "phrase {phrase:?}");
             for w in &parts {
-                assert!(words.contains(w), "unknown word {w:?}");
+                assert!(words.contains(w.as_str()), "unknown word {w:?}");
             }
         }
         assert!(phrase.chars().count() >= MIN_PASSPHRASE_LEN);

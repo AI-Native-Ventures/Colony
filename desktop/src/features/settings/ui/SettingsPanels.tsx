@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Archive,
   BellRing,
+  Blocks,
   Bot,
   ChevronDown,
   Cpu,
@@ -28,6 +29,7 @@ import type {
   NotificationSettings,
 } from "@/features/notifications/hooks";
 import type { SoundName, SoundSlot } from "@/features/notifications/lib/sound";
+import { BlocksSettingsCard } from "@/features/blocks/ui/BlocksSettingsCard";
 import { CommunityMembersSettingsCard } from "@/features/community-members/ui/CommunityMembersSettingsCard";
 import { CustomEmojiSettingsCard } from "@/features/custom-emoji/ui/CustomEmojiSettingsCard";
 import { LocalArchiveSettingsCard } from "@/features/local-archive/ui/LocalArchiveSettingsCard";
@@ -77,6 +79,7 @@ import { VoiceSettingsCard } from "./VoiceSettingsCard";
 
 export type SettingsSection =
   | "profile"
+  | "blocks"
   | "notifications"
   | "voice"
   | "experimental"
@@ -97,6 +100,7 @@ export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
 const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "profile",
+  "blocks",
   "notifications",
   "voice",
   "experimental",
@@ -196,6 +200,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "discovery",
     label: "Discovery",
     icon: Telescope,
+  },
+  {
+    value: "blocks",
+    label: "Blocks",
+    icon: Blocks,
   },
   {
     value: "community-members",
@@ -863,6 +872,8 @@ export function renderSettingsSection(
       return <KeyboardShortcutsCard />;
     case "discovery":
       return <DiscoverySettingsCard />;
+    case "blocks":
+      return <BlocksSettingsCard />;
     case "community-members":
       return (
         <CommunityMembersSettingsCard currentPubkey={props.currentPubkey} />
