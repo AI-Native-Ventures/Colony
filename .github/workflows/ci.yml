@@ -9,12 +9,12 @@ on:
   pull_request:
     branches: [main, develop, release]
 
-# One run per ref, newest wins. Rapid promotions to main collapse into a
-# single run that tests the cumulative state instead of billing one full
-# matrix per merge.
+# Ordinary PRs and pushes keep only the newest run for each ref. A promotion PR
+# targeting main must finish its in-flight matrix even when develop advances
+# underneath it.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.base_ref != 'main' }}
 
 env:
   CARGO_TERM_COLOR: always
