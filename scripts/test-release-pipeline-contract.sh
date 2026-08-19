@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Temporary scratch commit 1 for ordinary concurrency verification.
+# Temporary scratch commit 2 for ordinary concurrency verification.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
