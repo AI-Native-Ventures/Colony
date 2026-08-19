@@ -267,4 +267,5 @@ expect_mutation_failure \
   "live canary invocation removed" \
   "$noop" "$noop" "sed -i.bak '/scripts\/verify-relay-live.sh/d' '$tmp/fly.yml'"
 
+# Temporary live acceptance probe: this branch is never merged.
 echo "release pipeline contract passed"
