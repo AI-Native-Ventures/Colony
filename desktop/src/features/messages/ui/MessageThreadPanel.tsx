@@ -927,6 +927,9 @@ export function MessageThreadPanel({
     </>
   );
 
+  const threadRootSummary = showWorkspaceContext
+    ? summarizeThreadRoot(threadHead.body)
+    : null;
   const threadHeaderContent = (
     <>
       <AuxiliaryPanelHeaderGroup
@@ -942,12 +945,14 @@ export function MessageThreadPanel({
         {showWorkspaceContext ? (
           <div className="min-w-0 flex-1">
             <AuxiliaryPanelTitle>{`#${channelName}`}</AuxiliaryPanelTitle>
-            <p
-              className="truncate text-xs text-muted-foreground"
-              title={threadHead.body}
-            >
-              {summarizeThreadRoot(threadHead.body)}
-            </p>
+            {threadRootSummary ? (
+              <p
+                className="truncate text-xs text-muted-foreground"
+                title={threadRootSummary}
+              >
+                {threadRootSummary}
+              </p>
+            ) : null}
           </div>
         ) : (
           <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>

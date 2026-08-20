@@ -83,6 +83,14 @@ async function emitThreadReply(
   await emitThreadReplies(page, [content]);
 }
 
+async function backToConversation(page: import("@playwright/test").Page) {
+  const button = page.getByTestId("workspace-back-to-conversation");
+  await expect(button).toBeVisible();
+  await expect(button).toHaveAccessibleName("Back to conversation");
+  await button.click();
+  await expect(page.getByTestId("channel-workspace")).toHaveCount(0);
+}
+
 test.describe("channel workspace", () => {
   test.beforeEach(async ({ page }) => {
     await installMockBridge(page, undefined, { skipCommunitySeed: true });
@@ -125,7 +133,7 @@ test.describe("channel workspace", () => {
     await expect(page.getByTestId("community-rail")).toBeHidden();
     await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 
-    await page.getByRole("button", { name: "Collapse workspace" }).click();
+    await backToConversation(page);
     await expect(page.getByTestId("app-sidebar").locator("..")).toHaveAttribute(
       "data-state",
       "collapsed",
@@ -144,7 +152,7 @@ test.describe("channel workspace", () => {
     await expect(page.getByTestId("community-rail")).toBeHidden();
     await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 
-    await page.getByRole("button", { name: "Collapse workspace" }).click();
+    await backToConversation(page);
     await expect(page.getByTestId("app-sidebar")).toBeVisible();
     await expect(page.getByTestId("community-rail")).toBeVisible();
   });
@@ -474,11 +482,7 @@ test.describe("channel workspace", () => {
     expect(Math.abs(preservedDom.offsetDelta)).toBeLessThanOrEqual(2);
     expect(preservedDom.scrollTop).toBeGreaterThan(0);
 
-    await page
-      .getByRole("button", {
-        name: /Back to conversation|Collapse workspace/,
-      })
-      .click();
+    await backToConversation(page);
     await expect(page.getByTestId("focus-thread-drawer")).toBeVisible();
     await expect(
       page
@@ -644,7 +648,7 @@ test.describe("channel workspace", () => {
     await page.getByTestId("channel-workspace-toggle").click();
     await page.getByTestId("workspace-create-scratchpad").click();
     await page.getByTestId("workspace-scratchpad-body").fill("kept");
-    await page.getByRole("button", { name: "Collapse workspace" }).click();
+    await backToConversation(page);
 
     await page.getByTestId("channel-random").click();
     await expect(page.getByTestId("channel-workspace")).toHaveCount(
