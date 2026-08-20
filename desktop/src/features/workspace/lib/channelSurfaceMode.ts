@@ -15,21 +15,15 @@ import * as React from "react";
 export type ChannelSurfaceMode = "timeline" | "workspace";
 
 const MODE_STORAGE_KEY = "buzz.channels.surfaceMode";
-const EXPANDED_STORAGE_KEY = "buzz.channels.workspaceExpanded";
 
 const DEFAULT_MODE: ChannelSurfaceMode = "timeline";
 
 const listeners = new Set<() => void>();
 
 let modes = readStoredRecord(MODE_STORAGE_KEY, parseMode);
-let expanded = readStoredRecord(EXPANDED_STORAGE_KEY, parseExpanded);
 
 function parseMode(value: unknown): ChannelSurfaceMode | undefined {
   return value === "timeline" || value === "workspace" ? value : undefined;
-}
-
-function parseExpanded(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function readStoredRecord<T>(
@@ -87,27 +81,10 @@ export function setChannelSurfaceMode(
   emit();
 }
 
-/** Whether the workspace is expanded (right pane and sidebar hidden). */
-export function getWorkspaceExpanded(channelId: string): boolean {
-  return expanded[channelId] ?? false;
-}
-
-/** Set the expanded state for a channel's workspace. */
-export function setWorkspaceExpanded(
-  channelId: string,
-  isExpanded: boolean,
-): void {
-  expanded = { ...expanded, [channelId]: isExpanded };
-  persist(EXPANDED_STORAGE_KEY, expanded);
-  emit();
-}
-
 /** Clear every channel's surface state. Wired into resetCommunityState(). */
 export function resetChannelSurfaceModes(): void {
   modes = {};
-  expanded = {};
   persist(MODE_STORAGE_KEY, modes);
-  persist(EXPANDED_STORAGE_KEY, expanded);
   emit();
 }
 
@@ -119,14 +96,5 @@ export function useChannelSurfaceMode(
     subscribe,
     () => (channelId ? getChannelSurfaceMode(channelId) : DEFAULT_MODE),
     () => DEFAULT_MODE,
-  );
-}
-
-/** Subscribe a component to a channel's workspace expanded state. */
-export function useWorkspaceExpanded(channelId: string | undefined): boolean {
-  return React.useSyncExternalStore(
-    subscribe,
-    () => (channelId ? getWorkspaceExpanded(channelId) : false),
-    () => false,
   );
 }

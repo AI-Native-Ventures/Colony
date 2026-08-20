@@ -174,7 +174,6 @@ type AppSidebarProps = {
   starredChannelIds?: ReadonlySet<string>;
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
-  workspaceExpanded?: boolean;
 } & Pick<AppSidebarPinnedHeaderProps, "commandActions">;
 export function AppSidebar({
   addCommunityPrefill,
@@ -245,7 +244,6 @@ export function AppSidebar({
   starredChannelIds,
   onStarChannel,
   onUnstarChannel,
-  workspaceExpanded = false,
 }: AppSidebarProps) {
   const { feedItemState } = useAppShell();
   const actionCenter = useActionCenterItems({
@@ -526,7 +524,6 @@ export function AppSidebar({
       className="!z-[100] !border-r-0"
       collapsible="offcanvas"
       data-testid="app-sidebar"
-      hidden={workspaceExpanded}
       onClick={(event) => {
         if (isSidebarBackgroundTarget(event.target)) {
           onBackgroundClick?.();

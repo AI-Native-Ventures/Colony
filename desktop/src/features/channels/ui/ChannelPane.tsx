@@ -28,10 +28,7 @@ import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { ChannelWorkspaceDock } from "@/features/workspace/ui/ChannelWorkspaceDock";
 import { WorkspaceLinkProvider } from "@/features/workspace/ui/WorkspaceLinkContext";
-import {
-  useChannelSurfaceMode,
-  useWorkspaceExpanded,
-} from "@/features/workspace/lib/channelSurfaceMode";
+import { useChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
@@ -450,7 +447,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   const isOverlay = useIsThreadPanelOverlay();
   const workspaceOpen =
     useChannelSurfaceMode(activeChannel?.id) === "workspace";
-  const workspaceExpanded = useWorkspaceExpanded(activeChannel?.id);
   const useSplitAuxiliaryPane =
     !isSinglePanelView && (!isOverlay || workspaceOpen);
   const threadViewMode = useEffectiveThreadViewMode(activeChannel?.id);
@@ -532,7 +528,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     <WorkspaceLinkProvider channelId={activeChannelId}>
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden"
-        data-workspace-expanded={workspaceExpanded}
         ref={layoutRef}
         style={isHuddleTranscript ? HUDDLE_TRANSCRIPT_ROOT_STYLE : undefined}
       >
@@ -551,7 +546,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           <section
             aria-label="Channel messages and composer"
             className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-            hidden={workspaceExpanded}
             inert={channelIsCovered ? true : undefined}
             data-testid="channel-drop-zone"
             onDragEnter={
