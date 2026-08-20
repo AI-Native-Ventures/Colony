@@ -17,6 +17,16 @@ async function openRecoveryWorkflow(page: import("@playwright/test").Page) {
     .getByTestId("workflow-card-mock-recovery-failed")
     .getByRole("button", { name: "View Recovery test workflow" })
     .click();
+  await openRunHistory(page);
+}
+
+/**
+ * Run history moved inside the editor with #6248: opening a card opens the
+ * editor, and the panel lives in a popover behind the Run history button.
+ */
+async function openRunHistory(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Run history" }).click();
+  await expect(page.getByTestId("workflow-history-dropdown")).toBeVisible();
   await expect(page.getByTestId("workflow-detail-panel")).toBeVisible();
 }
 
@@ -50,10 +60,15 @@ test("offers Run again only for failed and cancelled runs", async ({
     "completed",
   );
 
+  // Close the editor back to the library. Escape alone lands on the popover,
+  // so the list is reached through its own route.
+  await page.goto("/#/workflows");
+  await expect(page.getByTestId("workflows-view")).toBeVisible();
   await page
     .getByTestId("workflow-card-mock-recovery-cancelled")
     .getByRole("button", { name: "View Recovery test workflow" })
     .click();
+  await openRunHistory(page);
   const cancelled = panel.getByTestId("workflow-run-mock-seeded-run-2");
   await cancelled.click();
   await expect(
