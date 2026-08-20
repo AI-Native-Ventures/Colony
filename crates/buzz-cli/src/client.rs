@@ -34,6 +34,9 @@ pub struct BlobDescriptor {
     /// Duration in seconds for video/audio (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// Original sanitized filename supplied by the uploader (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
 }
 
 /// Build an `imeta` tag array from a BlobDescriptor (NIP-92 media metadata).
@@ -56,6 +59,9 @@ pub fn build_imeta_tag(d: &BlobDescriptor) -> Vec<String> {
     }
     if let Some(dur) = d.duration {
         tag.push(format!("duration {dur}"));
+    }
+    if let Some(ref filename) = d.filename {
+        tag.push(format!("filename {filename}"));
     }
     tag
 }
@@ -91,6 +97,28 @@ fn upload_size_limit(mime: &str) -> Result<u64, CliError> {
         Ok(MAX_IMAGE_BYTES)
     } else {
         Ok(MAX_FILE_BYTES)
+    }
+}
+
+/// Return a display-only filename that satisfies the relay's imeta rules.
+fn attachment_filename(file_path: &str) -> String {
+    let basename = file_path.rsplit(['/', '\\']).next().unwrap_or_default();
+    let mut filename = String::with_capacity(basename.len().min(255));
+
+    for character in basename.chars() {
+        if character.is_control() || matches!(character, '/' | '\\') {
+            continue;
+        }
+        if filename.len() + character.len_utf8() > 255 {
+            break;
+        }
+        filename.push(character);
+    }
+
+    if filename.trim().is_empty() {
+        "attachment".to_string()
+    } else {
+        filename
     }
 }
 
@@ -1131,6 +1159,7 @@ impl BuzzClient {
 
         let bytes = std::fs::read(file_path)
             .map_err(|e| CliError::Other(format!("failed to read {file_path}: {e}")))?;
+        let filename = attachment_filename(file_path);
 
         // 2. Detect MIME from magic bytes
         let mime = infer::get(&bytes)
@@ -1200,7 +1229,10 @@ impl BuzzClient {
         // (404 or 405), fall back to the legacy /media/upload endpoint.  The 404/405 switch
         // itself is not retried; only transient failures on the selected legacy endpoint are.
         match result {
-            Ok(desc) => return Ok(desc),
+            Ok(mut desc) => {
+                desc.filename = Some(filename.clone());
+                return Ok(desc);
+            }
             Err(CliError::Relay { status: s, body: _ })
                 if should_retry_legacy_upload(
                     reqwest::StatusCode::from_u16(s).unwrap_or(reqwest::StatusCode::NOT_FOUND),
@@ -1212,34 +1244,38 @@ impl BuzzClient {
         }
 
         let legacy_url = format!("{}/media/upload", self.relay_url);
-        self.with_retry_body(|| {
-            let upload_body = upload_body.clone();
-            let legacy_url = legacy_url.clone();
-            let mime = mime.clone();
-            let sha256 = sha256.clone();
-            async move {
-                let auth_header = sign_blossom_upload(&self.keys, &sha256, &mime, &self.relay_url)?;
-                let resp = self
-                    .with_auth_tag(
-                        self.http
-                            .put(&legacy_url)
-                            .timeout(upload_timeout)
-                            .header("Authorization", auth_header)
-                            .header("Content-Type", &mime)
-                            .header("X-SHA-256", &sha256)
-                            .body(upload_body),
-                    )
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    let status = resp.status().as_u16();
-                    let body = resp.text().await.unwrap_or_default();
-                    return Err(CliError::Relay { status, body });
+        let mut descriptor = self
+            .with_retry_body(|| {
+                let upload_body = upload_body.clone();
+                let legacy_url = legacy_url.clone();
+                let mime = mime.clone();
+                let sha256 = sha256.clone();
+                async move {
+                    let auth_header =
+                        sign_blossom_upload(&self.keys, &sha256, &mime, &self.relay_url)?;
+                    let resp = self
+                        .with_auth_tag(
+                            self.http
+                                .put(&legacy_url)
+                                .timeout(upload_timeout)
+                                .header("Authorization", auth_header)
+                                .header("Content-Type", &mime)
+                                .header("X-SHA-256", &sha256)
+                                .body(upload_body),
+                        )
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status().as_u16();
+                        let body = resp.text().await.unwrap_or_default();
+                        return Err(CliError::Relay { status, body });
+                    }
+                    resp.json::<BlobDescriptor>().await.map_err(CliError::from)
                 }
-                resp.json::<BlobDescriptor>().await.map_err(CliError::from)
-            }
-        })
-        .await
+            })
+            .await?;
+        descriptor.filename = Some(filename);
+        Ok(descriptor)
     }
 
     /// Download a Blossom media blob using BUD-01 `t=get` auth.
@@ -1868,7 +1904,7 @@ mod retry_policy_tests {
     use axum::body::Body;
     use axum::extract::State;
     use axum::http::{HeaderMap, Response, StatusCode};
-    use axum::routing::post;
+    use axum::routing::{post, put};
     use axum::Router;
     use nostr::{EventBuilder, Keys, Kind};
     use tokio::net::TcpListener;
@@ -2465,6 +2501,11 @@ mod retry_policy_tests {
             "expected Ok after upload body-loss retries, got {result:?}"
         );
         assert_eq!(
+            result.unwrap().filename.as_deref(),
+            tmp.path().file_name().and_then(std::ffi::OsStr::to_str),
+            "the primary upload result must preserve the local filename"
+        );
+        assert_eq!(
             counter.load(Ordering::SeqCst),
             3,
             "expected 3 upload attempts (2 body-loss + 1 success)"
@@ -2477,6 +2518,38 @@ mod retry_policy_tests {
             auths.iter().all(|a| a.contains("Nostr ")),
             "each attempt must carry Nostr auth"
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_upload_result_preserves_the_local_filename() {
+        let app = Router::new()
+            .route("/upload", put(|| async { StatusCode::NOT_FOUND }))
+            .route(
+                "/media/upload",
+                put(|| async {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"url":"https://relay.test/media/aabbcc.pdf","sha256":"aabbcc","size":5,"type":"application/pdf","uploaded":0}"#,
+                        ))
+                        .unwrap()
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("Q3 [final].pdf");
+        std::fs::write(&file_path, b"%PDF-").unwrap();
+
+        let descriptor = test_client(&format!("http://{addr}"))
+            .upload_file(file_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(descriptor.filename.as_deref(), Some("Q3 [final].pdf"));
     }
 
     /// When all retry attempts for a stored event end with a partial body (200
@@ -2577,8 +2650,9 @@ mod retry_policy_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_query_cursor, create_response_with_id_if_accepted, extract_relay_response_field,
-        head_is_newer, head_rank, upload_size_limit, BuzzClient, MAX_FILE_BYTES, MAX_IMAGE_BYTES,
+        advance_query_cursor, attachment_filename, build_imeta_tag,
+        create_response_with_id_if_accepted, extract_relay_response_field, head_is_newer,
+        head_rank, upload_size_limit, BlobDescriptor, BuzzClient, MAX_FILE_BYTES, MAX_IMAGE_BYTES,
         MAX_VIDEO_BYTES,
     };
     use nostr::{EventBuilder, Keys, Kind, Tag};
@@ -2607,6 +2681,44 @@ mod tests {
         assert!(upload_size_limit("image/svg+xml").is_err());
         assert!(upload_size_limit("video/webm").is_err());
         assert!(upload_size_limit("audio/mpeg").is_err());
+    }
+
+    fn generic_descriptor() -> BlobDescriptor {
+        BlobDescriptor {
+            url: "https://relay.example/media/report.pdf".into(),
+            sha256: "a".repeat(64),
+            size: 42,
+            mime_type: "application/pdf".into(),
+            uploaded: 1,
+            dim: None,
+            blurhash: None,
+            thumb: None,
+            duration: None,
+            filename: Some("Q3 [final].pdf".into()),
+        }
+    }
+
+    #[test]
+    fn imeta_includes_the_preserved_filename() {
+        assert!(
+            build_imeta_tag(&generic_descriptor()).contains(&"filename Q3 [final].pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn attachment_filename_matches_relay_imeta_safety_rules() {
+        assert_eq!(
+            attachment_filename("reports/legacy\\Q3 [final]\n.pdf"),
+            "Q3 [final].pdf"
+        );
+        assert_eq!(attachment_filename("reports/\n\t"), "attachment");
+
+        let long_name = format!("{}.pdf", "é".repeat(200));
+        let sanitized = attachment_filename(&long_name);
+        assert!(sanitized.len() <= 255);
+        assert!(!sanitized.contains('/'));
+        assert!(!sanitized.contains('\\'));
+        assert!(!sanitized.chars().any(char::is_control));
     }
 
     #[test]
