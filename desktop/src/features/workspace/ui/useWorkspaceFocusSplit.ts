@@ -35,6 +35,7 @@ export function useWorkspaceFocusSplit(
 ) {
   const [preferredRatio, setPreferredRatio] = React.useState(readRatio);
   const [containerWidth, setContainerWidth] = React.useState(0);
+  const dragCleanupRef = React.useRef<(() => void) | null>(null);
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
@@ -55,6 +56,13 @@ export function useWorkspaceFocusSplit(
     }
   }, [preferredRatio]);
 
+  React.useEffect(
+    () => () => {
+      dragCleanupRef.current?.();
+    },
+    [],
+  );
+
   const threadWidthPx = hasThread
     ? clampFocusThreadWidth(containerWidth * preferredRatio, containerWidth)
     : 0;
@@ -62,18 +70,38 @@ export function useWorkspaceFocusSplit(
   const onResizeStart = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
       event.preventDefault();
+      dragCleanupRef.current?.();
       const bounds = containerRef.current?.getBoundingClientRect();
-      if (!bounds) return;
+      if (
+        !bounds ||
+        !Number.isFinite(bounds.left) ||
+        !Number.isFinite(bounds.width) ||
+        bounds.width <= 0
+      ) {
+        return;
+      }
       const move = (moveEvent: PointerEvent) => {
+        if (!Number.isFinite(moveEvent.clientX)) return;
         const width = clampFocusThreadWidth(
           moveEvent.clientX - bounds.left,
           bounds.width,
         );
-        setPreferredRatio(width / bounds.width);
+        const ratio = width / bounds.width;
+        if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return;
+        setPreferredRatio(ratio);
       };
-      const stop = () => window.removeEventListener("pointermove", move);
+      const cleanup = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", cleanup);
+        window.removeEventListener("pointercancel", cleanup);
+        if (dragCleanupRef.current === cleanup) {
+          dragCleanupRef.current = null;
+        }
+      };
       window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", stop, { once: true });
+      window.addEventListener("pointerup", cleanup);
+      window.addEventListener("pointercancel", cleanup);
+      dragCleanupRef.current = cleanup;
     },
     [containerRef],
   );
