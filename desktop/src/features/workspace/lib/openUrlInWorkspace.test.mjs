@@ -9,6 +9,46 @@ import {
   parseWorkspaceUrl,
 } from "./openUrlInWorkspace.ts";
 
+function webTab(id, url, title = "Web") {
+  return {
+    id,
+    kind: "web",
+    title,
+    createdBy: "local",
+    payload: { url },
+  };
+}
+
+function dependenciesWithTabs(tabsByChannel = {}) {
+  const calls = {
+    getWorkspace: [],
+    openTab: [],
+    setActiveTab: [],
+    setSurfaceMode: [],
+  };
+  return {
+    calls,
+    dependencies: {
+      getKind: (kind) => (kind === "web" ? {} : undefined),
+      getWorkspace: (channelId) => {
+        calls.getWorkspace.push(channelId);
+        const tabs = tabsByChannel[channelId] ?? [];
+        return { tabs, activeTabId: tabs.at(-1)?.id ?? null };
+      },
+      openTab: (channelId, tab) => {
+        calls.openTab.push([channelId, tab]);
+        return "new-tab";
+      },
+      setActiveTab: (channelId, tabId) => {
+        calls.setActiveTab.push([channelId, tabId]);
+      },
+      setSurfaceMode: (channelId, mode) => {
+        calls.setSurfaceMode.push([channelId, mode]);
+      },
+    },
+  };
+}
+
 test("extracts the first safe URL from markdown and plain text", () => {
   assert.equal(
     extractFirstHttpUrl(
@@ -65,10 +105,12 @@ test("opens the safe URL as a web tab and switches the channel to workspace", ()
     { body: "Open https://docs.example.com/guide.", channelId: "channel-1" },
     {
       getKind: (kind) => (kind === "web" ? {} : undefined),
+      getWorkspace: () => ({ tabs: [], activeTabId: null }),
       openTab: (channelId, tab) => {
         calls.push(["tab", channelId, tab]);
         return "tab-1";
       },
+      setActiveTab: () => {},
       setSurfaceMode: (channelId, mode) => {
         calls.push(["mode", channelId, mode]);
       },
@@ -77,6 +119,7 @@ test("opens the safe URL as a web tab and switches the channel to workspace", ()
 
   assert.deepEqual(result, {
     ok: true,
+    reused: false,
     tabId: "tab-1",
     title: "docs.example.com",
     url: "https://docs.example.com/guide",
@@ -106,10 +149,12 @@ test("opens a clicked link without re-scanning the message for a URL", () => {
     { channelId: "channel-1", href: "https://second.example.com/page?q=1" },
     {
       getKind: (kind) => (kind === "web" ? {} : undefined),
+      getWorkspace: () => ({ tabs: [], activeTabId: null }),
       openTab: (channelId, tab) => {
         calls.push(["tab", channelId, tab]);
         return "tab-2";
       },
+      setActiveTab: () => {},
       setSurfaceMode: (channelId, mode) => {
         calls.push(["mode", channelId, mode]);
       },
@@ -118,6 +163,7 @@ test("opens a clicked link without re-scanning the message for a URL", () => {
 
   assert.deepEqual(result, {
     ok: true,
+    reused: false,
     tabId: "tab-2",
     title: "second.example.com",
     url: "https://second.example.com/page?q=1",
@@ -139,6 +185,72 @@ test("opens a clicked link without re-scanning the message for a URL", () => {
     ],
     ["mode", "channel-1", "workspace"],
   ]);
+});
+
+test("reuses a canonical Web URL in the current channel", () => {
+  const { calls, dependencies } = dependenciesWithTabs({
+    alpha: [webTab("existing", "https://example.com/", "Existing page")],
+  });
+
+  const result = openLinkInWorkspace(
+    { channelId: "alpha", href: "https://example.com" },
+    dependencies,
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    reused: true,
+    tabId: "existing",
+    title: "Existing page",
+    url: "https://example.com/",
+  });
+  assert.deepEqual(calls.getWorkspace, ["alpha"]);
+  assert.deepEqual(calls.openTab, []);
+  assert.deepEqual(calls.setActiveTab, [["alpha", "existing"]]);
+  assert.deepEqual(calls.setSurfaceMode, [["alpha", "workspace"]]);
+});
+
+test("keeps path, query, and hash differences as separate Web tabs", () => {
+  for (const href of [
+    "https://example.com/other",
+    "https://example.com/path?view=two",
+    "https://example.com/path?view=one#details",
+  ]) {
+    const { calls, dependencies } = dependenciesWithTabs({
+      alpha: [webTab("existing", "https://example.com/path?view=one")],
+    });
+
+    const result = openLinkInWorkspace(
+      { channelId: "alpha", href },
+      dependencies,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.reused, false);
+    assert.equal(result.tabId, "new-tab");
+    assert.equal(calls.openTab.length, 1);
+    assert.deepEqual(calls.setActiveTab, []);
+    assert.deepEqual(calls.setSurfaceMode, [["alpha", "workspace"]]);
+  }
+});
+
+test("does not reuse a matching Web tab from another channel", () => {
+  const { calls, dependencies } = dependenciesWithTabs({
+    alpha: [webTab("alpha-tab", "https://example.com/")],
+    beta: [],
+  });
+
+  const result = openLinkInWorkspace(
+    { channelId: "beta", href: "https://example.com" },
+    dependencies,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reused, false);
+  assert.deepEqual(calls.getWorkspace, ["beta"]);
+  assert.equal(calls.openTab.length, 1);
+  assert.deepEqual(calls.setActiveTab, []);
+  assert.deepEqual(calls.setSurfaceMode, [["beta", "workspace"]]);
 });
 
 test("declines a clicked link the workspace browser must not load", () => {
@@ -179,8 +291,12 @@ test("returns a user-facing error when opening the tab fails", () => {
     { body: "https://example.com", channelId: "channel-1" },
     {
       getKind: () => ({}),
+      getWorkspace: () => ({ tabs: [], activeTabId: null }),
       openTab: () => {
         throw new Error("workspace unavailable");
+      },
+      setActiveTab: () => {
+        throw new Error("must not activate an existing tab");
       },
       setSurfaceMode: () => {
         throw new Error("must not reach surface mode");

@@ -1,6 +1,6 @@
 import { setChannelSurfaceMode } from "./channelSurfaceMode";
 import { getTabKind } from "./tabKindRegistry";
-import { openTab } from "./workspaceTabs";
+import { getWorkspace, openTab, setActiveTab } from "./workspaceTabs";
 
 type WorkspaceUrlDecision =
   | { supported: true; title: string; url: string }
@@ -8,18 +8,22 @@ type WorkspaceUrlDecision =
 
 /** Result of opening a message URL in the current channel workspace. */
 export type OpenUrlInWorkspaceResult =
-  | { ok: true; tabId: string; title: string; url: string }
+  | { ok: true; reused: boolean; tabId: string; title: string; url: string }
   | { ok: false; message: string };
 
 type OpenUrlDependencies = {
   getKind: (kind: string) => unknown;
+  getWorkspace: typeof getWorkspace;
   openTab: typeof openTab;
+  setActiveTab: typeof setActiveTab;
   setSurfaceMode: typeof setChannelSurfaceMode;
 };
 
 const DEFAULT_DEPENDENCIES: OpenUrlDependencies = {
   getKind: getTabKind,
+  getWorkspace,
   openTab,
+  setActiveTab,
   setSurfaceMode: setChannelSurfaceMode,
 };
 
@@ -66,6 +70,14 @@ export function extractFirstHttpUrl(text: string): string | null {
 
 function titleForUrl(url: URL): string {
   return url.hostname || "Web";
+}
+
+function webTabUrl(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = (payload as Record<string, unknown>).url;
+  return typeof value === "string"
+    ? (parseWorkspaceUrl(value)?.href ?? null)
+    : null;
 }
 
 const UNSUPPORTED_WEB_KIND_MESSAGE =
@@ -116,6 +128,23 @@ function openDecidedUrl(
   if (!decision.supported) return { ok: false, message: decision.message };
 
   try {
+    const existing = dependencies
+      .getWorkspace(channelId)
+      .tabs.find(
+        (tab) => tab.kind === "web" && webTabUrl(tab.payload) === decision.url,
+      );
+    if (existing) {
+      dependencies.setActiveTab(channelId, existing.id);
+      dependencies.setSurfaceMode(channelId, "workspace");
+      return {
+        ok: true,
+        reused: true,
+        tabId: existing.id,
+        title: existing.title,
+        url: decision.url,
+      };
+    }
+
     const tabId = dependencies.openTab(channelId, {
       kind: "web",
       title: decision.title,
@@ -127,7 +156,13 @@ function openDecidedUrl(
       },
     });
     dependencies.setSurfaceMode(channelId, "workspace");
-    return { ok: true, tabId, title: decision.title, url: decision.url };
+    return {
+      ok: true,
+      reused: false,
+      tabId,
+      title: decision.title,
+      url: decision.url,
+    };
   } catch (error) {
     return {
       ok: false,
