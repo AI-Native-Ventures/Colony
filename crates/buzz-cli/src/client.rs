@@ -103,16 +103,32 @@ fn upload_size_limit(mime: &str) -> Result<u64, CliError> {
 /// Return a display-only filename that satisfies the relay's imeta rules.
 fn attachment_filename(file_path: &str) -> String {
     let basename = file_path.rsplit(['/', '\\']).next().unwrap_or_default();
+    let safe_extension = basename.rfind('.').and_then(|dot_index| {
+        let extension = &basename[dot_index..];
+        (extension.len() > 1
+            && extension.len() <= 255
+            && !extension
+                .chars()
+                .any(|character| character.is_control() || matches!(character, '/' | '\\')))
+        .then_some(extension)
+    });
+    let stem = safe_extension
+        .map(|extension| &basename[..basename.len() - extension.len()])
+        .unwrap_or(basename);
+    let stem_budget = 255 - safe_extension.map(str::len).unwrap_or(0);
     let mut filename = String::with_capacity(basename.len().min(255));
 
-    for character in basename.chars() {
+    for character in stem.chars() {
         if character.is_control() || matches!(character, '/' | '\\') {
             continue;
         }
-        if filename.len() + character.len_utf8() > 255 {
+        if filename.len() + character.len_utf8() > stem_budget {
             break;
         }
         filename.push(character);
+    }
+    if let Some(extension) = safe_extension {
+        filename.push_str(extension);
     }
 
     if filename.trim().is_empty() {
@@ -2719,6 +2735,15 @@ mod tests {
         assert!(!sanitized.contains('/'));
         assert!(!sanitized.contains('\\'));
         assert!(!sanitized.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn attachment_filename_preserves_safe_extension_when_unicode_stem_is_truncated() {
+        let long_name = format!("{}.md", "é".repeat(200));
+        let sanitized = attachment_filename(&long_name);
+
+        assert!(sanitized.len() <= 255);
+        assert!(sanitized.ends_with(".md"));
     }
 
     #[test]
