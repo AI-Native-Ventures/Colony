@@ -44,4 +44,3 @@ mod tests {
         assert_eq!(ONBOARDING_SCAN_TIMEOUT, Duration::from_secs(300));
     }
 }
-
