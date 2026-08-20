@@ -22,6 +22,7 @@ import type { RelayEvent } from "../../src/shared/api/types";
  */
 
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
+const MOCK_VIEWER_PUBKEY = "deadbeef".repeat(8);
 
 type MockWindow = Window & {
   __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
@@ -63,6 +64,10 @@ type MockWindow = Window & {
     command: string;
     payload: unknown;
   }>;
+  __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+    channelName: string;
+    kind?: number;
+  }) => boolean;
   __BUZZ_E2E_SCROLL_INTO_VIEW_COUNT__?: number;
   /** When set to an event ID string, get_event calls for that ID are deferred until __BUZZ_E2E_RELEASE_GET_EVENT__ is called. */
   __BUZZ_E2E_DEFER_GET_EVENT__?: string | null;
@@ -85,6 +90,25 @@ async function waitForBridgeReady(page: import("@playwright/test").Page) {
       Array.isArray(win.__BUZZ_E2E_COMMAND_PAYLOADS__)
     );
   });
+}
+
+async function waitForMockLiveSubscription(
+  page: import("@playwright/test").Page,
+  channelName: string,
+  kind: number,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ channelName: targetChannelName, kind: targetKind }) =>
+          (window as MockWindow).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: targetChannelName,
+            kind: targetKind,
+          }) ?? false,
+        { channelName, kind },
+      ),
+    )
+    .toBe(true);
 }
 
 /** Installs a scrollIntoView spy that counts calls inside the detail pane. */
@@ -276,6 +300,44 @@ async function injectNewerSibling(
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────
+
+test("live forum mention survives a stale durable feed refetch", async ({
+  page,
+}) => {
+  const message = `Forum projection race ${Date.now()}`;
+
+  await installMockBridge(page);
+  await page.goto("/");
+  await expect(getListPane(page)).toBeVisible();
+  await waitForBridgeReady(page);
+  await waitForMockLiveSubscription(page, "watercooler", 45001);
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await page.evaluate(
+    ({ content, senderPubkey, viewerPubkey }) => {
+      const emit = (window as MockWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      if (!emit) throw new Error("Mock message emitter is unavailable");
+      emit({
+        channelName: "watercooler",
+        content,
+        kind: 45001,
+        mentionPubkeys: [viewerPubkey],
+        pubkey: senderPubkey,
+      });
+    },
+    {
+      content: message,
+      senderPubkey: TEST_IDENTITIES.alice.pubkey,
+      viewerPubkey: MOCK_VIEWER_PUBKEY,
+    },
+  );
+
+  await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
+  await expect(getListPane(page)).toContainText(message);
+});
 
 test.describe("inbox stable-conversation regressions", () => {
   test("scroll and focused draft preserved; new representative row selected when live sibling displaces anchor", async ({
