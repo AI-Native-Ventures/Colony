@@ -45,6 +45,7 @@ import {
 export { fromRawAcpRuntimeCatalogEntry } from "./runtimeCatalog";
 export type { RawAcpRuntimeCatalogEntry } from "./runtimeCatalog";
 
+export * from "@/shared/api/tauriAcpDiscovery";
 export * from "@/shared/api/tauriChannels";
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
@@ -738,12 +739,6 @@ export async function discoverGitBashPrerequisite(): Promise<GitBashPrerequisite
       installHint: prerequisite.install_hint,
     }
   );
-}
-
-export async function discoverAcpRuntimes(): Promise<AcpRuntimeCatalogEntry[]> {
-  return (
-    await invokeTauri<RawAcpRuntimeCatalogEntry[]>("discover_acp_providers")
-  ).map(fromRawAcpRuntimeCatalogEntry);
 }
 
 /** Input shape for creating or updating a custom harness. */
