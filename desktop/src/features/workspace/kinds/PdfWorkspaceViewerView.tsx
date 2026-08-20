@@ -5,10 +5,16 @@ import { PdfWorkspacePage } from "./PdfWorkspacePage";
 import {
   clampPdfScale,
   decodePdfBytes,
-  extractPdfPageText,
+  extractPdfPageTextWithinBudget,
+  MAX_PDF_TEXT_CHARS_PER_PAGE,
+  MAX_PDF_TEXT_CHARS_TOTAL,
   MAX_PDF_WORKSPACE_PAGES,
 } from "./pdfWorkspaceViewerModel";
-import type { PdfDocument, PdfViewerRuntime } from "./pdfWorkspaceViewerTypes";
+import type {
+  PdfAccessibleText,
+  PdfDocument,
+  PdfViewerRuntime,
+} from "./pdfWorkspaceViewerTypes";
 
 const INITIAL_PDF_SCALE = 1;
 const PDF_SCALE_STEP = 0.25;
@@ -37,8 +43,11 @@ export function PdfWorkspaceViewerView({
   const [scale, setScale] = React.useState(INITIAL_PDF_SCALE);
   const [status, setStatus] = React.useState<ViewerStatus>("loading");
   const [loadAttempt, setLoadAttempt] = React.useState(0);
-  const [pageTexts, setPageTexts] = React.useState<Array<string | null>>([]);
+  const [pageTexts, setPageTexts] = React.useState<
+    Array<PdfAccessibleText | null>
+  >([]);
   const [textProgress, setTextProgress] = React.useState(0);
+  const destroyDocumentRef = React.useRef<() => void>(() => {});
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt intentionally restarts PDF.js after Retry.
   React.useEffect(() => {
@@ -60,7 +69,11 @@ export function PdfWorkspaceViewerView({
       if (loadingTaskDestroyed) return;
       loadingTaskDestroyed = true;
       void loadingTask.destroy().catch(() => {});
+      if (destroyDocumentRef.current === destroyLoadingTask) {
+        destroyDocumentRef.current = () => {};
+      }
     };
+    destroyDocumentRef.current = destroyLoadingTask;
 
     void loadingTask.promise
       .then((loadedDocument) => {
@@ -69,8 +82,8 @@ export function PdfWorkspaceViewerView({
           loadedDocument.numPages < 1 ||
           loadedDocument.numPages > MAX_PDF_WORKSPACE_PAGES
         ) {
-          setStatus("error");
           destroyLoadingTask();
+          setStatus("error");
           return;
         }
         setDocument(loadedDocument);
@@ -78,8 +91,8 @@ export function PdfWorkspaceViewerView({
       })
       .catch(() => {
         if (disposed) return;
-        setStatus("error");
         destroyLoadingTask();
+        setStatus("error");
       });
 
     return () => {
@@ -88,29 +101,55 @@ export function PdfWorkspaceViewerView({
     };
   }, [bytesBase64, loadAttempt, runtime]);
 
-  const failRendering = React.useCallback(
-    (_cause: unknown) => setStatus("error"),
-    [],
-  );
+  const failRendering = React.useCallback((_cause: unknown) => {
+    destroyDocumentRef.current();
+    setStatus("error");
+  }, []);
 
   React.useEffect(() => {
     if (!document || status !== "ready") return;
     let disposed = false;
+    const controller = new AbortController();
+    let remainingTotal = MAX_PDF_TEXT_CHARS_TOTAL;
     setPageTexts(Array.from({ length: document.numPages }, () => null));
     setTextProgress(0);
 
     const extractText = async () => {
       for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
         if (disposed) return;
+        if (remainingTotal <= 0) {
+          setPageTexts((current) =>
+            current.map((entry, index) =>
+              index >= pageNumber - 1 ? { text: "", truncated: true } : entry,
+            ),
+          );
+          setTextProgress(document.numPages);
+          return;
+        }
         const page = await document.getPage(pageNumber);
         if (disposed) {
           page.cleanup();
           return;
         }
         try {
-          const content = await page.getTextContent();
+          const pageBudget = Math.min(
+            MAX_PDF_TEXT_CHARS_PER_PAGE,
+            remainingTotal,
+          );
+          const content = await page.getTextContent({
+            maxCharacters: pageBudget,
+            signal: controller.signal,
+          });
           if (disposed) return;
-          const pageText = extractPdfPageText(content.items);
+          const extracted = extractPdfPageTextWithinBudget(
+            content.items,
+            pageBudget,
+          );
+          const pageText = {
+            text: extracted.text,
+            truncated: content.truncated || extracted.truncated,
+          };
+          remainingTotal -= extracted.text.length;
           setPageTexts((current) => {
             const next = [...current];
             next[pageNumber - 1] = pageText;
@@ -128,6 +167,7 @@ export function PdfWorkspaceViewerView({
     });
     return () => {
       disposed = true;
+      controller.abort();
     };
   }, [document, failRendering, status]);
 

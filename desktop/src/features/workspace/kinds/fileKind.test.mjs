@@ -105,7 +105,9 @@ test("FileBody retries a failed file load", async () => {
   setNativeBridge(
     createMockNativeBridge(() => {
       attempts += 1;
-      if (attempts === 1) throw new Error("temporary read failure");
+      if (attempts === 1) {
+        throw new Error("/Users/private/relay-secret temporary read failure");
+      }
       return {
         bytes_base64: globalThis.btoa("Recovered body"),
         is_text: true,
@@ -135,7 +137,8 @@ test("FileBody retries a failed file load", async () => {
   );
 
   const error = await screen.findByTestId("workspace-file-error");
-  assert.match(error.textContent, /temporary read failure/);
+  assert.match(error.textContent, /This file could not be loaded/);
+  assert.doesNotMatch(error.textContent, /private|relay-secret/);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
   assert.equal(

@@ -3,6 +3,11 @@ export type PdfViewport = {
   width: number;
 };
 
+export type PdfAccessibleText = {
+  text: string;
+  truncated: boolean;
+};
+
 export type PdfRenderTask = {
   cancel: () => void;
   promise: Promise<unknown>;
@@ -10,8 +15,12 @@ export type PdfRenderTask = {
 
 export type PdfPage = {
   cleanup: () => boolean;
-  getTextContent: () => Promise<{
+  getTextContent: (options: {
+    maxCharacters: number;
+    signal: AbortSignal;
+  }) => Promise<{
     items: Array<{ str: string } | { type: string }>;
+    truncated: boolean;
   }>;
   getViewport: (options: { scale: number }) => PdfViewport;
   render: (options: {

@@ -17,6 +17,7 @@ import {
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
 
 const PdfWorkspaceViewer = React.lazy(() => import("./PdfWorkspaceViewer"));
+const WORKSPACE_FILE_LOAD_ERROR = "This file could not be loaded.";
 
 export const fileKindDefinition: TabKindDefinition = {
   kind: "file",
@@ -63,8 +64,8 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       .then((result) => {
         if (!cancelled) setFile(result);
       })
-      .catch((cause: unknown) => {
-        if (!cancelled) setError(String(cause));
+      .catch((_cause: unknown) => {
+        if (!cancelled) setError(WORKSPACE_FILE_LOAD_ERROR);
       });
     return () => {
       cancelled = true;
@@ -101,7 +102,11 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
 
   if (error) {
     return (
-      <div className="space-y-3 p-4 text-sm" data-testid="workspace-file-error">
+      <div
+        className="space-y-3 p-4 text-sm"
+        data-testid="workspace-file-error"
+        role="alert"
+      >
         <p className="text-destructive">{error}</p>
         <button
           className="rounded-md border border-border px-3 py-2 hover:bg-muted"

@@ -1,15 +1,19 @@
 import * as React from "react";
 
-import { calculatePdfCanvasMetrics } from "./pdfWorkspaceViewerModel";
+import {
+  calculatePdfCanvasMetrics,
+  hasValidPdfViewportDimensions,
+} from "./pdfWorkspaceViewerModel";
 import type {
   PdfDocument,
+  PdfAccessibleText,
   PdfPage,
   PdfRenderTask,
   PdfViewerRuntime,
 } from "./pdfWorkspaceViewerTypes";
 
 type PdfWorkspacePageProps = {
-  accessibleText: string | null;
+  accessibleText: PdfAccessibleText | null;
   document: PdfDocument;
   name: string;
   onFailure: (cause: unknown) => void;
@@ -73,12 +77,24 @@ export function PdfWorkspacePage({
 
       const canvas = canvasRef.current;
       if (!canvas) throw new Error(`Canvas ${pageNumber} is unavailable`);
-      const viewport = page.getViewport({ scale });
+      const requestedViewport = page.getViewport({ scale });
+      if (
+        !hasValidPdfViewportDimensions(
+          requestedViewport.width,
+          requestedViewport.height,
+        )
+      ) {
+        throw new Error("PDF page dimensions are invalid");
+      }
       const metrics = calculatePdfCanvasMetrics(
-        viewport.width,
-        viewport.height,
+        requestedViewport.width,
+        requestedViewport.height,
         globalThis.devicePixelRatio || 1,
       );
+      const viewport =
+        metrics.pageScaleMultiplier === 1
+          ? requestedViewport
+          : page.getViewport({ scale: scale * metrics.pageScaleMultiplier });
       canvas.width = metrics.pixelWidth;
       canvas.height = metrics.pixelHeight;
       canvas.style.width = `${metrics.cssWidth}px`;
@@ -131,7 +147,10 @@ export function PdfWorkspacePage({
       <p className="sr-only" data-testid={`workspace-pdf-text-${pageNumber}`}>
         {accessibleText === null
           ? `Extracting text for page ${pageNumber}`
-          : accessibleText || `Page ${pageNumber} has no extractable text`}
+          : accessibleText.text || `Page ${pageNumber} has no extractable text`}
+        {accessibleText?.truncated
+          ? ` Page ${pageNumber} text was truncated for preview.`
+          : null}
       </p>
     </section>
   );
