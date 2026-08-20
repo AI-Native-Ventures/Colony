@@ -64,17 +64,23 @@ type WebStartQueue = {
   latestRequest: NormalizedWebSessionRequest;
   promise: Promise<void>;
 };
+type PendingWebFrame = {
+  eligibleStarts: Set<symbol>;
+  frame: WebFrame;
+};
 
 const sessions = new Map<string, WebSessionState>();
 const nativeToTab = new Map<string, string>();
-const pendingFrames = new Map<string, WebFrame>();
+const pendingFrames = new Map<string, PendingWebFrame>();
 const queuedFrames = new Map<string, WebFrame>();
 const starts = new Map<string, WebStartQueue>();
 const listeners = new Map<string, Set<() => void>>();
 const tabGenerations = new Map<string, number>();
 const wheelDispatchers = new Map<string, WheelDispatcher>();
 const retiredNativeSessions = new Set<string>();
+const activeNativeStarts = new Set<symbol>();
 const MAX_RETIRED_NATIVE_SESSIONS = 256;
+const MAX_PENDING_FRAMES_PER_START = 4;
 const MAX_WEB_URL_BYTES = 8 * 1024;
 let nativeListeners: Promise<NativeUnlisten[]> | null = null;
 let resetGeneration = 0;
@@ -159,6 +165,24 @@ function webSessionRequestKey(request: NormalizedWebSessionRequest): string {
   return JSON.stringify([request.endpoint, request.targetId, request.url]);
 }
 
+function trimPendingFrames(): void {
+  const limit = activeNativeStarts.size * MAX_PENDING_FRAMES_PER_START;
+  while (pendingFrames.size > limit) {
+    const oldestSessionId = pendingFrames.keys().next().value;
+    if (typeof oldestSessionId !== "string") break;
+    pendingFrames.delete(oldestSessionId);
+  }
+}
+
+function finishNativeStart(startToken: symbol): void {
+  activeNativeStarts.delete(startToken);
+  for (const [sessionId, pending] of pendingFrames) {
+    pending.eligibleStarts.delete(startToken);
+    if (pending.eligibleStarts.size === 0) pendingFrames.delete(sessionId);
+  }
+  trimPendingFrames();
+}
+
 function emit(tabId: string): void {
   for (const listener of listeners.get(tabId) ?? []) listener();
 }
@@ -217,7 +241,17 @@ function handleWebFrameEvent(event: WebFrameEvent): void {
     scrollOffsetY: event.scrollOffsetY,
   };
   if (!tabId) {
-    pendingFrames.set(event.sessionId, frame);
+    if (activeNativeStarts.size === 0) return;
+    const pending = pendingFrames.get(event.sessionId);
+    if (pending) {
+      pending.frame = frame;
+    } else {
+      pendingFrames.set(event.sessionId, {
+        eligibleStarts: new Set(activeNativeStarts),
+        frame,
+      });
+      trimPendingFrames();
+    }
     return;
   }
   queueFrame(event.sessionId, frame);
@@ -370,6 +404,7 @@ async function startWebSession(
   const current = sessions.get(tabId);
   const generation = advanceTabGeneration(tabId);
   const resetAtStart = resetGeneration;
+  const nativeStartToken = Symbol("native-web-start");
   setSession(tabId, {
     ...(current ?? emptyState()),
     status: "connecting",
@@ -400,6 +435,7 @@ async function startWebSession(
         return;
       }
     }
+    activeNativeStarts.add(nativeStartToken);
     const result = await invoke<WebStartResult>("workspace_web_start", {
       // Only endpoint/target/url are user-facing connection inputs. The
       // browser binary and launch mode stay native-owned so a restored tab
@@ -420,7 +456,7 @@ async function startWebSession(
     }
     retiredNativeSessions.delete(result.sessionId);
     nativeToTab.set(result.sessionId, tabId);
-    const frame = pendingFrames.get(result.sessionId) ?? null;
+    const frame = pendingFrames.get(result.sessionId)?.frame ?? null;
     pendingFrames.delete(result.sessionId);
     setSession(tabId, {
       status: "running",
@@ -439,6 +475,8 @@ async function startWebSession(
       status: "error",
       error: START_ERROR,
     });
+  } finally {
+    finishNativeStart(nativeStartToken);
   }
 }
 
@@ -676,9 +714,14 @@ export async function resetWebSessions(): Promise<void> {
 /** Drive the native lifecycle handlers without exposing a production event seam. */
 export function applyWebSessionEventForTest(
   event:
+    | { type: "frame"; payload: WebFrameEvent }
     | { type: "error"; payload: WebErrorEvent }
     | { type: "closed"; payload: WebClosedEvent },
 ): void {
+  if (event.type === "frame") {
+    handleWebFrameEvent(event.payload);
+    return;
+  }
   if (event.type === "error") {
     handleWebErrorEvent(event.payload);
     return;
@@ -689,4 +732,9 @@ export function applyWebSessionEventForTest(
 /** Report bounded stale-session bookkeeping for lifecycle regression tests. */
 export function retiredWebSessionCountForTest(): number {
   return retiredNativeSessions.size;
+}
+
+/** Report bounded pre-start frame bookkeeping for lifecycle regression tests. */
+export function pendingWebFrameCountForTest(): number {
+  return pendingFrames.size;
 }

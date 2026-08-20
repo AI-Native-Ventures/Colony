@@ -17,6 +17,7 @@ import {
   sendWebText,
   sendWebWheel,
   normalizeWebNavigationUrl,
+  pendingWebFrameCountForTest,
   retiredWebSessionCountForTest,
 } from "./webSessions.ts";
 
@@ -747,6 +748,86 @@ test("retired native session tombstones remain bounded", async () => {
 
   assert.equal(startCount, 300);
   assert.equal(retiredWebSessionCountForTest(), 256);
+  applyWebSessionEventForTest({
+    type: "frame",
+    payload: {
+      sessionId: "bounded-retired-session-1",
+      data: "late-oldest-frame",
+      width: 1280,
+      height: 720,
+      deviceScaleFactor: 1,
+      offsetTop: 0,
+      scrollOffsetX: 0,
+      scrollOffsetY: 0,
+    },
+  });
+  assert.equal(pendingWebFrameCountForTest(), 0);
   await resetWebSessions();
   assert.equal(retiredWebSessionCountForTest(), 256);
+});
+
+test("pre-start frames are bounded and cleaned when their native start settles", async () => {
+  let releaseStart;
+  const heldStart = new Promise((resolve) => {
+    releaseStart = resolve;
+  });
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      if (command !== "workspace_web_start") return null;
+      await heldStart;
+      return {
+        sessionId: "legitimate-pre-start-session",
+        targetId: "target-pre-start",
+        url: args.request.url,
+        ownsBrowserProcess: false,
+        browserPid: null,
+      };
+    }),
+  );
+
+  const pendingStart = ensureWebSession("tab-pre-start-frame", {
+    endpoint: null,
+    targetId: null,
+    url: "https://example.com/pre-start",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  for (let index = 0; index < 20; index += 1) {
+    applyWebSessionEventForTest({
+      type: "frame",
+      payload: {
+        sessionId: `unknown-pre-start-${index}`,
+        data: `unknown-${index}`,
+        width: 1280,
+        height: 720,
+        deviceScaleFactor: 1,
+        offsetTop: 0,
+        scrollOffsetX: 0,
+        scrollOffsetY: 0,
+      },
+    });
+  }
+  applyWebSessionEventForTest({
+    type: "frame",
+    payload: {
+      sessionId: "legitimate-pre-start-session",
+      data: "legitimate-pre-start-frame",
+      width: 1280,
+      height: 720,
+      deviceScaleFactor: 1,
+      offsetTop: 0,
+      scrollOffsetX: 0,
+      scrollOffsetY: 0,
+    },
+  });
+  assert.equal(pendingWebFrameCountForTest(), 4);
+
+  releaseStart();
+  await pendingStart;
+  assert.equal(pendingWebFrameCountForTest(), 0);
+  assert.equal(
+    getWebSession("tab-pre-start-frame").frame?.data,
+    "legitimate-pre-start-frame",
+  );
+  await disposeWebSession("tab-pre-start-frame");
+  await resetWebSessions();
 });
