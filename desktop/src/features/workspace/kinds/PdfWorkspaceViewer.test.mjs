@@ -866,7 +866,14 @@ async function renderViewer(runtime, onRetry = () => {}) {
 }
 
 async function setAllPagesVisible(isVisible) {
-  const { act } = await import("@testing-library/react");
+  const { act, waitFor } = await import("@testing-library/react");
+  if (isVisible) {
+    await waitFor(() =>
+      assert.ok(
+        MockIntersectionObserver.instances.some((observer) => observer.target),
+      ),
+    );
+  }
   await act(async () => {
     for (const observer of MockIntersectionObserver.instances) {
       observer.setVisible(isVisible);
