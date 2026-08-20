@@ -69,7 +69,7 @@ const channelTypeOrder = {
   dm: 2,
 } as const;
 
-function sortChannels(channels: Channel[]) {
+export function sortChannels(channels: Channel[]) {
   const uniqueChannels = new Map<string, Channel>();
 
   for (const channel of channels) {
@@ -225,6 +225,20 @@ export function applyLastMessages(
     }
     return { ...channel, lastMessageAt: newTs };
   });
+}
+
+/// Whether a channel fetch may run for the current identity.
+///
+/// Ported verbatim from upstream's `hooks.ts` (#6328), which Colony's own
+/// `hooks.ts` had diverged from: a known owner allows the fetch, and so does a
+/// FAILED identity read. Failing open matters because the directory resolver
+/// asks this before scanning, and a stuck identity read would otherwise block
+/// the channel list indefinitely.
+export function canFetchChannelsForIdentity(
+  ownerPubkey: string | null,
+  identityReadFailed: boolean,
+): boolean {
+  return ownerPubkey !== null || identityReadFailed;
 }
 
 export function useChannelsQuery(options?: { enabled?: boolean }) {

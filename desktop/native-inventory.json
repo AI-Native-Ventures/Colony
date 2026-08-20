@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 527,
+    "rust_total": 529,
     "tauri_coupled": 209,
-    "portable": 318,
+    "portable": 320,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -219,6 +219,7 @@
       "src-tauri/src/app_state_identity_resolution.rs",
       "src-tauri/src/app_state_identity_resolution_tests.rs",
       "src-tauri/src/app_state_keyring.rs",
+      "src-tauri/src/app_state_pending_channels.rs",
       "src-tauri/src/app_state_tests.rs",
       "src-tauri/src/archive/agent_usage.rs",
       "src-tauri/src/archive/agent_usage_p4a_tests.rs",
@@ -254,6 +255,7 @@
       "src-tauri/src/commands/agent_proposals/preparation/tests.rs",
       "src-tauri/src/commands/agent_proposals_tests.rs",
       "src-tauri/src/commands/agents_tests.rs",
+      "src-tauri/src/commands/channels/fetch.rs",
       "src-tauri/src/commands/channels_tests.rs",
       "src-tauri/src/commands/global_agent_config/restart_policy.rs",
       "src-tauri/src/commands/global_agent_config_scope_tests.rs",
@@ -539,10 +541,10 @@
     ]
   },
   "commands": {
-    "registered": 379,
-    "defined": 379,
+    "registered": 380,
+    "defined": 380,
     "by_reach": {
-      "frontend": 368,
+      "frontend": 369,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -560,7 +562,7 @@
   },
   "params": {
     "AppHandle": 420,
-    "State": 272,
+    "State": 273,
     "Window": 7,
     "ipc::Request": 2,
     "ipc::Channel": 4
@@ -568,7 +570,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 417,
-      "State": 272,
+      "State": 273,
       "Window": 7,
       "ipc::Request": 2,
       "ipc::Channel": 4
@@ -646,7 +648,7 @@
   },
   "commands_per_module": {
     "src-tauri/src/commands/identity.rs": 23,
-    "src-tauri/src/commands/channels.rs": 16,
+    "src-tauri/src/commands/channels.rs": 17,
     "src-tauri/src/huddle/mod.rs": 14,
     "src-tauri/src/commands/web.rs": 12,
     "src-tauri/src/commands/messages.rs": 11,
@@ -866,7 +868,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:106",
         "src/parity/session/script.ts:452",
-        "src/shared/api/tauriChannels.ts:198"
+        "src/shared/api/tauriChannels.ts:214"
       ]
     },
     "archive_events": {
@@ -1342,7 +1344,7 @@
       "example_sites": [
         "src/parity/session/script.ts:539",
         "src/parity/session/script.ts:1595",
-        "src/shared/api/tauriChannels.ts:206"
+        "src/shared/api/tauriChannels.ts:222"
       ]
     },
     "delete_channel_template": {
@@ -1716,7 +1718,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:403",
-        "src/shared/api/tauriChannels.ts:154"
+        "src/shared/api/tauriChannels.ts:170"
       ]
     },
     "execute_agent_proposal": {
@@ -1955,8 +1957,9 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/parity/session/script.ts:428",
-        "src/shared/api/tauriChannels.ts:170"
+        "src/features/channels/openChannelDirectory.ts:212",
+        "src/features/channels/openChannelDirectory.ts:270",
+        "src/parity/session/script.ts:428"
       ]
     },
     "get_channel_members": {
@@ -1966,7 +1969,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:431",
-        "src/shared/api/tauriChannels.ts:256"
+        "src/shared/api/tauriChannels.ts:272"
       ]
     },
     "get_channel_messages_before": {
@@ -1976,7 +1979,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:599",
-        "src/shared/api/tauriChannels.ts:232"
+        "src/shared/api/tauriChannels.ts:248"
       ]
     },
     "get_channel_window": {
@@ -2257,6 +2260,15 @@
       "example_sites": [
         "src/parity/session/script.ts:312",
         "src/shared/api/tauriIdentity.ts:29"
+      ]
+    },
+    "get_open_channel_directory": {
+      "defining_file": "src-tauri/src/commands/channels.rs",
+      "module": "channels",
+      "registered_in": "src-tauri/src/command_registry.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriChannels.ts:158"
       ]
     },
     "get_os_idle_seconds": {
@@ -2540,7 +2552,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:111",
         "src/parity/session/script.ts:545",
-        "src/shared/api/tauriChannels.ts:164"
+        "src/shared/api/tauriChannels.ts:180"
       ]
     },
     "import_identity": {
@@ -2994,7 +3006,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:100",
         "src/parity/session/script.ts:542",
-        "src/shared/api/tauriChannels.ts:160"
+        "src/shared/api/tauriChannels.ts:176"
       ]
     },
     "open_huddle_window": {
@@ -3682,7 +3694,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:99",
         "src/parity/session/script.ts:439",
-        "src/shared/api/tauriChannels.ts:194"
+        "src/shared/api/tauriChannels.ts:210"
       ]
     },
     "set_channel_topic": {
@@ -4032,7 +4044,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/hooks.ts:715",
-        "src/features/channels/hooks.ts:628",
+        "src/features/channels/hooks.ts:642",
         "src/features/messages/ui/useMentionSendFlow.ts:442"
       ]
     },
@@ -4185,7 +4197,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:107",
         "src/parity/session/script.ts:455",
-        "src/shared/api/tauriChannels.ts:202"
+        "src/shared/api/tauriChannels.ts:218"
       ]
     },
     "unarchive_identity": {
@@ -4206,7 +4218,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:97",
         "src/parity/session/script.ts:445",
-        "src/shared/api/tauriChannels.ts:179"
+        "src/shared/api/tauriChannels.ts:195"
       ]
     },
     "update_channel_template": {
