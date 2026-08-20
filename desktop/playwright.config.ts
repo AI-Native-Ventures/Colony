@@ -189,6 +189,7 @@ export default defineConfig({
         "**/company-work-context.spec.ts",
         "**/task-thread-delivery.spec.ts",
         "**/onboarding.spec.ts",
+        "**/onboarding-v2-credits.spec.ts",
         "**/stream.spec.ts",
         "**/integration.spec.ts",
         "**/dm-double-notification.spec.ts",

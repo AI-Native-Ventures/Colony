@@ -14,8 +14,6 @@ const STAGE_INDEX: Record<OnboardingV2Stage, number> = {
   "runtime-check": 3,
   "runtime-ready": 3,
   "agent-install": 3,
-  "payment-method": 4,
-  credits: 4,
   model: 4,
   scout: 5,
   "first-task": 6,
@@ -27,7 +25,7 @@ const STAGE_TRAIL = [
   { id: "business", hue: "#427ee8" },
   { id: "context", hue: "#e857a4" },
   { id: "runtime", hue: "#ed9f36" },
-  { id: "funding", hue: "#21a778" },
+  { id: "model", hue: "#21a778" },
   { id: "scout", hue: "#7457e8" },
   { id: "task", hue: "#21a778" },
 ] as const;

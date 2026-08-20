@@ -39,6 +39,7 @@ test("runtime branches converge on Scout", () => {
     nextOnboardingStage("runtime-check", { runtimeRoute: "colony-agent" }),
     "agent-install",
   );
+  assert.equal(nextOnboardingStage("agent-install"), "model");
   assert.equal(nextOnboardingStage("model"), "scout");
 });
 
@@ -82,6 +83,10 @@ test("a fresh draft is durable and carries one stable delivery marker", () => {
   const draft = createOnboardingV2Draft();
   assert.equal(isOnboardingV2Draft(draft), true);
   assert.equal(draft.stage, "founder");
+  assert.deepEqual(draft.credits, {
+    balanceNanousd: null,
+    status: "unavailable",
+  });
   assert.ok(draft.firstTask.deliveryMarker.length > 0);
   assert.equal(isOnboardingV2Draft({ ...draft, version: 2 }), false);
 });

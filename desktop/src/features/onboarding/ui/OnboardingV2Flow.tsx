@@ -25,7 +25,10 @@ import {
   getGlobalAgentConfig,
   setGlobalAgentConfig,
 } from "@/shared/api/tauriGlobalAgentConfig";
-import { getColonyCreditsAccount } from "@/shared/api/tauriProvisionedCredits";
+import {
+  getColonyCreditsAccount,
+  getColonyCreditsStatus,
+} from "@/shared/api/tauriProvisionedCredits";
 import { updateProfile } from "@/shared/api/tauriProfiles";
 import { Button } from "@/shared/ui/button";
 import { AntMark } from "@/shared/ui/colony-logo/AntMark";
@@ -40,8 +43,6 @@ const GENDER_OPTIONS: Array<{ value: FounderGender; label: string }> = [
   { value: "self-describe", label: "Self-describe" },
   { value: "prefer-not-to-say", label: "Prefer not to say" },
 ];
-
-const FIVE_DOLLARS_NANOUSD = 5_000_000_000n;
 
 function Heading({
   kicker,
@@ -75,16 +76,12 @@ export function OnboardingV2Flow({
   onReadyToFinalize,
   externalError,
   isFinalizing = false,
-  paymentSetupAvailable = false,
-  onStartPaymentSetup,
 }: {
   draft: OnboardingV2Draft;
   onChange: (draft: OnboardingV2Draft) => void;
   onReadyToFinalize: () => Promise<void>;
   externalError?: string;
   isFinalizing?: boolean;
-  paymentSetupAvailable?: boolean;
-  onStartPaymentSetup?: () => Promise<void>;
 }) {
   const runtimes = useAcpRuntimesQuery({
     enabled: draft.stage === "runtime-check",
@@ -225,54 +222,26 @@ export function OnboardingV2Flow({
       await installRuntime.mutateAsync("buzz-agent");
       const current = await getGlobalAgentConfig();
       await setGlobalAgentConfig(defaultColonyAgentConfig(current));
+      let credits: OnboardingV2Draft["credits"] = {
+        balanceNanousd: null,
+        status: "unavailable",
+      };
       try {
         const account = await getColonyCreditsAccount();
-        if (BigInt(account.balance_nanousd) >= FIVE_DOLLARS_NANOUSD) {
-          patch({ stage: "model" });
-          return;
-        }
+        credits = {
+          balanceNanousd: account.balance_nanousd,
+          status: getColonyCreditsStatus(account.balance_nanousd),
+        };
       } catch {
-        // A missing account proceeds to the explicit payment step.
+        // Account visibility never blocks entry. The relay remains the
+        // authority that prevents model work without usable credits.
       }
-      patch({ stage: "payment-method" });
+      patch({ credits, stage: "model" });
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
           : "Colony Agent could not be installed.",
-      );
-    }
-  };
-
-  const startPayment = async () => {
-    if (!onStartPaymentSetup) return;
-    setError(null);
-    try {
-      await onStartPaymentSetup();
-      patch({ stage: "credits" });
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Your payment method was not linked.",
-      );
-    }
-  };
-
-  const checkCredits = async () => {
-    setError(null);
-    try {
-      const account = await getColonyCreditsAccount();
-      if (BigInt(account.balance_nanousd) < FIVE_DOLLARS_NANOUSD) {
-        setError(
-          "Your $5 credit is still processing. Check again in a moment.",
-        );
-        return;
-      }
-      patch({ stage: "model" });
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Credits are not ready yet.",
       );
     }
   };
@@ -582,8 +551,8 @@ export function OnboardingV2Flow({
               <div>
                 <strong>Automatic installation</strong>
                 <p>
-                  Signed runtime, managed model access, and a $5 starting
-                  balance.
+                  Signed runtime and managed model access, with no technical
+                  setup required.
                 </p>
               </div>
             </div>
@@ -596,48 +565,6 @@ export function OnboardingV2Flow({
               {installRuntime.isPending
                 ? "Installing Colony Agent…"
                 : "Install Colony Agent"}
-            </Button>
-          </>
-        );
-      case "payment-method":
-        return (
-          <>
-            <Heading kicker="Step 5 of 7" title="Link a card to add $5">
-              Your card keeps the company running after the first $5. Colony
-              never exposes payment details to agents.
-            </Heading>
-            {error ? <ErrorNotice>{error}</ErrorNotice> : null}
-            <Button
-              className="buzz-onboarding-v2__primary"
-              disabled={!paymentSetupAvailable}
-              onClick={() => void startPayment()}
-            >
-              {paymentSetupAvailable
-                ? "Link card securely"
-                : "Secure payment setup coming online"}
-            </Button>
-            <p className="buzz-onboarding-v2__fine-print">
-              No charge repeats without your approval.
-            </p>
-          </>
-        );
-      case "credits":
-        return (
-          <>
-            <Heading
-              kicker="Funding your company"
-              title="Confirming your $5 credit"
-            >
-              Payment providers can take a moment to confirm. Colony will not
-              create a duplicate charge.
-            </Heading>
-            <OnboardingV2Status label="Waiting for confirmation" />
-            {error ? <ErrorNotice>{error}</ErrorNotice> : null}
-            <Button
-              className="buzz-onboarding-v2__secondary"
-              onClick={() => void checkCredits()}
-            >
-              Check again
             </Button>
           </>
         );
@@ -718,6 +645,18 @@ export function OnboardingV2Flow({
                 placeholder="Example: Review our launch plan and tell me the three biggest risks."
               />
             </label>
+            {draft.runtime.route === "colony-agent" &&
+            draft.credits.status !== "active" ? (
+              <div
+                className="buzz-onboarding-v2__credits-warning"
+                data-testid="onboarding-zero-credits-warning"
+                role="status"
+              >
+                You can enter Colony now. Scout and other agents will not
+                respond until you add credits. Your balance is always visible
+                beside your profile.
+              </div>
+            ) : null}
             {error || externalError ? (
               <ErrorNotice>{error ?? externalError}</ErrorNotice>
             ) : null}

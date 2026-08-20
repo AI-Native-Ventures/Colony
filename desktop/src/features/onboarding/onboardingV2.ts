@@ -10,6 +10,8 @@ export const FOUNDER_GENDERS = [
 
 export type FounderGender = (typeof FOUNDER_GENDERS)[number];
 
+export type OnboardingCreditStatus = "active" | "depleted" | "unavailable";
+
 export const ONBOARDING_V2_STAGES = [
   "founder",
   "website",
@@ -19,8 +21,6 @@ export const ONBOARDING_V2_STAGES = [
   "runtime-check",
   "runtime-ready",
   "agent-install",
-  "payment-method",
-  "credits",
   "model",
   "scout",
   "first-task",
@@ -51,6 +51,10 @@ export type OnboardingV2Draft = {
     route: "cli" | "colony-agent" | null;
     model: string;
   };
+  credits: {
+    balanceNanousd: string | null;
+    status: OnboardingCreditStatus;
+  };
   firstTask: {
     content: string;
     deliveryMarker: string;
@@ -80,6 +84,10 @@ export function createOnboardingV2Draft(): OnboardingV2Draft {
       selectedId: null,
       route: null,
       model: "deepseek-v4-flash",
+    },
+    credits: {
+      balanceNanousd: null,
+      status: "unavailable",
     },
     firstTask: {
       content: "",
@@ -153,7 +161,6 @@ export function nextOnboardingStage(
     hasWebsite?: boolean;
     scanStatus?: OnboardingV2Draft["company"]["scanStatus"];
     runtimeRoute?: OnboardingV2Draft["runtime"]["route"];
-    creditsReady?: boolean;
   } = {},
 ): OnboardingV2Stage {
   switch (stage) {
@@ -171,11 +178,7 @@ export function nextOnboardingStage(
     case "runtime-ready":
       return "scout";
     case "agent-install":
-      return "payment-method";
-    case "payment-method":
-      return "credits";
-    case "credits":
-      return outcome.creditsReady ? "model" : "credits";
+      return "model";
     case "model":
       return "scout";
     case "scout":
@@ -198,6 +201,11 @@ export function isOnboardingV2Draft(
     typeof candidate.founder?.fullName === "string" &&
     typeof candidate.company?.summary === "string" &&
     typeof candidate.runtime?.model === "string" &&
+    (candidate.credits?.balanceNanousd === null ||
+      typeof candidate.credits?.balanceNanousd === "string") &&
+    ["active", "depleted", "unavailable"].includes(
+      candidate.credits?.status ?? "",
+    ) &&
     typeof candidate.firstTask?.deliveryMarker === "string"
   );
 }

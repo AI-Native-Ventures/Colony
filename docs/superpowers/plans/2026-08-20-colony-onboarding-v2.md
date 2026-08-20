@@ -4,7 +4,7 @@
 
 **Goal:** Replace the technical first-run setup with the approved founder, website, automatic runtime, Scout, and first-task journey while preserving recovery and exactly-once guarantees.
 
-**Architecture:** Machine onboarding creates or recovers the Nostr identity without exposing key or provider setup. The connected-community transaction becomes the durable v2 state machine, owns founder and company context, invokes an SSRF-safe native website scan with a 300-second ceiling, chooses a usable runtime automatically, and provisions exactly one Scout before durably sending the first task. Billing is an adapter boundary because the repository currently has a balance reader but no checkout or top-up provider.
+**Architecture:** Machine onboarding creates or recovers the Nostr identity without exposing key or provider setup. The connected-community transaction becomes the durable v2 state machine, owns founder and company context, invokes an SSRF-safe native website scan with a 300-second ceiling, chooses a usable runtime automatically, and provisions exactly one Scout before durably sending the first task. Colony Credits users may enter at any balance, the relay remains the execution authority, and the current balance stays visible beside the profile.
 
 **Tech Stack:** React 19, TypeScript, Motion, Tauri 2, Rust, `buzz-cli` company scanner, TanStack Query, node:test, Playwright.
 
@@ -18,12 +18,13 @@
 - Website scan accepts only public HTTPS targets and never merges a late result after failure or timeout.
 - Founder gender is optional, never inferred, and includes `prefer-not-to-say`.
 - The first task is sent once. Retry must reuse the saved task and delivery receipt.
-- Billing UI does not claim a card was linked or money moved until a real provider adapter returns a receipt.
+- Onboarding does not show card, payment, or top-up controls until a real provider exists.
+- Zero-credit users may enter Colony, see a clear agent-pause warning, and can always find their current balance beside the profile.
 - Existing users and add-community flows keep their current behavior.
 
 ## Acceptance gates
 
-1. **Journey contract:** the durable stage graph is founder, website, scan, summary or description fallback, automatic runtime, optional Colony Agent billing/model, Scout activation, first task, entering.
+1. **Journey contract:** the durable stage graph is founder, website, scan, summary or description fallback, automatic runtime, optional Colony Agent install/model, Scout activation, first task, entering.
 2. **Website evidence:** invalid/private URLs are rejected, scans stop after 300 seconds, cancellation prevents late merge, and evidence produces an editable bounded summary.
 3. **Automatic setup:** a ready supported CLI is chosen without a chooser or payment; no usable CLI selects Colony Agent and DeepSeek V4 Flash without exposing technical controls.
 4. **Exactly-once handoff:** retries cannot create a second Scout, double-charge, or send the first task twice.
@@ -132,7 +133,7 @@ assert.deepEqual(defaultColonyAgentConfig(), {
 
 - [ ] **Step 2: Make fresh identity creation automatic behind `Start my company`; keep returning-user recovery secondary**
 - [ ] **Step 3: Detect readiness, select the best supported CLI, and persist its valid current configuration without showing a chooser**
-- [ ] **Step 4: On the Colony Agent branch install the signed runtime, select the recommended model, and stop at the real billing adapter if no receipt exists**
+- [ ] **Step 4: On the Colony Agent branch install the signed runtime, record the current credit status without blocking entry, select the recommended model, and warn before the first task when credits are unavailable**
 - [ ] **Step 5: Reuse `ensureWelcomeTeam` and `initializeStarterChannels`, then send the confirmed founder/company context and first task once using a stable client marker**
 - [ ] **Step 6: Run all desktop tests and the affected Tauri package tests**
 
@@ -146,8 +147,7 @@ assert.deepEqual(defaultColonyAgentConfig(), {
 
 - [ ] **Step 1: Drive the ready-CLI path through Scout and assert no billing UI appears**
 - [ ] **Step 2: Drive invalid URL, scan failure, and 300-second timeout with preserved fallback input**
-- [ ] **Step 3: Drive Colony Agent install, payment pending, model unavailable, Scout activation retry, and delayed first-task delivery**
+- [ ] **Step 3: Drive Colony Agent install, zero-credit entry, visible balance, model unavailable, Scout activation retry, and delayed first-task delivery**
 - [ ] **Step 4: Restart at every durable stage and assert the same stage and draft return**
 - [ ] **Step 5: Assert exactly one `builtin:fizz` agent, one first-task message, no other starter personas, and no technical critical-path copy**
 - [ ] **Step 6: Run `pnpm --dir desktop test:e2e:smoke`, then `just ci` at the exact branch head**
-

@@ -393,6 +393,16 @@
     font-size: 0.8125rem;
     margin: 16px 0 0;
   }
+  .buzz-onboarding-v2__credits-warning {
+    background: rgb(255 248 225 / 0.88);
+    border: 1px solid rgb(179 120 14 / 0.24);
+    border-radius: 16px;
+    color: #73500e;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    margin-top: 16px;
+    padding: 14px 16px;
+  }
   .buzz-onboarding-v2__fine-print {
     color: #756e7b;
     font-size: 0.6875rem;
