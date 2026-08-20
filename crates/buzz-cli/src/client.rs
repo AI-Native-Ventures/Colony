@@ -60,7 +60,7 @@ pub fn build_imeta_tag(d: &BlobDescriptor) -> Vec<String> {
     tag
 }
 
-/// MIME types accepted for upload.
+/// Media MIME types accepted for upload.
 const ALLOWED_MIMES: &[&str] = &[
     "image/jpeg",
     "image/png",
@@ -74,6 +74,25 @@ const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Maximum file size for video uploads (500 MB).
 const MAX_VIDEO_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Maximum file size for generic attachment uploads (50 MB).
+const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+
+fn upload_size_limit(mime: &str) -> Result<u64, CliError> {
+    let is_media =
+        mime.starts_with("image/") || mime.starts_with("video/") || mime.starts_with("audio/");
+    if is_media && !ALLOWED_MIMES.contains(&mime) {
+        return Err(CliError::Usage(format!("unsupported file type: {mime}")));
+    }
+
+    if mime.starts_with("video/") {
+        Ok(MAX_VIDEO_BYTES)
+    } else if mime.starts_with("image/") {
+        Ok(MAX_IMAGE_BYTES)
+    } else {
+        Ok(MAX_FILE_BYTES)
+    }
+}
 
 /// Sign a NIP-98 HTTP auth event (kind:27235) and return the Authorization header value.
 ///
@@ -1118,16 +1137,9 @@ impl BuzzClient {
             .map(|t| t.mime_type().to_string())
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
-        if !ALLOWED_MIMES.contains(&mime.as_str()) {
-            return Err(CliError::Usage(format!("unsupported file type: {mime}")));
-        }
-
-        // 3. Size check
-        let max = if mime.starts_with("video/") {
-            MAX_VIDEO_BYTES
-        } else {
-            MAX_IMAGE_BYTES
-        };
+        // 3. Enforce the media allowlist and matching client-side size cap.
+        // Generic attachments are validated again by the relay.
+        let max = upload_size_limit(&mime)?;
         if bytes.len() as u64 > max {
             return Err(CliError::Usage(format!(
                 "file too large: {} bytes (max {})",
@@ -2566,9 +2578,36 @@ mod retry_policy_tests {
 mod tests {
     use super::{
         advance_query_cursor, create_response_with_id_if_accepted, extract_relay_response_field,
-        head_is_newer, head_rank, BuzzClient,
+        head_is_newer, head_rank, upload_size_limit, BuzzClient, MAX_FILE_BYTES, MAX_IMAGE_BYTES,
+        MAX_VIDEO_BYTES,
     };
     use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    #[test]
+    fn generic_documents_use_the_generic_limit() {
+        assert_eq!(MAX_FILE_BYTES, 50 * 1024 * 1024);
+        assert_eq!(
+            upload_size_limit("application/pdf").unwrap(),
+            MAX_FILE_BYTES
+        );
+        assert_eq!(
+            upload_size_limit("application/octet-stream").unwrap(),
+            MAX_FILE_BYTES
+        );
+    }
+
+    #[test]
+    fn images_and_video_keep_their_existing_limits() {
+        assert_eq!(upload_size_limit("image/png").unwrap(), MAX_IMAGE_BYTES);
+        assert_eq!(upload_size_limit("video/mp4").unwrap(), MAX_VIDEO_BYTES);
+    }
+
+    #[test]
+    fn unsupported_active_media_is_rejected() {
+        assert!(upload_size_limit("image/svg+xml").is_err());
+        assert!(upload_size_limit("video/webm").is_err());
+        assert!(upload_size_limit("audio/mpeg").is_err());
+    }
 
     #[test]
     fn query_cursor_uses_last_events_composite_sort_key() {
