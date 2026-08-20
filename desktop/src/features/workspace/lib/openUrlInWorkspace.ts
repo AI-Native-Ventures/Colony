@@ -43,7 +43,7 @@ function trimUrlCandidate(candidate: string): string {
 
 /** Parse a URL accepted by the workspace browser's external-navigation policy. */
 export function parseWorkspaceUrl(candidate: string): URL | null {
-  const trimmed = trimUrlCandidate(candidate.trim());
+  const trimmed = candidate.trim();
   if (!trimmed) return null;
   try {
     const url = new URL(trimmed);
@@ -64,7 +64,9 @@ export function parseWorkspaceUrl(candidate: string): URL | null {
 /** Extract the first HTTP(S) URL from message text, preserving its path/query. */
 export function extractFirstHttpUrl(text: string): string | null {
   const firstMatch = text.match(URL_PATTERN)?.[0];
-  const url = firstMatch ? parseWorkspaceUrl(firstMatch) : null;
+  const url = firstMatch
+    ? parseWorkspaceUrl(trimUrlCandidate(firstMatch))
+    : null;
   return url?.href ?? null;
 }
 
