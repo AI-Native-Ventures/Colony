@@ -37,6 +37,7 @@ buzz messages send --channel <uuid> --content - < message.md   # read body from 
 buzz messages send --channel <uuid> --content "Here they are." --discovery campaign_leads:<campaign-id>
 buzz messages get --channel <uuid> --limit 20
 buzz messages thread --channel <uuid> --event <event-id>
+buzz messages thread --link 'buzz://message?channel=<uuid>&id=<event-id>&thread=<root-id>'
 buzz messages search --query "architecture"
 buzz messages search --author <pubkey|npub|name> --since <unix-ts>
 buzz messages edit --event <event-id> --content "Updated text"
