@@ -17,6 +17,7 @@ type PdfWorkspacePageProps = {
   document: PdfDocument;
   name: string;
   onFailure: (cause: unknown) => void;
+  onVisibilityChange: (pageNumber: number, isVisible: boolean) => void;
   pageNumber: number;
   runtime: PdfViewerRuntime;
   scale: number;
@@ -29,6 +30,7 @@ export function PdfWorkspacePage({
   document,
   name,
   onFailure,
+  onVisibilityChange,
   pageNumber,
   runtime,
   scale,
@@ -51,6 +53,10 @@ export function PdfWorkspacePage({
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  React.useEffect(() => {
+    onVisibilityChange(pageNumber, isVisible);
+  }, [isVisible, onVisibilityChange, pageNumber]);
 
   React.useEffect(() => {
     if (!isVisible) {
@@ -133,7 +139,7 @@ export function PdfWorkspacePage({
   return (
     <section
       aria-label={`${name}, page ${pageNumber}`}
-      aria-busy={accessibleText === null}
+      aria-busy={isVisible && accessibleText === null}
       className="flex min-h-[792px] min-w-[612px] items-center justify-center bg-white shadow-sm"
       data-testid={`workspace-pdf-page-${pageNumber}`}
       ref={containerRef}
@@ -146,7 +152,9 @@ export function PdfWorkspacePage({
       <canvas ref={canvasRef} />
       <p className="sr-only" data-testid={`workspace-pdf-text-${pageNumber}`}>
         {accessibleText === null
-          ? `Extracting text for page ${pageNumber}`
+          ? isVisible
+            ? `Extracting text for page ${pageNumber}`
+            : `Page ${pageNumber} text loads when visible`
           : accessibleText.text || `Page ${pageNumber} has no extractable text`}
         {accessibleText?.truncated
           ? ` Page ${pageNumber} text was truncated for preview.`

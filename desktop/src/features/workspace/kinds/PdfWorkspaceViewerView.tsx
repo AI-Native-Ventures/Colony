@@ -30,8 +30,113 @@ export type PdfWorkspaceViewerViewProps = {
 
 type ViewerStatus = "loading" | "ready" | "error";
 
+type PdfTextExtractionScheduler = {
+  destroy: () => void;
+  setPageVisible: (pageNumber: number, isVisible: boolean) => void;
+};
+
 function pdfPageNumbers(count: number): number[] {
   return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+function createPdfTextExtractionScheduler(
+  document: PdfDocument,
+  onPageText: (pageNumber: number, text: PdfAccessibleText) => void,
+  onFailure: (cause: unknown) => void,
+): PdfTextExtractionScheduler {
+  const visiblePages = new Set<number>();
+  const queuedPages = new Set<number>();
+  const completedPages = new Set<number>();
+  let active: { controller: AbortController; pageNumber: number } | undefined;
+  let destroyed = false;
+  let remainingCharacters = MAX_PDF_TEXT_CHARS_TOTAL;
+  let remainingItems = MAX_PDF_TEXT_ITEMS_TOTAL;
+
+  const pump = () => {
+    if (destroyed || active) return;
+    const pageNumber = [...queuedPages]
+      .filter((candidate) => visiblePages.has(candidate))
+      .sort((left, right) => left - right)[0];
+    if (pageNumber === undefined) return;
+    queuedPages.delete(pageNumber);
+
+    if (remainingCharacters <= 0 || remainingItems <= 0) {
+      completedPages.add(pageNumber);
+      onPageText(pageNumber, { text: "", truncated: true });
+      queueMicrotask(pump);
+      return;
+    }
+
+    const reservedCharacters = Math.min(
+      MAX_PDF_TEXT_CHARS_PER_PAGE,
+      remainingCharacters,
+    );
+    const reservedItems = Math.min(MAX_PDF_TEXT_ITEMS_PER_PAGE, remainingItems);
+    remainingCharacters -= reservedCharacters;
+    remainingItems -= reservedItems;
+    const controller = new AbortController();
+    active = { controller, pageNumber };
+
+    void document
+      .getPage(pageNumber)
+      .then(async (page) => {
+        try {
+          const content = await page.getTextContent({
+            maxCharacters: reservedCharacters,
+            maxItems: reservedItems,
+            signal: controller.signal,
+          });
+          if (destroyed || controller.signal.aborted) return;
+          remainingCharacters += Math.max(
+            0,
+            reservedCharacters -
+              Math.min(reservedCharacters, content.consumedCharacters),
+          );
+          remainingItems += Math.max(
+            0,
+            reservedItems - Math.min(reservedItems, content.consumedItems),
+          );
+          const extracted = extractPdfPageTextWithinBudget(
+            content.items,
+            reservedCharacters,
+          );
+          completedPages.add(pageNumber);
+          onPageText(pageNumber, {
+            text: extracted.text,
+            truncated: content.truncated || extracted.truncated,
+          });
+        } finally {
+          page.cleanup();
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!destroyed && !controller.signal.aborted) onFailure(cause);
+      })
+      .finally(() => {
+        if (active?.controller === controller) active = undefined;
+        pump();
+      });
+  };
+
+  return {
+    destroy() {
+      destroyed = true;
+      queuedPages.clear();
+      active?.controller.abort();
+    },
+    setPageVisible(pageNumber, isVisible) {
+      if (destroyed || completedPages.has(pageNumber)) return;
+      if (isVisible) {
+        visiblePages.add(pageNumber);
+        queuedPages.add(pageNumber);
+      } else {
+        visiblePages.delete(pageNumber);
+        queuedPages.delete(pageNumber);
+        if (active?.pageNumber === pageNumber) active.controller.abort();
+      }
+      pump();
+    },
+  };
 }
 
 /** Injectable PDF viewer surface used by production and lifecycle tests. */
@@ -49,8 +154,14 @@ export function PdfWorkspaceViewerView({
     Array<PdfAccessibleText | null>
   >([]);
   const [textProgress, setTextProgress] = React.useState(0);
+  const [visiblePages, setVisiblePages] = React.useState<Set<number>>(
+    () => new Set(),
+  );
   const destroyDocumentRef = React.useRef<() => Promise<void>>(() =>
     Promise.resolve(),
+  );
+  const textSchedulerRef = React.useRef<PdfTextExtractionScheduler | null>(
+    null,
   );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt intentionally restarts PDF.js after Retry.
@@ -60,6 +171,7 @@ export function PdfWorkspaceViewerView({
     setStatus("loading");
     setPageTexts([]);
     setTextProgress(0);
+    setVisiblePages(new Set());
 
     let loadingTask: ReturnType<PdfViewerRuntime["loadDocument"]>;
     try {
@@ -110,75 +222,51 @@ export function PdfWorkspaceViewerView({
 
   React.useEffect(() => {
     if (!document || status !== "ready") return;
-    let disposed = false;
-    const controller = new AbortController();
-    let remainingTotalCharacters = MAX_PDF_TEXT_CHARS_TOTAL;
-    let remainingTotalItems = MAX_PDF_TEXT_ITEMS_TOTAL;
     setPageTexts(Array.from({ length: document.numPages }, () => null));
     setTextProgress(0);
-
-    const extractText = async () => {
-      for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
-        if (disposed) return;
-        if (remainingTotalCharacters <= 0 || remainingTotalItems <= 0) {
-          setPageTexts((current) =>
-            current.map((entry, index) =>
-              index >= pageNumber - 1 ? { text: "", truncated: true } : entry,
-            ),
-          );
-          setTextProgress(document.numPages);
-          return;
-        }
-        const page = await document.getPage(pageNumber);
-        if (disposed) {
-          page.cleanup();
-          return;
-        }
-        try {
-          const pageBudget = Math.min(
-            MAX_PDF_TEXT_CHARS_PER_PAGE,
-            remainingTotalCharacters,
-          );
-          const pageItemBudget = Math.min(
-            MAX_PDF_TEXT_ITEMS_PER_PAGE,
-            remainingTotalItems,
-          );
-          const content = await page.getTextContent({
-            maxCharacters: pageBudget,
-            maxItems: pageItemBudget,
-            signal: controller.signal,
-          });
-          if (disposed) return;
-          const extracted = extractPdfPageTextWithinBudget(
-            content.items,
-            pageBudget,
-          );
-          const pageText = {
-            text: extracted.text,
-            truncated: content.truncated || extracted.truncated,
-          };
-          remainingTotalCharacters -= content.consumedCharacters;
-          remainingTotalItems -= content.consumedItems;
-          setPageTexts((current) => {
-            const next = [...current];
-            next[pageNumber - 1] = pageText;
-            return next;
-          });
-          setTextProgress(pageNumber);
-        } finally {
-          page.cleanup();
-        }
+    const scheduler = createPdfTextExtractionScheduler(
+      document,
+      (pageNumber, pageText) => {
+        setPageTexts((current) => {
+          const next = [...current];
+          next[pageNumber - 1] = pageText;
+          return next;
+        });
+        setTextProgress((current) => current + 1);
+      },
+      failRendering,
+    );
+    textSchedulerRef.current = scheduler;
+    return () => {
+      scheduler.destroy();
+      if (textSchedulerRef.current === scheduler) {
+        textSchedulerRef.current = null;
       }
     };
-
-    void extractText().catch((cause: unknown) => {
-      if (!disposed) failRendering(cause);
-    });
-    return () => {
-      disposed = true;
-      controller.abort();
-    };
   }, [document, failRendering, status]);
+
+  React.useEffect(() => {
+    if (!document || status !== "ready") return;
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
+      textSchedulerRef.current?.setPageVisible(
+        pageNumber,
+        visiblePages.has(pageNumber),
+      );
+    }
+  }, [document, status, visiblePages]);
+
+  const setPageVisibility = React.useCallback(
+    (pageNumber: number, isVisible: boolean) => {
+      setVisiblePages((current) => {
+        if (current.has(pageNumber) === isVisible) return current;
+        const next = new Set(current);
+        if (isVisible) next.add(pageNumber);
+        else next.delete(pageNumber);
+        return next;
+      });
+    },
+    [],
+  );
 
   const changeScale = React.useCallback((delta: number) => {
     setScale((current) => clampPdfScale(current + delta));
@@ -268,6 +356,7 @@ export function PdfWorkspaceViewerView({
                 key={pageNumber}
                 name={name}
                 onFailure={failRendering}
+                onVisibilityChange={setPageVisibility}
                 pageNumber={pageNumber}
                 runtime={runtime}
                 scale={scale}

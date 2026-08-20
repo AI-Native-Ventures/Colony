@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import {
+  assertPdfDecodedStreamBudget,
   assertPdfPageHasRenderableContent,
   calculatePdfCanvasMetrics,
   clampPdfScale,
@@ -21,6 +22,8 @@ import {
   MAX_PDF_CANVAS_DIMENSION,
   MAX_PDF_CANVAS_PIXELS,
   MAX_PDF_CSS_DIMENSION,
+  MAX_PDF_DECODED_STREAM_BYTES,
+  MAX_PDF_DECODED_TOTAL_BYTES,
   MAX_PDF_IMAGE_PIXELS,
   MAX_PDF_OPERATOR_WORK_PER_PAGE,
   MAX_PDF_TEXT_CHARS_PER_PAGE,
@@ -28,6 +31,7 @@ import {
   MAX_PDF_TEXT_ITEMS_PER_PAGE,
   MAX_PDF_TEXT_ITEMS_TOTAL,
   MAX_PDF_WORKSPACE_PAGES,
+  PDF_WORKSPACE_RENDER_INTENT,
 } from "./pdfWorkspaceViewerModel.ts";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
@@ -189,6 +193,63 @@ function createCompressedOperatorFloodPdfFixture(operationPairs = 1_000_000) {
   };
 }
 
+function createFlateStreamSequenceFixture(decodedBytesPerStream, count) {
+  const compressed = deflateSync(Buffer.alloc(decodedBytesPerStream, 0x20));
+  const objects = Array.from({ length: count }, (_, index) =>
+    Buffer.concat([
+      Buffer.from(
+        `${index + 1} 0 obj\n<< /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`,
+      ),
+      compressed,
+      Buffer.from("\nendstream\nendobj\n"),
+    ]),
+  );
+  return new Uint8Array(
+    Buffer.concat([
+      Buffer.from("%PDF-1.7\n"),
+      ...objects,
+      Buffer.from("%%EOF\n"),
+    ]),
+  );
+}
+
+function createViewOnlyAnnotationPdfFixture() {
+  const appearance = Buffer.from("q 1 0 0 RG 0 0 100 100 re S Q\n");
+  const objects = [
+    Buffer.from("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    Buffer.from("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"),
+    Buffer.from(
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] " +
+        "/Annots [4 0 R] >>\nendobj\n",
+    ),
+    Buffer.from(
+      "4 0 obj\n<< /Type /Annot /Subtype /Square /Rect [50 50 150 150] " +
+        "/F 0 /AP << /N 5 0 R >> >>\nendobj\n",
+    ),
+    Buffer.concat([
+      Buffer.from(
+        `5 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length ${appearance.length} >>\nstream\n`,
+      ),
+      appearance,
+      Buffer.from("endstream\nendobj\n"),
+    ]),
+  ];
+  const header = Buffer.from("%PDF-1.7\n% view annotation fixture\n");
+  const offsets = [];
+  let offset = header.length;
+  for (const object of objects) {
+    offsets.push(offset);
+    offset += object.length;
+  }
+  const xref = Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .map((entry) => `${String(entry).padStart(10, "0")} 00000 n `)
+      .join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
+      `startxref\n${offset}\n%%EOF\n`,
+  );
+  return new Uint8Array(Buffer.concat([header, ...objects, xref]));
+}
+
 function createNoopCanvasContext() {
   const transform = {
     a: 1,
@@ -284,6 +345,20 @@ async function readPdfOperatorList(data, stopAtErrors) {
     const document = await loadingTask.promise;
     const page = await document.getPage(1);
     return await page.getOperatorList();
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
+async function readPdfOperatorListForIntent(data, intent) {
+  const loadingTask = pdfjs.getDocument({
+    ...createPdfDocumentOptions(data.slice()),
+    verbosity: pdfjs.VerbosityLevel.ERRORS,
+  });
+  try {
+    const document = await loadingTask.promise;
+    const page = await document.getPage(1);
+    return await page.getOperatorList({ intent });
   } finally {
     await loadingTask.destroy();
   }
@@ -437,6 +512,13 @@ async function setAllPagesVisible(isVisible) {
   });
 }
 
+async function setPageVisible(index, isVisible) {
+  const { act } = await import("@testing-library/react");
+  await act(async () => {
+    MockIntersectionObserver.instances[index]?.setVisible(isVisible);
+  });
+}
+
 test("PDF model bounds scale, bytes, text, and canvas pixels", () => {
   assert.equal(clampPdfScale(0.2), 0.5);
   assert.equal(clampPdfScale(1.25), 1.25);
@@ -476,6 +558,7 @@ test("compressed operator floods fail within the strict and tolerant work budget
   const fixture = createCompressedOperatorFloodPdfFixture();
   assert.ok(fixture.rawBytes >= 4_000_000);
   assert.ok(fixture.data.byteLength < 20_000);
+  await assert.doesNotReject(assertPdfDecodedStreamBudget(fixture.data));
 
   for (const stopAtErrors of [true, false]) {
     const consumed = await renderPdfWithOperatorBudget(
@@ -484,6 +567,80 @@ test("compressed operator floods fail within the strict and tolerant work budget
     );
     assert.equal(consumed, MAX_PDF_OPERATOR_WORK_PER_PAGE + 1);
   }
+});
+
+test("Flate preflight rejects a realistic compression bomb while retaining only streamed chunks", async () => {
+  const fixture = createCompressedOperatorFloodPdfFixture(16_000_000);
+  assert.ok(fixture.rawBytes >= 64_000_000);
+  assert.ok(fixture.data.byteLength < 100_000);
+  assert.equal(MAX_PDF_DECODED_STREAM_BYTES, 16 * 1_024 * 1_024);
+  assert.equal(MAX_PDF_DECODED_TOTAL_BYTES, 64 * 1_024 * 1_024);
+
+  await assert.rejects(assertPdfDecodedStreamBudget(fixture.data), (cause) => {
+    assert.match(cause.message, /decoded stream limit/);
+    assert.ok(cause.decodedBytes > MAX_PDF_DECODED_STREAM_BYTES);
+    assert.ok(cause.largestChunkBytes < 1_024 * 1_024);
+    assert.ok(cause.largestChunkBytes < fixture.rawBytes / 64);
+    return true;
+  });
+});
+
+test("Flate preflight enforces the decoded document ceiling across safe-sized streams", async () => {
+  const fixture = createFlateStreamSequenceFixture(15 * 1_024 * 1_024, 5);
+  assert.ok(fixture.byteLength < 100_000);
+
+  await assert.rejects(assertPdfDecodedStreamBudget(fixture), (cause) => {
+    assert.match(cause.message, /decoded document limit/);
+    assert.ok(cause.decodedBytes > MAX_PDF_DECODED_TOTAL_BYTES);
+    assert.ok(cause.largestChunkBytes < 1_024 * 1_024);
+    return true;
+  });
+});
+
+test("Flate preflight fails closed on unsupported chains and malformed lengths", async () => {
+  const unsupported = new TextEncoder().encode(
+    "%PDF-1.7\n1 0 obj\n<< /Filter [/ASCII85Decode /FlateDecode] /Length 4 >>\nstream\nzzzz\nendstream\nendobj\n%%EOF",
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(unsupported),
+    /unsupported PDF stream filter chain/,
+  );
+
+  const malformed = new TextEncoder().encode(
+    "%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode /Length 999 >>\nstream\nx\nendstream\nendobj\n%%EOF",
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(malformed),
+    /PDF stream length is invalid/,
+  );
+
+  const unfiltered = new TextEncoder().encode(
+    "%PDF-1.7\n1 0 obj\n<< /Length 8 >>\nstream\nq q q q \nendstream\nendobj\n%%EOF",
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(unfiltered, { maxStreamBytes: 4 }),
+    /decoded stream limit/,
+  );
+
+  const unsupportedFilter = new TextEncoder().encode(
+    "%PDF-1.7\n1 0 obj\n<< /Filter /LZWDecode /Length 1 >>\nstream\nx\nendstream\nendobj\n%%EOF",
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(unsupportedFilter),
+    /unsupported PDF stream filter/,
+  );
+});
+
+test("display intent preserves view-only annotations that print omits", async () => {
+  const fixture = createViewOnlyAnnotationPdfFixture();
+  const display = await readPdfOperatorListForIntent(
+    fixture,
+    PDF_WORKSPACE_RENDER_INTENT,
+  );
+  const print = await readPdfOperatorListForIntent(fixture, "print");
+
+  assert.ok(display.fnArray.includes(pdfjs.OPS.beginAnnotation));
+  assert.equal(print.fnArray.includes(pdfjs.OPS.beginAnnotation), false);
 });
 
 test("renders a real blank page and rejects an image above the hard cap", async () => {
@@ -613,15 +770,10 @@ test("renders only visible pages and exposes extracted text", async () => {
     (await screen.findAllByLabelText(/report\.pdf, page/)).length,
     3,
   );
-  await screen.findByText("Text from page 3");
-  assert.equal(pdf.pages.length, 3);
-  assert.equal(
-    pdf.pages.every((record) => record.calls.render === 0),
-    true,
-  );
-  assert.equal(
-    pdf.pages.every((record) => record.calls.cleanup === 1),
-    true,
+  assert.equal(pdf.pages.length, 0);
+  assert.match(
+    screen.getByTestId("workspace-pdf-text-3").textContent,
+    /loads when visible/,
   );
   assert.match(screen.getByRole("status").textContent, /3 pages/);
 
@@ -632,6 +784,7 @@ test("renders only visible pages and exposes extracted text", async () => {
       3,
     ),
   );
+  await screen.findByText("Text from page 3");
   assert.equal(screen.getAllByTestId(/workspace-pdf-text-/).length, 3);
   assert.deepEqual(
     screen
@@ -645,6 +798,45 @@ test("renders only visible pages and exposes extracted text", async () => {
   );
 });
 
+test("accessible text runs one visible page at a time and aborts offscreen work", async () => {
+  const firstText = deferred();
+  const pdf = createDocument(3, (pageNumber) =>
+    createPage(pageNumber, {
+      textDeferred: pageNumber === 1 ? firstText : undefined,
+    }),
+  );
+  const { runtime } = createRuntime([Promise.resolve(pdf.document)]);
+  await renderViewer(runtime);
+  const { waitFor } = await import("@testing-library/react");
+
+  assert.equal(pdf.pages.length, 0);
+  await setAllPagesVisible(true);
+  await waitFor(() =>
+    assert.equal(
+      pdf.pages.filter((record) => record.calls.textRequests === 1).length,
+      1,
+    ),
+  );
+  await setPageVisible(0, false);
+  await waitFor(() =>
+    assert.equal(
+      pdf.pages.filter((record) => record.calls.textAbort === 1).length,
+      1,
+    ),
+  );
+  await waitFor(() =>
+    assert.equal(
+      pdf.pages.filter((record) => record.calls.textRequests === 1).length,
+      3,
+    ),
+  );
+  assert.equal(
+    pdf.pages.filter((record) => record.calls.textRequests === 1)[0].calls
+      .textAbort,
+    1,
+  );
+});
+
 test("renders hostile page geometry through a bounded PDF.js viewport", async () => {
   const pdf = createDocument(1, (pageNumber) =>
     createPage(pageNumber, { height: 1, width: 1e9 }),
@@ -652,8 +844,8 @@ test("renders hostile page geometry through a bounded PDF.js viewport", async ()
   const { runtime } = createRuntime([Promise.resolve(pdf.document)]);
   await renderViewer(runtime);
   const { screen, waitFor } = await import("@testing-library/react");
-  await screen.findByText("Text from page 1");
   await setAllPagesVisible(true);
+  await screen.findByText("Text from page 1");
   await waitFor(() =>
     assert.equal(
       pdf.pages.filter((record) => record.calls.render === 1).length,
@@ -678,7 +870,6 @@ test("rejects invalid page geometry before rendering", async () => {
   const { calls, runtime } = createRuntime([Promise.resolve(pdf.document)]);
   await renderViewer(runtime);
   const { screen } = await import("@testing-library/react");
-  await screen.findByText("Text from page 1");
   await setAllPagesVisible(true);
 
   assert.match(
@@ -701,12 +892,16 @@ test("caps accessible text per page and announces truncation", async () => {
   await renderViewer(runtime);
   const { screen, waitFor } = await import("@testing-library/react");
   const pageText = await screen.findByTestId("workspace-pdf-text-1");
+  await setAllPagesVisible(true);
 
   await waitFor(() =>
     assert.match(pageText.textContent, /truncated for preview/),
   );
   assert.ok(pageText.textContent.length <= MAX_PDF_TEXT_CHARS_PER_PAGE + 50);
-  assert.equal(pdf.pages[0].calls.textRequests, 1);
+  assert.equal(
+    pdf.pages.filter((record) => record.calls.textRequests === 1).length,
+    1,
+  );
 });
 
 test("charges raw text against the document cap before trimming", async () => {
@@ -721,6 +916,7 @@ test("charges raw text against the document cap before trimming", async () => {
   const finalPageText = await screen.findByTestId(
     `workspace-pdf-text-${pageCount}`,
   );
+  await setAllPagesVisible(true);
 
   await waitFor(() =>
     assert.match(finalPageText.textContent, /truncated for preview/),
@@ -745,6 +941,7 @@ test("caps text items per page and across the document", async () => {
   const finalPageText = await screen.findByTestId(
     `workspace-pdf-text-${pageCount}`,
   );
+  await setAllPagesVisible(true);
 
   await waitFor(() =>
     assert.match(finalPageText.textContent, /truncated for preview/),
@@ -754,9 +951,11 @@ test("caps text items per page and across the document", async () => {
     pageCount - 1,
   );
   assert.equal(
-    pdf.pages.every(
-      (record) => record.calls.itemBudgets[0] === MAX_PDF_TEXT_ITEMS_PER_PAGE,
-    ),
+    pdf.pages
+      .filter((record) => record.calls.textRequests === 1)
+      .every(
+        (record) => record.calls.itemBudgets[0] === MAX_PDF_TEXT_ITEMS_PER_PAGE,
+      ),
     true,
   );
 });
@@ -769,11 +968,18 @@ test("aborts in-flight accessible text extraction on unmount", async () => {
   const { calls, runtime } = createRuntime([Promise.resolve(pdf.document)]);
   const view = await renderViewer(runtime);
   const { act, waitFor } = await import("@testing-library/react");
-  await waitFor(() => assert.equal(pdf.pages[0]?.calls.textRequests, 1));
+  await setAllPagesVisible(true);
+  await waitFor(() =>
+    assert.equal(
+      pdf.pages.filter((record) => record.calls.textRequests === 1).length,
+      1,
+    ),
+  );
 
   await act(async () => view.unmount());
-  await waitFor(() => assert.equal(pdf.pages[0].calls.textAbort, 1));
-  assert.equal(pdf.pages[0].calls.cleanup, 1);
+  const textPage = pdf.pages.find((record) => record.calls.textRequests === 1);
+  await waitFor(() => assert.equal(textPage.calls.textAbort, 1));
+  assert.equal(textPage.calls.cleanup, 1);
   assert.equal(calls.destroy, 1);
 });
 
@@ -784,7 +990,7 @@ test("releases an offscreen page canvas and PDF.js page resources", async () => 
   const { screen, waitFor } = await import("@testing-library/react");
   await screen.findByLabelText("report.pdf, page 1");
   await setAllPagesVisible(true);
-  await screen.findByTestId("workspace-pdf-text-1");
+  await screen.findByText("Text from page 1");
 
   const canvas = screen
     .getByLabelText("report.pdf, page 1")
@@ -835,6 +1041,7 @@ test("zoom controls report and enforce the supported range", async () => {
   const { runtime } = createRuntime([Promise.resolve(pdf.document)]);
   await renderViewer(runtime);
   const { fireEvent, screen } = await import("@testing-library/react");
+  await setAllPagesVisible(true);
   await screen.findByText("Text from page 1");
   const zoomOut = screen.getByRole("button", { name: "Zoom out" });
   const zoomIn = screen.getByRole("button", { name: "Zoom in" });
@@ -870,6 +1077,7 @@ test("worker load failure has alert semantics and retry starts a fresh task", as
   assert.equal(calls.destroy, 1);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   assert.match((await screen.findByRole("status")).textContent, /1 pages/);
+  await setAllPagesVisible(true);
   await screen.findByText("Text from page 1");
   assert.equal(calls.load, 2);
   assert.equal(calls.destroy, 1);
@@ -919,6 +1127,7 @@ test("text extraction failure destroys the worker before showing retry", async (
   await renderViewer(runtime);
   const { screen } = await import("@testing-library/react");
 
+  await setAllPagesVisible(true);
   await screen.findByRole("alert");
   assert.equal(calls.destroy, 1);
   assert.ok(screen.getByRole("button", { name: "Retry" }));
@@ -957,6 +1166,7 @@ test("render failure can retry the document", async () => {
     (await screen.findByTestId("workspace-pdf-status")).textContent,
     /1 pages/,
   );
+  await setAllPagesVisible(true);
   await screen.findByText("Text from page 1");
   assert.equal(calls.load, 2);
 });
