@@ -308,7 +308,11 @@ export function FocusThreadDrawer({
           data-testid="thread-surface-content"
         >
           <div
-            className="contents"
+            className={
+              ownsMessageThreadTestId
+                ? "relative flex min-h-0 min-w-0 flex-1 flex-col"
+                : "contents"
+            }
             data-testid={
               ownsMessageThreadTestId ? "message-thread-panel" : undefined
             }
