@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { frameCoordinatesForTest, readWebPayloadForTest } from "./webKind.tsx";
+import {
+  frameCoordinatesForTest,
+  readWebPayloadForTest,
+  webAutoStartKeyForTest,
+} from "./webKind.tsx";
 
 test("web frame coordinates map the displayed image scale to CDP pixels", () => {
   const element = {
@@ -43,5 +47,18 @@ test("web payload parsing keeps the connection surface kind-scoped", () => {
       targetId: "target-1",
       url: "about:blank",
     },
+  );
+});
+
+test("identical restored web payloads auto-start independently per tab", () => {
+  const payload = {
+    endpoint: null,
+    targetId: null,
+    url: "https://docs.example.com/same-page",
+  };
+
+  assert.notEqual(
+    webAutoStartKeyForTest("tab-first", payload),
+    webAutoStartKeyForTest("tab-second", payload),
   );
 });

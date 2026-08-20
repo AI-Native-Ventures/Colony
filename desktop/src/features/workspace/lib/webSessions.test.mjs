@@ -5,15 +5,18 @@ import { setNativeBridge } from "@/shared/api/nativeBridge";
 import { createMockNativeBridge } from "@/testing/createMockNativeBridge";
 
 import {
+  applyWebSessionEventForTest,
   disposeWebSession,
   ensureWebSession,
   getWebSession,
   goBackWeb,
+  navigateWeb,
   reloadWeb,
   resetWebSessions,
   resizeWeb,
   sendWebText,
   sendWebWheel,
+  normalizeWebNavigationUrl,
 } from "./webSessions.ts";
 
 test("forwards wheel and text input through the native web session", async () => {
@@ -213,6 +216,240 @@ test("does not forward hostile launch controls from a restored tab payload", asy
   await resetWebSessions();
 });
 
+test("rejects hostile restored URLs before native start", async () => {
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      return null;
+    }),
+  );
+
+  for (const [index, url] of [
+    "file:///Users/person/private.txt",
+    "javascript:alert(document.cookie)",
+    "data:text/html,<script>alert(1)</script>",
+    "https://user:secret@example.com/private",
+    "http://user@example.com/private",
+    "https://example.com/\nheader: value",
+  ].entries()) {
+    const tabId = `tab-hostile-url-${index}`;
+    await ensureWebSession(tabId, { endpoint: null, targetId: null, url });
+    assert.equal(getWebSession(tabId).status, "error");
+    assert.equal(
+      getWebSession(tabId).error,
+      "This address cannot be opened. Use http://, https://, or about:blank.",
+    );
+  }
+
+  assert.equal(
+    calls.filter(({ command }) => command === "workspace_web_start").length,
+    0,
+  );
+  await resetWebSessions();
+});
+
+test("normalizes only about blank and credential-free HTTP URLs", () => {
+  assert.equal(normalizeWebNavigationUrl(" about:blank "), "about:blank");
+  assert.equal(
+    normalizeWebNavigationUrl(" https://example.com/path?q=1#result "),
+    "https://example.com/path?q=1#result",
+  );
+  assert.equal(normalizeWebNavigationUrl("file:///tmp/private"), null);
+  assert.equal(normalizeWebNavigationUrl("https://user@example.com"), null);
+  assert.equal(
+    normalizeWebNavigationUrl("https://example.com/\nheader: value"),
+    null,
+  );
+});
+
+test("rejects hostile navigation before the native command", async () => {
+  const calls = [];
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_web_start") {
+        return {
+          sessionId: "session-safe-navigation",
+          targetId: "target-1",
+          url: "about:blank",
+          ownsBrowserProcess: false,
+          browserPid: null,
+        };
+      }
+      if (command === "workspace_web_navigate") {
+        throw new Error("failed at /Users/person/private/socket");
+      }
+      return null;
+    }),
+  );
+
+  await ensureWebSession("tab-safe-navigation", {
+    endpoint: null,
+    targetId: null,
+    url: "about:blank",
+  });
+  await navigateWeb("tab-safe-navigation", "file:///Users/person/private");
+  assert.equal(
+    calls.filter(({ command }) => command === "workspace_web_navigate").length,
+    0,
+  );
+  assert.equal(
+    getWebSession("tab-safe-navigation").error,
+    "This address cannot be opened. Use http://, https://, or about:blank.",
+  );
+
+  await navigateWeb("tab-safe-navigation", "https://example.com/failure");
+  assert.equal(
+    getWebSession("tab-safe-navigation").error,
+    "This page could not be opened. Check the address and try again.",
+  );
+  assert.doesNotMatch(
+    getWebSession("tab-safe-navigation").error,
+    /Users|private|socket/,
+  );
+  await disposeWebSession("tab-safe-navigation");
+  await resetWebSessions();
+});
+
+test("retries atomically after runtime failure and ignores late old events", async () => {
+  const calls = [];
+  let startCount = 0;
+  let releaseClose;
+  const heldClose = new Promise((resolve) => {
+    releaseClose = resolve;
+  });
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_web_start") {
+        startCount += 1;
+        return {
+          sessionId: startCount === 1 ? "session-old" : "session-replacement",
+          targetId: `target-${startCount}`,
+          url: "https://example.com/retry",
+          ownsBrowserProcess: false,
+          browserPid: null,
+        };
+      }
+      if (
+        command === "workspace_web_close" &&
+        args.sessionId === "session-old"
+      ) {
+        await heldClose;
+      }
+      return null;
+    }),
+  );
+
+  const request = {
+    endpoint: null,
+    targetId: null,
+    url: "https://example.com/retry",
+  };
+  await ensureWebSession("tab-atomic-retry", request);
+  applyWebSessionEventForTest({
+    type: "error",
+    payload: {
+      sessionId: "session-old",
+      error: "runtime failed at /Users/person/private/socket",
+    },
+  });
+  assert.equal(getWebSession("tab-atomic-retry").status, "error");
+  assert.equal(
+    getWebSession("tab-atomic-retry").error,
+    "The browser session stopped unexpectedly. Try again.",
+  );
+
+  const firstRetry = ensureWebSession("tab-atomic-retry", request);
+  const repeatedRetry = ensureWebSession("tab-atomic-retry", request);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    calls
+      .filter(({ command }) =>
+        ["workspace_web_start", "workspace_web_close"].includes(command),
+      )
+      .map(({ command, args }) => ({ command, sessionId: args?.sessionId })),
+    [
+      { command: "workspace_web_start", sessionId: undefined },
+      { command: "workspace_web_close", sessionId: "session-old" },
+    ],
+  );
+
+  applyWebSessionEventForTest({
+    type: "error",
+    payload: { sessionId: "session-old", error: "late private detail" },
+  });
+  assert.equal(getWebSession("tab-atomic-retry").status, "connecting");
+  releaseClose();
+  await Promise.all([firstRetry, repeatedRetry]);
+  assert.equal(startCount, 2);
+  assert.equal(getWebSession("tab-atomic-retry").status, "running");
+  assert.equal(
+    getWebSession("tab-atomic-retry").sessionId,
+    "session-replacement",
+  );
+
+  applyWebSessionEventForTest({
+    type: "closed",
+    payload: { sessionId: "session-old", error: "late raw path /tmp/x" },
+  });
+  assert.equal(getWebSession("tab-atomic-retry").status, "running");
+  assert.equal(
+    getWebSession("tab-atomic-retry").sessionId,
+    "session-replacement",
+  );
+  await disposeWebSession("tab-atomic-retry");
+  await resetWebSessions();
+});
+
+test("closes a previously closed native session before replacement start", async () => {
+  const calls = [];
+  let startCount = 0;
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command === "workspace_web_start") {
+        startCount += 1;
+        return {
+          sessionId: `closed-retry-${startCount}`,
+          targetId: `target-${startCount}`,
+          url: "https://example.com/closed",
+          ownsBrowserProcess: false,
+          browserPid: null,
+        };
+      }
+      return null;
+    }),
+  );
+  const request = {
+    endpoint: null,
+    targetId: null,
+    url: "https://example.com/closed",
+  };
+  await ensureWebSession("tab-closed-retry", request);
+  applyWebSessionEventForTest({
+    type: "closed",
+    payload: { sessionId: "closed-retry-1", error: null },
+  });
+  await ensureWebSession("tab-closed-retry", request);
+
+  assert.deepEqual(
+    calls
+      .filter(({ command }) =>
+        ["workspace_web_start", "workspace_web_close"].includes(command),
+      )
+      .map(({ command, args }) => ({ command, sessionId: args?.sessionId })),
+    [
+      { command: "workspace_web_start", sessionId: undefined },
+      { command: "workspace_web_close", sessionId: "closed-retry-1" },
+      { command: "workspace_web_start", sessionId: undefined },
+    ],
+  );
+  await disposeWebSession("tab-closed-retry");
+  await resetWebSessions();
+});
+
 test("a start that resolves after tab disposal closes its late native session", async () => {
   const calls = [];
   let resolveStart;
@@ -309,7 +546,10 @@ test("deduplicates a pending start and allows retry after failure", async () => 
   rejectFirstStart(new Error("Browser start failed"));
   await Promise.all([first, duplicate]);
   assert.equal(getWebSession("tab-retry").status, "error");
-  assert.equal(getWebSession("tab-retry").error, "Browser start failed");
+  assert.equal(
+    getWebSession("tab-retry").error,
+    "The browser could not be started. Check the connection and try again.",
+  );
 
   await ensureWebSession("tab-retry", request);
   assert.equal(

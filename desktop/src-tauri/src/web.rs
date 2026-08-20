@@ -905,7 +905,28 @@ mod tests {
     #[test]
     fn web_url_normalization_keeps_about_blank_and_rejects_empty() {
         assert_eq!(normalize_url(" about:blank ").unwrap(), "about:blank");
+        assert_eq!(
+            normalize_url(" https://example.com/path?q=1#result ").unwrap(),
+            "https://example.com/path?q=1#result"
+        );
         assert!(normalize_url(" ").is_err());
+    }
+
+    #[test]
+    fn web_url_normalization_rejects_hostile_navigation_payloads() {
+        for hostile in [
+            "file:///Users/person/private.txt",
+            "javascript:alert(document.cookie)",
+            "data:text/html,<script>alert(1)</script>",
+            "https://user:secret@example.com/private",
+            "http://user@example.com/private",
+            "https://example.com/\nheader: value",
+        ] {
+            assert!(
+                normalize_url(hostile).is_err(),
+                "hostile URL unexpectedly passed: {hostile}"
+            );
+        }
     }
 
     #[test]

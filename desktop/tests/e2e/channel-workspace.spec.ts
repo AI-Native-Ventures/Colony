@@ -596,7 +596,7 @@ test.describe("channel workspace", () => {
     });
     await expect(web).toHaveAttribute("data-status", "error");
     await expect(page.getByTestId("workspace-web-error")).toContainText(
-      "Browser start failed",
+      "The browser could not be started. Check the connection and try again.",
     );
     await expect(page.getByTestId("workspace-focus-thread-pane")).toBeVisible();
     await expect

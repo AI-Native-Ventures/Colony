@@ -1,4 +1,5 @@
 use crate::web::{WebKeyInput, WebMouseInput, WebWheelInput};
+use url::Url;
 
 const MAX_COMMAND_TEXT: usize = 64 * 1024;
 const MAX_COORDINATE: f64 = 100_000.0;
@@ -12,6 +13,19 @@ pub(crate) fn normalize_url(url: &str) -> Result<String, String> {
     }
     if url.len() > 8 * 1024 {
         return Err("web URL is too long".to_string());
+    }
+    if url == "about:blank" {
+        return Ok(url.to_string());
+    }
+    if url.chars().any(|character| character.is_ascii_control()) {
+        return Err("web URL contains unsupported characters".to_string());
+    }
+    let parsed = Url::parse(url).map_err(|_| "web URL is invalid".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("web URL scheme is not allowed".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("web URL credentials are not allowed".to_string());
     }
     Ok(url.to_string())
 }

@@ -60,6 +60,10 @@ function readWebPayload(payload: unknown): WebPayload {
   };
 }
 
+function webAutoStartKey(tabId: string, payload: WebPayload): string {
+  return `${tabId}|${payload.endpoint ?? ""}|${payload.targetId ?? ""}|${payload.url.trim()}`;
+}
+
 function modifiersForEvent(event: React.KeyboardEvent): number {
   return (
     (event.altKey ? 1 : 0) |
@@ -164,7 +168,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   React.useEffect(() => {
     const requestedUrl = payload.url.trim();
     if (!requestedUrl || requestedUrl === "about:blank") return;
-    const key = `${payload.endpoint ?? ""}|${payload.targetId ?? ""}|${requestedUrl}`;
+    const key = webAutoStartKey(tab.id, payload);
     if (autoStartKey.current === key) return;
     autoStartKey.current = key;
     void ensureWebSession(tab.id, {
@@ -172,7 +176,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       targetId: payload.targetId,
       url: requestedUrl,
     });
-  }, [payload.endpoint, payload.targetId, payload.url, tab.id]);
+  }, [payload, tab.id]);
 
   const navigate = React.useCallback(() => {
     persistPayload();
@@ -486,6 +490,13 @@ export function frameCoordinatesForTest(
   frame: { width: number; height: number },
 ): { x: number; y: number } | null {
   return frameCoordinates(element, event, frame);
+}
+
+export function webAutoStartKeyForTest(
+  tabId: string,
+  payload: WebPayload,
+): string {
+  return webAutoStartKey(tabId, payload);
 }
 
 export type { WorkspaceTab };
