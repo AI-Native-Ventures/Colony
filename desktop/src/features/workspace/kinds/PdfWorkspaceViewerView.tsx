@@ -76,6 +76,7 @@ function createPdfTextExtractionScheduler(
     remainingItems -= reservedItems;
     const controller = new AbortController();
     active = { controller, pageNumber };
+    let committed = false;
 
     void document
       .getPage(pageNumber)
@@ -87,15 +88,6 @@ function createPdfTextExtractionScheduler(
             signal: controller.signal,
           });
           if (destroyed || controller.signal.aborted) return;
-          remainingCharacters += Math.max(
-            0,
-            reservedCharacters -
-              Math.min(reservedCharacters, content.consumedCharacters),
-          );
-          remainingItems += Math.max(
-            0,
-            reservedItems - Math.min(reservedItems, content.consumedItems),
-          );
           const extracted = extractPdfPageTextWithinBudget(
             content.items,
             reservedCharacters,
@@ -105,6 +97,16 @@ function createPdfTextExtractionScheduler(
             text: extracted.text,
             truncated: content.truncated || extracted.truncated,
           });
+          remainingCharacters += Math.max(
+            0,
+            reservedCharacters -
+              Math.min(reservedCharacters, content.consumedCharacters),
+          );
+          remainingItems += Math.max(
+            0,
+            reservedItems - Math.min(reservedItems, content.consumedItems),
+          );
+          committed = true;
         } finally {
           page.cleanup();
         }
@@ -113,6 +115,10 @@ function createPdfTextExtractionScheduler(
         if (!destroyed && !controller.signal.aborted) onFailure(cause);
       })
       .finally(() => {
+        if (!committed) {
+          remainingCharacters += reservedCharacters;
+          remainingItems += reservedItems;
+        }
         if (active?.controller === controller) active = undefined;
         pump();
       });

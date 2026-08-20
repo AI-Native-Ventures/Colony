@@ -33,6 +33,7 @@ import {
   MAX_PDF_WORKSPACE_PAGES,
   PDF_WORKSPACE_RENDER_INTENT,
 } from "./pdfWorkspaceViewerModel.ts";
+import { readActivePdfXrefOffsets } from "./pdfWorkspaceXref.ts";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
@@ -156,6 +157,37 @@ function createBlankPdfFixture() {
   return new Uint8Array(Buffer.concat([header, ...objects, xref]));
 }
 
+function createFlatPageTreePdfFixture(pageCount) {
+  const objects = [
+    Buffer.from("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    Buffer.from(
+      `2 0 obj\n<< /Type /Pages /Kids [${Array.from(
+        { length: pageCount },
+        (_, index) => `${index + 3} 0 R`,
+      ).join(" ")}] /Count ${pageCount} >>\nendobj\n`,
+    ),
+    ...Array.from({ length: pageCount }, (_, index) =>
+      Buffer.from(
+        `${index + 3} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>\nendobj\n`,
+      ),
+    ),
+  ];
+  const header = Buffer.from("%PDF-1.7\n% flat page tree fixture\n");
+  const offsets = [];
+  let offset = header.length;
+  for (const object of objects) {
+    offsets.push(offset);
+    offset += object.length;
+  }
+  const xref = Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .map((entry) => `${String(entry).padStart(10, "0")} 00000 n `)
+      .join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
+      `startxref\n${offset}\n%%EOF\n`,
+  );
+  return new Uint8Array(Buffer.concat([header, ...objects, xref]));
+}
+
 function createCompressedOperatorFloodPdfFixture(operationPairs = 1_000_000) {
   const rawContent = Buffer.from("q Q\n".repeat(operationPairs));
   const compressedContent = deflateSync(rawContent);
@@ -211,6 +243,334 @@ function createFlateStreamSequenceFixture(decodedBytesPerStream, count) {
       Buffer.from("%%EOF\n"),
     ]),
   );
+}
+
+function createManyIndirectLengthStreamsFixture(count, paddingBytes) {
+  const compressed = deflateSync(Buffer.from("q Q\n"));
+  const streams = Array.from({ length: count }, (_, index) => {
+    const streamObject = index + 1;
+    const lengthObject = count + index + 1;
+    return Buffer.concat([
+      Buffer.from(
+        `${streamObject} 0 obj\n<< /Filter /FlateDecode /Length ${lengthObject} 0 R >>\nstream\n`,
+      ),
+      compressed,
+      Buffer.from(
+        `\nendstream\nendobj\n${lengthObject} 0 obj\n${compressed.length}\nendobj\n`,
+      ),
+    ]);
+  });
+  return new Uint8Array(
+    Buffer.concat([
+      Buffer.from("%PDF-1.7\n"),
+      ...streams,
+      Buffer.from(`%${"x".repeat(paddingBytes)}\n%%EOF\n`),
+    ]),
+  );
+}
+
+function createIncrementalIndirectLengthFixture(activeContent) {
+  const obsoleteContent = deflateSync(Buffer.alloc(128, 0x20));
+  const header = Buffer.from("%PDF-1.7\n");
+  const obsoleteStream = Buffer.concat([
+    Buffer.from("4 0 obj\n<< /Filter /FlateDecode /Length 9 0 R >>\nstream\n"),
+    obsoleteContent,
+    Buffer.from("\nendstream\nendobj\n"),
+  ]);
+  const oldLength = Buffer.from(`9 0 obj\n${obsoleteContent.length}\nendobj\n`);
+  const obsoleteStreamOffset = header.length;
+  const oldLengthOffset = obsoleteStreamOffset + obsoleteStream.length;
+  const baseXrefOffset = oldLengthOffset + oldLength.length;
+  const baseXref = Buffer.from(
+    `xref\n0 1\n0000000000 65535 f \n4 1\n${String(obsoleteStreamOffset).padStart(10, "0")} 00000 n \n` +
+      `9 1\n${String(oldLengthOffset).padStart(10, "0")} 00000 n \n` +
+      `trailer\n<< /Size 10 >>\nstartxref\n${baseXrefOffset}\n%%EOF\n`,
+  );
+  const activeStreamOffset = baseXrefOffset + baseXref.length;
+  const activeStream = Buffer.concat([
+    Buffer.from("4 0 obj\n<< /Filter /FlateDecode /Length 9 0 R >>\nstream\n"),
+    activeContent,
+    Buffer.from("\nendstream\nendobj\n"),
+  ]);
+  const newLengthOffset = activeStreamOffset + activeStream.length;
+  const newLength = Buffer.from(`9 0 obj\n${activeContent.length}\nendobj\n`);
+  const updateXrefOffset = newLengthOffset + newLength.length;
+  const updateXref = Buffer.from(
+    `xref\n4 1\n${String(activeStreamOffset).padStart(10, "0")} 00000 n \n` +
+      `9 1\n${String(newLengthOffset).padStart(10, "0")} 00000 n \n` +
+      `trailer\n<< /Size 10 /Prev ${baseXrefOffset} >>\n` +
+      `startxref\n${updateXrefOffset}\n%%EOF\n`,
+  );
+  return new Uint8Array(
+    Buffer.concat([
+      header,
+      obsoleteStream,
+      oldLength,
+      baseXref,
+      activeStream,
+      newLength,
+      updateXref,
+    ]),
+  );
+}
+
+function createXrefSelectedFilterFixture(decodedBytes) {
+  const encodedContent = deflateSync(Buffer.alloc(decodedBytes, 0x20));
+  const header = Buffer.from("%PDF-1.7\n");
+  const streamObject = Buffer.concat([
+    Buffer.from(
+      `4 0 obj\n<< /Filter 8 0 R /Length ${encodedContent.length} >>\nstream\n`,
+    ),
+    encodedContent,
+    Buffer.from("\nendstream\nendobj\n"),
+  ]);
+  const filterObject = Buffer.from("8 0 obj\n/FlateDecode\nendobj\n");
+  const streamOffset = header.length;
+  const filterOffset = streamOffset + streamObject.length;
+  const xrefOffset = filterOffset + filterObject.length;
+  const xref = Buffer.from(
+    `xref\n0 1\n0000000000 65535 f \n4 1\n${String(streamOffset).padStart(10, "0")} 00000 n \n` +
+      `8 1\n${String(filterOffset).padStart(10, "0")} 00000 n \n` +
+      `trailer\n<< /Size 9 >>\nstartxref\n${xrefOffset}\n%%EOF\n`,
+  );
+  const unreferencedShadow = Buffer.from("8 0 obj\n/DCTDecode\nendobj\n");
+  return new Uint8Array(
+    Buffer.concat([
+      header,
+      streamObject,
+      filterObject,
+      xref,
+      unreferencedShadow,
+    ]),
+  );
+}
+
+function createXrefParserFixture(entryTerminator, suffix = "") {
+  const header = "%PDF-1.7\n";
+  return new TextEncoder().encode(
+    `${header}xref\n1 1\n0000000000 00000 n${entryTerminator}` +
+      `trailer\n<< /Size 2 >>\nstartxref\n${header.length}\n%%EOF\n${suffix}`,
+  );
+}
+
+function createShiftedFreeEntryIncrementalFixture() {
+  const encodedContent = deflateSync(Buffer.alloc(128, 0x20));
+  const header = Buffer.from("%PDF-1.7\n");
+  const streamObject = Buffer.concat([
+    Buffer.from(
+      `2 0 obj\n<< /Filter /FlateDecode /Length ${encodedContent.length} >>\nstream\n`,
+    ),
+    encodedContent,
+    Buffer.from("\nendstream\nendobj\n"),
+  ]);
+  const streamOffset = header.length;
+  const baseXrefOffset = streamOffset + streamObject.length;
+  const baseXref = Buffer.from(
+    `xref\n2 1\n${String(streamOffset).padStart(10, "0")} 00000 n \n` +
+      `trailer\n<< /Size 3 >>\nstartxref\n${baseXrefOffset}\n%%EOF\n`,
+  );
+  const objectOneOffset = baseXrefOffset + baseXref.length;
+  const objectOne = Buffer.from("1 0 obj\nnull\nendobj\n");
+  const updateXrefOffset = objectOneOffset + objectOne.length;
+  const updateXref = Buffer.from(
+    "xref\n1 2\n0000000000 65535 f \n" +
+      `${String(objectOneOffset).padStart(10, "0")} 00000 n \n` +
+      `trailer\n<< /Size 3 /Prev ${baseXrefOffset} >>\n` +
+      `startxref\n${updateXrefOffset}\n%%EOF\n`,
+  );
+  return new Uint8Array(
+    Buffer.concat([header, streamObject, baseXref, objectOne, updateXref]),
+  );
+}
+
+function encodeAscii85(data) {
+  const output = [];
+  for (let offset = 0; offset < data.length; offset += 4) {
+    const remaining = Math.min(4, data.length - offset);
+    let value = 0;
+    for (let index = 0; index < 4; index += 1) {
+      value = value * 256 + (data[offset + index] ?? 0);
+    }
+    if (remaining === 4 && value === 0) {
+      output.push("z");
+      continue;
+    }
+    const encoded = Array(5);
+    for (let index = 4; index >= 0; index -= 1) {
+      encoded[index] = String.fromCharCode((value % 85) + 33);
+      value = Math.floor(value / 85);
+    }
+    output.push(encoded.slice(0, remaining + 1).join(""));
+  }
+  return Buffer.from(`${output.join("")}~>`);
+}
+
+function encodeLiteralLzw(data) {
+  const codes = [256, ...data, 257];
+  const output = [];
+  let bits = 0;
+  let bitCount = 0;
+  for (const code of codes) {
+    bits = bits * 512 + code;
+    bitCount += 9;
+    while (bitCount >= 8) {
+      bitCount -= 8;
+      output.push(Math.floor(bits / 2 ** bitCount) & 0xff);
+      bits %= 2 ** bitCount;
+    }
+  }
+  if (bitCount > 0) output.push((bits * 2 ** (8 - bitCount)) & 0xff);
+  return Buffer.from(output);
+}
+
+function encodeShortDictionaryLzw(data) {
+  const dictionary = new Map(
+    Array.from({ length: 256 }, (_, index) => [
+      String.fromCharCode(index),
+      index,
+    ]),
+  );
+  const codes = [256];
+  let nextCode = 258;
+  let phrase = "";
+  for (const byte of data) {
+    const character = String.fromCharCode(byte);
+    const combined = phrase + character;
+    if (dictionary.has(combined)) {
+      phrase = combined;
+      continue;
+    }
+    codes.push(dictionary.get(phrase));
+    dictionary.set(combined, nextCode);
+    nextCode += 1;
+    phrase = character;
+  }
+  if (phrase) codes.push(dictionary.get(phrase));
+  codes.push(257);
+  assert.ok(codes.some((code) => code >= 258));
+  assert.ok(nextCode < 512);
+
+  const output = [];
+  let bits = 0;
+  let bitCount = 0;
+  for (const code of codes) {
+    bits = bits * 512 + code;
+    bitCount += 9;
+    while (bitCount >= 8) {
+      bitCount -= 8;
+      output.push(Math.floor(bits / 2 ** bitCount) & 0xff);
+      bits %= 2 ** bitCount;
+    }
+  }
+  if (bitCount > 0) output.push((bits * 2 ** (8 - bitCount)) & 0xff);
+  return Buffer.from(output);
+}
+
+function encodeTransitioningLiteralLzw(
+  literalCount,
+  earlyChange,
+  resetAfter = null,
+) {
+  const codes = [256];
+  for (let index = 0; index < literalCount; index += 1) {
+    if (index === resetAfter) codes.push(256);
+    codes.push(0x20);
+  }
+  codes.push(257);
+
+  const output = [];
+  let bits = 0;
+  let bitCount = 0;
+  let codeLength = 9;
+  let nextCode = 258;
+  let hasPreviousCode = false;
+  for (const code of codes) {
+    bits = bits * 2 ** codeLength + code;
+    bitCount += codeLength;
+    while (bitCount >= 8) {
+      bitCount -= 8;
+      output.push(Math.floor(bits / 2 ** bitCount) & 0xff);
+      bits %= 2 ** bitCount;
+    }
+    if (code === 256) {
+      codeLength = 9;
+      nextCode = 258;
+      hasPreviousCode = false;
+    } else if (code !== 257) {
+      if (hasPreviousCode && nextCode < 4096) {
+        nextCode += 1;
+        if (codeLength < 12 && nextCode + earlyChange === 2 ** codeLength) {
+          codeLength += 1;
+        }
+      }
+      hasPreviousCode = true;
+    }
+  }
+  if (bitCount > 0) output.push((bits * 2 ** (8 - bitCount)) & 0xff);
+  return Buffer.from(output);
+}
+
+function encodeRunLengthLiteral(data) {
+  const output = [];
+  for (let offset = 0; offset < data.length; offset += 128) {
+    const chunk = data.subarray(offset, offset + 128);
+    output.push(chunk.length - 1, ...chunk);
+  }
+  output.push(128);
+  return Buffer.from(output);
+}
+
+function createFilteredOperatorPdfFixture({
+  decodeParms = "",
+  encodedContent,
+  filter,
+  filterWhitespace = " ",
+  indirectLength = false,
+}) {
+  const lengthValue = indirectLength ? "9 0 R" : String(encodedContent.length);
+  const objects = [
+    Buffer.from("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    Buffer.from("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"),
+    Buffer.from(
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] " +
+        "/Contents 4 0 R >>\nendobj\n",
+    ),
+    Buffer.concat([
+      Buffer.from(
+        `4 0 obj\n<< /Filter${filterWhitespace}${filter}${decodeParms} /Length ${lengthValue} >>\nstream\n`,
+      ),
+      encodedContent,
+      Buffer.from("\nendstream\nendobj\n"),
+    ]),
+  ];
+  if (indirectLength) {
+    objects.push(Buffer.from(`9 0 obj\n${encodedContent.length}\nendobj\n`));
+  }
+  const header = Buffer.from("%PDF-1.7\n% filtered operator fixture\n");
+  const objectNumbers = indirectLength ? [1, 2, 3, 4, 9] : [1, 2, 3, 4];
+  const offsets = [];
+  let offset = header.length;
+  for (const object of objects) {
+    offsets.push(offset);
+    offset += object.length;
+  }
+  const offsetByObject = new Map(
+    objectNumbers.map((objectNumber, index) => [objectNumber, offsets[index]]),
+  );
+  const xref = Buffer.from(
+    `xref\n0 10\n0000000000 65535 f \n${Array.from(
+      { length: 9 },
+      (_, index) => index + 1,
+    )
+      .map((objectNumber) =>
+        offsetByObject.has(objectNumber)
+          ? `${String(offsetByObject.get(objectNumber)).padStart(10, "0")} 00000 n `
+          : "0000000000 65535 f ",
+      )
+      .join("\n")}\ntrailer\n<< /Size 10 /Root 1 0 R >>\n` +
+      `startxref\n${offset}\n%%EOF\n`,
+  );
+  return new Uint8Array(Buffer.concat([header, ...objects, xref]));
 }
 
 function createViewOnlyAnnotationPdfFixture() {
@@ -386,7 +746,9 @@ function createPage(pageNumber, options = {}) {
         calls.textRequests += 1;
         calls.itemBudgets.push(maxItems);
         if (options.textError) throw options.textError;
-        if (options.textDeferred) {
+        const textDeferred =
+          options.textDeferredFactory?.() ?? options.textDeferred;
+        if (textDeferred) {
           await new Promise((resolve, reject) => {
             const abort = () => {
               calls.textAbort += 1;
@@ -395,7 +757,7 @@ function createPage(pageNumber, options = {}) {
               reject(cause);
             };
             signal.addEventListener("abort", abort, { once: true });
-            options.textDeferred.promise.then((value) => {
+            textDeferred.promise.then((value) => {
               signal.removeEventListener("abort", abort);
               resolve(value);
             }, reject);
@@ -597,13 +959,238 @@ test("Flate preflight enforces the decoded document ceiling across safe-sized st
   });
 });
 
-test("Flate preflight fails closed on unsupported chains and malformed lengths", async () => {
+test("preflight parses legal comments and indirect stream lengths without a filter bypass", async () => {
+  const rawContent = Buffer.from("q Q\n");
+  const compressedRawContent = deflateSync(rawContent);
+  const safe = createFilteredOperatorPdfFixture({
+    encodedContent: compressedRawContent,
+    filter: "/FlateDecode",
+    filterWhitespace: "% legal PDF comment\n  ",
+    indirectLength: true,
+  });
+  await assert.doesNotReject(assertPdfDecodedStreamBudget(safe));
+  assert.ok((await readPdfRenderOperationCount(safe, true)) > 0);
+
+  const incrementalLength =
+    createIncrementalIndirectLengthFixture(compressedRawContent);
+  await assert.doesNotReject(
+    assertPdfDecodedStreamBudget(incrementalLength, { maxStreamBytes: 64 }),
+  );
+
+  const manyLengths = createManyIndirectLengthStreamsFixture(64, 5_000_000);
+  await assert.doesNotReject(assertPdfDecodedStreamBudget(manyLengths));
+
+  const bomb = createFilteredOperatorPdfFixture({
+    encodedContent: deflateSync(Buffer.alloc(128, 0x20)),
+    filter: "/FlateDecode",
+    filterWhitespace: "% legal PDF comment\r\n  ",
+  });
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(bomb, { maxStreamBytes: 64 }),
+    /decoded stream limit/,
+  );
+});
+
+test("preflight resolves indirect filters and decode parameters", async () => {
+  const encodedContent = deflateSync(Buffer.from([0, 0x71, 0x20, 0x51]));
+  const fixture = new Uint8Array(
+    Buffer.concat([
+      Buffer.from(
+        `%PDF-1.7\n4 0 obj\n<< /Filter 8 0 R /DecodeParms 7 0 R /Length ${encodedContent.length} >>\nstream\n`,
+      ),
+      encodedContent,
+      Buffer.from(
+        "\nendstream\nendobj\n" +
+          "7 0 obj\n<< /Predictor 12 /Columns 11 0 R /Colors 1 /BitsPerComponent 8 >>\nendobj\n" +
+          "8 0 obj\n/FlateDecode\nendobj\n" +
+          "11 0 obj\n3\nendobj\n%%EOF\n",
+      ),
+    ]),
+  );
+
+  await assert.doesNotReject(
+    assertPdfDecodedStreamBudget(fixture, { maxStreamBytes: 64 }),
+  );
+
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(createXrefSelectedFilterFixture(128), {
+      maxStreamBytes: 64,
+    }),
+    /decoded stream limit/,
+  );
+});
+
+test("xref parsing aligns malformed subsections and fails closed", async () => {
+  assert.equal(
+    readActivePdfXrefOffsets(createXrefParserFixture("trailer")),
+    null,
+  );
+  assert.equal(
+    readActivePdfXrefOffsets(
+      createXrefParserFixture(" \n", "startxref\n999999\n%%EOF\n"),
+    ),
+    null,
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(createShiftedFreeEntryIncrementalFixture(), {
+      maxStreamBytes: 64,
+    }),
+    /decoded stream limit/,
+  );
+});
+
+test("preflight safely supports ASCII85 plus Flate and LZW content streams", async () => {
+  const rawContent = Buffer.from("q Q\n");
+  const ascii85Flate = createFilteredOperatorPdfFixture({
+    encodedContent: encodeAscii85(deflateSync(rawContent)),
+    filter: "[/ASCII85Decode /FlateDecode]",
+  });
+  const lzw = createFilteredOperatorPdfFixture({
+    encodedContent: encodeShortDictionaryLzw(
+      Buffer.from("q q q q q q q q q q q q Q\n"),
+    ),
+    filter: "/LZWDecode",
+  });
+  const runLength = createFilteredOperatorPdfFixture({
+    encodedContent: encodeRunLengthLiteral(rawContent),
+    filter: "/RunLengthDecode",
+  });
+
+  for (const fixture of [ascii85Flate, lzw, runLength]) {
+    await assert.doesNotReject(assertPdfDecodedStreamBudget(fixture));
+    assert.ok((await readPdfRenderOperationCount(fixture, true)) > 0);
+  }
+
+  await assert.doesNotReject(
+    assertPdfDecodedStreamBudget(ascii85Flate, {
+      maxDocumentBytes: 8,
+      maxStreamBytes: 8,
+    }),
+  );
+
+  const lzwBomb = createFilteredOperatorPdfFixture({
+    encodedContent: encodeLiteralLzw(Buffer.alloc(128, 0x20)),
+    filter: "/LZWDecode",
+  });
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(lzwBomb, { maxStreamBytes: 64 }),
+    /decoded stream limit/,
+  );
+
+  const runLengthBomb = createFilteredOperatorPdfFixture({
+    encodedContent: Buffer.from([129, 0x20, 128]),
+    filter: "/RunLengthDecode",
+  });
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(runLengthBomb, { maxStreamBytes: 64 }),
+    /decoded stream limit/,
+  );
+});
+
+test("LZW preflight crosses code widths for both EarlyChange modes and resets", async () => {
+  for (const earlyChange of [0, 1]) {
+    for (const resetAfter of [null, 3_900]) {
+      const decodedBytes = 5_000;
+      const fixture = createFilteredOperatorPdfFixture({
+        decodeParms: ` /DecodeParms << /EarlyChange ${earlyChange} >>`,
+        encodedContent: encodeTransitioningLiteralLzw(
+          decodedBytes,
+          earlyChange,
+          resetAfter,
+        ),
+        filter: "/LZWDecode",
+      });
+      await assert.doesNotReject(
+        assertPdfDecodedStreamBudget(fixture, {
+          maxStreamBytes: decodedBytes,
+        }),
+      );
+      await assert.rejects(
+        assertPdfDecodedStreamBudget(fixture, {
+          maxStreamBytes: decodedBytes - 1,
+        }),
+        /decoded stream limit/,
+      );
+    }
+  }
+});
+
+test("preflight rejects predictor rows that exceed the decoded stream", async () => {
+  const hostile = createFilteredOperatorPdfFixture({
+    decodeParms:
+      " /DecodeParms << /Predictor 12 /Columns 1000000 /Colors 3 /BitsPerComponent 8 >>",
+    encodedContent: deflateSync(Buffer.from([0, 0])),
+    filter: "/FlateDecode",
+  });
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(hostile, { maxStreamBytes: 64 }),
+    /PDF predictor row exceeds decoded stream limit/,
+  );
+
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(hostile, {
+      maxStreamBytes: 4 * 1_024 * 1_024,
+    }),
+    /PDF predictor row exceeds decoded stream data/,
+  );
+
+  const safe = createFilteredOperatorPdfFixture({
+    decodeParms:
+      " /DecodeParms << /Predictor 12 /Columns 3 /Colors 1 /BitsPerComponent 8 >>",
+    encodedContent: deflateSync(Buffer.from([0, 0x71, 0x20, 0x51])),
+    filter: "/FlateDecode",
+  });
+  await assert.doesNotReject(
+    assertPdfDecodedStreamBudget(safe, { maxStreamBytes: 64 }),
+  );
+});
+
+test("preflight accepts a flat page tree up to the viewer page limit", async () => {
+  const fixture = createFlatPageTreePdfFixture(MAX_PDF_WORKSPACE_PAGES);
+  await assert.doesNotReject(assertPdfDecodedStreamBudget(fixture));
+  const loadingTask = pdfjs.getDocument({ data: fixture });
+  const document = await loadingTask.promise;
+  try {
+    assert.equal(document.numPages, MAX_PDF_WORKSPACE_PAGES);
+  } finally {
+    await loadingTask.destroy();
+  }
+});
+
+test("preflight fails closed on malformed chains, references, predictors, and lengths", async () => {
   const unsupported = new TextEncoder().encode(
-    "%PDF-1.7\n1 0 obj\n<< /Filter [/ASCII85Decode /FlateDecode] /Length 4 >>\nstream\nzzzz\nendstream\nendobj\n%%EOF",
+    "%PDF-1.7\n1 0 obj\n<< /Filter [/FlateDecode /ASCII85Decode] /Length 4 >>\nstream\nzzzz\nendstream\nendobj\n%%EOF",
   );
   await assert.rejects(
     assertPdfDecodedStreamBudget(unsupported),
     /unsupported PDF stream filter chain/,
+  );
+
+  const cyclicLength = new TextEncoder().encode(
+    "%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode /Length 9 0 R >>\nstream\nx\nendstream\nendobj\n9 0 obj\n9 0 R\nendobj\n%%EOF",
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(cyclicLength),
+    /PDF stream length is invalid/,
+  );
+
+  const hiddenLength = new TextEncoder().encode(
+    "%PDF-1.7\n1 0 obj\n<< /Length 9 0 R >>\nstream\nx\nendstream\nendobj\n" +
+      "9 0 obj\n1\nendobj\n10 0 obj\n(9 0 obj 2 endobj)\nendobj\n%%EOF",
+  );
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(hiddenLength),
+    /PDF stream length is invalid/,
+  );
+
+  const unknownPredictor = createFilteredOperatorPdfFixture({
+    decodeParms: " /DecodeParms << /Predictor 99 >>",
+    encodedContent: deflateSync(Buffer.from("q Q\n")),
+    filter: "/FlateDecode",
+  });
+  await assert.rejects(
+    assertPdfDecodedStreamBudget(unknownPredictor),
+    /unsupported PDF predictor/,
   );
 
   const malformed = new TextEncoder().encode(
@@ -623,7 +1210,7 @@ test("Flate preflight fails closed on unsupported chains and malformed lengths",
   );
 
   const unsupportedFilter = new TextEncoder().encode(
-    "%PDF-1.7\n1 0 obj\n<< /Filter /LZWDecode /Length 1 >>\nstream\nx\nendstream\nendobj\n%%EOF",
+    "%PDF-1.7\n1 0 obj\n<< /Filter /Crypt /Length 1 >>\nstream\nx\nendstream\nendobj\n%%EOF",
   );
   await assert.rejects(
     assertPdfDecodedStreamBudget(unsupportedFilter),
@@ -835,6 +1422,42 @@ test("accessible text runs one visible page at a time and aborts offscreen work"
       .textAbort,
     1,
   );
+});
+
+test("accessible text refunds repeated offscreen aborts before committing budget", async () => {
+  const abortCount = MAX_PDF_TEXT_CHARS_TOTAL / MAX_PDF_TEXT_CHARS_PER_PAGE + 2;
+  let requests = 0;
+  const pdf = createDocument(1, (pageNumber) =>
+    createPage(pageNumber, {
+      textDeferredFactory() {
+        requests += 1;
+        return requests <= abortCount ? deferred() : undefined;
+      },
+    }),
+  );
+  const { runtime } = createRuntime([Promise.resolve(pdf.document)]);
+  await renderViewer(runtime);
+  const { screen, waitFor } = await import("@testing-library/react");
+
+  for (let attempt = 1; attempt <= abortCount; attempt += 1) {
+    await setPageVisible(0, true);
+    await waitFor(() => assert.equal(requests, attempt));
+    await setPageVisible(0, false);
+    await waitFor(() =>
+      assert.equal(
+        pdf.pages.reduce((total, record) => total + record.calls.textAbort, 0),
+        attempt,
+      ),
+    );
+  }
+
+  await setPageVisible(0, true);
+  await screen.findByText("Text from page 1");
+  assert.equal(requests, abortCount + 1);
+  const successful = pdf.pages.find(
+    (record) => record.calls.textRequests === 1 && record.calls.textAbort === 0,
+  );
+  assert.equal(successful.calls.itemBudgets[0], MAX_PDF_TEXT_ITEMS_PER_PAGE);
 });
 
 test("renders hostile page geometry through a bounded PDF.js viewport", async () => {

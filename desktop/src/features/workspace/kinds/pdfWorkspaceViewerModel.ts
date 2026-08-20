@@ -6,8 +6,6 @@ export const MAX_PDF_CSS_DIMENSION = 8_192;
 export const MAX_PDF_IMAGE_PIXELS = 16_000_000;
 export const MAX_PDF_CANVAS_AREA_BYTES = 64 * 1_024 * 1_024;
 export const MAX_PDF_WORKSPACE_PAGES = 500;
-export const MAX_PDF_DECODED_STREAM_BYTES = 16 * 1_024 * 1_024;
-export const MAX_PDF_DECODED_TOTAL_BYTES = 64 * 1_024 * 1_024;
 export const MAX_PDF_OPERATOR_WORK_PER_PAGE = 100_000;
 export const MAX_PDF_TEXT_CHARS_PER_PAGE = 200_000;
 export const MAX_PDF_TEXT_CHARS_TOTAL = 2_000_000;
@@ -49,21 +47,12 @@ export type PdfOperatorBudget = {
   operationsFilter: (operationIndex: number) => boolean;
 };
 
-export class PdfDecodedStreamLimitError extends Error {
-  readonly decodedBytes: number;
-  readonly largestChunkBytes: number;
-
-  constructor(
-    message: string,
-    decodedBytes: number,
-    largestChunkBytes: number,
-  ) {
-    super(message);
-    this.name = "PdfDecodedStreamLimitError";
-    this.decodedBytes = decodedBytes;
-    this.largestChunkBytes = largestChunkBytes;
-  }
-}
+export {
+  assertPdfDecodedStreamBudget,
+  MAX_PDF_DECODED_STREAM_BYTES,
+  MAX_PDF_DECODED_TOTAL_BYTES,
+  PdfDecodedStreamLimitError,
+} from "./pdfWorkspaceStreamPreflight";
 
 /** Keep workspace PDF zoom inside the supported 50% to 250% range. */
 export function clampPdfScale(value: number): number {
@@ -94,208 +83,6 @@ export function createPdfDocumentProbeOptions(
     ...createPdfDocumentOptions(data),
     stopAtErrors: false,
   };
-}
-
-function findDictionaryStart(source: string, dictionaryEnd: number): number {
-  let depth = 1;
-  for (let index = dictionaryEnd - 1; index >= 1; index -= 1) {
-    const token = source.slice(index - 1, index + 1);
-    if (token === ">>") {
-      depth += 1;
-      index -= 1;
-    } else if (token === "<<") {
-      depth -= 1;
-      if (depth === 0) return index - 1;
-      index -= 1;
-    }
-  }
-  return -1;
-}
-
-function resolvePdfStreamLength(
-  dictionary: string,
-  source: string,
-): number | null {
-  const indirect = dictionary.match(/\/Length\s+(\d+)\s+(\d+)\s+R\b/);
-  if (indirect) {
-    const objectPattern = new RegExp(
-      `(?:^|\\s)${indirect[1]}\\s+${indirect[2]}\\s+obj\\s+(\\d+)\\s+endobj\\b`,
-    );
-    const object = source.match(objectPattern);
-    return object ? Number.parseInt(object[1], 10) : null;
-  }
-
-  const direct = dictionary.match(/\/Length\s+(\d+)\b/);
-  return direct ? Number.parseInt(direct[1], 10) : null;
-}
-
-type PdfStreamFilterKind = "bounded" | "flate" | "image";
-
-function classifyPdfStreamFilter(dictionary: string): PdfStreamFilterKind {
-  const filter = dictionary.match(
-    /\/Filter\s*(\/[A-Za-z0-9]+|\[[\s\S]*?\])\s*(?:\/|>>|$)/,
-  );
-  if (!filter) return "bounded";
-  const names = filter[1].match(/\/[A-Za-z0-9]+/g) ?? [];
-  if (names.length !== 1) {
-    throw new Error("unsupported PDF stream filter chain");
-  }
-  if (names[0] === "/FlateDecode" || names[0] === "/Fl") return "flate";
-  if (names[0] === "/ASCII85Decode" || names[0] === "/ASCIIHexDecode") {
-    return "bounded";
-  }
-  if (
-    /\/Subtype\s*\/Image\b/.test(dictionary) &&
-    ["/CCITTFaxDecode", "/DCTDecode", "/JBIG2Decode", "/JPXDecode"].includes(
-      names[0],
-    )
-  ) {
-    return "image";
-  }
-  throw new Error("unsupported PDF stream filter");
-}
-
-function pdfStreamDataEnd(
-  source: string,
-  streamStart: number,
-  length: number,
-): number {
-  const streamEnd = streamStart + length;
-  if (
-    !Number.isSafeInteger(length) ||
-    length < 0 ||
-    streamEnd > source.length
-  ) {
-    throw new Error("PDF stream length is invalid");
-  }
-  let markerStart = streamEnd;
-  if (source.startsWith("\r\n", markerStart)) markerStart += 2;
-  else if (
-    source.charCodeAt(markerStart) === 0x0a ||
-    source.charCodeAt(markerStart) === 0x0d
-  ) {
-    markerStart += 1;
-  }
-  if (!source.startsWith("endstream", markerStart)) {
-    throw new Error("PDF stream length is invalid");
-  }
-  return streamEnd;
-}
-
-/**
- * Stream-decode every directly Flate-encoded PDF stream before PDF.js starts.
- * This rejects compression bombs without retaining their decoded contents.
- */
-export async function assertPdfDecodedStreamBudget(
-  data: Uint8Array,
-  options: {
-    maxDocumentBytes?: number;
-    maxStreamBytes?: number;
-    signal?: AbortSignal;
-  } = {},
-): Promise<void> {
-  const maxStreamBytes = Math.floor(
-    finitePositive(
-      options.maxStreamBytes ?? MAX_PDF_DECODED_STREAM_BYTES,
-      MAX_PDF_DECODED_STREAM_BYTES,
-    ),
-  );
-  const maxDocumentBytes = Math.floor(
-    finitePositive(
-      options.maxDocumentBytes ?? MAX_PDF_DECODED_TOTAL_BYTES,
-      MAX_PDF_DECODED_TOTAL_BYTES,
-    ),
-  );
-  const source = new TextDecoder("iso-8859-1").decode(data);
-  const streamPattern = /\bstream(?:\r\n|\n|\r)/g;
-  let totalDecodedBytes = 0;
-  let streamMatch = streamPattern.exec(source);
-
-  while (streamMatch) {
-    if (options.signal?.aborted) throw new Error("PDF preflight was cancelled");
-    const dictionaryEnd = source.lastIndexOf(">>", streamMatch.index);
-    const dictionaryStart = findDictionaryStart(source, dictionaryEnd);
-    if (dictionaryEnd < 0 || dictionaryStart < 0) {
-      throw new Error("PDF stream dictionary is invalid");
-    }
-    const dictionary = source.slice(dictionaryStart, dictionaryEnd + 2);
-    const filterKind = classifyPdfStreamFilter(dictionary);
-
-    const length = resolvePdfStreamLength(dictionary, source);
-    if (length === null) throw new Error("PDF stream length is invalid");
-    const streamStart = streamMatch.index + streamMatch[0].length;
-    const streamEnd = pdfStreamDataEnd(source, streamStart, length);
-    streamPattern.lastIndex = streamEnd;
-    if (filterKind === "bounded") {
-      totalDecodedBytes += length;
-      if (length > maxStreamBytes) {
-        throw new PdfDecodedStreamLimitError(
-          "PDF decoded stream limit exceeded",
-          length,
-          0,
-        );
-      }
-      if (totalDecodedBytes > maxDocumentBytes) {
-        throw new PdfDecodedStreamLimitError(
-          "PDF decoded document limit exceeded",
-          totalDecodedBytes,
-          0,
-        );
-      }
-      streamMatch = streamPattern.exec(source);
-      continue;
-    }
-    if (filterKind === "image") {
-      streamMatch = streamPattern.exec(source);
-      continue;
-    }
-    const compressed = new Uint8Array(data.subarray(streamStart, streamEnd));
-    const decoded = new Blob([compressed])
-      .stream()
-      .pipeThrough(new DecompressionStream("deflate"));
-    const reader = decoded.getReader();
-    let streamDecodedBytes = 0;
-    let largestChunkBytes = 0;
-    const abort = () => {
-      void reader.cancel();
-    };
-    options.signal?.addEventListener("abort", abort, { once: true });
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        largestChunkBytes = Math.max(largestChunkBytes, chunk.value.byteLength);
-        streamDecodedBytes += chunk.value.byteLength;
-        totalDecodedBytes += chunk.value.byteLength;
-        if (streamDecodedBytes > maxStreamBytes) {
-          await reader.cancel();
-          throw new PdfDecodedStreamLimitError(
-            "PDF decoded stream limit exceeded",
-            streamDecodedBytes,
-            largestChunkBytes,
-          );
-        }
-        if (totalDecodedBytes > maxDocumentBytes) {
-          await reader.cancel();
-          throw new PdfDecodedStreamLimitError(
-            "PDF decoded document limit exceeded",
-            totalDecodedBytes,
-            largestChunkBytes,
-          );
-        }
-      }
-    } catch (cause) {
-      if (cause instanceof PdfDecodedStreamLimitError) throw cause;
-      if (options.signal?.aborted) {
-        throw new Error("PDF preflight was cancelled");
-      }
-      throw new Error("PDF Flate stream is invalid", { cause });
-    } finally {
-      options.signal?.removeEventListener("abort", abort);
-      reader.releaseLock();
-    }
-    streamMatch = streamPattern.exec(source);
-  }
 }
 
 /** Stop streamed PDF.js operator execution before a compressed stream can expand without bound. */
