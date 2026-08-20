@@ -11,6 +11,132 @@ const ZERO_BALANCE = {
   status: "depleted" as const,
 };
 
+function runtime(
+  id: "buzz-agent" | "claude" | "codex",
+  availability: string,
+  authStatus: Record<string, unknown>,
+) {
+  return {
+    id,
+    label:
+      id === "buzz-agent"
+        ? "Colony Agent"
+        : id === "claude"
+          ? "Claude Code"
+          : "Codex",
+    avatar_url: "",
+    availability,
+    command: availability === "available" ? id : null,
+    binary_path: availability === "available" ? `/usr/local/bin/${id}` : null,
+    default_args: [],
+    mcp_command: null,
+    install_hint: `Install ${id}`,
+    install_instructions_url: "https://example.com",
+    can_auto_install: true,
+    underlying_cli_path: null,
+    node_required: false,
+    auth_status: authStatus,
+    login_hint: `Sign in to ${id}`,
+  };
+}
+
+async function seedRuntimeCheck(
+  page: Parameters<typeof seedActiveIdentity>[0],
+) {
+  const identity = { ...TEST_IDENTITIES.tyler, username: "" };
+  await seedActiveIdentity(page, identity);
+  await page.addInitScript(
+    ({ pubkey, storageKey }) => {
+      window.localStorage.setItem(
+        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        "true",
+      );
+      const timestamp = new Date().toISOString();
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          addedCommunity: true,
+          communityId: "e2e-default-community",
+          communityName: "E2E Test",
+          createdAt: timestamp,
+          id: "automatic-runtime-selection",
+          onboardingV2: {
+            company: {
+              canonicalUrl: "https://example.com/",
+              hasWebsite: true,
+              scanStatus: "success",
+              summary: "A test company ready for automatic runtime setup.",
+              website: "https://example.com",
+            },
+            credits: {
+              balanceNanousd: null,
+              status: "unavailable",
+            },
+            firstTask: {
+              content: "",
+              deliveredEventId: null,
+              deliveryMarker: "e2e-automatic-runtime",
+            },
+            founder: {
+              city: "Johannesburg",
+              country: "South Africa",
+              fullName: "Basheer Phiri",
+              gender: null,
+              selfDescribedGender: "",
+            },
+            runtime: {
+              model: "deepseek-v4-flash",
+              route: null,
+              selectedId: null,
+            },
+            stage: "runtime-check",
+            version: 1,
+          },
+          relayUrl: "wss://default.example.com",
+          source: "first-community",
+          stage: "profile",
+          updatedAt: timestamp,
+        }),
+      );
+    },
+    { pubkey: identity.pubkey, storageKey: TRANSACTION_STORAGE_KEY },
+  );
+}
+
+async function readGlobalConfig(page: Parameters<typeof installMockBridge>[0]) {
+  return await page.evaluate(async () => {
+    return await (
+      window as Window & {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload: unknown,
+        ) => Promise<{
+          credential_mode?: string;
+          preferred_runtime?: string | null;
+        }>;
+      }
+    ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config", null);
+  });
+}
+
+async function readGlobalConfigSetterCallCount(
+  page: Parameters<typeof installMockBridge>[0],
+) {
+  return await page.evaluate(async () => {
+    return await (
+      window as Window & {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload: unknown,
+        ) => Promise<number>;
+      }
+    ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+      "get_global_agent_config_set_call_count",
+      null,
+    );
+  });
+}
+
 test("zero-credit Colony Agent onboarding reaches the first task without payment UI", async ({
   page,
 }) => {
@@ -160,4 +286,80 @@ test("bring-your-own-key users do not see a Colony Credits balance", async ({
   await page.goto("/");
 
   await expect(page.getByTestId("sidebar-credits-balance")).toHaveCount(0);
+});
+
+test("automatic setup selects the first ready supported CLI without a chooser", async ({
+  page,
+}) => {
+  await seedRuntimeCheck(page);
+  await installMockBridge(
+    page,
+    {
+      acpRuntimesCatalog: [
+        runtime("claude", "available", { status: "logged_in" }),
+        runtime("codex", "available", { status: "logged_in" }),
+        runtime("buzz-agent", "available", { status: "not_applicable" }),
+      ],
+      globalAgentConfig: {
+        credential_mode: "byok",
+        env_vars: {},
+        model: null,
+        preferred_runtime: null,
+        provider: null,
+      },
+    },
+    { relayWsUrl: RELAY_URL, skipOnboardingSeed: true },
+  );
+
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Your existing AI setup works" }),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("codex is ready")).toBeVisible();
+  await expect(page.getByTestId("onboarding-runtime-codex")).toHaveCount(0);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect
+    .poll(() => readGlobalConfig(page))
+    .toMatchObject({ credential_mode: "byok", preferred_runtime: "codex" });
+  await expect.poll(() => readGlobalConfigSetterCallCount(page)).toBe(1);
+});
+
+test("automatic setup offers Colony Agent when no supported CLI is ready", async ({
+  page,
+}) => {
+  await seedRuntimeCheck(page);
+  await installMockBridge(
+    page,
+    {
+      acpRuntimesCatalog: [
+        runtime("codex", "available", { status: "logged_out" }),
+        runtime("claude", "not_installed", { status: "unknown" }),
+        runtime("buzz-agent", "available", { status: "not_applicable" }),
+      ],
+      globalAgentConfig: {
+        credential_mode: "byok",
+        env_vars: {},
+        model: null,
+        preferred_runtime: null,
+        provider: null,
+      },
+    },
+    { relayWsUrl: RELAY_URL, skipOnboardingSeed: true },
+  );
+
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Install your company’s engine" }),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.getByRole("button", { name: "Install Colony Agent" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("onboarding-runtime-codex")).toHaveCount(0);
+  await expect(await readGlobalConfig(page)).toMatchObject({
+    credential_mode: "byok",
+    preferred_runtime: null,
+  });
+  expect(await readGlobalConfigSetterCallCount(page)).toBe(0);
 });
