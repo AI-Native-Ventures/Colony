@@ -61,7 +61,12 @@ function readWebPayload(payload: unknown): WebPayload {
 }
 
 function webAutoStartKey(tabId: string, payload: WebPayload): string {
-  return `${tabId}|${payload.endpoint ?? ""}|${payload.targetId ?? ""}|${payload.url.trim()}`;
+  return JSON.stringify([
+    tabId,
+    payload.endpoint,
+    payload.targetId,
+    payload.url.trim(),
+  ]);
 }
 
 function modifiersForEvent(event: React.KeyboardEvent): number {

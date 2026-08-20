@@ -57,17 +57,25 @@ type WheelDispatcher = {
   pending: PendingWheel | null;
   scheduled: boolean;
 };
+type NormalizedWebSessionRequest = WebSessionRequest & { url: string };
+type WebStartQueue = {
+  cancelled: boolean;
+  latestKey: string;
+  latestRequest: NormalizedWebSessionRequest;
+  promise: Promise<void>;
+};
 
 const sessions = new Map<string, WebSessionState>();
 const nativeToTab = new Map<string, string>();
 const pendingFrames = new Map<string, WebFrame>();
 const queuedFrames = new Map<string, WebFrame>();
-const starts = new Map<string, Promise<void>>();
-const startTokens = new Map<string, symbol>();
+const starts = new Map<string, WebStartQueue>();
 const listeners = new Map<string, Set<() => void>>();
 const tabGenerations = new Map<string, number>();
 const wheelDispatchers = new Map<string, WheelDispatcher>();
 const retiredNativeSessions = new Set<string>();
+const MAX_RETIRED_NATIVE_SESSIONS = 256;
+const MAX_WEB_URL_BYTES = 8 * 1024;
 let nativeListeners: Promise<NativeUnlisten[]> | null = null;
 let resetGeneration = 0;
 let frameFlushGeneration = 0;
@@ -107,10 +115,20 @@ const NAVIGATION_ERROR =
 export function normalizeWebNavigationUrl(value: string): string | null {
   const candidate = value.trim();
   if (candidate === "about:blank") return candidate;
-  if (!candidate || candidate.length > 8 * 1024) return null;
+  if (!candidate) return null;
+  let utf8ByteLength = 0;
   for (const character of candidate) {
     const codePoint = character.codePointAt(0) ?? 0;
     if (codePoint <= 0x1f || codePoint === 0x7f) return null;
+    utf8ByteLength +=
+      codePoint <= 0x7f
+        ? 1
+        : codePoint <= 0x7ff
+          ? 2
+          : codePoint <= 0xffff
+            ? 3
+            : 4;
+    if (utf8ByteLength > MAX_WEB_URL_BYTES) return null;
   }
   try {
     const parsed = new URL(candidate);
@@ -128,7 +146,17 @@ function detachNativeSession(sessionId: string): void {
   nativeToTab.delete(sessionId);
   pendingFrames.delete(sessionId);
   queuedFrames.delete(sessionId);
+  retiredNativeSessions.delete(sessionId);
   retiredNativeSessions.add(sessionId);
+  while (retiredNativeSessions.size > MAX_RETIRED_NATIVE_SESSIONS) {
+    const oldestSessionId = retiredNativeSessions.values().next().value;
+    if (typeof oldestSessionId !== "string") break;
+    retiredNativeSessions.delete(oldestSessionId);
+  }
+}
+
+function webSessionRequestKey(request: NormalizedWebSessionRequest): string {
+  return JSON.stringify([request.endpoint, request.targetId, request.url]);
 }
 
 function emit(tabId: string): void {
@@ -335,6 +363,102 @@ export function subscribeWebSession(
   };
 }
 
+async function startWebSession(
+  tabId: string,
+  request: NormalizedWebSessionRequest,
+): Promise<void> {
+  const current = sessions.get(tabId);
+  const generation = advanceTabGeneration(tabId);
+  const resetAtStart = resetGeneration;
+  setSession(tabId, {
+    ...(current ?? emptyState()),
+    status: "connecting",
+    sessionId: null,
+    targetId: null,
+    ownsBrowserProcess: false,
+    browserPid: null,
+    frame: null,
+    error: null,
+  });
+  try {
+    await ensureNativeListeners();
+    if (current?.sessionId) {
+      detachNativeSession(current.sessionId);
+      clearWheelDispatcher(tabId);
+      try {
+        await invoke("workspace_web_close", {
+          sessionId: current.sessionId,
+        });
+      } catch {
+        if (isCurrentGeneration(tabId, generation, resetAtStart)) {
+          setSession(tabId, {
+            ...current,
+            status: "error",
+            error: START_ERROR,
+          });
+        }
+        return;
+      }
+    }
+    const result = await invoke<WebStartResult>("workspace_web_start", {
+      // Only endpoint/target/url are user-facing connection inputs. The
+      // browser binary and launch mode stay native-owned so a restored tab
+      // payload can never execute an arbitrary local path or open a visible
+      // focus-stealing browser.
+      request: {
+        endpoint: request.endpoint,
+        targetId: request.targetId,
+        url: request.url,
+      },
+    });
+    if (!isCurrentGeneration(tabId, generation, resetAtStart)) {
+      await invoke("workspace_web_close", {
+        sessionId: result.sessionId,
+      }).catch(() => undefined);
+      detachNativeSession(result.sessionId);
+      return;
+    }
+    retiredNativeSessions.delete(result.sessionId);
+    nativeToTab.set(result.sessionId, tabId);
+    const frame = pendingFrames.get(result.sessionId) ?? null;
+    pendingFrames.delete(result.sessionId);
+    setSession(tabId, {
+      status: "running",
+      sessionId: result.sessionId,
+      targetId: result.targetId,
+      url: result.url,
+      ownsBrowserProcess: result.ownsBrowserProcess,
+      browserPid: result.browserPid,
+      frame,
+      error: null,
+    });
+  } catch {
+    if (!isCurrentGeneration(tabId, generation, resetAtStart)) return;
+    setSession(tabId, {
+      ...(sessions.get(tabId) ?? emptyState()),
+      status: "error",
+      error: START_ERROR,
+    });
+  }
+}
+
+async function drainWebStartQueue(
+  tabId: string,
+  queue: WebStartQueue,
+): Promise<void> {
+  try {
+    while (!queue.cancelled) {
+      const request = queue.latestRequest;
+      const requestKey = queue.latestKey;
+      await startWebSession(tabId, request);
+      if (queue.cancelled || starts.get(tabId) !== queue) return;
+      if (queue.latestKey === requestKey) return;
+    }
+  } finally {
+    if (starts.get(tabId) === queue) starts.delete(tabId);
+  }
+}
+
 /** Start one native browser session for a tab. Remounts reuse the session. */
 export async function ensureWebSession(
   tabId: string,
@@ -342,8 +466,6 @@ export async function ensureWebSession(
 ): Promise<void> {
   const current = sessions.get(tabId);
   if (current?.sessionId && current.status === "running") return;
-  const existing = starts.get(tabId);
-  if (existing) return existing;
 
   const normalizedUrl = normalizeWebNavigationUrl(request.url);
   if (!normalizedUrl) {
@@ -354,90 +476,26 @@ export async function ensureWebSession(
     });
     return;
   }
-
-  const generation = advanceTabGeneration(tabId);
-  const resetAtStart = resetGeneration;
-  const startToken = Symbol("web-start");
-  startTokens.set(tabId, startToken);
-  const start = (async () => {
-    setSession(tabId, {
-      ...(current ?? emptyState()),
-      status: "connecting",
-      sessionId: null,
-      targetId: null,
-      ownsBrowserProcess: false,
-      browserPid: null,
-      frame: null,
-      error: null,
-    });
-    try {
-      await ensureNativeListeners();
-      if (current?.sessionId) {
-        detachNativeSession(current.sessionId);
-        clearWheelDispatcher(tabId);
-        try {
-          await invoke("workspace_web_close", {
-            sessionId: current.sessionId,
-          });
-        } catch {
-          if (isCurrentGeneration(tabId, generation, resetAtStart)) {
-            setSession(tabId, {
-              ...current,
-              status: "error",
-              error: START_ERROR,
-            });
-          }
-          return;
-        }
-      }
-      const result = await invoke<WebStartResult>("workspace_web_start", {
-        // Only endpoint/target/url are user-facing connection inputs. The
-        // browser binary and launch mode stay native-owned so a restored tab
-        // payload can never execute an arbitrary local path or open a visible
-        // focus-stealing browser.
-        request: {
-          endpoint: request.endpoint,
-          targetId: request.targetId,
-          url: normalizedUrl,
-        },
-      });
-      if (!isCurrentGeneration(tabId, generation, resetAtStart)) {
-        await invoke("workspace_web_close", {
-          sessionId: result.sessionId,
-        }).catch(() => undefined);
-        pendingFrames.delete(result.sessionId);
-        return;
-      }
-      retiredNativeSessions.delete(result.sessionId);
-      nativeToTab.set(result.sessionId, tabId);
-      const frame = pendingFrames.get(result.sessionId) ?? null;
-      pendingFrames.delete(result.sessionId);
-      setSession(tabId, {
-        status: "running",
-        sessionId: result.sessionId,
-        targetId: result.targetId,
-        url: result.url,
-        ownsBrowserProcess: result.ownsBrowserProcess,
-        browserPid: result.browserPid,
-        frame,
-        error: null,
-      });
-    } catch {
-      if (!isCurrentGeneration(tabId, generation, resetAtStart)) return;
-      setSession(tabId, {
-        ...(sessions.get(tabId) ?? emptyState()),
-        status: "error",
-        error: START_ERROR,
-      });
-    } finally {
-      if (startTokens.get(tabId) === startToken) {
-        startTokens.delete(tabId);
-        starts.delete(tabId);
-      }
+  const normalizedRequest = { ...request, url: normalizedUrl };
+  const requestKey = webSessionRequestKey(normalizedRequest);
+  const existing = starts.get(tabId);
+  if (existing) {
+    if (existing.latestKey !== requestKey) {
+      existing.latestKey = requestKey;
+      existing.latestRequest = normalizedRequest;
     }
-  })();
-  starts.set(tabId, start);
-  return start;
+    return existing.promise;
+  }
+
+  const queue: WebStartQueue = {
+    cancelled: false,
+    latestKey: requestKey,
+    latestRequest: normalizedRequest,
+    promise: Promise.resolve(),
+  };
+  queue.promise = drainWebStartQueue(tabId, queue);
+  starts.set(tabId, queue);
+  return queue.promise;
 }
 
 /** Navigate the currently attached page. */
@@ -565,7 +623,8 @@ export const reloadWeb = (tabId: string): Promise<void> =>
 
 /** Close one native web session before removing its tab. */
 export async function disposeWebSession(tabId: string): Promise<void> {
-  const pendingStart = starts.get(tabId);
+  const pendingQueue = starts.get(tabId);
+  if (pendingQueue) pendingQueue.cancelled = true;
   advanceTabGeneration(tabId);
   clearWheelDispatcher(tabId);
   const session = sessions.get(tabId);
@@ -579,9 +638,9 @@ export async function disposeWebSession(tabId: string): Promise<void> {
       detachNativeSession(session.sessionId);
     }
   }
-  if (pendingStart) {
+  if (pendingQueue) {
     try {
-      await pendingStart;
+      await pendingQueue.promise;
     } catch (cause: unknown) {
       failure ??= cause;
     }
@@ -596,7 +655,8 @@ export async function resetWebSessions(): Promise<void> {
   resetGeneration += 1;
   clearWheelDispatchers();
   clearQueuedFrames();
-  const pendingStarts = [...starts.values()];
+  const pendingQueues = [...starts.values()];
+  for (const queue of pendingQueues) queue.cancelled = true;
   let failure: unknown = null;
   try {
     await invoke("workspace_web_close_all");
@@ -606,9 +666,7 @@ export async function resetWebSessions(): Promise<void> {
     sessions.clear();
     nativeToTab.clear();
     pendingFrames.clear();
-    retiredNativeSessions.clear();
-    await Promise.allSettled(pendingStarts);
-    startTokens.clear();
+    await Promise.allSettled(pendingQueues.map((queue) => queue.promise));
     starts.clear();
     for (const tabId of listeners.keys()) emit(tabId);
   }
@@ -626,4 +684,9 @@ export function applyWebSessionEventForTest(
     return;
   }
   handleWebClosedEvent(event.payload);
+}
+
+/** Report bounded stale-session bookkeeping for lifecycle regression tests. */
+export function retiredWebSessionCountForTest(): number {
+  return retiredNativeSessions.size;
 }

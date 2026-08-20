@@ -62,3 +62,20 @@ test("identical restored web payloads auto-start independently per tab", () => {
     webAutoStartKeyForTest("tab-second", payload),
   );
 });
+
+test("web auto-start identity cannot collide through field delimiters", () => {
+  const url = "https://docs.example.com/collision";
+
+  assert.notEqual(
+    webAutoStartKeyForTest("tab|endpoint", {
+      endpoint: "target",
+      targetId: "url",
+      url,
+    }),
+    webAutoStartKeyForTest("tab", {
+      endpoint: "endpoint|target",
+      targetId: "url",
+      url,
+    }),
+  );
+});
