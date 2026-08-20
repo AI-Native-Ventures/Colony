@@ -346,7 +346,7 @@ export function useMentions(
         personaId:
           managedAgentPersonaIdsByPubkey.get(pubkey) ??
           (activePersonaById.has(pubkey) ? pubkey : undefined),
-        ownerPubkey: null,
+        ownerPubkey: agent.ownerPubkey,
         isAgent: true,
         roleId: personaRoleByPubkey.get(pubkey)?.roleId ?? null,
         roleTitle: personaRoleByPubkey.get(pubkey)?.roleTitle ?? null,
@@ -508,13 +508,14 @@ export function useMentions(
     searchableNamesLowerRef.current = searchableNamesLower;
   }, [searchableNamesLower]);
 
-  React.useEffect(() => {
-    return () => {
+  React.useEffect(
+    () => () => {
       if (debounceTimerRef.current !== null) {
         clearTimeout(debounceTimerRef.current);
       }
-    };
-  }, []);
+    },
+    [],
+  );
 
   const matchingSuggestions = React.useMemo<MentionSuggestion[]>(() => {
     if (mentionQuery === null) {
