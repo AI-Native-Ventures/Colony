@@ -1,7 +1,7 @@
 # Workspace Focus Mode, Direct Navigation, and Artifact Delivery Design
 
 Date: 2026-08-20
-Status: In review after artifact-delivery amendment
+Status: Approved
 Thread: `ec0cd9f47806fd60419bffb14971223e29a0fc671a49c248d448cd4ec86107f0`
 
 ## Outcome
