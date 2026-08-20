@@ -946,7 +946,7 @@ test.describe("community rail", () => {
     await expect(page.getByTestId("community-rail")).toHaveCount(0);
   });
 
-  test("keeps the rail visible when the sidebar is collapsed", async ({
+  test("hides the rail when the sidebar is collapsed and restores it", async ({
     page,
   }) => {
     await installMockBridge(page, undefined, { skipCommunitySeed: true });
@@ -956,20 +956,25 @@ test.describe("community rail", () => {
     const rail = page.getByTestId("community-rail");
     await expect(rail).toBeVisible();
 
-    // Collapse the sidebar via its keyboard shortcut. The rail is a sibling of
-    // the sidebar, not inside it, so it must stay fully visible and unshifted.
-    await page.evaluate(() => {
-      const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
-      window.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          cancelable: true,
-          key: "s",
-          ctrlKey: !isMac,
-          metaKey: isMac,
-        }),
-      );
-    });
+    const toggleSidebar = () =>
+      page.evaluate(() => {
+        const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "s",
+            ctrlKey: !isMac,
+            metaKey: isMac,
+          }),
+        );
+      });
+
+    await toggleSidebar();
+
+    await expect(rail).toHaveCount(0);
+
+    await toggleSidebar();
 
     await expect(rail).toBeVisible();
     await expect(

@@ -60,6 +60,15 @@ function readWebPayload(payload: unknown): WebPayload {
   };
 }
 
+function webAutoStartKey(tabId: string, payload: WebPayload): string {
+  return JSON.stringify([
+    tabId,
+    payload.endpoint,
+    payload.targetId,
+    payload.url.trim(),
+  ]);
+}
+
 function modifiersForEvent(event: React.KeyboardEvent): number {
   return (
     (event.altKey ? 1 : 0) |
@@ -132,6 +141,7 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   const [endpoint, setEndpoint] = React.useState(payload.endpoint ?? "");
   const [targetId, setTargetId] = React.useState(payload.targetId ?? "");
   const [url, setUrl] = React.useState(payload.url);
+  const autoStartKey = React.useRef<string | null>(null);
   const frameRef = React.useRef<HTMLImageElement>(null);
   const surfaceRef = React.useRef<HTMLDivElement>(null);
 
@@ -159,6 +169,19 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     persistPayload();
     void ensureWebSession(tab.id, request);
   }, [endpoint, persistPayload, tab.id, targetId, url]);
+
+  React.useEffect(() => {
+    const requestedUrl = payload.url.trim();
+    if (!requestedUrl || requestedUrl === "about:blank") return;
+    const key = webAutoStartKey(tab.id, payload);
+    if (autoStartKey.current === key) return;
+    autoStartKey.current = key;
+    void ensureWebSession(tab.id, {
+      endpoint: payload.endpoint,
+      targetId: payload.targetId,
+      url: requestedUrl,
+    });
+  }, [payload, tab.id]);
 
   const navigate = React.useCallback(() => {
     persistPayload();
@@ -405,10 +428,17 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       </div>
       {session.error ? (
         <div
-          className="border-b border-destructive/30 px-3 py-2 text-sm text-destructive"
+          className="flex items-center justify-between gap-3 border-b border-destructive/30 px-3 py-2 text-sm"
           data-testid="workspace-web-error"
         >
-          {session.error}
+          <span className="text-destructive">{session.error}</span>
+          <button
+            className="rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted"
+            onClick={connect}
+            type="button"
+          >
+            Retry
+          </button>
         </div>
       ) : null}
       <div
@@ -433,6 +463,14 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
             src={`data:image/jpeg;base64,${session.frame.data}`}
             width={session.frame.width}
           />
+        ) : session.status === "connecting" ? (
+          <div
+            aria-live="polite"
+            className="max-w-md p-8 text-center text-sm text-muted-foreground"
+            data-testid="workspace-web-loading"
+          >
+            Starting browser...
+          </div>
         ) : (
           <div
             className="max-w-md p-8 text-center text-sm text-muted-foreground"
@@ -457,6 +495,13 @@ export function frameCoordinatesForTest(
   frame: { width: number; height: number },
 ): { x: number; y: number } | null {
   return frameCoordinates(element, event, frame);
+}
+
+export function webAutoStartKeyForTest(
+  tabId: string,
+  payload: WebPayload,
+): string {
+  return webAutoStartKey(tabId, payload);
 }
 
 export type { WorkspaceTab };
