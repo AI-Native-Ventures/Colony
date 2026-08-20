@@ -65,6 +65,20 @@ function pointerEvent(type, clientX = 0) {
   return new dom.window.MouseEvent(type, { clientX });
 }
 
+function keyboardEvent(key, shiftKey = false) {
+  let prevented = false;
+  return {
+    event: {
+      key,
+      preventDefault() {
+        prevented = true;
+      },
+      shiftKey,
+    },
+    wasPrevented: () => prevented,
+  };
+}
+
 test("the default focus split is 20/80", () => {
   assert.equal(DEFAULT_FOCUS_THREAD_RATIO, 0.2);
   assert.equal(clampFocusThreadWidth(320, 1600), 320);
@@ -132,4 +146,25 @@ test("zero-width drag bounds never persist an invalid ratio", async () => {
     window.sessionStorage.getItem("buzz.desktop.workspace-focus-thread-ratio"),
     String(DEFAULT_FOCUS_THREAD_RATIO),
   );
+});
+
+test("keyboard arrows resize and Home restores the preferred split", async () => {
+  const { act } = await import("@testing-library/react");
+  const hook = await renderSplit(1_600);
+  assert.equal(hook.result.current.threadWidthPx, 320);
+
+  const arrow = keyboardEvent("ArrowRight");
+  act(() => hook.result.current.onResizeKeyDown(arrow.event));
+  assert.equal(arrow.wasPrevented(), true);
+  assert.equal(hook.result.current.threadWidthPx, 336);
+
+  const shiftedArrow = keyboardEvent("ArrowLeft", true);
+  act(() => hook.result.current.onResizeKeyDown(shiftedArrow.event));
+  assert.equal(shiftedArrow.wasPrevented(), true);
+  assert.equal(hook.result.current.threadWidthPx, 280);
+
+  const home = keyboardEvent("Home");
+  act(() => hook.result.current.onResizeKeyDown(home.event));
+  assert.equal(home.wasPrevented(), true);
+  assert.equal(hook.result.current.threadWidthPx, 320);
 });

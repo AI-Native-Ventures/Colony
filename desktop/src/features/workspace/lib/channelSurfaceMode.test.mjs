@@ -51,6 +51,41 @@ test("workspace mode is channel-scoped and resettable", async () => {
   });
 });
 
+test("surface transitions can capture state before the new layout renders", async () => {
+  await withStorage(memoryStorage(), (mod) => {
+    const transitions = [];
+    const unsubscribe = mod.subscribeBeforeChannelSurfaceModeChange(
+      (change) => {
+        transitions.push({
+          ...change,
+          observedMode: mod.getChannelSurfaceMode(change.channelId),
+        });
+      },
+    );
+
+    mod.setChannelSurfaceMode("alpha", "workspace");
+    mod.setChannelSurfaceMode("alpha", "workspace");
+    mod.setChannelSurfaceMode("alpha", "timeline");
+    unsubscribe();
+    mod.setChannelSurfaceMode("alpha", "workspace");
+
+    assert.deepEqual(transitions, [
+      {
+        channelId: "alpha",
+        from: "timeline",
+        observedMode: "timeline",
+        to: "workspace",
+      },
+      {
+        channelId: "alpha",
+        from: "workspace",
+        observedMode: "workspace",
+        to: "timeline",
+      },
+    ]);
+  });
+});
+
 test("surface mode is the only exported workspace focus state", async () => {
   await withStorage(memoryStorage(), (mod) => {
     assert.equal(["get", "Workspace", "Expanded"].join("") in mod, false);

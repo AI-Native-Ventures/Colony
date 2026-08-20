@@ -1,45 +1,43 @@
-import * as React from "react";
+import type * as React from "react";
 
 import { useChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
 import { ChannelWorkspace } from "@/features/workspace/ui/ChannelWorkspace";
 import { RightWorkspacePane } from "@/features/workspace/ui/RightWorkspacePane";
-import { useWorkspacePanelWidth } from "@/features/workspace/ui/useWorkspacePanelWidth";
-
-const WORKSPACE_WIDTH_CSS_PROPERTY = "--buzz-workspace-pane-width";
 
 type ChannelWorkspaceDockProps = {
+  canResetWidth: boolean;
   channelId: string | null;
-  hasAuxiliaryPane: boolean;
-  layoutRef: React.RefObject<HTMLDivElement | null>;
+  hasThread: boolean;
+  onResetWidth: () => void;
+  onResizeKeyDown: (event: React.KeyboardEvent<HTMLHRElement>) => void;
+  onResizeStart: (event: React.PointerEvent<HTMLElement>) => void;
+  threadWidthPx: number;
+  workspaceWidthPx: number;
 };
 
 export function ChannelWorkspaceDock({
+  canResetWidth,
   channelId,
-  hasAuxiliaryPane,
-  layoutRef,
+  hasThread,
+  onResetWidth,
+  onResizeKeyDown,
+  onResizeStart,
+  threadWidthPx,
+  workspaceWidthPx,
 }: ChannelWorkspaceDockProps): React.JSX.Element | null {
   const isOpen = useChannelSurfaceMode(channelId ?? undefined) === "workspace";
-  const { canReset, onResetWidth, onResizeStart, widthPx } =
-    useWorkspacePanelWidth(layoutRef, hasAuxiliaryPane);
-
-  React.useLayoutEffect(() => {
-    const element = layoutRef.current;
-    if (!element) return;
-    element.style.removeProperty(WORKSPACE_WIDTH_CSS_PROPERTY);
-    return () => {
-      element.style.removeProperty(WORKSPACE_WIDTH_CSS_PROPERTY);
-    };
-  }, [layoutRef]);
 
   if (!channelId || !isOpen) return null;
 
   return (
     <RightWorkspacePane
-      canResetWidth={canReset}
-      expanded
+      canResetWidth={canResetWidth}
+      hasThread={hasThread}
       onResetWidth={onResetWidth}
+      onResizeKeyDown={onResizeKeyDown}
       onResizeStart={onResizeStart}
-      widthPx={widthPx}
+      threadWidthPx={threadWidthPx}
+      widthPx={workspaceWidthPx}
     >
       <ChannelWorkspace channelId={channelId} />
     </RightWorkspacePane>

@@ -6,12 +6,20 @@ import {
   THREAD_FOCUS_SLIVER_WIDTH_PX,
 } from "@/features/channels/lib/threadFocusLayout";
 import { getThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
+import { AUXILIARY_PANEL_MIN_WIDTH_PX } from "@/shared/layout/AuxiliaryPanel";
 import { cn } from "@/shared/lib/cn";
 
 type FocusThreadDrawerProps = {
+  canResetWidth: boolean;
   channelName: string;
   children: React.ReactNode;
+  focusWidthPx: number;
+  mode: "focus" | "split" | "standalone" | "workspace";
+  normalWidthPx: number;
   onClose: () => void;
+  ownsMessageThreadTestId: boolean;
+  onResetWidth: () => void;
+  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
 };
 
 /**
@@ -135,16 +143,27 @@ const REDUCED_MOTION_TRANSITION = { duration: 0.12, ease: "linear" } as const;
  * drawer its own stacking context, so the panel chrome inside it is isolated.
  */
 export function FocusThreadDrawer({
+  canResetWidth,
   channelName,
   children,
+  focusWidthPx,
+  mode,
+  normalWidthPx,
   onClose,
+  ownsMessageThreadTestId,
+  onResetWidth,
+  onResizeStart,
 }: FocusThreadDrawerProps) {
+  const focusMode = mode === "focus";
   const prefersReducedMotion = useReducedMotion();
   const travelPx = prefersReducedMotion ? 0 : THREAD_FOCUS_DRAWER_TRAVEL_PX;
-  const drawerRef = React.useRef<HTMLDivElement>(null);
+  const drawerRef = React.useRef<HTMLElement>(null);
+  const modeRef = React.useRef(mode);
   const previousFocusRef = React.useRef<HTMLElement | null>(null);
+  modeRef.current = mode;
 
   React.useEffect(() => {
+    if (!focusMode) return;
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -156,9 +175,10 @@ export function FocusThreadDrawer({
     return () => {
       window.removeEventListener("keydown", handleEscape, { capture: true });
     };
-  }, [onClose]);
+  }, [focusMode, onClose]);
 
   React.useLayoutEffect(() => {
+    if (!focusMode) return;
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -170,74 +190,133 @@ export function FocusThreadDrawer({
       requestAnimationFrame(() => {
         // A real dismissal keeps focus mode selected; a presentation switch
         // has already selected split mode and owns focus inside the new panel.
-        if (getThreadViewMode() === "focus") {
+        if (modeRef.current === "focus" && getThreadViewMode() === "focus") {
           previousFocus?.focus({ preventScroll: true });
         }
       });
     };
-  }, []);
+  }, [focusMode]);
 
   return (
     <div
-      className="absolute inset-0 z-41"
-      data-testid="focus-thread-drawer-overlay"
+      className={focusMode ? "absolute inset-0 z-41" : "contents"}
+      data-testid={focusMode ? "focus-thread-drawer-overlay" : undefined}
     >
-      <motion.button
-        animate={{ opacity: 1 }}
-        aria-label={`Back to #${channelName}`}
-        className={cn(
-          "absolute inset-0 cursor-pointer transition-colors duration-150",
-          FOCUS_SCRIM_CLASS,
-          FOCUS_SCRIM_HOVER_CLASS,
-        )}
-        data-testid="focus-thread-drawer-scrim"
-        exit={{
-          opacity: 0,
-          transition: prefersReducedMotion
-            ? REDUCED_MOTION_TRANSITION
-            : { duration: SCRIM_EXIT_SECONDS, ease: "linear" },
-        }}
-        initial={{ opacity: 0 }}
-        onClick={onClose}
-        transition={
-          prefersReducedMotion
-            ? REDUCED_MOTION_TRANSITION
-            : { duration: SCRIM_ENTER_SECONDS, ease: "linear" }
-        }
-        type="button"
-      />
+      {focusMode ? (
+        <motion.button
+          animate={{ opacity: 1 }}
+          aria-label={`Back to #${channelName}`}
+          className={cn(
+            "absolute inset-0 cursor-pointer transition-colors duration-150",
+            FOCUS_SCRIM_CLASS,
+            FOCUS_SCRIM_HOVER_CLASS,
+          )}
+          data-testid="focus-thread-drawer-scrim"
+          exit={{
+            opacity: 0,
+            transition: prefersReducedMotion
+              ? REDUCED_MOTION_TRANSITION
+              : { duration: SCRIM_EXIT_SECONDS, ease: "linear" },
+          }}
+          initial={{ opacity: 0 }}
+          onClick={onClose}
+          transition={
+            prefersReducedMotion
+              ? REDUCED_MOTION_TRANSITION
+              : { duration: SCRIM_ENTER_SECONDS, ease: "linear" }
+          }
+          type="button"
+        />
+      ) : null}
 
-      <motion.div
+      <motion.aside
         animate={{ opacity: 1, x: 0 }}
         className={cn(
-          // Left corners only, at the app content surface's own `rounded-2xl`:
-          // the drawer is flush to that surface's right edge, so it is *clipped*
-          // to its right corners rather than nesting inside them. Flush edges
-          // share a radius — a smaller one here would put two radii on one
-          // element. `shadow-panel-left` draws the left edge and its corners;
-          // see the token for why a `border-l` cannot.
-          "absolute inset-y-0 right-0 flex flex-col overflow-hidden rounded-l-2xl bg-background shadow-panel-left",
+          mode === "standalone"
+            ? "contents"
+            : "relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-background",
+          focusMode &&
+            "absolute inset-y-0 right-0 rounded-l-2xl shadow-panel-left",
+          mode === "split" &&
+            "group/right-pane before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:z-50 before:w-px before:bg-border/80 before:content-['']",
         )}
-        aria-label="Thread"
-        data-testid="focus-thread-drawer"
+        aria-label={
+          focusMode
+            ? "Thread"
+            : mode === "standalone"
+              ? undefined
+              : "Thread context"
+        }
+        data-testid={
+          focusMode
+            ? "focus-thread-drawer"
+            : mode === "workspace"
+              ? "workspace-focus-thread-pane"
+              : undefined
+        }
         ref={drawerRef}
-        role="complementary"
-        tabIndex={-1}
+        role={focusMode ? "complementary" : undefined}
+        tabIndex={focusMode ? -1 : undefined}
         exit={{
-          opacity: 0,
+          opacity: focusMode ? 0 : 1,
           transition: prefersReducedMotion
             ? REDUCED_MOTION_TRANSITION
             : EXIT_TRANSITION,
-          x: travelPx,
+          x: focusMode ? travelPx : 0,
         }}
-        initial={{ opacity: 0, x: travelPx }}
-        style={{ left: THREAD_FOCUS_SLIVER_WIDTH_PX }}
+        initial={focusMode ? { opacity: 0, x: travelPx } : false}
+        style={
+          focusMode
+            ? { left: THREAD_FOCUS_SLIVER_WIDTH_PX }
+            : mode === "workspace"
+              ? { width: focusWidthPx }
+              : mode === "split"
+                ? {
+                    maxWidth: `calc(100% - ${AUXILIARY_PANEL_MIN_WIDTH_PX}px - var(--buzz-workspace-pane-width, 0px))`,
+                    width: normalWidthPx,
+                  }
+                : undefined
+        }
         transition={
           prefersReducedMotion ? REDUCED_MOTION_TRANSITION : ENTER_TRANSITION
         }
       >
-        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
-      </motion.div>
+        {mode === "split" ? (
+          <button
+            aria-label="Resize panel"
+            className="peer/right-pane-resize group/right-pane-resize absolute inset-y-0 left-0 z-50 w-3 -translate-x-1/2 cursor-col-resize"
+            data-testid="right-auxiliary-pane-resize-handle"
+            onDoubleClick={canResetWidth ? onResetWidth : undefined}
+            onPointerDown={onResizeStart}
+            title={
+              canResetWidth
+                ? "Drag to resize. Double-click to reset width."
+                : "Drag to resize."
+            }
+            type="button"
+          >
+            <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover/right-pane-resize:bg-border/80 group-focus-visible/right-pane-resize:bg-border/80" />
+          </button>
+        ) : null}
+        <div
+          key="thread-content"
+          className={
+            mode === "standalone"
+              ? "contents"
+              : "relative flex min-h-0 min-w-0 flex-1 flex-col"
+          }
+          data-testid="thread-surface-content"
+        >
+          <div
+            className="contents"
+            data-testid={
+              ownsMessageThreadTestId ? "message-thread-panel" : undefined
+            }
+          >
+            {children}
+          </div>
+        </div>
+      </motion.aside>
     </div>
   );
 }

@@ -68,7 +68,7 @@ export function useWorkspaceFocusSplit(
     : 0;
 
   const onResizeStart = React.useCallback(
-    (event: React.PointerEvent<HTMLButtonElement>) => {
+    (event: React.PointerEvent<HTMLElement>) => {
       event.preventDefault();
       dragCleanupRef.current?.();
       const bounds = containerRef.current?.getBoundingClientRect();
@@ -106,8 +106,30 @@ export function useWorkspaceFocusSplit(
     [containerRef],
   );
 
+  const onResizeKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLHRElement>) => {
+      if (event.key === "Home") {
+        event.preventDefault();
+        setPreferredRatio(DEFAULT_FOCUS_THREAD_RATIO);
+        return;
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      if (containerWidth <= 0) return;
+      const step = event.shiftKey ? 64 : 16;
+      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const width = clampFocusThreadWidth(
+        threadWidthPx + direction * step,
+        containerWidth,
+      );
+      setPreferredRatio(width / containerWidth);
+    },
+    [containerWidth, threadWidthPx],
+  );
+
   return {
     canReset: preferredRatio !== DEFAULT_FOCUS_THREAD_RATIO,
+    onResizeKeyDown,
     onReset: () => setPreferredRatio(DEFAULT_FOCUS_THREAD_RATIO),
     onResizeStart,
     threadWidthPx,

@@ -19,6 +19,13 @@ const MODE_STORAGE_KEY = "buzz.channels.surfaceMode";
 const DEFAULT_MODE: ChannelSurfaceMode = "timeline";
 
 const listeners = new Set<() => void>();
+const beforeChangeListeners = new Set<
+  (change: {
+    channelId: string;
+    from: ChannelSurfaceMode;
+    to: ChannelSurfaceMode;
+  }) => void
+>();
 
 let modes = readStoredRecord(MODE_STORAGE_KEY, parseMode);
 
@@ -76,9 +83,27 @@ export function setChannelSurfaceMode(
   channelId: string,
   mode: ChannelSurfaceMode,
 ): void {
+  const currentMode = getChannelSurfaceMode(channelId);
+  if (currentMode !== mode) {
+    for (const listener of beforeChangeListeners) {
+      listener({ channelId, from: currentMode, to: mode });
+    }
+  }
   modes = { ...modes, [channelId]: mode };
   persist(MODE_STORAGE_KEY, modes);
   emit();
+}
+
+/** Observe a real surface transition before subscribers render its new layout. */
+export function subscribeBeforeChannelSurfaceModeChange(
+  listener: (change: {
+    channelId: string;
+    from: ChannelSurfaceMode;
+    to: ChannelSurfaceMode;
+  }) => void,
+): () => void {
+  beforeChangeListeners.add(listener);
+  return () => beforeChangeListeners.delete(listener);
 }
 
 /** Clear every channel's surface state. Wired into resetCommunityState(). */
