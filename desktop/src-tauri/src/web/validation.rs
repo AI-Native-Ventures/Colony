@@ -94,3 +94,33 @@ fn validate_coordinate(value: f64) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_url;
+
+    #[test]
+    fn web_url_normalization_keeps_safe_http_urls() {
+        assert_eq!(
+            normalize_url(" https://example.com/path?q=1#result ").unwrap(),
+            "https://example.com/path?q=1#result"
+        );
+    }
+
+    #[test]
+    fn web_url_normalization_rejects_hostile_navigation_payloads() {
+        for hostile in [
+            "file:///Users/person/private.txt",
+            "javascript:alert(document.cookie)",
+            "data:text/html,<script>alert(1)</script>",
+            "https://user:secret@example.com/private",
+            "http://user@example.com/private",
+            "https://example.com/\nheader: value",
+        ] {
+            assert!(
+                normalize_url(hostile).is_err(),
+                "hostile URL unexpectedly passed: {hostile}"
+            );
+        }
+    }
+}

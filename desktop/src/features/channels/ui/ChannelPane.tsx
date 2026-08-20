@@ -50,6 +50,7 @@ import {
 } from "@/features/channels/ui/WelcomeComposerBanner";
 import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
 import { mentionsKnownAgent } from "@/features/channels/ui/ChannelPane.helpers";
+import { HUDDLE_TRANSCRIPT_ROOT_STYLE } from "@/features/channels/ui/ChannelPane.constants";
 import { HuddleStartingView, HuddleTranscriptIntro } from "@/features/huddle";
 import { useChannelIntro } from "@/features/channels/ui/useChannelIntro";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
@@ -64,10 +65,6 @@ import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
-const HUDDLE_TRANSCRIPT_ROOT_STYLE = {
-  "--buzz-channel-content-top-padding": "0rem",
-  "--channel-top-chrome-height": "0.25rem",
-} as React.CSSProperties;
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentPubkeys,
