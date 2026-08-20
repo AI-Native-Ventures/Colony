@@ -281,23 +281,6 @@ export function FocusThreadDrawer({
           prefersReducedMotion ? REDUCED_MOTION_TRANSITION : ENTER_TRANSITION
         }
       >
-        {mode === "split" ? (
-          <button
-            aria-label="Resize panel"
-            className="peer/right-pane-resize group/right-pane-resize absolute inset-y-0 left-0 z-50 w-3 -translate-x-1/2 cursor-col-resize"
-            data-testid="right-auxiliary-pane-resize-handle"
-            onDoubleClick={canResetWidth ? onResetWidth : undefined}
-            onPointerDown={onResizeStart}
-            title={
-              canResetWidth
-                ? "Drag to resize. Double-click to reset width."
-                : "Drag to resize."
-            }
-            type="button"
-          >
-            <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover/right-pane-resize:bg-border/80 group-focus-visible/right-pane-resize:bg-border/80" />
-          </button>
-        ) : null}
         <div
           key="thread-content"
           className={
@@ -317,6 +300,23 @@ export function FocusThreadDrawer({
               ownsMessageThreadTestId ? "message-thread-panel" : undefined
             }
           >
+            {mode === "split" ? (
+              <button
+                aria-label="Resize panel"
+                className="peer/right-pane-resize group/right-pane-resize absolute inset-y-0 left-0 z-50 w-3 -translate-x-1/2 cursor-col-resize"
+                data-testid="right-auxiliary-pane-resize-handle"
+                onDoubleClick={canResetWidth ? onResetWidth : undefined}
+                onPointerDown={onResizeStart}
+                title={
+                  canResetWidth
+                    ? "Drag to resize. Double-click to reset width."
+                    : "Drag to resize."
+                }
+                type="button"
+              >
+                <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover/right-pane-resize:bg-border/80 group-focus-visible/right-pane-resize:bg-border/80" />
+              </button>
+            ) : null}
             {children}
           </div>
         </div>
