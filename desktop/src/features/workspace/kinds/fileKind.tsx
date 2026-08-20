@@ -110,7 +110,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }
 
-  if (!file.isText) {
+  if (file.presentation !== "text") {
     return (
       <div
         className="p-4 text-sm text-muted-foreground"
