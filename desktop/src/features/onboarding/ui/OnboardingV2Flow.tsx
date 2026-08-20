@@ -16,6 +16,7 @@ import {
   shouldStartWebsiteScan,
   type FounderGender,
   type OnboardingV2Draft,
+  type OnboardingV2Journey,
 } from "@/features/onboarding/onboardingV2";
 import {
   buildEditableCompanySummary,
@@ -72,17 +73,20 @@ function ErrorNotice({ children }: { children: React.ReactNode }) {
 
 export function OnboardingV2Flow({
   draft,
+  journey = "first-community",
   onChange,
   onReadyToFinalize,
   externalError,
   isFinalizing = false,
 }: {
   draft: OnboardingV2Draft;
+  journey?: OnboardingV2Journey;
   onChange: (draft: OnboardingV2Draft) => void;
   onReadyToFinalize: () => Promise<void>;
   externalError?: string;
   isFinalizing?: boolean;
 }) {
+  const isAdditionalCommunity = journey === "additional-community";
   const runtimes = useAcpRuntimesQuery({
     enabled: draft.stage === "runtime-check",
   });
@@ -198,7 +202,7 @@ export function OnboardingV2Flow({
   const continueFromCompany = () => {
     if (!draft.company.summary.trim()) return;
     setError(null);
-    patch({ stage: "runtime-check" });
+    patch({ stage: isAdditionalCommunity ? "scout" : "runtime-check" });
   };
 
   const saveFounder = async () => {
@@ -345,7 +349,14 @@ export function OnboardingV2Flow({
       case "website":
         return (
           <>
-            <Heading kicker="Step 2 of 7" title="Show Colony your business">
+            <Heading
+              kicker={isAdditionalCommunity ? "Step 1 of 4" : "Step 2 of 7"}
+              title={
+                isAdditionalCommunity
+                  ? "Show Colony this business"
+                  : "Show Colony your business"
+              }
+            >
               We will read your public website and turn it into a summary you
               control.
             </Heading>
@@ -444,7 +455,7 @@ export function OnboardingV2Flow({
         return (
           <>
             <Heading
-              kicker="Step 3 of 7"
+              kicker={isAdditionalCommunity ? "Step 2 of 4" : "Step 3 of 7"}
               title={
                 draft.stage === "summary"
                   ? "Is this your business?"
@@ -599,11 +610,12 @@ export function OnboardingV2Flow({
         return (
           <>
             <Heading
-              kicker="Step 6 of 7"
+              kicker={isAdditionalCommunity ? "Step 3 of 4" : "Step 6 of 7"}
               title="Meet Scout, your Chief of Staff"
             >
-              Scout is your first and only starting agent. It turns company
-              context into coordinated work.
+              {isAdditionalCommunity
+                ? "Scout is the first and only agent in this company. It starts with the business context you confirmed."
+                : "Scout is your first and only starting agent. It turns company context into coordinated work."}
             </Heading>
             <div className="buzz-onboarding-v2__scout">
               <span>
@@ -626,7 +638,10 @@ export function OnboardingV2Flow({
       case "first-task":
         return (
           <>
-            <Heading kicker="Step 7 of 7" title="What should Scout move first?">
+            <Heading
+              kicker={isAdditionalCommunity ? "Step 4 of 4" : "Step 7 of 7"}
+              title="What should Scout move first?"
+            >
               Give Scout one real outcome. It will start in your private Welcome
               channel with the company context you confirmed.
             </Heading>
@@ -673,7 +688,11 @@ export function OnboardingV2Flow({
                 )
               }
             >
-              {isFinalizing ? "Bringing Scout online…" : "Start my company"}
+              {isFinalizing
+                ? "Bringing Scout online…"
+                : isAdditionalCommunity
+                  ? "Start this company"
+                  : "Start my company"}
             </Button>
           </>
         );
@@ -698,19 +717,25 @@ export function OnboardingV2Flow({
 
   const previousStage =
     draft.stage === "website"
-      ? "founder"
+      ? isAdditionalCommunity
+        ? null
+        : "founder"
       : draft.stage === "summary" || draft.stage === "description"
         ? "website"
         : draft.stage === "scout"
-          ? draft.runtime.route === "cli"
-            ? "runtime-ready"
-            : "model"
+          ? isAdditionalCommunity
+            ? draft.company.hasWebsite && draft.company.scanStatus === "success"
+              ? "summary"
+              : "description"
+            : draft.runtime.route === "cli"
+              ? "runtime-ready"
+              : "model"
           : draft.stage === "first-task"
             ? "scout"
             : null;
 
   return (
-    <OnboardingV2Shell stage={draft.stage}>
+    <OnboardingV2Shell journey={journey} stage={draft.stage}>
       {previousStage ? (
         <button
           aria-label="Go back"

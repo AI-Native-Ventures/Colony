@@ -1,6 +1,9 @@
 import type * as React from "react";
 
-import type { OnboardingV2Stage } from "@/features/onboarding/onboardingV2";
+import type {
+  OnboardingV2Journey,
+  OnboardingV2Stage,
+} from "@/features/onboarding/onboardingV2";
 import { cn } from "@/shared/lib/cn";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { AntMark } from "@/shared/ui/colony-logo/AntMark";
@@ -30,21 +33,51 @@ const STAGE_TRAIL = [
   { id: "task", hue: "#21a778" },
 ] as const;
 
+const ADDITIONAL_STAGE_INDEX: Record<OnboardingV2Stage, number> = {
+  founder: 0,
+  website: 0,
+  scan: 0,
+  summary: 1,
+  description: 1,
+  "runtime-check": 1,
+  "runtime-ready": 1,
+  "agent-install": 1,
+  model: 1,
+  scout: 2,
+  "first-task": 3,
+  entering: 3,
+};
+
+const ADDITIONAL_STAGE_TRAIL = [
+  { id: "business", hue: "#427ee8" },
+  { id: "context", hue: "#e857a4" },
+  { id: "scout", hue: "#7457e8" },
+  { id: "task", hue: "#21a778" },
+] as const;
+
 export function OnboardingV2Shell({
   children,
+  journey = "first-community",
   stage,
 }: {
   children: React.ReactNode;
+  journey?: OnboardingV2Journey;
   stage: OnboardingV2Stage;
 }) {
-  const stageIndex = STAGE_INDEX[stage];
+  const isAdditionalCommunity = journey === "additional-community";
+  const stageIndex = isAdditionalCommunity
+    ? ADDITIONAL_STAGE_INDEX[stage]
+    : STAGE_INDEX[stage];
+  const stageTrail = isAdditionalCommunity
+    ? ADDITIONAL_STAGE_TRAIL
+    : STAGE_TRAIL;
   return (
     <main
       className="buzz-onboarding-v2"
       data-testid="onboarding-v2"
       style={
         {
-          "--onboarding-v2-accent": STAGE_TRAIL[stageIndex].hue,
+          "--onboarding-v2-accent": stageTrail[stageIndex].hue,
         } as React.CSSProperties
       }
     >
@@ -58,11 +91,13 @@ export function OnboardingV2Shell({
           <span>Colony</span>
         </div>
         <span className="buzz-onboarding-v2__eyebrow">
-          Your company is waking up
+          {isAdditionalCommunity
+            ? "Your new company is waking up"
+            : "Your company is waking up"}
         </span>
       </header>
       <div className="buzz-onboarding-v2__trail" aria-hidden="true">
-        {STAGE_TRAIL.map(({ hue, id }, index) => (
+        {stageTrail.map(({ hue, id }, index) => (
           <span
             className={cn(
               "buzz-onboarding-v2__trail-node",

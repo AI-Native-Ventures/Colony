@@ -56,7 +56,7 @@ test("non-invite onboarding starts at connection", () => {
   assert.equal(transaction.stage, "connecting");
 });
 
-test("first-community onboarding persists the v2 journey without changing add-community", () => {
+test("created communities persist an adapted v2 journey without changing joins", () => {
   const storage = createMemoryStorage();
   const firstCommunity = startCommunityOnboarding(
     { source: "first-community", relayUrl: "wss://relay.example" },
@@ -82,13 +82,20 @@ test("first-community onboarding persists the v2 journey without changing add-co
     firstCommunity.onboardingV2?.firstTask.deliveryMarker,
   );
 
-  const addCommunity = startCommunityOnboarding(
+  const createdCommunity = startCommunityOnboarding(
+    { source: "create-community", relayUrl: "wss://created.example" },
+    createMemoryStorage(),
+  );
+  assert.equal(createdCommunity.onboardingV2?.stage, "website");
+  assert.equal(shouldForceFirstCommunityJourney(createdCommunity), false);
+
+  const joinedCommunity = startCommunityOnboarding(
     { source: "add-community", relayUrl: "wss://other.example" },
     createMemoryStorage(),
   );
-  assert.equal(addCommunity.onboardingV2, undefined);
+  assert.equal(joinedCommunity.onboardingV2, undefined);
   assert.equal(shouldForceFirstCommunityJourney(firstCommunity), true);
-  assert.equal(shouldForceFirstCommunityJourney(addCommunity), false);
+  assert.equal(shouldForceFirstCommunityJourney(joinedCommunity), false);
 });
 
 test("same-relay ingress resumes rather than replacing progress", () => {

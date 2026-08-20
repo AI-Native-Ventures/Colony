@@ -15,8 +15,10 @@ export function buildOnboardingFirstTaskMessage(
         ? founder.gender
         : "";
   const details = [
-    `Founder: ${founder.fullName.trim()}`,
-    `Location: ${founder.city.trim()}, ${founder.country.trim()}`,
+    founder.fullName.trim() ? `Founder: ${founder.fullName.trim()}` : "",
+    founder.city.trim() && founder.country.trim()
+      ? `Location: ${founder.city.trim()}, ${founder.country.trim()}`
+      : "",
     gender ? `Gender: ${gender}` : "",
     draft.company.hasWebsite && draft.company.canonicalUrl
       ? `Website: ${draft.company.canonicalUrl}`
