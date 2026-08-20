@@ -114,7 +114,10 @@ test.describe("channel workspace", () => {
     await expect(page.getByTestId("community-rail")).toBeVisible();
 
     await page.getByRole("button", { name: "Toggle Sidebar" }).click();
-    await expect(page.getByTestId("app-sidebar")).toBeHidden();
+    await expect(page.getByTestId("app-sidebar").locator("..")).toHaveAttribute(
+      "data-state",
+      "collapsed",
+    );
     await expect(page.getByTestId("community-rail")).toBeHidden();
 
     await page.getByTestId("channel-workspace-toggle").click();
@@ -123,7 +126,10 @@ test.describe("channel workspace", () => {
     await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 
     await page.getByRole("button", { name: "Collapse workspace" }).click();
-    await expect(page.getByTestId("app-sidebar")).toBeHidden();
+    await expect(page.getByTestId("app-sidebar").locator("..")).toHaveAttribute(
+      "data-state",
+      "collapsed",
+    );
     await expect(page.getByTestId("community-rail")).toBeHidden();
   });
 
@@ -632,12 +638,13 @@ test.describe("channel workspace", () => {
     });
   });
 
-  test("the workspace survives leaving and returning to the channel", async ({
+  test("the workspace session survives leaving and returning to the channel", async ({
     page,
   }) => {
     await page.getByTestId("channel-workspace-toggle").click();
     await page.getByTestId("workspace-create-scratchpad").click();
     await page.getByTestId("workspace-scratchpad-body").fill("kept");
+    await page.getByRole("button", { name: "Collapse workspace" }).click();
 
     await page.getByTestId("channel-random").click();
     await expect(page.getByTestId("channel-workspace")).toHaveCount(
@@ -646,6 +653,7 @@ test.describe("channel workspace", () => {
     );
 
     await page.getByTestId("channel-general").click();
+    await page.getByTestId("channel-workspace-toggle").click();
     await expect(page.getByTestId("workspace-scratchpad-body")).toHaveValue(
       "kept",
     );
