@@ -268,3 +268,57 @@ test("a start that resolves after tab disposal closes its late native session", 
   );
   await resetWebSessions();
 });
+
+test("deduplicates a pending start and allows retry after failure", async () => {
+  const calls = [];
+  let rejectFirstStart;
+  const firstStart = new Promise((_, reject) => {
+    rejectFirstStart = reject;
+  });
+  setNativeBridge(
+    createMockNativeBridge(async (command, args) => {
+      calls.push({ command, args });
+      if (command !== "workspace_web_start") return null;
+      const startNumber = calls.filter(
+        (entry) => entry.command === "workspace_web_start",
+      ).length;
+      if (startNumber === 1) return firstStart;
+      return {
+        sessionId: "session-retry",
+        targetId: "target-retry",
+        url: "https://docs.example.com/retry",
+        ownsBrowserProcess: false,
+        browserPid: null,
+      };
+    }),
+  );
+
+  const request = {
+    endpoint: null,
+    targetId: null,
+    url: "https://docs.example.com/retry",
+  };
+  const first = ensureWebSession("tab-retry", request);
+  const duplicate = ensureWebSession("tab-retry", request);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    calls.filter(({ command }) => command === "workspace_web_start").length,
+    1,
+  );
+
+  rejectFirstStart(new Error("Browser start failed"));
+  await Promise.all([first, duplicate]);
+  assert.equal(getWebSession("tab-retry").status, "error");
+  assert.equal(getWebSession("tab-retry").error, "Browser start failed");
+
+  await ensureWebSession("tab-retry", request);
+  assert.equal(
+    calls.filter(({ command }) => command === "workspace_web_start").length,
+    2,
+  );
+  assert.equal(getWebSession("tab-retry").status, "running");
+  assert.equal(getWebSession("tab-retry").error, null);
+
+  await disposeWebSession("tab-retry");
+  await resetWebSessions();
+});

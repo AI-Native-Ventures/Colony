@@ -91,6 +91,29 @@ async function backToConversation(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-workspace")).toHaveCount(0);
 }
 
+async function webCommands(page: import("@playwright/test").Page) {
+  return page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __BUZZ_E2E_WEB_COMMANDS__?: () => Array<{ command: string }>;
+        }
+      ).__BUZZ_E2E_WEB_COMMANDS__?.() ?? [],
+  );
+}
+
+async function openThreadLinkInWorkspace(
+  page: import("@playwright/test").Page,
+  url: string,
+) {
+  await emitThreadReply(page, url);
+  await page.getByTestId("message-thread-summary").first().click();
+  const thread = page.getByTestId("message-thread-panel");
+  await expect(thread).toBeVisible();
+  await thread.getByRole("link", { name: url }).click();
+  await expect(page.getByTestId("workspace-web-url")).toHaveValue(url);
+}
+
 test.describe("channel workspace", () => {
   test.beforeEach(async ({ page }) => {
     await installMockBridge(page, undefined, { skipCommunitySeed: true });
@@ -542,6 +565,63 @@ test.describe("channel workspace", () => {
     expect(
       Math.abs((await readPreservedThreadState()).offsetDelta),
     ).toBeLessThanOrEqual(2);
+  });
+
+  test("starts a link-created browser once and retries in workspace focus", async ({
+    page,
+  }) => {
+    const url = "https://docs.example.com/retry-in-focus";
+    await page.evaluate(() => {
+      (
+        window as Window & {
+          __BUZZ_E2E_WEB_PERFORMANCE__?: {
+            setStartHold?: (hold: boolean) => void;
+            setStartErrors?: (errors: string[]) => void;
+          };
+        }
+      ).__BUZZ_E2E_WEB_PERFORMANCE__?.setStartHold?.(true);
+      window.__BUZZ_E2E_WEB_PERFORMANCE__?.setStartErrors([
+        "Browser start failed",
+      ]);
+    });
+
+    await openThreadLinkInWorkspace(page, url);
+
+    const web = page.getByTestId("workspace-web-body");
+    await expect(web).toHaveAttribute("data-status", "connecting");
+    await expect(page.getByTestId("workspace-web-loading")).toBeVisible();
+    await expect(page.getByTestId("channel-workspace")).toBeVisible();
+    await page.evaluate(() => {
+      window.__BUZZ_E2E_WEB_PERFORMANCE__?.setStartHold(false);
+    });
+    await expect(web).toHaveAttribute("data-status", "error");
+    await expect(page.getByTestId("workspace-web-error")).toContainText(
+      "Browser start failed",
+    );
+    await expect(page.getByTestId("workspace-focus-thread-pane")).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await webCommands(page)).filter(
+            (entry) => entry.command === "workspace_web_start",
+          ).length,
+      )
+      .toBe(1);
+
+    await page.getByRole("button", { name: "Retry" }).click();
+
+    await expect(web).toHaveAttribute("data-status", "running");
+    await expect(page.getByTestId("workspace-web-frame")).toBeVisible();
+    await expect(page.getByTestId("workspace-web-error")).toHaveCount(0);
+    await expect(page.getByTestId("workspace-focus-thread-pane")).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          (await webCommands(page)).filter(
+            (entry) => entry.command === "workspace_web_start",
+          ).length,
+      )
+      .toBe(2);
   });
 
   test("resizes and resets the shared focus split", async ({ page }) => {
