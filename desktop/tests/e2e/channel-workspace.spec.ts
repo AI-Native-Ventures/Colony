@@ -6,6 +6,21 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 const FOCUS_THREAD_RATIO = 0.2;
 const FOCUS_THREAD_MIN_WIDTH_PX = 280;
 const FOCUS_WORKSPACE_MIN_WIDTH_PX = 320;
+const RELAY_URL = "ws://localhost:3000";
+const WORKSPACE_COMMUNITIES = [
+  {
+    id: "workspace-focus-community-a",
+    name: "Alpha",
+    relayUrl: RELAY_URL,
+    addedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    id: "workspace-focus-community-b",
+    name: "Bravo",
+    relayUrl: "ws://localhost:3001",
+    addedAt: "2026-01-02T00:00:00.000Z",
+  },
+];
 
 function expectedFocusThreadWidth(containerWidth: number): number {
   const maximum = Math.max(0, containerWidth - FOCUS_WORKSPACE_MIN_WIDTH_PX);
@@ -70,10 +85,62 @@ async function emitThreadReply(
 
 test.describe("channel workspace", () => {
   test.beforeEach(async ({ page }) => {
-    await installMockBridge(page);
+    await installMockBridge(page, undefined, { skipCommunitySeed: true });
+    await page.addInitScript(
+      ({ communities, activeCommunityId }) => {
+        window.localStorage.setItem(
+          "buzz-communities",
+          JSON.stringify(communities),
+        );
+        window.localStorage.setItem(
+          "buzz-active-community-id",
+          activeCommunityId,
+        );
+      },
+      {
+        communities: WORKSPACE_COMMUNITIES,
+        activeCommunityId: WORKSPACE_COMMUNITIES[0].id,
+      },
+    );
     await page.setViewportSize({ width: 1600, height: 900 });
     await page.goto("/");
     await page.getByTestId("channel-general").click();
+  });
+
+  test("preserves a collapsed navigation preference through workspace focus", async ({
+    page,
+  }) => {
+    await expect(page.getByTestId("app-sidebar")).toBeVisible();
+    await expect(page.getByTestId("community-rail")).toBeVisible();
+
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+    await expect(page.getByTestId("app-sidebar")).toBeHidden();
+    await expect(page.getByTestId("community-rail")).toBeHidden();
+
+    await page.getByTestId("channel-workspace-toggle").click();
+    await expect(page.getByTestId("app-sidebar")).toBeHidden();
+    await expect(page.getByTestId("community-rail")).toBeHidden();
+    await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+
+    await page.getByRole("button", { name: "Collapse workspace" }).click();
+    await expect(page.getByTestId("app-sidebar")).toBeHidden();
+    await expect(page.getByTestId("community-rail")).toBeHidden();
+  });
+
+  test("restores expanded navigation after workspace focus", async ({
+    page,
+  }) => {
+    await expect(page.getByTestId("app-sidebar")).toBeVisible();
+    await expect(page.getByTestId("community-rail")).toBeVisible();
+
+    await page.getByTestId("channel-workspace-toggle").click();
+    await expect(page.getByTestId("app-sidebar")).toBeHidden();
+    await expect(page.getByTestId("community-rail")).toBeHidden();
+    await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+
+    await page.getByRole("button", { name: "Collapse workspace" }).click();
+    await expect(page.getByTestId("app-sidebar")).toBeVisible();
+    await expect(page.getByTestId("community-rail")).toBeVisible();
   });
 
   test("uses the full content width when no thread is open", async ({

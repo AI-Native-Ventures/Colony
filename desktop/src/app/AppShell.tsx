@@ -93,6 +93,7 @@ import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { SidebarProvider } from "@/shared/ui/sidebar";
 import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
 import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
+import { useChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
 import { AppProfilePanelProvider } from "@/app/AppProfilePanelProvider";
 import { LazySettingsScreen } from "@/app/LazySettingsScreen";
 
@@ -289,6 +290,12 @@ export function AppShell() {
         : null,
     [channels, selectedChannelId],
   );
+  const workspaceOpen =
+    useChannelSurfaceMode(activeChannel?.id) === "workspace";
+  const [sidebarOpen, setSidebarOpen] = React.useState(true);
+  const effectiveSidebarOpen = sidebarOpen && !workspaceOpen;
+  const effectiveCommunityRail =
+    hasCommunityRail && effectiveSidebarOpen && !isHuddleRoom;
   const managedChannel = React.useMemo(() => {
     const targetChannelId = managedChannelId ?? selectedChannelId;
     return targetChannelId
@@ -719,7 +726,7 @@ export function AppShell() {
             onViewHuddleChannel={viewHuddleChannel}
             onVisibilityChange={handleHuddleVisibilityChange}
           >
-            {hasCommunityRail && !isHuddleRoom ? (
+            {effectiveCommunityRail ? (
               <CommunityRail
                 activeCommunityId={communitiesHook.activeCommunity?.id ?? null}
                 onAddCommunity={addCommunityDialog.openDialog}
@@ -733,13 +740,17 @@ export function AppShell() {
             <SidebarProvider
               className="relative z-10 min-h-0 flex-1 flex-col overflow-visible"
               data-testid="app-sidebar-layer"
+              onOpenChange={(nextOpen) => {
+                if (!workspaceOpen) setSidebarOpen(nextOpen);
+              }}
+              open={effectiveSidebarOpen}
             >
               <AppProfilePanelProvider>
                 {!settingsOpen && !isHuddleRoom ? (
                   <AppTopChrome
                     canGoBack={canGoBack}
                     canGoForward={canGoForward}
-                    hasCommunityRail={hasCommunityRail}
+                    hasCommunityRail={effectiveCommunityRail}
                     onGoBack={goBack}
                     onGoForward={goForward}
                   />
@@ -897,7 +908,7 @@ export function AppShell() {
                       <RelayConnectionOverlay
                         card={relayConnectionCard}
                         errorMessage={channelsErrorMessage}
-                        hasCommunityRail={hasCommunityRail}
+                        hasCommunityRail={effectiveCommunityRail}
                         isHuddleDrawerOpen={isHuddleDrawerOpen}
                       />
                     ) : null}
