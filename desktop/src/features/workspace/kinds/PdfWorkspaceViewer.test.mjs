@@ -11,6 +11,7 @@ import {
   clampPdfScale,
   consumePdfTextItemsWithinBudget,
   createPdfDocumentOptions,
+  createPdfDocumentProbeOptions,
   decodePdfBytes,
   extractPdfPageText,
   extractPdfPageTextWithinBudget,
@@ -125,9 +126,36 @@ function createScannedPdfFixture(width, height) {
   return new Uint8Array(Buffer.concat([header, ...objects, xref]));
 }
 
-async function readScannedPdfOperatorList(width, height) {
+function createBlankPdfFixture() {
+  const objects = [
+    Buffer.from("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    Buffer.from("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"),
+    Buffer.from(
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>\nendobj\n",
+    ),
+  ];
+  const header = Buffer.from("%PDF-1.7\n% blank fixture\n");
+  const offsets = [];
+  let offset = header.length;
+  for (const object of objects) {
+    offsets.push(offset);
+    offset += object.length;
+  }
+  const xref = Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .map((entry) => `${String(entry).padStart(10, "0")} 00000 n `)
+      .join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
+      `startxref\n${offset}\n%%EOF\n`,
+  );
+  return new Uint8Array(Buffer.concat([header, ...objects, xref]));
+}
+
+async function readPdfOperatorList(data, stopAtErrors) {
+  const options = stopAtErrors
+    ? createPdfDocumentOptions(data.slice())
+    : createPdfDocumentProbeOptions(data.slice());
   const loadingTask = pdfjs.getDocument({
-    ...createPdfDocumentOptions(createScannedPdfFixture(width, height)),
+    ...options,
     verbosity: pdfjs.VerbosityLevel.ERRORS,
   });
   try {
@@ -137,6 +165,13 @@ async function readScannedPdfOperatorList(width, height) {
   } finally {
     await loadingTask.destroy();
   }
+}
+
+function readScannedPdfOperatorList(width, height, stopAtErrors = true) {
+  return readPdfOperatorList(
+    createScannedPdfFixture(width, height),
+    stopAtErrors,
+  );
 }
 
 function createPage(pageNumber, options = {}) {
@@ -310,23 +345,49 @@ test("PDF model bounds scale, bytes, text, and canvas pixels", () => {
 test("PDF.js options cap oversized image dictionaries and canvas decoding", () => {
   const data = decodePdfBytes(globalThis.btoa("%PDF-1.4"));
   const options = createPdfDocumentOptions(data);
+  const probeOptions = createPdfDocumentProbeOptions(data);
   assert.equal(options.data, data);
   assert.equal(options.maxImageSize, MAX_PDF_IMAGE_PIXELS);
   assert.equal(options.canvasMaxAreaInBytes, MAX_PDF_CANVAS_AREA_BYTES);
   assert.equal(options.maxImageSize, 16_000_000);
   assert.equal(options.canvasMaxAreaInBytes, 64 * 1_024 * 1_024);
   assert.equal(options.stopAtErrors, true);
+  assert.equal(probeOptions.maxImageSize, MAX_PDF_IMAGE_PIXELS);
+  assert.equal(probeOptions.canvasMaxAreaInBytes, MAX_PDF_CANVAS_AREA_BYTES);
+  assert.equal(probeOptions.stopAtErrors, false);
 });
 
-test("renders a 300-DPI A4 scan and rejects an image above the hard cap", async () => {
+test("renders a real blank page and rejects an image above the hard cap", async () => {
+  const blank = createBlankPdfFixture();
+  const blankStrict = await readPdfOperatorList(blank, true);
+  const blankProbe = await readPdfOperatorList(blank, false);
+  assert.deepEqual(blankStrict.fnArray, []);
+  assert.deepEqual(blankProbe.fnArray, []);
+  assert.doesNotThrow(() =>
+    assertPdfPageHasRenderableContent(blankStrict.fnArray, blankProbe.fnArray),
+  );
+
   const a4Scan = await readScannedPdfOperatorList(2480, 3508);
   assert.ok(a4Scan.fnArray.includes(pdfjs.OPS.paintImageXObject));
-  assert.doesNotThrow(() => assertPdfPageHasRenderableContent(a4Scan.fnArray));
+  assert.doesNotThrow(() =>
+    assertPdfPageHasRenderableContent(a4Scan.fnArray, a4Scan.fnArray),
+  );
 
   const oversized = await readScannedPdfOperatorList(4001, 4000);
+  const oversizedProbe = await readScannedPdfOperatorList(4001, 4000, false);
+  assert.deepEqual(oversized.fnArray, []);
+  assert.ok(oversizedProbe.fnArray.length > 0);
+  assert.equal(
+    oversizedProbe.fnArray.includes(pdfjs.OPS.paintImageXObject),
+    false,
+  );
   assert.throws(
-    () => assertPdfPageHasRenderableContent(oversized.fnArray),
-    /no renderable content/,
+    () =>
+      assertPdfPageHasRenderableContent(
+        oversized.fnArray,
+        oversizedProbe.fnArray,
+      ),
+    /content was rejected/,
   );
 });
 

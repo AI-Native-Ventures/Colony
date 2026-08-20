@@ -29,7 +29,7 @@ export type PdfDocumentOptions = {
   canvasMaxAreaInBytes: number;
   data: Uint8Array;
   maxImageSize: number;
-  stopAtErrors: true;
+  stopAtErrors: boolean;
 };
 
 export type PdfTextBudgetResult = {
@@ -61,6 +61,16 @@ export function createPdfDocumentOptions(data: Uint8Array): PdfDocumentOptions {
   };
 }
 
+/** Re-run zero-operation pages tolerantly so discarded content is detectable. */
+export function createPdfDocumentProbeOptions(
+  data: Uint8Array,
+): PdfDocumentOptions {
+  return {
+    ...createPdfDocumentOptions(data),
+    stopAtErrors: false,
+  };
+}
+
 function finitePositive(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -74,10 +84,13 @@ export function hasValidPdfViewportDimensions(
   );
 }
 
-/** Prevent PDF.js image-budget removal from producing a silent blank page. */
-export function assertPdfPageHasRenderableContent(operations: number[]): void {
-  if (operations.length === 0) {
-    throw new Error("PDF page has no renderable content");
+/** Distinguish an intentional blank page from content discarded by PDF.js. */
+export function assertPdfPageHasRenderableContent(
+  operations: number[],
+  probeOperations: number[],
+): void {
+  if (operations.length === 0 && probeOperations.length > 0) {
+    throw new Error("PDF page content was rejected for preview");
   }
 }
 
