@@ -25,9 +25,9 @@ export type InboundFrameCapabilities = {
   recordInbound(): void;
   resetConnection(error: Error): void;
   handleAuthChallenge(challenge: string, generation: number): Promise<void>;
-  handleEvent(subId: string, event: RelayEvent): void;
+  handleEvent(subId: string, event: RelayEvent, generation: number): void;
   handleOk(eventId: string, success: boolean, message: string): void;
-  handleEose(subId: string): void;
+  handleEose(subId: string, generation: number): void;
   sendRawWithReconnectRetry(
     payload: unknown[],
     fallbackMessage: string,
@@ -82,7 +82,7 @@ export async function handleRelayWsMessage(
     return;
   }
   if (type === "EVENT" && typeof rest[0] === "string" && rest[1]) {
-    caps.handleEvent(rest[0], rest[1] as RelayEvent);
+    caps.handleEvent(rest[0], rest[1] as RelayEvent, generation);
     return;
   }
 
@@ -96,7 +96,7 @@ export async function handleRelayWsMessage(
   }
 
   if (type === "EOSE" && typeof rest[0] === "string") {
-    caps.handleEose(rest[0]);
+    caps.handleEose(rest[0], generation);
     return;
   }
 

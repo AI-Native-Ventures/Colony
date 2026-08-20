@@ -140,6 +140,7 @@ macro_rules! app_invoke_handler {
             get_forum_thread,
             get_thread_replies,
             get_channel_window,
+            get_channel_reconnect_repair,
             get_channel_messages_before,
             edit_message,
             delete_message,
