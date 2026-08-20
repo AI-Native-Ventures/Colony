@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 404,
-    "rust_lines": 162674,
-    "tauri_coupled": 160,
+    "rust_total": 405,
+    "rust_lines": 162723,
+    "tauri_coupled": 161,
     "portable": 244,
-    "portable_lines": 91840,
+    "portable_lines": 91842,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -37,6 +37,7 @@
       "src-tauri/src/commands/channels.rs",
       "src-tauri/src/commands/clipboard.rs",
       "src-tauri/src/commands/company_blueprint.rs",
+      "src-tauri/src/commands/company_scan.rs",
       "src-tauri/src/commands/discovery_export.rs",
       "src-tauri/src/commands/dms.rs",
       "src-tauri/src/commands/engrams.rs",
@@ -418,10 +419,10 @@
     ]
   },
   "commands": {
-    "registered": 338,
-    "defined": 338,
+    "registered": 339,
+    "defined": 339,
     "by_reach": {
-      "frontend": 334,
+      "frontend": 335,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -604,6 +605,7 @@
     "src-tauri/src/huddle/reconnect.rs": 1,
     "src-tauri/src/commands/discovery_export.rs": 1,
     "src-tauri/src/commands/qr_download.rs": 1,
+    "src-tauri/src/commands/company_scan.rs": 1,
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
@@ -3135,6 +3137,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1577",
         "src/parity/session/script.ts:1578"
+      ]
+    },
+    "scan_onboarding_company_website": {
+      "defining_file": "src-tauri/src/commands/company_scan.rs",
+      "module": "company_scan",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriCompanyScan.ts:67"
       ]
     },
     "search_messages": {
