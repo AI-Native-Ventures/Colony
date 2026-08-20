@@ -4,6 +4,11 @@ import {
 } from "@/features/communities/communityStorage";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 import type { Profile } from "@/shared/api/types";
+import {
+  createOnboardingV2Draft,
+  isOnboardingV2Draft,
+  type OnboardingV2Draft,
+} from "./onboardingV2";
 
 const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 
@@ -55,6 +60,8 @@ export type CommunityOnboardingTransaction = {
   // Deep links are persisted before machine onboarding completes. Set when
   // the user dismisses the acknowledgment so it stays dismissed on relaunch.
   acknowledged?: boolean;
+  /** Durable first-community product journey. Never created for add/join flows. */
+  onboardingV2?: OnboardingV2Draft;
 };
 
 export type CommunityOnboardingTransactionPatch = Partial<
@@ -68,6 +75,7 @@ export type CommunityOnboardingTransactionPatch = Partial<
     | "communityName"
     | "error"
     | "acknowledged"
+    | "onboardingV2"
   >
 >;
 
@@ -112,7 +120,9 @@ function isTransaction(
       "team-intro",
       "finalizing",
       "entering",
-    ].includes(transaction.stage ?? "")
+    ].includes(transaction.stage ?? "") &&
+    (transaction.onboardingV2 === undefined ||
+      isOnboardingV2Draft(transaction.onboardingV2))
   );
 }
 
@@ -187,6 +197,9 @@ export function startCommunityOnboarding(
     policyReceipt: input.policyReceipt,
     createdAt: timestamp,
     updatedAt: timestamp,
+    ...(input.source === "first-community" && {
+      onboardingV2: createOnboardingV2Draft(),
+    }),
   };
   saveCommunityOnboardingTransaction(transaction, storage);
   return transaction;
@@ -212,6 +225,15 @@ export function updateCurrentCommunityOnboardingTransaction(
 ): CommunityOnboardingTransaction | null {
   if (!current || (expectedId && current.id !== expectedId)) return current;
   return updateCommunityOnboardingTransaction(current, patch, storage, now);
+}
+
+export function shouldForceFirstCommunityJourney(
+  transaction: CommunityOnboardingTransaction,
+): boolean {
+  return (
+    transaction.source === "first-community" &&
+    transaction.onboardingV2 !== undefined
+  );
 }
 
 export function markCommunityOnboardingComplete(

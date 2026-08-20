@@ -9,6 +9,7 @@ import {
   resolveProfileCheckAction,
   shouldSkipCommunityOnboarding,
   startCommunityOnboarding,
+  shouldForceFirstCommunityJourney,
   updateCommunityOnboardingTransaction,
   updateCurrentCommunityOnboardingTransaction,
 } from "./communityOnboarding.tsx";
@@ -53,6 +54,41 @@ test("non-invite onboarding starts at connection", () => {
     createMemoryStorage(),
   );
   assert.equal(transaction.stage, "connecting");
+});
+
+test("first-community onboarding persists the v2 journey without changing add-community", () => {
+  const storage = createMemoryStorage();
+  const firstCommunity = startCommunityOnboarding(
+    { source: "first-community", relayUrl: "wss://relay.example" },
+    storage,
+  );
+  assert.equal(firstCommunity.onboardingV2?.stage, "founder");
+  const updated = updateCommunityOnboardingTransaction(
+    firstCommunity,
+    {
+      onboardingV2: {
+        ...firstCommunity.onboardingV2,
+        stage: "website",
+      },
+    },
+    storage,
+  );
+  assert.equal(
+    loadCommunityOnboardingTransaction(storage)?.onboardingV2?.stage,
+    "website",
+  );
+  assert.equal(
+    updated.onboardingV2?.firstTask.deliveryMarker,
+    firstCommunity.onboardingV2?.firstTask.deliveryMarker,
+  );
+
+  const addCommunity = startCommunityOnboarding(
+    { source: "add-community", relayUrl: "wss://other.example" },
+    createMemoryStorage(),
+  );
+  assert.equal(addCommunity.onboardingV2, undefined);
+  assert.equal(shouldForceFirstCommunityJourney(firstCommunity), true);
+  assert.equal(shouldForceFirstCommunityJourney(addCommunity), false);
 });
 
 test("same-relay ingress resumes rather than replacing progress", () => {

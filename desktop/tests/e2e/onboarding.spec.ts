@@ -662,20 +662,27 @@ test("completed users skip the loading gate while profile is still settling", as
   await expectHomeView(page);
 });
 
-test("first-launch key import continues to machine setup", async ({ page }) => {
+test("first launch offers simple account entry without technical key choices", async ({
+  page,
+}) => {
   await installMockBridge(page, undefined, {
     skipCommunitySeed: true,
     skipOnboardingSeed: true,
   });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Use an existing key" }).click();
-  const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
-  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
-  await page.getByTestId("nostr-import-submit").click();
-
-  await expect(page.getByTestId("onboarding-page-2")).toBeVisible();
-  await expect(page.getByTestId("machine-onboarding-gate")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start with Colony" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign in to an existing account" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create a new identity key" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Use an existing key" }),
+  ).toHaveCount(0);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
 });
 
@@ -1034,7 +1041,7 @@ test("first-community owner can connect an existing hosted community", async ({
   await expect(page.getByText("North Star")).toBeVisible();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
+    page.getByRole("heading", { name: "Let’s start with you" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1050,21 +1057,13 @@ test("first-community owner can connect an existing hosted community", async ({
       ),
     )
     .toContain("wss://north-star.colony.ainative.ventures");
-  await page.getByTestId("community-profile-back").click();
-  await expect(
-    page.getByRole("heading", { name: "Choose a community" }),
-  ).toBeVisible();
-  await expect(page.getByText("North Star")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Join a community" }),
-  ).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(() =>
         window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
       ),
     )
-    .toBeNull();
+    .toContain('"stage":"founder"');
 });
 
 test("first-community owner can create and connect a hosted community", async ({
@@ -1125,7 +1124,7 @@ test("first-community owner can create and connect a hosted community", async ({
   );
   await page.getByRole("button", { name: "Next" }).click();
   await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
+    page.getByRole("heading", { name: "Let’s start with you" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1329,7 +1328,7 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(page.getByTestId("onboarding-finish")).toBeEnabled();
 });
 
-test("first-community direct join reaches profile", async ({ page }) => {
+test("first-community direct join reaches founder setup", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
@@ -1351,7 +1350,7 @@ test("first-community direct join reaches profile", async ({ page }) => {
   await page.getByTestId("invite-redeem-submit").click();
 
   await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
+    page.getByRole("heading", { name: "Let’s start with you" }),
   ).toBeVisible();
   await expect(page.getByText("Connecting securely…")).toHaveCount(0);
   await expect(page.getByText("Create an identity key")).toHaveCount(0);

@@ -523,10 +523,17 @@ type MockBridgeOptions = {
    * Pass a config with a provider to test Inherit-from-global behavior.
    */
   globalAgentConfig?: {
+    credential_mode?: "byok" | "colony_credits";
     env_vars: Record<string, string>;
     provider: string | null;
     model: string | null;
     preferred_runtime?: string | null;
+  };
+  /** Volatile Colony Credits account returned by the authenticated mock command. */
+  colonyCreditsAccount?: {
+    balance_nanousd: string;
+    currency: "USD";
+    status: "active" | "depleted";
   };
   /** Reject the explicit Colony Credits reconnect action with this message. */
   colonyCreditsReconnectError?: string;
