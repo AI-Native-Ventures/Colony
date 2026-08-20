@@ -843,6 +843,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                   isFollowingThread={isFollowingThread}
                   isMessageUnreadById={isMessageUnreadById}
                   isSending={isSending}
+                  showWorkspaceContext={workspaceOpen}
                   {...threadLayoutProps}
                   autoSendDraftKey={autoSendDraftKey}
                   onAutoSubmitComplete={handleAutoSubmitComplete}

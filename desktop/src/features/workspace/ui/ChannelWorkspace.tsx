@@ -84,11 +84,12 @@ export function ChannelWorkspace({
     >
       <WorkspaceTabStrip
         activeTabId={activeTabId}
-        isExpanded
+        onBackToConversation={() =>
+          setChannelSurfaceMode(channelId, "timeline")
+        }
         onClose={handleClose}
         onNewTab={handleNewTab}
         onSelect={(tabId) => setActiveTab(channelId, tabId)}
-        onToggleExpanded={() => setChannelSurfaceMode(channelId, "timeline")}
         tabs={tabs}
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">

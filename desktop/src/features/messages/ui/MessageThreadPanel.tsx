@@ -54,7 +54,10 @@ import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useStableSendToChannel } from "./useStableSendToChannel";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
-import { getActiveContinuationDepths } from "./MessageThreadPanel.helpers";
+import {
+  getActiveContinuationDepths,
+  summarizeThreadRoot,
+} from "./MessageThreadPanel.helpers";
 import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
@@ -123,6 +126,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   activityAccessoryVisible: boolean;
   widthPx: number;
   isFollowingThread?: boolean;
+  showWorkspaceContext?: boolean;
   isMessageUnreadById?: (messageId: string) => boolean;
   onFollowThread?: () => void;
   onUnfollowThread?: () => void;
@@ -159,6 +163,7 @@ export function MessageThreadPanel({
   isFocusMode,
   isSinglePanelView = false,
   isFollowingThread,
+  showWorkspaceContext = false,
   isMessageUnreadById,
   onCancelEdit,
   onCancelReply,
@@ -934,7 +939,19 @@ export function MessageThreadPanel({
         leading={headerLeading}
         onBack={isSinglePanelView && !isFocusMode ? onClose : undefined}
       >
-        <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        {showWorkspaceContext ? (
+          <div className="min-w-0 flex-1">
+            <AuxiliaryPanelTitle>{`#${channelName}`}</AuxiliaryPanelTitle>
+            <p
+              className="truncate text-xs text-muted-foreground"
+              title={threadHead.body}
+            >
+              {summarizeThreadRoot(threadHead.body)}
+            </p>
+          </div>
+        ) : (
+          <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        )}
       </AuxiliaryPanelHeaderGroup>
       <ThreadReadStateToggle
         isUnread={(threadUnreadCount ?? 0) > 0}
