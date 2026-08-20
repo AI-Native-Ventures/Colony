@@ -22,8 +22,10 @@ import {
 import {
   BUNDLED_CORE_MANIFEST_DIGESTS,
   createBlockRepository,
+  loadDefaultMemberRoles,
   resetBlockRepository,
 } from "./blockRepository.ts";
+import { relayClient } from "../../shared/api/relayClient.ts";
 import { blockDataQueryKey, requireAvailableBlockResult } from "./hooks.ts";
 import {
   blockJsonSha256,
@@ -711,6 +713,37 @@ test("block repository verifies signatures and coalesces community fetches", asy
   });
   assert.equal(invalid.ok, false);
   if (!invalid.ok) assert.equal(invalid.code, "invalid-event");
+});
+
+test("default Block trust coalesces concurrent membership snapshot reads", async (t) => {
+  resetBlockRepository();
+  const relaySelf = "d".repeat(64);
+  let fetchCount = 0;
+  let releaseFetch;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => {
+    markFetchStarted = resolve;
+  });
+  const fetchRelease = new Promise((resolve) => {
+    releaseFetch = resolve;
+  });
+
+  t.mock.method(relayClient, "fetchFirstEvent", async () => {
+    fetchCount += 1;
+    markFetchStarted();
+    await fetchRelease;
+    return null;
+  });
+
+  const first = loadDefaultMemberRoles(relaySelf);
+  await fetchStarted;
+  const second = loadDefaultMemberRoles(relaySelf);
+  releaseFetch();
+
+  const [firstRoles, secondRoles] = await Promise.all([first, second]);
+  assert.equal(fetchCount, 1);
+  assert.equal(firstRoles, secondRoles);
+  assert.equal(firstRoles.size, 0);
 });
 
 test("block repository requires relay key plus bundled digest for Core trust", async () => {

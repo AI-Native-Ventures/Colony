@@ -29,6 +29,7 @@ import {
   markCommunityOnboardingComplete,
   resolveProfileCheckAction,
   isTransactionStillConnecting,
+  shouldForceFirstCommunityJourney,
 } from "@/features/onboarding/communityOnboarding";
 import { CommunityOnboardingFlow } from "@/features/onboarding/ui/CommunityOnboardingFlow";
 import {
@@ -460,12 +461,23 @@ function CommunityApp({
     transaction?.communityId === activeCommunity?.id &&
     community.isReady &&
     community.appliedKey === communityKey;
+  const forceFirstCommunityJourney = transaction
+    ? shouldForceFirstCommunityJourney(transaction)
+    : false;
   useEffect(() => {
     if (transaction?.stage !== "connecting" || !targetIsReady) return;
     const transactionId = transaction.id;
     const relayUrl = transaction.relayUrl;
     if (profileCheckTransactionRef.current === transactionId) return;
     profileCheckTransactionRef.current = transactionId;
+
+    if (forceFirstCommunityJourney) {
+      communityOnboarding.update(
+        { stage: "profile", error: undefined },
+        transactionId,
+      );
+      return;
+    }
 
     // resolveProfileCheckAction resolves exactly once (Promise.race + timer
     // cleared on settle), so no settled flag is needed here.
@@ -489,6 +501,7 @@ function CommunityApp({
     });
   }, [
     communityOnboarding,
+    forceFirstCommunityJourney,
     targetIsReady,
     transaction?.stage,
     transaction?.id,

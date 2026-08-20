@@ -44,6 +44,10 @@ function filter(name) {
 }
 
 requireContract(!/^  merge_group:\s*$/m.test(ci), "CI must not restore the disabled develop merge queue trigger");
+requireContract(
+  /^\s+cancel-in-progress: \$\{\{ github\.base_ref != 'main' \}\}$/m.test(ci),
+  "CI must keep in-flight main promotion runs alive while retaining cancellation elsewhere",
+);
 
 const changes = job("changes");
 for (const output of [
@@ -238,6 +242,9 @@ noop=':'
 expect_mutation_failure \
   "merge_group trigger restored" \
   "perl -0pi -e 's/^on:$/on:\\n  merge_group:/m' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "promotion cancellation restored" \
+  "sed -i.bak 's/cancel-in-progress:.*/cancel-in-progress: true/' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "core push rerun restored" \
   "perl -0pi -e \"s/needs\\.changes\\.outputs\\.core-enabled == 'true'/github.event_name == 'push'/\" '$tmp/ci.yml'" "$noop" "$noop"

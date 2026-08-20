@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
@@ -7,11 +7,10 @@ import type { WorkspaceTab } from "@/features/workspace/lib/workspaceTabs";
 type WorkspaceTabStripProps = {
   tabs: WorkspaceTab[];
   activeTabId: string | null;
-  isExpanded: boolean;
   onSelect: (tabId: string) => void;
   onClose: (tabId: string) => void;
   onNewTab: () => void;
-  onToggleExpanded: () => void;
+  onBackToConversation: () => void;
 };
 
 /**
@@ -21,11 +20,10 @@ type WorkspaceTabStripProps = {
 export function WorkspaceTabStrip({
   tabs,
   activeTabId,
-  isExpanded,
   onSelect,
   onClose,
   onNewTab,
-  onToggleExpanded,
+  onBackToConversation,
 }: WorkspaceTabStripProps): React.JSX.Element {
   return (
     <div
@@ -75,17 +73,12 @@ export function WorkspaceTabStrip({
         </button>
       </div>
       <button
-        aria-label={isExpanded ? "Collapse workspace" : "Expand workspace"}
-        className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-background/60"
-        data-testid="workspace-expand-toggle"
-        onClick={onToggleExpanded}
+        className="shrink-0 rounded-md border border-border px-2 py-1 text-xs text-foreground hover:bg-background/60"
+        data-testid="workspace-back-to-conversation"
+        onClick={onBackToConversation}
         type="button"
       >
-        {isExpanded ? (
-          <Minimize2 aria-hidden className="size-4" />
-        ) : (
-          <Maximize2 aria-hidden className="size-4" />
-        )}
+        Back to conversation
       </button>
     </div>
   );

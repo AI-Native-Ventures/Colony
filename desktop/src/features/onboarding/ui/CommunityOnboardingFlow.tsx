@@ -22,6 +22,8 @@ import {
   ProfileAvatarEditor,
 } from "@/features/profile/ui/ProfileAvatarEditor";
 import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
+import { sendChannelMessage } from "@/shared/api/tauri";
+import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
 import {
@@ -42,6 +44,11 @@ import {
   OnboardingChrome,
 } from "./OnboardingChrome";
 import { OnboardingFooter, OnboardingFooterProvider } from "./OnboardingFooter";
+import { OnboardingV2Flow } from "./OnboardingV2Flow";
+import {
+  buildOnboardingFirstTaskMessage,
+  onboardingFirstTaskMarker,
+} from "../onboardingV2FirstTask";
 
 function isRelayMembershipDeniedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -259,6 +266,40 @@ export function CommunityOnboardingFlow({
         throw new Error(result.reason);
       }
       if (result.focusChannelId) {
+        let onboardingV2 = transaction?.onboardingV2;
+        if (
+          onboardingV2?.firstTask.content.trim() &&
+          !onboardingV2.firstTask.deliveredEventId
+        ) {
+          const marker = onboardingFirstTaskMarker(onboardingV2);
+          const exists = await hasManagedAgentChannelMessageMarker({
+            channelId: result.focusChannelId,
+            marker,
+            markerScope: "channel",
+          });
+          let deliveredEventId = "already-delivered";
+          if (!exists) {
+            const sent = await sendChannelMessage(
+              result.focusChannelId,
+              buildOnboardingFirstTaskMessage(onboardingV2),
+              null,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              [["client", marker]],
+            );
+            deliveredEventId = sent.eventId;
+          }
+          onboardingV2 = {
+            ...onboardingV2,
+            firstTask: {
+              ...onboardingV2.firstTask,
+              deliveredEventId,
+            },
+          };
+        }
         // Direct entry: point the router at the Welcome channel *before* the
         // app mounts, so it never lands on Home first. Consume the pending
         // entry — it exists for the Home-route fallback, and leaving it would
@@ -268,7 +309,13 @@ export function CommunityOnboardingFlow({
         markCommunityOnboardingComplete(identity.pubkey, relayUrl);
         // Keep this screen mounted as a curtain over the loading app; the
         // "entering" stage fades it out once Welcome reports ready.
-        update({ stage: "entering", error: undefined });
+        update({
+          stage: "entering",
+          error: undefined,
+          onboardingV2: onboardingV2
+            ? { ...onboardingV2, stage: "entering" }
+            : undefined,
+        });
         return;
       }
       await finish();
@@ -279,7 +326,14 @@ export function CommunityOnboardingFlow({
       });
       setIsPending(false);
     }
-  }, [finish, isPending, queryClient, relayUrl, update]);
+  }, [
+    finish,
+    isPending,
+    queryClient,
+    relayUrl,
+    transaction?.onboardingV2,
+    update,
+  ]);
 
   const backToProfile = React.useCallback(() => {
     if (isPending) return;
@@ -435,6 +489,22 @@ export function CommunityOnboardingFlow({
       setIsPending(false);
     }
   };
+
+  if (
+    transaction.onboardingV2 &&
+    transaction.stage !== "claiming" &&
+    transaction.stage !== "connecting"
+  ) {
+    return (
+      <OnboardingV2Flow
+        draft={transaction.onboardingV2}
+        externalError={transaction.error}
+        isFinalizing={isPending}
+        onChange={(onboardingV2) => update({ onboardingV2, error: undefined })}
+        onReadyToFinalize={finalize}
+      />
+    );
+  }
 
   return (
     <div
