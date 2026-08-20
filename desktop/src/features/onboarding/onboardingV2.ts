@@ -28,6 +28,7 @@ export const ONBOARDING_V2_STAGES = [
 ] as const;
 
 export type OnboardingV2Stage = (typeof ONBOARDING_V2_STAGES)[number];
+export type OnboardingV2Journey = "first-community" | "additional-community";
 
 export type OnboardingV2Draft = {
   version: typeof ONBOARDING_V2_VERSION;
@@ -94,6 +95,13 @@ export function createOnboardingV2Draft(): OnboardingV2Draft {
       deliveryMarker: crypto.randomUUID(),
       deliveredEventId: null,
     },
+  };
+}
+
+export function createAdditionalCommunityOnboardingV2Draft(): OnboardingV2Draft {
+  return {
+    ...createOnboardingV2Draft(),
+    stage: "website",
   };
 }
 

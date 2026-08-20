@@ -5,6 +5,7 @@ import {
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 import type { Profile } from "@/shared/api/types";
 import {
+  createAdditionalCommunityOnboardingV2Draft,
   createOnboardingV2Draft,
   isOnboardingV2Draft,
   type OnboardingV2Draft,
@@ -14,6 +15,7 @@ const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 
 export type CommunityOnboardingSource =
   | "first-community"
+  | "create-community"
   | "add-community"
   | "membership-recovery"
   | "deep-link-connect"
@@ -60,7 +62,7 @@ export type CommunityOnboardingTransaction = {
   // Deep links are persisted before machine onboarding completes. Set when
   // the user dismisses the acknowledgment so it stays dismissed on relaunch.
   acknowledged?: boolean;
-  /** Durable first-community product journey. Never created for add/join flows. */
+  /** Durable company-creation journey. Never created for join flows. */
   onboardingV2?: OnboardingV2Draft;
 };
 
@@ -199,6 +201,9 @@ export function startCommunityOnboarding(
     updatedAt: timestamp,
     ...(input.source === "first-community" && {
       onboardingV2: createOnboardingV2Draft(),
+    }),
+    ...(input.source === "create-community" && {
+      onboardingV2: createAdditionalCommunityOnboardingV2Draft(),
     }),
   };
   saveCommunityOnboardingTransaction(transaction, storage);

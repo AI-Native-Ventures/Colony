@@ -5,7 +5,10 @@ import {
   buildOnboardingFirstTaskMessage,
   onboardingFirstTaskMarker,
 } from "./onboardingV2FirstTask.ts";
-import { createOnboardingV2Draft } from "./onboardingV2.ts";
+import {
+  createAdditionalCommunityOnboardingV2Draft,
+  createOnboardingV2Draft,
+} from "./onboardingV2.ts";
 
 test("builds a private Scout handoff from confirmed onboarding context", () => {
   const draft = createOnboardingV2Draft();
@@ -39,4 +42,16 @@ test("uses one stable client marker for retry-safe delivery", () => {
     onboardingFirstTaskMarker(draft),
     `colony-onboarding-v2:first-task:${draft.firstTask.deliveryMarker}`,
   );
+});
+
+test("an additional-community handoff omits empty founder details", () => {
+  const draft = createAdditionalCommunityOnboardingV2Draft();
+  draft.company.summary = "A second company with its own operating context.";
+  draft.firstTask.content = "Prepare the first-week operating plan.";
+
+  const message = buildOnboardingFirstTaskMessage(draft);
+  assert.doesNotMatch(message, /Founder:/);
+  assert.doesNotMatch(message, /Location:/);
+  assert.match(message, /A second company with its own operating context/);
+  assert.match(message, /Prepare the first-week operating plan/);
 });
