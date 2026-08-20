@@ -6,6 +6,7 @@ import {
   clampPdfScale,
   decodePdfBytes,
   extractPdfPageText,
+  MAX_PDF_WORKSPACE_PAGES,
 } from "./pdfWorkspaceViewerModel";
 import type { PdfDocument, PdfViewerRuntime } from "./pdfWorkspaceViewerTypes";
 
@@ -54,25 +55,43 @@ export function PdfWorkspaceViewerView({
       setStatus("error");
       return;
     }
+    let loadingTaskDestroyed = false;
+    const destroyLoadingTask = () => {
+      if (loadingTaskDestroyed) return;
+      loadingTaskDestroyed = true;
+      void loadingTask.destroy().catch(() => {});
+    };
 
     void loadingTask.promise
       .then((loadedDocument) => {
         if (disposed) return;
+        if (
+          loadedDocument.numPages < 1 ||
+          loadedDocument.numPages > MAX_PDF_WORKSPACE_PAGES
+        ) {
+          setStatus("error");
+          destroyLoadingTask();
+          return;
+        }
         setDocument(loadedDocument);
         setStatus("ready");
       })
       .catch(() => {
         if (disposed) return;
         setStatus("error");
+        destroyLoadingTask();
       });
 
     return () => {
       disposed = true;
-      void loadingTask.destroy().catch(() => {});
+      destroyLoadingTask();
     };
   }, [bytesBase64, loadAttempt, runtime]);
 
-  const failRendering = React.useCallback(() => setStatus("error"), []);
+  const failRendering = React.useCallback(
+    (_cause: unknown) => setStatus("error"),
+    [],
+  );
 
   React.useEffect(() => {
     if (!document || status !== "ready") return;

@@ -9,6 +9,7 @@ import {
   decodePdfBytes,
   extractPdfPageText,
   MAX_PDF_CANVAS_PIXELS,
+  MAX_PDF_WORKSPACE_PAGES,
 } from "./pdfWorkspaceViewerModel.ts";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
@@ -185,6 +186,7 @@ test("PDF model bounds scale, bytes, text, and canvas pixels", () => {
   assert.ok(metrics.pixelWidth * metrics.pixelHeight <= MAX_PDF_CANVAS_PIXELS);
   assert.equal(metrics.cssWidth, 1530);
   assert.equal(metrics.cssHeight, 1980);
+  assert.equal(MAX_PDF_WORKSPACE_PAGES, 500);
 });
 
 test("renders only visible pages and exposes extracted text", async () => {
@@ -325,6 +327,20 @@ test("worker load failure has alert semantics and retry starts a fresh task", as
   assert.equal(calls.load, 2);
   assert.equal(calls.destroy, 1);
   assert.equal(retries, 1);
+});
+
+test("rejects excessive page counts before creating page DOM or work", async () => {
+  const pdf = createDocument(MAX_PDF_WORKSPACE_PAGES + 1);
+  const { runtime } = createRuntime([Promise.resolve(pdf.document)]);
+  await renderViewer(runtime);
+  const { screen } = await import("@testing-library/react");
+
+  assert.match(
+    (await screen.findByRole("alert")).textContent,
+    /could not be rendered/,
+  );
+  assert.equal(screen.queryByLabelText(/report\.pdf, page/), null);
+  assert.equal(pdf.pages.length, 0);
 });
 
 test("render failure can retry the document", async () => {

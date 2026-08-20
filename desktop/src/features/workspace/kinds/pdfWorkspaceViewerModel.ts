@@ -1,6 +1,7 @@
 const MIN_PDF_SCALE = 0.5;
 const MAX_PDF_SCALE = 2.5;
 export const MAX_PDF_CANVAS_PIXELS = 4_000_000;
+export const MAX_PDF_WORKSPACE_PAGES = 500;
 
 export type PdfCanvasMetrics = {
   cssHeight: number;
