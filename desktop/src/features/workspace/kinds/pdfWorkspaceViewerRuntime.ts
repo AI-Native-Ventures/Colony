@@ -2,10 +2,11 @@ import * as pdfjs from "pdfjs-dist/build/pdf.mjs";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 import {
-  assertPdfPageHasRenderableContent,
+  assertPdfPageOperationCounts,
   consumePdfTextItemsWithinBudget,
   createPdfDocumentOptions,
   createPdfDocumentProbeOptions,
+  createPdfOperatorBudget,
 } from "./pdfWorkspaceViewerModel";
 import type { PdfViewerRuntime } from "./pdfWorkspaceViewerTypes";
 
@@ -96,38 +97,81 @@ export const pdfWorkspaceViewerRuntime: PdfViewerRuntime = {
               getViewport: (options) => page.getViewport(options),
               render: (options) => {
                 let cancelled = false;
-                let renderTask: ReturnType<typeof page.render> | null = null;
+                let activeRenderTask: ReturnType<typeof page.render> | null =
+                  null;
                 return {
                   cancel() {
                     cancelled = true;
-                    renderTask?.cancel();
+                    activeRenderTask?.cancel();
                   },
-                  promise: page.getOperatorList().then(async (operatorList) => {
-                    let probeOperations = operatorList.fnArray;
-                    if (operatorList.fnArray.length === 0) {
+                  promise: (async () => {
+                    const operationBudget = createPdfOperatorBudget();
+                    const strictRenderTask = page.render({
+                      ...(options as Parameters<typeof page.render>[0]),
+                      // Print intent executes streamed chunks without waiting for
+                      // an animation frame, so the filter can stop worker output
+                      // near the configured limit instead of after full expansion.
+                      intent: "print",
+                      operationsFilter: operationBudget.operationsFilter,
+                    });
+                    activeRenderTask = strictRenderTask;
+                    try {
+                      await strictRenderTask.promise;
+                    } finally {
+                      if (activeRenderTask === strictRenderTask) {
+                        activeRenderTask = null;
+                      }
+                    }
+
+                    let probeOperationCount =
+                      operationBudget.consumedOperations();
+                    if (probeOperationCount === 0) {
                       const probeDocument = await getProbeDocument();
+                      if (cancelled) {
+                        throw new pdfjs.RenderingCancelledException(
+                          "PDF rendering was cancelled",
+                        );
+                      }
                       const probePage = await probeDocument.getPage(pageNumber);
+                      const probeCanvas =
+                        globalThis.document.createElement("canvas");
+                      probeCanvas.width = 1;
+                      probeCanvas.height = 1;
+                      const probeBudget = createPdfOperatorBudget({
+                        executeOperations: false,
+                      });
                       try {
-                        probeOperations = (await probePage.getOperatorList())
-                          .fnArray;
+                        const probeRenderTask = probePage.render({
+                          canvas: probeCanvas,
+                          intent: "print",
+                          operationsFilter: probeBudget.operationsFilter,
+                          viewport: probePage.getViewport({ scale: 1 }),
+                        });
+                        activeRenderTask = probeRenderTask;
+                        try {
+                          await probeRenderTask.promise;
+                        } finally {
+                          if (activeRenderTask === probeRenderTask) {
+                            activeRenderTask = null;
+                          }
+                        }
+                        probeOperationCount = probeBudget.consumedOperations();
                       } finally {
+                        probeCanvas.width = 0;
+                        probeCanvas.height = 0;
                         probePage.cleanup();
                       }
                     }
-                    assertPdfPageHasRenderableContent(
-                      operatorList.fnArray,
-                      probeOperations,
+                    assertPdfPageOperationCounts(
+                      operationBudget.consumedOperations(),
+                      probeOperationCount,
                     );
                     if (cancelled) {
                       throw new pdfjs.RenderingCancelledException(
                         "PDF rendering was cancelled",
                       );
                     }
-                    renderTask = page.render(
-                      options as Parameters<typeof page.render>[0],
-                    );
-                    return renderTask.promise;
-                  }),
+                  })(),
                 };
               },
             };

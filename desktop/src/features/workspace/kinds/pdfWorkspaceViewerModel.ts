@@ -6,6 +6,7 @@ export const MAX_PDF_CSS_DIMENSION = 8_192;
 export const MAX_PDF_IMAGE_PIXELS = 16_000_000;
 export const MAX_PDF_CANVAS_AREA_BYTES = 64 * 1_024 * 1_024;
 export const MAX_PDF_WORKSPACE_PAGES = 500;
+export const MAX_PDF_OPERATOR_WORK_PER_PAGE = 100_000;
 export const MAX_PDF_TEXT_CHARS_PER_PAGE = 200_000;
 export const MAX_PDF_TEXT_CHARS_TOTAL = 2_000_000;
 export const MAX_PDF_TEXT_ITEMS_PER_PAGE = 50_000;
@@ -40,6 +41,11 @@ export type PdfTextBudgetResult = {
   truncated: boolean;
 };
 
+export type PdfOperatorBudget = {
+  consumedOperations: () => number;
+  operationsFilter: (operationIndex: number) => boolean;
+};
+
 /** Keep workspace PDF zoom inside the supported 50% to 250% range. */
 export function clampPdfScale(value: number): number {
   return Math.min(MAX_PDF_SCALE, Math.max(MIN_PDF_SCALE, value));
@@ -71,6 +77,34 @@ export function createPdfDocumentProbeOptions(
   };
 }
 
+/** Stop streamed PDF.js operator execution before a compressed stream can expand without bound. */
+export function createPdfOperatorBudget(
+  options: { executeOperations?: boolean; maxOperations?: number } = {},
+): PdfOperatorBudget {
+  const executeOperations = options.executeOperations ?? true;
+  const maxOperations = Math.max(
+    0,
+    Math.floor(
+      finitePositive(
+        options.maxOperations ?? MAX_PDF_OPERATOR_WORK_PER_PAGE,
+        MAX_PDF_OPERATOR_WORK_PER_PAGE,
+      ),
+    ),
+  );
+  let consumedOperations = 0;
+
+  return {
+    consumedOperations: () => consumedOperations,
+    operationsFilter: () => {
+      consumedOperations += 1;
+      if (consumedOperations > maxOperations) {
+        throw new Error("PDF page operation limit exceeded");
+      }
+      return executeOperations;
+    },
+  };
+}
+
 function finitePositive(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -90,6 +124,16 @@ export function assertPdfPageHasRenderableContent(
   probeOperations: number[],
 ): void {
   if (operations.length === 0 && probeOperations.length > 0) {
+    throw new Error("PDF page content was rejected for preview");
+  }
+}
+
+/** Count-only form used by streamed rendering, which never retains whole operator arrays. */
+export function assertPdfPageOperationCounts(
+  operations: number,
+  probeOperations: number,
+): void {
+  if (operations === 0 && probeOperations > 0) {
     throw new Error("PDF page content was rejected for preview");
   }
 }

@@ -10,6 +10,7 @@ import {
   calculatePdfCanvasMetrics,
   clampPdfScale,
   consumePdfTextItemsWithinBudget,
+  createPdfOperatorBudget,
   createPdfDocumentOptions,
   createPdfDocumentProbeOptions,
   decodePdfBytes,
@@ -21,6 +22,7 @@ import {
   MAX_PDF_CANVAS_PIXELS,
   MAX_PDF_CSS_DIMENSION,
   MAX_PDF_IMAGE_PIXELS,
+  MAX_PDF_OPERATOR_WORK_PER_PAGE,
   MAX_PDF_TEXT_CHARS_PER_PAGE,
   MAX_PDF_TEXT_CHARS_TOTAL,
   MAX_PDF_TEXT_ITEMS_PER_PAGE,
@@ -150,6 +152,126 @@ function createBlankPdfFixture() {
   return new Uint8Array(Buffer.concat([header, ...objects, xref]));
 }
 
+function createCompressedOperatorFloodPdfFixture(operationPairs = 1_000_000) {
+  const rawContent = Buffer.from("q Q\n".repeat(operationPairs));
+  const compressedContent = deflateSync(rawContent);
+  const objects = [
+    Buffer.from("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    Buffer.from("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"),
+    Buffer.from(
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] " +
+        "/Contents 4 0 R >>\nendobj\n",
+    ),
+    Buffer.concat([
+      Buffer.from(
+        `4 0 obj\n<< /Filter /FlateDecode /Length ${compressedContent.length} >>\nstream\n`,
+      ),
+      compressedContent,
+      Buffer.from("\nendstream\nendobj\n"),
+    ]),
+  ];
+  const header = Buffer.from("%PDF-1.7\n% compressed operator fixture\n");
+  const offsets = [];
+  let offset = header.length;
+  for (const object of objects) {
+    offsets.push(offset);
+    offset += object.length;
+  }
+  const xref = Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .map((entry) => `${String(entry).padStart(10, "0")} 00000 n `)
+      .join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
+      `startxref\n${offset}\n%%EOF\n`,
+  );
+  return {
+    data: new Uint8Array(Buffer.concat([header, ...objects, xref])),
+    rawBytes: rawContent.length,
+  };
+}
+
+function createNoopCanvasContext() {
+  const transform = {
+    a: 1,
+    b: 0,
+    c: 0,
+    d: 1,
+    e: 0,
+    f: 0,
+    invertSelf() {
+      return this;
+    },
+  };
+  return new Proxy(
+    {
+      canvas: { height: 1, width: 1 },
+      getTransform: () => transform,
+      measureText: () => ({ width: 0 }),
+    },
+    {
+      get(target, property) {
+        if (property in target) return target[property];
+        return () => {};
+      },
+      set(target, property, value) {
+        target[property] = value;
+        return true;
+      },
+    },
+  );
+}
+
+async function renderPdfWithOperatorBudget(data, stopAtErrors) {
+  const options = stopAtErrors
+    ? createPdfDocumentOptions(data.slice())
+    : createPdfDocumentProbeOptions(data.slice());
+  const loadingTask = pdfjs.getDocument({
+    ...options,
+    verbosity: pdfjs.VerbosityLevel.ERRORS,
+  });
+  try {
+    const document = await loadingTask.promise;
+    const page = await document.getPage(1);
+    const budget = createPdfOperatorBudget({ executeOperations: false });
+    const renderTask = page.render({
+      canvas: null,
+      canvasContext: createNoopCanvasContext(),
+      intent: "print",
+      operationsFilter: budget.operationsFilter,
+      viewport: page.getViewport({ scale: 1 }),
+    });
+    await assert.rejects(renderTask.promise, /operation limit/);
+    return budget.consumedOperations();
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
+async function readPdfRenderOperationCount(data, stopAtErrors) {
+  const options = stopAtErrors
+    ? createPdfDocumentOptions(data.slice())
+    : createPdfDocumentProbeOptions(data.slice());
+  const loadingTask = pdfjs.getDocument({
+    ...options,
+    verbosity: pdfjs.VerbosityLevel.ERRORS,
+  });
+  try {
+    const document = await loadingTask.promise;
+    const page = await document.getPage(1);
+    const budget = createPdfOperatorBudget({ executeOperations: false });
+    const renderTask = page.render({
+      canvas: null,
+      canvasContext: createNoopCanvasContext(),
+      intent: "print",
+      operationsFilter: budget.operationsFilter,
+      viewport: page.getViewport({ scale: 1 }),
+    });
+    await renderTask.promise;
+    return budget.consumedOperations();
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
 async function readPdfOperatorList(data, stopAtErrors) {
   const options = stopAtErrors
     ? createPdfDocumentOptions(data.slice())
@@ -165,13 +287,6 @@ async function readPdfOperatorList(data, stopAtErrors) {
   } finally {
     await loadingTask.destroy();
   }
-}
-
-function readScannedPdfOperatorList(width, height, stopAtErrors = true) {
-  return readPdfOperatorList(
-    createScannedPdfFixture(width, height),
-    stopAtErrors,
-  );
 }
 
 function createPage(pageNumber, options = {}) {
@@ -357,6 +472,20 @@ test("PDF.js options cap oversized image dictionaries and canvas decoding", () =
   assert.equal(probeOptions.stopAtErrors, false);
 });
 
+test("compressed operator floods fail within the strict and tolerant work budget", async () => {
+  const fixture = createCompressedOperatorFloodPdfFixture();
+  assert.ok(fixture.rawBytes >= 4_000_000);
+  assert.ok(fixture.data.byteLength < 20_000);
+
+  for (const stopAtErrors of [true, false]) {
+    const consumed = await renderPdfWithOperatorBudget(
+      fixture.data,
+      stopAtErrors,
+    );
+    assert.equal(consumed, MAX_PDF_OPERATOR_WORK_PER_PAGE + 1);
+  }
+});
+
 test("renders a real blank page and rejects an image above the hard cap", async () => {
   const blank = createBlankPdfFixture();
   const blankStrict = await readPdfOperatorList(blank, true);
@@ -366,15 +495,23 @@ test("renders a real blank page and rejects an image above the hard cap", async 
   assert.doesNotThrow(() =>
     assertPdfPageHasRenderableContent(blankStrict.fnArray, blankProbe.fnArray),
   );
+  assert.equal(await readPdfRenderOperationCount(blank, true), 0);
+  assert.equal(await readPdfRenderOperationCount(blank, false), 0);
 
-  const a4Scan = await readScannedPdfOperatorList(2480, 3508);
+  const a4ScanFixture = createScannedPdfFixture(2480, 3508);
+  const a4Scan = await readPdfOperatorList(a4ScanFixture, true);
   assert.ok(a4Scan.fnArray.includes(pdfjs.OPS.paintImageXObject));
+  assert.ok(
+    (await readPdfRenderOperationCount(a4ScanFixture, true)) <
+      MAX_PDF_OPERATOR_WORK_PER_PAGE,
+  );
   assert.doesNotThrow(() =>
     assertPdfPageHasRenderableContent(a4Scan.fnArray, a4Scan.fnArray),
   );
 
-  const oversized = await readScannedPdfOperatorList(4001, 4000);
-  const oversizedProbe = await readScannedPdfOperatorList(4001, 4000, false);
+  const oversizedFixture = createScannedPdfFixture(4001, 4000);
+  const oversized = await readPdfOperatorList(oversizedFixture, true);
+  const oversizedProbe = await readPdfOperatorList(oversizedFixture, false);
   assert.deepEqual(oversized.fnArray, []);
   assert.ok(oversizedProbe.fnArray.length > 0);
   assert.equal(
@@ -389,6 +526,8 @@ test("renders a real blank page and rejects an image above the hard cap", async 
       ),
     /content was rejected/,
   );
+  assert.equal(await readPdfRenderOperationCount(oversizedFixture, true), 0);
+  assert.ok((await readPdfRenderOperationCount(oversizedFixture, false)) > 0);
 });
 
 test("PDF canvas metrics stay finite and hard-capped for hostile geometry", () => {

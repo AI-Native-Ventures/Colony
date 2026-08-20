@@ -28,6 +28,8 @@ export type PdfPage = {
   getViewport: (options: { scale: number }) => PdfViewport;
   render: (options: {
     canvas: HTMLCanvasElement;
+    intent?: "display" | "print";
+    operationsFilter?: (operationIndex: number) => boolean;
     transform?: [number, number, number, number, number, number];
     viewport: PdfViewport;
   }) => PdfRenderTask;
