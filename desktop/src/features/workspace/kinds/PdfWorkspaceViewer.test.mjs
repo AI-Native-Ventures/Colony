@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, test } from "node:test";
+import { deflateSync } from "node:zlib";
 
 import { JSDOM } from "jsdom";
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import {
+  assertPdfPageHasRenderableContent,
   calculatePdfCanvasMetrics,
   clampPdfScale,
+  consumePdfTextItemsWithinBudget,
   createPdfDocumentOptions,
   decodePdfBytes,
   extractPdfPageText,
@@ -18,6 +22,8 @@ import {
   MAX_PDF_IMAGE_PIXELS,
   MAX_PDF_TEXT_CHARS_PER_PAGE,
   MAX_PDF_TEXT_CHARS_TOTAL,
+  MAX_PDF_TEXT_ITEMS_PER_PAGE,
+  MAX_PDF_TEXT_ITEMS_TOTAL,
   MAX_PDF_WORKSPACE_PAGES,
 } from "./pdfWorkspaceViewerModel.ts";
 
@@ -77,11 +83,68 @@ function deferred() {
   return { promise, reject, resolve };
 }
 
+function createScannedPdfFixture(width, height) {
+  const rowBytes = Math.ceil(width / 8);
+  const compressedImage = deflateSync(Buffer.alloc(rowBytes * height, 0xff));
+  const pageContent = Buffer.from("q 595 0 0 842 0 0 cm /Im0 Do Q\n");
+  const objects = [
+    Buffer.from("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"),
+    Buffer.from("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"),
+    Buffer.from(
+      "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] " +
+        "/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+    ),
+    Buffer.concat([
+      Buffer.from(
+        `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} ` +
+          `/Height ${height} /ColorSpace /DeviceGray /BitsPerComponent 1 ` +
+          `/Filter /FlateDecode /Length ${compressedImage.length} >>\nstream\n`,
+      ),
+      compressedImage,
+      Buffer.from("\nendstream\nendobj\n"),
+    ]),
+    Buffer.concat([
+      Buffer.from(`5 0 obj\n<< /Length ${pageContent.length} >>\nstream\n`),
+      pageContent,
+      Buffer.from("endstream\nendobj\n"),
+    ]),
+  ];
+  const header = Buffer.from("%PDF-1.7\n% fixture\n");
+  const offsets = [];
+  let offset = header.length;
+  for (const object of objects) {
+    offsets.push(offset);
+    offset += object.length;
+  }
+  const xref = Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .map((entry) => `${String(entry).padStart(10, "0")} 00000 n `)
+      .join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
+      `startxref\n${offset}\n%%EOF\n`,
+  );
+  return new Uint8Array(Buffer.concat([header, ...objects, xref]));
+}
+
+async function readScannedPdfOperatorList(width, height) {
+  const loadingTask = pdfjs.getDocument({
+    ...createPdfDocumentOptions(createScannedPdfFixture(width, height)),
+    verbosity: pdfjs.VerbosityLevel.ERRORS,
+  });
+  try {
+    const document = await loadingTask.promise;
+    const page = await document.getPage(1);
+    return await page.getOperatorList();
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
 function createPage(pageNumber, options = {}) {
   const renderDeferred = options.renderDeferred ?? null;
   const calls = {
     cancel: 0,
     cleanup: 0,
+    itemBudgets: [],
     render: 0,
     textAbort: 0,
     textRequests: 0,
@@ -94,8 +157,9 @@ function createPage(pageNumber, options = {}) {
         calls.cleanup += 1;
         return true;
       },
-      async getTextContent({ maxCharacters, signal }) {
+      async getTextContent({ maxCharacters, maxItems, signal }) {
         calls.textRequests += 1;
+        calls.itemBudgets.push(maxItems);
         if (options.textError) throw options.textError;
         if (options.textDeferred) {
           await new Promise((resolve, reject) => {
@@ -113,9 +177,19 @@ function createPage(pageNumber, options = {}) {
           });
         }
         const fullText = options.text ?? `Text from page ${pageNumber}`;
+        const hasItemBudget = maxItems > 0;
+        const requestedItems = options.consumedItems ?? 1;
+        const consumedCharacters = hasItemBudget ? fullText.length : 0;
         return {
-          items: [{ str: fullText.slice(0, maxCharacters) }],
-          truncated: fullText.length > maxCharacters,
+          consumedCharacters,
+          consumedItems: hasItemBudget ? Math.min(requestedItems, maxItems) : 0,
+          items: hasItemBudget
+            ? [{ str: fullText.slice(0, maxCharacters) }]
+            : [],
+          truncated:
+            fullText.length > maxCharacters ||
+            requestedItems > maxItems ||
+            maxItems < 1,
         };
       },
       getViewport({ scale }) {
@@ -158,7 +232,7 @@ function createDocument(numPages, createPageForNumber = createPage) {
   };
 }
 
-function createRuntime(loadResults) {
+function createRuntime(loadResults, options = {}) {
   const calls = { destroy: 0, load: 0 };
   return {
     calls,
@@ -175,6 +249,9 @@ function createRuntime(loadResults) {
         return {
           async destroy() {
             calls.destroy += 1;
+            if (options.destroyDeferred) {
+              await options.destroyDeferred.promise;
+            }
           },
           promise: result,
         };
@@ -236,7 +313,21 @@ test("PDF.js options cap oversized image dictionaries and canvas decoding", () =
   assert.equal(options.data, data);
   assert.equal(options.maxImageSize, MAX_PDF_IMAGE_PIXELS);
   assert.equal(options.canvasMaxAreaInBytes, MAX_PDF_CANVAS_AREA_BYTES);
-  assert.equal(options.maxImageSize, MAX_PDF_CANVAS_PIXELS);
+  assert.equal(options.maxImageSize, 16_000_000);
+  assert.equal(options.canvasMaxAreaInBytes, 64 * 1_024 * 1_024);
+  assert.equal(options.stopAtErrors, true);
+});
+
+test("renders a 300-DPI A4 scan and rejects an image above the hard cap", async () => {
+  const a4Scan = await readScannedPdfOperatorList(2480, 3508);
+  assert.ok(a4Scan.fnArray.includes(pdfjs.OPS.paintImageXObject));
+  assert.doesNotThrow(() => assertPdfPageHasRenderableContent(a4Scan.fnArray));
+
+  const oversized = await readScannedPdfOperatorList(4001, 4000);
+  assert.throws(
+    () => assertPdfPageHasRenderableContent(oversized.fnArray),
+    /no renderable content/,
+  );
 });
 
 test("PDF canvas metrics stay finite and hard-capped for hostile geometry", () => {
@@ -280,6 +371,36 @@ test("PDF canvas metrics stay finite and hard-capped for hostile geometry", () =
   assert.ok(tinyBudget.pixelWidth * tinyBudget.pixelHeight <= 17);
   const boundedText = extractPdfPageTextWithinBudget([{ str: "123456789" }], 5);
   assert.deepEqual(boundedText, { text: "12345", truncated: true });
+});
+
+test("text budgets charge raw characters and every item", () => {
+  const result = consumePdfTextItemsWithinBudget(
+    [
+      { str: "  raw  " },
+      { str: "" },
+      { type: "beginMarkedContent" },
+      { str: "tail" },
+    ],
+    20,
+    3,
+  );
+
+  assert.deepEqual(result, {
+    consumedCharacters: 7,
+    consumedItems: 3,
+    items: [{ str: "  raw  " }, { str: "" }],
+    retainedCharacters: 7,
+    truncated: true,
+  });
+  assert.deepEqual(consumePdfTextItemsWithinBudget([{ str: "   x" }], 2, 1), {
+    consumedCharacters: 4,
+    consumedItems: 1,
+    items: [{ str: "  " }],
+    retainedCharacters: 2,
+    truncated: true,
+  });
+  assert.equal(MAX_PDF_TEXT_ITEMS_PER_PAGE, 50_000);
+  assert.equal(MAX_PDF_TEXT_ITEMS_TOTAL, 500_000);
 });
 
 test("renders only visible pages and exposes extracted text", async () => {
@@ -388,8 +509,8 @@ test("caps accessible text per page and announces truncation", async () => {
   assert.equal(pdf.pages[0].calls.textRequests, 1);
 });
 
-test("caps total accessible text and marks unfetched pages truncated", async () => {
-  const fullPage = "a".repeat(MAX_PDF_TEXT_CHARS_PER_PAGE);
+test("charges raw text against the document cap before trimming", async () => {
+  const fullPage = " ".repeat(MAX_PDF_TEXT_CHARS_PER_PAGE);
   const pageCount = MAX_PDF_TEXT_CHARS_TOTAL / MAX_PDF_TEXT_CHARS_PER_PAGE + 1;
   const pdf = createDocument(pageCount, (pageNumber) =>
     createPage(pageNumber, { text: fullPage }),
@@ -407,6 +528,36 @@ test("caps total accessible text and marks unfetched pages truncated", async () 
   assert.equal(
     pdf.pages.filter((record) => record.calls.textRequests === 1).length,
     pageCount - 1,
+  );
+});
+
+test("caps text items per page and across the document", async () => {
+  const pageCount = MAX_PDF_TEXT_ITEMS_TOTAL / MAX_PDF_TEXT_ITEMS_PER_PAGE + 1;
+  const pdf = createDocument(pageCount, (pageNumber) =>
+    createPage(pageNumber, {
+      consumedItems: MAX_PDF_TEXT_ITEMS_PER_PAGE,
+      text: "",
+    }),
+  );
+  const { runtime } = createRuntime([Promise.resolve(pdf.document)]);
+  await renderViewer(runtime);
+  const { screen, waitFor } = await import("@testing-library/react");
+  const finalPageText = await screen.findByTestId(
+    `workspace-pdf-text-${pageCount}`,
+  );
+
+  await waitFor(() =>
+    assert.match(finalPageText.textContent, /truncated for preview/),
+  );
+  assert.equal(
+    pdf.pages.filter((record) => record.calls.textRequests === 1).length,
+    pageCount - 1,
+  );
+  assert.equal(
+    pdf.pages.every(
+      (record) => record.calls.itemBudgets[0] === MAX_PDF_TEXT_ITEMS_PER_PAGE,
+    ),
+    true,
   );
 });
 
@@ -523,6 +674,26 @@ test("worker load failure has alert semantics and retry starts a fresh task", as
   assert.equal(calls.load, 2);
   assert.equal(calls.destroy, 1);
   assert.equal(retries, 1);
+});
+
+test("waits for one deferred destroy before exposing Retry", async () => {
+  const firstLoad = deferred();
+  const destroyJob = deferred();
+  const { calls, runtime } = createRuntime([firstLoad.promise], {
+    destroyDeferred: destroyJob,
+  });
+  await renderViewer(runtime);
+  const { act, screen } = await import("@testing-library/react");
+
+  await act(async () => firstLoad.reject(new Error("worker failed")));
+  assert.equal(calls.destroy, 1);
+  assert.equal(screen.queryByRole("alert"), null);
+  assert.equal(screen.queryByRole("button", { name: "Retry" }), null);
+
+  await act(async () => destroyJob.resolve());
+  assert.ok(await screen.findByRole("alert"));
+  assert.ok(screen.getByRole("button", { name: "Retry" }));
+  assert.equal(calls.destroy, 1);
 });
 
 test("rejects excessive page counts before creating page DOM or work", async () => {

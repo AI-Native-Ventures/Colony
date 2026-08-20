@@ -17,8 +17,11 @@ export type PdfPage = {
   cleanup: () => boolean;
   getTextContent: (options: {
     maxCharacters: number;
+    maxItems: number;
     signal: AbortSignal;
   }) => Promise<{
+    consumedCharacters: number;
+    consumedItems: number;
     items: Array<{ str: string } | { type: string }>;
     truncated: boolean;
   }>;

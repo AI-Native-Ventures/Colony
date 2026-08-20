@@ -3,11 +3,13 @@ const MAX_PDF_SCALE = 2.5;
 export const MAX_PDF_CANVAS_PIXELS = 4_000_000;
 export const MAX_PDF_CANVAS_DIMENSION = 8_192;
 export const MAX_PDF_CSS_DIMENSION = 8_192;
-export const MAX_PDF_IMAGE_PIXELS = MAX_PDF_CANVAS_PIXELS;
-export const MAX_PDF_CANVAS_AREA_BYTES = MAX_PDF_CANVAS_PIXELS * 4;
+export const MAX_PDF_IMAGE_PIXELS = 16_000_000;
+export const MAX_PDF_CANVAS_AREA_BYTES = 64 * 1_024 * 1_024;
 export const MAX_PDF_WORKSPACE_PAGES = 500;
 export const MAX_PDF_TEXT_CHARS_PER_PAGE = 200_000;
 export const MAX_PDF_TEXT_CHARS_TOTAL = 2_000_000;
+export const MAX_PDF_TEXT_ITEMS_PER_PAGE = 50_000;
+export const MAX_PDF_TEXT_ITEMS_TOTAL = 500_000;
 
 export type PdfCanvasMetrics = {
   cssHeight: number;
@@ -27,6 +29,15 @@ export type PdfDocumentOptions = {
   canvasMaxAreaInBytes: number;
   data: Uint8Array;
   maxImageSize: number;
+  stopAtErrors: true;
+};
+
+export type PdfTextBudgetResult = {
+  consumedCharacters: number;
+  consumedItems: number;
+  items: Array<{ str: string }>;
+  retainedCharacters: number;
+  truncated: boolean;
 };
 
 /** Keep workspace PDF zoom inside the supported 50% to 250% range. */
@@ -46,6 +57,7 @@ export function createPdfDocumentOptions(data: Uint8Array): PdfDocumentOptions {
     canvasMaxAreaInBytes: MAX_PDF_CANVAS_AREA_BYTES,
     data,
     maxImageSize: MAX_PDF_IMAGE_PIXELS,
+    stopAtErrors: true,
   };
 }
 
@@ -60,6 +72,13 @@ export function hasValidPdfViewportDimensions(
   return (
     Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
   );
+}
+
+/** Prevent PDF.js image-budget removal from producing a silent blank page. */
+export function assertPdfPageHasRenderableContent(operations: number[]): void {
+  if (operations.length === 0) {
+    throw new Error("PDF page has no renderable content");
+  }
 }
 
 /** Bound CSS geometry and backing-store memory for untrusted page dimensions. */
@@ -175,4 +194,62 @@ export function extractPdfPageTextWithinBudget(
   }
 
   return { text, truncated };
+}
+
+/** Charge every PDF.js text item before retaining its bounded raw string. */
+export function consumePdfTextItemsWithinBudget(
+  items: Array<{ str: string } | { type: string }>,
+  maxCharacters: number,
+  maxItems: number,
+): PdfTextBudgetResult {
+  const characterLimit = Math.max(
+    0,
+    Math.floor(finitePositive(maxCharacters, 0)),
+  );
+  const itemLimit = Math.max(0, Math.floor(finitePositive(maxItems, 0)));
+  const accepted: Array<{ str: string }> = [];
+  let consumedCharacters = 0;
+  let consumedItems = 0;
+  let retainedCharacters = 0;
+
+  for (const item of items) {
+    if (consumedItems >= itemLimit) {
+      return {
+        consumedCharacters,
+        consumedItems,
+        items: accepted,
+        retainedCharacters,
+        truncated: true,
+      };
+    }
+    consumedItems += 1;
+    if (!("str" in item)) continue;
+
+    const remainingCharacters = characterLimit - consumedCharacters;
+    if (item.str.length > remainingCharacters) {
+      consumedCharacters += item.str.length;
+      if (remainingCharacters > 0) {
+        accepted.push({ str: item.str.slice(0, remainingCharacters) });
+        retainedCharacters += remainingCharacters;
+      }
+      return {
+        consumedCharacters,
+        consumedItems,
+        items: accepted,
+        retainedCharacters,
+        truncated: true,
+      };
+    }
+    accepted.push({ str: item.str });
+    consumedCharacters += item.str.length;
+    retainedCharacters += item.str.length;
+  }
+
+  return {
+    consumedCharacters,
+    consumedItems,
+    items: accepted,
+    retainedCharacters,
+    truncated: false,
+  };
 }
