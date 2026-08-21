@@ -64,6 +64,9 @@ type MockWindow = Window & {
     command: string;
     payload: unknown;
   }>;
+  __BUZZ_E2E_QUERY_CLIENT__?: {
+    isFetching: (filters: { queryKey: readonly string[] }) => number;
+  };
   __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
     channelName: string;
     kind?: number;
@@ -109,6 +112,33 @@ async function waitForMockLiveSubscription(
       ),
     )
     .toBe(true);
+}
+
+async function getHomeFeedReadCount(page: import("@playwright/test").Page) {
+  return page.evaluate(
+    () =>
+      (window as MockWindow).__BUZZ_E2E_COMMAND_PAYLOADS__?.filter(
+        (entry) => entry.command === "get_feed",
+      ).length ?? 0,
+  );
+}
+
+async function waitForHomeFeedReadAfter(
+  page: import("@playwright/test").Page,
+  baseline: number,
+) {
+  await expect.poll(() => getHomeFeedReadCount(page)).toBeGreaterThan(baseline);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as MockWindow).__BUZZ_E2E_QUERY_CLIENT__?.isFetching({
+            queryKey: ["home-feed"],
+          }) ?? -1,
+      ),
+    )
+    .toBe(0);
+  return getHomeFeedReadCount(page);
 }
 
 /** Installs a scrollIntoView spy that counts calls inside the detail pane. */
@@ -314,6 +344,7 @@ test("live forum mention survives a stale durable feed refetch", async ({
 
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
+  const baselineFeedReads = await getHomeFeedReadCount(page);
 
   await page.evaluate(
     ({ content, senderPubkey, viewerPubkey }) => {
@@ -334,6 +365,15 @@ test("live forum mention survives a stale durable feed refetch", async ({
     },
   );
 
+  const liveRefreshReads = await waitForHomeFeedReadAfter(
+    page,
+    baselineFeedReads,
+  );
+  await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("buzz:e2e-home-feed-updated"));
+  });
+  await waitForHomeFeedReadAfter(page, liveRefreshReads);
   await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
   await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(getListPane(page)).toContainText(message);
