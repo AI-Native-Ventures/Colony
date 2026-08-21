@@ -24,12 +24,18 @@ Every task inherits these. They come from the spec, `CLAUDE.md`, and `docs/BRAND
 - **Animate wrapper elements, never SVG children.** WebKit paints SVG children on the main thread, so a transform on a `<path>` freezes exactly while a loading gate is on screen.
 - **Never trap the user.** Every blocking step has a timeout and a way forward. Every disabled primary button has visible text saying what is missing.
 - **Files stay under 1000 lines**, enforced by `pnpm check:file-sizes`.
+- **A `label` wrapping a custom component, or a wrapper div carrying a key
+  handler, trips Biome's a11y rules.** Biome cannot see through a custom
+  component to the native control inside it. Suppress with a `biome-ignore`
+  comment that states why, matching the convention already used in
+  `ChannelActivityPopover.tsx` and `SidebarProfileCard.tsx`.
 - **Never use `autoFocus`.** Biome's `lint/a11y/noAutofocus` is error-level in
   this repo, so the pre-commit hook rejects it. Focus an element with a `ref`
   in an effect instead.
 - **Commit with `git commit -s`.** The DCO check fails any commit without a sign-off.
-- **Run one test file directly** while iterating:
-  `cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test <path>`.
+- **Run one test file directly** while iterating. Activate hermit first, from
+  the repo root, or node will not be on PATH in a fresh shell:
+  `. ./bin/activate-hermit && cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test <path>`.
   Do not use `pnpm test -- --test-name-pattern=...`: node still imports every
   `.test.mjs` in the suite before filtering, so it takes minutes, and a pattern
   silently matches fewer tests than it looks like it does. Run the whole suite
