@@ -8,52 +8,17 @@ import { cn } from "@/shared/lib/cn";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { AntMark } from "@/shared/ui/colony-logo/AntMark";
 
-const STAGE_INDEX: Record<OnboardingV2Stage, number> = {
-  founder: 0,
-  website: 1,
-  scan: 1,
-  summary: 2,
-  description: 2,
-  "runtime-check": 3,
-  "runtime-ready": 3,
-  "agent-install": 3,
-  model: 4,
-  scout: 5,
-  "first-task": 6,
-  entering: 6,
-};
-
-const STAGE_TRAIL = [
-  { id: "founder", hue: "#7457e8" },
-  { id: "business", hue: "#427ee8" },
-  { id: "context", hue: "#e857a4" },
-  { id: "runtime", hue: "#ed9f36" },
-  { id: "model", hue: "#21a778" },
-  { id: "scout", hue: "#7457e8" },
-  { id: "task", hue: "#21a778" },
-] as const;
-
-const ADDITIONAL_STAGE_INDEX: Record<OnboardingV2Stage, number> = {
-  founder: 0,
-  website: 0,
-  scan: 0,
-  summary: 1,
-  description: 1,
-  "runtime-check": 1,
-  "runtime-ready": 1,
-  "agent-install": 1,
-  model: 1,
-  scout: 2,
-  "first-task": 3,
-  entering: 3,
-};
-
-const ADDITIONAL_STAGE_TRAIL = [
-  { id: "business", hue: "#427ee8" },
-  { id: "context", hue: "#e857a4" },
-  { id: "scout", hue: "#7457e8" },
-  { id: "task", hue: "#21a778" },
-] as const;
+const FIRST_COMMUNITY_STEPS: readonly OnboardingV2Stage[] = [
+  "founder",
+  "company",
+  "scout-task",
+  "entering",
+];
+const ADDITIONAL_COMMUNITY_STEPS: readonly OnboardingV2Stage[] = [
+  "company",
+  "scout-task",
+  "entering",
+];
 
 export function OnboardingV2Shell({
   children,
@@ -65,51 +30,59 @@ export function OnboardingV2Shell({
   stage: OnboardingV2Stage;
 }) {
   const isAdditionalCommunity = journey === "additional-community";
-  const stageIndex = isAdditionalCommunity
-    ? ADDITIONAL_STAGE_INDEX[stage]
-    : STAGE_INDEX[stage];
-  const stageTrail = isAdditionalCommunity
-    ? ADDITIONAL_STAGE_TRAIL
-    : STAGE_TRAIL;
+  const steps = isAdditionalCommunity
+    ? ADDITIONAL_COMMUNITY_STEPS
+    : FIRST_COMMUNITY_STEPS;
+  const stepIndex = Math.max(0, steps.indexOf(stage));
   return (
     <main
-      className="buzz-onboarding-v2"
+      className="relative flex min-h-dvh flex-col items-center justify-center overflow-y-auto bg-background px-4 py-20 text-foreground"
       data-testid="onboarding-v2"
-      style={
-        {
-          "--onboarding-v2-accent": stageTrail[stageIndex].hue,
-        } as React.CSSProperties
-      }
     >
       <StartupWindowDragRegion />
-      <div className="buzz-onboarding-v2__glow" aria-hidden="true" />
-      <header className="buzz-onboarding-v2__header">
-        <div className="buzz-onboarding-v2__brand">
-          <span className="buzz-onboarding-v2__mark">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed -top-32 right-[-6rem] h-80 w-80 rounded-full bg-primary/10 blur-3xl"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed -bottom-40 left-[-8rem] h-96 w-96 rounded-full bg-primary/5 blur-3xl"
+      />
+      <header className="absolute inset-x-7 top-7 z-2 flex items-center justify-between">
+        <div className="flex items-center gap-2.5 text-sm font-semibold tracking-tight">
+          <span className="flex h-7.5 w-7.5 items-center justify-center rounded-lg bg-foreground text-background">
             <AntMark />
           </span>
           <span>Colony</span>
         </div>
-        <span className="buzz-onboarding-v2__eyebrow">
+        <span className="text-3xs uppercase tracking-[0.08em] text-muted-foreground">
           {isAdditionalCommunity
             ? "Your new company is waking up"
             : "Your company is waking up"}
         </span>
       </header>
-      <div className="buzz-onboarding-v2__trail" aria-hidden="true">
-        {stageTrail.map(({ hue, id }, index) => (
+      <div
+        aria-hidden="true"
+        className="absolute top-[4.25rem] z-2 flex items-center gap-2"
+        data-testid="onboarding-v2-progress"
+      >
+        {steps.map((step, index) => (
           <span
             className={cn(
-              "buzz-onboarding-v2__trail-node",
-              index <= stageIndex && "is-active",
-              index === stageIndex && "is-current",
+              "h-1 rounded-full transition-all duration-200",
+              index === stepIndex && "w-9 bg-primary",
+              index < stepIndex && "w-4 bg-primary/50",
+              index > stepIndex && "w-4 bg-foreground/15",
             )}
-            key={id}
-            style={{ "--trail-hue": hue } as React.CSSProperties}
+            key={step}
           />
         ))}
       </div>
-      <section className="buzz-onboarding-v2__panel">{children}</section>
+      <section className="relative z-1 w-full max-w-xl">
+        <div className="rounded-3xl border border-border/70 bg-card/85 p-7 shadow-[0_18px_50px_rgb(0_0_0/0.06)] backdrop-blur-sm">
+          {children}
+        </div>
+      </section>
     </main>
   );
 }
@@ -122,11 +95,19 @@ export function OnboardingV2Status({
   detail?: string;
 }) {
   return (
-    <div className="buzz-onboarding-v2__status" role="status">
-      <span className="buzz-onboarding-v2__spinner" aria-hidden="true" />
+    <div
+      className="mt-7 flex items-center gap-4 rounded-2xl border border-border/60 bg-background p-5"
+      role="status"
+    >
+      <span
+        aria-hidden="true"
+        className="h-7 w-7 shrink-0 animate-spin rounded-full border-2 border-primary/25 border-t-primary motion-reduce:animate-none"
+      />
       <div>
-        <strong>{label}</strong>
-        {detail ? <p>{detail}</p> : null}
+        <strong className="block text-sm font-semibold">{label}</strong>
+        {detail ? (
+          <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+        ) : null}
       </div>
     </div>
   );

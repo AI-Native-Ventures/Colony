@@ -7,11 +7,29 @@ import type { Profile } from "@/shared/api/types";
 import {
   createAdditionalCommunityOnboardingV2Draft,
   createOnboardingV2Draft,
-  isOnboardingV2Draft,
+  migrateOnboardingV2Draft,
   type OnboardingV2Draft,
 } from "./onboardingV2";
 
 const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
+
+/**
+ * A transaction parked in "finalizing" is mid-handoff. If it is still there
+ * after this long, the handoff died without settling (e.g. the relay never
+ * answered) and replaying the curtain on every launch would trap the user
+ * out of their own communities. Sweep it on load instead.
+ */
+const FINALIZING_STALE_AFTER_MS = 2 * 60 * 1000;
+
+export function finalizingTransactionIsStale(
+  transaction: Pick<CommunityOnboardingTransaction, "stage" | "updatedAt">,
+  now = Date.now(),
+): boolean {
+  if (transaction.stage !== "finalizing") return false;
+  const updatedAt = Date.parse(transaction.updatedAt);
+  if (Number.isNaN(updatedAt)) return true;
+  return now - updatedAt > FINALIZING_STALE_AFTER_MS;
+}
 
 export type CommunityOnboardingSource =
   | "first-community"
@@ -122,9 +140,10 @@ function isTransaction(
       "team-intro",
       "finalizing",
       "entering",
-    ].includes(transaction.stage ?? "") &&
-    (transaction.onboardingV2 === undefined ||
-      isOnboardingV2Draft(transaction.onboardingV2))
+    ].includes(transaction.stage ?? "")
+    // onboardingV2 is deliberately not validated here: persisted drafts from
+    // older builds must survive the load path so migrateOnboardingV2Draft can
+    // carry them forward.
   );
 }
 
@@ -135,7 +154,31 @@ export function loadCommunityOnboardingTransaction(
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isTransaction(parsed) ? parsed : null;
+    if (!isTransaction(parsed)) return null;
+    if (finalizingTransactionIsStale(parsed)) {
+      // The community itself was already added and activated; dropping the
+      // transaction lands the user inside the app instead of replaying a
+      // dead handoff forever.
+      storage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    if (parsed.onboardingV2 !== undefined) {
+      // Drafts predate the stage-machine rework sometimes (app upgraded
+      // mid-onboarding). Migrate what was captured instead of replaying old
+      // steps; an unusable draft restarts its journey rather than falling
+      // back to the join flow.
+      const migrated = migrateOnboardingV2Draft(parsed.onboardingV2);
+      const fallbackDraft =
+        parsed.source === "first-community"
+          ? createOnboardingV2Draft()
+          : createAdditionalCommunityOnboardingV2Draft();
+      const repaired = { ...parsed, onboardingV2: migrated ?? fallbackDraft };
+      if (repaired.onboardingV2 !== parsed.onboardingV2) {
+        saveCommunityOnboardingTransaction(repaired, storage);
+      }
+      return repaired;
+    }
+    return parsed;
   } catch {
     return null;
   }

@@ -1,4 +1,4 @@
-export const ONBOARDING_V2_VERSION = 1 as const;
+export const ONBOARDING_V2_VERSION = 2 as const;
 
 export const FOUNDER_GENDERS = [
   "woman",
@@ -14,16 +14,8 @@ export type OnboardingCreditStatus = "active" | "depleted" | "unavailable";
 
 export const ONBOARDING_V2_STAGES = [
   "founder",
-  "website",
-  "scan",
-  "summary",
-  "description",
-  "runtime-check",
-  "runtime-ready",
-  "agent-install",
-  "model",
-  "scout",
-  "first-task",
+  "company",
+  "scout-task",
   "entering",
 ] as const;
 
@@ -101,7 +93,7 @@ export function createOnboardingV2Draft(): OnboardingV2Draft {
 export function createAdditionalCommunityOnboardingV2Draft(): OnboardingV2Draft {
   return {
     ...createOnboardingV2Draft(),
-    stage: "website",
+    stage: "company",
   };
 }
 
@@ -155,47 +147,95 @@ export function isValidBusinessWebsite(value: string): boolean {
   }
 }
 
+/**
+ * The website scan runs in the background of the company screen: it never
+ * gates progress, so it may start whenever that screen (or any later one) is
+ * showing and no scan has run yet.
+ */
 export function shouldStartWebsiteScan(
   stage: OnboardingV2Stage,
   status: OnboardingV2Draft["company"]["scanStatus"],
 ): boolean {
-  return stage === "scan" && status === "idle";
+  return (stage === "company" || stage === "scout-task") && status === "idle";
 }
 
 export function nextOnboardingStage(
   stage: OnboardingV2Stage,
-  outcome: {
-    founderValid?: boolean;
-    hasWebsite?: boolean;
-    scanStatus?: OnboardingV2Draft["company"]["scanStatus"];
-    runtimeRoute?: OnboardingV2Draft["runtime"]["route"];
-  } = {},
+  outcome: { founderValid?: boolean } = {},
 ): OnboardingV2Stage {
   switch (stage) {
     case "founder":
-      return outcome.founderValid ? "website" : "founder";
-    case "website":
-      return outcome.hasWebsite === false ? "description" : "scan";
-    case "scan":
-      return outcome.scanStatus === "success" ? "summary" : "description";
-    case "summary":
-    case "description":
-      return "runtime-check";
-    case "runtime-check":
-      return outcome.runtimeRoute === "cli" ? "runtime-ready" : "agent-install";
-    case "runtime-ready":
-      return "scout";
-    case "agent-install":
-      return "model";
-    case "model":
-      return "scout";
-    case "scout":
-      return "first-task";
-    case "first-task":
+      return outcome.founderValid ? "company" : "founder";
+    case "company":
+      return "scout-task";
+    case "scout-task":
       return "entering";
     case "entering":
       return "entering";
   }
+}
+
+function v1DraftIsMigratable(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  // The delivery marker is the only state that cannot be regenerated: it
+  // dedupes the first-task handoff. Everything else has safe defaults.
+  return (
+    candidate.version === 1 &&
+    typeof candidate.firstTask === "object" &&
+    candidate.firstTask !== null &&
+    typeof (candidate.firstTask as Record<string, unknown>).deliveryMarker ===
+      "string"
+  );
+}
+
+const V1_STAGE_FALLBACK: Record<string, OnboardingV2Stage> = {
+  founder: "founder",
+  website: "company",
+  scan: "company",
+  summary: "company",
+  description: "company",
+  "runtime-check": "scout-task",
+  "runtime-ready": "scout-task",
+  "agent-install": "scout-task",
+  model: "scout-task",
+  scout: "scout-task",
+  "first-task": "scout-task",
+  entering: "entering",
+};
+
+/**
+ * Accept a persisted draft from any shipped version. V1 drafts (0.10.21)
+ * keep their captured context and task; stages collapse onto the v2 machine
+ * with the most advanced equivalent so nobody replays steps they finished.
+ */
+export function migrateOnboardingV2Draft(
+  value: unknown,
+): OnboardingV2Draft | null {
+  if (isOnboardingV2Draft(value)) return value;
+  if (!v1DraftIsMigratable(value)) return null;
+  const base = createOnboardingV2Draft();
+  const v1 = value as {
+    stage?: unknown;
+    founder?: Partial<OnboardingV2Draft["founder"]>;
+    company?: Partial<OnboardingV2Draft["company"]>;
+    runtime?: Partial<OnboardingV2Draft["runtime"]>;
+    credits?: Partial<OnboardingV2Draft["credits"]>;
+    firstTask?: Partial<OnboardingV2Draft["firstTask"]>;
+  };
+  const stage =
+    typeof v1.stage === "string"
+      ? (V1_STAGE_FALLBACK[v1.stage] ?? "company")
+      : "company";
+  return {
+    version: ONBOARDING_V2_VERSION,
+    stage,
+    founder: { ...base.founder, ...v1.founder },
+    company: { ...base.company, ...v1.company },
+    runtime: { ...base.runtime, ...v1.runtime },
+    credits: { ...base.credits, ...v1.credits },
+    firstTask: { ...base.firstTask, ...v1.firstTask },
+  };
 }
 
 export function isOnboardingV2Draft(

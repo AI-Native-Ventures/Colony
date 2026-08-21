@@ -68,6 +68,13 @@ const ENTERING_CURTAIN_FADE_MS = 500;
  */
 const ENTERING_CURTAIN_MAX_WAIT_MS = 8_000;
 
+/**
+ * Hard deadline for the Scout handoff (channel creation + first-task
+ * delivery) against a possibly brand-new relay. Bounded failure with Retry
+ * and Skip beats an eternal "Bringing Scout online…".
+ */
+const FINALIZE_TIMEOUT_MS = 15_000;
+
 const NEUTRAL_EMOJI_PICKER_THEME_VARS = {
   "--buzz-emoji-picker-rgb-background":
     "var(--buzz-onboarding-emoji-picker-background)",
@@ -251,74 +258,90 @@ export function CommunityOnboardingFlow({
     if (isPending || !relayUrl) return;
     setIsPending(true);
     update({ stage: "finalizing", error: undefined });
+    // The handoff talks to a possibly brand-new relay. Without a deadline a
+    // relay that never answers leaves the user on "Bringing Scout online…"
+    // forever with no error and no way forward — the exact trap this guard
+    // exists for. On timeout the catch below surfaces Retry / Skip for now.
+    const deadline = new Promise<never>((_, reject) => {
+      window.setTimeout(
+        () =>
+          reject(
+            new Error("Scout setup timed out. Try again or skip for now."),
+          ),
+        FINALIZE_TIMEOUT_MS,
+      );
+    });
     try {
-      const identity = await getIdentity();
-      const result = await initializeStarterChannels(queryClient, {
-        focus: true,
-        pubkey: identity.pubkey,
-        communityScope: relayUrl,
-      });
-      // Public starter channels are optional; initializeStarterChannels still
-      // returns a focus channel when the required private Welcome channel was
-      // created successfully. Only a failure without a focus target should
-      // keep onboarding open.
-      if (!result.ok && !result.focusChannelId) {
-        throw new Error(result.reason);
-      }
-      if (result.focusChannelId) {
-        let onboardingV2 = transaction?.onboardingV2;
-        if (
-          onboardingV2?.firstTask.content.trim() &&
-          !onboardingV2.firstTask.deliveredEventId
-        ) {
-          const marker = onboardingFirstTaskMarker(onboardingV2);
-          const exists = await hasManagedAgentChannelMessageMarker({
-            channelId: result.focusChannelId,
-            marker,
-            markerScope: "channel",
-          });
-          let deliveredEventId = "already-delivered";
-          if (!exists) {
-            const sent = await sendChannelMessage(
-              result.focusChannelId,
-              buildOnboardingFirstTaskMessage(onboardingV2),
-              null,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              [["client", marker]],
-            );
-            deliveredEventId = sent.eventId;
-          }
-          onboardingV2 = {
-            ...onboardingV2,
-            firstTask: {
-              ...onboardingV2.firstTask,
-              deliveredEventId,
-            },
-          };
-        }
-        // Direct entry: point the router at the Welcome channel *before* the
-        // app mounts, so it never lands on Home first. Consume the pending
-        // entry — it exists for the Home-route fallback, and leaving it would
-        // yank a later Home visit back to Welcome.
-        takePendingWelcomeChannelForDirectEntry();
-        window.location.hash = `/channels/${result.focusChannelId}`;
-        markCommunityOnboardingComplete(identity.pubkey, relayUrl);
-        // Keep this screen mounted as a curtain over the loading app; the
-        // "entering" stage fades it out once Welcome reports ready.
-        update({
-          stage: "entering",
-          error: undefined,
-          onboardingV2: onboardingV2
-            ? { ...onboardingV2, stage: "entering" }
-            : undefined,
+      const work = (async () => {
+        const identity = await getIdentity();
+        const result = await initializeStarterChannels(queryClient, {
+          focus: true,
+          pubkey: identity.pubkey,
+          communityScope: relayUrl,
         });
-        return;
-      }
-      await finish();
+        // Public starter channels are optional; initializeStarterChannels still
+        // returns a focus channel when the required private Welcome channel was
+        // created successfully. Only a failure without a focus target should
+        // keep onboarding open.
+        if (!result.ok && !result.focusChannelId) {
+          throw new Error(result.reason);
+        }
+        if (result.focusChannelId) {
+          let onboardingV2 = transaction?.onboardingV2;
+          if (
+            onboardingV2?.firstTask.content.trim() &&
+            !onboardingV2.firstTask.deliveredEventId
+          ) {
+            const marker = onboardingFirstTaskMarker(onboardingV2);
+            const exists = await hasManagedAgentChannelMessageMarker({
+              channelId: result.focusChannelId,
+              marker,
+              markerScope: "channel",
+            });
+            let deliveredEventId = "already-delivered";
+            if (!exists) {
+              const sent = await sendChannelMessage(
+                result.focusChannelId,
+                buildOnboardingFirstTaskMessage(onboardingV2),
+                null,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                [["client", marker]],
+              );
+              deliveredEventId = sent.eventId;
+            }
+            onboardingV2 = {
+              ...onboardingV2,
+              firstTask: {
+                ...onboardingV2.firstTask,
+                deliveredEventId,
+              },
+            };
+          }
+          // Direct entry: point the router at the Welcome channel *before* the
+          // app mounts, so it never lands on Home first. Consume the pending
+          // entry — it exists for the Home-route fallback, and leaving it would
+          // yank a later Home visit back to Welcome.
+          takePendingWelcomeChannelForDirectEntry();
+          window.location.hash = `/channels/${result.focusChannelId}`;
+          markCommunityOnboardingComplete(identity.pubkey, relayUrl);
+          // Keep this screen mounted as a curtain over the loading app; the
+          // "entering" stage fades it out once Welcome reports ready.
+          update({
+            stage: "entering",
+            error: undefined,
+            onboardingV2: onboardingV2
+              ? { ...onboardingV2, stage: "entering" }
+              : undefined,
+          });
+          return;
+        }
+        await finish();
+      })();
+      await Promise.race([work, deadline]);
     } catch (error) {
       setStarterChannelFailureCount((count) => count + 1);
       update({
@@ -507,6 +530,7 @@ export function CommunityOnboardingFlow({
         }
         onChange={(onboardingV2) => update({ onboardingV2, error: undefined })}
         onReadyToFinalize={finalize}
+        onSkip={() => void finish()}
       />
     );
   }
