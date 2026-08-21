@@ -292,8 +292,15 @@
 </p>
 
 <ul class="tight">
-  <li>Managed agent (kind 30177): <code>"manager": "&lt;hex&gt;"</code> in the content JSON.</li>
-  <li>Employee (kind 30190): a <code>manager</code> tag on the head, sourced from the hire request.</li>
+  <li><strong>A <code>manager</code> tag on both kinds</strong>, 30177 and 30190. An earlier draft
+      put it in 30177's content JSON. That would have been unqueryable: the delete-protection rule
+      below has to find an agent's reports, and the relay indexes tags, not content fields. A
+      content mirror may be written for readability but the tag is authoritative.</li>
+  <li><strong>A migration adding <code>manager BYTEA NULL</code> to the <code>employees</code>
+      table</strong> (<code>migrations/0043_employees.sql</code> defines it; the next free number is
+      0061). <code>agent_tier</code> reads <code>employees.rank</code> before it looks at any event,
+      so a promotion that only republishes the head would be ignored by the gate. Kind 9046 must
+      update the row and the head together.</li>
   <li>Executives have no manager. Absence is the root marker, not a sentinel value.</li>
   <li>Workers and leaders may have none. They render in an Unassigned tray. Nothing breaks and no
       migration is required.</li>
@@ -310,10 +317,12 @@
   <li>The manager must have a resolvable head in the same community.</li>
   <li>An executive carrying a <code>manager</code> is rejected. There is no rank above it.</li>
   <li>A manager pointing at the agent itself is rejected.</li>
-  <li><strong>Tier in 30177 content is trusted only when the head is signed by an owner.</strong>
-      Today the tier resolver falls through to the content <code>tier</code> field when no employee
-      row exists (<code>interrupt_gate.rs:236</code>), so a self-published head can name its own
-      rank. Closing that is part of this phase.</li>
+  <li><strong>Owner-signature on the tier head is already enforced.</strong> An earlier draft of
+      this spec claimed a self-published head could name its own rank. That was wrong:
+      <code>agent_tier</code> skips every candidate head whose author is not a current owner
+      (<code>crates/buzz-relay/src/interrupt_gate.rs:180-191</code>) before it reads the content
+      <code>tier</code> field at all. No change needed. Phase 2 adds a regression test pinning
+      that behaviour and nothing more.</li>
 </ol>
 
 <p>
