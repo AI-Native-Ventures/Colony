@@ -24,6 +24,9 @@ Every task inherits these. They come from the spec, `CLAUDE.md`, and `docs/BRAND
 - **Animate wrapper elements, never SVG children.** WebKit paints SVG children on the main thread, so a transform on a `<path>` freezes exactly while a loading gate is on screen.
 - **Never trap the user.** Every blocking step has a timeout and a way forward. Every disabled primary button has visible text saying what is missing.
 - **Files stay under 1000 lines**, enforced by `pnpm check:file-sizes`.
+- **Never use `autoFocus`.** Biome's `lint/a11y/noAutofocus` is error-level in
+  this repo, so the pre-commit hook rejects it. Focus an element with a `ref`
+  in an effect instead.
 - **Commit with `git commit -s`.** The DCO check fails any commit without a sign-off.
 - **Run one test file directly** while iterating:
   `cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test <path>`.
@@ -2044,7 +2047,7 @@ export function CreditsScreen({
           <span className="onb-amount" data-selected="true">
             $
             <input
-              autoFocus
+              ref={customRef}
               inputMode="numeric"
               aria-label="Custom amount in dollars"
               value={custom}
