@@ -70,6 +70,14 @@ export type ActiveChannelTurnSummary = {
   agentCount: number;
   agentPubkeys: string[];
   agentNames?: string[];
+  /** Per-agent badge anchors (startedAt + that agent's clock offset), built in
+   * the store in the same sorted pass as `agentPubkeys` so the two arrays are
+   * index-aligned by construction. Optional only because the typing-fallback
+   * producer (agentWorkingSignal's typing-only summaries) has no turn anchors
+   * to offer; the observer store always populates it. Consumers must fall back
+   * to `anchorAt` when it is missing or its length drifts from
+   * `agentPubkeys`. */
+  agentAnchorsAt?: number[];
 };
 
 // Module-level state: agentPubkey → turnId → ActiveTurn
@@ -530,7 +538,10 @@ const EMPTY_CHANNEL_TURNS: ActiveChannelTurnSummary[] = [];
 
 /**
  * Returns active working channels across all tracked agents, sorted by
- * channelId and anchored to the earliest live turn in each channel.
+ * channelId and anchored to the earliest live turn in each channel. Each
+ * summary also carries `agentAnchorsAt` — per-agent earliest anchors,
+ * index-aligned with `agentPubkeys` (both derived from one sorted pass, so
+ * they cannot drift apart).
  */
 export function getActiveTurnsByChannel(): ActiveChannelTurnSummary[] {
   if (cachedChannelTurnSummaries) return cachedChannelTurnSummaries;
@@ -538,7 +549,7 @@ export function getActiveTurnsByChannel(): ActiveChannelTurnSummary[] {
 
   const summaries = new Map<
     string,
-    { anchorAt: number; agentPubkeys: Set<string> }
+    { anchorAt: number; earliestAnchorByAgent: Map<string, number> }
   >();
 
   for (const [agentKey, agentTurns] of activeTurnsByAgent) {
@@ -551,12 +562,15 @@ export function getActiveTurnsByChannel(): ActiveChannelTurnSummary[] {
       if (!summary) {
         summaries.set(turn.channelId, {
           anchorAt,
-          agentPubkeys: new Set([agentKey]),
+          earliestAnchorByAgent: new Map([[agentKey, anchorAt]]),
         });
         continue;
       }
 
-      summary.agentPubkeys.add(agentKey);
+      const priorAnchor = summary.earliestAnchorByAgent.get(agentKey);
+      if (priorAnchor === undefined || anchorAt < priorAnchor) {
+        summary.earliestAnchorByAgent.set(agentKey, anchorAt);
+      }
       if (anchorAt < summary.anchorAt) {
         summary.anchorAt = anchorAt;
       }
@@ -564,12 +578,19 @@ export function getActiveTurnsByChannel(): ActiveChannelTurnSummary[] {
   }
 
   const result = [...summaries.entries()]
-    .map(([channelId, summary]) => ({
-      channelId,
-      anchorAt: summary.anchorAt,
-      agentCount: summary.agentPubkeys.size,
-      agentPubkeys: [...summary.agentPubkeys].sort(),
-    }))
+    .map(([channelId, summary]) => {
+      // One sorted pass derives both arrays — alignment is structural.
+      const sortedAgents = [...summary.earliestAnchorByAgent.entries()].sort(
+        ([a], [b]) => a.localeCompare(b),
+      );
+      return {
+        channelId,
+        anchorAt: summary.anchorAt,
+        agentCount: sortedAgents.length,
+        agentPubkeys: sortedAgents.map(([pubkey]) => pubkey),
+        agentAnchorsAt: sortedAgents.map(([, anchorAt]) => anchorAt),
+      };
+    })
     .sort((a, b) => a.channelId.localeCompare(b.channelId));
   cachedChannelTurnSummaries = result;
   return result;
