@@ -215,30 +215,22 @@ test("a created community uses the returning-founder V2 journey", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Show Colony this business" }),
+    page.getByRole("heading", { name: "Show Colony the business" }),
   ).toBeVisible();
-  await expect(page.getByText("Step 1 of 4")).toBeVisible();
-  await expect(page.locator(".buzz-onboarding-v2__trail-node")).toHaveCount(4);
-  await page.getByRole("button", { name: "I do not have a website" }).click();
+  await expect(page.getByText("Step 1 of 3")).toBeVisible();
+  await expect(page.getByTestId("onboarding-v2-progress")).toHaveCount(1);
 
-  await expect(page.getByText("Step 2 of 4")).toBeVisible();
   await page
-    .getByRole("textbox", { name: "Business summary" })
+    .getByRole("textbox", { name: /What does the business do/ })
     .fill("A second company with its own operating context.");
-  await page.getByRole("button", { name: "This is right" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Meet Scout, your Chief of Staff" }),
   ).toBeVisible();
-  await expect(page.getByText("Step 3 of 4")).toBeVisible();
-  await expect(
-    page.getByText("Finding the best way to run your team"),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: "Give Scout a first task" }).click();
-
-  await expect(page.getByText("Step 4 of 4")).toBeVisible();
+  await expect(page.getByText("Step 2 of 3")).toBeVisible();
   await page
-    .getByRole("textbox", { name: "First task" })
+    .getByRole("textbox", { name: /First task for Scout/ })
     .fill("Prepare the first-week operating plan.");
   await page.getByRole("button", { name: "Start this company" }).click();
 
@@ -336,9 +328,9 @@ test("zero-credit Colony Agent onboarding reaches the first task without payment
         return transaction.onboardingV2?.stage ?? null;
       }, TRANSACTION_STORAGE_KEY),
     )
-    .toBe("first-task");
+    .toBe("scout-task");
   await expect(
-    page.getByRole("heading", { name: "What should Scout move first?" }),
+    page.getByRole("heading", { name: "Meet Scout, your Chief of Staff" }),
   ).toBeVisible();
   await expect(page.getByTestId("onboarding-zero-credits-warning")).toHaveText(
     "You can enter Colony now. Scout and other agents will not respond until you add credits. Your balance is always visible beside your profile.",
@@ -423,10 +415,9 @@ test("automatic setup selects the first ready supported CLI without a chooser", 
 
   await page.goto("/");
 
-  await expect(
-    page.getByRole("heading", { name: "Your existing AI setup works" }),
-  ).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("codex is ready")).toBeVisible();
+  await expect(page.getByText("codex is connected")).toBeVisible({
+    timeout: 10_000,
+  });
   await expect(page.getByTestId("onboarding-runtime-codex")).toHaveCount(0);
   await expect(page.getByRole("checkbox")).toHaveCount(0);
   await expect
@@ -460,12 +451,10 @@ test("automatic setup offers Colony Agent when no supported CLI is ready", async
 
   await page.goto("/");
 
-  await expect(
-    page.getByRole("heading", { name: "Install your company’s engine" }),
-  ).toBeVisible({ timeout: 10_000 });
-  await expect(
-    page.getByRole("button", { name: "Install Colony Agent" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Install" })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.getByText("Colony Agent", { exact: true })).toBeVisible();
   await expect(page.getByTestId("onboarding-runtime-codex")).toHaveCount(0);
   await expect(await readGlobalConfig(page)).toMatchObject({
     credential_mode: "byok",

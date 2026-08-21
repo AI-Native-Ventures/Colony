@@ -13,7 +13,6 @@ import {
 import {
   founderDetailsAreValid,
   isValidBusinessWebsite,
-  shouldStartWebsiteScan,
   type FounderGender,
   type OnboardingV2Draft,
   type OnboardingV2Journey,
@@ -55,17 +54,23 @@ function Heading({
   children: React.ReactNode;
 }) {
   return (
-    <div className="buzz-onboarding-v2__heading">
-      <span>{kicker}</span>
-      <h1>{title}</h1>
-      <p>{children}</p>
+    <div>
+      <span className="mb-3.5 block text-xs font-bold uppercase tracking-[0.12em] text-primary">
+        {kicker}
+      </span>
+      <h1 className="m-0 max-w-full text-2xl font-semibold leading-tight tracking-tight">
+        {title}
+      </h1>
+      <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+        {children}
+      </p>
     </div>
   );
 }
 
 function ErrorNotice({ children }: { children: React.ReactNode }) {
   return (
-    <p className="buzz-onboarding-v2__error" role="alert">
+    <p className="mt-4 text-sm text-destructive" role="alert">
       {children}
     </p>
   );
@@ -76,6 +81,7 @@ export function OnboardingV2Flow({
   journey = "first-community",
   onChange,
   onReadyToFinalize,
+  onSkip,
   externalError,
   isFinalizing = false,
 }: {
@@ -83,16 +89,23 @@ export function OnboardingV2Flow({
   journey?: OnboardingV2Journey;
   onChange: (draft: OnboardingV2Draft) => void;
   onReadyToFinalize: () => Promise<void>;
+  onSkip?: () => void;
   externalError?: string;
   isFinalizing?: boolean;
 }) {
   const isAdditionalCommunity = journey === "additional-community";
   const runtimes = useAcpRuntimesQuery({
-    enabled: draft.stage === "runtime-check",
+    enabled: draft.stage === "company" || draft.stage === "scout-task",
   });
   const installRuntime = useInstallAcpRuntimeMutation();
   const [error, setError] = React.useState<string | null>(null);
   const scanGeneration = React.useRef(0);
+  const autoFilledSummary = React.useRef(false);
+
+  // Async callbacks (scan, runtime configure) must never write a stale draft
+  // over edits the user made while they were in flight.
+  const draftRef = React.useRef(draft);
+  draftRef.current = draft;
 
   const patch = React.useCallback(
     (next: Partial<OnboardingV2Draft>) => onChange({ ...draft, ...next }),
@@ -110,78 +123,81 @@ export function OnboardingV2Flow({
     [draft.company, patch],
   );
 
-  React.useEffect(() => {
-    if (!shouldStartWebsiteScan(draft.stage, draft.company.scanStatus)) return;
+  const runScan = React.useCallback(async () => {
+    const current = draftRef.current;
+    const url = current.company.website.trim();
+    if (!isValidBusinessWebsite(url)) return;
     const generation = ++scanGeneration.current;
     setError(null);
-    patchCompany({ scanStatus: "running" });
-    void scanOnboardingCompanyWebsite(draft.company.website)
-      .then((result) => {
-        if (scanGeneration.current !== generation) return;
-        if (result.status === "success") {
-          onChange({
-            ...draft,
-            stage: "summary",
-            company: {
-              ...draft.company,
-              canonicalUrl: result.result.canonicalUrl,
-              summary: buildEditableCompanySummary(result.result),
-              scanStatus: "success",
-            },
-          });
-          return;
-        }
+    onChange({
+      ...current,
+      company: { ...current.company, scanStatus: "running" },
+    });
+    try {
+      const result = await scanOnboardingCompanyWebsite(url);
+      if (scanGeneration.current !== generation) return;
+      const latest = draftRef.current;
+      if (result.status === "success") {
+        const summaryIsEmptyOrOurs =
+          latest.company.summary.trim().length === 0 ||
+          autoFilledSummary.current;
+        const summary = summaryIsEmptyOrOurs
+          ? buildEditableCompanySummary(result.result)
+          : latest.company.summary;
+        autoFilledSummary.current = true;
         onChange({
-          ...draft,
-          stage: "description",
+          ...latest,
           company: {
-            ...draft.company,
-            scanStatus: result.status === "timeout" ? "timeout" : "failed",
+            ...latest.company,
+            canonicalUrl: result.result.canonicalUrl,
+            summary,
+            scanStatus: "success",
           },
         });
-      })
-      .catch((cause) => {
-        if (scanGeneration.current !== generation) return;
-        setError(
-          cause instanceof Error ? cause.message : "The scan could not finish.",
-        );
-        patchCompany({ scanStatus: "failed" });
+        return;
+      }
+      onChange({
+        ...latest,
+        company: {
+          ...latest.company,
+          scanStatus: result.status === "timeout" ? "timeout" : "failed",
+        },
       });
-  }, [draft, onChange, patchCompany]);
+    } catch (cause) {
+      if (scanGeneration.current !== generation) return;
+      setError(
+        cause instanceof Error ? cause.message : "The scan could not finish.",
+      );
+      onChange({
+        ...draftRef.current,
+        company: { ...draftRef.current.company, scanStatus: "failed" },
+      });
+    }
+  }, [onChange]);
 
+  // Runtime detection starts on the company screen so it is already resolved
+  // (or installing) by the time the user reaches Scout. Every journey gets
+  // it — created companies previously skipped setup entirely.
   React.useEffect(() => {
-    if (draft.stage !== "runtime-check" || runtimes.isPending || !runtimes.data)
-      return;
+    if (draft.runtime.route !== null) return;
+    if (runtimes.isPending || !runtimes.data) return;
     let cancelled = false;
     const configure = async () => {
       setError(null);
       const choice = selectAutomaticRuntime(runtimes.data);
       try {
-        const current = await getGlobalAgentConfig();
         if (choice.route === "cli") {
+          const current = await getGlobalAgentConfig();
           await setGlobalAgentConfig(
             configForAutomaticCli(current, choice.runtimeId),
           );
-          if (!cancelled) {
-            onChange({
-              ...draft,
-              stage: "runtime-ready",
-              runtime: {
-                ...draft.runtime,
-                route: "cli",
-                selectedId: choice.runtimeId,
-              },
-            });
-          }
-          return;
         }
         if (!cancelled) {
           onChange({
-            ...draft,
-            stage: "agent-install",
+            ...draftRef.current,
             runtime: {
-              ...draft.runtime,
-              route: "colony-agent",
+              ...draftRef.current.runtime,
+              route: choice.route,
               selectedId: choice.runtimeId,
             },
           });
@@ -197,12 +213,11 @@ export function OnboardingV2Flow({
     return () => {
       cancelled = true;
     };
-  }, [draft, onChange, runtimes.data, runtimes.isPending]);
+  }, [draft.runtime.route, onChange, runtimes.data, runtimes.isPending]);
 
   const continueFromCompany = () => {
-    if (!draft.company.summary.trim()) return;
     setError(null);
-    patch({ stage: isAdditionalCommunity ? "scout" : "runtime-check" });
+    patch({ stage: "scout-task" });
   };
 
   const saveFounder = async () => {
@@ -210,7 +225,7 @@ export function OnboardingV2Flow({
     setError(null);
     try {
       await updateProfile({ displayName: draft.founder.fullName.trim() });
-      patch({ stage: "website" });
+      patch({ stage: "company" });
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -240,7 +255,7 @@ export function OnboardingV2Flow({
         // Account visibility never blocks entry. The relay remains the
         // authority that prevents model work without usable credits.
       }
-      patch({ credits, stage: "model" });
+      patch({ credits });
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -250,17 +265,66 @@ export function OnboardingV2Flow({
     }
   };
 
+  const scanChip = (() => {
+    switch (draft.company.scanStatus) {
+      case "running":
+        return (
+          <p
+            className="mt-2.5 flex items-center gap-2 text-xs text-muted-foreground"
+            role="status"
+          >
+            <span
+              aria-hidden="true"
+              className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary/25 border-t-primary motion-reduce:animate-none"
+            />
+            Reading your website in the background. You can keep typing.
+          </p>
+        );
+      case "success":
+        return (
+          <p className="mt-2.5 text-xs text-muted-foreground" role="status">
+            Summary started from your website. Edit anything it got wrong.
+          </p>
+        );
+      case "failed":
+      case "timeout":
+        return (
+          <div className="mt-2.5 flex items-center gap-3">
+            <p className="text-xs text-destructive" role="alert">
+              {draft.company.scanStatus === "timeout"
+                ? "The scan ended before it had a reliable answer."
+                : "The scan could not read that website."}
+            </p>
+            <button
+              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              onClick={() => void runScan()}
+              type="button"
+            >
+              Try again
+            </button>
+          </div>
+        );
+      default:
+        return null;
+    }
+  })();
+
   const content = (() => {
     switch (draft.stage) {
       case "founder":
         return (
           <>
-            <Heading kicker="Step 1 of 7" title="Let’s start with you">
+            <Heading kicker="Step 1 of 4" title="Let’s start with you">
               A few human details help Scout understand who it is working with.
             </Heading>
-            <div className="buzz-onboarding-v2__form-grid">
-              <label className="is-wide" htmlFor="onboarding-founder-name">
-                <span>Full name</span>
+            <div className="mt-6 grid grid-cols-2 gap-4.5">
+              <label
+                className="col-span-full"
+                htmlFor="onboarding-founder-name"
+              >
+                <span className="mb-2 block pl-1 text-xs font-semibold">
+                  Full name
+                </span>
                 <Input
                   autoFocus
                   id="onboarding-founder-name"
@@ -272,8 +336,11 @@ export function OnboardingV2Flow({
                 />
               </label>
               <label htmlFor="onboarding-founder-country">
-                <span>Country</span>
+                <span className="mb-2 block pl-1 text-xs font-semibold">
+                  Country
+                </span>
                 <select
+                  className="h-11 w-full rounded-xl border border-border/70 bg-background/80 px-3 text-sm outline-hidden focus-visible:border-primary/70 focus-visible:ring-2 focus-visible:ring-primary/15"
                   id="onboarding-founder-country"
                   value={draft.founder.country}
                   onChange={(event) =>
@@ -289,7 +356,9 @@ export function OnboardingV2Flow({
                 </select>
               </label>
               <label htmlFor="onboarding-founder-city">
-                <span>City</span>
+                <span className="mb-2 block pl-1 text-xs font-semibold">
+                  City
+                </span>
                 <Input
                   id="onboarding-founder-city"
                   value={draft.founder.city}
@@ -299,17 +368,20 @@ export function OnboardingV2Flow({
                   placeholder="Your city"
                 />
               </label>
-              <fieldset className="is-wide">
-                <legend>
-                  Gender <small>optional</small>
+              <fieldset className="col-span-full border-0 p-0">
+                <legend className="mb-2 pl-1 text-xs font-semibold">
+                  Gender{" "}
+                  <small className="font-normal text-muted-foreground">
+                    optional
+                  </small>
                 </legend>
-                <div className="buzz-onboarding-v2__chips">
+                <div className="flex flex-wrap gap-2">
                   {GENDER_OPTIONS.map((option) => (
                     <button
                       className={
                         draft.founder.gender === option.value
-                          ? "is-selected"
-                          : ""
+                          ? "rounded-full border border-primary bg-primary px-3.5 py-2 text-xs text-primary-foreground transition-colors"
+                          : "rounded-full border border-border/70 bg-background/60 px-3.5 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/25 hover:text-foreground"
                       }
                       key={option.value}
                       onClick={() => patchFounder({ gender: option.value })}
@@ -322,10 +394,12 @@ export function OnboardingV2Flow({
               </fieldset>
               {draft.founder.gender === "self-describe" ? (
                 <label
-                  className="is-wide"
+                  className="col-span-full"
                   htmlFor="onboarding-founder-gender-description"
                 >
-                  <span>How should we describe you?</span>
+                  <span className="mb-2 block pl-1 text-xs font-semibold">
+                    How should we describe you?
+                  </span>
                   <Input
                     id="onboarding-founder-gender-description"
                     value={draft.founder.selfDescribedGender}
@@ -338,7 +412,7 @@ export function OnboardingV2Flow({
             </div>
             {error ? <ErrorNotice>{error}</ErrorNotice> : null}
             <Button
-              className="buzz-onboarding-v2__primary"
+              className="mt-6 h-11 rounded-full px-6"
               disabled={!founderDetailsAreValid(draft.founder)}
               onClick={() => void saveFounder()}
             >
@@ -346,133 +420,71 @@ export function OnboardingV2Flow({
             </Button>
           </>
         );
-      case "website":
+      case "company":
         return (
           <>
             <Heading
-              kicker={isAdditionalCommunity ? "Step 1 of 4" : "Step 2 of 7"}
-              title={
-                isAdditionalCommunity
-                  ? "Show Colony this business"
-                  : "Show Colony your business"
-              }
+              kicker={isAdditionalCommunity ? "Step 1 of 3" : "Step 2 of 4"}
+              title="Show Colony the business"
             >
-              We will read your public website and turn it into a summary you
-              control.
+              Add a website and Colony reads it in the background while you keep
+              moving. A sentence of your own works too.
             </Heading>
-            <label
-              className="buzz-onboarding-v2__single-field"
-              htmlFor="onboarding-business-website"
-            >
-              <span>Business website</span>
-              <div>
-                <Globe2 aria-hidden="true" />
+            <label className="mt-7 block" htmlFor="onboarding-business-website">
+              <span className="mb-2 block pl-1 text-xs font-semibold">
+                Business website{" "}
+                <small className="font-normal text-muted-foreground">
+                  optional
+                </small>
+              </span>
+              <div className="relative">
+                <Globe2
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                />
                 <Input
                   autoFocus
+                  className="pl-11"
                   id="onboarding-business-website"
                   value={draft.company.website}
                   onChange={(event) =>
                     patchCompany({ website: event.target.value })
                   }
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      isValidBusinessWebsite(draft.company.website) &&
+                      draft.company.scanStatus === "idle"
+                    ) {
+                      event.preventDefault();
+                      void runScan();
+                    }
+                  }}
                   placeholder="https://yourcompany.com"
                 />
               </div>
             </label>
-            {draft.company.website.trim() &&
-            !isValidBusinessWebsite(draft.company.website) ? (
-              <ErrorNotice>
-                Enter a public HTTPS website, for example
-                https://yourcompany.com.
-              </ErrorNotice>
+            {draft.company.scanStatus === "idle" &&
+            isValidBusinessWebsite(draft.company.website) ? (
+              <button
+                className="mt-2.5 self-start text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                onClick={() => void runScan()}
+                type="button"
+              >
+                Read my website
+              </button>
             ) : null}
-            {error ? <ErrorNotice>{error}</ErrorNotice> : null}
-            <Button
-              className="buzz-onboarding-v2__primary"
-              disabled={!isValidBusinessWebsite(draft.company.website)}
-              onClick={() => {
-                setError(null);
-                patch({
-                  stage: "scan",
-                  company: {
-                    ...draft.company,
-                    hasWebsite: true,
-                    scanStatus: "idle",
-                  },
-                });
-              }}
-            >
-              Scan my website
-            </Button>
-            <button
-              className="buzz-onboarding-v2__text-button"
-              onClick={() =>
-                patch({
-                  stage: "description",
-                  company: {
-                    ...draft.company,
-                    hasWebsite: false,
-                    scanStatus: "idle",
-                  },
-                })
-              }
-              type="button"
-            >
-              I do not have a website
-            </button>
-          </>
-        );
-      case "scan":
-        return (
-          <>
-            <Heading
-              kicker="Learning your company"
-              title="Colony is reading the signals"
-            >
-              This can take up to five minutes. Stay here while we map what your
-              business does.
-            </Heading>
-            <OnboardingV2Status
-              label="Scanning your website"
-              detail="Reading the offer, customers, voice, and public company facts."
-            />
-            {error ? (
-              <>
-                <ErrorNotice>{error}</ErrorNotice>
-                <Button
-                  className="buzz-onboarding-v2__primary"
-                  onClick={() => patchCompany({ scanStatus: "idle" })}
-                >
-                  Try again
-                </Button>
-              </>
-            ) : null}
-          </>
-        );
-      case "summary":
-      case "description": {
-        const scanFailed =
-          draft.stage === "description" && draft.company.hasWebsite;
-        return (
-          <>
-            <Heading
-              kicker={isAdditionalCommunity ? "Step 2 of 4" : "Step 3 of 7"}
-              title={
-                draft.stage === "summary"
-                  ? "Is this your business?"
-                  : scanFailed
-                    ? "Tell Colony about your business"
-                    : "Describe your business"
-              }
-            >
-              {draft.stage === "summary"
-                ? "Edit anything the scan got wrong. This becomes Scout’s starting context."
-                : draft.company.scanStatus === "timeout"
-                  ? "The five-minute scan ended before we had a reliable answer. A short description keeps you moving."
-                  : "A clear paragraph is enough. You can improve it with Scout later."}
-            </Heading>
-            <label className="buzz-onboarding-v2__textarea">
-              <span>Business summary</span>
+            {scanChip}
+            <label className="mt-6 block" htmlFor="onboarding-business-summary">
+              <span className="mb-2 block pl-1 text-xs font-semibold">
+                What does the business do?{" "}
+                <small className="font-normal text-muted-foreground">
+                  optional
+                </small>
+              </span>
               <textarea
+                className="min-h-24 w-full resize-y rounded-2xl border border-border/70 bg-background/80 p-4 text-sm outline-hidden transition-colors placeholder:text-muted-foreground/60 focus-visible:border-primary/70 focus-visible:ring-2 focus-visible:ring-primary/15"
+                id="onboarding-business-summary"
                 value={draft.company.summary}
                 onChange={(event) =>
                   patchCompany({ summary: event.target.value })
@@ -480,174 +492,129 @@ export function OnboardingV2Flow({
                 placeholder="What do you sell, who do you serve, and what makes the business distinctive?"
               />
             </label>
-            <Button
-              className="buzz-onboarding-v2__primary"
-              disabled={!draft.company.summary.trim()}
-              onClick={continueFromCompany}
-            >
-              This is right
-            </Button>
-            {draft.company.hasWebsite ? (
-              <button
-                className="buzz-onboarding-v2__text-button"
-                onClick={() => patch({ stage: "website" })}
-                type="button"
-              >
-                Try a different website
-              </button>
-            ) : null}
-          </>
-        );
-      }
-      case "runtime-check":
-        return (
-          <>
-            <Heading
-              kicker="Step 4 of 7"
-              title="Finding the best way to run your team"
-            >
-              Colony is checking this computer and choosing the simplest ready
-              setup.
-            </Heading>
-            <OnboardingV2Status
-              label="Checking your computer"
-              detail="No technical choices needed."
-            />
-            {runtimes.isError || error ? (
-              <>
-                <ErrorNotice>
-                  {error ?? "The automatic check could not finish."}
-                </ErrorNotice>
-                <Button
-                  className="buzz-onboarding-v2__primary"
-                  onClick={() => void runtimes.refetch()}
-                >
-                  Check again
-                </Button>
-              </>
-            ) : null}
-          </>
-        );
-      case "runtime-ready":
-        return (
-          <>
-            <Heading kicker="Ready" title="Your existing AI setup works">
-              Colony found a signed-in AI tool on this computer and connected it
-              automatically. There is nothing to buy.
-            </Heading>
-            <div className="buzz-onboarding-v2__success">
-              <Check aria-hidden="true" />
-              <span>{draft.runtime.selectedId} is ready</span>
-            </div>
-            <Button
-              className="buzz-onboarding-v2__primary"
-              onClick={() => patch({ stage: "scout" })}
-            >
-              Bring Scout online
-            </Button>
-          </>
-        );
-      case "agent-install":
-        return (
-          <>
-            <Heading
-              kicker="Colony Agent"
-              title="Install your company’s engine"
-            >
-              No ready AI tool was found. Colony Agent is the secure managed
-              option and takes care of the technical setup.
-            </Heading>
-            <div className="buzz-onboarding-v2__feature">
-              <Sparkles aria-hidden="true" />
-              <div>
-                <strong>Automatic installation</strong>
-                <p>
-                  Signed runtime and managed model access, with no technical
-                  setup required.
-                </p>
-              </div>
-            </div>
             {error ? <ErrorNotice>{error}</ErrorNotice> : null}
             <Button
-              className="buzz-onboarding-v2__primary"
-              disabled={installRuntime.isPending}
-              onClick={() => void installColonyAgent()}
+              className="mt-6 h-11 rounded-full px-6"
+              onClick={continueFromCompany}
             >
-              {installRuntime.isPending
-                ? "Installing Colony Agent…"
-                : "Install Colony Agent"}
+              Continue
             </Button>
           </>
         );
-      case "model":
-        return (
-          <>
-            <Heading kicker="Model" title="Choose your company’s first brain">
-              DeepSeek V4 Flash is selected for speed and value. You can change
-              this later in Settings.
-            </Heading>
-            <button
-              className="buzz-onboarding-v2__model is-selected"
-              type="button"
-            >
-              <span>
-                <strong>DeepSeek V4 Flash</strong>
-                <small className="buzz-onboarding-v2__model-meta">
-                  Recommended
-                </small>
-              </span>
-              <Check aria-hidden="true" />
-            </button>
-            <Button
-              className="buzz-onboarding-v2__primary"
-              onClick={() => patch({ stage: "scout" })}
-            >
-              Use this model
-            </Button>
-          </>
-        );
-      case "scout":
+      case "scout-task":
         return (
           <>
             <Heading
-              kicker={isAdditionalCommunity ? "Step 3 of 4" : "Step 6 of 7"}
+              kicker={isAdditionalCommunity ? "Step 2 of 3" : "Step 3 of 4"}
               title="Meet Scout, your Chief of Staff"
             >
-              {isAdditionalCommunity
-                ? "Scout is the first and only agent in this company. It starts with the business context you confirmed."
-                : "Scout is your first and only starting agent. It turns company context into coordinated work."}
+              Scout turns the company context you confirmed into coordinated
+              work, starting in your private Welcome channel.
             </Heading>
-            <div className="buzz-onboarding-v2__scout">
-              <span>
+            <div className="mt-7 flex items-center gap-4 rounded-2xl border border-border/60 bg-background p-5">
+              <span className="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
                 <AntMark />
               </span>
               <div>
-                <strong>Scout</strong>
-                <p>Chief of Staff</p>
+                <strong className="block text-sm font-semibold">Scout</strong>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Chief of Staff
+                </p>
               </div>
-              <i>Ready</i>
+              <i className="ml-auto text-xs font-medium text-primary not-italic">
+                Ready
+              </i>
             </div>
-            <Button
-              className="buzz-onboarding-v2__primary"
-              onClick={() => patch({ stage: "first-task" })}
-            >
-              Give Scout a first task
-            </Button>
-          </>
-        );
-      case "first-task":
-        return (
-          <>
-            <Heading
-              kicker={isAdditionalCommunity ? "Step 4 of 4" : "Step 7 of 7"}
-              title="What should Scout move first?"
-            >
-              Give Scout one real outcome. It will start in your private Welcome
-              channel with the company context you confirmed.
-            </Heading>
-            <label className="buzz-onboarding-v2__textarea">
-              <span>First task</span>
+            <div className="mt-3 rounded-2xl border border-border/60 bg-background p-5">
+              {draft.runtime.route === null ? (
+                <div className="flex items-center gap-4" role="status">
+                  <span
+                    aria-hidden="true"
+                    className="h-7 w-7 shrink-0 animate-spin rounded-full border-2 border-primary/25 border-t-primary motion-reduce:animate-none"
+                  />
+                  <div>
+                    <strong className="block text-sm font-semibold">
+                      Checking this computer
+                    </strong>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Finding the simplest ready way to run your team.
+                    </p>
+                  </div>
+                </div>
+              ) : draft.runtime.route === "cli" ? (
+                <div className="flex items-center gap-4" role="status">
+                  <Check
+                    aria-hidden="true"
+                    className="h-7 w-7 shrink-0 text-primary"
+                  />
+                  <div>
+                    <strong className="block text-sm font-semibold">
+                      {draft.runtime.selectedId} is connected
+                    </strong>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Your existing AI setup runs the team. Nothing to buy.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-4">
+                  <Sparkles
+                    aria-hidden="true"
+                    className="h-7 w-7 shrink-0 text-primary"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <strong className="block text-sm font-semibold">
+                      Colony Agent
+                    </strong>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      The secure managed option. Signed runtime, no technical
+                      setup.
+                    </p>
+                    {error ? <ErrorNotice>{error}</ErrorNotice> : null}
+                  </div>
+                  <Button
+                    className="h-9 shrink-0 rounded-full px-5 text-xs"
+                    disabled={installRuntime.isPending}
+                    onClick={() => void installColonyAgent()}
+                  >
+                    {installRuntime.isPending ? "Installing…" : "Install"}
+                  </Button>
+                </div>
+              )}
+            </div>
+            <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-primary/60 bg-background p-5">
+              <span>
+                <strong className="block text-sm font-semibold">
+                  DeepSeek V4 Flash
+                </strong>
+                <small className="mt-1 block text-3xs uppercase tracking-wide text-muted-foreground">
+                  Recommended
+                </small>
+              </span>
+              <Check aria-hidden="true" className="h-5 w-5 text-primary" />
+            </div>
+            {draft.runtime.route === "colony-agent" &&
+            draft.credits.status !== "active" ? (
+              <div
+                className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-100/70 p-4 text-xs leading-relaxed text-amber-800"
+                data-testid="onboarding-zero-credits-warning"
+                role="status"
+              >
+                You can enter Colony now. Scout and other agents will not
+                respond until you add credits. Your balance is always visible
+                beside your profile.
+              </div>
+            ) : null}
+            <label className="mt-6 block" htmlFor="onboarding-first-task">
+              <span className="mb-2 block pl-1 text-xs font-semibold">
+                First task for Scout{" "}
+                <small className="font-normal text-muted-foreground">
+                  optional
+                </small>
+              </span>
               <textarea
+                className="min-h-24 w-full resize-y rounded-2xl border border-border/70 bg-background/80 p-4 text-sm outline-hidden transition-colors placeholder:text-muted-foreground/60 focus-visible:border-primary/70 focus-visible:ring-2 focus-visible:ring-primary/15"
+                id="onboarding-first-task"
                 value={draft.firstTask.content}
                 onChange={(event) =>
                   patch({
@@ -660,24 +627,25 @@ export function OnboardingV2Flow({
                 placeholder="Example: Review our launch plan and tell me the three biggest risks."
               />
             </label>
-            {draft.runtime.route === "colony-agent" &&
-            draft.credits.status !== "active" ? (
-              <div
-                className="buzz-onboarding-v2__credits-warning"
-                data-testid="onboarding-zero-credits-warning"
-                role="status"
-              >
-                You can enter Colony now. Scout and other agents will not
-                respond until you add credits. Your balance is always visible
-                beside your profile.
-              </div>
-            ) : null}
             {error || externalError ? (
-              <ErrorNotice>{error ?? externalError}</ErrorNotice>
+              <>
+                <ErrorNotice>{error ?? externalError}</ErrorNotice>
+                {onSkip ? (
+                  <button
+                    className="mt-3 text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    data-testid="onboarding-skip-for-now"
+                    onClick={onSkip}
+                    type="button"
+                  >
+                    Skip for now and open Colony
+                  </button>
+                ) : null}
+              </>
             ) : null}
             <Button
-              className="buzz-onboarding-v2__primary"
-              disabled={!draft.firstTask.content.trim() || isFinalizing}
+              className="mt-6 h-11 rounded-full px-6"
+              data-testid="onboarding-start-company"
+              disabled={isFinalizing}
               onClick={() =>
                 void onReadyToFinalize().catch((cause) =>
                   setError(
@@ -716,34 +684,25 @@ export function OnboardingV2Flow({
   })();
 
   const previousStage =
-    draft.stage === "website"
+    draft.stage === "company"
       ? isAdditionalCommunity
         ? null
         : "founder"
-      : draft.stage === "summary" || draft.stage === "description"
-        ? "website"
-        : draft.stage === "scout"
-          ? isAdditionalCommunity
-            ? draft.company.hasWebsite && draft.company.scanStatus === "success"
-              ? "summary"
-              : "description"
-            : draft.runtime.route === "cli"
-              ? "runtime-ready"
-              : "model"
-          : draft.stage === "first-task"
-            ? "scout"
-            : null;
+      : draft.stage === "scout-task"
+        ? "company"
+        : null;
 
   return (
     <OnboardingV2Shell journey={journey} stage={draft.stage}>
       {previousStage ? (
         <button
           aria-label="Go back"
-          className="buzz-onboarding-v2__back"
+          className="mb-4 flex h-9 w-9 items-center justify-center rounded-full border border-border/60 bg-background/70 text-muted-foreground transition-colors hover:text-foreground"
+          disabled={isFinalizing}
           onClick={() => patch({ stage: previousStage })}
           type="button"
         >
-          <ChevronLeft aria-hidden="true" />
+          <ChevronLeft aria-hidden="true" className="h-4 w-4" />
         </button>
       ) : null}
       {content}
