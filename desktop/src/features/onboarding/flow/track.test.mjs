@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PROBE_BUDGET_MS, resolveTrack, withProbeBudget } from "./track.ts";
+import { PROBE_BUDGET_MS, resolveTrack } from "./track.ts";
 
 function runtime(overrides = {}) {
   return {
@@ -49,17 +49,6 @@ test("track_ignores_a_runtime_that_is_present_but_not_logged_in", () => {
     emptyConfig,
   );
   assert.equal(result.track, "colony");
-});
-
-test("probe_budget_falls_back_when_the_probe_hangs", async () => {
-  const hang = new Promise(() => {});
-  const result = await withProbeBudget(hang, 20, "fallback");
-  assert.equal(result, "fallback");
-});
-
-test("probe_budget_returns_the_real_value_when_it_arrives_in_time", async () => {
-  const result = await withProbeBudget(Promise.resolve("real"), 50, "fallback");
-  assert.equal(result, "real");
 });
 
 test("probe_budget_is_eight_seconds", () => {

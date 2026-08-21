@@ -37,22 +37,3 @@ export function resolveTrack(
 
   return { track: installed.length ? track : "colony", installed };
 }
-
-export function withProbeBudget<T>(
-  probe: Promise<T>,
-  ms: number,
-  fallback: T,
-): Promise<T> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms);
-    probe
-      .then((value) => {
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch(() => {
-        clearTimeout(timer);
-        resolve(fallback);
-      });
-  });
-}

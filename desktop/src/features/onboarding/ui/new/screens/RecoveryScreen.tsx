@@ -62,9 +62,9 @@ export function RecoveryScreen({
             {saved ? "Saved" : "Save as file"}
           </Button>
         </div>
-        {/* biome-ignore lint/a11y/noLabelWithoutControl: the custom Checkbox renders a native control inside this label, so association holds in the rendered DOM. */}
-        <label className="onb-check">
+        <label className="onb-check" htmlFor="onb-recovery-acknowledged">
           <Checkbox
+            id="onb-recovery-acknowledged"
             checked={acknowledged}
             onCheckedChange={(value) => onAcknowledge(value === true)}
           />

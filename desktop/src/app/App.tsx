@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -23,6 +24,9 @@ import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkey
 import { huddleWindowChannelId } from "@/features/huddle/lib/huddleWindow";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
+import { createFakeServices } from "@/features/onboarding/contracts.fake";
+import { isNewOnboardingEnabled } from "@/features/onboarding/newOnboardingFlag";
+import { NewOnboardingFlow } from "@/features/onboarding/ui/new/NewOnboardingFlow";
 import {
   type FirstCommunityPage,
   useCommunityOnboarding,
@@ -245,6 +249,10 @@ function AppReady({
   isCommunitySwitch: boolean;
 }) {
   const onboarding = useAppOnboardingState(isSharedIdentity);
+  // Fakes until the real auth, payments, scrape and invite services exist.
+  // Memoised so the flow never sees a new services identity mid-run, which
+  // would restart in-flight steps such as the website read.
+  const onboardingServices = useMemo(() => createFakeServices(), []);
 
   if (onboarding.stage === "reset-failed") {
     return <ResetFailedScreen />;
@@ -259,6 +267,15 @@ function AppReady({
   }
 
   if (onboarding.stage === "onboarding") {
+    if (isNewOnboardingEnabled(import.meta.env)) {
+      return (
+        <NewOnboardingFlow
+          key={onboarding.currentPubkey ?? "anonymous"}
+          services={onboardingServices}
+          onComplete={onboarding.flow.actions.complete}
+        />
+      );
+    }
     return (
       <OnboardingFlow
         actions={onboarding.flow.actions}
