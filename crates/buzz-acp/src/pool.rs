@@ -672,6 +672,13 @@ pub struct PromptContext {
     /// Harness identity string for NIP-AM `harness` field. Derived from the
     /// configured `agent_command` at startup (e.g. `"goose"`, `"buzz-agent"`).
     pub harness_name: String,
+    /// Provider used for the ACP-response Spend fallback. `None` when wire
+    /// metering is authoritative and publishing a second record would double
+    /// count the same turn.
+    pub adapter_usage_provider: Option<String>,
+    /// Crash-safe queue for encrypted Spend records. Each signed event is
+    /// persisted before relay submission and removed only after acknowledgement.
+    pub usage_outbox: Option<std::sync::Arc<crate::usage_outbox::UsageOutbox>>,
     /// Relay URL this harness is connected to. Rides in observer payloads that
     /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
     /// mirroring the `managed_agent_runtime_lifecycle` frames.
@@ -4261,6 +4268,81 @@ pub(crate) fn build_turn_metric_counts(
     (turn_counts, cumulative_counts)
 }
 
+/// Build one encrypted Spend record from cumulative Codex adapter usage.
+///
+/// This is the subscription fallback for runtimes such as Codex whose login
+/// cannot be forwarded through an API-key proxy. The payload remains imputed:
+/// it is API-equivalent shadow cost, not a claim that a per-token invoice was
+/// charged. Unknown token buckets stay explicitly unknown in the payload.
+fn build_adapter_usage_record_event(
+    ctx: &PromptContext,
+    usage: &crate::usage::TurnUsage,
+    channel_id: Option<uuid::Uuid>,
+    session_id: &str,
+    turn_id: &str,
+    work_context: Option<&buzz_core::company::AgentWorkContext>,
+) -> Option<Result<nostr::Event, String>> {
+    use buzz_core::usage_record::{
+        PaymentMode, UsageBreakdown, UsageRecordPayload, UsageSource, UsageTokenField,
+    };
+
+    let provider = ctx.adapter_usage_provider.as_ref()?;
+    if !usage.delta_reliable {
+        return None;
+    }
+    let cache_read_tokens = usage.turn_cache_read_tokens?;
+    let cache_write_tokens = usage.turn_cache_write_tokens;
+    let input_uncached_tokens = usage
+        .turn_input_tokens?
+        .checked_sub(cache_read_tokens.saturating_add(cache_write_tokens.unwrap_or(0)))?;
+    let output_tokens = usage.turn_output_tokens?;
+    if input_uncached_tokens == 0
+        && cache_read_tokens == 0
+        && cache_write_tokens.unwrap_or(0) == 0
+        && output_tokens == 0
+    {
+        return None;
+    }
+    let owner = ctx.agent_owner_pubkey.as_ref()?;
+    let agent_hex = ctx.agent_keys.public_key().to_hex();
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let payload = UsageRecordPayload {
+        source: UsageSource::AdapterEstimate,
+        provider: provider.clone(),
+        request_id: format!("acp:{session_id}:{turn_id}"),
+        model: usage.model.clone(),
+        timestamp,
+        payment_mode: PaymentMode::Imputed,
+        tokens: Some(UsageBreakdown {
+            input_uncached_tokens,
+            cache_read_tokens,
+            cache_write_5m_tokens: cache_write_tokens.unwrap_or(0),
+            cache_write_1h_tokens: 0,
+            output_tokens,
+        }),
+        unknown_token_fields: if cache_write_tokens.is_none() {
+            vec![UsageTokenField::CacheWrite5m, UsageTokenField::CacheWrite1h]
+        } else {
+            vec![UsageTokenField::CacheWrite1h]
+        },
+        amount_nanousd: None,
+        observed_cost_nanousd: None,
+        harness: Some(ctx.harness_name.clone()),
+        session_id: Some(session_id.to_string()),
+        turn_id: Some(turn_id.to_string()),
+        http_status: None,
+        description: Some("Cumulative Codex adapter estimate".to_string()),
+        agent_pubkey: Some(agent_hex.clone()),
+        channel_id: channel_id.map(|id| id.to_string()),
+        work_context: work_context.cloned(),
+    };
+    Some(crate::meter_publish::build_usage_payload_event(
+        payload,
+        &ctx.agent_keys,
+        owner,
+    ))
+}
+
 /// Best-effort: build and publish a `kind:44200` NIP-AM agent turn metric event.
 ///
 /// Does nothing when `usage` is `None` (goose emitted no usage notification
@@ -4283,6 +4365,38 @@ async fn publish_agent_turn_metric(
         (Some(u), Some(pk)) => (u, pk),
         _ => return,
     };
+
+    if let Some(built) =
+        build_adapter_usage_record_event(ctx, &usage, channel_id, session_id, turn_id, work_context)
+    {
+        match built {
+            Ok(event) => {
+                if let Some(outbox) = &ctx.usage_outbox {
+                    if let Err(error) = outbox.enqueue_and_submit(&ctx.rest_client, event).await {
+                        tracing::warn!(
+                            target: "pool::metrics",
+                            session_id,
+                            turn_id,
+                            "ACP Spend record retained for retry: {error}"
+                        );
+                    }
+                } else {
+                    tracing::error!(
+                        target: "pool::metrics",
+                        session_id,
+                        turn_id,
+                        "ACP Spend record has no durable outbox"
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(
+                target: "pool::metrics",
+                session_id,
+                turn_id,
+                "ACP Spend record build failed: {error}"
+            ),
+        }
+    }
 
     let (turn_counts, cumulative_counts) = build_turn_metric_counts(&usage);
     let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -7454,6 +7568,151 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         .await;
     }
 
+    #[test]
+    fn codex_adapter_usage_builds_an_imputed_spend_record() {
+        use buzz_core::usage_record::{decrypt_usage_record, PaymentMode};
+
+        let agent_keys = nostr::Keys::generate();
+        let owner_keys = nostr::Keys::generate();
+        let mut ctx = make_prompt_context_with_owner(&agent_keys, owner_keys.public_key());
+        ctx.harness_name = "codex".to_string();
+        ctx.adapter_usage_provider = Some("openai".to_string());
+        let usage = crate::usage::TurnUsage {
+            session_id: "sess-codex".to_string(),
+            turn_seq: 1,
+            delta_reliable: true,
+            turn_input_tokens: Some(1_300),
+            turn_output_tokens: Some(120),
+            turn_total_tokens: Some(1_420),
+            turn_cost_usd: None,
+            turn_cache_read_tokens: Some(300),
+            turn_cache_write_tokens: Some(0),
+            cumulative_input_tokens: Some(1_300),
+            cumulative_output_tokens: Some(120),
+            cumulative_total_tokens: Some(1_420),
+            cumulative_cost_usd: None,
+            cumulative_cache_read_tokens: Some(300),
+            cumulative_cache_write_tokens: Some(0),
+            model: Some("gpt-5.6-sol".to_string()),
+            pricing_identity: None,
+        };
+
+        let event =
+            build_adapter_usage_record_event(&ctx, &usage, None, "sess-codex", "turn-codex", None)
+                .expect("adapter fallback must be enabled")
+                .expect("usage record must build");
+        let payload = decrypt_usage_record(&owner_keys, &event).expect("owner decrypts");
+
+        assert_eq!(payload.provider, "openai");
+        assert_eq!(payload.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(payload.payment_mode, PaymentMode::Imputed);
+        assert_eq!(payload.request_id, "acp:sess-codex:turn-codex");
+        let tokens = payload.tokens.expect("token-priced record");
+        assert_eq!(tokens.input_uncached_tokens, 1_000);
+        assert_eq!(tokens.cache_read_tokens, 300);
+        assert_eq!(tokens.output_tokens, 120);
+    }
+
+    #[tokio::test]
+    async fn codex_adapter_usage_is_submitted_to_the_spend_endpoint() {
+        use axum::{extract::State, routing::post, Json, Router};
+        use buzz_core::usage_record::{decrypt_usage_record, PaymentMode};
+        use std::sync::{Arc, Mutex};
+
+        async fn capture_event(
+            State(events): State<Arc<Mutex<Vec<nostr::Event>>>>,
+            Json(event): Json<nostr::Event>,
+        ) -> Json<serde_json::Value> {
+            events.lock().expect("event capture lock").push(event);
+            Json(serde_json::json!({"ok": true}))
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/events", post(capture_event))
+            .with_state(Arc::clone(&events));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind Spend sink");
+        let base_url = format!("http://{}", listener.local_addr().expect("sink address"));
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let agent_keys = nostr::Keys::generate();
+        let owner_keys = nostr::Keys::generate();
+        let mut ctx = make_prompt_context_with_owner(&agent_keys, owner_keys.public_key());
+        let outbox_dir = tempfile::tempdir().expect("Spend outbox directory");
+        ctx.usage_outbox = Some(std::sync::Arc::new(
+            crate::usage_outbox::UsageOutbox::open_at(
+                outbox_dir.path().join("outbox"),
+                agent_keys.public_key(),
+            )
+            .expect("open Spend outbox"),
+        ));
+        ctx.rest_client.base_url = base_url;
+        ctx.harness_name = "codex".to_string();
+        ctx.adapter_usage_provider = Some("openai".to_string());
+        let channel_id = uuid::Uuid::new_v4();
+        let usage = crate::usage::TurnUsage {
+            session_id: "sess-codex".to_string(),
+            turn_seq: 1,
+            delta_reliable: true,
+            turn_input_tokens: Some(1_300),
+            turn_output_tokens: Some(120),
+            turn_total_tokens: Some(1_420),
+            turn_cost_usd: None,
+            turn_cache_read_tokens: Some(300),
+            turn_cache_write_tokens: Some(0),
+            cumulative_input_tokens: Some(1_300),
+            cumulative_output_tokens: Some(120),
+            cumulative_total_tokens: Some(1_420),
+            cumulative_cost_usd: None,
+            cumulative_cache_read_tokens: Some(300),
+            cumulative_cache_write_tokens: Some(0),
+            model: Some("gpt-5.6-sol".to_string()),
+            pricing_identity: None,
+        };
+
+        publish_agent_turn_metric(
+            &ctx,
+            Some(usage),
+            Some(channel_id),
+            "sess-codex",
+            "turn-codex",
+            Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
+            None,
+        )
+        .await;
+        server.abort();
+
+        let submitted = events.lock().expect("event capture lock");
+        assert_eq!(
+            submitted.len(),
+            2,
+            "Spend and turn metric must both publish"
+        );
+        let spend_event = submitted
+            .iter()
+            .find(|event| {
+                event.kind == nostr::Kind::Custom(buzz_core::kind::KIND_USAGE_RECORD as u16)
+            })
+            .expect("kind 44210 Spend event");
+        let payload = decrypt_usage_record(&owner_keys, spend_event).expect("owner decrypts");
+        assert_eq!(payload.provider, "openai");
+        assert_eq!(payload.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(payload.payment_mode, PaymentMode::Imputed);
+        assert_eq!(payload.request_id, "acp:sess-codex:turn-codex");
+        assert_eq!(
+            payload.channel_id.as_deref(),
+            Some(channel_id.to_string().as_str())
+        );
+        let tokens = payload.tokens.expect("token-priced record");
+        assert_eq!(tokens.input_uncached_tokens, 1_000);
+        assert_eq!(tokens.cache_read_tokens, 300);
+        assert_eq!(tokens.output_tokens, 120);
+    }
+
     /// Regression for the control-cancel drain: `publish_agent_turn_metric`
     /// with a `Cancelled` stop reason and pending usage executes without panic
     /// (encrypt+sign path). This mirrors the control-signal arm that previously
@@ -7793,6 +8052,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             agent_owner_pubkey: owner_pubkey,
             memory_enabled: false,
             harness_name: "goose".to_string(),
+            adapter_usage_provider: None,
+            usage_outbox: None,
             relay_url: "ws://127.0.0.1:3000".to_string(),
         }
     }

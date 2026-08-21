@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 405,
-    "rust_lines": 162767,
+    "rust_total": 406,
+    "rust_lines": 162871,
     "tauri_coupled": 161,
-    "portable": 244,
-    "portable_lines": 91886,
+    "portable": 245,
+    "portable_lines": 91952,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -356,6 +356,7 @@
       "src-tauri/src/managed_agents/runtime/metadata.rs",
       "src-tauri/src/managed_agents/runtime/path.rs",
       "src-tauri/src/managed_agents/runtime/prime_agent_config.rs",
+      "src-tauri/src/managed_agents/runtime/spend_tests.rs",
       "src-tauri/src/managed_agents/runtime/sweep.rs",
       "src-tauri/src/managed_agents/runtime/test_fixtures.rs",
       "src-tauri/src/managed_agents/runtime/tests.rs",
@@ -2376,7 +2377,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/ledger/report.ts:388",
+        "src/features/ledger/report.ts:403",
         "src/parity/session/script.ts:1232"
       ]
     },
