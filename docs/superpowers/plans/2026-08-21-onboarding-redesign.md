@@ -2315,6 +2315,124 @@ git commit -s -m "feat(onboarding): invite screen with list paste and rejection 
 
 ---
 
+## Task 12b: Screen styles
+
+**Files:**
+- Create: `desktop/src/features/onboarding/ui/new/onboarding-screens.css`
+- Modify: `desktop/src/features/onboarding/ui/new/OnboardingCanvas.tsx` (import the new stylesheet)
+- Test: `desktop/src/features/onboarding/ui/new/screenStyles.test.mjs`
+
+**Interfaces:**
+- Consumes: the class names the screens already render.
+- Produces: a stylesheet covering every `onb-` class outside the canvas chrome.
+
+This task exists because the plan omitted it. Task 6 styled only the canvas
+(mesh, streak, grain, step marker, foot trail, ant gait). Every screen-level
+class the screens render has no rule at all, so the flow currently renders as
+unstyled markup on a gradient.
+
+Port the remaining rules from `prototypes/onboarding/app.css`, renaming the
+`ob-` prefix to `onb-`, and wrap the file in `@layer components`. Do not
+invent new styles: the prototype is the agreed design and it has been reviewed.
+
+Classes that must be covered, taken from what the merged screens render:
+`onb-screen` (including `data-wide` and `data-solo`), `onb-col-head`,
+`onb-headline`, `onb-sub`, `onb-panel`, `onb-field`, `onb-label`, `onb-note`,
+`onb-note-warn`, `onb-row`, `onb-actions`, `onb-quiet-action`, `onb-card`,
+`onb-code`, `onb-check`, `onb-options`, `onb-option`, `onb-option-title`,
+`onb-option-meta`, `onb-pulse`, `onb-stack`, `onb-amounts`, `onb-amount`,
+`onb-handoff`, `onb-handoff-title`, `onb-handoff-methods`, `onb-pills`,
+`onb-pill`, `onb-window`, `onb-pages`, `onb-page`, `onb-skel`, `onb-search`,
+`onb-search-ant`, `onb-install`, `onb-install-ant`, `onb-status`.
+
+Two things the prototype does not have to handle and this file does:
+
+1. `BusinessScreen` renders `fieldset` elements, which carry a default browser
+   border, padding and margin. Reset them.
+2. The screens use the real Colony `Input` and `Textarea`, whose own classes
+   ship inside `@layer`. The call-site restyle to underline fields therefore
+   works from an unlayered rule, exactly as the prototype does it.
+
+- [ ] **Step 1: Write the failing test**
+
+```javascript
+// desktop/src/features/onboarding/ui/new/screenStyles.test.mjs
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const css = readFileSync(join(here, "onboarding-screens.css"), "utf8");
+
+function renderedClasses() {
+  const dirs = [here, join(here, "screens")];
+  const found = new Set();
+  for (const dir of dirs) {
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(".tsx")) continue;
+      const source = readFileSync(join(dir, file), "utf8");
+      for (const match of source.matchAll(/onb-[a-z0-9-]+/g)) {
+        found.add(match[0]);
+      }
+    }
+  }
+  return [...found];
+}
+
+test("every_rendered_screen_class_has_a_style_rule", () => {
+  const canvas = readFileSync(join(here, "onboarding-canvas.css"), "utf8");
+  const missing = renderedClasses().filter(
+    (name) => !css.includes(`.${name}`) && !canvas.includes(`.${name}`),
+  );
+  assert.deepEqual(missing, [], `classes with no CSS rule: ${missing.join(", ")}`);
+});
+
+test("screen_styles_are_layered", () => {
+  // Unlayered CSS beats Tailwind's utilities regardless of specificity, which
+  // silently defeats call-site overrides. See docs/BRAND.md.
+  assert.ok(css.includes("@layer components"));
+});
+
+test("fieldset_defaults_are_reset", () => {
+  // BusinessScreen groups its questions in fieldsets, which arrive with a
+  // browser border, padding and margin.
+  assert.match(css, /fieldset[^{]*\{[^}]*border:\s*0/);
+});
+```
+
+- [ ] **Step 2: Run the test and watch it fail**
+
+Run: `. ./bin/activate-hermit && cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test src/features/onboarding/ui/new/screenStyles.test.mjs`
+Expected: FAIL, cannot read `onboarding-screens.css`.
+
+- [ ] **Step 3: Write the stylesheet**
+
+Port from `prototypes/onboarding/app.css`. Rename every `ob-` prefix to `onb-`,
+wrap the whole file in `@layer components`, and add the fieldset reset. Import
+it from `OnboardingCanvas.tsx` beside the existing canvas stylesheet import.
+
+- [ ] **Step 4: Run the test and watch it pass**
+
+Run: `. ./bin/activate-hermit && cd desktop && node --import ./test-loader.mjs --experimental-strip-types --test src/features/onboarding/ui/new/screenStyles.test.mjs`
+Expected: PASS, 3 tests.
+
+- [ ] **Step 5: Check the guards**
+
+Run: `cd desktop && pnpm check:px-text && pnpm check:file-sizes`
+Expected: both pass. The prototype uses stock rem tokens, so any failure here
+means an arbitrary literal came across in the port.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add desktop/src/features/onboarding/ui/new/onboarding-screens.css desktop/src/features/onboarding/ui/new/screenStyles.test.mjs desktop/src/features/onboarding/ui/new/OnboardingCanvas.tsx
+git commit -s -m "feat(onboarding): screen styles ported from the reviewed prototype"
+```
+
+---
+
 ## Task 13: Wire the flow together behind a flag
 
 **Files:**
