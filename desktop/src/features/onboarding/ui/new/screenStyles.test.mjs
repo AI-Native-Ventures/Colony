@@ -20,7 +20,9 @@ function renderedClasses() {
     for (const file of readdirSync(dir)) {
       if (!file.endsWith(".tsx")) continue;
       const source = readFileSync(join(dir, file), "utf8");
-      for (const attr of source.matchAll(/className\s*=\s*(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/g)) {
+      for (const attr of source.matchAll(
+        /className\s*=\s*(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/g,
+      )) {
         const value = attr[1] ?? attr[2] ?? attr[3] ?? "";
         for (const match of value.matchAll(/onb-[a-z0-9_-]+/g)) {
           found.add(match[0]);
