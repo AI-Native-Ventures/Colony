@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createAdditionalCommunityOnboardingV2Draft,
   createOnboardingV2Draft,
   founderDetailsAreValid,
   isOnboardingV2Draft,
@@ -89,4 +90,13 @@ test("a fresh draft is durable and carries one stable delivery marker", () => {
   });
   assert.ok(draft.firstTask.deliveryMarker.length > 0);
   assert.equal(isOnboardingV2Draft({ ...draft, version: 2 }), false);
+});
+
+test("an additional community starts at company context without resetting the founder or runtime", () => {
+  const draft = createAdditionalCommunityOnboardingV2Draft();
+  assert.equal(isOnboardingV2Draft(draft), true);
+  assert.equal(draft.stage, "website");
+  assert.equal(draft.founder.fullName, "");
+  assert.equal(draft.runtime.route, null);
+  assert.equal(draft.runtime.selectedId, null);
 });

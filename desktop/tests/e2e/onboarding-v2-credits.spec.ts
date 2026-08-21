@@ -137,6 +137,116 @@ async function readGlobalConfigSetterCallCount(
   });
 }
 
+test("a created community uses the returning-founder V2 journey", async ({
+  page,
+}) => {
+  const identity = { ...TEST_IDENTITIES.tyler, username: "" };
+  await seedActiveIdentity(page, identity);
+  await page.addInitScript(
+    ({ pubkey, storageKey }) => {
+      window.localStorage.setItem(
+        `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        "true",
+      );
+      const timestamp = new Date().toISOString();
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          addedCommunity: true,
+          communityId: "e2e-created-community",
+          communityName: "Second Company",
+          createdAt: timestamp,
+          id: "additional-community-v2",
+          onboardingV2: {
+            company: {
+              canonicalUrl: "",
+              hasWebsite: true,
+              scanStatus: "idle",
+              summary: "",
+              website: "",
+            },
+            credits: {
+              balanceNanousd: null,
+              status: "unavailable",
+            },
+            firstTask: {
+              content: "",
+              deliveredEventId: null,
+              deliveryMarker: "e2e-additional-community",
+            },
+            founder: {
+              city: "",
+              country: "",
+              fullName: "",
+              gender: null,
+              selfDescribedGender: "",
+            },
+            runtime: {
+              model: "deepseek-v4-flash",
+              route: null,
+              selectedId: null,
+            },
+            stage: "website",
+            version: 1,
+          },
+          relayUrl: "wss://default.example.com",
+          source: "create-community",
+          stage: "profile",
+          updatedAt: timestamp,
+        }),
+      );
+    },
+    { pubkey: identity.pubkey, storageKey: TRANSACTION_STORAGE_KEY },
+  );
+  await installMockBridge(
+    page,
+    {
+      globalAgentConfig: {
+        credential_mode: "byok",
+        env_vars: {},
+        model: null,
+        preferred_runtime: "codex",
+        provider: null,
+      },
+    },
+    { relayWsUrl: RELAY_URL, skipOnboardingSeed: true },
+  );
+
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Show Colony this business" }),
+  ).toBeVisible();
+  await expect(page.getByText("Step 1 of 4")).toBeVisible();
+  await expect(page.locator(".buzz-onboarding-v2__trail-node")).toHaveCount(4);
+  await page.getByRole("button", { name: "I do not have a website" }).click();
+
+  await expect(page.getByText("Step 2 of 4")).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Business summary" })
+    .fill("A second company with its own operating context.");
+  await page.getByRole("button", { name: "This is right" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Meet Scout, your Chief of Staff" }),
+  ).toBeVisible();
+  await expect(page.getByText("Step 3 of 4")).toBeVisible();
+  await expect(
+    page.getByText("Finding the best way to run your team"),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Give Scout a first task" }).click();
+
+  await expect(page.getByText("Step 4 of 4")).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "First task" })
+    .fill("Prepare the first-week operating plan.");
+  await page.getByRole("button", { name: "Start this company" }).click();
+
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
+    timeout: 10_000,
+  });
+});
+
 test("zero-credit Colony Agent onboarding reaches the first task without payment UI", async ({
   page,
 }) => {

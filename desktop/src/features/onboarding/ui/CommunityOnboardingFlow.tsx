@@ -500,6 +500,11 @@ export function CommunityOnboardingFlow({
         draft={transaction.onboardingV2}
         externalError={transaction.error}
         isFinalizing={isPending}
+        journey={
+          transaction.source === "create-community"
+            ? "additional-community"
+            : "first-community"
+        }
         onChange={(onboardingV2) => update({ onboardingV2, error: undefined })}
         onReadyToFinalize={finalize}
       />
