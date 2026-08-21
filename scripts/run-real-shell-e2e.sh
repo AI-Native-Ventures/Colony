@@ -177,6 +177,9 @@ start_relay_nohup() {
     export PGSCHEMA_PLAN_HOST=localhost PGSCHEMA_PLAN_PORT="${pg_port}"
     export PGSCHEMA_PLAN_DB=buzz PGSCHEMA_PLAN_USER=buzz PGSCHEMA_PLAN_PASSWORD=buzz_dev
     export PGHOST=localhost PGPORT="${pg_port}" PGUSER=buzz PGDATABASE=buzz
+    # The stub downloads pgschema on first use; retry that fetch on its own so
+    # a transient GitHub Releases error is not reported as a schema failure.
+    ./scripts/ci-prefetch-hermit-pkg.sh pgschema
     ./bin/pgschema apply --file schema/schema.sql --auto-approve
     docker compose -p "${project}" -f "${compose_file}" exec -T postgres \
       psql -U buzz -d buzz -v ON_ERROR_STOP=1 < scripts/attach-schema-partitions.sql

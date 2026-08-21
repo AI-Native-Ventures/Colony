@@ -68,14 +68,14 @@ test("created communities persist an adapted v2 journey without changing joins",
     {
       onboardingV2: {
         ...firstCommunity.onboardingV2,
-        stage: "website",
+        stage: "company",
       },
     },
     storage,
   );
   assert.equal(
     loadCommunityOnboardingTransaction(storage)?.onboardingV2?.stage,
-    "website",
+    "company",
   );
   assert.equal(
     updated.onboardingV2?.firstTask.deliveryMarker,
@@ -86,7 +86,7 @@ test("created communities persist an adapted v2 journey without changing joins",
     { source: "create-community", relayUrl: "wss://created.example" },
     createMemoryStorage(),
   );
-  assert.equal(createdCommunity.onboardingV2?.stage, "website");
+  assert.equal(createdCommunity.onboardingV2?.stage, "company");
   assert.equal(shouldForceFirstCommunityJourney(createdCommunity), false);
 
   const joinedCommunity = startCommunityOnboarding(
@@ -96,6 +96,74 @@ test("created communities persist an adapted v2 journey without changing joins",
   assert.equal(joinedCommunity.onboardingV2, undefined);
   assert.equal(shouldForceFirstCommunityJourney(firstCommunity), true);
   assert.equal(shouldForceFirstCommunityJourney(joinedCommunity), false);
+});
+
+test("a transaction stuck finalizing past the deadline is swept on load", () => {
+  const storage = createMemoryStorage();
+  const transaction = startCommunityOnboarding(
+    { source: "create-community", relayUrl: "wss://created.example" },
+    storage,
+  );
+  // Parked in finalizing three minutes ago and still there: the handoff died
+  // without settling, so the curtain must not replay forever.
+  const staleUpdatedAt = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+  updateCommunityOnboardingTransaction(
+    transaction,
+    { stage: "finalizing" },
+    storage,
+    new Date(staleUpdatedAt),
+  );
+  const swept = loadCommunityOnboardingTransaction(storage);
+  assert.equal(swept, null);
+  assert.equal(
+    storage.getItem("buzz-community-onboarding-transaction.v1"),
+    null,
+  );
+});
+
+test("a freshly stuck finalizing transaction still resumes interactively", () => {
+  const storage = createMemoryStorage();
+  const transaction = startCommunityOnboarding(
+    { source: "create-community", relayUrl: "wss://created.example" },
+    storage,
+  );
+  updateCommunityOnboardingTransaction(
+    transaction,
+    { stage: "finalizing" },
+    storage,
+    new Date(Date.now() - 10_000),
+  );
+  const resumed = loadCommunityOnboardingTransaction(storage);
+  assert.equal(resumed?.stage, "finalizing");
+});
+
+test("v1 persisted drafts migrate instead of replaying old steps", () => {
+  const storage = createMemoryStorage();
+  const transaction = startCommunityOnboarding(
+    { source: "create-community", relayUrl: "wss://created.example" },
+    storage,
+  );
+  updateCommunityOnboardingTransaction(
+    transaction,
+    {
+      onboardingV2: {
+        version: 1,
+        stage: "description",
+        company: { summary: "Captured context." },
+        firstTask: {
+          content: "",
+          deliveryMarker: "marker-1",
+          deliveredEventId: null,
+        },
+      },
+    },
+    storage,
+  );
+  const migrated = loadCommunityOnboardingTransaction(storage)?.onboardingV2;
+  assert.equal(migrated?.version, 2);
+  assert.equal(migrated?.stage, "company");
+  assert.equal(migrated?.company.summary, "Captured context.");
+  assert.equal(migrated?.firstTask.deliveryMarker, "marker-1");
 });
 
 test("same-relay ingress resumes rather than replacing progress", () => {

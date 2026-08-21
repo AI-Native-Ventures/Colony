@@ -16,6 +16,9 @@ import {
 } from "@/features/workspace/lib/workspaceTabs";
 import type { TabBodyProps } from "@/features/workspace/kinds/scratchpadKind";
 
+const PdfWorkspaceViewer = React.lazy(() => import("./PdfWorkspaceViewer"));
+const WORKSPACE_FILE_LOAD_ERROR = "This file could not be loaded.";
+
 export const fileKindDefinition: TabKindDefinition = {
   kind: "file",
   label: "File",
@@ -45,7 +48,9 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   );
   const [file, setFile] = React.useState<LoadedWorkspaceFile | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [reloadToken, setReloadToken] = React.useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken intentionally retriggers the file request after Retry.
   React.useEffect(() => {
     if (!source) {
       setFile(null);
@@ -59,13 +64,17 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       .then((result) => {
         if (!cancelled) setFile(result);
       })
-      .catch((cause: unknown) => {
-        if (!cancelled) setError(String(cause));
+      .catch((_cause: unknown) => {
+        if (!cancelled) setError(WORKSPACE_FILE_LOAD_ERROR);
       });
     return () => {
       cancelled = true;
     };
-  }, [source]);
+  }, [source, reloadToken]);
+
+  const retry = React.useCallback(() => {
+    setReloadToken((value) => value + 1);
+  }, []);
 
   const handlePick = React.useCallback(async () => {
     const picked = await invoke<string | null>("pick_workspace_file", {
@@ -94,10 +103,18 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   if (error) {
     return (
       <div
-        className="p-4 text-sm text-destructive"
+        className="space-y-3 p-4 text-sm"
         data-testid="workspace-file-error"
+        role="alert"
       >
-        {error}
+        <p className="text-destructive">{error}</p>
+        <button
+          className="rounded-md border border-border px-3 py-2 hover:bg-muted"
+          onClick={retry}
+          type="button"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -110,13 +127,34 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }
 
-  if (!file.isText) {
+  if (file.presentation === "pdf") {
+    return (
+      <React.Suspense
+        fallback={
+          <div
+            className="p-4 text-sm text-muted-foreground"
+            data-testid="workspace-pdf-loading"
+          >
+            Loading {file.name}…
+          </div>
+        }
+      >
+        <PdfWorkspaceViewer
+          bytesBase64={file.bytesBase64}
+          name={file.name}
+          onRetry={retry}
+        />
+      </React.Suspense>
+    );
+  }
+
+  if (file.presentation === "binary") {
     return (
       <div
         className="p-4 text-sm text-muted-foreground"
         data-testid="workspace-file-binary"
       >
-        {file.name} is not a text file ({file.mime})
+        {file.name} cannot be previewed ({file.mime})
       </div>
     );
   }

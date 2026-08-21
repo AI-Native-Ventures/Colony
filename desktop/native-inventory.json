@@ -701,7 +701,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:264",
+        "src/features/communities/useCommunityInit.ts:266",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -2244,7 +2244,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:250",
+        "src/features/communities/useCommunityInit.ts:252",
         "src/parity/session/script.ts:321",
         "src/shared/api/tauriIdentity.ts:37"
       ]
@@ -2740,7 +2740,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/kinds/fileKind.tsx:71",
+        "src/features/workspace/kinds/fileKind.tsx:80",
         "src/features/workspace/kinds/imageKind.tsx:64"
       ]
     },
@@ -2903,7 +2903,7 @@
       "example_sites": [
         "src/features/workspace/kinds/imageKind.tsx:46",
         "src/features/workspace/lib/workspaceFileContent.ts:6",
-        "src/features/workspace/lib/workspaceFileContent.ts:32"
+        "src/features/workspace/lib/workspaceFileContent.ts:35"
       ]
     },
     "reconcile_inbound_persona_event": {
