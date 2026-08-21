@@ -35,6 +35,7 @@ import {
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
+import { useLiveMentionFeedRepair } from "@/features/home/useLiveMentionFeedRepair";
 import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
 import {
   useHomeFeedNotifications,
@@ -242,6 +243,11 @@ export function AppShell() {
   const refetchHomeFeedFromLiveSignal = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
+  const repairHomeFeedFromLiveMention = useLiveMentionFeedRepair(
+    communitiesHook.activeCommunity?.id ?? "",
+    channels,
+    homeFeedQuery.refetch,
+  );
   useLiveHomeFeedActions(
     identityQuery.data?.pubkey,
     refetchHomeFeedFromLiveSignal,
@@ -359,7 +365,7 @@ export function AppShell() {
       notifyForActiveChannel: notificationSettings.settings.notifyWhileViewing,
       onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
-      onLiveMention: refetchHomeFeedFromLiveSignal,
+      onLiveMention: repairHomeFeedFromLiveMention,
       onThreadReplyDesktopNotification: handleThreadReplyDesktopNotification,
       followedRootIds,
     },
