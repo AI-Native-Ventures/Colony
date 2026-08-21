@@ -195,7 +195,7 @@ Commit message: `feat(acp): persist usage records before relay delivery`
 
 - [ ] **Step 1: Write failing parser and rendering tests**
 
-Assert that `adapterEstimate` parses, unknown values fail closed, and the
+Assert that `adapter_estimate` parses, unknown values fail closed, and the
 activity row renders `adapter estimate` independently from `subscription`.
 
 - [ ] **Step 2: Run the full Desktop UI package suite and confirm failure**

@@ -73,6 +73,8 @@ pub struct LedgerEntryView {
     pub model: Option<String>,
     /// Serialized [`buzz_core_pkg::usage_record::PaymentMode`].
     pub payment_mode: serde_json::Value,
+    /// Serialized [`buzz_core_pkg::usage_record::UsageSource`].
+    pub source: serde_json::Value,
     /// Cost in nanoUSD, or `null` when the model is unpriced. An unpriced
     /// model is an open question, never a zero.
     pub cost_nanousd: Option<String>,
@@ -187,6 +189,8 @@ impl LedgerReportView {
                     provider: entry.provider,
                     model: entry.model,
                     payment_mode: serde_json::to_value(entry.payment_mode)
+                        .unwrap_or(serde_json::Value::Null),
+                    source: serde_json::to_value(entry.source)
                         .unwrap_or(serde_json::Value::Null),
                     cost_nanousd: entry.cost_nanousd.map(|cost| cost.to_string()),
                     price_basis: entry
@@ -391,7 +395,7 @@ mod tests {
     use buzz_core_pkg::company::CostClassification;
     use buzz_core_pkg::{
         ledger::engine::{AttributionMethod, ClassTotals, LedgerEntry},
-        usage_record::PaymentMode,
+        usage_record::{PaymentMode, UsageSource},
     };
 
     /// $3 per million tokens is 3000 nanoUSD per token. Getting this wrong
@@ -461,6 +465,7 @@ mod tests {
                 day: "2026-08-03".to_string(),
                 provider: "anthropic".to_string(),
                 model: Some("claude-sonnet-4-5".to_string()),
+                source: UsageSource::Wire,
                 payment_mode: PaymentMode::Metered,
                 cost_nanousd: Some(amount),
                 price_basis: None,
@@ -533,6 +538,15 @@ mod tests {
         let view = LedgerReportView::from_report(report, 0, true);
         assert_eq!(view.entries[0].cost_nanousd, None);
         assert!(view.price_book_missing);
+    }
+
+    #[test]
+    fn adapter_source_crosses_the_boundary_with_the_protocol_spelling() {
+        let mut report = report_with_money(1);
+        report.entries[0].source = UsageSource::AdapterEstimate;
+        let view = LedgerReportView::from_report(report, 0, false);
+        let json = serde_json::to_value(view).expect("view must serialize");
+        assert_eq!(json["entries"][0]["source"], "adapter_estimate");
     }
 
     /// The relay may answer a replaceable query with more than one head.

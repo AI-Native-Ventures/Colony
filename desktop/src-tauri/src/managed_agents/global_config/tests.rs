@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::{
-    normalize_global_config_fields, resolve_effective_model_provider, strip_empty_env_vars,
-    validate_global_config, CredentialMode, GlobalAgentConfig,
+    normalize_global_config_fields, remove_managed_meter_opt_out,
+    resolve_effective_model_provider, strip_empty_env_vars, validate_global_config, CredentialMode,
+    GlobalAgentConfig,
 };
 use crate::managed_agents::{AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo};
 
@@ -281,6 +282,25 @@ fn missing_credential_mode_defaults_to_byok() {
     )
     .expect("legacy config without credential_mode must deserialize");
     assert_eq!(config.credential_mode, CredentialMode::Byok);
+    assert_eq!(
+        config.env_vars.get("OPENAI_API_KEY"),
+        Some(&"saved".to_string())
+    );
+}
+
+#[test]
+fn legacy_global_no_meter_opt_out_is_removed_case_insensitively() {
+    let mut config: GlobalAgentConfig = serde_json::from_str(
+        r#"{"env_vars":{"buzz_acp_no_meter":"true","OPENAI_API_KEY":"saved"}}"#,
+    )
+    .expect("legacy config must deserialize");
+
+    remove_managed_meter_opt_out(&mut config);
+
+    assert!(!config
+        .env_vars
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case("BUZZ_ACP_NO_METER")));
     assert_eq!(
         config.env_vars.get("OPENAI_API_KEY"),
         Some(&"saved".to_string())

@@ -26,6 +26,9 @@ export type AttributionMethod =
 /** Whether real money moved, or a subscription covered it. */
 export type PaymentMode = "metered" | "imputed";
 
+/** How the usage evidence was captured. */
+export type UsageSource = "wire" | "adapter_estimate" | "manual";
+
 /** Accounting classification in force for an entry. */
 export type EntryClassification = "cogs" | "opex" | "needsReview";
 
@@ -54,6 +57,8 @@ export interface LedgerEntry {
   model: string | null;
   /** Metered (real money) or imputed (subscription shadow cost). */
   paymentMode: PaymentMode;
+  /** Wire evidence, adapter estimate, or an explicit manual amount. */
+  source: UsageSource;
   /**
    * Cost in nanoUSD, or `null` when no price covers the model.
    *
@@ -284,6 +289,15 @@ function parseEntry(value: unknown): LedgerEntry {
   if (paymentMode !== "metered" && paymentMode !== "imputed") {
     fail(`paymentMode is unknown: ${paymentMode}`);
   }
+  const source =
+    raw.source === undefined ? "wire" : requireString(raw, "source");
+  if (
+    source !== "wire" &&
+    source !== "adapter_estimate" &&
+    source !== "manual"
+  ) {
+    fail(`source is unknown: ${source}`);
+  }
   return {
     attributedBy: parseAttributedBy(raw.attributedBy),
     costNanousd: optionalNanousd(raw, "costNanousd"),
@@ -305,6 +319,7 @@ function parseEntry(value: unknown): LedgerEntry {
     paymentMode,
     priceBasis: parsePriceBasis(raw.priceBasis),
     provider: requireString(raw, "provider"),
+    source,
   };
 }
 

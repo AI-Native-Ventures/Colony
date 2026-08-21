@@ -212,6 +212,12 @@ fn global_config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(managed_agents_base_dir(app)?.join("global-agent-config.json"))
 }
 
+fn remove_managed_meter_opt_out(config: &mut GlobalAgentConfig) {
+    config
+        .env_vars
+        .retain(|key, _| !key.eq_ignore_ascii_case("BUZZ_ACP_NO_METER"));
+}
+
 /// Load the global agent config from disk.
 ///
 /// Returns the default (all-empty) config if the file does not exist yet.
@@ -222,7 +228,13 @@ pub fn load_global_agent_config(app: &AppHandle) -> Result<GlobalAgentConfig, St
     }
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("failed to read global agent config: {e}"))?;
-    serde_json::from_str(&content).map_err(|e| format!("failed to parse global agent config: {e}"))
+    let mut config: GlobalAgentConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("failed to parse global agent config: {e}"))?;
+    // Older builds allowed this process-wide opt-out in the saved global env.
+    // Keep the file readable, but remove the value from the effective/UI
+    // config so an upgrade immediately restores Desktop-owned Spend coverage.
+    remove_managed_meter_opt_out(&mut config);
+    Ok(config)
 }
 
 /// Save the global agent config to disk.

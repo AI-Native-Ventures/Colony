@@ -116,6 +116,8 @@ pub struct LedgerEntry {
     pub day: String,
     /// Provider slug.
     pub provider: String,
+    /// Evidence source for the underlying usage record.
+    pub source: UsageSource,
     /// Model, when the record was token-priced.
     pub model: Option<String>,
     /// Metered (real money) or imputed (subscription shadow cost).
@@ -251,7 +253,9 @@ fn parse_rfc3339(timestamp: &str) -> Option<u64> {
 /// unique across vendors.
 fn dedupe_key(record: &StoredUsageRecord) -> String {
     match record.payload.source {
-        UsageSource::Wire => format!("{}:{}", record.payload.provider, record.payload.request_id),
+        UsageSource::Wire | UsageSource::AdapterEstimate => {
+            format!("{}:{}", record.payload.provider, record.payload.request_id)
+        }
         UsageSource::Manual => record.event_id.clone(),
     }
 }
@@ -435,6 +439,7 @@ pub fn compute_ledger(
             event_id: record.event_id.clone(),
             day,
             provider: payload.provider.clone(),
+            source: payload.source,
             model: payload.model.clone(),
             payment_mode: payload.payment_mode,
             cost_nanousd,
@@ -610,6 +615,7 @@ mod tests {
                 timestamp: "2026-08-02T10:00:00Z".to_string(),
                 payment_mode: PaymentMode::Metered,
                 tokens: Some(breakdown),
+                unknown_token_fields: Vec::new(),
                 amount_nanousd: None,
                 observed_cost_nanousd: None,
                 harness: Some("buzz-acp".to_string()),

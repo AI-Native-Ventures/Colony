@@ -119,6 +119,10 @@ letting the agent reach it directly.
 
 ## Turning it off
 
-`BUZZ_ACP_NO_METER` disables the checkpoint entirely. Agents then hold real
-provider credentials and their spend is invisible to the cost ledger, which is
-why it is an explicit opt-out rather than a side effect of configuration.
+`BUZZ_ACP_NO_METER` disables the wire checkpoint. Agents then keep their own
+provider credentials. A supported Codex subscription runtime still publishes
+its cumulative ACP counters as an imputed `adapter_estimate`. Cache categories
+that the adapter omits remain explicitly unknown rather than becoming asserted
+zeroes. Runtimes without guarded cumulative counters remain invisible, which is
+why Desktop-managed agents do not accept this opt-out from saved or ambient
+config.

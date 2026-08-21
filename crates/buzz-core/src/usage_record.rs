@@ -1,7 +1,8 @@
 //! Colony cost ledger: immutable usage record (kind 44210) payload.
 //!
 //! One record per provider API call, captured at the wire by the metering
-//! checkpoint (source `wire`) or entered by the owner (source `manual`).
+//! checkpoint (source `wire`), derived from guarded cumulative adapter counters
+//! (source `adapter_estimate`), or entered by the owner (source `manual`).
 //! Content is a NIP-44 v2 ciphertext (publisher key to owner pubkey).
 //!
 //! Agents never author the authoritative counts: the checkpoint reads them
@@ -19,9 +20,9 @@ pub use crate::observer::ObserverPayloadError as UsageRecordError;
 
 /// Provider-itemized token counts for one API call.
 ///
-/// Every field comes from the provider's own response. Zero means the
-/// provider reported zero, never "unknown" — a call whose usage could not be
-/// parsed produces no record at all rather than a record of zeroes.
+/// Wire records carry the provider's own itemization. Adapter estimates use
+/// `UsageRecordPayload::unknown_token_fields` to distinguish absent categories
+/// from provider-confirmed zeroes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageBreakdown {
@@ -54,8 +55,28 @@ pub enum PaymentMode {
 pub enum UsageSource {
     /// Captured off the provider wire by the metering checkpoint.
     Wire,
+    /// Reported by an adapter from provider counters when Colony could not
+    /// observe the provider wire. This is weaker evidence than `wire` and
+    /// must stay visibly labelled as an estimate.
+    AdapterEstimate,
     /// Entered by the owner: subscriptions, infrastructure, non-token costs.
     Manual,
+}
+
+/// Token categories whose exact value the publisher could not observe.
+///
+/// The numeric breakdown retains zero placeholders for backward-compatible
+/// pricing. This list prevents those placeholders from being mistaken for
+/// provider-confirmed zeroes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageTokenField {
+    /// Cache-served input tokens.
+    CacheRead,
+    /// Tokens written to a five-minute prompt-cache tier.
+    CacheWrite5m,
+    /// Tokens written to a one-hour prompt-cache tier.
+    CacheWrite1h,
 }
 
 /// Decrypted payload of a `kind:44210` usage record event.
@@ -67,12 +88,14 @@ pub enum UsageSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordPayload {
-    /// Whether the checkpoint observed this or the owner entered it.
+    /// Whether this came from provider wire evidence, guarded adapter counters,
+    /// or an owner entry.
     pub source: UsageSource,
     /// Provider slug: `anthropic`, `openai`, or a manual-cost vendor slug.
     pub provider: String,
-    /// Provider request id for wire records; the dedupe key together with
-    /// `provider`. Manual records carry an owner-supplied reference.
+    /// Provider request id for wire records or a stable adapter turn id; the
+    /// dedupe key together with `provider`. Manual records carry an
+    /// owner-supplied reference.
     pub request_id: String,
     /// Model identifier as the provider named it.
     pub model: Option<String>,
@@ -82,6 +105,12 @@ pub struct UsageRecordPayload {
     pub payment_mode: PaymentMode,
     /// Provider-itemized token counts, for token-priced records.
     pub tokens: Option<UsageBreakdown>,
+    /// Token categories that were absent from the measurement source.
+    ///
+    /// Empty for provider-wire records and old records. Adapter estimates use
+    /// this to preserve absent cache categories instead of claiming zero.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown_token_fields: Vec<UsageTokenField>,
     /// Direct cost in nanoUSD, for non-token records.
     pub amount_nanousd: Option<u64>,
     /// What the provider itself said this call cost, in nanoUSD.
@@ -157,6 +186,16 @@ impl UsageRecordPayload {
                 .validate()
                 .map_err(|error| ObserverPayloadError::InvalidPayload(error.to_string()))?;
         }
+        if self.source == UsageSource::Wire && !self.unknown_token_fields.is_empty() {
+            return Err(ObserverPayloadError::InvalidPayload(
+                "wire usage cannot contain unknownTokenFields".to_string(),
+            ));
+        }
+        if self.tokens.is_none() && !self.unknown_token_fields.is_empty() {
+            return Err(ObserverPayloadError::InvalidPayload(
+                "unknownTokenFields require a token record".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -207,6 +246,7 @@ mod tests {
                 cache_write_1h_tokens: 2100,
                 output_tokens: 750,
             }),
+            unknown_token_fields: Vec::new(),
             amount_nanousd: None,
             observed_cost_nanousd: None,
             harness: Some("buzz-acp".to_string()),
@@ -306,6 +346,32 @@ mod tests {
         }"#;
         let payload: UsageRecordPayload = serde_json::from_str(json).expect("must parse");
         assert_eq!(payload.request_id, "req_x");
+        assert!(payload.unknown_token_fields.is_empty());
+    }
+
+    #[test]
+    fn adapter_estimate_preserves_unknown_cache_fields() {
+        let mut payload = sample_payload();
+        payload.source = UsageSource::AdapterEstimate;
+        payload.unknown_token_fields =
+            vec![UsageTokenField::CacheWrite5m, UsageTokenField::CacheWrite1h];
+
+        let json = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(json["source"], "adapter_estimate");
+        assert_eq!(
+            json["unknownTokenFields"],
+            serde_json::json!(["cacheWrite5m", "cacheWrite1h"])
+        );
+        let decoded: UsageRecordPayload = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(decoded, payload);
+        assert!(decoded.validate().is_ok());
+    }
+
+    #[test]
+    fn wire_records_reject_unknown_token_fields() {
+        let mut payload = sample_payload();
+        payload.unknown_token_fields = vec![UsageTokenField::CacheRead];
+        assert!(payload.validate().is_err());
     }
 
     #[test]
