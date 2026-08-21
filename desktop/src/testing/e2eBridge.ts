@@ -54,6 +54,7 @@ import {
   KIND_GIT_STATUS_MERGED,
   KIND_GIT_STATUS_OPEN,
   KIND_HUDDLE_STARTED,
+  KIND_EMPLOYEE,
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
@@ -136,6 +137,14 @@ type MockRelayAgentSeed = {
   channelNames?: string[];
   channelIds?: string[];
   status?: PresenceStatus;
+};
+
+type MockEmployeeHeadSeed = {
+  /** The employee pubkey; also the head's `d` tag and author. */
+  pubkey: string;
+  role?: string;
+  name?: string;
+  rank: "worker" | "leader" | "executive";
 };
 
 type MockPersonaSeed = {
@@ -357,6 +366,9 @@ type E2eConfig = {
     personaSharePublicationStatuses?: Array<"published" | "queued">;
     teams?: MockTeamSeed[];
     relayAgents?: MockRelayAgentSeed[];
+    /** Employee heads (kind 30190) the mock relay serves: who is employed at
+     *  what rank. Drives the rank badges and the ladder UI. */
+    employeeHeads?: MockEmployeeHeadSeed[];
     /** Native-like huddle state seeded from authoritative role-bearing membership. */
     huddle?: MockHuddleSeed;
     agentListDelayMs?: number;
@@ -2435,6 +2447,49 @@ function resetMockRelayAgents(config?: E2eConfig) {
       respond_to_allowlist: seed.respondToAllowlist ?? [],
     });
   }
+}
+
+const mockEmployeeHeadEvents: RelayEvent[] = [];
+
+function resetMockEmployeeHeadEvents(config?: E2eConfig) {
+  mockEmployeeHeadEvents.length = 0;
+  for (const seed of config?.mock?.employeeHeads ?? []) {
+    // A head is keyed by (and signed by) its own employee pubkey, so the
+    // author carries the same hex the `d` tag does.
+    mockEmployeeHeadEvents.push(
+      createMockEvent(
+        KIND_EMPLOYEE,
+        "",
+        [
+          ["d", seed.pubkey.toLowerCase()],
+          ["role", seed.role ?? "role"],
+          ["name", seed.name ?? "Employee"],
+          ["rank", seed.rank],
+        ],
+        seed.pubkey.toLowerCase(),
+      ),
+    );
+  }
+}
+
+/** Serve employee heads for one REQ filter. */
+function filterMockEmployeeHeadEvents(filter: MockFilter): RelayEvent[] {
+  return mockEmployeeHeadEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const dValues = filter["#d"];
+    if (dValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "d")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 function resetMockManagedAgents(config?: E2eConfig) {
@@ -10656,6 +10711,13 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
+    if (filter.kinds?.includes(KIND_EMPLOYEE)) {
+      for (const event of filterMockEmployeeHeadEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (
       filter.kinds?.some((kind) =>
         mockBlockEvents.some((event) => event.kind === kind),
@@ -11100,6 +11162,7 @@ export function maybeInstallE2eTauriMocks() {
     : { balance_nanousd: "0", currency: "USD", status: "depleted" };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
+  resetMockEmployeeHeadEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);
   resetMockPersonas(config);

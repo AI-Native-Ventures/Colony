@@ -2204,7 +2204,13 @@ pub async fn run_prompt_task(
         .map(|batch_event| &batch_event.event)
     {
         Some(event) => {
-            match crate::work_context::resolve_for_event(&ctx.rest_client, event).await {
+            match crate::work_context::resolve_for_event(
+                &ctx.rest_client,
+                event,
+                &ctx.agent_keys.public_key(),
+            )
+            .await
+            {
                 Ok(context) => context,
                 Err(error) => {
                     tracing::warn!(
