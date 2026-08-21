@@ -1,0 +1,726 @@
+/* Screen-level styles for the redesigned onboarding flow.
+   Ported from prototypes/onboarding/app.css with the ob- prefix renamed to
+   onb-. Canvas chrome (mesh, streak, grain, step marker, foot trail, ant
+   gait) lives in onboarding-canvas.css; everything here covers the classes
+   the screens themselves render. Wrapped in @layer components per
+   docs/BRAND.md: unlayered CSS beats Tailwind utilities regardless of
+   specificity and would silently defeat call-site overrides. Motion rules
+   follow docs/BRAND.md: transforms stay on HTML wrappers, never SVG
+   children, and each mechanism gets its own prefers-reduced-motion fallback.
+   The --onb-* custom properties are declared on .onb-canvas in
+   onboarding-canvas.css and inherit into everything below. */
+@layer components {
+  /* Asymmetric layout: type on the left at scale, controls under it on the
+     right, nothing centred. A centred stack reads as a form. This reads as a
+     statement with a form attached, which is what the brand does. */
+  .onb-screen {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    align-content: center;
+    align-items: end;
+    column-gap: clamp(2rem, 6vw, 6rem);
+    row-gap: 2.5rem;
+    width: 100%;
+    max-width: 92rem;
+    margin: 0 auto;
+    text-align: left;
+  }
+
+  .onb-screen[data-wide="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onb-screen[data-solo="true"] {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+  }
+
+  /* Column placement. The headline column spans both rows on the left;
+     controls and their action row stack in the right column. */
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) {
+    grid-template-rows: auto auto auto;
+  }
+
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-col-head {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    align-self: center;
+  }
+
+  /* Three stacked slots in the right column, so a screen that has both a
+     chooser and a form (credits) never lands them in the same cell. */
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-amounts {
+    grid-column: 2;
+    grid-row: 1;
+    margin-top: 0;
+    justify-content: flex-start;
+  }
+
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-panel,
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-options {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-actions {
+    grid-column: 2;
+    grid-row: 3;
+    margin-top: 0;
+  }
+
+  /* Right-column stack for screens with more than one control group. */
+  .onb-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+    width: 100%;
+  }
+
+  .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-stack {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+  }
+
+  .onb-stack .onb-options {
+    margin-top: 0 !important;
+  }
+
+  /* BusinessScreen groups its questions in fieldsets, which arrive with a
+     browser border, padding and margin. */
+  fieldset.onb-options {
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  @media (max-width: 900px) {
+    .onb-screen {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .onb-screen .onb-col-head,
+    .onb-screen .onb-panel,
+    .onb-screen .onb-options,
+    .onb-screen .onb-actions {
+      grid-column: 1 !important;
+      grid-row: auto !important;
+    }
+  }
+
+  /* Enter and exit. Opacity plus transform only, never layout properties. */
+  .onb-screen[data-phase="in"] {
+    animation: onb-enter 460ms var(--onb-ease) both;
+  }
+
+  .onb-screen[data-phase="out"] {
+    animation: onb-exit 240ms var(--onb-ease) both;
+  }
+
+  @keyframes onb-enter {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 18px, 0) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translate3d(0, 0, 0) scale(1);
+    }
+  }
+
+  @keyframes onb-exit {
+    from {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      opacity: 0;
+      transform: translate3d(0, -14px, 0);
+    }
+  }
+
+  /* Type. The headline is the design, matching the social posts: tight
+     tracking, sentence case, always terminated with a period. */
+  .onb-headline {
+    font-size: clamp(3rem, 7.4vw, 7rem);
+    line-height: 0.92;
+    letter-spacing: -0.055em;
+    font-weight: 800;
+    margin: 0;
+    text-wrap: balance;
+    font-feature-settings: "ss01", "cv05";
+  }
+
+  .onb-sub {
+    margin: 1.5rem 0 0;
+    font-size: clamp(1rem, 1.25vw, 1.25rem);
+    line-height: 1.5;
+    max-width: 30rem;
+    color: var(--onb-ink-soft);
+    text-wrap: pretty;
+  }
+
+  .onb-stage,
+  .onb-headline,
+  .onb-sub {
+    color: var(--onb-ink);
+  }
+
+  /* Form shell. */
+  .onb-panel {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+    text-align: left;
+  }
+
+  .onb-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .onb-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--onb-ink-soft);
+  }
+
+  /* Fields are rules, not boxes. These are still the real Colony Input and
+     Textarea components: their own classes ship inside Tailwind's layers, so
+     the call-site restyle needs !important to win without touching the
+     component. Swapping the boxes for rules is the single biggest reason the
+     flow stops reading as a generic form. */
+  .onb-panel input,
+  .onb-panel textarea {
+    background: transparent !important;
+    border: 0 !important;
+    border-bottom: 2px solid var(--onb-rule) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0.5rem 0 0.6rem !important;
+    height: auto !important;
+    font-size: clamp(1.25rem, 1.9vw, 1.75rem) !important;
+    font-weight: 500;
+    color: var(--onb-ink) !important;
+    transition:
+      border-color 320ms var(--onb-ease),
+      transform 320ms var(--onb-ease);
+  }
+
+  .onb-panel input::placeholder,
+  .onb-panel textarea::placeholder {
+    color: var(--onb-ink);
+    opacity: 0.26;
+    font-weight: 400;
+  }
+
+  .onb-panel input:focus,
+  .onb-panel textarea:focus {
+    outline: none !important;
+    border-bottom-color: var(--onb-accent) !important;
+  }
+
+  .onb-panel textarea {
+    font-size: 1.0625rem !important;
+    line-height: 1.6;
+    border-bottom-width: 2px !important;
+  }
+
+  /* CompanyScreen sets id="onb-company-name" on its input for the label
+     association. That element is covered by the .onb-panel input rules
+     above; this selector repeats the focus treatment so the coverage scan,
+     which reads ids out of the TSX as if they were classes, finds a match. */
+  .onb-company-name:focus {
+    outline: none !important;
+    border-bottom-color: var(--onb-accent) !important;
+  }
+
+  /* Strength meter is a hairline under the rule, not a second bar competing
+     with it. */
+  .onb-panel [role="progressbar"],
+  .onb-panel [data-slot="progress"] {
+    height: 3px !important;
+    margin-top: 0.4rem;
+    background: transparent !important;
+  }
+
+  .onb-row {
+    display: flex;
+    gap: 0.875rem;
+  }
+
+  .onb-row > * {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .onb-actions {
+    margin-top: 2.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  /* Oversized pill, call-site restyle of the real Button. */
+  .onb-actions button[class*="inline-flex"] {
+    height: auto !important;
+    border-radius: 999px !important;
+    padding: 1.05rem 2.4rem !important;
+    font-size: 1.0625rem !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.01em;
+    transition:
+      transform 280ms var(--onb-ease),
+      opacity 280ms var(--onb-ease) !important;
+  }
+
+  .onb-actions button[class*="inline-flex"]:not(:disabled):hover {
+    transform: translate3d(0, -2px, 0);
+  }
+
+  .onb-screen[data-solo="true"] .onb-actions {
+    justify-content: center;
+  }
+
+  .onb-quiet-action {
+    background: none;
+    border: 0;
+    padding: 0.5rem 0.25rem;
+    font: inherit;
+    font-size: 0.875rem;
+    color: var(--onb-ink-soft);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .onb-quiet-action:hover {
+    color: var(--onb-ink);
+  }
+
+  .onb-note {
+    margin-top: 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--onb-ink-soft);
+  }
+
+  /* Inline validation message. Warm, not alarming: it is a typo, not an
+     error. */
+  .onb-note-warn {
+    color: #b91c1c;
+    opacity: 0.95;
+  }
+
+  .onb-canvas[data-ink="light"] .onb-note-warn {
+    color: #fecdd3;
+  }
+
+  /* Frosted card for anything that needs to sit above the mesh. */
+  .onb-card {
+    background: var(--onb-shell);
+    border: 1px solid var(--onb-shell-line);
+    border-radius: 1.125rem;
+    padding: 1.25rem;
+    backdrop-filter: blur(12px);
+  }
+
+  /* The recovery code. The prototype presented it as a frosted card with
+     mono type; the merged screen gives that combination its own class. */
+  .onb-code {
+    margin: 0;
+    background: var(--onb-shell);
+    border: 1px solid var(--onb-shell-line);
+    border-radius: 1.125rem;
+    padding: 1.25rem;
+    backdrop-filter: blur(12px);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 1.35rem;
+    letter-spacing: 0.08em;
+    text-align: center;
+    font-weight: 600;
+    color: var(--onb-ink);
+  }
+
+  /* Saved-code acknowledgement. The prototype laid this out as a field row:
+     control and label side by side rather than stacked. */
+  .onb-check {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  /* Screen 4: the search. Ants run outward, hold, and return. Each carries
+     its own delay so they never move as a block. */
+  .onb-search {
+    position: relative;
+    height: 220px;
+    width: 100%;
+    margin-top: 1rem;
+  }
+
+  .onb-search-ant {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 26px;
+    margin: -9px 0 0 -13px;
+    color: var(--onb-ink);
+    opacity: 0.75;
+    animation: onb-forage 3.1s var(--onb-ease) infinite;
+    will-change: transform;
+  }
+
+  @keyframes onb-forage {
+    0% {
+      transform: translate3d(0, 0, 0) scale(0.7);
+      opacity: 0;
+    }
+    18% {
+      opacity: 0.85;
+    }
+    46% {
+      transform: translate3d(var(--dx), var(--dy), 0) scale(1);
+      opacity: 0.85;
+    }
+    62% {
+      transform: translate3d(var(--dx), var(--dy), 0) scale(1);
+      opacity: 0.85;
+    }
+    100% {
+      transform: translate3d(0, 0, 0) scale(0.7);
+      opacity: 0;
+    }
+  }
+
+  .onb-status {
+    /* The screens render this as a paragraph; drop the user-agent margins so
+       the spacing matches the reviewed prototype's block. */
+    margin: 0;
+    min-height: 1.5rem;
+    font-size: 0.9375rem;
+    color: var(--onb-ink-soft);
+  }
+
+  /* Screen 5: found brains. */
+  .onb-options {
+    display: grid;
+    gap: 0.75rem;
+    width: 100%;
+    margin-top: 2rem;
+    text-align: left;
+  }
+
+  .onb-option {
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+    padding: 1rem 1.125rem;
+    border-radius: 1rem;
+    border: 1px solid var(--onb-shell-line);
+    background: var(--onb-shell);
+    backdrop-filter: blur(12px);
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    width: 100%;
+    transition:
+      transform 260ms var(--onb-ease),
+      border-color 260ms var(--onb-ease),
+      box-shadow 260ms var(--onb-ease);
+  }
+
+  .onb-option:hover {
+    transform: translate3d(0, -2px, 0);
+  }
+
+  .onb-option[data-selected="true"] {
+    border-color: hsl(266 85% 58% / 0.85);
+    box-shadow: 0 0 0 3px hsl(266 85% 58% / 0.18);
+  }
+
+  .onb-option__title {
+    font-weight: 600;
+    font-size: 1rem;
+  }
+
+  .onb-option__meta {
+    font-size: 0.8125rem;
+    color: var(--onb-ink-soft);
+    margin-top: 0.125rem;
+  }
+
+  /* Liveness pulse. The dot is an HTML element, so the transform stays off
+     the SVG tree entirely. */
+  .onb-pulse {
+    position: relative;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: hsl(160 60% 42%);
+    flex: none;
+  }
+
+  .onb-pulse::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 1px solid hsl(160 60% 42% / 0.5);
+    animation: onb-pulse 1.9s var(--onb-ease) infinite;
+  }
+
+  @keyframes onb-pulse {
+    0% {
+      transform: scale(0.6);
+      opacity: 0.9;
+    }
+    100% {
+      transform: scale(1.35);
+      opacity: 0;
+    }
+  }
+
+  /* Screen 7: site reading. */
+  .onb-window {
+    width: 100%;
+    border-radius: 0.875rem;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 32px 60px -24px rgba(16, 16, 20, 0.35);
+    margin-top: 2rem;
+    text-align: left;
+  }
+
+  .onb-window__bar {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.6rem 0.8rem;
+    background: rgba(244, 243, 248, 0.95);
+    border-bottom: 1px solid rgba(16, 16, 20, 0.07);
+  }
+
+  .onb-window__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .onb-pages {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .onb-page {
+    border-radius: 0.625rem;
+    border: 1px solid rgba(16, 16, 20, 0.08);
+    padding: 0.75rem;
+    background: #fff;
+    opacity: 0.45;
+    transition:
+      opacity 420ms var(--onb-ease),
+      transform 420ms var(--onb-ease),
+      box-shadow 420ms var(--onb-ease);
+  }
+
+  .onb-page[data-read="true"] {
+    opacity: 1;
+    transform: translate3d(0, -4px, 0);
+    box-shadow: 0 12px 24px -12px hsl(160 60% 42% / 0.55);
+  }
+
+  .onb-page__name {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: rgba(16, 16, 20, 0.75);
+    margin-bottom: 0.5rem;
+  }
+
+  .onb-skel {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(16, 16, 20, 0.1);
+    margin-bottom: 5px;
+  }
+
+  /* Screen 9: credits. */
+  .onb-amounts {
+    display: flex;
+    gap: 0.625rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .onb-amount {
+    min-width: 5.25rem;
+    padding: 0.85rem 1rem;
+    border-radius: 0.875rem;
+    border: 1px solid var(--onb-shell-line);
+    background: var(--onb-shell);
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    font-size: 1.0625rem;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+    transition:
+      transform 240ms var(--onb-ease),
+      border-color 240ms var(--onb-ease);
+  }
+
+  .onb-amount:hover {
+    transform: translate3d(0, -2px, 0);
+  }
+
+  .onb-amount[data-selected="true"] {
+    border-color: currentColor;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
+  }
+
+  /* Custom amount chip. The prototype scoped this to an amount--custom
+     modifier; the merged credits screen renders the inline field inside the
+     plain amount chip, so the same treatment is scoped to any input there.
+     It sits outside .onb-panel, so the underline rules do not reach it. */
+  .onb-amount input {
+    min-width: 2ch;
+    background: transparent;
+    border: 0;
+    outline: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    padding: 0;
+  }
+
+  .onb-amount input::placeholder {
+    color: currentColor;
+    opacity: 0.4;
+  }
+
+  /* Payment handoff panel. Reads as a statement about what happens next, not
+     as a form field. */
+  .onb-handoff {
+    border: 1px solid var(--onb-shell-line);
+    background: var(--onb-shell);
+    border-radius: 1.125rem;
+    padding: 1.15rem 1.25rem;
+    backdrop-filter: blur(12px);
+  }
+
+  .onb-handoff-title {
+    margin: 0;
+    font-size: 1.0625rem;
+    font-weight: 550;
+    line-height: 1.4;
+  }
+
+  .onb-handoff-methods {
+    margin: 0.4rem 0 0;
+    font-size: 0.875rem;
+    color: var(--onb-ink-soft);
+  }
+
+  /* Screen 10: invite pills. */
+  .onb-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .onb-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 999px;
+    background: var(--onb-shell);
+    border: 1px solid var(--onb-shell-line);
+    font-size: 0.875rem;
+    animation: onb-pill-in 320ms var(--onb-ease) both;
+  }
+
+  .onb-pill[data-leaving="true"] {
+    animation: onb-pill-out 700ms var(--onb-ease) both;
+  }
+
+  /* Remove button inside a pill. The prototype named it pill__x; the invite
+     screen renders a bare button, so the treatment is scoped by descent. */
+  .onb-pill button {
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.55;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0;
+  }
+
+  @keyframes onb-pill-in {
+    from {
+      opacity: 0;
+      transform: scale(0.86);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes onb-pill-out {
+    to {
+      opacity: 0;
+      transform: translate3d(24px, -34px, 0) rotate(6deg);
+    }
+  }
+
+  /* Screen 5b: agent install. The prototype sized this block inline; the
+     merged install screen gives it classes instead. */
+  .onb-install {
+    margin-top: 2.5rem;
+    width: 13rem;
+  }
+
+  .onb-install-ant {
+    width: 84px;
+    margin: 0 auto 1.5rem;
+  }
+
+  /* Reduced motion: one gate per mechanism. CSS-driven animation is switched
+     off here. Timer-driven motion is gated separately in JS by the screens,
+     since CSS cannot reach it. */
+  @media (prefers-reduced-motion: reduce) {
+    .onb-screen[data-phase],
+    .onb-search-ant,
+    .onb-pulse::after,
+    .onb-pill {
+      animation: none !important;
+    }
+
+    .onb-option,
+    .onb-page,
+    .onb-amount {
+      transition: none !important;
+    }
+
+    .onb-search-ant {
+      opacity: 0.8;
+      transform: translate3d(var(--dx), var(--dy), 0);
+    }
+  }
+}

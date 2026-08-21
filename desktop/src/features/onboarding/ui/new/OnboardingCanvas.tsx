@@ -3,6 +3,7 @@ import type { OnboardingStep, OnboardingTrack } from "../../flow/steps";
 import { ONBOARDING_STEPS } from "../../flow/steps";
 import { canvasFor } from "./canvasTheme";
 import "./onboarding-canvas.css";
+import "./onboarding-screens.css";
 
 type Props = {
   step: OnboardingStep;
