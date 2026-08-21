@@ -759,6 +759,11 @@ jobs:
         with:
           name: desktop-e2e-relay
           path: target/ci
+      - name: Prefetch pgschema
+        # The bin/pgschema stub downloads on first use, so a 504 from GitHub
+        # Releases fails the schema step instead of reporting a fetch problem.
+        # Retry the download on its own before anything depends on it.
+        run: ./scripts/ci-prefetch-hermit-pkg.sh pgschema
       - name: Apply schema and seed deployment community
         # MT: the relay resolves each request's tenant from the communities host
         # map and fails closed on an unmapped host. The channel reconciler binds
@@ -1067,6 +1072,11 @@ jobs:
         with:
           name: desktop-e2e-relay
           path: target/ci
+      - name: Prefetch pgschema
+        # The bin/pgschema stub downloads on first use, so a 504 from GitHub
+        # Releases fails the schema step instead of reporting a fetch problem.
+        # Retry the download on its own before anything depends on it.
+        run: ./scripts/ci-prefetch-hermit-pkg.sh pgschema
       - name: Apply schema and seed deployment community
         # MT: the relay resolves each request's tenant from the communities host
         # map and fails closed on an unmapped host. The reminder scheduler binds
