@@ -8,6 +8,9 @@ import { getChannelDescription } from "@/features/channels/lib/channelDescriptio
 import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDisplay";
 import { ChannelHeaderStatusBadge } from "@/features/channels/ui/ChannelHeaderStatusBadge";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { useAgentRank } from "@/features/agents/employeeHeads";
+import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { useCommunities } from "@/features/communities/useCommunities";
 import {
   DEFAULT_HOVER_PROFILE_STATUS_GEOMETRY,
   ProfileAvatarWithStatus,
@@ -79,6 +82,15 @@ export function ChannelScreenHeader({
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
   const activeDmParticipant = activeDmHeaderParticipants[0] ?? null;
+  // A DM with a company-hired agent shows its rank next to the name. A human
+  // or personal-agent DM resolves to no rank and renders nothing extra.
+  const { activeCommunity } = useCommunities();
+  const dmParticipantRank = useAgentRank(
+    activeCommunity?.id ?? "",
+    activeChannel?.channelType === "dm" && !isGroupDm
+      ? (activeDmParticipant?.pubkey ?? null)
+      : null,
+  );
   const showJoinButton =
     activeChannel !== null &&
     !activeChannel.isMember &&
@@ -207,9 +219,14 @@ export function ChannelScreenHeader({
         ) : undefined
       }
       statusBadge={
-        <ChannelHeaderStatusBadge
-          ephemeralDisplay={activeChannelEphemeralDisplay}
-        />
+        <>
+          {dmParticipantRank ? (
+            <AgentRankBadge rank={dmParticipantRank} />
+          ) : null}
+          <ChannelHeaderStatusBadge
+            ephemeralDisplay={activeChannelEphemeralDisplay}
+          />
+        </>
       }
       title={activeChannelTitle}
       transparentChrome={transparentChrome}

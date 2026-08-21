@@ -41,6 +41,11 @@ export const KIND_JOB_CLAIM = 43011;
 export const KIND_JOB_HEARTBEAT = 43012;
 export const KIND_JOB_OUTCOME = 43013;
 export const KIND_JOB_CHECKPOINT = 43014;
+// Colony employees: the workspace's statement of who it employs and at what
+// rank. Signed by the relay-held employee key, so the author IS the employee
+// pubkey, which the `d` tag also carries (NIP-33 parameterized replaceable).
+export const KIND_EMPLOYEE = 30190;
+export const KIND_HIRE_REQUEST = 9045;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
