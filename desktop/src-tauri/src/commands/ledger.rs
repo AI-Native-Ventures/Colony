@@ -190,8 +190,7 @@ impl LedgerReportView {
                     model: entry.model,
                     payment_mode: serde_json::to_value(entry.payment_mode)
                         .unwrap_or(serde_json::Value::Null),
-                    source: serde_json::to_value(entry.source)
-                        .unwrap_or(serde_json::Value::Null),
+                    source: serde_json::to_value(entry.source).unwrap_or(serde_json::Value::Null),
                     cost_nanousd: entry.cost_nanousd.map(|cost| cost.to_string()),
                     price_basis: entry
                         .price_basis

@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    normalize_global_config_fields, remove_managed_meter_opt_out,
-    resolve_effective_model_provider, strip_empty_env_vars, validate_global_config, CredentialMode,
-    GlobalAgentConfig,
+    normalize_global_config_fields, remove_managed_meter_opt_out, resolve_effective_model_provider,
+    strip_empty_env_vars, validate_global_config, CredentialMode, GlobalAgentConfig,
 };
 use crate::managed_agents::{AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo};
 
