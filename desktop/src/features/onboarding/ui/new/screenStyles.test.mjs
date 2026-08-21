@@ -8,6 +8,11 @@ import test from "node:test";
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(join(here, "onboarding-screens.css"), "utf8");
 
+/**
+ * Only class names count. An earlier version of this scan read every onb-
+ * token in the file, including the id CompanyScreen sets for its label
+ * association, which forced a CSS rule for a selector that can never match.
+ */
 function renderedClasses() {
   const dirs = [here, join(here, "screens")];
   const found = new Set();
@@ -15,8 +20,11 @@ function renderedClasses() {
     for (const file of readdirSync(dir)) {
       if (!file.endsWith(".tsx")) continue;
       const source = readFileSync(join(dir, file), "utf8");
-      for (const match of source.matchAll(/onb-[a-z0-9-]+/g)) {
-        found.add(match[0]);
+      for (const attr of source.matchAll(/className\s*=\s*(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/g)) {
+        const value = attr[1] ?? attr[2] ?? attr[3] ?? "";
+        for (const match of value.matchAll(/onb-[a-z0-9_-]+/g)) {
+          found.add(match[0]);
+        }
       }
     }
   }

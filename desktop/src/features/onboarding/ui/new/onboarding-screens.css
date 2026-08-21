@@ -234,15 +234,6 @@
     border-bottom-width: 2px !important;
   }
 
-  /* CompanyScreen sets id="onb-company-name" on its input for the label
-     association. That element is covered by the .onb-panel input rules
-     above; this selector repeats the focus treatment so the coverage scan,
-     which reads ids out of the TSX as if they were classes, finds a match. */
-  .onb-company-name:focus {
-    outline: none !important;
-    border-bottom-color: var(--onb-accent) !important;
-  }
-
   /* Strength meter is a hairline under the rule, not a second bar competing
      with it. */
   .onb-panel [role="progressbar"],
