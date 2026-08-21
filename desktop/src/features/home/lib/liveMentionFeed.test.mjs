@@ -17,7 +17,7 @@ function feed(mentions = []) {
   };
 }
 
-function event(id, createdAt) {
+function event(id, createdAt, overrides = {}) {
   return {
     id,
     kind: 45001,
@@ -29,6 +29,7 @@ function event(id, createdAt) {
       ["p", "viewer"],
     ],
     sig: "sig",
+    ...overrides,
   };
 }
 
@@ -80,5 +81,43 @@ test("does not double-count a live mention after the durable feed catches up", (
   );
 
   assert.equal(repaired.feed.mentions.length, 1);
+  assert.equal(repaired.meta.total, 1);
+});
+
+test("does not project stream mentions into the durable forum feed", () => {
+  const current = feed();
+  const streamMention = event("stream", 6, { kind: 40002 });
+
+  const repaired = mergeLiveMentionsIntoHomeFeed(
+    current,
+    [streamMention],
+    channels,
+  );
+
+  assert.equal(repaired, current);
+});
+
+test("repairs forum reply mentions without projecting stream thread replies", () => {
+  const current = feed();
+  const forumReply = event("forum-reply", 7, { kind: 45003 });
+  const streamReply = event("stream-reply", 8, {
+    kind: 40002,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["p", "viewer"],
+      ["e", "stream-root", "", "root"],
+    ],
+  });
+
+  const repaired = mergeLiveMentionsIntoHomeFeed(
+    current,
+    [forumReply, streamReply],
+    channels,
+  );
+
+  assert.deepEqual(
+    repaired.feed.mentions.map((item) => item.id),
+    ["forum-reply"],
+  );
   assert.equal(repaired.meta.total, 1);
 });

@@ -4,6 +4,7 @@ import type {
   HomeFeedResponse,
   RelayEvent,
 } from "@/shared/api/types";
+import { KIND_FORUM_COMMENT, KIND_FORUM_POST } from "@/shared/constants/kinds";
 
 const HOME_FEED_LIMIT = 50;
 
@@ -20,6 +21,12 @@ function toMentionItem(
   const channelId = channelIdForEvent(event);
   if (channelId === null) return null;
   const channel = channelById.get(channelId);
+  if (
+    channel?.channelType !== "forum" ||
+    (event.kind !== KIND_FORUM_POST && event.kind !== KIND_FORUM_COMMENT)
+  ) {
+    return null;
+  }
   return {
     id: event.id,
     kind: event.kind,
