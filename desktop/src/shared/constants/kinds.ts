@@ -46,6 +46,16 @@ export const KIND_JOB_CHECKPOINT = 43014;
 // pubkey, which the `d` tag also carries (NIP-33 parameterized replaceable).
 export const KIND_EMPLOYEE = 30190;
 export const KIND_HIRE_REQUEST = 9045;
+// Owner-signed request to change an EXISTING employee: new rank and/or
+// manager (p tag carries the employee pubkey), or retire=true. The relay
+// validates authority and ladder geometry at ingest, then republishes the
+// 30190 head from the row. Mirror of buzz-core's KIND_EMPLOYEE_UPDATE.
+export const KIND_EMPLOYEE_UPDATE = 9046;
+// Owner-signed NIP-33 delegation grant head (d tag = grant id). Content JSON
+// carries category, scope, active, and an optional cap_nano_usd. Authority is
+// resolved from rank plus ANY active grant: grants are community-wide, never
+// per-agent. Mirror of buzz-core's KIND_DELEGATION_GRANT.
+export const KIND_DELEGATION_GRANT = 30189;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
