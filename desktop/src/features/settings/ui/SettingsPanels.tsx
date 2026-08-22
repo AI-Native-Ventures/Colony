@@ -10,6 +10,7 @@ import {
   Download,
   FlaskConical,
   Keyboard,
+  LayoutDashboard,
   LayoutTemplate,
   MonitorCog,
   Moon,
@@ -69,6 +70,7 @@ import { MeshComputeSettingsCard } from "@/features/mesh-compute/ui/MeshComputeS
 import { MobilePairingCard } from "./MobilePairingCard";
 import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
+import { OperatorConsoleCard } from "./OperatorConsoleCard";
 import { AgentsSettingsPanel } from "./AgentsSettingsPanel";
 import { DiscoverySettingsCard } from "./DiscoverySettingsCard";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
@@ -91,6 +93,7 @@ export type SettingsSection =
   | "discovery"
   | "community-members"
   | "moderation"
+  | "operator-console"
   | "custom-emoji"
   | "local-archive"
   | "mobile"
@@ -112,6 +115,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "discovery",
   "community-members",
   "moderation",
+  "operator-console",
   "custom-emoji",
   "local-archive",
   "mobile",
@@ -215,6 +219,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "moderation",
     label: "Moderation",
     icon: ShieldAlert,
+  },
+  {
+    value: "operator-console",
+    label: "Admin console",
+    icon: LayoutDashboard,
   },
   {
     value: "custom-emoji",
@@ -880,6 +889,8 @@ export function renderSettingsSection(
       );
     case "moderation":
       return <ModerationQueueCard />;
+    case "operator-console":
+      return <OperatorConsoleCard />;
     case "custom-emoji":
       return <CustomEmojiSettingsCard />;
     case "local-archive":

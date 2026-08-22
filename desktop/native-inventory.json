@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 406,
-    "rust_lines": 162871,
-    "tauri_coupled": 161,
+    "rust_total": 407,
+    "rust_lines": 163380,
+    "tauri_coupled": 162,
     "portable": 245,
     "portable_lines": 91952,
     "tauri_coupled_list": [
@@ -155,6 +155,7 @@
       "src-tauri/src/migration_avatar_refresh.rs",
       "src-tauri/src/mouse_nav.rs",
       "src-tauri/src/native_websocket.rs",
+      "src-tauri/src/operator_console.rs",
       "src-tauri/src/prevent_sleep.rs",
       "src-tauri/src/provisioned_credits.rs",
       "src-tauri/src/provisioned_credits/lease_http.rs",
@@ -420,29 +421,31 @@
     ]
   },
   "commands": {
-    "registered": 339,
-    "defined": 339,
+    "registered": 342,
+    "defined": 342,
     "by_reach": {
-      "frontend": 335,
-      "frontend-plugin-prefixed": 2,
-      "NO CALLER FOUND": 2
+      "frontend": 336,
+      "NO CALLER FOUND": 4,
+      "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
+      "operator_pubkey",
+      "operator_sign_nip98",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 350,
-    "State": 252,
+    "AppHandle": 351,
+    "State": 254,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 347,
-      "State": 252,
+      "AppHandle": 348,
+      "State": 254,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -468,7 +471,7 @@
     ".opener()": 1,
     ".notification()": 1,
     ".updater()": 0,
-    ".get_webview_window(": 5,
+    ".get_webview_window(": 6,
     ".global_shortcut(": 1,
     ".request_restart(": 7,
     ".run_on_main_thread(": 3,
@@ -558,6 +561,7 @@
     "src-tauri/src/huddle/commands.rs": 3,
     "src-tauri/src/commands/ledger.rs": 3,
     "src-tauri/src/macos_notifications.rs": 3,
+    "src-tauri/src/operator_console.rs": 3,
     "src-tauri/src/commands/media.rs": 3,
     "src-tauri/src/commands/workspace_files.rs": 3,
     "src-tauri/src/commands/agent_settings.rs": 3,
@@ -2677,6 +2681,16 @@
         "src/features/huddle/components/HuddleProfileControl.tsx:112"
       ]
     },
+    "open_operator_console": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/settings/ui/operatorConsole.ts:27",
+        "src/shared/api/operatorConsoleApi.ts:13"
+      ]
+    },
     "open_project_merge_recovery_terminal": {
       "defining_file": "src-tauri/src/commands/project_terminal.rs",
       "module": "project_terminal",
@@ -2696,6 +2710,20 @@
         "src/parity/session/script.ts:1214",
         "src/shared/api/projectGit.ts:338"
       ]
+    },
+    "operator_pubkey": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/operator_console.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "operator_sign_nip98": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/operator_console.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "perform_sidebar_default_haptic": {
       "defining_file": "src-tauri/src/commands/window_chrome.rs",
@@ -3408,7 +3436,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1551",
         "src/parity/session/script.ts:1552",
-        "src/shared/theme/ThemeProvider.tsx:376"
+        "src/shared/theme/ThemeProvider.tsx:385"
       ]
     },
     "show_native_notification": {

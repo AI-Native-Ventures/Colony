@@ -22,7 +22,13 @@ pub const NIP44_MIN_CONTENT_LEN: usize = 132;
 /// Maximum NIP-44 v2 ciphertext length.
 pub const NIP44_MAX_CONTENT_LEN: usize = 87_472;
 /// Maximum observer plaintext JSON size accepted by helpers.
-pub const OBSERVER_MAX_PLAINTEXT_LEN: usize = 65_535;
+///
+/// Must stay at or below nostr's NIP-44 v2 hard limit, the private constant
+/// `nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`: 65_536 - 128 =
+/// 65_408. (The constant cannot be imported; the boundary tests below pin us
+/// to the encryptor's real behaviour instead.) Above it, `nip44::encrypt`
+/// fails with `Error::MessageTooLong` and the caller drops the whole frame.
+pub const OBSERVER_MAX_PLAINTEXT_LEN: usize = 65_408;
 
 /// Errors returned by observer payload encryption/decryption helpers.
 #[derive(Debug, Error)]
@@ -155,5 +161,56 @@ mod tests {
             decrypt_observer_payload::<serde_json::Value>(&recipient, &event),
             Err(ObserverPayloadError::InvalidCiphertextLength(_))
         ));
+    }
+
+    /// A payload serializing to exactly `OBSERVER_MAX_PLAINTEXT_LEN` bytes must
+    /// encrypt successfully. This pins our cap to the encryptor's real limit:
+    /// nostr's NIP-44 v2 rejects anything above its private
+    /// `MAX_SUPPORTED_PLAINTEXT_SIZE` (65_536 - 128 = 65_408), so if this
+    /// constant drifts above the encryptor's limit again — or a future nostr
+    /// release lowers it — this test fails.
+    #[test]
+    fn observer_payload_at_max_plaintext_len_encrypts() {
+        let sender = Keys::generate();
+        let recipient = Keys::generate();
+        let mut payload = serde_json::json!({ "pad": "" });
+        let floor = serde_json::to_string(&payload).unwrap().len();
+        payload["pad"] = serde_json::Value::String("x".repeat(OBSERVER_MAX_PLAINTEXT_LEN - floor));
+        assert_eq!(
+            serde_json::to_string(&payload).unwrap().len(),
+            OBSERVER_MAX_PLAINTEXT_LEN,
+            "payload must serialize to exactly the cap"
+        );
+
+        encrypt_observer_payload(&sender, &recipient.public_key(), &payload)
+            .expect("a payload at exactly the plaintext cap must encrypt");
+    }
+
+    /// One byte over the encryptor's hard limit must be rejected by OUR check
+    /// (`PlaintextTooLarge`), never by NIP-44. The size is nostr's private
+    /// `MAX_SUPPORTED_PLAINTEXT_SIZE + 1` (65_408 + 1): before our cap was
+    /// aligned with it, this size slipped past our check and died inside
+    /// `nip44::encrypt` with `Error::MessageTooLong` instead — the wrong
+    /// error, from the wrong layer.
+    #[test]
+    fn observer_payload_one_byte_above_nip44_limit_hits_our_check() {
+        let sender = Keys::generate();
+        let recipient = Keys::generate();
+        const NIP44_HARD_LIMIT: usize = 65_408;
+        let mut payload = serde_json::json!({ "pad": "" });
+        let floor = serde_json::to_string(&payload).unwrap().len();
+        payload["pad"] = serde_json::Value::String("x".repeat(NIP44_HARD_LIMIT + 1 - floor));
+        assert_eq!(
+            serde_json::to_string(&payload).unwrap().len(),
+            NIP44_HARD_LIMIT + 1,
+            "payload must serialize to one byte over the NIP-44 limit"
+        );
+
+        let err = encrypt_observer_payload(&sender, &recipient.public_key(), &payload)
+            .expect_err("one byte over the NIP-44 limit must be rejected");
+        assert!(
+            matches!(err, ObserverPayloadError::PlaintextTooLarge { .. }),
+            "our own PlaintextTooLarge check must fire before NIP-44, got: {err}"
+        );
     }
 }
