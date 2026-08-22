@@ -18,6 +18,12 @@ const MAX_NAME_BYTES: usize = 256;
 const MAX_TAXONOMY_ID_BYTES: usize = 128;
 const MAX_DESCRIPTION_BYTES: usize = 2_048;
 
+/// Exact Approval Block action used for agent-submitted Campaign budgets.
+pub const DISCOVERY_BUDGET_APPROVAL_ACTION: &str = "Approve Colony Credits for Discovery Campaign";
+
+/// Stable destination prefix pinned into a Campaign budget Approval Block.
+pub const DISCOVERY_BUDGET_APPROVAL_DESTINATION_PREFIX: &str = "colony:discovery:campaign:";
+
 /// Why a Discovery workspace request was refused before persistence.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DiscoveryWorkspaceValidationError {
@@ -285,6 +291,41 @@ impl DiscoveryCampaignBudgetApproval {
             )),
         }
     }
+
+    /// Build the exact Approval Block proposal an agent must present to the payer.
+    pub fn approval_proposal(
+        &self,
+    ) -> Result<crate::block::ApprovalProposal, DiscoveryWorkspaceValidationError> {
+        self.validate()?;
+        let expires_at = self
+            .approval_expires_at
+            .ok_or(DiscoveryWorkspaceValidationError::InvalidField(
+                "approval_evidence",
+            ))?
+            .timestamp();
+        let expires_at = u64::try_from(expires_at)
+            .map_err(|_| DiscoveryWorkspaceValidationError::InvalidField("approval_evidence"))?;
+        let content = crate::block::canonical_json(&serde_json::json!({
+            "approved_nanousd": self.approved_nanousd.get().to_string(),
+            "campaign_fingerprint": self.campaign_fingerprint,
+            "campaign_id": self.campaign_id,
+            "payer_pubkey": self.payer_pubkey.to_hex(),
+            "price_per_retained_lead_nanousd": self
+                .price_per_retained_lead_nanousd
+                .get()
+                .to_string(),
+        }))
+        .map_err(|_| DiscoveryWorkspaceValidationError::InvalidField("approval_evidence"))?;
+        Ok(crate::block::ApprovalProposal {
+            action: DISCOVERY_BUDGET_APPROVAL_ACTION.to_owned(),
+            destination: format!(
+                "{DISCOVERY_BUDGET_APPROVAL_DESTINATION_PREFIX}{}",
+                self.campaign_id
+            ),
+            content: serde_json::Value::String(content),
+            expires_at,
+        })
+    }
 }
 
 /// Current Campaign budget safe for entitled workspace readers.
@@ -482,6 +523,9 @@ pub enum DiscoveryWorkspaceActionPayload {
     CreateCampaign {
         /// Rolling-compatible Campaign input normalized to Colony-owned sources.
         campaign: Box<DiscoveryCampaignCreateInput>,
+        /// Optional direct human approval committed atomically with Campaign creation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget_approval: Option<DiscoveryCampaignBudgetApproval>,
     },
     /// Replace the source plan used by future runs of one Campaign.
     UpdateCampaignSources {
@@ -569,7 +613,38 @@ impl DiscoveryWorkspaceActionPayload {
     pub fn validate(&self) -> Result<(), DiscoveryWorkspaceValidationError> {
         match self {
             Self::Access => Ok(()),
-            Self::CreateCampaign { campaign } => campaign.validate(),
+            Self::CreateCampaign {
+                campaign,
+                budget_approval,
+            } => {
+                campaign.validate()?;
+                let Some(approval) = budget_approval else {
+                    return Ok(());
+                };
+                approval.validate()?;
+                let campaign = campaign.normalized();
+                if approval.campaign_id != campaign.campaign_id
+                    || approval.approval_action_event_id.is_some()
+                    || approval.approval_expires_at.is_some()
+                {
+                    return Err(DiscoveryWorkspaceValidationError::InvalidField(
+                        "budget_approval",
+                    ));
+                }
+                let expected = campaign_budget_fingerprint(
+                    &campaign,
+                    &approval.payer_pubkey,
+                    approval.price_per_retained_lead_nanousd,
+                )?;
+                if hex::decode(&approval.campaign_fingerprint).ok().as_deref()
+                    != Some(expected.as_slice())
+                {
+                    return Err(DiscoveryWorkspaceValidationError::InvalidField(
+                        "budget_approval",
+                    ));
+                }
+                Ok(())
+            }
             Self::UpdateCampaignSources {
                 campaign_id,
                 source_config,
@@ -1096,6 +1171,7 @@ mod tests {
                 campaign: Box::new(DiscoveryCampaignCreateInput::Current(
                     DiscoveryCampaignInputV2::from_legacy(campaign()),
                 )),
+                budget_approval: None,
             },
         };
         let value = serde_json::to_value(&request).expect("serialize request");
@@ -1209,6 +1285,47 @@ mod tests {
     }
 
     #[test]
+    fn budget_fingerprint_matches_the_desktop_contract_vector() {
+        let payer = nostr::PublicKey::from_hex(&"11".repeat(32)).expect("payer");
+        let price =
+            DiscoveryNanoUsd::new(DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD).expect("launch price");
+        let campaign = DiscoveryCampaignInputV2 {
+            campaign_id: Uuid::from_u128(3),
+            name: "Sandton dentists".into(),
+            industry_id: "healthcare".into(),
+            industry_name: "Healthcare".into(),
+            vertical_id: "dentists".into(),
+            vertical_name: "Dentists".into(),
+            query: "dentists".into(),
+            location: "Sandton, South Africa".into(),
+            target: 100,
+            description: None,
+            language: "en".into(),
+            region: Some("ZA".into()),
+        };
+        let fingerprint =
+            campaign_budget_fingerprint(&campaign, &payer, price).expect("fingerprint Campaign");
+        assert_eq!(
+            hex::encode(fingerprint),
+            "9c9192ad1893bf8122ff29ef3f0ca90e5c227639c685b1f4844ad8884d3596c7"
+        );
+
+        let payload = DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign: Box::new(DiscoveryCampaignCreateInput::Current(campaign)),
+            budget_approval: Some(DiscoveryCampaignBudgetApproval {
+                campaign_id: Uuid::from_u128(3),
+                payer_pubkey: payer,
+                approved_nanousd: DiscoveryNanoUsd::new(5_000_000_000).expect("approved maximum"),
+                price_per_retained_lead_nanousd: price,
+                campaign_fingerprint: hex::encode(fingerprint),
+                approval_action_event_id: None,
+                approval_expires_at: None,
+            }),
+        };
+        assert_eq!(payload.validate(), Ok(()));
+    }
+
+    #[test]
     fn budget_actions_require_canonical_positive_launch_price() {
         let campaign_id = Uuid::new_v4();
         let payer = nostr::PublicKey::from_hex(&"22".repeat(32)).expect("payer");
@@ -1244,6 +1361,47 @@ mod tests {
         ] {
             assert_eq!(action.validate(), Ok(()));
         }
+    }
+
+    #[test]
+    fn agent_budget_approval_proposal_pins_every_spend_field() {
+        let approval = DiscoveryCampaignBudgetApproval {
+            campaign_id: Uuid::from_u128(3),
+            payer_pubkey: nostr::PublicKey::from_hex(&"11".repeat(32)).expect("payer"),
+            approved_nanousd: DiscoveryNanoUsd::new(5_000_000_000).expect("maximum"),
+            price_per_retained_lead_nanousd: DiscoveryNanoUsd::new(
+                DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD,
+            )
+            .expect("price"),
+            campaign_fingerprint:
+                "9c9192ad1893bf8122ff29ef3f0ca90e5c227639c685b1f4844ad8884d3596c7".into(),
+            approval_action_event_id: Some("22".repeat(32)),
+            approval_expires_at: Some(
+                chrono::DateTime::from_timestamp(2_000_000_000, 0).expect("expiry"),
+            ),
+        };
+        let proposal = approval.approval_proposal().expect("exact proposal");
+        assert_eq!(proposal.action, DISCOVERY_BUDGET_APPROVAL_ACTION);
+        assert_eq!(
+            proposal.destination,
+            "colony:discovery:campaign:00000000-0000-0000-0000-000000000003"
+        );
+        assert_eq!(proposal.expires_at, 2_000_000_000);
+        let content = proposal.content.as_str().expect("string content");
+        for expected in [
+            "5000000000",
+            "50000000",
+            "9c9192ad1893bf8122ff29ef3f0ca90e5c227639c685b1f4844ad8884d3596c7",
+            &"11".repeat(32),
+        ] {
+            assert!(content.contains(expected));
+        }
+        assert_eq!(
+            crate::block::compute_approval_hash(&proposal)
+                .expect("approval hash")
+                .len(),
+            64
+        );
     }
 
     #[test]

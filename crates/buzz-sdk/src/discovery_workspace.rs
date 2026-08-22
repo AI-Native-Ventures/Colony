@@ -310,18 +310,29 @@ fn request_supported_by_wire_version(
     request: &DiscoveryWorkspaceRequest,
 ) -> bool {
     if wire_version == DiscoveryWorkspaceWireVersion::V3 {
-        return true;
+        return !matches!(
+            request.payload,
+            buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                ..
+            }
+        );
     }
     match &request.payload {
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::CreateCampaign {
             campaign,
-        } => match campaign.as_ref() {
+            budget_approval,
+        } => {
+            if budget_approval.is_some() {
+                return false;
+            }
+            match campaign.as_ref() {
             buzz_core::discovery_workspace::DiscoveryCampaignCreateInput::Current(_) => true,
             buzz_core::discovery_workspace::DiscoveryCampaignCreateInput::Legacy(campaign) => {
                 wire_version == DiscoveryWorkspaceWireVersion::V2
                     || campaign.source_config.is_default()
             }
-        },
+            }
+        }
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
             ..
         }
@@ -626,6 +637,7 @@ mod tests {
                         source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
                     },
                 )),
+                budget_approval: None,
             },
         }
     }
@@ -644,11 +656,13 @@ mod tests {
         assert_eq!(parsed.relay_pubkey, relay.public_key());
         let DiscoveryWorkspaceActionPayload::CreateCampaign {
             campaign: parsed_campaign,
+            ..
         } = &parsed.request.payload
         else {
             panic!("parsed campaign fixture");
         };
-        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } = &request.payload else {
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign, .. } = &request.payload
+        else {
             panic!("campaign fixture");
         };
         assert_eq!(parsed_campaign.normalized(), campaign.normalized());
@@ -673,16 +687,19 @@ mod tests {
         assert_eq!(parsed.wire_version, DiscoveryWorkspaceWireVersion::V1);
         let DiscoveryWorkspaceActionPayload::CreateCampaign {
             campaign: parsed_campaign,
+            ..
         } = &parsed.request.payload
         else {
             panic!("parsed campaign fixture");
         };
-        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } = &request.payload else {
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign, .. } = &request.payload
+        else {
             panic!("campaign fixture");
         };
         assert_eq!(parsed_campaign.normalized(), campaign.normalized());
 
-        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } = request.payload else {
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign, .. } = request.payload
+        else {
             panic!("campaign fixture");
         };
         let campaign = campaign.normalized();
@@ -753,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn source_update_round_trips_as_a_private_canonical_action() {
+    fn source_update_remains_readable_on_v2_but_cannot_be_built_on_v3() {
         let relay = Keys::generate();
         let actor = Keys::generate();
         let request = DiscoveryWorkspaceRequest {
@@ -770,10 +787,15 @@ mod tests {
                 },
             },
         };
-        let event = build_discovery_workspace_action(relay.public_key(), &request)
-            .expect("build update")
-            .sign_with_keys(&actor)
-            .expect("sign update");
+        assert!(build_discovery_workspace_action(relay.public_key(), &request).is_err());
+        let event = build_discovery_workspace_action_for_version(
+            DiscoveryWorkspaceWireVersion::V2,
+            relay.public_key(),
+            &request,
+        )
+        .expect("build released update")
+        .sign_with_keys(&actor)
+        .expect("sign update");
         let parsed = parse_discovery_workspace_action(&event).expect("parse update");
         assert_eq!(parsed.request, request);
         assert!(event.content.contains("update_campaign_sources"));

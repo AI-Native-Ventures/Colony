@@ -69,6 +69,7 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                             region: region.map(|value| value.trim().to_ascii_uppercase()),
                         },
                     )),
+                    budget_approval: None,
                 },
                 idempotency_key,
             )

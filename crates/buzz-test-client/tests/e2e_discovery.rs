@@ -261,6 +261,7 @@ async fn create_campaign(
                 region: Some("ZA".to_owned()),
                 source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
             }),
+            budget_approval: None,
         },
     )
     .await;

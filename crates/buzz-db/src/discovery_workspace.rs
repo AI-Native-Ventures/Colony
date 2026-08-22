@@ -18,6 +18,7 @@ use buzz_core::{
     party::{is_relationship_transition_allowed, RelationshipKind},
     CommunityId, StoredEvent,
 };
+use chrono::Utc;
 use nostr::{Event, PublicKey};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Row, Transaction};
@@ -208,6 +209,7 @@ impl Db {
         &self,
         community_id: CommunityId,
         actor_pubkey: &[u8; 32],
+        verified_approval_payer: Option<[u8; 32]>,
         request: &DiscoveryWorkspaceRequest,
         action_event: &Event,
         build_receipt: F,
@@ -271,6 +273,7 @@ impl Db {
             &mut tx,
             community_id,
             actor_pubkey,
+            verified_approval_payer,
             action_event.id.as_bytes(),
             &request.payload,
         )
@@ -330,6 +333,7 @@ async fn apply_workspace_operation_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     actor_pubkey: &[u8; 32],
+    verified_approval_payer: Option<[u8; 32]>,
     action_event_id: &[u8; 32],
     payload: &DiscoveryWorkspaceActionPayload,
 ) -> Result<DiscoveryWorkspaceResult> {
@@ -344,9 +348,23 @@ async fn apply_workspace_operation_tx(
             .await?;
             Ok(DiscoveryWorkspaceResult::Access { active })
         }
-        DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } => {
+        DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign,
+            budget_approval,
+        } => {
             let campaign = campaign.normalized();
             insert_campaign_tx(tx, community_id, actor_pubkey, &campaign).await?;
+            if let Some(approval) = budget_approval {
+                approve_campaign_budget_tx(
+                    tx,
+                    community_id,
+                    actor_pubkey,
+                    None,
+                    action_event_id,
+                    approval,
+                )
+                .await?;
+            }
             Ok(DiscoveryWorkspaceResult::Campaign {
                 campaign: Box::new(load_campaign_tx(tx, community_id, campaign.campaign_id).await?),
             })
@@ -361,8 +379,15 @@ async fn apply_workspace_operation_tx(
             })
         }
         DiscoveryWorkspaceActionPayload::ApproveCampaignBudget { approval } => {
-            approve_campaign_budget_tx(tx, community_id, actor_pubkey, action_event_id, approval)
-                .await?;
+            approve_campaign_budget_tx(
+                tx,
+                community_id,
+                actor_pubkey,
+                verified_approval_payer,
+                action_event_id,
+                approval,
+            )
+            .await?;
             Ok(DiscoveryWorkspaceResult::Budget {
                 budget: load_campaign_budget_tx(tx, community_id, approval.campaign_id, false)
                     .await?,
@@ -467,7 +492,11 @@ async fn insert_campaign_tx(
         .bind(&campaign.language)
         .bind(campaign.region.as_deref())
         .bind(source_mode_text(DiscoverySourceMode::Waterfall))
-        .bind(vec![source_text(DiscoverySource::GoogleMaps)])
+        .bind(vec![
+            source_text(DiscoverySource::GoogleMaps),
+            source_text(DiscoverySource::BraveSearch),
+            source_text(DiscoverySource::ExaSearch),
+        ])
         .fetch_optional(&mut **tx)
         .await?;
     if inserted.is_none() {
@@ -482,40 +511,72 @@ async fn approve_campaign_budget_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     actor_pubkey: &[u8; 32],
+    verified_approval_payer: Option<[u8; 32]>,
     action_event_id: &[u8; 32],
     approval: &DiscoveryCampaignBudgetApproval,
 ) -> Result<()> {
     approval
         .validate()
         .map_err(|error| DbError::InvalidData(error.to_string()))?;
-    if approval.payer_pubkey.to_bytes() != *actor_pubkey
-        || approval.approval_action_event_id.is_some()
-        || approval.approval_expires_at.is_some()
-    {
-        return Err(DbError::AccessDenied(
-            "Campaign budgets require a direct human payer approval".into(),
-        ));
-    }
-    let actor_is_human: bool = sqlx::query_scalar(
+    let payer = approval.payer_pubkey.to_bytes();
+    let approval_event_id = match (
+        approval.approval_action_event_id.as_deref(),
+        approval.approval_expires_at,
+        verified_approval_payer,
+    ) {
+        (None, None, None) if payer == *actor_pubkey => *action_event_id,
+        (Some(event_id), Some(expires_at), Some(verified))
+            if verified == payer && expires_at > Utc::now() =>
+        {
+            let decoded = hex::decode(event_id).map_err(|_| {
+                DbError::InvalidData("Campaign budget approval event ID is invalid".into())
+            })?;
+            decoded.try_into().map_err(|_| {
+                DbError::InvalidData("Campaign budget approval event ID is invalid".into())
+            })?
+        }
+        _ => {
+            return Err(DbError::AccessDenied(
+                "Campaign budget approval authority is invalid".into(),
+            ))
+        }
+    };
+    let payer_is_human: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM users WHERE community_id=$1 AND pubkey=$2 \
          AND agent_owner_pubkey IS NULL)",
     )
     .bind(community_id.as_uuid())
-    .bind(actor_pubkey.as_slice())
+    .bind(payer.as_slice())
     .fetch_one(&mut **tx)
     .await?;
-    if !actor_is_human {
+    if !payer_is_human {
         return Err(DbError::AccessDenied(
             "Agents cannot approve Campaign spending".into(),
         ));
     }
+    if actor_pubkey != &payer {
+        let actor_is_owned_agent: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE community_id=$1 AND pubkey=$2 \
+             AND agent_owner_pubkey=$3)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(actor_pubkey.as_slice())
+        .bind(payer.as_slice())
+        .fetch_one(&mut **tx)
+        .await?;
+        if !actor_is_owned_agent {
+            return Err(DbError::AccessDenied(
+                "Campaign budget evidence requires the payer's owned agent".into(),
+            ));
+        }
+    }
 
     sqlx::query("INSERT INTO accounts (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING")
-        .bind(actor_pubkey.as_slice())
+        .bind(payer.as_slice())
         .execute(&mut **tx)
         .await?;
     sqlx::query("SELECT balance FROM accounts WHERE pubkey=$1 FOR UPDATE")
-        .bind(actor_pubkey.as_slice())
+        .bind(payer.as_slice())
         .fetch_one(&mut **tx)
         .await?;
 
@@ -582,7 +643,7 @@ async fn approve_campaign_budget_tx(
     let existing_price: Option<i64> = row.try_get("price_per_retained_lead_nanousd")?;
     if existing_payer
         .as_deref()
-        .is_some_and(|payer| payer != actor_pubkey.as_slice())
+        .is_some_and(|existing| existing != payer.as_slice())
         || existing_fingerprint
             .as_deref()
             .is_some_and(|fingerprint| fingerprint != expected_fingerprint)
@@ -606,10 +667,10 @@ async fn approve_campaign_budget_tx(
     )
     .bind(community_id.as_uuid())
     .bind(approval.campaign_id)
-    .bind(actor_pubkey.as_slice())
+    .bind(payer.as_slice())
     .bind(approval.approved_nanousd.get())
     .bind(state)
-    .bind(action_event_id.as_slice())
+    .bind(approval_event_id.as_slice())
     .bind(expected_fingerprint.as_slice())
     .bind(approval.price_per_retained_lead_nanousd.get())
     .execute(&mut **tx)
@@ -1408,6 +1469,7 @@ mod fingerprint_tests {
                         },
                     ),
                 ),
+                budget_approval: None,
             },
         };
         let encoded = serde_json::to_string(&request).expect("encode workspace request");

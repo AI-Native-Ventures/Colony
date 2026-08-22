@@ -4,7 +4,7 @@ use buzz_core::{
     discovery::{
         DiscoveryBusinessSearchSpec, DiscoveryNanoUsd, DiscoveryOperation,
         DiscoveryRunBillingProjection, DiscoveryRunProjection, DiscoveryRunState,
-        DiscoveryTerminalReason,
+        DiscoveryTerminalReason, DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
     },
     discovery_worker::{
         canonical_business_domain_digest, normalized_business_name_locality_digest,
@@ -109,6 +109,17 @@ pub struct DiscoveryRunRecord {
     pub created_at: DateTime<Utc>,
     /// Last durable update time.
     pub updated_at: DateTime<Utc>,
+}
+
+/// Relay-only inputs for one Colony-hosted provider request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryGatewayRunContext {
+    /// Search snapshotted from the approved Campaign.
+    pub business_search: DiscoveryBusinessSearchSpec,
+    /// Maximum additional observations the provider may return.
+    pub remaining_target: u16,
+    /// Provider request identifier already fenced into the source row.
+    pub request_cursor: Option<String>,
 }
 
 impl DiscoveryRunRecord {
@@ -649,6 +660,161 @@ async fn settle_paid_run_tx(
 }
 
 impl Db {
+    /// Authorize and derive one hosted provider request without trusting client targeting.
+    pub async fn discovery_gateway_run_context(
+        &self,
+        community_id: CommunityId,
+        actor_pubkey: &[u8; 32],
+        run_id: Uuid,
+        lease_id: Uuid,
+        provider: DiscoveryProvider,
+    ) -> Result<DiscoveryGatewayRunContext> {
+        let row = sqlx::query(
+            "SELECT r.state,r.discovery_protocol_version,r.claim_id,r.lease_until,\
+                    r.lease_owner_pubkey,r.billable_lead_limit,r.reserved_nanousd,c.budget_state,\
+                    c.query,c.location,c.language,c.region,s.status,s.request_cursor,\
+                    COALESCE((SELECT sum(retained_count) FROM discovery_run_sources totals \
+                              WHERE totals.community_id=r.community_id AND totals.run_id=r.id),0) \
+                        AS retained_count \
+             FROM discovery_runs r \
+             JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+             JOIN discovery_run_sources s ON s.community_id=r.community_id AND s.run_id=r.id \
+             WHERE r.community_id=$1 AND r.id=$2 AND s.provider=$3",
+        )
+        .bind(community_id.as_uuid())
+        .bind(run_id)
+        .bind(provider_text(provider))
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| DbError::NotFound("Discovery hosted provider source".into()))?;
+        let state: String = row.try_get("state")?;
+        let protocol_version: i16 = row.try_get("discovery_protocol_version")?;
+        let claim_id: Option<Uuid> = row.try_get("claim_id")?;
+        let lease_until: Option<DateTime<Utc>> = row.try_get("lease_until")?;
+        let lease_owner: Option<Vec<u8>> = row.try_get("lease_owner_pubkey")?;
+        let reserved_nanousd: Option<i64> = row.try_get("reserved_nanousd")?;
+        let budget_state: String = row.try_get("budget_state")?;
+        let source_state: String = row.try_get("status")?;
+        if state != "running"
+            || protocol_version
+                != i16::try_from(DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION)
+                    .expect("hosted protocol fits SMALLINT")
+            || claim_id != Some(lease_id)
+            || lease_until.is_none_or(|deadline| deadline <= Utc::now())
+            || lease_owner.as_deref() != Some(actor_pubkey.as_slice())
+            || reserved_nanousd.is_none_or(|reserved| reserved <= 0)
+            || !matches!(budget_state.as_str(), "active" | "exhausted")
+            || !matches!(source_state.as_str(), "pending" | "active")
+        {
+            return Err(DbError::AccessDenied(
+                "Discovery hosted provider lease is not active".into(),
+            ));
+        }
+        let actor_is_human: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE community_id=$1 AND pubkey=$2 \
+             AND agent_owner_pubkey IS NULL)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(actor_pubkey.as_slice())
+        .fetch_one(&self.pool)
+        .await?;
+        if !actor_is_human {
+            return Err(DbError::AccessDenied(
+                "Discovery hosted provider requests require the active human worker".into(),
+            ));
+        }
+        let billable_limit: i16 = row.try_get("billable_lead_limit")?;
+        let retained_count: i64 = row.try_get("retained_count")?;
+        let remaining = i64::from(billable_limit).saturating_sub(retained_count);
+        let remaining_target = u16::try_from(remaining).map_err(|_| {
+            DbError::InvalidData("Discovery hosted provider capacity is invalid".into())
+        })?;
+        if remaining_target == 0 {
+            return Err(DbError::AccessDenied(
+                "Discovery hosted provider capacity is exhausted".into(),
+            ));
+        }
+        let business_search = DiscoveryBusinessSearchSpec {
+            query: row.try_get("query")?,
+            location: row.try_get("location")?,
+            limit: remaining_target,
+            language: row.try_get("language")?,
+            region: row.try_get("region")?,
+        };
+        business_search
+            .validate()
+            .map_err(|error| DbError::InvalidData(error.to_string()))?;
+        Ok(DiscoveryGatewayRunContext {
+            business_search,
+            remaining_target,
+            request_cursor: row.try_get("request_cursor")?,
+        })
+    }
+
+    /// Fence one hosted provider submission before the paid request leaves Colony.
+    pub async fn fence_discovery_gateway_submission(
+        &self,
+        community_id: CommunityId,
+        actor_pubkey: &[u8; 32],
+        run_id: Uuid,
+        lease_id: Uuid,
+        provider: DiscoveryProvider,
+        fence: &str,
+    ) -> Result<bool> {
+        let updated = sqlx::query(
+            "UPDATE discovery_run_sources s SET status='active',request_cursor=$6,\
+                 request_count=GREATEST(request_count,1),\
+                 started_at=COALESCE(started_at,now()),failure_class=NULL,updated_at=now() \
+             FROM discovery_runs r, discovery_campaigns c \
+             WHERE s.community_id=$1 AND s.run_id=$2 AND s.provider=$3 \
+               AND s.request_cursor IS NULL AND s.status IN ('pending','active') \
+               AND r.community_id=s.community_id AND r.id=s.run_id \
+               AND c.community_id=r.community_id AND c.id=r.campaign_id \
+               AND r.state='running' AND r.discovery_protocol_version=$4 \
+               AND r.claim_id=$5 AND r.lease_until > now() \
+               AND r.lease_owner_pubkey=$7 AND r.reserved_nanousd > 0 \
+               AND c.budget_state IN ('active','exhausted') \
+               AND EXISTS (SELECT 1 FROM users u WHERE u.community_id=$1 \
+                           AND u.pubkey=$7 AND u.agent_owner_pubkey IS NULL)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(run_id)
+        .bind(provider_text(provider))
+        .bind(
+            i16::try_from(DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION)
+                .expect("hosted protocol fits SMALLINT"),
+        )
+        .bind(lease_id)
+        .bind(fence)
+        .bind(actor_pubkey.as_slice())
+        .execute(&self.pool)
+        .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+
+    /// Replace the private pre-spend fence with the provider request identifier.
+    pub async fn finalize_discovery_gateway_submission(
+        &self,
+        community_id: CommunityId,
+        run_id: Uuid,
+        provider: DiscoveryProvider,
+        fence: &str,
+        provider_request_id: &str,
+    ) -> Result<bool> {
+        let updated = sqlx::query(
+            "UPDATE discovery_run_sources SET request_cursor=$5,updated_at=now() \
+             WHERE community_id=$1 AND run_id=$2 AND provider=$3 AND request_cursor=$4",
+        )
+        .bind(community_id.as_uuid())
+        .bind(run_id)
+        .bind(provider_text(provider))
+        .bind(fence)
+        .bind(provider_request_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(updated.rows_affected() == 1)
+    }
+
     /// Manually provision or revoke a workspace Discovery entitlement.
     pub async fn set_discovery_entitlement(
         &self,
@@ -4030,6 +4196,16 @@ mod tests {
         let search = business_search();
         let campaign_id = Uuid::new_v4();
         insert_test_campaign(&db, community, &actor_bytes, campaign_id, &search).await;
+        sqlx::query(
+            "UPDATE discovery_campaigns SET source_mode='waterfall',\
+             source_keys=ARRAY['google_maps','brave_search','exa_search']::TEXT[] \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .execute(&db.pool)
+        .await
+        .expect("configure hosted source plan");
         let campaign = DiscoveryCampaignInputV2 {
             campaign_id,
             name: format!("Discovery test {campaign_id}"),
@@ -4125,6 +4301,15 @@ mod tests {
             run.reserved_nanousd.expect("reservation").get(),
             150_000_000
         );
+        let source_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_run_sources WHERE community_id=$1 AND run_id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run.id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("count hosted run sources");
+        assert_eq!(source_count, 3);
 
         let worker_id = Uuid::new_v4();
         let claim = applied_worker_outcome(
@@ -4149,6 +4334,60 @@ mod tests {
             panic!("paid run is claimable only by protocol V3");
         };
         assert_eq!(lease.run.run_id, run.id);
+        let context = db
+            .discovery_gateway_run_context(
+                community,
+                &actor_bytes,
+                run.id,
+                lease.lease_id,
+                DiscoveryProvider::Outscraper,
+            )
+            .await
+            .expect("derive hosted request context");
+        assert_eq!(context.request_cursor, None);
+        let fence = format!("colony_pending_{}", Uuid::new_v4().simple());
+        assert!(db
+            .fence_discovery_gateway_submission(
+                community,
+                &actor_bytes,
+                run.id,
+                lease.lease_id,
+                DiscoveryProvider::Outscraper,
+                &fence,
+            )
+            .await
+            .expect("fence provider spend"));
+        assert!(!db
+            .fence_discovery_gateway_submission(
+                community,
+                &actor_bytes,
+                run.id,
+                lease.lease_id,
+                DiscoveryProvider::Outscraper,
+                "colony_pending_competing",
+            )
+            .await
+            .expect("refuse competing provider spend"));
+        assert!(!db
+            .finalize_discovery_gateway_submission(
+                community,
+                run.id,
+                DiscoveryProvider::Outscraper,
+                "colony_pending_wrong",
+                "provider-job-paid",
+            )
+            .await
+            .expect("refuse wrong provider fence"));
+        assert!(db
+            .finalize_discovery_gateway_submission(
+                community,
+                run.id,
+                DiscoveryProvider::Outscraper,
+                &fence,
+                "provider-job-paid",
+            )
+            .await
+            .expect("finalize provider fence"));
         sqlx::query(
             "UPDATE discovery_run_sources SET status='completed',started_at=now(),\
              finished_at=now(),updated_at=now() WHERE community_id=$1 AND run_id=$2",
@@ -4380,6 +4619,7 @@ mod tests {
                         },
                     ),
                 ),
+                budget_approval: None,
             },
         };
         let create_event = build_discovery_workspace_action(relay.public_key(), &create)
@@ -4681,6 +4921,7 @@ mod tests {
         db.apply_discovery_workspace_command_once(
             community,
             &actor.public_key().to_bytes(),
+            None,
             request,
             action,
             |result| {
