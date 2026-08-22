@@ -33,7 +33,7 @@ const PARALLELISM: u32 = 1;
 /// string: if it ever fails to parse, `verify_auth_key` returns early and the
 /// timing defence silently does nothing. The test
 /// `dummy_verify_parses_its_placeholder_hash` guards that.
-pub(crate) const DUMMY_PHC_FOR_TEST: &str =
+pub(crate) const DUMMY_PHC: &str =
     "$argon2id$v=19$m=19456,t=2,p=1$bKUShWO9M715a1OJ4t9zhA$5DPYQzMrTJpZNBPmsYCi4hlqe69M20ZZ9cDA5ryRIfE";
 
 fn hasher() -> Result<Argon2<'static>, AuthError> {
@@ -74,7 +74,7 @@ pub fn verify_auth_key(auth_key: &str, phc: &str) -> bool {
 /// Called on the no-such-account path so an attacker cannot tell a registered
 /// email from an unregistered one by timing the response.
 pub fn dummy_verify() {
-    let _ = verify_auth_key("dummy", DUMMY_PHC_FOR_TEST);
+    let _ = verify_auth_key("dummy", DUMMY_PHC);
 }
 
 /// Whether this build can verify accounts written at `version`.
@@ -131,6 +131,6 @@ mod tests {
     fn dummy_verify_parses_its_placeholder_hash() {
         // A malformed placeholder makes verify_auth_key return early, which
         // would silently remove the timing defence on the unknown-email path.
-        assert!(PasswordHash::new(DUMMY_PHC_FOR_TEST).is_ok());
+        assert!(PasswordHash::new(DUMMY_PHC).is_ok());
     }
 }
