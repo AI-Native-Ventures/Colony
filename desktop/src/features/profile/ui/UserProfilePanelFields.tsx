@@ -12,6 +12,8 @@ import {
 import * as React from "react";
 import type { AgentRank } from "@/features/agents/employeeHeads";
 import { rankLabel, useAgentRank } from "@/features/agents/employeeHeads";
+import type { ReportingLine } from "@/features/agents/reportingLine";
+import { useAgentReportingLine } from "@/features/agents/reportingLine";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
 import { truncatePubkey } from "@/shared/lib/pubkey";
@@ -54,6 +56,7 @@ const AGENT_INFO_LABELS = new Set([
   "Public key",
   "Managed by",
   "NIP-05",
+  "Reports to",
   "Role",
   "Agent type",
   "Capabilities",
@@ -119,14 +122,20 @@ export function useProfileFieldBuckets({
   // head, so `rank` stays null and no Role row is rendered.
   const { activeCommunity } = useCommunities();
   const rank = useAgentRank(activeCommunity?.id ?? "", pubkey ?? "");
+  const reportingLine = useAgentReportingLine(
+    activeCommunity?.id ?? "",
+    rank ? pubkey : null,
+  );
   return React.useMemo(() => {
     const metadataFields = [
       ...buildPublicFields({
         pubkey,
         profile,
         rank,
+        reportingLine: rank ? reportingLine : null,
         relayAgent,
         isBot,
+        onOpenProfile,
         persona,
       }),
       ...(ownerDisplayName || isOwner === true
@@ -161,23 +170,28 @@ export function useProfileFieldBuckets({
     profile,
     pubkey,
     rank,
+    reportingLine,
     relayAgent,
   ]);
 }
 
 export function buildPublicFields({
   isBot,
+  onOpenProfile,
   persona,
   profile,
   pubkey,
   rank,
+  reportingLine,
   relayAgent,
 }: {
   isBot: boolean;
+  onOpenProfile?: (pubkey: string) => void;
   persona?: AgentPersona;
   profile: Profile | undefined;
   pubkey: string | null;
   rank: AgentRank | null;
+  reportingLine: ReportingLine | null;
   relayAgent: RelayAgent | undefined;
 }): ProfileField[] {
   const fields: ProfileField[] = [];
@@ -207,6 +221,20 @@ export function buildPublicFields({
       icon: Network,
       label: "Role",
       testId: "user-profile-rank",
+    });
+    // The reporting line rides along wherever the rank does: the owner can
+    // see an agent is a Worker, so they can see whose Worker it is. The name
+    // opens the manager's profile; an agent nobody manages says so plainly.
+    const managerPubkey = reportingLine?.managerPubkey ?? null;
+    fields.push({
+      displayValue: reportingLine?.managerLabel ?? "No manager",
+      icon: Network,
+      label: "Reports to",
+      onClick:
+        managerPubkey && onOpenProfile
+          ? () => onOpenProfile(managerPubkey)
+          : undefined,
+      testId: "user-profile-reports-to",
     });
   }
 

@@ -180,17 +180,26 @@ export function employeeHeadsQueryKey(communityId: string) {
  * reference is stable between refetches and consumers can `.get()` per row
  * without re-render storms.
  */
+/**
+ * Module-level so its identity is stable across renders. An inline `select`
+ * is a new function every render, which makes React Query re-run it and
+ * hand back a NEW Map each time; anything memoizing on that Map then churns
+ * every render, which is how the reporting-line lookup drove an infinite
+ * render loop in the virtualized lists that consume it.
+ */
+function selectHeadsByPubkey(heads: EmployeeHead[]): Map<string, EmployeeHead> {
+  const byPubkey = new Map<string, EmployeeHead>();
+  for (const head of heads) byPubkey.set(head.pubkey, head);
+  return byPubkey;
+}
+
 export function useEmployeeHeadsQuery(communityId: string, enabled = true) {
   return useQuery({
     queryKey: employeeHeadsQueryKey(communityId),
     queryFn: fetchEmployeeHeads,
     enabled: enabled && communityId !== "",
     staleTime: 30_000,
-    select: (heads) => {
-      const byPubkey = new Map<string, EmployeeHead>();
-      for (const head of heads) byPubkey.set(head.pubkey, head);
-      return byPubkey;
-    },
+    select: selectHeadsByPubkey,
   });
 }
 
