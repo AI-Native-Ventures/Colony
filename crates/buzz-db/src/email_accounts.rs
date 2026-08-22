@@ -210,9 +210,16 @@ pub async fn record_signin_success(pool: &PgPool, community: CommunityId, id: Uu
 ///
 /// The increment and the conditional lock are one UPDATE with RETURNING, so
 /// the row lock serialises concurrent failures and two simultaneous attempts
-/// cannot both read the same count. Returns the new `locked_until` when this
-/// call set the lock, `None` otherwise. A stale lock from an already expired
-/// window is cleared, so it can never be reported as fresh.
+/// cannot both read the same count. Every branch keys off the pre-update row.
+///
+/// When the stored `locked_until` is already in the past, the lockout has
+/// been served and the counter restarts at 1 instead of incrementing.
+/// Without that reset a served lockout could never end: each later failure
+/// would stack on the old full counter and re-lock on every single mistake.
+///
+/// Returns the lock deadline in force after the update: `Some` when this
+/// call crossed the threshold or an existing lock still stands, `None` when
+/// the account is unlocked, including immediately after a served window.
 pub async fn record_signin_failure(
     pool: &PgPool,
     community: CommunityId,
@@ -223,8 +230,16 @@ pub async fn record_signin_failure(
     let lock_expires_at = Utc::now() + lock_for;
     let row = sqlx::query(
         "UPDATE email_accounts \
-         SET failed_attempts = email_accounts.failed_attempts + 1, \
+         SET failed_attempts = CASE \
+                 WHEN email_accounts.locked_until IS NOT NULL \
+                      AND email_accounts.locked_until <= now() THEN 1 \
+                 ELSE email_accounts.failed_attempts + 1 \
+             END, \
              locked_until = CASE \
+                 WHEN email_accounts.locked_until IS NOT NULL \
+                      AND email_accounts.locked_until <= now() THEN NULL \
+                 WHEN email_accounts.locked_until IS NOT NULL \
+                      THEN email_accounts.locked_until \
                  WHEN email_accounts.failed_attempts + 1 >= $3 THEN $4 \
                  ELSE NULL \
              END, \
@@ -529,6 +544,64 @@ mod tests {
             locked.is_some_and(|until| until > Utc::now()),
             "the tenth failure must lock the account"
         );
+        delete_test_community(&pool, community).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn an_expired_lock_restarts_the_counter_instead_of_relocking() {
+        let pool = setup_pool().await;
+        let community = make_test_community(&pool).await;
+        let outcome = create_account(&pool, community, "a@x.com", sample_account())
+            .await
+            .expect("create");
+        let CreateAccountOutcome::Created(id) = outcome else {
+            panic!("expected a created account");
+        };
+
+        for _ in 0..10 {
+            record_signin_failure(&pool, community, id, 10, Duration::minutes(15))
+                .await
+                .expect("record failure");
+        }
+        // Serve the lockout: force the window into the past, as time would.
+        sqlx::query(
+            "UPDATE email_accounts SET locked_until = now() - interval '1 second' \
+             WHERE community_id = $1 AND id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("expire the lock");
+
+        let locked = record_signin_failure(&pool, community, id, 10, Duration::minutes(15))
+            .await
+            .expect("record failure after the window");
+        assert!(
+            locked.is_none(),
+            "one mistake after a served lockout must not re-lock"
+        );
+        let found = find_account(&pool, community, "a@x.com")
+            .await
+            .expect("lookup")
+            .expect("account exists");
+        assert_eq!(
+            found.failed_attempts, 1,
+            "the count must restart when the window ends"
+        );
+        assert!(found.locked_until.is_none());
+
+        // From the restarted count the normal threshold applies again.
+        for _ in 0..8 {
+            record_signin_failure(&pool, community, id, 10, Duration::minutes(15))
+                .await
+                .expect("record failure");
+        }
+        let locked = record_signin_failure(&pool, community, id, 10, Duration::minutes(15))
+            .await
+            .expect("record tenth fresh failure");
+        assert!(locked.is_some(), "ten fresh failures must lock again");
         delete_test_community(&pool, community).await;
     }
 
