@@ -421,15 +421,17 @@
     ]
   },
   "commands": {
-    "registered": 340,
+    "registered": 342,
     "defined": 342,
     "by_reach": {
       "frontend": 336,
-      "frontend-plugin-prefixed": 2,
-      "NO CALLER FOUND": 2
+      "NO CALLER FOUND": 4,
+      "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
+      "operator_pubkey",
+      "operator_sign_nip98",
       "start_stt_pipeline"
     ]
   },
@@ -559,6 +561,7 @@
     "src-tauri/src/huddle/commands.rs": 3,
     "src-tauri/src/commands/ledger.rs": 3,
     "src-tauri/src/macos_notifications.rs": 3,
+    "src-tauri/src/operator_console.rs": 3,
     "src-tauri/src/commands/media.rs": 3,
     "src-tauri/src/commands/workspace_files.rs": 3,
     "src-tauri/src/commands/agent_settings.rs": 3,
@@ -602,7 +605,6 @@
     "src-tauri/src/commands/updater.rs": 1,
     "src-tauri/src/commands/agents_roster.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
-    "src-tauri/src/operator_console.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
     "src-tauri/src/huddle/reconnect.rs": 1,
@@ -2708,6 +2710,20 @@
         "src/parity/session/script.ts:1214",
         "src/shared/api/projectGit.ts:338"
       ]
+    },
+    "operator_pubkey": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/operator_console.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "operator_sign_nip98": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/operator_console.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "perform_sidebar_default_haptic": {
       "defining_file": "src-tauri/src/commands/window_chrome.rs",
