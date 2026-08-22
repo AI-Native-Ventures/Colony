@@ -158,4 +158,21 @@ mod tests {
         assert!(!constant_time_eq_hex("abcd", "abce"));
         assert!(!constant_time_eq_hex("abcd", "abcde"));
     }
+
+    #[test]
+    fn agrees_with_the_typescript_client() {
+        // The one cross-language invariant in the account system. The client
+        // hashes the recovery code in `desktop/src/features/onboarding/
+        // authCrypto.ts` and the relay compares that hash against this one. If
+        // the two ever diverge, recovery stops working and nothing errors: the
+        // relay simply reports an invalid code for a correct one.
+        //
+        // Pinned rather than derived, so a change to either implementation
+        // fails here instead of in production. Independently confirmed with
+        // `printf 'ABCDE-FGHJK-MNPQR-STVWX' | shasum -a 256`.
+        assert_eq!(
+            hash_recovery_code("ABCDE-FGHJK-MNPQR-STVWX"),
+            "e01055a9e47012a33c3a2312f149b6e55730feb969ed6ae82ee43bfe54d9a587"
+        );
+    }
 }
