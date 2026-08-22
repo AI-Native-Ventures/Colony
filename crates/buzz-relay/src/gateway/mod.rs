@@ -581,7 +581,7 @@ impl AdmissionController {
             .map_err(|error| AdmissionError::Database(error.to_string()))?;
             let (intent, account) = match reservation {
                 buzz_db::credits::GatewayIntentReservation::Reserved { intent, account } => {
-                    (intent, account)
+                    (*intent, account)
                 }
                 buzz_db::credits::GatewayIntentReservation::Insufficient {
                     available_nanousd,

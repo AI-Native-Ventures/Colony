@@ -127,7 +127,7 @@ pub enum GatewayIntentReservation {
     /// Capacity was held and the durable intent was created.
     Reserved {
         /// Durable provider-call identity.
-        intent: GatewaySettlementIntent,
+        intent: Box<GatewaySettlementIntent>,
         /// Account admission settings read under the same row lock.
         account: AdmissionAccount,
     },
@@ -417,7 +417,7 @@ pub async fn create_gateway_settlement_intent(
     }
     tx.commit().await?;
     Ok(GatewayIntentReservation::Reserved {
-        intent,
+        intent: Box::new(intent),
         account: AdmissionAccount {
             balance: balance.saturating_add(discovery_reserved_nanousd),
             discovery_reserved_nanousd,
@@ -802,7 +802,16 @@ pub async fn debit_observed_for_gateway_intent(
     request_id: Option<&str>,
 ) -> Result<AppliedLedgerEntry> {
     debit_gateway_intent_internal(
-        pool, intent_id, pubkey, cost, reference, model, request_id, "observed",
+        pool,
+        GatewayIntentDebitParams {
+            intent_id,
+            pubkey,
+            cost,
+            reference,
+            model,
+            request_id,
+            settle_basis: "observed",
+        },
     )
     .await
 }
@@ -862,27 +871,42 @@ pub async fn debit_estimated_for_gateway_intent(
 ) -> Result<AppliedLedgerEntry> {
     debit_gateway_intent_internal(
         pool,
+        GatewayIntentDebitParams {
+            intent_id,
+            pubkey,
+            cost,
+            reference,
+            model,
+            request_id,
+            settle_basis: "estimated",
+        },
+    )
+    .await
+}
+
+struct GatewayIntentDebitParams<'a> {
+    intent_id: i64,
+    pubkey: &'a [u8],
+    cost: u64,
+    reference: &'a str,
+    model: &'a str,
+    request_id: Option<&'a str>,
+    settle_basis: &'a str,
+}
+
+async fn debit_gateway_intent_internal(
+    pool: &PgPool,
+    params: GatewayIntentDebitParams<'_>,
+) -> Result<AppliedLedgerEntry> {
+    let GatewayIntentDebitParams {
         intent_id,
         pubkey,
         cost,
         reference,
         model,
         request_id,
-        "estimated",
-    )
-    .await
-}
-
-async fn debit_gateway_intent_internal(
-    pool: &PgPool,
-    intent_id: i64,
-    pubkey: &[u8],
-    cost: u64,
-    reference: &str,
-    model: &str,
-    request_id: Option<&str>,
-    settle_basis: &str,
-) -> Result<AppliedLedgerEntry> {
+        settle_basis,
+    } = params;
     let cost = i64::try_from(cost)
         .map_err(|_| crate::error::DbError::InvalidAmount(format!("cost {cost} exceeds i64")))?;
     let mut tx = pool.begin().await?;

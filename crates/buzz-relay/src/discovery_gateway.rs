@@ -450,16 +450,16 @@ async fn submit(
     let stored = state
         .app
         .db
-        .record_discovery_gateway_response(
-            tenant.community(),
-            &actor.to_bytes(),
-            request.run_id,
-            request.lease_id,
-            request.provider,
-            &fence,
-            parsed.provider_request_id(),
-            parsed.observations(),
-        )
+        .record_discovery_gateway_response(buzz_db::discovery::DiscoveryGatewayResponseInput {
+            community_id: tenant.community(),
+            actor_pubkey: &actor.to_bytes(),
+            run_id: request.run_id,
+            lease_id: request.lease_id,
+            provider: request.provider,
+            expected_cursor: &fence,
+            provider_request_id: parsed.provider_request_id(),
+            observations: parsed.observations(),
+        })
         .await
         .map_err(map_db_error)?;
     ProviderResponse::from_stored(stored).map(Json)
@@ -800,16 +800,16 @@ async fn poll(
     let stored = state
         .app
         .db
-        .record_discovery_gateway_response(
-            tenant.community(),
-            &actor.to_bytes(),
-            request.run_id,
-            request.lease_id,
-            request.provider,
-            &request.provider_request_id,
-            parsed.provider_request_id(),
-            parsed.observations(),
-        )
+        .record_discovery_gateway_response(buzz_db::discovery::DiscoveryGatewayResponseInput {
+            community_id: tenant.community(),
+            actor_pubkey: &actor.to_bytes(),
+            run_id: request.run_id,
+            lease_id: request.lease_id,
+            provider: request.provider,
+            expected_cursor: &request.provider_request_id,
+            provider_request_id: parsed.provider_request_id(),
+            observations: parsed.observations(),
+        })
         .await
         .map_err(map_db_error)?;
     ProviderResponse::from_stored(stored).map(Json)

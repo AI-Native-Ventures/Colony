@@ -43,6 +43,26 @@ pub enum DiscoveryAuthorization {
     AgentGrantRequired,
 }
 
+/// One provider response tied to its authenticated run lease and durable fence.
+pub struct DiscoveryGatewayResponseInput<'a> {
+    /// Workspace that owns the run.
+    pub community_id: CommunityId,
+    /// Human actor holding the active hosted-worker lease.
+    pub actor_pubkey: &'a [u8; 32],
+    /// Run receiving the provider response.
+    pub run_id: Uuid,
+    /// Active worker lease identity.
+    pub lease_id: Uuid,
+    /// Provider that produced the response.
+    pub provider: DiscoveryProvider,
+    /// Durable pre-spend fence this response must replace.
+    pub expected_cursor: &'a str,
+    /// Provider's stable request identity.
+    pub provider_request_id: &'a str,
+    /// Completed observations, or `None` while an asynchronous request is pending.
+    pub observations: Option<&'a [DiscoveryBusinessObservationInput]>,
+}
+
 impl DiscoveryAuthorization {
     /// Whether this result permits a Discovery operation.
     pub const fn is_authorized(self) -> bool {
@@ -1078,15 +1098,18 @@ impl Db {
     /// retain every billable observation before it is returned to a client.
     pub async fn record_discovery_gateway_response(
         &self,
-        community_id: CommunityId,
-        actor_pubkey: &[u8; 32],
-        run_id: Uuid,
-        lease_id: Uuid,
-        provider: DiscoveryProvider,
-        expected_cursor: &str,
-        provider_request_id: &str,
-        observations: Option<&[DiscoveryBusinessObservationInput]>,
+        input: DiscoveryGatewayResponseInput<'_>,
     ) -> Result<DiscoveryGatewayStoredResponse> {
+        let DiscoveryGatewayResponseInput {
+            community_id,
+            actor_pubkey,
+            run_id,
+            lease_id,
+            provider,
+            expected_cursor,
+            provider_request_id,
+            observations,
+        } = input;
         let mut tx = self.pool.begin().await?;
         let attempt = sqlx::query(
             "SELECT status,intent_id,provider_request_id,observations \
@@ -5253,16 +5276,16 @@ mod tests {
             Some(DiscoveryGatewayStoredResponse::OutcomeUnknown)
         ));
         assert!(db
-            .record_discovery_gateway_response(
-                community,
-                &actor_bytes,
-                run.id,
-                lease.lease_id,
-                DiscoveryProvider::Outscraper,
-                "colony_pending_wrong",
-                "provider-job-paid",
-                None,
-            )
+            .record_discovery_gateway_response(DiscoveryGatewayResponseInput {
+                community_id: community,
+                actor_pubkey: &actor_bytes,
+                run_id: run.id,
+                lease_id: lease.lease_id,
+                provider: DiscoveryProvider::Outscraper,
+                expected_cursor: "colony_pending_wrong",
+                provider_request_id: "provider-job-paid",
+                observations: None,
+            })
             .await
             .is_err());
         sqlx::query(
@@ -5275,16 +5298,16 @@ mod tests {
         .await
         .expect("expire hosted provider lease");
         assert!(matches!(
-            db.record_discovery_gateway_response(
-                community,
-                &actor_bytes,
-                run.id,
-                lease.lease_id,
-                DiscoveryProvider::Outscraper,
-                &fence,
-                "provider-job-paid",
-                Some(&[]),
-            )
+            db.record_discovery_gateway_response(DiscoveryGatewayResponseInput {
+                community_id: community,
+                actor_pubkey: &actor_bytes,
+                run_id: run.id,
+                lease_id: lease.lease_id,
+                provider: DiscoveryProvider::Outscraper,
+                expected_cursor: &fence,
+                provider_request_id: "provider-job-paid",
+                observations: Some(&[]),
+            })
             .await,
             Err(DbError::AccessDenied(_))
         ));
@@ -5360,16 +5383,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let stored = db
-            .record_discovery_gateway_response(
-                community,
-                &actor_bytes,
-                run.id,
-                lease.lease_id,
-                DiscoveryProvider::BraveSearch,
-                &brave_fence,
-                "brave-job-paid",
-                Some(&provider_observations),
-            )
+            .record_discovery_gateway_response(DiscoveryGatewayResponseInput {
+                community_id: community,
+                actor_pubkey: &actor_bytes,
+                run_id: run.id,
+                lease_id: lease.lease_id,
+                provider: DiscoveryProvider::BraveSearch,
+                expected_cursor: &brave_fence,
+                provider_request_id: "brave-job-paid",
+                observations: Some(&provider_observations),
+            })
             .await
             .expect("store provider result before client acknowledgement");
         assert!(matches!(
