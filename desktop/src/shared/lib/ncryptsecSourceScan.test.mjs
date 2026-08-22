@@ -37,6 +37,12 @@ const ALLOWLIST = [
   "features/settings/ui/BackupTestFlow.tsx",
   "features/settings/ui/EncryptedBackupCreator.tsx",
   "features/settings/ui/ProfileSettingsCard.tsx",
+  // Account signup fixtures. The service itself never names the codec: it
+  // receives already-encrypted blobs from the identity layer and forwards
+  // them as opaque strings. Only its test spells the prefix out, because a
+  // fixture that did not look like the real wire format would stop proving
+  // the request body carries a blob rather than the password.
+  "features/onboarding/authService.test.mjs",
   // e2e-only mock bridge (never in the production bundle):
   "testing/e2eBridge.ts",
   // this scan:
