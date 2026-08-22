@@ -471,9 +471,24 @@
 </p>
 
 <h3>Scope</h3>
+<p class="note">
+  <strong>Correction, verified in the relay.</strong> An earlier draft of this section said to show
+  "the agent's active grants" on its org-chart node. Grants are not issued to an agent.
+  <code>ParsedGrant</code> (<code>crates/buzz-core/src/interrupt.rs:283</code>) carries an id, a
+  category, a scope, a cap and an active flag, with no holder field, and
+  <code>enforce_decision_log_authority</code>
+  (<code>crates/buzz-relay/src/interrupt_gate.rs:590</code>) authorizes a decision by checking that
+  the signer is a Leader or Executive and that the cited grant is active, matching category and
+  within cap. A grant is therefore a community-wide capability available to every leader and
+  executive. The consequence the product must state: <strong>promoting an agent to Team lead hands
+  it every active delegation in the community, immediately.</strong> The phase 2 rank picker has to
+  say so before the owner confirms.
+</p>
+
 <ul class="tight">
   <li><code>KIND_DELEGATION_GRANT</code> added to <code>kinds.ts</code>.</li>
-  <li>A grants surface: every grant, its holder, category, scope, cap, and active state.</li>
+  <li>A community-level grants surface: every grant, category, scope, cap, and active state. Not a
+      per-agent badge, because that is not how authority resolves.</li>
   <li>Create and revoke from the app. The owner key signs, exactly as the CLI does.</li>
   <li>Grants shown on the agent's org chart node and in its profile, so authority and rank are read
       in one place.</li>
@@ -517,6 +532,20 @@
   window, a community-wide default fills in. Hard-list categories may never carry a default, so the
   worst cases are already protected. Everything else is not.
 </p>
+<p class="note">
+  <strong>Two corrections, verified in the relay.</strong> First, the self-answer is narrower than
+  stated above and it targets the owner specifically: default execution applies only to a decision
+  or question ask addressed to a <em>current owner</em> that carries a stated default
+  (<code>crates/buzz-relay/src/interrupt_runtime.rs:16-36</code>). Every other expired ask either
+  promotes one rung up the ladder or is re-armed with a fresh deadline. The relay flags an executed
+  default <code>"default_executed": true</code>, so the app can tell it from a human answer.
+  Second, <strong>this phase is not desktop-only</strong>: <code>deadline_at</code> is computed in
+  <code>ask_broker</code> and stored in the <code>asks</code> table, never placed on the event or
+  exposed by the CLI. The relay must expose it before any countdown can exist. Recomputing it
+  client-side would drift from the relay's own arithmetic, and a countdown that disagrees with the
+  real deadline is worse than none.
+</p>
+
 <p>
   <code>AskDetailCard</code> shows no countdown. A decision can be made by the owner's silence on a
   surface that never mentioned a clock was running. Add:
