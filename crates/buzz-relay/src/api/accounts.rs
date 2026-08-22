@@ -19,14 +19,15 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::Digest;
 
-use buzz_auth::account_crypto::normalise_email;
+use buzz_auth::account_crypto::{constant_time_eq_hex, normalise_email};
 use buzz_auth::account_verifier::{
     dummy_verify, hash_auth_key, is_supported_kdf_version, verify_auth_key,
 };
 use buzz_db::email_accounts::{
-    create_account, find_account, record_signin_failure, record_signin_success,
-    CreateAccountOutcome, NewAccount,
+    consume_reset_and_rewrite, create_account, find_account, issue_reset_token,
+    record_signin_failure, record_signin_success, CreateAccountOutcome, NewAccount, PasswordReset,
 };
 
 use crate::state::AppState;
@@ -277,6 +278,191 @@ pub async fn signin(
     })))
 }
 
+/// How long a recovery-issued reset token stays valid. Matches the lockout
+/// window: both are "one deliberate action" lifetimes.
+pub const RESET_TOKEN_TTL_MINS: i64 = 15;
+
+/// Body for `POST /api/accounts/recover`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverRequest {
+    /// Address the account is filed under, normalised server side.
+    pub email: String,
+    /// Lowercase hex SHA-256 of the recovery code, hashed on the device.
+    pub recovery_code_hash: String,
+}
+
+pub(crate) fn validate_recover(request: &RecoverRequest) -> Result<(), &'static str> {
+    if !is_plausible_email(&request.email) {
+        return Err("invalid_email");
+    }
+    if !is_lowercase_hex(&request.recovery_code_hash, 64) {
+        return Err("invalid_recovery_code_hash");
+    }
+    Ok(())
+}
+
+/// `POST /api/accounts/recover`
+///
+/// Exchanges a recovery code hash for the escrow blob it opens plus a
+/// single-use reset token for the password reset that follows. An unknown
+/// address and a wrong code are indistinguishable (`invalid_recovery_code`),
+/// and the unknown path burns verification work so timing does not become an
+/// enumeration oracle either.
+pub async fn recover(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RecoverRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if let Err(reason) = validate_recover(&request) {
+        return Err(api_error(StatusCode::BAD_REQUEST, reason));
+    }
+    let tenant = tenant_from_host(&state, &headers).await?;
+    let email = normalise_email(&request.email);
+
+    let account = find_account(state.db.pool(), tenant.community(), &email)
+        .await
+        .map_err(|error| internal_error(&format!("find account: {error}")))?;
+
+    let Some(account) = account else {
+        dummy_verify();
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_recovery_code"));
+    };
+
+    // Never ==: the comparison must not leak how much of the guess matched.
+    if !constant_time_eq_hex(&request.recovery_code_hash, &account.recovery_code_hash) {
+        let locked = record_signin_failure(
+            state.db.pool(),
+            tenant.community(),
+            account.id,
+            LOCK_THRESHOLD,
+            chrono::Duration::minutes(LOCK_DURATION_MINS),
+        )
+        .await
+        .map_err(|error| internal_error(&format!("record failure: {error}")))?;
+        if let Some(until) = locked {
+            return Err(locked_error(until));
+        }
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_recovery_code"));
+    }
+
+    let token_bytes = random_32_bytes();
+    let token_hash = hex::encode(sha2::Sha256::digest(token_bytes));
+
+    issue_reset_token(
+        state.db.pool(),
+        tenant.community(),
+        account.id,
+        &token_hash,
+        chrono::Duration::minutes(RESET_TOKEN_TTL_MINS),
+    )
+    .await
+    .map_err(|error| internal_error(&format!("issue reset token: {error}")))?;
+
+    Ok(Json(json!({
+        "pubkey": account.pubkey,
+        "recoveryBlob": account.recovery_blob,
+        "resetToken": hex::encode(token_bytes),
+    })))
+}
+
+fn random_32_bytes() -> [u8; 32] {
+    use rand::Rng;
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Body for `POST /api/accounts/reset-password`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetPasswordRequest {
+    /// Address the account is filed under, normalised server side.
+    pub email: String,
+    /// The opaque token `recover` returned, single use.
+    pub reset_token: String,
+    /// Client-derived authentication value for the new password.
+    pub auth_key: String,
+    /// New blob under the new password.
+    pub password_blob: String,
+    /// New blob under the fresh recovery code.
+    pub recovery_blob: String,
+    /// Lowercase hex SHA-256 of the fresh recovery code. Required: a reset
+    /// that kept the old code would keep a secret that was just typed into a
+    /// form.
+    pub recovery_code_hash: String,
+    /// KDF parameter set version the client used for the new credentials.
+    pub kdf_version: i16,
+}
+
+pub(crate) fn validate_reset(request: &ResetPasswordRequest) -> Result<(), &'static str> {
+    if !is_plausible_email(&request.email) {
+        return Err("invalid_email");
+    }
+    if request.reset_token.is_empty() {
+        return Err("invalid_reset_token");
+    }
+    if !is_lowercase_hex(&request.auth_key, 64) {
+        return Err("invalid_auth_key");
+    }
+    if !is_lowercase_hex(&request.recovery_code_hash, 64) {
+        return Err("invalid_recovery_code_hash");
+    }
+    if !is_valid_blob(&request.password_blob) || !is_valid_blob(&request.recovery_blob) {
+        return Err("invalid_blob");
+    }
+    if request.password_blob == request.recovery_blob {
+        return Err("invalid_blob");
+    }
+    if !is_supported_kdf_version(request.kdf_version) {
+        return Err("unsupported_kdf_version");
+    }
+    Ok(())
+}
+
+/// `POST /api/accounts/reset-password`
+///
+/// Rewrites both blobs, the auth hash, and the recovery code hash in one
+/// transaction. The token row is consumed inside that transaction, so expired,
+/// already used, and never issued all collapse into one uniform
+/// `invalid_reset_token` with nothing to distinguish them.
+pub async fn reset_password(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ResetPasswordRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if let Err(reason) = validate_reset(&request) {
+        return Err(api_error(StatusCode::BAD_REQUEST, reason));
+    }
+    let tenant = tenant_from_host(&state, &headers).await?;
+
+    let auth_hash = hash_auth_key(&request.auth_key)
+        .map_err(|error| internal_error(&format!("hash auth key: {error}")))?;
+
+    let token_hash = hex::encode(sha2::Sha256::digest(request.reset_token.as_bytes()));
+    let applied = consume_reset_and_rewrite(
+        state.db.pool(),
+        tenant.community(),
+        &normalise_email(&request.email),
+        &token_hash,
+        PasswordReset {
+            auth_hash,
+            password_blob: request.password_blob,
+            recovery_blob: request.recovery_blob,
+            recovery_code_hash: request.recovery_code_hash,
+            kdf_version: request.kdf_version,
+        },
+    )
+    .await
+    .map_err(|error| internal_error(&format!("consume reset token: {error}")))?;
+
+    if !applied {
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_reset_token"));
+    }
+
+    Ok(Json(json!({ "ok": true })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +581,53 @@ mod tests {
     fn a_lock_already_in_the_past_reports_zero() {
         let until = chrono::Utc::now() - chrono::Duration::seconds(30);
         assert_eq!(retry_after_secs(until), 0);
+    }
+
+    fn valid_reset() -> ResetPasswordRequest {
+        ResetPasswordRequest {
+            email: "founder@example.com".into(),
+            reset_token: "f".repeat(64),
+            auth_key: "b".repeat(64),
+            password_blob: format!("ncryptsec1{}", "c".repeat(40)),
+            recovery_blob: format!("ncryptsec1{}", "d".repeat(40)),
+            recovery_code_hash: "e".repeat(64),
+            kdf_version: 1,
+        }
+    }
+
+    #[test]
+    fn recover_validation_requires_a_hex_hash() {
+        let request = RecoverRequest {
+            email: "a@x.com".into(),
+            recovery_code_hash: "nothex".into(),
+        };
+        assert_eq!(
+            validate_recover(&request).unwrap_err(),
+            "invalid_recovery_code_hash"
+        );
+    }
+
+    #[test]
+    fn reset_validation_requires_a_new_recovery_code() {
+        // A reset must issue a fresh code: the old one was just typed into a
+        // form, which is exactly when it is most likely to have been seen.
+        let mut request = valid_reset();
+        request.recovery_code_hash = String::new();
+        assert_eq!(
+            validate_reset(&request).unwrap_err(),
+            "invalid_recovery_code_hash"
+        );
+    }
+
+    #[test]
+    fn reset_validation_rejects_identical_blobs() {
+        let mut request = valid_reset();
+        request.recovery_blob = request.password_blob.clone();
+        assert_eq!(validate_reset(&request).unwrap_err(), "invalid_blob");
+    }
+
+    #[test]
+    fn reset_validation_accepts_a_well_formed_body() {
+        assert!(validate_reset(&valid_reset()).is_ok());
     }
 }
