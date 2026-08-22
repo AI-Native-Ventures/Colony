@@ -912,6 +912,140 @@ test("selecting a person mention inserts @Name into input", async ({
   });
   await expect(mentionChip).toBeVisible();
   await expect(mentionChip).not.toHaveClass(/agent-mention-highlight/);
+  await expect(mentionChip).toHaveCSS("display", "inline");
+  await expect(
+    input.locator(".mention-prefix-hidden", { hasText: "@" }),
+  ).toHaveCount(1);
+  const iconMask = await mentionChip.evaluate((element) =>
+    getComputedStyle(element, "::before").getPropertyValue(
+      "-webkit-mask-image",
+    ),
+  );
+  expect(iconMask).toContain("data:image/svg+xml");
+});
+
+test("immediate ArrowLeft after a person mention is not bounced past the trailing space", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Hey @bo");
+  await autocomplete(page).getByText("bob").click();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.type("x");
+  const text = (await input.innerText()).replace(/\s+$/, "");
+  expect(text).toBe("Hey @bobx");
+  expect(text).not.toMatch(/@bob x/);
+});
+
+test("clicking a person mention chip edge is not treated as after the trailing space", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("Hey @bo");
+  await autocomplete(page).getByText("bob").click();
+  const chip = input.locator(".human-mention-highlight", { hasText: "bob" });
+  await expect(chip).toBeVisible();
+  const box = await chip.boundingBox();
+  expect(box).toBeTruthy();
+  await chip.click({
+    position: {
+      x: Math.max((box?.width ?? 1) - 2, 0),
+      y: (box?.height ?? 2) / 2,
+    },
+  });
+  await page.keyboard.type("x");
+  const text = (await input.innerText()).replace(/\s+$/, "");
+  expect(text).toBe("Hey @bobx");
+  expect(text).not.toMatch(/@bob x/);
+});
+
+test("typing a mention before existing text does not interleave spaces", async ({
+  page,
+}) => {
+  // Regression (the reported repro): with a draft already written, place the
+  // caret earlier in the message, type a partial mention, pick a suggestion,
+  // then keep typing. Caret correction used to fire on every document change
+  // and walk the caret across the mention's trailing space, so each keystroke
+  // pushed a space further into the rest of the draft.
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("hello world");
+
+  // Click between "hello" and " world", then open autocomplete there.
+  await input.focus();
+  for (let i = 0; i < " world".length; i++) {
+    await page.keyboard.press("ArrowLeft");
+  }
+  await page.keyboard.type(" @bo");
+  await autocomplete(page).getByText("bob").click();
+  await page.keyboard.type("abc");
+
+  await expect(input).toHaveText("hello @bob abc world");
+});
+
+test("typing an unregistered @token before existing text is left alone", async ({
+  page,
+}) => {
+  // The trailing-space scan is purely textual, so it also fired for tokens
+  // that were never registered as mentions.
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("hello world");
+  await input.focus();
+  for (let i = 0; i < " world".length; i++) {
+    await page.keyboard.press("ArrowLeft");
+  }
+  await page.keyboard.type(" @zzq");
+
+  await expect(input).toHaveText("hello @zzq world");
+});
+
+test("channel references keep caret movement through the channel name", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.fill("#general");
+
+  const channelChip = input.locator(".inline-chip-icon-channel", {
+    hasText: "general",
+  });
+  await expect(channelChip).toBeVisible();
+  await expect(channelChip).toHaveText("general");
+  await expect(
+    input.locator(".mention-prefix-hidden", { hasText: "#" }),
+  ).toHaveCount(1);
+  const iconMask = await channelChip.evaluate((element) =>
+    getComputedStyle(element, "::before").getPropertyValue(
+      "-webkit-mask-image",
+    ),
+  );
+  expect(iconMask).toContain("data:image/svg+xml");
+
+  await input.focus();
+  await input.press("ArrowLeft");
+  await input.press("ArrowLeft");
+  await input.press("ArrowLeft");
+  await page.keyboard.type("X");
+
+  await expect(input).toHaveText("#geneXral");
 });
 
 test("selecting a managed agent mention inserts @Name into input", async ({
