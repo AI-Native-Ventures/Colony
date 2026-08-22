@@ -14,8 +14,8 @@ use buzz_core::{
     kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT},
 };
 use buzz_sdk::discovery::{
-    build_discovery_cancel_action, build_discovery_start_action, build_discovery_status_action,
-    parse_discovery_receipt,
+    build_discovery_cancel_action_for_version, build_discovery_start_action,
+    build_discovery_status_action_for_version, parse_discovery_receipt, DiscoveryWireVersion,
 };
 use buzz_sdk::discovery_workspace::{
     build_discovery_workspace_action, parse_discovery_workspace_receipt,
@@ -367,8 +367,12 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 idempotency_key: idempotency_key.unwrap_or_else(Uuid::new_v4),
                 run_id: run,
             };
-            let builder = build_discovery_status_action(relay, &request)
-                .map_err(|error| CliError::Usage(error.to_string()))?;
+            let builder = build_discovery_status_action_for_version(
+                relay,
+                &request,
+                DiscoveryWireVersion::V3,
+            )
+            .map_err(|error| CliError::Usage(error.to_string()))?;
             publish(
                 client,
                 relay,
@@ -388,8 +392,12 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 idempotency_key: idempotency_key.unwrap_or_else(Uuid::new_v4),
                 run_id: run,
             };
-            let builder = build_discovery_cancel_action(relay, &request)
-                .map_err(|error| CliError::Usage(error.to_string()))?;
+            let builder = build_discovery_cancel_action_for_version(
+                relay,
+                &request,
+                DiscoveryWireVersion::V3,
+            )
+            .map_err(|error| CliError::Usage(error.to_string()))?;
             publish(
                 client,
                 relay,

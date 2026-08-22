@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 408,
-    "rust_lines": 163429,
-    "tauri_coupled": 162,
-    "portable": 246,
-    "portable_lines": 92001,
+    "rust_total": 410,
+    "rust_lines": 163736,
+    "tauri_coupled": 161,
+    "portable": 249,
+    "portable_lines": 92696,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -402,6 +402,7 @@
       "src-tauri/src/nostr_convert.rs",
       "src-tauri/src/nostr_convert/user_search.rs",
       "src-tauri/src/nostr_convert/users_batch.rs",
+      "src-tauri/src/provisioned_credits/account.rs",
       "src-tauri/src/relay.rs",
       "src-tauri/src/relay/agent_boundary.rs",
       "src-tauri/src/relay/profile_role_tests.rs",

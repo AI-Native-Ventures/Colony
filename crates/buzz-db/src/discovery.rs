@@ -316,6 +316,12 @@ struct PaidDiscoveryRunReservation {
     reserved_nanousd: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ObservationInsertOutcome {
+    new_lead: bool,
+    new_campaign_lead: bool,
+}
+
 async fn reserve_paid_discovery_run_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
@@ -419,20 +425,6 @@ async fn reserve_paid_discovery_run_tx(
             "Campaign changed after its Credits budget was approved".into(),
         ));
     }
-    let already_searched: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM discovery_gateway_attempts \
-         WHERE community_id=$1 AND campaign_id=$2)",
-    )
-    .bind(community_id.as_uuid())
-    .bind(campaign_id)
-    .fetch_one(&mut **tx)
-    .await?;
-    if already_searched {
-        return Err(DbError::AccessDenied(
-            "campaign_search_already_executed".into(),
-        ));
-    }
-
     let retained_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM discovery_campaign_leads \
          WHERE community_id=$1 AND campaign_id=$2",
@@ -911,9 +903,11 @@ impl Db {
                               AND earlier.status NOT IN \
                                   ('completed','exhausted','outcome_unknown','skipped_target_met','failed','cancelled')) \
                         AS earlier_source_open,\
-                    COALESCE((SELECT sum(retained_count) FROM discovery_run_sources totals \
-                              WHERE totals.community_id=r.community_id AND totals.run_id=r.id),0) \
-                        AS retained_count \
+                    COALESCE((SELECT count(*) FROM discovery_campaign_leads campaign_leads \
+                              WHERE campaign_leads.community_id=r.community_id \
+                                AND campaign_leads.campaign_id=r.campaign_id \
+                                AND campaign_leads.discovered_run_id=r.id),0) \
+                        AS campaign_lead_count \
              FROM discovery_runs r \
              JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
              JOIN discovery_run_sources s ON s.community_id=r.community_id AND s.run_id=r.id \
@@ -968,8 +962,8 @@ impl Db {
             ));
         }
         let billable_limit: i16 = row.try_get("billable_lead_limit")?;
-        let retained_count: i64 = row.try_get("retained_count")?;
-        let remaining = i64::from(billable_limit).saturating_sub(retained_count);
+        let campaign_lead_count: i64 = row.try_get("campaign_lead_count")?;
+        let remaining = i64::from(billable_limit).saturating_sub(campaign_lead_count);
         let remaining_target = u16::try_from(remaining).map_err(|_| {
             DbError::InvalidData("Discovery hosted provider capacity is invalid".into())
         })?;
@@ -1040,7 +1034,7 @@ impl Db {
                AND (SELECT count(*) FROM discovery_gateway_attempts recent \
                     WHERE recent.payer_pubkey=r.payer_pubkey \
                       AND recent.created_at > now()-INTERVAL '24 hours') < 60 \
-             ON CONFLICT (community_id,campaign_id,provider) DO NOTHING \
+             ON CONFLICT (community_id,run_id,provider) DO NOTHING \
              RETURNING run_id",
         )
         .bind(community_id.as_uuid())
@@ -1186,9 +1180,10 @@ impl Db {
                             WHERE d.community_id=r.community_id AND d.active \
                               AND (d.expires_at IS NULL OR d.expires_at > now())) \
                         AS entitlement_active,\
-                    COALESCE((SELECT sum(retained_count) FROM discovery_run_sources totals \
-                              WHERE totals.community_id=r.community_id \
-                                AND totals.run_id=r.id),0) AS retained_count \
+                    COALESCE((SELECT count(*) FROM discovery_campaign_leads campaign_leads \
+                              WHERE campaign_leads.community_id=r.community_id \
+                                AND campaign_leads.campaign_id=r.campaign_id \
+                                AND campaign_leads.discovered_run_id=r.id),0) AS campaign_lead_count \
              FROM discovery_runs r \
              JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
              WHERE r.community_id=$1 AND r.id=$2 FOR UPDATE OF r,c",
@@ -1229,16 +1224,18 @@ impl Db {
             ));
         }
         let billable_limit: i16 = capacity_row.try_get("billable_lead_limit")?;
-        let already_retained: i64 = capacity_row.try_get("retained_count")?;
-        let remaining = i64::from(billable_limit).saturating_sub(already_retained);
+        let campaign_lead_count: i64 = capacity_row.try_get("campaign_lead_count")?;
+        let remaining = i64::from(billable_limit).saturating_sub(campaign_lead_count);
         let remaining = u16::try_from(remaining).map_err(|_| {
             DbError::InvalidData("Discovery hosted provider capacity is invalid".into())
         })?;
         let mut accepted_count = 0_u16;
         let mut existing_count = 0_u16;
+        let mut campaign_added_count = 0_u16;
         let mut stored_observations = Vec::new();
+        prepare_observation_batch_tx(&mut tx, community_id).await?;
         for observation in observations {
-            if accepted_count == remaining || stored_observations.len() == 500 {
+            if campaign_added_count == remaining || stored_observations.len() == 500 {
                 break;
             }
             if observation.provider != provider {
@@ -1250,7 +1247,7 @@ impl Db {
                 .validate()
                 .map_err(|error| DbError::InvalidData(error.to_string()))?;
             let fingerprint = observation_fingerprint(observation)?;
-            let inserted = insert_business_observation_tx(
+            let outcome = insert_business_observation_tx(
                 &mut tx,
                 community_id,
                 run_id,
@@ -1258,7 +1255,7 @@ impl Db {
                 &fingerprint,
             )
             .await?;
-            if inserted {
+            if outcome.new_lead {
                 accepted_count = accepted_count.checked_add(1).ok_or_else(|| {
                     DbError::InvalidData("Discovery accepted count overflow".into())
                 })?;
@@ -1267,7 +1264,12 @@ impl Db {
                     DbError::InvalidData("Discovery existing count overflow".into())
                 })?;
             }
-            stored_observations.push(observation.clone());
+            if outcome.new_campaign_lead {
+                campaign_added_count = campaign_added_count.checked_add(1).ok_or_else(|| {
+                    DbError::InvalidData("Discovery Campaign Lead count overflow".into())
+                })?;
+                stored_observations.push(observation.clone());
+            }
         }
         let returned_count = i32::try_from(stored_observations.len()).map_err(|_| {
             DbError::InvalidData("Discovery provider result count is invalid".into())
@@ -2867,6 +2869,7 @@ async fn apply_worker_action_tx(
             } else {
                 let mut accepted_count = 0u16;
                 let mut existing_count = 0u16;
+                prepare_observation_batch_tx(tx, community_id).await?;
                 for observation in &request.observations {
                     let fingerprint = observation_fingerprint(observation)?;
                     let inserted = insert_business_observation_tx(
@@ -2877,7 +2880,7 @@ async fn apply_worker_action_tx(
                         &fingerprint,
                     )
                     .await?;
-                    if inserted {
+                    if inserted.new_lead {
                         accepted_count = accepted_count.checked_add(1).ok_or_else(|| {
                             DbError::InvalidData("Discovery accepted count overflow".into())
                         })?;
@@ -3620,10 +3623,12 @@ async fn salvage_observation_batch_tx(
 
     let mut accepted_count = 0_u16;
     let mut existing_count = 0_u16;
+    prepare_observation_batch_tx(tx, community_id).await?;
     for observation in observations {
         let fingerprint = observation_fingerprint(observation)?;
         if insert_business_observation_tx(tx, community_id, run_id, observation, &fingerprint)
             .await?
+            .new_lead
         {
             accepted_count = accepted_count
                 .checked_add(1)
@@ -3713,7 +3718,7 @@ async fn insert_business_observation_tx(
     run_id: Uuid,
     observation: &DiscoveryBusinessObservationInput,
     fingerprint: &[u8; 32],
-) -> Result<bool> {
+) -> Result<ObservationInsertOutcome> {
     let rating_hundredths = observation
         .rating_hundredths
         .map(i16::try_from)
@@ -3734,13 +3739,6 @@ async fn insert_business_observation_tx(
         observation.state.as_deref(),
         observation.country.as_deref(),
     );
-    // Serialize identity selection within a workspace so two providers cannot
-    // concurrently create separate canonical Leads for the same business.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(community_id.as_uuid())
-        .execute(&mut **tx)
-        .await?;
-    backfill_legacy_observation_digests_tx(tx, community_id).await?;
     let exact_identity: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM discovery_business_observations \
          WHERE community_id=$1 AND provider=$2 AND provider_record_id=$3",
@@ -3751,8 +3749,12 @@ async fn insert_business_observation_tx(
     .fetch_optional(&mut **tx)
     .await?;
     if let Some(lead_id) = exact_identity {
-        associate_campaign_lead_tx(tx, community_id, run_id, lead_id).await?;
-        return Ok(false);
+        let new_campaign_lead =
+            associate_campaign_lead_tx(tx, community_id, run_id, lead_id).await?;
+        return Ok(ObservationInsertOutcome {
+            new_lead: false,
+            new_campaign_lead,
+        });
     }
     let cross_provider_duplicate: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM discovery_business_observations \
@@ -3781,8 +3783,12 @@ async fn insert_business_observation_tx(
     .fetch_optional(&mut **tx)
     .await?;
     if let Some(lead_id) = cross_provider_duplicate {
-        associate_campaign_lead_tx(tx, community_id, run_id, lead_id).await?;
-        return Ok(false);
+        let new_campaign_lead =
+            associate_campaign_lead_tx(tx, community_id, run_id, lead_id).await?;
+        return Ok(ObservationInsertOutcome {
+            new_lead: false,
+            new_campaign_lead,
+        });
     }
     let inserted = sqlx::query(
         "INSERT INTO discovery_business_observations (\
@@ -3844,8 +3850,12 @@ async fn insert_business_observation_tx(
     .rows_affected()
         == 1;
     if inserted {
-        associate_campaign_lead_tx(tx, community_id, run_id, observation.observation_id).await?;
-        return Ok(true);
+        return Ok(ObservationInsertOutcome {
+            new_lead: true,
+            // The rolling-upgrade association trigger inserts this junction
+            // in the same statement as the new observation.
+            new_campaign_lead: true,
+        });
     }
 
     let row = sqlx::query(
@@ -3857,8 +3867,14 @@ async fn insert_business_observation_tx(
     .bind(&observation.provider_record_id)
     .fetch_optional(&mut **tx)
     .await?;
-    if row.is_some() {
-        return Ok(false);
+    if let Some(row) = row {
+        let lead_id: Uuid = row.try_get("id")?;
+        let new_campaign_lead =
+            associate_campaign_lead_tx(tx, community_id, run_id, lead_id).await?;
+        return Ok(ObservationInsertOutcome {
+            new_lead: false,
+            new_campaign_lead,
+        });
     }
 
     let conflicting_identity: bool = sqlx::query_scalar(
@@ -3876,7 +3892,10 @@ async fn insert_business_observation_tx(
     }
     // A different provider identity matched a stronger workspace dedupe key.
     // The first retained row remains the canonical Lead and provenance source.
-    Ok(false)
+    Ok(ObservationInsertOutcome {
+        new_lead: false,
+        new_campaign_lead: false,
+    })
 }
 
 async fn associate_campaign_lead_tx(
@@ -3884,8 +3903,8 @@ async fn associate_campaign_lead_tx(
     community_id: CommunityId,
     run_id: Uuid,
     lead_id: Uuid,
-) -> Result<()> {
-    sqlx::query(
+) -> Result<bool> {
+    let inserted = sqlx::query(
         "INSERT INTO discovery_campaign_leads \
          (community_id,campaign_id,lead_id,discovered_run_id) \
          SELECT r.community_id,r.campaign_id,$3,r.id FROM discovery_runs r \
@@ -3895,8 +3914,23 @@ async fn associate_campaign_lead_tx(
     .bind(run_id)
     .bind(lead_id)
     .execute(&mut **tx)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected()
+        == 1;
+    Ok(inserted)
+}
+
+async fn prepare_observation_batch_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+) -> Result<()> {
+    // Serialize identity selection once per batch so concurrent providers
+    // cannot create separate canonical Leads for the same business.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(community_id.as_uuid())
+        .execute(&mut **tx)
+        .await?;
+    backfill_legacy_observation_digests_tx(tx, community_id).await
 }
 
 async fn backfill_legacy_observation_digests_tx(
@@ -4710,6 +4744,25 @@ mod tests {
         .await
         .expect("insert paid reaper run");
         sqlx::query(
+            "INSERT INTO credit_ledger \
+             (pubkey,delta,kind,ref,service,quantity,unit_price_nanousd,\
+              discovery_community_id,discovery_campaign_id,discovery_run_id) \
+             VALUES ($1,-50000000,'hold',$2,'discovery',1,50000000,$3,$4,$5)",
+        )
+        .bind(payer.as_slice())
+        .bind(format!("discovery-hold:{}:{run_id}", community.as_uuid()))
+        .bind(community.as_uuid())
+        .bind(campaign_id)
+        .bind(run_id)
+        .execute(&db.pool)
+        .await
+        .expect("insert paid reaper hold");
+        sqlx::query("UPDATE accounts SET balance=balance-50000000 WHERE pubkey=$1")
+            .bind(payer.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("escrow paid reaper Credits");
+        sqlx::query(
             "INSERT INTO discovery_run_source_plans \
              (community_id,run_id,source_mode,source_keys) \
              VALUES ($1,$2,'waterfall',ARRAY['google_maps']::TEXT[]) ",
@@ -5184,6 +5237,21 @@ mod tests {
             )
             .await
             .expect("refuse competing provider spend"));
+        sqlx::query(
+            "UPDATE discovery_gateway_attempts SET updated_at=now()-INTERVAL '31 seconds' \
+             WHERE community_id=$1 AND run_id=$2 AND provider='outscraper'",
+        )
+        .bind(community.as_uuid())
+        .bind(run.id)
+        .execute(&db.pool)
+        .await
+        .expect("age first hosted provider fence");
+        assert!(matches!(
+            db.discovery_gateway_stored_response(community, run.id, DiscoveryProvider::Outscraper,)
+                .await
+                .expect("load aged provider fence"),
+            Some(DiscoveryGatewayStoredResponse::OutcomeUnknown)
+        ));
         assert!(db
             .record_discovery_gateway_response(
                 community,
@@ -5240,7 +5308,7 @@ mod tests {
                     provider: DiscoveryProvider::Outscraper,
                     status: DiscoveryRunSourceStatus::OutcomeUnknown,
                     request_cursor: None,
-                    request_count: 1,
+                    request_count: 3,
                     returned_count: 0,
                     failure_class: Some(DiscoveryRunSourceFailureClass::OutcomeUnknown),
                 }),
@@ -5390,9 +5458,129 @@ mod tests {
         .fetch_one(&db.pool)
         .await
         .expect("load settled Campaign budget");
-        assert_eq!(ledger_count, 1);
+        assert_eq!(ledger_count, 3);
         assert_eq!(balance, 850_000_000);
         assert_eq!(campaign_amounts, (150_000_000, 0));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn hosted_run_capacity_does_not_subtract_prior_campaign_leads_twice() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let relay = Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
+        sqlx::query("INSERT INTO relay_members (community_id,pubkey,role) VALUES ($1,$2,'member')")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert paid Discovery member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor_bytes.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert paid Discovery human");
+        sqlx::query("INSERT INTO accounts (pubkey,balance) VALUES ($1,1000000000)")
+            .bind(actor_bytes.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("seed paid Discovery Credits");
+        let (campaign_id, run_id) = insert_paid_run_fixture(&db, community, &actor_bytes).await;
+        let search = business_search();
+        sqlx::query(
+            "INSERT INTO discovery_run_business_searches \
+             (community_id,run_id,query,location,result_limit,language,region) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(community.as_uuid())
+        .bind(run_id)
+        .bind(&search.query)
+        .bind(&search.location)
+        .bind(i16::try_from(search.limit).expect("test target fits SMALLINT"))
+        .bind(&search.language)
+        .bind(search.region.as_deref())
+        .execute(&db.pool)
+        .await
+        .expect("insert paid run search snapshot");
+        let prior_run_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,state,\
+              completed_steps,total_steps,discovery_protocol_version) \
+             VALUES ($1,$2,$3,$4,$5,'succeeded',1,1,2)",
+        )
+        .bind(community.as_uuid())
+        .bind(prior_run_id)
+        .bind(campaign_id)
+        .bind(actor_bytes.as_slice())
+        .bind(Uuid::new_v4())
+        .execute(&db.pool)
+        .await
+        .expect("insert prior partial run");
+        let mut tx = db.pool.begin().await.expect("begin prior Lead insert");
+        for index in 0..2 {
+            let mut observation = business_observation_for(
+                DiscoveryProvider::Outscraper,
+                &format!("prior-campaign-lead-{index}"),
+                &format!("Prior Campaign Lead {index}"),
+                &format!("https://prior-campaign-lead-{index}.test"),
+            );
+            observation.phone = Some(format!("+27 11 555 02{index:02}"));
+            let fingerprint = observation_fingerprint(&observation).expect("Lead fingerprint");
+            let outcome = insert_business_observation_tx(
+                &mut tx,
+                community,
+                prior_run_id,
+                &observation,
+                &fingerprint,
+            )
+            .await
+            .expect("insert prior Campaign Lead");
+            assert!(outcome.new_campaign_lead);
+        }
+        tx.commit().await.expect("commit prior Campaign Leads");
+
+        let worker_id = Uuid::new_v4();
+        let claim = applied_worker_outcome(
+            apply_worker_action(
+                &db,
+                community,
+                &actor,
+                &relay,
+                DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                    request_id: Uuid::new_v4(),
+                    idempotency_key: Uuid::new_v4(),
+                    worker_id,
+                    protocol_version: DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+                    available_providers: Vec::new(),
+                }),
+                Duration::seconds(30),
+            )
+            .await
+            .expect("claim remaining-capacity run"),
+        );
+        let DiscoveryWorkerReceiptOutcome::Lease(lease) = claim else {
+            panic!("remaining-capacity run must lease");
+        };
+        assert_eq!(lease.run.run_id, run_id);
+        let context = db
+            .discovery_gateway_run_context(
+                community,
+                &actor_bytes,
+                run_id,
+                lease.lease_id,
+                DiscoveryProvider::Outscraper,
+            )
+            .await
+            .expect("derive remaining provider capacity");
+        assert_eq!(context.remaining_target, 1);
+        assert_eq!(context.business_search.limit, 1);
     }
 
     #[tokio::test]

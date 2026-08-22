@@ -23,6 +23,8 @@ use crate::{
     relay::build_nip98_auth_header_for_keys,
 };
 
+mod account;
+
 /// Gateway token lifetime requested by the desktop. Short-lived leases bound
 /// the credential exposure window when a process exits before graceful drain.
 pub const GATEWAY_TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
@@ -90,43 +92,16 @@ pub enum GatewayAccountStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayAccount {
     pub balance_nanousd: String,
+    #[serde(default)]
     pub total_balance_nanousd: String,
+    #[serde(default)]
     pub discovery_reserved_nanousd: String,
+    #[serde(default)]
     pub gateway_reserved_nanousd: String,
+    #[serde(default)]
     pub available_balance_nanousd: String,
     pub currency: String,
     pub status: GatewayAccountStatus,
-}
-
-impl GatewayAccount {
-    pub fn balance_nanousd_i128(&self) -> Result<i128, String> {
-        if self.currency != "USD" {
-            return Err("gateway account returned an unsupported currency".to_string());
-        }
-        let balance = parse_balance_nanousd(&self.balance_nanousd)?;
-        let total = parse_balance_nanousd(&self.total_balance_nanousd)?;
-        let reserved = parse_balance_nanousd(&self.discovery_reserved_nanousd)?;
-        let gateway_reserved = parse_balance_nanousd(&self.gateway_reserved_nanousd)?;
-        let available = parse_balance_nanousd(&self.available_balance_nanousd)?;
-        let expected = total
-            .saturating_sub(reserved)
-            .saturating_sub(gateway_reserved);
-        if reserved < 0 || gateway_reserved < 0
-            || available != expected
-            || balance != available
-        {
-            return Err("gateway account balance breakdown is inconsistent".to_string());
-        }
-        let computed = if balance > 0 {
-            GatewayAccountStatus::Active
-        } else {
-            GatewayAccountStatus::Depleted
-        };
-        if self.status != computed {
-            return Err("gateway account status does not match its balance".to_string());
-        }
-        Ok(balance)
-    }
 }
 
 pub fn parse_balance_nanousd(value: &str) -> Result<i128, String> {

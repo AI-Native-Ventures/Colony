@@ -258,6 +258,7 @@ export type UseDiscoveryRunResult = DiscoveryRunState & {
   busy: boolean;
   error: string | null;
   canStart: boolean;
+  startBlockedReason: string | null;
   start: () => void;
   retry: () => void;
   cancel: () => void;
@@ -283,9 +284,25 @@ export function useDiscoveryRun(
   const [error, setError] = React.useState<string | null>(null);
   const generation = React.useRef(0);
   const budgetReady = campaign.budget?.state === "active";
-  const campaignAlreadyRan = Boolean(
-    campaign.run && isTerminalDiscoveryRun(campaign.run),
-  );
+  const startBlockedReason = (() => {
+    if (!canStartDiscovery({ state: entitlement?.state ?? "loading" })) {
+      return entitlement?.state === "error"
+        ? "Discovery access could not be confirmed. Try again."
+        : "Discovery access is required before this Campaign can run.";
+    }
+    switch (campaign.budget?.state) {
+      case "active":
+        return null;
+      case "paused":
+        return "Resume this Campaign budget in Settings before starting Discovery.";
+      case "revoked":
+        return "This Campaign budget was permanently revoked. Create a new Campaign to search again.";
+      case "exhausted":
+        return "This Campaign has used its approved Credits. Create a new Campaign for another paid search.";
+      default:
+        return "Approve this Campaign budget in Settings before starting Discovery.";
+    }
+  })();
 
   React.useEffect(() => {
     generation.current += 1;
@@ -333,12 +350,6 @@ export function useDiscoveryRun(
         );
         return;
       }
-      if (campaignAlreadyRan) {
-        setError(
-          "This Campaign search has already run. Create a new Campaign to run another paid search.",
-        );
-        return;
-      }
       generation.current += 1;
       const token = generation.current;
       // Every explicit start/retry is a fresh local session. Reusing a
@@ -356,7 +367,6 @@ export function useDiscoveryRun(
     [
       budgetReady,
       campaign,
-      campaignAlreadyRan,
       campaignId,
       consume,
       dataSource,
@@ -388,8 +398,8 @@ export function useDiscoveryRun(
     error,
     canStart:
       canStartDiscovery({ state: entitlement?.state ?? "loading" }) &&
-      budgetReady &&
-      !campaignAlreadyRan,
+      budgetReady,
+    startBlockedReason,
     start: () => startStream("start"),
     retry: () => startStream("retry"),
     cancel,

@@ -28,9 +28,49 @@ const DEFAULT_BRAVE_URL: &str = "https://api.search.brave.com/res/v1/web/search"
 const DEFAULT_EXA_URL: &str = "https://api.exa.ai/search";
 const OUTSCRAPER_FIELDS: &str = "name,place_id,google_id,cid,phone,site,website,full_address,address,city,state,postal_code,country,country_code,latitude,longitude,rating,reviews,type,category,subtypes,business_status,verified,location_link,photo,logo";
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CONCURRENT_PROVIDER_SUBMITS: usize = 64;
 const MAX_CONCURRENT_PROVIDER_POLLS: usize = 64;
+const EXCLUDED_BUSINESS_HOSTS: &[&str] = &[
+    "bing.com",
+    "bloomberg.com",
+    "brabys.com",
+    "crunchbase.com",
+    "facebook.com",
+    "foursquare.com",
+    "glassdoor.com",
+    "google.com",
+    "indeed.com",
+    "instagram.com",
+    "linkedin.com",
+    "opentable.com",
+    "pinterest.com",
+    "restaurantguru.com",
+    "snupit.co.za",
+    "tiktok.com",
+    "tripadvisor.com",
+    "trustpilot.com",
+    "twitter.com",
+    "wikipedia.org",
+    "x.com",
+    "yelp.com",
+    "yellowpages.co.za",
+    "youtube.com",
+    "zoominfo.com",
+];
+const GENERIC_TITLE_SEGMENTS: &[&str] = &[
+    "about",
+    "about us",
+    "contact",
+    "contact us",
+    "home",
+    "homepage",
+    "our services",
+    "services",
+    "welcome",
+];
 
 type PollKey = (Uuid, [u8; 32], Uuid, u8);
+type SubmitKey = (Uuid, [u8; 32]);
 
 /// Server-only provider configuration.
 #[derive(Clone)]
@@ -78,7 +118,9 @@ pub fn config_from_env() -> anyhow::Result<Option<DiscoveryGatewayConfig>> {
         configured_secret("EXA_SEARCH_API_KEY"),
     )?
     else {
-        return Ok(None);
+        anyhow::bail!(
+            "hosted Discovery is enabled but OUTSCRAPER_API_KEY, BRAVE_SEARCH_API_KEY, and EXA_SEARCH_API_KEY are missing"
+        );
     };
     let search_url = std::env::var("BUZZ_DISCOVERY_OUTSCRAPER_SEARCH_URL")
         .unwrap_or_else(|_| DEFAULT_SEARCH_URL.to_owned());
@@ -165,6 +207,8 @@ fn complete_provider_keys(
 pub struct DiscoveryGatewayState {
     config: DiscoveryGatewayConfig,
     client: reqwest::Client,
+    submit_in_flight: DashSet<SubmitKey>,
+    submit_limit: Semaphore,
     poll_in_flight: DashSet<PollKey>,
     poll_limit: Semaphore,
 }
@@ -190,9 +234,22 @@ impl DiscoveryGatewayState {
         Ok(Self {
             config,
             client,
+            submit_in_flight: DashSet::new(),
+            submit_limit: Semaphore::new(MAX_CONCURRENT_PROVIDER_SUBMITS),
             poll_in_flight: DashSet::new(),
             poll_limit: Semaphore::new(MAX_CONCURRENT_PROVIDER_POLLS),
         })
+    }
+}
+
+struct SubmitFlight<'a> {
+    in_flight: &'a DashSet<SubmitKey>,
+    key: SubmitKey,
+}
+
+impl Drop for SubmitFlight<'_> {
+    fn drop(&mut self) {
+        self.in_flight.remove(&self.key);
     }
 }
 
@@ -321,16 +378,51 @@ async fn submit(
         )
         .await
         .map_err(map_db_error)?;
-    if context.request_cursor.is_some() {
-        let stored = state
-            .app
-            .db
-            .discovery_gateway_stored_response(tenant.community(), request.run_id, request.provider)
-            .await
-            .map_err(map_db_error)?
-            .ok_or_else(|| safe_error(StatusCode::CONFLICT, "provider_outcome_unknown"))?;
-        return ProviderResponse::from_stored(stored).map(Json);
+    let prior_fence = context.request_cursor.as_deref();
+    let stored = if prior_fence.is_some() {
+        Some(
+            state
+                .app
+                .db
+                .discovery_gateway_stored_response(
+                    tenant.community(),
+                    request.run_id,
+                    request.provider,
+                )
+                .await
+                .map_err(map_db_error)?
+                .ok_or_else(|| safe_error(StatusCode::CONFLICT, "provider_outcome_unknown"))?,
+        )
+    } else {
+        None
+    };
+    if let Some(stored) = stored {
+        return match stored {
+            stored @ (DiscoveryGatewayStoredResponse::Ready { .. }
+            | DiscoveryGatewayStoredResponse::Pending { .. }) => {
+                ProviderResponse::from_stored(stored).map(Json)
+            }
+            DiscoveryGatewayStoredResponse::OutcomeUnknown => {
+                Err(safe_error(StatusCode::CONFLICT, "provider_outcome_unknown"))
+            }
+        };
     }
+    let submit_key = (*tenant.community().as_uuid(), actor.to_bytes());
+    if !state.provider.submit_in_flight.insert(submit_key) {
+        return Err(safe_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "submit_in_flight",
+        ));
+    }
+    let _flight = SubmitFlight {
+        in_flight: &state.provider.submit_in_flight,
+        key: submit_key,
+    };
+    let _permit = state
+        .provider
+        .submit_limit
+        .try_acquire()
+        .map_err(|_| safe_error(StatusCode::TOO_MANY_REQUESTS, "submit_capacity"))?;
     let fence = format!("colony_pending_{}", Uuid::new_v4().simple());
     let fenced = state
         .app
@@ -747,6 +839,7 @@ async fn authenticate(
         true,
     )?;
     crate::api::bridge::check_nip98_replay(state, &tenant, event_id).await?;
+    crate::api::bridge::enforce_http_admission(state, &tenant, &actor).await?;
     Ok((tenant, actor))
 }
 
@@ -1044,7 +1137,7 @@ fn normalize_web_candidate(
     let website = canonical_business_url(candidate.url?)?;
     let provider_record_id = format!("url:{}", hex::encode(Sha256::digest(website.as_bytes())));
     let name = text(candidate.profile_name, 256)
-        .or_else(|| title_name(candidate.title))
+        .or_else(|| title_name(candidate.title.as_deref(), &search.query))
         .or_else(|| domain_name(&website))?;
     let observation = DiscoveryBusinessObservationInput {
         observation_id: deterministic_business_observation_id(provider, &provider_record_id),
@@ -1070,7 +1163,10 @@ fn normalize_web_candidate(
         business_status: None,
         verified: None,
         source_url: Some(website),
-        image_url: web_url(candidate.image_url),
+        image_url: candidate
+            .image_url
+            .as_deref()
+            .and_then(canonical_public_url),
         description: text(candidate.description, 2_048),
     };
     observation.validate().ok()?;
@@ -1078,6 +1174,15 @@ fn normalize_web_candidate(
 }
 
 fn canonical_business_url(value: String) -> Option<String> {
+    let canonical = canonical_public_url(&value)?;
+    let host = reqwest::Url::parse(&canonical)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    (!host_is_excluded(&host)).then_some(canonical)
+}
+
+fn canonical_public_url(value: &str) -> Option<String> {
     let mut url = reqwest::Url::parse(value.trim()).ok()?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
@@ -1087,23 +1192,15 @@ fn canonical_business_url(value: String) -> Option<String> {
     }
     let host = url.host_str()?.to_ascii_lowercase();
     let host = host.strip_prefix("www.").unwrap_or(&host).to_owned();
-    if [
-        "facebook.com",
-        "google.com",
-        "instagram.com",
-        "linkedin.com",
-        "tripadvisor.com",
-        "wikipedia.org",
-        "x.com",
-        "yelp.com",
-        "youtube.com",
-    ]
-    .iter()
-    .any(|excluded| host == *excluded || host.ends_with(&format!(".{excluded}")))
-    {
+    if host.is_empty() {
         return None;
     }
     url.set_host(Some(&host)).ok()?;
+    if (url.scheme() == "https" && url.port() == Some(443))
+        || (url.scheme() == "http" && url.port() == Some(80))
+    {
+        url.set_port(None).ok()?;
+    }
     url.set_fragment(None);
     let mut query = url
         .query_pairs()
@@ -1118,17 +1215,39 @@ fn canonical_business_url(value: String) -> Option<String> {
     if !query.is_empty() {
         url.query_pairs_mut().extend_pairs(query);
     }
-    let value = url.to_string();
-    (value.len() <= 2_048).then_some(value)
+    if url.path() != "/" && url.path().ends_with('/') {
+        let path = url.path().trim_end_matches('/').to_owned();
+        url.set_path(&path);
+    }
+    let mut canonical = url.to_string();
+    if url.path() == "/" && url.query().is_none() {
+        canonical.pop();
+    }
+    (canonical.len() <= 2_048).then_some(canonical)
 }
 
-fn title_name(value: Option<String>) -> Option<String> {
-    let value = value?;
-    let name = value
-        .split(['|', '\u{2013}', '-'])
-        .map(str::trim)
-        .find(|part| !part.is_empty())?;
-    text(Some(name.to_owned()), 256)
+fn host_is_excluded(host: &str) -> bool {
+    EXCLUDED_BUSINESS_HOSTS
+        .iter()
+        .any(|excluded| host == *excluded || host.ends_with(&format!(".{excluded}")))
+}
+
+fn title_name(title: Option<&str>, query: &str) -> Option<String> {
+    let candidates = title?
+        .split(['|', '\u{2013}', '\u{2014}'])
+        .flat_map(|segment| segment.split(" - "))
+        .filter_map(|segment| text(Some(segment.to_owned()), 256))
+        .filter(|segment| {
+            !GENERIC_TITLE_SEGMENTS
+                .iter()
+                .any(|generic| segment.eq_ignore_ascii_case(generic))
+        })
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .find(|candidate| !candidate.eq_ignore_ascii_case(query))
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
 }
 
 fn domain_name(value: &str) -> Option<String> {
@@ -1238,6 +1357,41 @@ mod tests {
         assert!(!encoded.contains("secret-shape"));
     }
 
+    #[test]
+    fn hosted_web_normalization_matches_the_desktop_contract() {
+        let candidates = vec![
+            WebCandidate {
+                title: Some("Home - Acme Dental | Dentist".into()),
+                url: Some(
+                    "HTTPS://WWW.Acme.Example:443/about/?utm_source=test&b=2&a=1#team".into(),
+                ),
+                description: Some("Public snippet".into()),
+                image_url: Some("https://cdn.example/logo.png#fragment".into()),
+                profile_name: None,
+            },
+            WebCandidate {
+                title: Some("Directory listing".into()),
+                url: Some("https://company.zoominfo.com/acme".into()),
+                description: None,
+                image_url: None,
+                profile_name: None,
+            },
+        ];
+        let normalized =
+            normalize_web_candidates(DiscoveryProvider::BraveSearch, candidates, &search());
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].name, "Acme Dental");
+        assert_eq!(
+            normalized[0].website.as_deref(),
+            Some("https://acme.example/about?a=1&b=2")
+        );
+        assert_eq!(
+            normalized[0].image_url.as_deref(),
+            Some("https://cdn.example/logo.png")
+        );
+    }
+
     #[tokio::test]
     async fn brave_and_exa_use_server_keys_and_return_light_observations() {
         async fn brave(
@@ -1332,7 +1486,7 @@ mod tests {
         assert_eq!(brave[0].name, "Cape Dental");
         assert_eq!(
             brave[0].website.as_deref(),
-            Some("https://cape-dental.example/")
+            Some("https://cape-dental.example")
         );
         assert_eq!(exa.len(), 1);
         assert_eq!(exa[0].provider, DiscoveryProvider::ExaSearch);

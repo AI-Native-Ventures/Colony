@@ -29,7 +29,6 @@ export type CreateCampaignSheetProps = {
   onOpenChange: (open: boolean) => void;
   dataSource: DiscoveryDataSource;
   entitlement: DiscoveryEntitlement | null;
-  onRetryEntitlement: () => void;
   industryName: string;
   vertical: Vertical;
   onCreated: (campaign: CampaignDetail) => void;
@@ -77,6 +76,24 @@ export function CreateCampaignSheet({
     "idle" | "loading" | "ready" | "error"
   >("idle");
   const liveBusinessPhase = entitlement?.experience === "live";
+  const loadBalance = React.useCallback(() => {
+    let active = true;
+    setBalanceStatus("loading");
+    setAvailableBalanceNanousd(null);
+    void getColonyCreditsAccount()
+      .then((account) => {
+        if (active) {
+          setAvailableBalanceNanousd(account.available_balance_nanousd);
+          setBalanceStatus("ready");
+        }
+      })
+      .catch(() => {
+        if (active) setBalanceStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -96,31 +113,14 @@ export function CreateCampaignSheet({
       setBalanceStatus("idle");
       return;
     }
-    let active = true;
-    setBalanceStatus("loading");
-    void getColonyCreditsAccount()
-      .then((account) => {
-        if (active) {
-          setAvailableBalanceNanousd(account.available_balance_nanousd);
-          setBalanceStatus("ready");
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setAvailableBalanceNanousd(null);
-          setBalanceStatus("error");
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [liveBusinessPhase, open]);
+    return loadBalance();
+  }, [liveBusinessPhase, loadBalance, open]);
 
   const targetNumber = Math.max(0, Number.parseInt(target, 10) || 0);
-  const approvedBudget =
-    targetNumber >= 1 && targetNumber <= 500
-      ? formatDiscoveryNanousd(approvedCampaignBudgetNanousd(targetNumber))
-      : "$0.00";
+  const targetValid = targetNumber >= 1 && targetNumber <= 500;
+  const approvedBudget = targetValid
+    ? formatDiscoveryNanousd(approvedCampaignBudgetNanousd(targetNumber))
+    : null;
   const availableBalance = availableBalanceNanousd
     ? formatNanousdAsUsd(availableBalanceNanousd)
     : null;
@@ -278,6 +278,10 @@ export function CreateCampaignSheet({
                   id="discovery-campaign-target"
                   min="1"
                   max="500"
+                  aria-describedby={
+                    targetValid ? undefined : "discovery-target-error"
+                  }
+                  aria-invalid={!targetValid}
                   onChange={(event) => setTarget(event.target.value)}
                   type="number"
                   value={target}
@@ -286,6 +290,15 @@ export function CreateCampaignSheet({
                   per location
                 </span>
               </div>
+              {!targetValid ? (
+                <p
+                  className="mt-2 text-sm text-destructive"
+                  id="discovery-target-error"
+                  role="alert"
+                >
+                  Choose 1 to 500 leads.
+                </p>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
@@ -300,24 +313,26 @@ export function CreateCampaignSheet({
                     </p>
                     <span className="text-sm font-semibold text-primary">
                       {liveBusinessPhase
-                        ? `Up to ${approvedBudget}`
+                        ? approvedBudget
+                          ? `Up to ${approvedBudget}`
+                          : "Choose 1 to 500 leads"
                         : "No Credits"}
                     </span>
                   </div>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  <p className="mt-1 text-sm leading-5 text-muted-foreground">
                     {liveBusinessPhase
                       ? "Colony charges 5¢ only for each newly retained, deduplicated lead. Failed requests and duplicate leads are not charged. Colony chooses and funds the data source."
                       : "This demo uses sample data and never approves or spends Colony Credits."}
                   </p>
-                  {liveBusinessPhase ? (
-                    <p className="mt-2 text-xs font-medium text-foreground">
+                  {liveBusinessPhase && approvedBudget ? (
+                    <p className="mt-2 text-sm font-medium text-foreground">
                       Creating this Campaign approves exactly {approvedBudget}{" "}
                       in Colony Credits.
                     </p>
                   ) : null}
                   {availableBalance ? (
                     <p
-                      className={`mt-1 text-xs ${
+                      className={`mt-1 text-sm ${
                         balanceBelowApproval
                           ? "font-medium text-amber-700 dark:text-amber-300"
                           : "text-muted-foreground"
@@ -329,14 +344,29 @@ export function CreateCampaignSheet({
                         : ". Active Campaign reservations reduce the amount available to spend."}
                     </p>
                   ) : null}
-                  {balanceStatus === "error" ? (
+                  {balanceStatus === "loading" ? (
                     <p
-                      className="mt-1 text-xs font-medium text-destructive"
-                      role="alert"
+                      className="mt-2 text-sm text-muted-foreground"
+                      role="status"
                     >
-                      Colony Credits could not be confirmed. Try again before
-                      approving this Campaign.
+                      <Loader2 className="mr-1 inline h-4 w-4 animate-spin" />
+                      Checking Colony Credits...
                     </p>
+                  ) : null}
+                  {balanceStatus === "error" ? (
+                    <div className="mt-2 flex items-center gap-2" role="alert">
+                      <p className="text-sm font-medium text-destructive">
+                        Colony Credits could not be confirmed.
+                      </p>
+                      <Button
+                        onClick={() => loadBalance()}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        Retry
+                      </Button>
+                    </div>
                   ) : null}
                 </div>
               </div>
@@ -445,6 +475,7 @@ export function CreateCampaignSheet({
             <Button
               disabled={
                 submitting ||
+                !targetValid ||
                 (liveBusinessPhase &&
                   (balanceStatus !== "ready" || balanceBelowApproval))
               }
@@ -454,7 +485,9 @@ export function CreateCampaignSheet({
                 <Loader2 aria-hidden="true" className="animate-spin" />
               ) : null}
               {liveBusinessPhase
-                ? `Create and approve ${approvedBudget}`
+                ? approvedBudget
+                  ? `Create and approve ${approvedBudget}`
+                  : "Choose 1 to 500 leads"
                 : "Create Campaign"}
             </Button>
           </SheetFooter>

@@ -20,10 +20,10 @@ function terminalCopy(status: UseDiscoveryRunResult["run"]["status"]) {
     return "The target was not fully reached, but the leads found so far are ready to review.";
   }
   if (status === "cancelled") {
-    return "This run was cancelled. Create a new Campaign before starting another paid search.";
+    return "This run was cancelled. You can retry with the remaining Campaign budget.";
   }
   if (status === "failed") {
-    return "The run stopped safely. Create a new Campaign before starting another paid search.";
+    return "The run stopped safely. You can retry with the remaining Campaign budget.";
   }
   if (status === "completed") {
     return "Discovery is complete. Review the Leads retained for this Campaign.";
@@ -35,11 +35,13 @@ function ActionButton({
   actionLabel,
   entitlement,
   enabled,
+  blockedReason,
   onRun,
 }: {
   actionLabel: string;
   entitlement: DiscoveryEntitlement | null;
   enabled: boolean;
+  blockedReason: string | null;
   onRun: () => void;
 }) {
   if (!canStartDiscovery({ state: entitlement?.state ?? "loading" })) {
@@ -61,6 +63,7 @@ function ActionButton({
           : actionLabel
       }
       className="h-12 rounded-full bg-foreground px-8 text-base font-semibold text-background shadow-lg shadow-primary/20 transition-transform hover:scale-[1.02] hover:bg-foreground/90 active:scale-[0.99]"
+      aria-describedby={blockedReason ? "discovery-start-blocked" : undefined}
       disabled={!enabled}
       onClick={onRun}
       size="lg"
@@ -113,6 +116,7 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
   const isRunning = runState.busy || status === "running";
   const isIdle = status === "idle" && runState.timeline.length === 0;
   const isCompleted = status === "completed" || status === "partial";
+  const canRetry = runState.terminal && !isRunning;
 
   return (
     <Card className="flex min-h-[37.5rem] flex-col overflow-hidden rounded-2xl border-border/60 bg-card p-0 shadow-sm">
@@ -184,8 +188,17 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
                     actionLabel="Start Discovery Engine"
                     entitlement={entitlement}
                     enabled={runState.canStart}
+                    blockedReason={runState.startBlockedReason}
                     onRun={runState.start}
                   />
+                  {runState.startBlockedReason ? (
+                    <p
+                      className="max-w-md text-sm text-muted-foreground"
+                      id="discovery-start-blocked"
+                    >
+                      {runState.startBlockedReason}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -215,6 +228,26 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
                   <StopCircle aria-hidden="true" />
                   Cancel run
                 </Button>
+              ) : null}
+
+              {canRetry ? (
+                <div className="mt-5 flex flex-col items-start gap-2">
+                  <ActionButton
+                    actionLabel="Retry Discovery"
+                    blockedReason={runState.startBlockedReason}
+                    enabled={runState.canStart}
+                    entitlement={entitlement}
+                    onRun={runState.retry}
+                  />
+                  {runState.startBlockedReason ? (
+                    <p
+                      className="max-w-md text-sm text-muted-foreground"
+                      id="discovery-start-blocked"
+                    >
+                      {runState.startBlockedReason}
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
             </div>
 

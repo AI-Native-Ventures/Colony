@@ -799,7 +799,8 @@ INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('gateway_tokens',         'provisioned-mode tokens are identity-global, not community-scoped'),
     ('model_catalog',          'model allowlist is deployment-global'),
     ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable attribution/reconciliation'),
-    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement');
+    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement'),
+    ('discovery_budget_approval_claims', 'global single-use claims for human spending approvals');
 
 -- Colony Credits gateway tables. Keep the schema snapshot aligned with the
 -- migration path so a fresh isolated harness has the same money/admission
@@ -946,8 +947,49 @@ CREATE TABLE gateway_settlement_intents (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at TIMESTAMPTZ,
-    UNIQUE (pubkey, reference)
+    UNIQUE (pubkey, reference),
+    CHECK (
+        (state IN ('admitted','provider_completed','reconciliation')
+         AND reserved_nanousd > 0)
+        OR (state IN ('debited','resolved') AND reserved_nanousd = 0)
+    )
 );
+
+CREATE FUNCTION gateway_settlement_intent_reservation_compat() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.state IN ('admitted','provider_completed','reconciliation') THEN
+        IF NEW.reserved_nanousd = 0 THEN
+            NEW.reserved_nanousd := GREATEST(
+                COALESCE(
+                    (SELECT typical_call_cost_nanousd FROM accounts WHERE pubkey=NEW.pubkey),
+                    50000000
+                ),
+                1
+            );
+        END IF;
+    ELSIF NEW.state IN ('debited','resolved') THEN
+        NEW.reserved_nanousd := 0;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_reservation_compat
+BEFORE INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW EXECUTE FUNCTION gateway_settlement_intent_reservation_compat();
+
+CREATE FUNCTION gateway_settlement_intent_account_lock() RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM 1 FROM accounts WHERE pubkey=NEW.pubkey FOR UPDATE;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_account_lock
+AFTER INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW
+WHEN (NEW.state IN ('admitted','provider_completed','reconciliation'))
+EXECUTE FUNCTION gateway_settlement_intent_account_lock();
 CREATE INDEX gateway_settlement_intents_pending_idx
     ON gateway_settlement_intents (updated_at)
     WHERE state <> 'resolved';
@@ -1390,6 +1432,14 @@ CREATE UNIQUE INDEX discovery_campaign_budget_approval_event_unique
     ON discovery_campaigns (community_id, budget_approval_event_id)
     WHERE budget_approval_event_id IS NOT NULL;
 
+CREATE TABLE discovery_budget_approval_claims (
+    approval_event_id BYTEA PRIMARY KEY CHECK (octet_length(approval_event_id) = 32),
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE discovery_workspace_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     idempotency_key UUID NOT NULL,
@@ -1794,8 +1844,7 @@ CREATE TABLE discovery_gateway_attempts (
     duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count BETWEEN 0 AND 500),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (community_id, campaign_id, provider),
-    UNIQUE (community_id, run_id, provider),
+    PRIMARY KEY (community_id, run_id, provider),
     FOREIGN KEY (community_id, campaign_id)
         REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
     FOREIGN KEY (community_id, run_id)
@@ -2045,21 +2094,6 @@ CREATE TRIGGER discovery_associate_observation_campaign
 AFTER INSERT ON discovery_business_observations
 FOR EACH ROW EXECUTE FUNCTION discovery_associate_observation_campaign();
 
-CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.existing_count > 0 THEN
-        RAISE EXCEPTION
-            'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
-            USING ERRCODE = 'check_violation';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER discovery_guard_legacy_duplicate_batch
-BEFORE INSERT ON discovery_observation_batches
-FOR EACH ROW EXECUTE FUNCTION discovery_guard_legacy_duplicate_batch();
-
 CREATE FUNCTION discovery_guard_legacy_observation_insert() RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.dedupe_digest_version = 0 OR NEW.provider <> 'outscraper' THEN
@@ -2279,6 +2313,21 @@ CREATE TABLE discovery_observation_batches (
         REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE,
     CHECK (accepted_count + existing_count BETWEEN 1 AND 25)
 );
+
+CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.existing_count > 0 AND pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION
+            'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER discovery_guard_legacy_duplicate_batch
+BEFORE INSERT ON discovery_observation_batches
+FOR EACH ROW EXECUTE FUNCTION discovery_guard_legacy_duplicate_batch();
 
 CREATE TABLE discovery_source_observation_batches (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,

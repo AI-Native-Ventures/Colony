@@ -521,6 +521,7 @@ mod tests {
             "gateway_reconciliation_outcomes",
             "gateway_settlement_intents",
             "operator_access_log",
+            "discovery_budget_approval_claims",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -734,7 +735,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 62);
+        assert_eq!(migrations.len(), 63);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1728,7 +1729,7 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(61));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(63));
     }
 
     /// Acceptance 3 (upgrade path): migration 0050 (credit ledger) applies
@@ -1797,13 +1798,13 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn migration_0062_preserves_legacy_discovery_and_enforces_paid_run_accounting() {
+    async fn migration_0063_preserves_legacy_discovery_and_enforces_paid_run_accounting() {
         let pool = connect_test_pool().await;
         reset_public_schema(&pool).await;
         MIGRATOR
-            .run_to(61, &pool)
+            .run_to(62, &pool)
             .await
-            .expect("apply migrations 1-61");
+            .expect("apply migrations 1-62");
 
         let community_id = uuid::Uuid::new_v4();
         let campaign_id = uuid::Uuid::new_v4();
@@ -1811,7 +1812,7 @@ mod tests {
         let payer = vec![31_u8; 32];
         sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
             .bind(community_id)
-            .bind(format!("pre-0062-{}.example", community_id.simple()))
+            .bind(format!("pre-0063-{}.example", community_id.simple()))
             .execute(&pool)
             .await
             .expect("insert community");
@@ -1853,11 +1854,88 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert legacy credit rows");
+        sqlx::query(
+            "INSERT INTO accounts (pubkey,balance) VALUES ($1,1000000000) \
+             ON CONFLICT (pubkey) DO UPDATE SET balance=EXCLUDED.balance",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("seed rolling gateway account");
+        sqlx::query(
+            "INSERT INTO gateway_settlement_intents (pubkey,reference,model) \
+             VALUES ($1,'pre-upgrade-gateway-call','deepseek-v4-flash'), \
+                    ($1,'pre-upgrade-debited-call','deepseek-v4-flash')",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("insert pre-upgrade gateway calls");
+        sqlx::query(
+            "UPDATE gateway_settlement_intents SET state='debited' \
+             WHERE pubkey=$1 AND reference='pre-upgrade-debited-call'",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("mark pre-upgrade gateway call debited");
 
         run_migrations(&pool)
             .await
-            .expect("0062 must apply additively on a populated schema");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(62));
+            .expect("0063 must apply additively on a populated schema");
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(63));
+        let migrated_reservation: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='pre-upgrade-gateway-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read migrated gateway reservation");
+        assert_eq!(migrated_reservation, 50_000_000);
+        let migrated_debited_reservation: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='pre-upgrade-debited-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read migrated debited gateway reservation");
+        assert_eq!(migrated_debited_reservation, 0);
+        sqlx::query(
+            "INSERT INTO gateway_settlement_intents (pubkey,reference,model) \
+             VALUES ($1,'rolling-old-gateway-call','deepseek-v4-flash')",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("released gateway writer remains valid during rolling deployment");
+        let rolling_reservation: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='rolling-old-gateway-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read released gateway writer reservation");
+        assert_eq!(rolling_reservation, 50_000_000);
+        sqlx::query(
+            "UPDATE gateway_settlement_intents SET state='debited',updated_at=now() \
+             WHERE pubkey=$1 AND reference='rolling-old-gateway-call'",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("released gateway writer settles during rolling deployment");
+        let rolling_released: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='rolling-old-gateway-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read released gateway writer settlement");
+        assert_eq!(rolling_released, 0);
 
         let legacy_campaign: (String, i64, i64, i64) = sqlx::query_as(
             "SELECT budget_state,budget_approved_nanousd,budget_spent_nanousd,\
@@ -1895,7 +1973,7 @@ mod tests {
         .bind(&payer)
         .execute(&pool)
         .await
-        .expect("released model ledger writer remains compatible after 0062");
+        .expect("released model ledger writer remains compatible after 0063");
         let rolling_service: Option<String> = sqlx::query_scalar(
             "SELECT service FROM credit_ledger WHERE pubkey=$1 AND ref='rolling-model-debit'",
         )
@@ -1918,7 +1996,7 @@ mod tests {
         .bind(vec![34_u8; 32])
         .execute(&pool)
         .await
-        .expect("released observation writer remains compatible after 0062");
+        .expect("released observation writer remains compatible after 0063");
         let association: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
             "SELECT campaign_id,discovered_run_id FROM discovery_campaign_leads \
              WHERE community_id=$1 AND lead_id=$2",

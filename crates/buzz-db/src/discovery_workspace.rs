@@ -627,6 +627,24 @@ async fn approve_campaign_budget_tx(
         ));
     }
 
+    let claimed = sqlx::query_scalar::<_, Vec<u8>>(
+        "INSERT INTO discovery_budget_approval_claims \
+         (approval_event_id,community_id,campaign_id,payer_pubkey) \
+         VALUES ($1,$2,$3,$4) ON CONFLICT (approval_event_id) DO NOTHING \
+         RETURNING approval_event_id",
+    )
+    .bind(approval_event_id.as_slice())
+    .bind(community_id.as_uuid())
+    .bind(approval.campaign_id)
+    .bind(payer.as_slice())
+    .fetch_optional(&mut **tx)
+    .await?;
+    if claimed.is_none() {
+        return Err(DbError::AccessDenied(
+            "Campaign budget approval evidence has already been used".into(),
+        ));
+    }
+
     let state: String = row.try_get("budget_state")?;
     if state == "revoked" {
         return Err(DbError::AccessDenied(
@@ -1438,7 +1456,30 @@ fn count_to_u32(value: i64, entity: &str) -> Result<u32> {
 #[cfg(test)]
 mod fingerprint_tests {
     use super::*;
-    use buzz_core::discovery_workspace::{DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload};
+    use crate::{Db, DbConfig};
+    use buzz_core::discovery::DiscoveryNanoUsd;
+    use buzz_core::discovery_workspace::{
+        DiscoveryCampaignInput, DiscoveryCampaignInputV2, DiscoveryWorkspaceActionPayload,
+    };
+    use nostr::PublicKey;
+
+    static APPROVAL_CLAIM_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn clean_approval_replay_community(db: &Db, community: CommunityId) {
+        for table in crate::deletion::PURGE_SCOPED_TABLES {
+            let sql = format!("DELETE FROM {table} WHERE community_id=$1");
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(community.as_uuid())
+                .execute(&db.pool)
+                .await
+                .unwrap_or_else(|error| panic!("clean {table} approval replay fixture: {error}"));
+        }
+        sqlx::query("DELETE FROM communities WHERE id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean approval replay community");
+    }
 
     #[test]
     fn default_source_campaign_keeps_the_released_workspace_fingerprint_shape() {
@@ -1474,5 +1515,153 @@ mod fingerprint_tests {
             workspace_request_fingerprint(&request).expect("fingerprint request"),
             <[u8; 32]>::from(Sha256::digest(encoded.as_bytes()))
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn approval_event_cannot_be_replayed_across_communities() {
+        let _guard = APPROVAL_CLAIM_TEST_LOCK.lock().await;
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_owned());
+        let db = Db::new(&DbConfig {
+            database_url,
+            max_connections: 2,
+            min_connections: 0,
+            ..DbConfig::default()
+        })
+        .await
+        .expect("connect approval replay database");
+        crate::migration::run_migrations(&db.pool)
+            .await
+            .expect("apply approval replay migrations");
+
+        let payer = [71_u8; 32];
+        sqlx::query("DELETE FROM discovery_budget_approval_claims WHERE payer_pubkey=$1")
+            .bind(payer.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("clean abandoned approval replay claims");
+        let abandoned: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM communities WHERE host LIKE 'approval-replay-%.test'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .expect("find abandoned approval replay communities");
+        for community in abandoned {
+            clean_approval_replay_community(&db, CommunityId::from_uuid(community)).await;
+        }
+        let payer_key = PublicKey::from_slice(&payer).expect("valid payer key");
+        let campaign_id = Uuid::new_v4();
+        let communities = [
+            CommunityId::from_uuid(Uuid::new_v4()),
+            CommunityId::from_uuid(Uuid::new_v4()),
+        ];
+        let campaign = DiscoveryCampaignInputV2 {
+            campaign_id,
+            name: "Approval replay dentists".into(),
+            industry_id: "healthcare".into(),
+            industry_name: "Healthcare".into(),
+            vertical_id: "dentists".into(),
+            vertical_name: "Dentists".into(),
+            query: "dentists".into(),
+            location: "Cape Town".into(),
+            target: 2,
+            description: None,
+            language: "en".into(),
+            region: Some("ZA".into()),
+        };
+        for community in communities {
+            sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(format!("approval-replay-{}.test", community.as_uuid()))
+                .execute(&db.pool)
+                .await
+                .expect("insert approval replay community");
+            sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(payer.as_slice())
+                .execute(&db.pool)
+                .await
+                .expect("insert approval replay payer");
+            sqlx::query(
+                "INSERT INTO discovery_campaigns \
+                 (community_id,id,created_by,name,industry_id,industry_name,vertical_id,\
+                  vertical_name,query,location,target,language,region) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            )
+            .bind(community.as_uuid())
+            .bind(campaign_id)
+            .bind(payer.as_slice())
+            .bind(&campaign.name)
+            .bind(&campaign.industry_id)
+            .bind(&campaign.industry_name)
+            .bind(&campaign.vertical_id)
+            .bind(&campaign.vertical_name)
+            .bind(&campaign.query)
+            .bind(&campaign.location)
+            .bind(i16::try_from(campaign.target).expect("test target fits SMALLINT"))
+            .bind(&campaign.language)
+            .bind(campaign.region.as_deref())
+            .execute(&db.pool)
+            .await
+            .expect("insert approval replay Campaign");
+        }
+        let price = DiscoveryNanoUsd::new(50_000_000).expect("valid test price");
+        let approval = DiscoveryCampaignBudgetApproval {
+            campaign_id,
+            payer_pubkey: payer_key,
+            approved_nanousd: price.checked_mul(2).expect("valid test budget"),
+            price_per_retained_lead_nanousd: price,
+            campaign_fingerprint: hex::encode(
+                campaign_budget_fingerprint(&campaign, &payer_key, price)
+                    .expect("approval replay fingerprint"),
+            ),
+            approval_action_event_id: None,
+            approval_expires_at: None,
+        };
+        let approval_event_id = [99_u8; 32];
+        let mut first = db.pool.begin().await.expect("begin first approval");
+        approve_campaign_budget_tx(
+            &mut first,
+            communities[0],
+            &payer,
+            None,
+            &approval_event_id,
+            &approval,
+        )
+        .await
+        .expect("claim approval evidence once");
+        first.commit().await.expect("commit first approval");
+
+        let mut replay = db.pool.begin().await.expect("begin replay approval");
+        assert!(matches!(
+            approve_campaign_budget_tx(
+                &mut replay,
+                communities[1],
+                &payer,
+                None,
+                &approval_event_id,
+                &approval,
+            )
+            .await,
+            Err(DbError::AccessDenied(message))
+                if message == "Campaign budget approval evidence has already been used"
+        ));
+        replay.rollback().await.expect("rollback rejected replay");
+
+        sqlx::query("DELETE FROM discovery_budget_approval_claims WHERE approval_event_id=$1")
+            .bind(approval_event_id.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("clean approval claim");
+        for community in communities {
+            clean_approval_replay_community(&db, community).await;
+        }
+        sqlx::query("DELETE FROM accounts WHERE pubkey=$1")
+            .bind(payer.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("clean approval replay account");
     }
 }

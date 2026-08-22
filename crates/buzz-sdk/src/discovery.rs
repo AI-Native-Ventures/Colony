@@ -186,12 +186,40 @@ pub fn build_discovery_status_action(
     build_run_action(relay_pubkey, DiscoveryOperation::Status, request)
 }
 
+/// Build a status action for the requested run wire version.
+pub fn build_discovery_status_action_for_version(
+    relay_pubkey: PublicKey,
+    request: &DiscoveryRunRequest,
+    wire_version: DiscoveryWireVersion,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    build_run_action_for_version(
+        relay_pubkey,
+        DiscoveryOperation::Status,
+        request,
+        wire_version,
+    )
+}
+
 /// Build a member-signable Discovery cancel action.
 pub fn build_discovery_cancel_action(
     relay_pubkey: PublicKey,
     request: &DiscoveryRunRequest,
 ) -> Result<EventBuilder, DiscoverySdkError> {
     build_run_action(relay_pubkey, DiscoveryOperation::Cancel, request)
+}
+
+/// Build a cancel action for the requested run wire version.
+pub fn build_discovery_cancel_action_for_version(
+    relay_pubkey: PublicKey,
+    request: &DiscoveryRunRequest,
+    wire_version: DiscoveryWireVersion,
+) -> Result<EventBuilder, DiscoverySdkError> {
+    build_run_action_for_version(
+        relay_pubkey,
+        DiscoveryOperation::Cancel,
+        request,
+        wire_version,
+    )
 }
 
 /// Build the exact relay-signable Discovery receipt envelope.
@@ -259,13 +287,22 @@ fn build_run_action(
     operation: DiscoveryOperation,
     request: &DiscoveryRunRequest,
 ) -> Result<EventBuilder, DiscoverySdkError> {
+    build_run_action_for_version(relay_pubkey, operation, request, DiscoveryWireVersion::V2)
+}
+
+fn build_run_action_for_version(
+    relay_pubkey: PublicKey,
+    operation: DiscoveryOperation,
+    request: &DiscoveryRunRequest,
+    wire_version: DiscoveryWireVersion,
+) -> Result<EventBuilder, DiscoverySdkError> {
     validate_uuid(request.request_id, "discovery action")?;
     validate_uuid(request.idempotency_key, "discovery action")?;
     validate_uuid(request.run_id, "discovery action")?;
     build_action(
         relay_pubkey,
         DiscoveryActionInput {
-            wire_version: DiscoveryWireVersion::V2,
+            wire_version,
             operation,
             request_id: request.request_id,
             idempotency_key: request.idempotency_key,
@@ -707,6 +744,16 @@ mod tests {
             .expect("cancel builds")
             .sign_with_keys(&Keys::generate())
             .expect("cancel signs");
+        let hosted_status =
+            build_discovery_status_action_for_version(relay, &request, DiscoveryWireVersion::V3)
+                .expect("hosted status builds")
+                .sign_with_keys(&Keys::generate())
+                .expect("hosted status signs");
+        let hosted_cancel =
+            build_discovery_cancel_action_for_version(relay, &request, DiscoveryWireVersion::V3)
+                .expect("hosted cancel builds")
+                .sign_with_keys(&Keys::generate())
+                .expect("hosted cancel signs");
 
         assert_eq!(
             parse_discovery_action(&status)
@@ -718,8 +765,16 @@ mod tests {
             parse_discovery_action(&cancel)
                 .expect("cancel parses")
                 .action,
-            DiscoveryAction::Cancel(request)
+            DiscoveryAction::Cancel(request.clone())
         );
+        for action in [hosted_status, hosted_cancel] {
+            assert_eq!(
+                parse_discovery_action(&action)
+                    .expect("hosted run action parses")
+                    .wire_version,
+                DiscoveryWireVersion::V3,
+            );
+        }
     }
 
     #[test]

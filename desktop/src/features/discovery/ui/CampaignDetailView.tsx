@@ -10,6 +10,7 @@ import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { CampaignDetail, LeadPage } from "../types";
 import {
   approvedCampaignBudgetNanousd,
+  DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD,
   formatDiscoveryNanousd,
 } from "../data/campaignBudget";
 import { useDiscoveryRun } from "../useDiscoveryRun";
@@ -66,6 +67,16 @@ function SettingsTab({
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const budget = campaign.budget;
+  const remainingLeadCapacity = (() => {
+    try {
+      return Number(
+        BigInt(budget?.remainingNanousd ?? "0") /
+          BigInt(DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD),
+      );
+    } catch {
+      return 0;
+    }
+  })();
 
   async function change(action: "approve" | "pause" | "revoke"): Promise<void> {
     if (
@@ -129,7 +140,7 @@ function SettingsTab({
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {[
             ["Approved", budget?.approvedNanousd ?? "0"],
             ["Spent", budget?.spentNanousd ?? "0"],
@@ -143,7 +154,19 @@ function SettingsTab({
               </p>
             </div>
           ))}
+          <div className="rounded-xl bg-muted/50 p-3">
+            <p className="text-xs text-muted-foreground">Lead capacity</p>
+            <p className="mt-1 font-mono text-sm font-semibold text-foreground">
+              {remainingLeadCapacity}
+            </p>
+          </div>
         </div>
+        {budget?.state === "exhausted" ? (
+          <p className="text-sm text-muted-foreground">
+            This Campaign has used its approved Credits. Create a new Campaign
+            to approve another paid search.
+          </p>
+        ) : null}
         {error ? (
           <p className="text-sm text-destructive" role="alert">
             {error}
@@ -254,9 +277,14 @@ export function CampaignDetailView({
           {activeTab !== "discovery" ? (
             <div className="flex shrink-0 items-center gap-2 pt-1">
               {entitlement?.state === "entitled" && !runState.canStart ? (
-                <Button className="rounded-full px-5" disabled>
-                  Run Discovery
-                </Button>
+                <div className="max-w-xs text-right">
+                  <Button className="rounded-full px-5" disabled>
+                    Run Discovery
+                  </Button>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {runState.startBlockedReason}
+                  </p>
+                </div>
               ) : (
                 <EntitlementLock
                   actionLabel="Run Discovery"

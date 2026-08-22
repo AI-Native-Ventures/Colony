@@ -82,6 +82,22 @@ fn account_requires_usd_and_matching_status() {
 }
 
 #[test]
+fn legacy_account_response_defaults_to_an_available_balance() {
+    let account: GatewayAccount = serde_json::from_value(serde_json::json!({
+        "balance_nanousd": "125000000",
+        "currency": "USD",
+        "status": "active"
+    }))
+    .expect("legacy account wire shape");
+
+    assert_eq!(account.balance_nanousd_i128(), Ok(125_000_000));
+    assert_eq!(account.total_balance_nanousd, "");
+    assert_eq!(account.discovery_reserved_nanousd, "");
+    assert_eq!(account.gateway_reserved_nanousd, "");
+    assert_eq!(account.available_balance_nanousd, "");
+}
+
+#[test]
 fn token_debug_is_redacted_and_cache_keys_are_isolated() {
     let token = RedactedToken::new("colony-gw-secret".to_string()).expect("token");
     assert!(!format!("{token:?}").contains("colony-gw-secret"));

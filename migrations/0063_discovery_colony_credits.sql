@@ -75,6 +75,23 @@ CREATE UNIQUE INDEX discovery_campaign_budget_approval_event_unique
     ON discovery_campaigns (community_id, budget_approval_event_id)
     WHERE budget_approval_event_id IS NOT NULL;
 
+-- Approval evidence is globally single-use. This operator-owned claim table
+-- prevents one signed human event from authorizing spend in another community.
+CREATE TABLE discovery_budget_approval_claims (
+    approval_event_id BYTEA PRIMARY KEY CHECK (octet_length(approval_event_id) = 32),
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO _operator_global_tables (table_name, reason)
+VALUES (
+    'discovery_budget_approval_claims',
+    'global single-use claims for human spending approvals'
+)
+ON CONFLICT (table_name) DO NOTHING;
+
 CREATE INDEX discovery_runs_community_campaign_idx
     ON discovery_runs (community_id, campaign_id, created_at DESC);
 
@@ -163,9 +180,9 @@ ALTER TABLE discovery_run_sources
     ADD COLUMN provider_poll_after TIMESTAMPTZ;
 
 -- Every Colony-funded provider attempt is durable before the request leaves
--- the relay. One Campaign can spend at most once per provider, and a lost
--- client acknowledgement can replay the exact stored result without buying
--- the same search twice.
+-- the relay. A lost client acknowledgement can replay the exact stored result
+-- without buying the same search twice. A later run may retry the provider and
+-- is billed only for newly retained Leads.
 CREATE TABLE discovery_gateway_attempts (
     community_id UUID NOT NULL,
     campaign_id UUID NOT NULL,
@@ -192,8 +209,7 @@ CREATE TABLE discovery_gateway_attempts (
     duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count BETWEEN 0 AND 500),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (community_id, campaign_id, provider),
-    UNIQUE (community_id, run_id, provider),
+    PRIMARY KEY (community_id, run_id, provider),
     FOREIGN KEY (community_id, campaign_id)
         REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
     FOREIGN KEY (community_id, run_id)
@@ -248,7 +264,7 @@ FOR EACH ROW EXECUTE FUNCTION discovery_associate_observation_campaign();
 -- Campaign result. An upgraded relay can safely replay the same batch.
 CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW.existing_count > 0 THEN
+    IF NEW.existing_count > 0 AND pg_trigger_depth() <= 1 THEN
         RAISE EXCEPTION
             'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
             USING ERRCODE = 'check_violation';
@@ -387,6 +403,67 @@ CREATE UNIQUE INDEX credit_ledger_discovery_run_idx
 ALTER TABLE gateway_settlement_intents
     ADD COLUMN reserved_nanousd BIGINT NOT NULL DEFAULT 0
         CHECK (reserved_nanousd >= 0);
+
+-- Existing unresolved calls were admitted before durable holds existed. Hold a
+-- conservative floor for them. The compatibility trigger also lets released
+-- writers drain during a rolling deploy while applying and releasing the new
+-- account-level reservation on their behalf.
+UPDATE gateway_settlement_intents i
+SET reserved_nanousd=GREATEST(COALESCE(a.typical_call_cost_nanousd,50000000),1)
+FROM accounts a
+WHERE i.pubkey=a.pubkey
+  AND i.state IN ('admitted','provider_completed','reconciliation');
+
+UPDATE gateway_settlement_intents
+SET reserved_nanousd=0
+WHERE state IN ('debited','resolved');
+
+CREATE FUNCTION gateway_settlement_intent_reservation_compat() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.state IN ('admitted','provider_completed','reconciliation') THEN
+        IF NEW.reserved_nanousd = 0 THEN
+            NEW.reserved_nanousd := GREATEST(
+                COALESCE(
+                    (SELECT typical_call_cost_nanousd FROM accounts WHERE pubkey=NEW.pubkey),
+                    50000000
+                ),
+                1
+            );
+        END IF;
+    ELSIF NEW.state IN ('debited','resolved') THEN
+        NEW.reserved_nanousd := 0;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_reservation_compat
+BEFORE INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW EXECUTE FUNCTION gateway_settlement_intent_reservation_compat();
+
+-- Uniqueness arbitration must finish before an intent writer locks its
+-- account. This keeps released ON CONFLICT writers on the same
+-- intent-then-account order as upgraded admission and settlement code.
+CREATE FUNCTION gateway_settlement_intent_account_lock() RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM 1 FROM accounts WHERE pubkey=NEW.pubkey FOR UPDATE;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_account_lock
+AFTER INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW
+WHEN (NEW.state IN ('admitted','provider_completed','reconciliation'))
+EXECUTE FUNCTION gateway_settlement_intent_account_lock();
+
+ALTER TABLE gateway_settlement_intents
+    ADD CONSTRAINT gateway_settlement_intents_active_reservation_complete
+        CHECK (
+            (state IN ('admitted','provider_completed','reconciliation')
+             AND reserved_nanousd > 0)
+            OR (state IN ('debited','resolved') AND reserved_nanousd = 0)
+        );
 
 CREATE INDEX gateway_settlement_intents_account_reservations_idx
     ON gateway_settlement_intents (pubkey)

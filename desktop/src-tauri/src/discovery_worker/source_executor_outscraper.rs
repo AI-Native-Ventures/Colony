@@ -1,6 +1,46 @@
 use super::*;
 
+enum HostedSubmitResult {
+    Response(super::super::hosted_gateway::HostedProviderResponse),
+    Failed(DiscoveryRunSourceFailureClass),
+}
+
 impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
+    async fn submit_hosted_with_recovery(
+        &self,
+        run_id: Uuid,
+        lease_id: Uuid,
+        provider: DiscoveryProvider,
+    ) -> HostedSubmitResult {
+        let mut final_failure = DiscoveryRunSourceFailureClass::RateLimited;
+        for attempt in 0..4 {
+            match self
+                .protocol
+                .hosted_provider_submit(run_id, lease_id, provider)
+                .await
+            {
+                Ok(response) => return HostedSubmitResult::Response(response),
+                Err(error) if error.contains("no longer authorized") => {
+                    return HostedSubmitResult::Failed(
+                        if final_failure == DiscoveryRunSourceFailureClass::OutcomeUnknown {
+                            final_failure
+                        } else {
+                            DiscoveryRunSourceFailureClass::CredentialRejected
+                        },
+                    );
+                }
+                Err(error) if error.contains("rate limited") => {}
+                Err(_) => {
+                    final_failure = DiscoveryRunSourceFailureClass::OutcomeUnknown;
+                }
+            }
+            if attempt < 3 {
+                tokio::time::sleep(std::time::Duration::from_secs(11)).await;
+            }
+        }
+        HostedSubmitResult::Failed(final_failure)
+    }
+
     pub(super) async fn execute_hosted_source(
         &self,
         provider: DiscoveryProvider,
@@ -54,20 +94,16 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 ) =>
             {
                 let response = match self
-                    .protocol
-                    .hosted_provider_submit(run_id, lease_id, provider)
+                    .submit_hosted_with_recovery(run_id, lease_id, provider)
                     .await
                 {
-                    Ok(response) => response,
-                    Err(_) => {
-                        self.outbox.mark_outcome_unknown(call.call_id)?;
+                    HostedSubmitResult::Response(response) => response,
+                    HostedSubmitResult::Failed(failure) => {
+                        if failure == DiscoveryRunSourceFailureClass::OutcomeUnknown {
+                            self.outbox.mark_outcome_unknown(call.call_id)?;
+                        }
                         return self
-                            .finish_source_failure(
-                                provider,
-                                None,
-                                1,
-                                DiscoveryRunSourceFailureClass::OutcomeUnknown,
-                            )
+                            .finish_source_failure(provider, None, 1, failure)
                             .await;
                     }
                 };
@@ -90,20 +126,16 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             None => {
                 let intent = self.outbox.begin_call(run_id, provider)?;
                 let response = match self
-                    .protocol
-                    .hosted_provider_submit(run_id, lease_id, provider)
+                    .submit_hosted_with_recovery(run_id, lease_id, provider)
                     .await
                 {
-                    Ok(response) => response,
-                    Err(_) => {
-                        self.outbox.mark_outcome_unknown(intent.call_id)?;
+                    HostedSubmitResult::Response(response) => response,
+                    HostedSubmitResult::Failed(failure) => {
+                        if failure == DiscoveryRunSourceFailureClass::OutcomeUnknown {
+                            self.outbox.mark_outcome_unknown(intent.call_id)?;
+                        }
                         return self
-                            .finish_source_failure(
-                                provider,
-                                None,
-                                1,
-                                DiscoveryRunSourceFailureClass::OutcomeUnknown,
-                            )
+                            .finish_source_failure(provider, None, 1, failure)
                             .await;
                     }
                 };

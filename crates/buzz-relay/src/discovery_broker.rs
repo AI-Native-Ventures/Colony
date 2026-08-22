@@ -248,11 +248,6 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
         buzz_db::DbError::AccessDenied(message) if message == "balance_depleted" => {
             DiscoveryBrokerError::Conflict("balance_depleted".into())
         }
-        buzz_db::DbError::AccessDenied(message)
-            if message == "campaign_search_already_executed" =>
-        {
-            DiscoveryBrokerError::Conflict("campaign_search_already_executed".into())
-        }
         buzz_db::DbError::NotFound(message) if message.contains("campaign") => {
             DiscoveryBrokerError::Invalid("Discovery campaign not found".into())
         }
