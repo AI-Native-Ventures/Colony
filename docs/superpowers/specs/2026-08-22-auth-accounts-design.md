@@ -139,7 +139,7 @@ rather than when it is needed.
 
 ## Data model
 
-`migrations/0061_email_accounts.sql`:
+`migrations/0062_email_accounts.sql`:
 
 **The table is `email_accounts`, not `accounts`.** Migration 0050 already
 created an `accounts` table holding pubkey-to-credit balances, so the obvious
