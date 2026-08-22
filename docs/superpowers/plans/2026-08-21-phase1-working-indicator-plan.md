@@ -99,12 +99,14 @@ reads `anchorAt`. Both keep working unchanged; verify you have not altered them.
 Run from the worktree root, after `. ./bin/activate-hermit`:
 
 ```
-cd desktop && pnpm test:unit          # or the repo's unit-test task for desktop
+cd desktop && node --import ./test-loader.mjs --experimental-strip-types \
+  --test src/features/agents/activeAgentTurnsStore.test.mjs
 just desktop-lint
-just ci
 ```
 
-`just ci` is the full local gate and must pass before you report done.
+**Do NOT run `just ci`.** It saturates the owner's machine for about ten minutes
+and he is working on it. The full matrix runs on GitHub when the orchestrator
+pushes. Formatting still matters, so run the desktop biome fix on your files.
 
 ## Definition of done
 
