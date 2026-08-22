@@ -15,6 +15,8 @@
  */
 
 import type { RelayEvent } from "@/shared/api/types";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 /** A gate that ran and cleared its bar, ran and did not, or did not run. */
 export type GateStatus = "pass" | "fail" | "skip";
@@ -22,12 +24,7 @@ export type GateStatus = "pass" | "fail" | "skip";
 /** What a whole gate report adds up to. */
 export type GateVerdict = "pass" | "fail" | "incomplete";
 
-/**
- * Gates every post must report before it can be offered to the owner.
- *
- * Mirrors `REQUIRED_GATES` in `buzz-core`. Kept here so the UI can show a
- * missing gate as missing rather than silently omitting a row nobody notices.
- */
+/** Gate ids a post must report, mirroring `REQUIRED_GATES` in `buzz-core`. */
 export const REQUIRED_GATES = [
   "contrast",
   "grain",
@@ -36,6 +33,9 @@ export const REQUIRED_GATES = [
   "housestyle",
   "claims",
 ] as const;
+
+/** Largest number of slides one post may carry, mirroring `buzz-core`. */
+export const MAX_SLIDES = 20;
 
 /** Human labels for the gate ids, for the checks panel. */
 export const GATE_LABELS: Record<string, string> = {
@@ -118,11 +118,11 @@ export type ContentPost = {
   alt: string | null;
   hashtags: string[];
   styleVersion: string | null;
-  image: PostImage | null;
+  images: PostImage[];
   assets: PostAsset[];
   claims: ContentClaim[];
   claimFields: Record<string, string[]>;
-  gateReport: GateReport | null;
+  gateReports: GateReport[];
   status: PostStatus;
   updatedAt: number;
 };
@@ -249,7 +249,24 @@ export function bareSha256(value: string): string {
 }
 
 /**
- * The verdict the gate statuses actually add up to.
+ * The SHA-256 of the ordered slide hashes, so a decision names the whole set.
+ *
+ * Mirrors `slides_digest` in `buzz-core`: the input is the list of slide
+ * images in slide order; the output is bare lowercase hex. Editing one slide
+ * changes the digest, which is what makes an approval of a carousel invalid
+ * after one slide is re-rendered.
+ */
+export function slidesDigest(images: PostImage[]): string {
+  // Concatenate all slide hashes into one byte stream, then hash the stream.
+  // This gives an ordered digest: changing one slide or reordering slides
+  // changes the result, so an approval against this digest covers the exact
+  // set of bytes and nothing else.
+  const encoded = images.map((image) => image.sha256).join("");
+  return bytesToHex(sha256(new TextEncoder().encode(encoded)));
+}
+
+/**
+ * The verdict the gate statuses of one report add up to.
  *
  * Recomputed rather than read. A report that says "pass" over a skipped claims
  * gate is exactly the lie this feature exists to prevent, and the relay
@@ -266,13 +283,38 @@ export function deriveVerdict(gates: GateResult[]): GateVerdict {
   return "pass";
 }
 
-/** Gate ids a post should report but does not. */
-export function missingGates(report: GateReport | null): string[] {
-  if (!report) {
+/**
+ * The verdict across all slide reports, or `null` when nothing ran.
+ *
+ * The worst verdict wins: one failing slide makes the whole post fail, one
+ * incomplete slide makes the whole post incomplete. Only when every report
+ * passes is the post fully passing.
+ */
+export function postVerdict(reports: GateReport[]): GateVerdict | null {
+  if (reports.length === 0) {
+    return null;
+  }
+  let worst: GateVerdict = "pass";
+  for (const report of reports) {
+    const verdict = deriveVerdict(report.gates);
+    if (verdict === "fail") {
+      return "fail";
+    }
+    if (verdict === "incomplete") {
+      worst = "incomplete";
+    }
+  }
+  return worst;
+}
+
+/** Gate ids a post should report but does not, across all its reports. */
+export function missingGates(reports: GateReport[]): string[] {
+  if (reports.length === 0) {
     return [...REQUIRED_GATES];
   }
   return REQUIRED_GATES.filter(
-    (id) => !report.gates.some((gate) => gate.id === id),
+    (id) =>
+      !reports.some((report) => report.gates.some((gate) => gate.id === id)),
   );
 }
 
@@ -418,18 +460,24 @@ export function parsePost(event: RelayEvent): ContentPost | null {
     return null;
   }
 
-  const rawImage = record(content, "image");
-  const imageSha = rawImage ? str(rawImage, "sha256") : null;
-  const imageUrl = rawImage ? str(rawImage, "url") : null;
-  const image: PostImage | null =
-    rawImage && imageSha && imageUrl
-      ? {
-          height: num(rawImage, "height") ?? 0,
-          sha256: bareSha256(imageSha),
-          url: imageUrl,
-          width: num(rawImage, "width") ?? 0,
-        }
-      : null;
+  const rawImages = list(content, "images");
+  const images: PostImage[] = [];
+  for (const entry of rawImages) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const raw = entry as Record<string, unknown>;
+    const sha = str(raw, "sha256");
+    const url = str(raw, "url");
+    if (sha && url) {
+      images.push({
+        height: num(raw, "height") ?? 0,
+        sha256: bareSha256(sha),
+        url,
+        width: num(raw, "width") ?? 0,
+      });
+    }
+  }
 
   const claims: ContentClaim[] = [];
   for (const entry of list(content, "claims")) {
@@ -473,7 +521,18 @@ export function parsePost(event: RelayEvent): ContentPost | null {
     });
   }
 
-  const rawReport = record(content, "gate_report");
+  const rawReports = list(content, "gate_reports");
+  const gateReports: GateReport[] = [];
+  for (const entry of rawReports) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const report = parseGateReport(entry as Record<string, unknown>);
+    if (report) {
+      gateReports.push(report);
+    }
+  }
+
   return {
     address,
     alt: str(content, "alt"),
@@ -485,13 +544,13 @@ export function parsePost(event: RelayEvent): ContentPost | null {
     claimFields,
     claims,
     eventId: event.id,
-    gateReport: rawReport ? parseGateReport(rawReport) : null,
+    gateReports,
     hashtags: list(content, "hashtags")
       .filter((tag): tag is string => typeof tag === "string")
       .map((tag) => tag.replace(/^#/, ""))
       .filter((tag) => tag.length > 0),
     headline: str(content, "headline"),
-    image,
+    images,
     job: str(content, "job"),
     scheduledFor,
     slug: address.slice(separator + 1),
@@ -586,9 +645,9 @@ export function postCoordinate(post: ContentPost, postKind: number): string {
  * Fold a post's decisions into one state.
  *
  * Newest decision wins, and an approval only counts for the bytes it named.
- * A card re-rendered after sign-off reads as `changed-since-approval` rather
- * than inheriting the approval, which is the whole reason the hash is on the
- * decision event.
+ * With slides, the decision names a digest over every slide hash, so a card
+ * re-rendered after sign-off reads as `changed-since-approval` rather than
+ * inheriting the approval.
  */
 export function approvalState(
   post: ContentPost,
@@ -604,12 +663,11 @@ export function approvalState(
   if (newest.decision === "change") {
     return "changes-requested";
   }
-  if (
-    post.image &&
-    newest.imageSha256 &&
-    newest.imageSha256 !== post.image.sha256
-  ) {
-    return "changed-since-approval";
+  if (post.images.length > 0 && newest.imageSha256) {
+    const digest = slidesDigest(post.images);
+    if (newest.imageSha256 !== digest) {
+      return "changed-since-approval";
+    }
   }
   return "approved";
 }

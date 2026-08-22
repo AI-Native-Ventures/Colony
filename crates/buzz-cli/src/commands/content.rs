@@ -15,8 +15,8 @@ use nostr::{EventBuilder, Kind, Tag};
 
 use buzz_core::content::{
     parse_content_campaign, parse_content_decision, parse_content_post, parse_content_style,
-    post_address, GateVerdict, ParsedContentPost, SCHEMA_CONTENT_CAMPAIGN, SCHEMA_CONTENT_DECISION,
-    SCHEMA_CONTENT_POST, SCHEMA_CONTENT_STYLE,
+    post_address, slides_digest, GateVerdict, ParsedContentPost, SCHEMA_CONTENT_CAMPAIGN,
+    SCHEMA_CONTENT_DECISION, SCHEMA_CONTENT_POST, SCHEMA_CONTENT_STYLE,
 };
 use buzz_core::content_brand_kit::{parse_content_brand_kit, SCHEMA_CONTENT_BRAND_KIT};
 use buzz_core::kind::{
@@ -288,8 +288,8 @@ async fn cmd_decide(
     // unrendered card be approved as though its gates had run.
     let verdict = parsed.verdict().unwrap_or(GateVerdict::Incomplete);
     let mut target = serde_json::json!({ "verdict": verdict.as_str() });
-    if let Some(image) = &parsed.image {
-        target["image_sha256"] = serde_json::json!(image.sha256);
+    if !parsed.images.is_empty() {
+        target["image_sha256"] = serde_json::json!(slides_digest(&parsed.images));
     }
 
     let mut body = serde_json::json!({
