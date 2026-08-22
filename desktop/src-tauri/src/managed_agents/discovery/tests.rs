@@ -388,6 +388,17 @@ fn record_agent_command_override_beats_runtime() {
 fn record_agent_command_legacy_persona_fallback() {
     // Pre-migration record: persona_id set, no runtime — resolves through
     // the legacy persona path unchanged.
+    //
+    // "omp" is a preset id, not a tier-1 builtin: it only resolves through
+    // the global loaded-harness registry, so seed it with the static preset
+    // list and hold the test guard until after the assert. Without this the
+    // result depended on which parallel test had warmed or cleared the
+    // registry first (fails standalone with "buzz-agent" instead of "omp").
+    use crate::managed_agents::custom_harnesses::{
+        registry_test_lock, warm_harness_registry_from_dir,
+    };
+    let _lock = registry_test_lock();
+    warm_harness_registry_from_dir(None);
     let personas = vec![persona_with_runtime("p1", Some("omp"))];
     let record = record_with(None, Some("p1"), None);
     assert_eq!(record_agent_command(&record, &personas), "omp");
