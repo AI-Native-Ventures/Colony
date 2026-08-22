@@ -2147,13 +2147,19 @@ CREATE TABLE IF NOT EXISTS employees (
     -- events alone rather than trusting this table.
     hired_by      BYTEA NOT NULL,
     hire_event    BYTEA NOT NULL,
+    -- The agent this employee reports to, one rung up the interrupt ladder
+    -- (migration 0061). NULL means no manager: the root marker for
+    -- executives and the Unassigned-tray state for everyone else. Read by
+    -- interrupt_gate::agent_manager before any event is consulted.
+    manager       BYTEA,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
     created_at    BIGINT NOT NULL,
     updated_at    BIGINT NOT NULL,
     PRIMARY KEY (community_id, pubkey),
     CHECK (LENGTH(pubkey) = 32),
     CHECK (LENGTH(hired_by) = 32),
-    CHECK (LENGTH(hire_event) = 32)
+    CHECK (LENGTH(hire_event) = 32),
+    CHECK (manager IS NULL OR LENGTH(manager) = 32)
 );
 
 -- Hiring is driven by a best-effort side effect, which may run more than once
