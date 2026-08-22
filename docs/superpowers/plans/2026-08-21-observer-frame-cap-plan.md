@@ -96,15 +96,20 @@ separate branch, so touching it also causes a conflict.
 
 ```
 . ./bin/activate-hermit
-just ci
+cargo test -p buzz-core observer
+cargo test -p buzz-acp observer
+cargo clippy -p buzz-core -p buzz-acp
+cargo fmt
 ```
 
-`just test` is not required: this touches no schema and no relay path.
+**Do NOT run `just ci`.** It saturates the owner's machine for about ten minutes
+and he is working on it. The full matrix runs on GitHub when the orchestrator
+pushes. `just test` is not required: this touches no schema and no relay path.
 
 ## Definition of done
 
 - All four tests pass, with the earlier failing output saved.
-- `just ci` passes.
+- Targeted crate tests and clippy pass. The full matrix runs on GitHub.
 - Files touched: `crates/buzz-core/src/observer.rs`, `crates/buzz-acp/src/lib.rs`
   and their tests. Nothing under `desktop/`.
 - Every commit uses `git commit -s`.
@@ -113,7 +118,7 @@ just ci
 ## Report back with
 
 1. Failing output from before the fix, for at least tests 1 and 3.
-2. Passing output after, plus the `just ci` result.
+2. Passing output after, plus the targeted test and clippy results.
 3. Your arithmetic on `OBSERVER_CHUNK_MAX_TEXT_BYTES` and your conclusion on
    `NIP44_MAX_CONTENT_LEN`.
 4. Whether any other call site encrypts an observer payload without going through
