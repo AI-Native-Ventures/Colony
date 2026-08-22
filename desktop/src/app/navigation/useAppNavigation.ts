@@ -122,6 +122,18 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goPeople = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/agents",
+          search: { section: "people" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goActionCenter = React.useCallback(
     (options?: ActionCenterNavigationOptions) =>
       commitNavigation(
@@ -436,6 +448,7 @@ export function useAppNavigation() {
     goForumPost,
     goHome,
     goNewMessage,
+    goPeople,
     goProject,
     goProjects,
     goPulse,
