@@ -94,10 +94,7 @@ pub(crate) async fn handle_discovery_action(
                 } else {
                     1
                 },
-                supports_multi_source: matches!(
-                    wire_version,
-                    buzz_sdk::discovery::DiscoveryWireVersion::V2
-                ),
+                protocol_version: request.protocol_version,
                 accepted_at: chrono::Utc::now(),
             }
         }
@@ -246,13 +243,14 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             campaign_id: Uuid::new_v4(),
-            business_search: DiscoveryBusinessSearchSpec {
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(DiscoveryBusinessSearchSpec {
                 query: "dentists".to_owned(),
                 location: "Sandton, Johannesburg, South Africa".to_owned(),
                 limit: 3,
                 language: "en".to_owned(),
                 region: Some("ZA".to_owned()),
-            },
+            }),
         };
         let event = build_discovery_start_action(relay.public_key(), &request)
             .expect("valid builder")

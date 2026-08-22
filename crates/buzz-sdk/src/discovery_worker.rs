@@ -24,8 +24,10 @@ use crate::discovery::{
 
 const ACTION_SCHEMA_V1: &str = "colony.discovery-worker-action/v1";
 const ACTION_SCHEMA_V2: &str = "colony.discovery-worker-action/v2";
+const ACTION_SCHEMA_V3: &str = "colony.discovery-worker-action/v3";
 const RECEIPT_SCHEMA_V1: &str = "colony.discovery-worker-receipt/v1";
 const RECEIPT_SCHEMA_V2: &str = "colony.discovery-worker-receipt/v2";
+const RECEIPT_SCHEMA_V3: &str = "colony.discovery-worker-receipt/v3";
 const MAX_PROVIDER_REQUEST_ID_LEN: usize = 128;
 
 /// Version of the strict Discovery worker wire envelope.
@@ -35,6 +37,8 @@ pub enum DiscoveryWorkerWireVersion {
     V1,
     /// Capability-aware multi-source contract.
     V2,
+    /// Colony-funded provider gateway contract.
+    V3,
 }
 
 impl DiscoveryWorkerWireVersion {
@@ -42,6 +46,7 @@ impl DiscoveryWorkerWireVersion {
         match self {
             Self::V1 => "1",
             Self::V2 => "2",
+            Self::V3 => "3",
         }
     }
 
@@ -49,6 +54,7 @@ impl DiscoveryWorkerWireVersion {
         match self {
             Self::V1 => ACTION_SCHEMA_V1,
             Self::V2 => ACTION_SCHEMA_V2,
+            Self::V3 => ACTION_SCHEMA_V3,
         }
     }
 
@@ -56,6 +62,7 @@ impl DiscoveryWorkerWireVersion {
         match self {
             Self::V1 => RECEIPT_SCHEMA_V1,
             Self::V2 => RECEIPT_SCHEMA_V2,
+            Self::V3 => RECEIPT_SCHEMA_V3,
         }
     }
 }
@@ -94,6 +101,8 @@ struct DiscoveryWorkerActionContent {
     request_id: Uuid,
     idempotency_key: Uuid,
     worker_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    protocol_version: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     available_providers: Option<Vec<DiscoveryProvider>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,14 +147,28 @@ pub fn build_discovery_worker_claim_action(
     request
         .validate()
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery worker claim"))?;
+    let (wire_version, protocol_version, available_providers) = match request.protocol_version {
+        buzz_core::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION => (
+            DiscoveryWorkerWireVersion::V3,
+            Some(buzz_core::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION),
+            None,
+        ),
+        buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION => (
+            DiscoveryWorkerWireVersion::V2,
+            None,
+            Some(request.available_providers.clone()),
+        ),
+        _ => return Err(DiscoverySdkError::InvalidEnvelope("discovery worker claim")),
+    };
     build_action(
         relay_pubkey,
-        DiscoveryWorkerWireVersion::V2,
+        wire_version,
         DiscoveryWorkerOperation::Claim,
         request.request_id,
         request.idempotency_key,
         request.worker_id,
-        Some(request.available_providers.clone()),
+        protocol_version,
+        available_providers,
         None,
         None,
         None,
@@ -181,6 +204,7 @@ pub fn build_discovery_worker_checkpoint_action(
         request.lease.worker_id,
         None,
         None,
+        None,
         Some(request.lease.run_id),
         Some(request.lease.lease_id),
         Some(request.checkpoint.clone()),
@@ -206,6 +230,7 @@ pub fn build_discovery_worker_store_observations_action(
         request.lease.request_id,
         request.lease.idempotency_key,
         request.lease.worker_id,
+        None,
         None,
         Some(request.provider),
         Some(request.lease.run_id),
@@ -234,6 +259,7 @@ pub fn build_discovery_worker_salvage_observations_action(
         request.idempotency_key,
         request.worker_id,
         None,
+        None,
         Some(request.provider),
         Some(request.run_id),
         None,
@@ -260,6 +286,7 @@ pub fn build_discovery_worker_source_progress_action(
         request.lease.request_id,
         request.lease.idempotency_key,
         request.lease.worker_id,
+        None,
         None,
         None,
         Some(request.lease.run_id),
@@ -310,6 +337,7 @@ fn build_lease_action(
         request.worker_id,
         None,
         None,
+        None,
         Some(request.run_id),
         Some(request.lease_id),
         None,
@@ -328,6 +356,7 @@ fn build_action(
     request_id: Uuid,
     idempotency_key: Uuid,
     worker_id: Uuid,
+    protocol_version: Option<u16>,
     available_providers: Option<Vec<DiscoveryProvider>>,
     provider: Option<DiscoveryProvider>,
     run_id: Option<Uuid>,
@@ -349,6 +378,7 @@ fn build_action(
         request_id,
         idempotency_key,
         worker_id,
+        protocol_version,
         available_providers,
         provider,
         run_id,
@@ -422,6 +452,11 @@ pub fn parse_discovery_worker_action(
             "discovery worker action",
         ));
     }
+    if operation != DiscoveryWorkerOperation::Claim && content.protocol_version.is_some() {
+        return Err(DiscoverySdkError::TagContentMismatch(
+            "discovery worker action",
+        ));
+    }
     let action = match operation {
         DiscoveryWorkerOperation::Claim
             if content.run_id.is_none()
@@ -429,16 +464,37 @@ pub fn parse_discovery_worker_action(
                 && content.checkpoint.is_none()
                 && content_has_no_observations(&content) =>
         {
+            let (protocol_version, available_providers) = match (
+                wire_version,
+                content.protocol_version,
+                content.available_providers,
+            ) {
+                (DiscoveryWorkerWireVersion::V1, None, providers) => (
+                    1,
+                    providers.unwrap_or_else(|| vec![DiscoveryProvider::Outscraper]),
+                ),
+                (DiscoveryWorkerWireVersion::V2, None, Some(providers)) => (
+                    buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+                    providers,
+                ),
+                (DiscoveryWorkerWireVersion::V3, Some(version), None)
+                    if version
+                        == buzz_core::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION =>
+                {
+                    (version, Vec::new())
+                }
+                _ => {
+                    return Err(DiscoverySdkError::TagContentMismatch(
+                        "discovery worker action",
+                    ))
+                }
+            };
             let request = DiscoveryWorkerClaimRequest {
                 request_id,
                 idempotency_key,
                 worker_id,
-                // Claims signed by the released Outscraper-only worker predate
-                // capability advertisements. Treat only that legacy shape as
-                // Outscraper-capable so it can never claim Brave or Exa work.
-                available_providers: content
-                    .available_providers
-                    .unwrap_or_else(|| vec![DiscoveryProvider::Outscraper]),
+                protocol_version,
+                available_providers,
             };
             request
                 .validate()
@@ -449,6 +505,7 @@ pub fn parse_discovery_worker_action(
         | DiscoveryWorkerOperation::Fail
         | DiscoveryWorkerOperation::Complete
             if content.available_providers.is_none()
+                && content.protocol_version.is_none()
                 && content.checkpoint.is_none()
                 && content_has_no_observations(&content) =>
         {
@@ -791,6 +848,7 @@ fn parse_wire_version(
     match value {
         "1" => Ok(DiscoveryWorkerWireVersion::V1),
         "2" => Ok(DiscoveryWorkerWireVersion::V2),
+        "3" => Ok(DiscoveryWorkerWireVersion::V3),
         _ => Err(DiscoverySdkError::InvalidTag(tag)),
     }
 }
@@ -1048,11 +1106,13 @@ mod tests {
         DiscoveryRunProjection {
             run_id: Uuid::from_u128(4),
             campaign_id: Uuid::from_u128(6),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
             state: DiscoveryRunState::Running,
             completed_steps: 0,
             total_steps: 1,
             cancel_requested: false,
             terminal_reason: None,
+            billing: None,
             created_at: Utc.timestamp_opt(1_800_000_000, 0).single().unwrap(),
             updated_at: Utc.timestamp_opt(1_800_000_000, 0).single().unwrap(),
         }
@@ -1135,6 +1195,7 @@ mod tests {
             request_id: Uuid::from_u128(10),
             idempotency_key: Uuid::from_u128(11),
             worker_id: Uuid::from_u128(12),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
             available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let checkpoint = DiscoveryWorkerCheckpointRequest {
@@ -1249,6 +1310,7 @@ mod tests {
             request_id: Uuid::from_u128(10),
             idempotency_key: Uuid::from_u128(11),
             worker_id: Uuid::from_u128(12),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
             available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let original = build_discovery_worker_claim_action(relay.public_key(), &request)
@@ -1274,6 +1336,7 @@ mod tests {
             request_id: Uuid::from_u128(10),
             idempotency_key: Uuid::from_u128(11),
             worker_id: Uuid::from_u128(12),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
             available_providers: Vec::new(),
         };
         assert!(build_discovery_worker_claim_action(relay.public_key(), &request).is_err());
@@ -1293,6 +1356,7 @@ mod tests {
             Uuid::from_u128(10),
             Uuid::from_u128(11),
             Uuid::from_u128(12),
+            None,
             None,
             None,
             None,

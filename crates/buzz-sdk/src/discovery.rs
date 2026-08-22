@@ -17,8 +17,10 @@ use uuid::Uuid;
 
 const ACTION_SCHEMA_V1: &str = "colony.discovery-action/v1";
 const ACTION_SCHEMA_V2: &str = "colony.discovery-action/v2";
+const ACTION_SCHEMA_V3: &str = "colony.discovery-action/v3";
 const RECEIPT_SCHEMA_V1: &str = "colony.discovery-receipt/v1";
 const RECEIPT_SCHEMA_V2: &str = "colony.discovery-receipt/v2";
+const RECEIPT_SCHEMA_V3: &str = "colony.discovery-receipt/v3";
 
 /// Version of the strict Discovery run wire envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +29,8 @@ pub enum DiscoveryWireVersion {
     V1,
     /// Multi-source-aware run contract.
     V2,
+    /// Colony-funded run contract with Campaign-derived search and billing.
+    V3,
 }
 
 impl DiscoveryWireVersion {
@@ -34,6 +38,7 @@ impl DiscoveryWireVersion {
         match self {
             Self::V1 => "1",
             Self::V2 => "2",
+            Self::V3 => "3",
         }
     }
 
@@ -41,6 +46,7 @@ impl DiscoveryWireVersion {
         match self {
             Self::V1 => ACTION_SCHEMA_V1,
             Self::V2 => ACTION_SCHEMA_V2,
+            Self::V3 => ACTION_SCHEMA_V3,
         }
     }
 
@@ -48,6 +54,7 @@ impl DiscoveryWireVersion {
         match self {
             Self::V1 => RECEIPT_SCHEMA_V1,
             Self::V2 => RECEIPT_SCHEMA_V2,
+            Self::V3 => RECEIPT_SCHEMA_V3,
         }
     }
 }
@@ -113,6 +120,9 @@ struct DiscoveryActionContent {
     idempotency_key: Uuid,
     campaign_id: Option<Uuid>,
     run_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    protocol_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     business_search: Option<DiscoveryBusinessSearchSpec>,
 }
 
@@ -123,6 +133,7 @@ struct DiscoveryActionInput {
     idempotency_key: Uuid,
     campaign_id: Option<Uuid>,
     run_id: Option<Uuid>,
+    protocol_version: Option<u16>,
     business_search: Option<DiscoveryBusinessSearchSpec>,
 }
 
@@ -139,23 +150,30 @@ pub fn build_discovery_start_action(
     relay_pubkey: PublicKey,
     request: &DiscoveryStartRequest,
 ) -> Result<EventBuilder, DiscoverySdkError> {
-    validate_uuid(request.request_id, "discovery action")?;
-    validate_uuid(request.idempotency_key, "discovery action")?;
-    validate_uuid(request.campaign_id, "discovery action")?;
     request
-        .business_search
         .validate()
         .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
+    let (wire_version, protocol_version) = match request.protocol_version {
+        buzz_core::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION => (
+            DiscoveryWireVersion::V3,
+            Some(buzz_core::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION),
+        ),
+        buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION => {
+            (DiscoveryWireVersion::V2, None)
+        }
+        _ => return Err(DiscoverySdkError::InvalidEnvelope("discovery action")),
+    };
     build_action(
         relay_pubkey,
         DiscoveryActionInput {
-            wire_version: DiscoveryWireVersion::V2,
+            wire_version,
             operation: DiscoveryOperation::Start,
             request_id: request.request_id,
             idempotency_key: request.idempotency_key,
             campaign_id: Some(request.campaign_id),
             run_id: None,
-            business_search: Some(request.business_search.clone()),
+            protocol_version,
+            business_search: request.business_search.clone(),
         },
     )
 }
@@ -247,6 +265,7 @@ fn build_run_action(
             idempotency_key: request.idempotency_key,
             campaign_id: None,
             run_id: Some(request.run_id),
+            protocol_version: None,
             business_search: None,
         },
     )
@@ -263,6 +282,7 @@ fn build_action(
         idempotency_key,
         campaign_id,
         run_id,
+        protocol_version,
         business_search,
     } = input;
     let target = campaign_id
@@ -285,6 +305,7 @@ fn build_action(
         idempotency_key,
         campaign_id,
         run_id,
+        protocol_version,
         business_search,
     };
     let tags = [
@@ -341,26 +362,37 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
     }
     let action = match operation {
         DiscoveryOperation::Start
-            if content.campaign_id == Some(target_id)
-                && content.run_id.is_none()
-                && content.business_search.is_some() =>
+            if content.campaign_id == Some(target_id) && content.run_id.is_none() =>
         {
-            let business_search = content
-                .business_search
-                .ok_or(DiscoverySdkError::InvalidEnvelope("discovery action"))?;
-            business_search
-                .validate()
-                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
-            DiscoveryAction::Start(DiscoveryStartRequest {
+            let protocol_version = match (wire_version, content.protocol_version) {
+                (DiscoveryWireVersion::V1, None) => 1,
+                (DiscoveryWireVersion::V2, None) => {
+                    buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION
+                }
+                (DiscoveryWireVersion::V3, Some(version))
+                    if version
+                        == buzz_core::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION =>
+                {
+                    version
+                }
+                _ => return Err(DiscoverySdkError::TagContentMismatch("discovery action")),
+            };
+            let request = DiscoveryStartRequest {
                 request_id,
                 idempotency_key,
                 campaign_id: target_id,
-                business_search,
-            })
+                protocol_version,
+                business_search: content.business_search,
+            };
+            request
+                .validate()
+                .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery action"))?;
+            DiscoveryAction::Start(request)
         }
         DiscoveryOperation::Status
             if content.run_id == Some(target_id)
                 && content.campaign_id.is_none()
+                && content.protocol_version.is_none()
                 && content.business_search.is_none() =>
         {
             DiscoveryAction::Status(DiscoveryRunRequest {
@@ -372,6 +404,7 @@ pub fn parse_discovery_action(event: &Event) -> Result<ParsedDiscoveryAction, Di
         DiscoveryOperation::Cancel
             if content.run_id == Some(target_id)
                 && content.campaign_id.is_none()
+                && content.protocol_version.is_none()
                 && content.business_search.is_none() =>
         {
             DiscoveryAction::Cancel(DiscoveryRunRequest {
@@ -442,6 +475,7 @@ fn parse_wire_version(
     match value {
         "1" => Ok(DiscoveryWireVersion::V1),
         "2" => Ok(DiscoveryWireVersion::V2),
+        "3" => Ok(DiscoveryWireVersion::V3),
         _ => Err(DiscoverySdkError::InvalidTag(tag)),
     }
 }
@@ -451,10 +485,10 @@ fn validate_projection(receipt: &DiscoveryReceipt) -> Result<(), DiscoverySdkErr
     validate_uuid(receipt.idempotency_key, "discovery receipt")?;
     validate_uuid(receipt.run.run_id, "discovery receipt")?;
     validate_uuid(receipt.run.campaign_id, "discovery receipt")?;
-    if receipt.run.total_steps == 0 || receipt.run.completed_steps > receipt.run.total_steps {
-        return Err(DiscoverySdkError::InvalidEnvelope("discovery receipt"));
-    }
-    Ok(())
+    receipt
+        .run
+        .validate()
+        .map_err(|_| DiscoverySdkError::InvalidEnvelope("discovery receipt"))
 }
 
 fn operation_tag(operation: DiscoveryOperation) -> &'static str {
@@ -636,7 +670,8 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
-            business_search: business_search(),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(business_search()),
         };
         let event = build_discovery_start_action(relay_keys.public_key(), &request)
             .expect("test event must build")
@@ -687,7 +722,8 @@ mod tests {
             request_id: Uuid::nil(),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
-            business_search: business_search(),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(business_search()),
         };
         assert!(matches!(
             build_discovery_start_action(Keys::generate().public_key(), &request),
@@ -701,15 +737,16 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
-            business_search: business_search(),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(business_search()),
         };
-        request.business_search.limit = 0;
+        request.business_search.as_mut().expect("search").limit = 0;
         assert!(matches!(
             build_discovery_start_action(Keys::generate().public_key(), &request),
             Err(DiscoverySdkError::InvalidEnvelope("discovery action"))
         ));
 
-        request.business_search = business_search();
+        request.business_search = Some(business_search());
         let original = build_discovery_start_action(Keys::generate().public_key(), &request)
             .expect("valid action builds")
             .sign_with_keys(&Keys::generate())
@@ -740,7 +777,8 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
-            business_search: business_search(),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(business_search()),
         };
         let original = build_discovery_start_action(relay.public_key(), &request)
             .expect("action builds")
@@ -766,7 +804,8 @@ mod tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             campaign_id: Uuid::from_u128(3),
-            business_search: business_search(),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(business_search()),
         };
         let original = build_discovery_start_action(relay.public_key(), &request)
             .expect("action builds")
@@ -779,7 +818,8 @@ mod tests {
             idempotency_key: request.idempotency_key,
             campaign_id: Some(Uuid::from_u128(99)),
             run_id: None,
-            business_search: Some(request.business_search.clone()),
+            protocol_version: None,
+            business_search: request.business_search.clone(),
         };
         let event = EventBuilder::new(
             Kind::Custom(KIND_DISCOVERY_ACTION as u16),
@@ -809,11 +849,13 @@ mod tests {
             run: DiscoveryRunProjection {
                 run_id: Uuid::from_u128(23),
                 campaign_id: Uuid::from_u128(24),
+                protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
                 state: DiscoveryRunState::Queued,
                 completed_steps: 0,
                 total_steps: 5,
                 cancel_requested: false,
                 terminal_reason: None,
+                billing: None,
                 created_at: chrono::Utc
                     .timestamp_opt(1_800_000_000, 0)
                     .single()
@@ -845,7 +887,8 @@ mod tests {
             request_id: Uuid::from_u128(31),
             idempotency_key: Uuid::from_u128(32),
             campaign_id: Uuid::from_u128(33),
-            business_search: business_search(),
+            protocol_version: 1,
+            business_search: Some(business_search()),
         };
         let action = build_action(
             relay.public_key(),
@@ -856,7 +899,8 @@ mod tests {
                 idempotency_key: request.idempotency_key,
                 campaign_id: Some(request.campaign_id),
                 run_id: None,
-                business_search: Some(request.business_search.clone()),
+                protocol_version: None,
+                business_search: request.business_search.clone(),
             },
         )
         .expect("legacy action builds")
@@ -873,11 +917,13 @@ mod tests {
             run: DiscoveryRunProjection {
                 run_id: Uuid::from_u128(34),
                 campaign_id: Uuid::from_u128(33),
+                protocol_version: 1,
                 state: DiscoveryRunState::Queued,
                 completed_steps: 0,
                 total_steps: 1,
                 cancel_requested: false,
                 terminal_reason: None,
+                billing: None,
                 created_at: chrono::Utc
                     .timestamp_opt(1_800_000_000, 0)
                     .single()

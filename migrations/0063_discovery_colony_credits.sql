@@ -3,6 +3,25 @@
 -- Campaign budgets are approved once, reserved before work starts, and settled
 -- exactly once when a run reaches a terminal state.
 
+ALTER TABLE discovery_workspace_action_claims
+    DROP CONSTRAINT discovery_workspace_action_claims_operation_check,
+    ADD CONSTRAINT discovery_workspace_action_claims_operation_check
+        CHECK (operation IN (
+            'access',
+            'create_campaign',
+            'update_campaign_sources',
+            'approve_campaign_budget',
+            'pause_campaign_budget',
+            'revoke_campaign_budget',
+            'get_campaign_budget',
+            'get_campaign',
+            'list_campaigns',
+            'list_leads',
+            'list_lead_counts',
+            'get_lead',
+            'update_lead'
+        ));
+
 ALTER TABLE discovery_campaigns
     ADD COLUMN budget_payer_pubkey BYTEA
         CHECK (budget_payer_pubkey IS NULL OR octet_length(budget_payer_pubkey) = 32),

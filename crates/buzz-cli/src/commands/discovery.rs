@@ -2,12 +2,12 @@
 
 use buzz_core::{
     discovery::{
-        DiscoveryBusinessSearchSpec, DiscoveryRunRequest, DiscoverySource, DiscoverySourceConfig,
-        DiscoverySourceMode, DiscoveryStartRequest,
+        DiscoveryRunRequest, DiscoveryStartRequest, DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
     },
     discovery_workspace::{
-        DiscoveryCampaignInput, DiscoveryCampaignListRequest, DiscoveryLeadListRequest,
-        DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
+        DiscoveryCampaignBudgetApproval, DiscoveryCampaignCreateInput, DiscoveryCampaignInputV2,
+        DiscoveryCampaignListRequest, DiscoveryLeadListRequest, DiscoveryLeadUpdateInput,
+        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
     },
     kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT},
 };
@@ -22,9 +22,7 @@ use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::{
-    client::BuzzClient, error::CliError, DiscoveryCmd, DiscoverySourceArg, DiscoverySourceModeArg,
-};
+use crate::{client::BuzzClient, error::CliError, DiscoveryCmd};
 
 /// Route `buzz discovery ...`.
 pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), CliError> {
@@ -50,54 +48,83 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             description,
             language,
             region,
-            source_mode,
-            sources,
             idempotency_key,
         } => {
             publish_workspace_payload(
                 client,
                 DiscoveryWorkspaceActionPayload::CreateCampaign {
-                    campaign: Box::new(DiscoveryCampaignInput {
-                        campaign_id: campaign.unwrap_or_else(Uuid::new_v4),
-                        name: name.trim().to_owned(),
-                        industry_id: industry.trim().to_owned(),
-                        industry_name: industry_name.trim().to_owned(),
-                        vertical_id: vertical.trim().to_owned(),
-                        vertical_name: vertical_name.trim().to_owned(),
-                        query: query.trim().to_owned(),
-                        location: location.trim().to_owned(),
-                        target,
-                        description: description.map(|value| value.trim().to_owned()),
-                        language: language.trim().to_ascii_lowercase(),
-                        region: region.map(|value| value.trim().to_ascii_uppercase()),
-                        source_config: DiscoverySourceConfig {
-                            mode: source_mode.into(),
-                            sources: if sources.is_empty() {
-                                vec![DiscoverySource::GoogleMaps]
-                            } else {
-                                sources.into_iter().map(Into::into).collect()
-                            },
+                    campaign: Box::new(DiscoveryCampaignCreateInput::Current(
+                        DiscoveryCampaignInputV2 {
+                            campaign_id: campaign.unwrap_or_else(Uuid::new_v4),
+                            name: name.trim().to_owned(),
+                            industry_id: industry.trim().to_owned(),
+                            industry_name: industry_name.trim().to_owned(),
+                            vertical_id: vertical.trim().to_owned(),
+                            vertical_name: vertical_name.trim().to_owned(),
+                            query: query.trim().to_owned(),
+                            location: location.trim().to_owned(),
+                            target,
+                            description: description.map(|value| value.trim().to_owned()),
+                            language: language.trim().to_ascii_lowercase(),
+                            region: region.map(|value| value.trim().to_ascii_uppercase()),
                         },
-                    }),
+                    )),
                 },
                 idempotency_key,
             )
             .await
         }
-        DiscoveryCmd::CampaignSources {
+        DiscoveryCmd::CampaignBudgetApprove {
+            file,
+            idempotency_key,
+        } => {
+            let raw = std::fs::read_to_string(&file)
+                .map_err(|error| CliError::Usage(format!("cannot read `{file}`: {error}")))?;
+            let approval: DiscoveryCampaignBudgetApproval =
+                serde_json::from_str(&raw).map_err(|error| {
+                    CliError::Usage(format!("invalid Campaign budget JSON: {error}"))
+                })?;
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::ApproveCampaignBudget { approval },
+                idempotency_key,
+            )
+            .await
+        }
+        DiscoveryCmd::CampaignBudgetPause {
             campaign,
-            source_mode,
-            sources,
             idempotency_key,
         } => {
             publish_workspace_payload(
                 client,
-                DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                DiscoveryWorkspaceActionPayload::PauseCampaignBudget {
                     campaign_id: campaign,
-                    source_config: DiscoverySourceConfig {
-                        mode: source_mode.into(),
-                        sources: sources.into_iter().map(Into::into).collect(),
-                    },
+                },
+                idempotency_key,
+            )
+            .await
+        }
+        DiscoveryCmd::CampaignBudgetRevoke {
+            campaign,
+            idempotency_key,
+        } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::RevokeCampaignBudget {
+                    campaign_id: campaign,
+                },
+                idempotency_key,
+            )
+            .await
+        }
+        DiscoveryCmd::CampaignBudgetGet {
+            campaign,
+            idempotency_key,
+        } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::GetCampaignBudget {
+                    campaign_id: campaign,
                 },
                 idempotency_key,
             )
@@ -217,11 +244,6 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
         }
         DiscoveryCmd::Start {
             campaign,
-            query,
-            location,
-            limit,
-            language,
-            region,
             idempotency_key,
         } => {
             let relay = relay_self(client).await?;
@@ -229,13 +251,8 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 request_id: Uuid::new_v4(),
                 idempotency_key: idempotency_key.unwrap_or_else(Uuid::new_v4),
                 campaign_id: campaign,
-                business_search: DiscoveryBusinessSearchSpec {
-                    query: query.trim().to_owned(),
-                    location: location.trim().to_owned(),
-                    limit,
-                    language: language.trim().to_ascii_lowercase(),
-                    region: region.map(|value| value.trim().to_ascii_uppercase()),
-                },
+                protocol_version: DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+                business_search: None,
             };
             let builder = build_discovery_start_action(relay, &request)
                 .map_err(|error| CliError::Usage(error.to_string()))?;
@@ -289,25 +306,6 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 builder,
             )
             .await
-        }
-    }
-}
-
-impl From<DiscoverySourceModeArg> for DiscoverySourceMode {
-    fn from(value: DiscoverySourceModeArg) -> Self {
-        match value {
-            DiscoverySourceModeArg::Waterfall => Self::Waterfall,
-            DiscoverySourceModeArg::Concurrent => Self::Concurrent,
-        }
-    }
-}
-
-impl From<DiscoverySourceArg> for DiscoverySource {
-    fn from(value: DiscoverySourceArg) -> Self {
-        match value {
-            DiscoverySourceArg::GoogleMaps => Self::GoogleMaps,
-            DiscoverySourceArg::BraveSearch => Self::BraveSearch,
-            DiscoverySourceArg::ExaSearch => Self::ExaSearch,
         }
     }
 }
