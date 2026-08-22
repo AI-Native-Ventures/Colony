@@ -19,6 +19,7 @@ import { TeamShareDialog } from "./TeamShareDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamsSection } from "./TeamsSection";
+import { PeopleSection } from "./PeopleSection";
 import { UnassignedAgentsBanner } from "./UnassignedAgentsBanner";
 import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
@@ -293,6 +294,8 @@ export function AgentsView() {
               personas={personas.libraryPersonas}
               teams={teamActions.teams}
             />
+
+            <PeopleSection />
           </div>
         </div>
       </div>

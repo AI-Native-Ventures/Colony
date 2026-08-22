@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   collectEmployeeHeads,
+  isValidRoleSlug,
   parseEmployeeHead,
   parseRank,
   rankLabel,
@@ -20,20 +21,25 @@ function headEvent({
   role = "sales-lead",
   name = "Sift",
   createdAt = 1_000,
+  manager,
 }) {
+  const tags = [
+    ["d", pubkey],
+    ["role", role],
+    ["name", name],
+    ["rank", rank],
+    ["hired-by", OTHER_PK],
+    ["e", "2".repeat(64)],
+  ];
+  if (manager !== undefined) {
+    tags.push(["manager", manager]);
+  }
   return {
     id: "e".repeat(64),
     pubkey,
     created_at: createdAt,
     kind: KIND_EMPLOYEE,
-    tags: [
-      ["d", pubkey],
-      ["role", role],
-      ["name", name],
-      ["rank", rank],
-      ["hired-by", OTHER_PK],
-      ["e", "2".repeat(64)],
-    ],
+    tags,
     content: "",
     sig: "f".repeat(128),
   };
@@ -64,7 +70,33 @@ test("a well-formed head parses to its identity and rank", () => {
     role: "sales-lead",
     name: "Sift",
     rank: "worker",
+    manager: null,
   });
+});
+
+test("an employee head's manager tag is read as the reporting line", () => {
+  const parsed = parseEmployeeHead(headEvent({ manager: OTHER_PK }));
+  assert.equal(parsed.manager, OTHER_PK);
+});
+
+test("a malformed or ambiguous manager tag yields null rather than throwing", () => {
+  // Not a pubkey: no reporting line, but the head itself stays valid.
+  assert.equal(parseEmployeeHead(headEvent({ manager: "sift" })).manager, null);
+  assert.equal(parseEmployeeHead(headEvent({ manager: "" })).manager, null);
+  // Two conflicting lines resolve to NO line, mirroring the relay's
+  // duplicate-rejection (fail closed, never first-wins).
+  const duplicated = headEvent({ manager: OTHER_PK });
+  duplicated.tags.push(["manager", PK]);
+  assert.equal(parseEmployeeHead(duplicated).manager, null);
+});
+
+test("the newest head's manager wins over an older one", () => {
+  const heads = collectEmployeeHeads([
+    headEvent({ manager: OTHER_PK, createdAt: 1_000 }),
+    headEvent({ createdAt: 2_000 }),
+  ]);
+  assert.equal(heads.length, 1);
+  assert.equal(heads[0].manager, null);
 });
 
 test("malformed heads are dropped, not fatal", () => {
@@ -106,4 +138,22 @@ test("an older duplicate never shadows a newer head", () => {
   ]);
   assert.equal(heads.length, 1);
   assert.equal(heads[0].rank, "executive");
+});
+
+test("role slug grammar mirrors the relay's is_valid_role_slug", () => {
+  for (const good of ["a", "sales-lead", "chief_of_staff", "r2", "9lives"]) {
+    assert.ok(isValidRoleSlug(good), `${good} should be valid`);
+  }
+  for (const bad of [
+    "",
+    "-lead",
+    "_lead",
+    "Sales",
+    "sales lead",
+    "sales.lead",
+  ]) {
+    assert.ok(!isValidRoleSlug(bad), `${bad} should be invalid`);
+  }
+  assert.ok(isValidRoleSlug("a".repeat(64)));
+  assert.ok(!isValidRoleSlug("a".repeat(65)));
 });

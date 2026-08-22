@@ -242,6 +242,154 @@ pub async fn agent_tier(
     Ok(None)
 }
 
+/// Resolve `pubkey`'s reporting line: the agent it reports to, scoped to
+/// `tenant`, or `None` when there is no manager. Mirrors [`agent_tier`]
+/// step for step, because the two answers come from the same two sources:
+///
+/// 1. an `employees` row for this pubkey -> its `manager` column (a hired
+///    employee; the column is relay-written, so it needs no author-trust
+///    scan);
+/// 2. else an owner-authored managed-agent head -> its `manager` TAG (the
+///    legacy-free managed-agent path; the tag, not any content field, is
+///    authoritative -- tags are indexed and this is also where an agent's
+///    reports are found for delete protection).
+///
+/// The claimed manager is then VALIDATED against the tier ladder before it
+/// is returned: its own resolved tier must equal the subject's escalation
+/// target exactly (worker -> leader, leader -> executive), and a subject
+/// with no resolvable tier, or an executive subject, has no manager at all.
+/// An invalid edge resolves to NO manager -- never to a different agent --
+/// so a stale or forged line can only ever route to nobody, not somewhere.
+///
+/// Like [`agent_tier`], fails closed on every database error: a lookup
+/// failure must never invent a reporting line. There is deliberately no
+/// cycle detection: the ladder is a strict total order and every edge climbs
+/// exactly one rung, so a cycle is unrepresentable -- a check here would
+/// mask a broken tier rule rather than surface it.
+///
+/// Returns `Ok(None)` when the pubkey has no employees row and no
+/// owner-authored head carrying a `manager` tag, when the claimed manager
+/// fails the one-rung-up rule, or when the subject sits nowhere on the
+/// ladder. Callers treat `None` as "no default audience", never as
+/// authorization.
+pub async fn agent_manager(
+    tenant: &TenantContext,
+    state: &AppState,
+    pubkey: &PublicKey,
+) -> Result<Option<PublicKey>, String> {
+    // Fail closed: a DB error resolving the reporting line must not be read
+    // as "no manager" any more than a tier lookup failure may invent one.
+    let employee = state
+        .db
+        .find_employee(tenant.community(), &pubkey.to_bytes())
+        .await
+        .map_err(|error| format!("error: internal error loading employee record: {error}"))?;
+
+    let claimed = if let Some(employee) = &employee {
+        // A corrupt manager column (not 32 bytes) cannot be a reporting
+        // line; the CHECK constraint makes it unreachable anyway.
+        employee
+            .manager
+            .as_deref()
+            .and_then(|bytes| PublicKey::from_slice(bytes).ok())
+    } else {
+        let rows = state
+            .db
+            .query_events(&buzz_db::event::EventQuery {
+                kinds: Some(vec![KIND_MANAGED_AGENT as i32]),
+                d_tag: Some(pubkey.to_hex()),
+                global_only: true,
+                limit: Some(MAX_CANDIDATE_TIER_HEADS),
+                ..buzz_db::event::EventQuery::for_community(tenant.community())
+            })
+            .await
+            .map_err(|error| {
+                format!("error: internal error loading managed-agent head: {error}")
+            })?;
+
+        // Walk candidates newest-first and use the first one authored by a
+        // CURRENT community owner, exactly as [`agent_tier`] does before it
+        // reads anything off a head. `KIND_MANAGED_AGENT` is client-writable:
+        // trusting whichever head happens to be newest would let any member
+        // redirect another agent's reporting line -- upward, or sideways to a
+        // colluding same-rank agent that passes every tier check.
+        for stored in rows {
+            let author_hex = stored.event.pubkey.to_hex();
+            let author_is_owner = state
+                .db
+                .get_relay_member(tenant.community(), &author_hex)
+                .await
+                .map_err(|error| {
+                    format!("error: internal error checking managed-agent head author: {error}")
+                })?
+                .is_some_and(|member| member.role == "owner");
+            if !author_is_owner {
+                continue;
+            }
+
+            // NIP-33 latest-wins among the OWNER'S OWN heads: this is the
+            // authoritative head even if it carries no `manager` tag, in
+            // which case the answer is "no manager" -- never an older,
+            // already-superseded head's line.
+            return Ok(event_single_tag(&stored.event, "manager")
+                .and_then(|manager_hex| PublicKey::from_hex(&manager_hex).ok()));
+        }
+        None
+    };
+
+    let Some(claimed) = claimed else {
+        return Ok(None);
+    };
+
+    // The edge must sit exactly one rung up the ladder. Resolve the
+    // subject's own tier first: no tier means nothing to escalate from, and
+    // an executive is the top of the ladder -- it reports to no agent.
+    //
+    // This check is also why a SELF-manager is unrepresentable here, without
+    // any explicit self-comparison: an edge from an agent to itself would
+    // need its own tier to equal its own escalation target, and every rung's
+    // target is strictly higher (Executive maps to itself only for subjects
+    // already excluded above). A forged head naming its own subject as
+    // manager therefore resolves to None, not to a self-loop.
+    let Some(subject_tier) = agent_tier(tenant, state, pubkey).await? else {
+        return Ok(None);
+    };
+    if subject_tier == AgentTier::Executive {
+        return Ok(None);
+    }
+    let manager_tier = agent_tier(tenant, state, &claimed).await?;
+    if manager_tier != Some(subject_tier.escalation_target()) {
+        return Ok(None);
+    }
+
+    Ok(Some(claimed))
+}
+
+/// Read a single-valued tag off an event. `None` when the tag is absent --
+/// AND when it appears more than once.
+///
+/// Duplicate-rejection, not first-wins: `KIND_MANAGED_AGENT` is
+/// client-writable, so a head can carry two conflicting `manager` tags.
+/// Resolving to the first would let the relay enforce one reporting line
+/// while a client walking tags naively drew another -- a divergence the
+/// owner cannot see. Same convention as `buzz_core::event_tags::single_tag`,
+/// which refuses duplicates for exactly this reason; here an ambiguous line
+/// resolves to NO line (fail closed) rather than erroring, matching every
+/// other resolver in this file.
+pub(crate) fn event_single_tag(event: &Event, name: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    for tag in event.tags.iter() {
+        if tag.kind().to_string() != name {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = tag.content().map(|value| value.to_string());
+    }
+    found
+}
+
 /// Bring a `role_id` read off event content into the form `employees.role_id`
 /// is stored in.
 ///
