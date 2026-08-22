@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildRankedHeadContent,
+  newestOwnerAuthoredHeadEvent,
   parseManagedAgentHead,
+  rankedHeadTags,
   resolveManagedAgentRank,
+  supersedingCreatedAt,
   trustedManagedAgentHeads,
 } from "./managedAgentHeads.ts";
 import { KIND_MANAGED_AGENT } from "@/shared/constants/kinds.ts";
@@ -170,4 +174,88 @@ test("rank resolves through the role's employee before the tier field", () => {
     ),
     null,
   );
+});
+
+test("the newest owner-authored head at a d tag is found for merging", () => {
+  const impostor = managedHeadEvent({
+    author: AGENT,
+    createdAt: 3_000,
+    tier: "executive",
+  });
+  const ownersNewest = managedHeadEvent({ author: OWNER, createdAt: 2_000 });
+  const ownersOlder = managedHeadEvent({ author: OWNER, createdAt: 1_000 });
+  assert.equal(
+    newestOwnerAuthoredHeadEvent(
+      [impostor, ownersOlder, ownersNewest],
+      OWNERS,
+      AGENT,
+    )?.created_at,
+    2_000,
+  );
+});
+
+test("no owner-authored head at the d tag yields none", () => {
+  assert.equal(
+    newestOwnerAuthoredHeadEvent(
+      [managedHeadEvent({ author: AGENT, createdAt: 9_000 })],
+      OWNERS,
+      AGENT,
+    ),
+    null,
+  );
+  // A head at a DIFFERENT d tag never matches.
+  assert.equal(
+    newestOwnerAuthoredHeadEvent(
+      [managedHeadEvent({ pubkey: OTHER_AGENT })],
+      OWNERS,
+      AGENT,
+    ),
+    null,
+  );
+});
+
+test("superseding created_at is newer than both now and the previous head", () => {
+  const previous = managedHeadEvent({ createdAt: 5_000 });
+  assert.equal(supersedingCreatedAt(previous, 10_000_000), 10_000);
+  assert.equal(supersedingCreatedAt(previous, 4_000_000), 5_001);
+  assert.equal(supersedingCreatedAt(null, 4_000_000), 4_000);
+});
+
+test("ranked head content merges tier into the previous content, preserving fields", () => {
+  const previous = JSON.stringify({
+    name: "Scout",
+    persona_id: "p-1",
+    respond_to: "owner",
+  });
+  const merged = JSON.parse(
+    buildRankedHeadContent(previous, "Scout", "leader"),
+  );
+  assert.equal(merged.tier, "leader");
+  assert.equal(merged.name, "Scout");
+  assert.equal(merged.persona_id, "p-1");
+  assert.equal(merged.respond_to, "owner");
+});
+
+test("ranked head content synthesizes a body when no usable head exists", () => {
+  const merged = JSON.parse(buildRankedHeadContent(null, "Scout", "worker"));
+  assert.deepEqual(merged, { name: "Scout", tier: "worker" });
+
+  const garbage = JSON.parse(
+    buildRankedHeadContent("not json {", "Scout", "worker"),
+  );
+  assert.deepEqual(garbage, { name: "Scout", tier: "worker" });
+
+  // An existing non-string name is not overwritten by the fallback.
+  const kept = JSON.parse(
+    buildRankedHeadContent(JSON.stringify({ name: "Sift" }), "Scout", "worker"),
+  );
+  assert.equal(kept.name, "Sift");
+});
+
+test("ranked head tags carry the d tag and only a valid manager", () => {
+  assert.deepEqual(rankedHeadTags(AGENT, null), [["d", AGENT]]);
+  assert.deepEqual(rankedHeadTags(AGENT, OTHER_AGENT), [
+    ["d", AGENT],
+    ["manager", OTHER_AGENT],
+  ]);
 });

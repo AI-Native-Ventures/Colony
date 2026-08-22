@@ -7,6 +7,7 @@ import {
   parseRank,
   type AgentRank,
 } from "@/features/agents/employeeHeads";
+import { signRelayEvent } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 /**
@@ -155,4 +156,182 @@ const MANAGED_AGENT_HEADS_ROOT = "colony-managed-agent-heads" as const;
 /** Community-scoped query key for the raw kind-30177 head fetch. */
 export function managedAgentHeadsQueryKey(communityId: string) {
   return [MANAGED_AGENT_HEADS_ROOT, communityId] as const;
+}
+
+/**
+ * Writing rank onto a personal agent.
+ *
+ * A personal agent has no employee row for the relay to speak about, so its
+ * rank lives on the owner-authored kind-30177 head the desktop already
+ * publishes: `content.tier` for the rung (what `agent_tier` reads) and a
+ * `manager` TAG for the reporting line (what `agent_manager` reads -- tags,
+ * not content, because that is where reports are indexed). Republishing is
+ * NIP-33 latest-wins at `(kind, author, d)`, so the replacement must merge
+ * into the newest owner-authored head's content rather than replace it:
+ * other readers of 30177 resolve name and definition linkage from the same
+ * event, and a synthesized body would unlink them.
+ */
+
+/** Thrown when no owner-authored head has landed for the agent yet. */
+export class ManagedAgentHeadNotLandedError extends Error {
+  constructor(pubkey: string) {
+    super(
+      `No workspace-published profile has landed on the relay for ${pubkey} yet; try again in a moment.`,
+    );
+    this.name = "ManagedAgentHeadNotLandedError";
+  }
+}
+
+/**
+ * The newest owner-authored head event at `dTag`, or null. This is the event
+ * a rank republish supersedes and merges into; impostor-authored candidates
+ * are invisible here exactly as they are everywhere else in this module.
+ */
+export function newestOwnerAuthoredHeadEvent(
+  events: readonly RelayEvent[],
+  ownerPubkeys: ReadonlySet<string>,
+  dTag: string,
+): RelayEvent | null {
+  let newest: RelayEvent | null = null;
+  for (const event of events) {
+    if (event.kind !== KIND_MANAGED_AGENT) continue;
+    const d = singleTagValue(event, "d")?.trim().toLowerCase();
+    if (d !== dTag) continue;
+    if (!ownerPubkeys.has(normalizePubkey(event.pubkey))) continue;
+    if (!newest || event.created_at > newest.created_at) newest = event;
+  }
+  return newest;
+}
+
+/** Live lookup of the same, for callers deciding whether a head has landed. */
+export async function fetchNewestOwnerAuthoredHead(
+  pubkey: string,
+  ownerPubkeys: ReadonlySet<string>,
+): Promise<RelayEvent | null> {
+  return newestOwnerAuthoredHeadEvent(
+    await fetchManagedAgentHeadEvents(),
+    ownerPubkeys,
+    pubkey,
+  );
+}
+
+/**
+ * The created_at a replacement head needs: newer than both now and the head
+ * it supersedes, so an in-flight retention flush can never shadow the rank
+ * with the older body it still holds. Seconds, as Nostr requires.
+ */
+export function supersedingCreatedAt(
+  previous: RelayEvent | null,
+  nowMs: number,
+): number {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const afterPrevious = previous ? previous.created_at + 1 : 0;
+  return Math.max(nowSeconds, afterPrevious);
+}
+
+/**
+ * Merge `tier` into the previous head's content JSON. Fields the org chart
+ * does not read -- name, definition linkage, respond-to -- survive the
+ * republish untouched; malformed content degrades to a minimal body naming
+ * the agent rather than failing the write.
+ */
+export function buildRankedHeadContent(
+  previousContent: string | null,
+  fallbackName: string,
+  tier: AgentRank,
+): string {
+  let base: Record<string, unknown> = {};
+  if (previousContent) {
+    try {
+      const parsed: unknown = JSON.parse(previousContent);
+      if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed)
+      ) {
+        base = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Content that does not parse says nothing worth preserving.
+    }
+  }
+  if (typeof base.name !== "string" || base.name.trim().length === 0) {
+    base.name = fallbackName;
+  }
+  base.tier = tier;
+  return JSON.stringify(base);
+}
+
+/** The tag shape of a ranked head: the `d` tag plus an optional manager line. */
+export function rankedHeadTags(
+  dTag: string,
+  manager: string | null,
+): string[][] {
+  const tags = [["d", dTag]];
+  if (manager) tags.push(["manager", manager]);
+  return tags;
+}
+
+export type ManagedAgentRankInput = {
+  /** The agent being ranked; becomes the `d` tag. */
+  pubkey: string;
+  /** Display-name fallback for the rare case the merged content names none. */
+  name: string;
+  tier: AgentRank;
+  /** Manager pubkey, or null to publish no manager line. */
+  manager: string | null;
+};
+
+/**
+ * Publish an owner-signed kind-30177 head carrying `tier` and `manager`.
+ *
+ * Refuses (fail closed) while the community's owner set is unknown: without
+ * it the newest owner-authored head cannot be found, so the merge could not
+ * preserve the fields other readers rely on. Refuses when no owner-authored
+ * head has landed yet -- ranking a freshly created agent races the async
+ * identity publication, and guessing the body would publish a head that
+ * unlinks the agent's definition for every reader.
+ *
+ * The relay accepts this event from any member (kind 30177 is
+ * client-writable), so trust comes from authorship, not ingest: only the
+ * owner's device signs here, which is what makes the result authoritative.
+ */
+export async function publishManagedAgentRankHead(
+  input: ManagedAgentRankInput,
+  ownerPubkeys: ReadonlySet<string>,
+): Promise<string> {
+  if (!/^[0-9a-f]{64}$/.test(input.pubkey)) {
+    throw new Error("An agent rank needs a valid pubkey.");
+  }
+  if (input.manager && !/^[0-9a-f]{64}$/.test(input.manager)) {
+    throw new Error("A manager needs a valid pubkey.");
+  }
+  if (ownerPubkeys.size === 0) {
+    throw new Error(
+      "The workspace's owners could not be verified, so the rank was not published.",
+    );
+  }
+
+  const events = await fetchManagedAgentHeadEvents();
+  const previous = newestOwnerAuthoredHeadEvent(
+    events,
+    ownerPubkeys,
+    input.pubkey,
+  );
+  if (!previous) {
+    throw new ManagedAgentHeadNotLandedError(input.pubkey);
+  }
+
+  const event = await signRelayEvent({
+    kind: KIND_MANAGED_AGENT,
+    content: buildRankedHeadContent(previous.content, input.name, input.tier),
+    createdAt: supersedingCreatedAt(previous, Date.now()),
+    tags: rankedHeadTags(input.pubkey, input.manager),
+  });
+  await relayClient.publishEvent(
+    event,
+    "Timed out while updating the agent's rank.",
+    "Failed to update the agent's rank.",
+  );
+  return event.id;
 }

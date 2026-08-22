@@ -17,6 +17,11 @@ export type ScrapeResult =
 export type OnboardingServices = {
   auth: {
     signUp: (email: string, password: string) => Promise<SignUpResult>;
+    signIn: (email: string, password: string) => Promise<{ pubkey: string }>;
+    recover: (
+      email: string,
+      code: string,
+    ) => Promise<{ pubkey: string; resetToken: string }>;
   };
   payments: {
     /** Amount is USD cents. $5.00 is 500. Everything is USD, nothing converts. */

@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 407,
-    "rust_lines": 163380,
+    "rust_total": 408,
+    "rust_lines": 163429,
     "tauri_coupled": 162,
-    "portable": 245,
-    "portable_lines": 91952,
+    "portable": 246,
+    "portable_lines": 92001,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -322,6 +322,7 @@
       "src-tauri/src/managed_agents/discovery/runtime_metadata.rs",
       "src-tauri/src/managed_agents/discovery/tests.rs",
       "src-tauri/src/managed_agents/discovery/tests/codex_version.rs",
+      "src-tauri/src/managed_agents/discovery/tests/harness_registry_tests.rs",
       "src-tauri/src/managed_agents/discovery/tests/managed_path_resolution.rs",
       "src-tauri/src/managed_agents/discovery/tests/nvm.rs",
       "src-tauri/src/managed_agents/discovery/windows_install.rs",

@@ -373,7 +373,10 @@ function CommunityApp({
       const activeCommunityId = activeCommunity?.id;
       if (targetCommunityId === activeCommunityId) return;
       if (activeCommunityId) {
-        const route = deriveShellRoute(router.state.location.pathname);
+        const route = deriveShellRoute(
+          router.state.location.pathname,
+          router.state.location.search,
+        );
         saveCommunityDestination(
           activeCommunityId,
           route.selectedView === "channel" && route.selectedChannelId
