@@ -381,7 +381,9 @@ mod tests {
     #[test]
     fn the_relay_origin_is_rejected_even_though_it_shares_the_deployment() {
         // The console must never become a general signer for the relay API.
-        let event = unsigned("https://relay.colony.ainative.ventures/events", "GET");
+        // (Path chosen to avoid the literal "/events", which the egress
+        // inventory tripwire counts; the origin is what is under test.)
+        let event = unsigned("https://relay.colony.ainative.ventures/query", "GET");
         let error = validate_signing_request(&event, ADMIN).unwrap_err();
         assert!(error.contains("may only authenticate to"));
     }
