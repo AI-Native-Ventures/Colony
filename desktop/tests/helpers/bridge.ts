@@ -90,6 +90,8 @@ export type MockEmployeeHeadSeed = {
   role?: string;
   name?: string;
   rank: "worker" | "leader" | "executive";
+  /** The agent this employee reports to (pubkey); omitted means no manager. */
+  manager?: string;
 };
 
 type MockHuddleSeed = {
@@ -191,6 +193,11 @@ type MockBridgeOptions = {
   discoveryCredentialSaveDelayMs?: number;
   /** Signed Block manifests/catalog events served by the mock relay. */
   blockEvents?: RelayEvent[];
+  /**
+   * Owner-authored delegation grant heads (kind 30189) served by the mock
+   * relay, keyed by their `d` tag; drives the promotion confirmation.
+   */
+  delegationGrantEvents?: RelayEvent[];
   /** Signed Block timeline events seeded before the app subscribes. */
   blockTimelineEvents?: Array<{
     channelName: string;

@@ -45,6 +45,37 @@ export function parseRank(value: string | undefined): AgentRank | null {
   return null;
 }
 
+/**
+ * Role slug grammar, mirroring `is_valid_role_slug` in
+ * `crates/buzz-core/src/employee.rs`: lowercase, digits, `-` and `_`,
+ * starting alphanumeric, 64 characters maximum. The relay re-validates at
+ * ingest; this exists so the hire form can refuse a slug before signing.
+ */
+export function isValidRoleSlug(value: string): boolean {
+  if (value.length === 0 || value.length > 64) return false;
+  const first = value[0];
+  const isLowerDigit = (c: string) =>
+    (c >= "a" && c <= "z") || (c >= "0" && c <= "9");
+  if (!first || !isLowerDigit(first)) return false;
+  return [...value].every((c) => isLowerDigit(c) || c === "-" || c === "_");
+}
+
+/**
+ * The agent this employee reports to (lowercase hex pubkey), or null when
+ * there is none. Parsed from the head's `manager` tag, the same
+ * authoritative tag the relay resolves at ingest.
+ */
+function parseManagerTag(event: RelayEvent): string | null {
+  // Duplicate-rejection, not first-wins: the relay's `event_single_tag`
+  // resolves an ambiguous line to NO line (fail closed), and a client that
+  // read the first tag instead could draw a reporting edge the relay
+  // enforces differently.
+  const matches = event.tags.filter((tag) => tag[0] === "manager");
+  if (matches.length !== 1) return null;
+  const value = matches[0][1]?.trim().toLowerCase();
+  return value !== undefined && /^[0-9a-f]{64}$/.test(value) ? value : null;
+}
+
 /** One employee, projected from its newest head. */
 export type EmployeeHead = {
   /** The employee pubkey (lowercase hex), from the `d` tag. */
@@ -52,6 +83,8 @@ export type EmployeeHead = {
   role: string;
   name: string;
   rank: AgentRank;
+  /** The agent one rung up that this employee reports to, or null. */
+  manager: string | null;
 };
 
 function tagValue(event: RelayEvent, name: string): string | undefined {
@@ -74,6 +107,7 @@ export function parseEmployeeHead(event: RelayEvent): EmployeeHead | null {
     role: tagValue(event, "role") ?? "",
     name: tagValue(event, "name") ?? "",
     rank,
+    manager: parseManagerTag(event),
   };
 }
 
