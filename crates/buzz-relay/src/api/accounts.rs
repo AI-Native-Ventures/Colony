@@ -21,8 +21,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use buzz_auth::account_crypto::normalise_email;
-use buzz_auth::account_verifier::{hash_auth_key, is_supported_kdf_version};
-use buzz_db::email_accounts::{create_account, CreateAccountOutcome, NewAccount};
+use buzz_auth::account_verifier::{
+    dummy_verify, hash_auth_key, is_supported_kdf_version, verify_auth_key,
+};
+use buzz_db::email_accounts::{
+    create_account, find_account, record_signin_failure, record_signin_success,
+    CreateAccountOutcome, NewAccount,
+};
 
 use crate::state::AppState;
 
@@ -167,6 +172,111 @@ pub async fn signup(
     }
 }
 
+/// Failed signins before the account locks.
+pub const LOCK_THRESHOLD: i32 = 10;
+/// How long a locked account stays locked.
+pub const LOCK_DURATION_MINS: i64 = 15;
+
+/// Body for `POST /api/accounts/signin`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigninRequest {
+    /// Address the account is filed under, normalised server side.
+    pub email: String,
+    /// Client-derived authentication value, 64 lowercase hex characters.
+    pub auth_key: String,
+}
+
+/// Validate a signin body. Deliberately shallower than signup validation:
+/// anything an attacker would probe with belongs behind the uniform
+/// `invalid_credentials` response, not a distinguishable 400.
+pub(crate) fn validate_signin(request: &SigninRequest) -> Result<(), &'static str> {
+    let email = normalise_email(&request.email);
+    if email.len() > MAX_EMAIL_LEN || !email.contains('@') {
+        return Err("invalid_email");
+    }
+    if !is_lowercase_hex(&request.auth_key, 64) {
+        return Err("invalid_auth_key");
+    }
+    Ok(())
+}
+
+/// Whole seconds until `until`, floored at zero.
+pub(crate) fn retry_after_secs(until: chrono::DateTime<chrono::Utc>) -> i64 {
+    (until - chrono::Utc::now()).num_seconds().max(0)
+}
+
+fn locked_error(until: chrono::DateTime<chrono::Utc>) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::LOCKED,
+        Json(json!({
+            "error": "temporarily_locked",
+            "retryAfterSecs": retry_after_secs(until),
+        })),
+    )
+}
+
+/// `POST /api/accounts/signin`
+///
+/// Returns `invalid_credentials` for both an unknown address and a wrong
+/// password, and burns equivalent work on the unknown path so the two cannot
+/// be told apart by timing. Signup deliberately does disclose existence; that
+/// is a usability requirement on one screen, and repeating it here would hand
+/// credential stuffing a free oracle.
+pub async fn signin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SigninRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if let Err(reason) = validate_signin(&request) {
+        return Err(api_error(StatusCode::BAD_REQUEST, reason));
+    }
+    let tenant = tenant_from_host(&state, &headers).await?;
+    let email = normalise_email(&request.email);
+
+    let account = find_account(state.db.pool(), tenant.community(), &email)
+        .await
+        .map_err(|error| internal_error(&format!("find account: {error}")))?;
+
+    let Some(account) = account else {
+        dummy_verify();
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_credentials"));
+    };
+
+    if let Some(until) = account.locked_until {
+        if until > chrono::Utc::now() {
+            return Err(locked_error(until));
+        }
+    }
+
+    if !verify_auth_key(&request.auth_key, &account.auth_hash) {
+        let locked = record_signin_failure(
+            state.db.pool(),
+            tenant.community(),
+            account.id,
+            LOCK_THRESHOLD,
+            chrono::Duration::minutes(LOCK_DURATION_MINS),
+        )
+        .await
+        .map_err(|error| internal_error(&format!("record failure: {error}")))?;
+
+        if let Some(until) = locked {
+            return Err(locked_error(until));
+        }
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_credentials"));
+    }
+
+    record_signin_success(state.db.pool(), tenant.community(), account.id)
+        .await
+        .map_err(|error| internal_error(&format!("record success: {error}")))?;
+
+    Ok(Json(json!({
+        "pubkey": account.pubkey,
+        "passwordBlob": account.password_blob,
+        "kdfVersion": account.kdf_version,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +364,36 @@ mod tests {
         let mut request = valid();
         request.recovery_blob = request.password_blob.clone();
         assert_eq!(validate_signup(&request).unwrap_err(), "invalid_blob");
+    }
+
+    #[test]
+    fn signin_validation_accepts_a_well_formed_body() {
+        let request = SigninRequest {
+            email: "founder@example.com".into(),
+            auth_key: "b".repeat(64),
+        };
+        assert!(validate_signin(&request).is_ok());
+    }
+
+    #[test]
+    fn signin_validation_rejects_a_malformed_auth_key() {
+        let request = SigninRequest {
+            email: "founder@example.com".into(),
+            auth_key: "short".into(),
+        };
+        assert_eq!(validate_signin(&request).unwrap_err(), "invalid_auth_key");
+    }
+
+    #[test]
+    fn lock_expiry_is_reported_in_whole_seconds_remaining() {
+        let until = chrono::Utc::now() + chrono::Duration::seconds(90);
+        let secs = retry_after_secs(until);
+        assert!((85..=90).contains(&secs), "got {secs}");
+    }
+
+    #[test]
+    fn a_lock_already_in_the_past_reports_zero() {
+        let until = chrono::Utc::now() - chrono::Duration::seconds(30);
+        assert_eq!(retry_after_secs(until), 0);
     }
 }
