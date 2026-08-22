@@ -38,6 +38,14 @@ export function createFakeServices(
           recoveryCode: "TRAIL-9F2K-4QD8-MZ71",
         };
       },
+      signIn: async (email) => {
+        await wait();
+        return { pubkey: `fake-${email}` };
+      },
+      recover: async (email) => {
+        await wait();
+        return { pubkey: `fake-${email}`, resetToken: "fake-reset-token" };
+      },
     },
     payments: {
       createTransaction: async (usdCents) => {
