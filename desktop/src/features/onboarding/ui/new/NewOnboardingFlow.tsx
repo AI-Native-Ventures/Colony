@@ -2,11 +2,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
+import { getRelayHttpUrl } from "@/shared/api/tauri";
+import {
+  createNcryptsecBackup,
+  getIdentity,
+  importIdentity,
+} from "@/shared/api/tauriIdentity";
 import {
   getStorageItem,
   removeStorageItem,
   setStorageItem,
 } from "@/shared/lib/safeStorage";
+import { createAuthService, type AuthFailure } from "../../authService";
 import type { OnboardingServices, ScrapeResult } from "../../contracts";
 import {
   clearAnswers,
@@ -71,6 +78,100 @@ function readReducedMotion(): boolean {
 const FAKE_INSTALL_MS = 3400;
 const FAKE_INSTALL_REDUCED_MS = 900;
 
+/** Bound account requests so an unreachable server fails in seconds instead
+ *  of hanging on the OS-level connect timeout (mirrors invites.ts). */
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
+/** POST JSON to the active community's server. Network failures throw and
+ *  become `unreachable` inside authService; non-2xx responses are returned as
+ *  data, never thrown. */
+async function postJson(path: string, body: unknown) {
+  const base = await getRelayHttpUrl();
+  const response = await fetch(`${base.replace(/\/+$/, "")}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
+  });
+  const parsed: unknown = await response.json().catch(() => ({}));
+  return { status: response.status, body: parsed };
+}
+
+/**
+ * The real auth service wired to the identity this computer already holds:
+ * the app generated and persisted it on first launch, so there is something
+ * to back up before onboarding runs. Nothing runs until the account screen
+ * is submitted.
+ */
+function createWiredAuthService() {
+  return createAuthService({
+    post: postJson,
+    createBackup: createNcryptsecBackup,
+    importIdentity: async (blob, password) => {
+      await importIdentity(blob, password);
+    },
+    getPubkey: async () => (await getIdentity()).pubkey,
+  });
+}
+
+const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
+
+/**
+ * E2E only: one spec pins an auth failure so the account screen's failure
+ * states stay testable without pointing the flow at a live server. The mode
+ * check keeps this unreachable outside the e2e build, exactly like the flag's
+ * own localStorage override in newOnboardingFlag.ts.
+ */
+function readE2eAuthFailure(
+  env: Record<string, string | undefined>,
+): AuthFailure | null {
+  if (env.MODE !== "e2e") return null;
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(E2E_AUTH_FAILURE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { kind?: unknown }).kind === "string"
+    ) {
+      return parsed as AuthFailure;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which auth service the flow runs on. The boundary newOnboardingFlag draws
+ * for the redesigned flow itself decides this too: the build-time switch
+ * turns the real service on, and the e2e build mode keeps fakes so existing
+ * specs stay hermetic.
+ */
+function resolveAuthServices(
+  env: Record<string, string | undefined>,
+  passed: OnboardingServices,
+): OnboardingServices {
+  const real =
+    env.VITE_NEW_ONBOARDING === "1" && env.MODE !== "e2e"
+      ? createWiredAuthService()
+      : null;
+  const base = real === null ? passed : { ...passed, auth: real };
+  const forced = readE2eAuthFailure(env);
+  if (forced === null) return base;
+  return {
+    ...base,
+    auth: {
+      ...base.auth,
+      signUp: async () => {
+        throw forced;
+      },
+    },
+  };
+}
+
 type Props = {
   services: OnboardingServices;
   onComplete: () => void;
@@ -79,6 +180,12 @@ type Props = {
 export function NewOnboardingFlow({ services, onComplete }: Props) {
   // Build-time flags never change mid-session, so both are read once.
   const canInvite = invitesEnabled(import.meta.env);
+  // Resolved once per mount: the flow must not see a new services identity
+  // mid-run (in-flight steps read it), for the same reason App memoises the
+  // fakes it passes in.
+  const [effectiveServices] = useState(() =>
+    resolveAuthServices(import.meta.env, services),
+  );
   const [reducedMotion] = useState(readReducedMotion);
 
   const [boot] = useState(() => {
@@ -95,6 +202,9 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     city: "",
   });
   const [isSigningUp, setIsSigningUp] = useState(false);
+  const [accountFailure, setAccountFailure] = useState<AuthFailure | null>(
+    null,
+  );
   const [acknowledged, setAcknowledged] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState("");
   const [pubkey, setPubkey] = useState("");
@@ -197,9 +307,13 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
   const handleAccountSubmit = async () => {
     if (!accountReady(accountValues) || isSigningUp) return;
     setIsSigningUp(true);
+    setAccountFailure(null);
     try {
       const email = accountValues.email.trim();
-      const result = await services.auth.signUp(email, accountValues.password);
+      const result = await effectiveServices.auth.signUp(
+        email,
+        accountValues.password,
+      );
       setRecoveryCode(result.recoveryCode);
       setPubkey(result.pubkey);
       const updated: OnboardingAnswers = {
@@ -208,9 +322,15 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
       };
       setAnswers(updated);
       goTo(nextStep("account", updated));
-    } catch {
-      // Sign-up failed: stay here with the button re-enabled so the user can
-      // simply try again.
+    } catch (thrown) {
+      // authService throws the typed union; anything else still lands on the
+      // generic retry state rather than vanishing. Either way the user stays
+      // here with every field intact and the button re-enabled.
+      setAccountFailure(
+        typeof thrown === "object" && thrown !== null && "kind" in thrown
+          ? (thrown as AuthFailure)
+          : { kind: "unreachable" },
+      );
     } finally {
       setIsSigningUp(false);
     }
@@ -284,7 +404,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     if (!invites.length || isSendingInvites) return;
     setIsSendingInvites(true);
     try {
-      await services.invites.invite(invites);
+      await effectiveServices.invites.invite(invites);
       finish();
     } finally {
       setIsSendingInvites(false);
@@ -300,11 +420,14 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
         return (
           <AccountScreen
             values={accountValues}
-            onChange={(patch) =>
-              setAccountValues((current) => ({ ...current, ...patch }))
-            }
+            onChange={(patch) => {
+              setAccountValues((current) => ({ ...current, ...patch }));
+              // A fresh attempt is a new question; drop the stale answer.
+              setAccountFailure(null);
+            }}
             onSubmit={handleAccountSubmit}
             isSubmitting={isSigningUp}
+            failure={accountFailure}
           />
         );
       case "recovery":
@@ -381,7 +504,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
         return (
           <ReadingScreen
             url={answers.website ?? ""}
-            services={services}
+            services={effectiveServices}
             reducedMotion={reducedMotion}
             onDone={handleReadingDone}
           />
@@ -403,7 +526,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             track={canvasTrack}
             email={answers.account?.email ?? ""}
             pubkey={pubkey}
-            services={services}
+            services={effectiveServices}
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}
             onBack={goBack}
