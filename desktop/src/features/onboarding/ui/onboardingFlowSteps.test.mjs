@@ -1,7 +1,7 @@
 /**
  * Tests for the onboarding step-count logic and the BackupStep gating helper
- * (BackupStep now runs in the machine onboarding flow). These are pure-logic
- * tests — no React rendering needed.
+ * (BackupStep now also runs as a required-ish step in the relay onboarding
+ * flow). These are pure-logic tests, no React rendering needed.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,14 +9,14 @@ import test from "node:test";
 import { backupNextDisabled } from "./BackupStep.tsx";
 
 // Mirrors the activeSteps array in OnboardingFlow.tsx. The relay-scoped flow
-// owns only the community profile: profile → avatar. key-import is normalised
-// to "profile" before the indexOf lookup.
-const ACTIVE_STEPS = ["profile", "avatar"];
+// owns profile → avatar → backup. key-import is normalised to "profile"
+// before the indexOf lookup; membership-denied falls back to step 1.
+const ACTIVE_STEPS = ["profile", "avatar", "backup"];
 const STEP_OFFSET = 1;
 
 /**
  * Mirrors the currentStep derivation in OnboardingFlow.tsx:
- * profile(1) → avatar(2).
+ * profile(1) → avatar(2) → backup(3).
  */
 function computeCurrentStep(page) {
   const normalizedPage = page === "key-import" ? "profile" : page;
@@ -32,8 +32,8 @@ function computeTotalSteps() {
 // Step count and numbering
 // ---------------------------------------------------------------------------
 
-test("totalSteps_is_2", () => {
-  assert.equal(computeTotalSteps(), 2);
+test("totalSteps_is_3", () => {
+  assert.equal(computeTotalSteps(), 3);
 });
 
 test("currentStep_profile_is_1", () => {
@@ -46,6 +46,10 @@ test("currentStep_key_import_is_1", () => {
 
 test("currentStep_avatar_is_2", () => {
   assert.equal(computeCurrentStep("avatar"), 2);
+});
+
+test("currentStep_backup_is_3", () => {
+  assert.equal(computeCurrentStep("backup"), 3);
 });
 
 test("currentStep_falls_back_to_1_for_pages_outside_the_step_list", () => {
