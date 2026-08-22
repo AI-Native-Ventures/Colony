@@ -19,11 +19,15 @@ import {
   type OrgMember,
   type OrgTreeNode,
 } from "@/features/agents/orgTree";
-import { useOrgMembers } from "@/features/agents/orgMembers";
+import {
+  type OrgChartMember,
+  useOrgMembers,
+} from "@/features/agents/orgMembers";
 import {
   dismissLandedPendingHires,
   usePendingHires,
 } from "@/features/agents/pendingHires";
+import type { RoleDialogMember } from "@/features/agents/ui/EmployeeRoleDialog";
 import { EmployeeRoleDialog } from "@/features/agents/ui/EmployeeRoleDialog";
 import { HireEmployeeDialog } from "@/features/agents/ui/HireEmployeeDialog";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
@@ -51,7 +55,8 @@ export function PeopleSection() {
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
   const queryClient = useQueryClient();
-  const { members, isLoading, error } = useOrgMembers(communityId);
+  const { members, unrankedAgents, isLoading, error } =
+    useOrgMembers(communityId);
   const ownersQuery = useCommunityOwnersQuery(communityId);
   const grantEventsQuery = useQuery({
     queryKey: delegationGrantsQueryKey(communityId),
@@ -62,9 +67,8 @@ export function PeopleSection() {
   const pendingHires = usePendingHires(communityId);
 
   const [isHireOpen, setIsHireOpen] = React.useState(false);
-  const [editingMember, setEditingMember] = React.useState<OrgMember | null>(
-    null,
-  );
+  const [editingMember, setEditingMember] =
+    React.useState<RoleDialogMember | null>(null);
 
   // While a hire is pending, poll for its head; it lands asynchronously once
   // the relay mints the identity.
@@ -99,6 +103,21 @@ export function PeopleSection() {
   );
 
   const tree = React.useMemo(() => buildOrgTree(members), [members]);
+
+  // The tree builder types its nodes as plain OrgMember, but every member it
+  // was given is an OrgChartMember carrying the payroll flag; restore it so
+  // the dialog knows which publish path this agent edits through.
+  const openEditor = React.useCallback((member: OrgMember) => {
+    const chartMember = member as OrgChartMember;
+    setEditingMember({
+      pubkey: chartMember.pubkey,
+      name: chartMember.name,
+      role: chartMember.role,
+      rank: chartMember.rank,
+      manager: chartMember.manager,
+      isPersonalAgent: chartMember.isPersonalAgent === true,
+    });
+  }, []);
   // Real avatars, batched in one query for every agent on the chart. Nodes
   // rendered initials-only before this, which made the org read as a debug
   // view rather than the company.
@@ -110,7 +129,10 @@ export function PeopleSection() {
     enabled: memberPubkeys.length > 0,
   });
   const profiles = profilesQuery.data?.profiles;
-  const isEmpty = !isLoading && members.length === 0;
+  // An agent present but unranked is an action waiting, not an empty page:
+  // the empty state may only claim "no one" when nothing at all renders.
+  const isEmpty =
+    !isLoading && members.length === 0 && unrankedAgents.length === 0;
 
   return (
     <section className="relative space-y-4" data-testid="people-roles-section">
@@ -176,9 +198,65 @@ export function PeopleSection() {
                   profiles={profiles}
                   key={root.member.pubkey}
                   node={root}
-                  onEdit={setEditingMember}
+                  onEdit={openEditor}
                 />
               ))}
+            </div>
+          ) : null}
+
+          {unrankedAgents.length > 0 ? (
+            <div
+              className="rounded-2xl border border-dashed border-border p-4"
+              data-testid="unranked-agents"
+            >
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Unranked
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                These agents have no rank yet, so they cannot sit on the chart.
+                Give one a rank to place it in the org.
+              </p>
+              <div className="mt-3 flex flex-col gap-2">
+                {unrankedAgents.map((agent) => (
+                  <div
+                    className="flex items-center gap-2.5"
+                    data-testid={`unranked-agent-${agent.pubkey}`}
+                    key={agent.pubkey}
+                  >
+                    <ProfileAvatar
+                      avatarUrl={null}
+                      className="h-7 w-7 text-xs"
+                      label={agent.name}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium tracking-tight text-foreground">
+                        {agent.name}
+                      </p>
+                      {agent.role ? (
+                        <p className="truncate font-mono text-3xs text-muted-foreground">
+                          {agent.role}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      className="ml-auto shrink-0"
+                      data-testid={`unranked-agent-rank-${agent.pubkey}`}
+                      onClick={() =>
+                        setEditingMember({
+                          ...agent,
+                          rank: null,
+                          manager: null,
+                          isPersonalAgent: true,
+                        })
+                      }
+                      size="sm"
+                      variant="outline"
+                    >
+                      Set rank
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
 
@@ -200,7 +278,7 @@ export function PeopleSection() {
                     profiles={profiles}
                     key={node.member.pubkey}
                     node={node}
-                    onEdit={setEditingMember}
+                    onEdit={openEditor}
                     variant="tray"
                   />
                 ))}
@@ -242,6 +320,7 @@ export function PeopleSection() {
 
       {editingMember ? (
         <EmployeeRoleDialog
+          communityId={communityId}
           grants={activeGrants}
           isGrantsLoading={ownersQuery.isLoading || grantEventsQuery.isLoading}
           member={editingMember}
@@ -250,6 +329,7 @@ export function PeopleSection() {
             if (!open) setEditingMember(null);
           }}
           open={editingMember !== null}
+          ownerPubkeys={ownersQuery.data ?? EMPTY_OWNERS}
         />
       ) : null}
     </section>

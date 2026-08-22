@@ -30,6 +30,8 @@ pub mod discovery;
 pub mod discovery_workspace;
 /// Direct message channel persistence.
 pub mod dm;
+/// Email and password account persistence (zero-knowledge key escrow).
+pub mod email_accounts;
 pub mod employees;
 /// Database error types.
 pub mod error;

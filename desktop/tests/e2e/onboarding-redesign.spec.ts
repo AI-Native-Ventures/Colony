@@ -13,10 +13,16 @@ const FIRST_RUN_IDENTITY = { ...TEST_IDENTITIES.tyler, username: "" };
 // in while every other first-run spec keeps the old flow. The script must be
 // registered before installMockBridge: React reads the flag on mount and the
 // bridge triggers that mount.
-async function seedFreshFirstRun(page: Page) {
-  await page.addInitScript(() => {
+async function seedFreshFirstRun(
+  page: Page,
+  extraStorage: Record<string, string> = {},
+) {
+  await page.addInitScript((extra) => {
     window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+    for (const [key, value] of Object.entries(extra)) {
+      window.localStorage.setItem(key, value);
+    }
+  }, extraStorage);
   await seedActiveIdentity(page, FIRST_RUN_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
 }
@@ -99,6 +105,45 @@ test("a non-technical user can get from the first screen to the end", async ({
   await expect(page.locator(".onb-canvas")).toHaveCount(0);
   await waitForAnimations(page);
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+});
+
+test("a taken email address is explained inline and keeps the form intact", async ({
+  page,
+}) => {
+  // Pin the signup failure the real service would produce for a duplicate
+  // address (see the e2e-only override in NewOnboardingFlow), so screen 1's
+  // failure states stay testable without pointing the flow at a live relay.
+  await seedFreshFirstRun(page, {
+    "colony.e2e.authFailure": JSON.stringify({ kind: "email-taken" }),
+  });
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Welcome to the colony." }),
+  ).toBeVisible();
+  await page.getByLabel("Your name").fill("Aisha Bello");
+  await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
+  await page.getByLabel("Password").fill("colonyprototype");
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  // The error sits on the email field, not as a dead button or a silent
+  // nothing. The flow stays here.
+  const emailField = page
+    .locator("label.onb-field")
+    .filter({ has: page.locator("#onb-account-email") });
+  await expect(
+    emailField.getByText("That email already has an account."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Welcome to the colony." }),
+  ).toBeVisible();
+
+  // A failed signup never clears what was typed.
+  await expect(page.getByLabel("Your name")).toHaveValue("Aisha Bello");
+  await expect(page.getByLabel("Email")).toHaveValue(
+    "aisha@rosebankauto.co.za",
+  );
+  await expect(page.getByLabel("Password")).toHaveValue("colonyprototype");
 });
 
 test("a disabled primary action always says what is missing", async ({

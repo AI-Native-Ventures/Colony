@@ -7,6 +7,7 @@ import { GUIDE_NAME, STARTER_PERSONA_IDS } from "../helpers/starterTeam";
 import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
+  passThroughBackupStep,
   seedActiveIdentity,
 } from "../helpers/onboarding";
 
@@ -722,6 +723,7 @@ async function completeProfileOnboarding(page: Page) {
     .getByTestId("onboarding-avatar-url")
     .fill("https://example.com/onboarding-avatar.png");
   await page.getByTestId("onboarding-next").click();
+  await passThroughBackupStep(page);
 }
 
 test("completed users skip the loading gate while profile is still settling", async ({
@@ -2607,6 +2609,7 @@ test("avatar step accepts an avatar URL before completing onboarding", async ({
   expect(box?.height).toBeCloseTo(192, 0);
 
   await page.getByTestId("onboarding-next").click();
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -2642,6 +2645,7 @@ test("failed avatar saves can continue without saving the avatar", async ({
   ).toBeVisible();
   await page.getByTestId("onboarding-next-without-saving").click();
 
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -3001,8 +3005,12 @@ test("failed first profile saves can be skipped for the current session", async 
   await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
   await page.getByTestId("onboarding-skip").click();
 
+  // The profile error-recovery skip now leads to the key-backup step instead
+  // of exiting onboarding; the explicit acknowledgement is the only exit, and
+  // completing through it lands on the standard first-run Welcome channel.
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectHomeView(page);
+  await expectWelcomeView(page);
 });
 
 test("generic relay save failures use the generic reconnect card", async ({

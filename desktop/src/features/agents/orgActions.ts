@@ -86,3 +86,32 @@ export async function publishEmployeeUpdate(
   );
   return event.id;
 }
+
+/**
+ * Retire an employee: kind 9046 carrying only the `retire` flag, which is
+ * mutually exclusive with rank and manager changes -- one request, one
+ * decision about one person.
+ *
+ * The relay refuses at ingest when the employee still has direct reports,
+ * naming them by pubkey; that message is surfaced verbatim so the owner can
+ * reassign before retrying. Retirement is not deletion: the row, its history,
+ * and its past decisions all stay on the relay.
+ */
+export async function publishEmployeeRetirement(input: {
+  pubkey: string;
+}): Promise<string> {
+  const event = await signRelayEvent({
+    kind: KIND_EMPLOYEE_UPDATE,
+    content: "",
+    tags: [
+      ["p", input.pubkey],
+      ["retire", "true"],
+    ],
+  });
+  await relayClient.publishEvent(
+    event,
+    "Timed out while retiring the employee.",
+    "Failed to retire the employee.",
+  );
+  return event.id;
+}

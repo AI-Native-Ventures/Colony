@@ -23,7 +23,7 @@ import { ONBOARDING_KEY_TEXT_CLASS } from "./NsecMaskedDisplay";
 
 /**
  * How long the "Creating your identity key" loader holds the stage before the
- * finished state fades in. Purely perceptual — the key already exists; the
+ * finished state fades in. Purely perceptual: the key already exists; the
  * pause sells the creation moment.
  */
 const INTRO_HOLD_MS = 1400;
@@ -41,7 +41,7 @@ const REVEAL_ANIMATION_CLASS =
 const BACKUP_OPTION_CLASS =
   "flex min-h-48 w-full flex-col items-start justify-start px-6 py-5 text-left text-foreground";
 
-/** Viewing the key never blocks onboarding — Next is always actionable. */
+/** Viewing the key never blocks onboarding: Next is always actionable. */
 export function backupNextDisabled(): boolean {
   return false;
 }
@@ -49,6 +49,12 @@ export function backupNextDisabled(): boolean {
 type BackupStepProps = {
   direction: OnboardingTransitionDirection;
   identityStorage?: IdentityStorage;
+  /**
+   * Label for the primary CTA (defaults to "Next"). Hosts that gate the
+   * action behind their own confirmation relabel it, e.g. "Continue" or
+   * "Finish", without changing this component's behavior.
+   */
+  nextLabel?: string;
   onNext: () => void;
   onOpenPasswordBackup: () => void;
   onShowOptions: () => void;
@@ -57,7 +63,7 @@ type BackupStepProps = {
 };
 
 /**
- * Onboarding identity-key step — shows the freshly created key, then opens a
+ * Onboarding identity-key step: shows the freshly created key, then opens a
  * dark backup-options state. Copy fetches the raw key only after an explicit
  * click; password backup opens the separate security flow. Neither method
  * blocks Next.
@@ -65,6 +71,7 @@ type BackupStepProps = {
 export function BackupStep({
   direction,
   identityStorage,
+  nextLabel,
   onNext,
   onOpenPasswordBackup,
   onShowOptions,
@@ -414,7 +421,7 @@ export function BackupStep({
           onClick={onNext}
           type="button"
         >
-          Next
+          {nextLabel ?? "Next"}
         </Button>
       </OnboardingFooter>
     </OnboardingSlideTransition>
