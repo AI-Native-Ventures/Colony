@@ -99,6 +99,23 @@ test("a lockout carries its retry delay", async () => {
   );
 });
 
+test("rate limiting maps to locked, not unreachable", async () => {
+  // unreachable renders a retry banner, and retrying is what keeps a
+  // rate-limit window open. The user has to be told to wait instead.
+  const auth = createAuthService(
+    deps({
+      post: async () => ({
+        status: 429,
+        body: { error: "rate_limited", retryAfterSecs: 120 },
+      }),
+    }),
+  );
+  await assert.rejects(
+    () => auth.signIn("founder@example.com", "correct horse battery"),
+    (error) => error.kind === "locked" && error.retryAfterSecs === 120,
+  );
+});
+
 test("a network failure maps to unreachable", async () => {
   const auth = createAuthService(
     deps({

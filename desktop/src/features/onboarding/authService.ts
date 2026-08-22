@@ -79,7 +79,11 @@ function failureFromResponse(body: unknown): AuthFailure {
     case "invalid_credentials":
     case "invalid_recovery_code":
       return { kind: "invalid-credentials" };
-    case "temporarily_locked": {
+    // Both mean "wait, then try again", and both carry how long. Rate limiting
+    // must not fall through to `unreachable`: that tells the user to retry, and
+    // retrying is what keeps the window open.
+    case "temporarily_locked":
+    case "rate_limited": {
       const secs = readNumber(body, "retryAfterSecs");
       return {
         kind: "locked",
