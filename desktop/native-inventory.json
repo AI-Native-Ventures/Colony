@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 406,
-    "rust_lines": 162871,
-    "tauri_coupled": 161,
+    "rust_total": 407,
+    "rust_lines": 163378,
+    "tauri_coupled": 162,
     "portable": 245,
     "portable_lines": 91952,
     "tauri_coupled_list": [
@@ -155,6 +155,7 @@
       "src-tauri/src/migration_avatar_refresh.rs",
       "src-tauri/src/mouse_nav.rs",
       "src-tauri/src/native_websocket.rs",
+      "src-tauri/src/operator_console.rs",
       "src-tauri/src/prevent_sleep.rs",
       "src-tauri/src/provisioned_credits.rs",
       "src-tauri/src/provisioned_credits/lease_http.rs",
@@ -420,10 +421,10 @@
     ]
   },
   "commands": {
-    "registered": 339,
-    "defined": 339,
+    "registered": 340,
+    "defined": 342,
     "by_reach": {
-      "frontend": 335,
+      "frontend": 336,
       "frontend-plugin-prefixed": 2,
       "NO CALLER FOUND": 2
     },
@@ -433,16 +434,16 @@
     ]
   },
   "params": {
-    "AppHandle": 350,
-    "State": 252,
+    "AppHandle": 351,
+    "State": 254,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 347,
-      "State": 252,
+      "AppHandle": 348,
+      "State": 254,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -468,7 +469,7 @@
     ".opener()": 1,
     ".notification()": 1,
     ".updater()": 0,
-    ".get_webview_window(": 5,
+    ".get_webview_window(": 6,
     ".global_shortcut(": 1,
     ".request_restart(": 7,
     ".run_on_main_thread(": 3,
@@ -601,6 +602,7 @@
     "src-tauri/src/commands/updater.rs": 1,
     "src-tauri/src/commands/agents_roster.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
+    "src-tauri/src/operator_console.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
     "src-tauri/src/huddle/reconnect.rs": 1,
@@ -2675,6 +2677,16 @@
         "src/app/useHuddlePresentation.ts:267",
         "src/features/huddle/components/HuddleBar.tsx:551",
         "src/features/huddle/components/HuddleProfileControl.tsx:112"
+      ]
+    },
+    "open_operator_console": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/settings/ui/operatorConsole.ts:27",
+        "src/shared/api/operatorConsoleApi.ts:13"
       ]
     },
     "open_project_merge_recovery_terminal": {
