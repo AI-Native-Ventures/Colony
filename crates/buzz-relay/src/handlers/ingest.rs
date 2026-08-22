@@ -16,8 +16,8 @@ use buzz_core::kind::{
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL,
     KIND_AUTH, KIND_BLOCK_ACTION, KIND_BLOCK_CATALOG_ENTRY, KIND_BLOCK_MANIFEST,
     KIND_BLOCK_RECEIPT, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_COMPANY_ACTION,
-    KIND_CONTACT_LIST, KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION, KIND_CONTENT_POST,
-    KIND_CONTENT_STYLE, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
+    KIND_CONTACT_LIST, KIND_CONTENT_BRAND_KIT, KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION,
+    KIND_CONTENT_POST, KIND_CONTENT_STYLE, KIND_DECISION_LOG, KIND_DELEGATION_GRANT, KIND_DELETION,
     KIND_DISCOVERY_ACTION, KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKSPACE_ACTION,
     KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_EMOJI_LIST, KIND_EMOJI_SET, KIND_EMPLOYEE,
     KIND_EVENT_REMINDER, KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
@@ -633,11 +633,16 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // the employee that owes it. Same forgery gate as the employee head,
         // in the job-head arm of `validate_event`.
         KIND_JOB_HEAD => Ok(Scope::MessagesWrite),
-        // Colony content calendar (30195-30197): the content agent's own
-        // account of what it plans to post, what it rendered, and the house
-        // style it accumulated. Ordinary member writes; the schema and the
-        // ready-state gates are enforced past this point by `buzz_core::content`.
-        KIND_CONTENT_CAMPAIGN | KIND_CONTENT_POST | KIND_CONTENT_STYLE => {
+        // Colony content calendar (30195-30198): the content agent's own
+        // account of what it plans to post, what it rendered, the house
+        // style it accumulated, and the brand kit every gate measures
+        // against. Ordinary member writes; the schema and the ready-state
+        // gates are enforced past this point by `buzz_core::content` and
+        // `buzz_core::content_brand_kit`.
+        KIND_CONTENT_CAMPAIGN
+        | KIND_CONTENT_POST
+        | KIND_CONTENT_STYLE
+        | KIND_CONTENT_BRAND_KIT => {
             Ok(Scope::MessagesWrite)
         }
         // Colony content decision (40025): the owner approving a post or
@@ -787,7 +792,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             // KIND_TEAM/KIND_MANAGED_AGENT above -- a stray `h` tag must not
             // channel-scope a company-wide policy record.
             | KIND_DELEGATION_GRANT
-            // Colony content calendar (30195-30197, 40025): workspace-wide
+            // Colony content calendar (30195-30198, 40025): workspace-wide
             // records keyed by (pubkey, kind, d_tag), and decisions that
             // address a post by `a` tag. A campaign is not owned by whichever
             // channel its Block happened to be posted in, so a stray `h` tag
@@ -795,6 +800,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_CONTENT_CAMPAIGN
             | KIND_CONTENT_POST
             | KIND_CONTENT_STYLE
+            | KIND_CONTENT_BRAND_KIT
             | KIND_CONTENT_DECISION
             // Block manifests and relay-authored catalog heads are immutable or
             // addressable global definitions. Instances remain kind:9 messages.
@@ -2803,6 +2809,10 @@ async fn ingest_event_inner(
         }
         KIND_CONTENT_STYLE => {
             buzz_core::content::parse_content_style(&event)
+                .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        }
+        KIND_CONTENT_BRAND_KIT => {
+            buzz_core::content_brand_kit::parse_content_brand_kit(&event)
                 .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
         }
         KIND_CONTENT_DECISION => {
