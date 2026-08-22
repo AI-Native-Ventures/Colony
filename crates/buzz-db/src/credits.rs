@@ -32,7 +32,7 @@ pub struct LedgerEntry {
     pub pubkey: Vec<u8>,
     /// Signed nanoUSD change applied to the balance (negative for debits).
     pub delta: i64,
-    /// Ledger kind: `debit`, `credit`, `seed`, or `correction`.
+    /// Ledger kind: `debit`, `credit`, `seed`, `correction`, `hold`, or `release`.
     pub kind: String,
     /// Idempotency reference — unique per account.
     pub reference: String,
@@ -59,6 +59,10 @@ pub struct LedgerEntry {
 pub struct AdmissionAccount {
     /// Current signed nanoUSD balance.
     pub balance: i64,
+    /// Credits held for active paid Discovery runs.
+    pub discovery_reserved_nanousd: i64,
+    /// Credits held for admitted model calls that have not resolved yet.
+    pub gateway_reserved_nanousd: i64,
     /// Typical call cost override, in nanoUSD.
     pub typical_call_cost_nanousd: Option<i64>,
     /// Concurrent gateway call limit override.
@@ -83,8 +87,8 @@ pub struct RecentDebit {
     pub created_at: DateTime<Utc>,
 }
 
-/// Durable identity for one admitted hosted-gateway call. An intent records
-/// attribution before provider spend; it never reserves or mutates balance.
+/// Durable identity for one admitted hosted-gateway call. An unresolved intent
+/// holds its admission estimate so other services cannot spend the same Credits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewaySettlementIntent {
     /// Durable intent id.
@@ -107,12 +111,33 @@ pub struct GatewaySettlementIntent {
     pub reason: Option<String>,
     /// Ledger reference used for an exact correction.
     pub correction_ref: Option<String>,
+    /// Admission estimate held until the call is debited or resolved.
+    pub reserved_nanousd: i64,
     /// Creation time.
     pub created_at: DateTime<Utc>,
     /// Last lifecycle update.
     pub updated_at: DateTime<Utc>,
     /// Resolution time, if complete.
     pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// Atomic result of reserving one hosted model call against the account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayIntentReservation {
+    /// Capacity was held and the durable intent was created.
+    Reserved {
+        /// Durable provider-call identity.
+        intent: GatewaySettlementIntent,
+        /// Account admission settings read under the same row lock.
+        account: AdmissionAccount,
+    },
+    /// The account did not have enough unreserved Credits.
+    Insufficient {
+        /// Balance remaining after all durable reservations.
+        available_nanousd: i64,
+        /// Estimate required for this admission.
+        required_nanousd: i64,
+    },
 }
 
 /// One exact provider-export row used by the pending-intent resolver. The
@@ -144,10 +169,14 @@ pub struct AppliedLedgerEntry {
 /// Return the account's current balance in nanoUSD. Accounts that have never
 /// been seen have a balance of zero (their row is created on first activity).
 pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
-    let row = sqlx::query("SELECT balance FROM accounts WHERE pubkey = $1")
-        .bind(pubkey)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT a.balance + COALESCE((SELECT sum(c.budget_reserved_nanousd) \
+         FROM discovery_campaigns c WHERE c.budget_payer_pubkey=a.pubkey),0)::BIGINT AS balance \
+         FROM accounts a WHERE a.pubkey = $1",
+    )
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
     Ok(match row {
         Some(row) => row.try_get("balance")?,
         None => 0,
@@ -161,22 +190,38 @@ pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
 /// global defaults while holding the account's in-process admission gate.
 pub async fn admission_account(pool: &PgPool, pubkey: &[u8]) -> Result<AdmissionAccount> {
     let row = sqlx::query(
-        "SELECT balance, typical_call_cost_nanousd, max_in_flight, \
-                hourly_burn_cap_nanousd \
-         FROM accounts WHERE pubkey = $1",
+        "SELECT a.balance AS spendable_balance, a.typical_call_cost_nanousd, a.max_in_flight, \
+                a.hourly_burn_cap_nanousd, \
+                COALESCE((SELECT sum(c.budget_reserved_nanousd) \
+                          FROM discovery_campaigns c \
+                          WHERE c.budget_payer_pubkey=a.pubkey),0)::BIGINT \
+                    AS discovery_reserved_nanousd, \
+                COALESCE((SELECT sum(i.reserved_nanousd) \
+                          FROM gateway_settlement_intents i \
+                          WHERE i.pubkey=a.pubkey AND i.state <> 'resolved'),0)::BIGINT \
+                    AS gateway_reserved_nanousd \
+         FROM accounts a WHERE a.pubkey = $1",
     )
     .bind(pubkey)
     .fetch_optional(pool)
     .await?;
     match row {
-        Some(row) => Ok(AdmissionAccount {
-            balance: row.try_get("balance")?,
-            typical_call_cost_nanousd: row.try_get("typical_call_cost_nanousd")?,
-            max_in_flight: row.try_get("max_in_flight")?,
-            hourly_burn_cap_nanousd: row.try_get("hourly_burn_cap_nanousd")?,
-        }),
+        Some(row) => {
+            let discovery_reserved_nanousd: i64 = row.try_get("discovery_reserved_nanousd")?;
+            let spendable_balance: i64 = row.try_get("spendable_balance")?;
+            Ok(AdmissionAccount {
+                balance: spendable_balance.saturating_add(discovery_reserved_nanousd),
+                discovery_reserved_nanousd,
+                gateway_reserved_nanousd: row.try_get("gateway_reserved_nanousd")?,
+                typical_call_cost_nanousd: row.try_get("typical_call_cost_nanousd")?,
+                max_in_flight: row.try_get("max_in_flight")?,
+                hourly_burn_cap_nanousd: row.try_get("hourly_burn_cap_nanousd")?,
+            })
+        }
         None => Ok(AdmissionAccount {
             balance: 0,
+            discovery_reserved_nanousd: 0,
+            gateway_reserved_nanousd: 0,
             typical_call_cost_nanousd: None,
             max_in_flight: None,
             hourly_burn_cap_nanousd: None,
@@ -247,6 +292,7 @@ fn row_to_gateway_intent(row: &sqlx::postgres::PgRow) -> Result<GatewaySettlemen
         provider_status: row.try_get("provider_status")?,
         reason: row.try_get("reason")?,
         correction_ref: row.try_get("correction_ref")?,
+        reserved_nanousd: row.try_get("reserved_nanousd")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         resolved_at: row.try_get("resolved_at")?,
@@ -255,7 +301,7 @@ fn row_to_gateway_intent(row: &sqlx::postgres::PgRow) -> Result<GatewaySettlemen
 
 const GATEWAY_INTENT_COLUMNS: &str =
     "id, pubkey, reference, model, state, provider_request_id, observed_cost, \
-     provider_status, reason, correction_ref, created_at, updated_at, resolved_at";
+     provider_status, reason, correction_ref, reserved_nanousd, created_at, updated_at, resolved_at";
 
 /// Create (or replay) the durable attribution intent before a provider call.
 /// Replays return the existing row without resetting a later lifecycle state.
@@ -264,20 +310,123 @@ pub async fn create_gateway_settlement_intent(
     pubkey: &[u8],
     reference: &str,
     model: &str,
-) -> Result<GatewaySettlementIntent> {
-    let query = format!(
-        "INSERT INTO gateway_settlement_intents (pubkey, reference, model) \
-         VALUES ($1, $2, $3) \
-         ON CONFLICT (pubkey, reference) DO UPDATE SET updated_at = now() \
-         RETURNING {GATEWAY_INTENT_COLUMNS}"
+    default_typical_call_cost_nanousd: i64,
+    minimum_reservation_nanousd: i64,
+) -> Result<GatewayIntentReservation> {
+    let mut tx = pool.begin().await?;
+    // Lock the intent before the account. Every lifecycle update locks in this
+    // order, including released writers through the compatibility trigger.
+    // Keeping admission on the same order prevents replay and settlement from
+    // deadlocking each other during a rolling deploy.
+    let preliminary_reservation_nanousd = default_typical_call_cost_nanousd
+        .max(minimum_reservation_nanousd)
+        .max(1);
+    let replay_query = format!(
+        "SELECT {GATEWAY_INTENT_COLUMNS} FROM gateway_settlement_intents \
+         WHERE pubkey=$1 AND reference=$2 FOR UPDATE"
     );
-    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+    let existing = sqlx::query(sqlx::AssertSqlSafe(replay_query.clone()))
         .bind(pubkey)
         .bind(reference)
-        .bind(model)
-        .fetch_one(pool)
+        .fetch_optional(&mut *tx)
         .await?;
-    row_to_gateway_intent(&row)
+    let (mut intent, created) = match existing {
+        Some(row) => (row_to_gateway_intent(&row)?, false),
+        None => {
+            let insert_query = format!(
+                "INSERT INTO gateway_settlement_intents \
+                   (pubkey, reference, model, reserved_nanousd) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT (pubkey, reference) DO NOTHING \
+                 RETURNING {GATEWAY_INTENT_COLUMNS}"
+            );
+            let inserted = sqlx::query(sqlx::AssertSqlSafe(insert_query))
+                .bind(pubkey)
+                .bind(reference)
+                .bind(model)
+                .bind(preliminary_reservation_nanousd)
+                .fetch_optional(&mut *tx)
+                .await?;
+            match inserted {
+                Some(row) => (row_to_gateway_intent(&row)?, true),
+                None => {
+                    let row = sqlx::query(sqlx::AssertSqlSafe(replay_query))
+                        .bind(pubkey)
+                        .bind(reference)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                    (row_to_gateway_intent(&row)?, false)
+                }
+            }
+        }
+    };
+    let account = sqlx::query(
+        "SELECT balance,typical_call_cost_nanousd,max_in_flight,hourly_burn_cap_nanousd \
+         FROM accounts WHERE pubkey=$1 FOR UPDATE",
+    )
+    .bind(pubkey)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(account) = account else {
+        tx.rollback().await?;
+        return Ok(GatewayIntentReservation::Insufficient {
+            available_nanousd: 0,
+            required_nanousd: default_typical_call_cost_nanousd.max(minimum_reservation_nanousd),
+        });
+    };
+    let balance: i64 = account.try_get("balance")?;
+    let required_nanousd: i64 = account
+        .try_get::<Option<i64>, _>("typical_call_cost_nanousd")?
+        .unwrap_or(default_typical_call_cost_nanousd)
+        .max(minimum_reservation_nanousd)
+        .max(1);
+    if created && intent.reserved_nanousd != required_nanousd {
+        let update_query = format!(
+            "UPDATE gateway_settlement_intents SET reserved_nanousd=$2,updated_at=now() \
+             WHERE id=$1 RETURNING {GATEWAY_INTENT_COLUMNS}"
+        );
+        let row = sqlx::query(sqlx::AssertSqlSafe(update_query))
+            .bind(intent.id)
+            .bind(required_nanousd)
+            .fetch_one(&mut *tx)
+            .await?;
+        intent = row_to_gateway_intent(&row)?;
+    }
+    let discovery_reserved_nanousd: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(budget_reserved_nanousd),0)::BIGINT \
+         FROM discovery_campaigns WHERE budget_payer_pubkey=$1",
+    )
+    .bind(pubkey)
+    .fetch_one(&mut *tx)
+    .await?;
+    let gateway_reserved_nanousd: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(reserved_nanousd),0)::BIGINT \
+         FROM gateway_settlement_intents WHERE pubkey=$1 AND state <> 'resolved'",
+    )
+    .bind(pubkey)
+    .fetch_one(&mut *tx)
+    .await?;
+    let prior_gateway_reserved_nanousd =
+        gateway_reserved_nanousd.saturating_sub(intent.reserved_nanousd);
+    let available_nanousd = balance.saturating_sub(prior_gateway_reserved_nanousd);
+    if created && available_nanousd < intent.reserved_nanousd {
+        tx.rollback().await?;
+        return Ok(GatewayIntentReservation::Insufficient {
+            available_nanousd,
+            required_nanousd: intent.reserved_nanousd,
+        });
+    }
+    tx.commit().await?;
+    Ok(GatewayIntentReservation::Reserved {
+        intent,
+        account: AdmissionAccount {
+            balance: balance.saturating_add(discovery_reserved_nanousd),
+            discovery_reserved_nanousd,
+            gateway_reserved_nanousd,
+            typical_call_cost_nanousd: account.try_get("typical_call_cost_nanousd")?,
+            max_in_flight: account.try_get("max_in_flight")?,
+            hourly_burn_cap_nanousd: account.try_get("hourly_burn_cap_nanousd")?,
+        },
+    })
 }
 
 /// Mark that provider usage was observed. Replays never move a later
@@ -315,6 +464,7 @@ pub async fn mark_gateway_intent_debited(
     let query = format!(
         "UPDATE gateway_settlement_intents SET \
            state = CASE WHEN state = 'resolved' THEN state ELSE 'debited' END, \
+           reserved_nanousd = 0, \
            updated_at = now() WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
     );
     let row = sqlx::query(sqlx::AssertSqlSafe(query))
@@ -333,7 +483,8 @@ pub async fn resolve_gateway_intent_no_charge(
     provider_status: i16,
 ) -> Result<GatewaySettlementIntent> {
     let query = format!(
-        "UPDATE gateway_settlement_intents SET state = 'resolved', observed_cost = COALESCE(observed_cost, 0), \
+        "UPDATE gateway_settlement_intents SET state = 'resolved', reserved_nanousd = 0, \
+           observed_cost = COALESCE(observed_cost, 0), \
            provider_status = $2, reason = COALESCE(reason, 'provider_non_success'), \
            resolved_at = COALESCE(resolved_at, now()), updated_at = now() \
          WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
@@ -477,18 +628,19 @@ pub async fn resolve_gateway_settlement_intent(
             }
         });
     if !normal_debit_exists {
-        debit_observed_applied(
+        debit_observed_for_gateway_intent(
             pool,
+            intent.id,
             &intent.pubkey,
             usage.cost_nanousd,
             &correction_ref,
-            Some(&usage.model),
+            &usage.model,
             usage.provider_request_id.as_deref(),
         )
         .await?;
     }
     let updated_query = format!(
-        "UPDATE gateway_settlement_intents SET state = 'resolved', \
+        "UPDATE gateway_settlement_intents SET state = 'resolved', reserved_nanousd = 0, \
            provider_request_id = COALESCE($2, provider_request_id), observed_cost = $3, \
            correction_ref = $4, resolved_at = COALESCE(resolved_at, now()), updated_at = now() \
          WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
@@ -637,6 +789,24 @@ pub async fn debit_observed_applied(
     .await
 }
 
+/// Apply an observed model debit and release its durable admission hold in
+/// the same transaction. A committed charge can never leave stale reserved
+/// Credits behind.
+pub async fn debit_observed_for_gateway_intent(
+    pool: &PgPool,
+    intent_id: i64,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: &str,
+    request_id: Option<&str>,
+) -> Result<AppliedLedgerEntry> {
+    debit_gateway_intent_internal(
+        pool, intent_id, pubkey, cost, reference, model, request_id, "observed",
+    )
+    .await
+}
+
 /// Debit an **estimated** cost, idempotent on `reference`.
 ///
 /// The provider stated no usable cost (an unfamiliar usage shape), so the
@@ -677,6 +847,82 @@ pub async fn debit_estimated_applied(
         Some("estimated"),
     )
     .await
+}
+
+/// Apply an estimated model debit and release its durable admission hold in
+/// the same transaction.
+pub async fn debit_estimated_for_gateway_intent(
+    pool: &PgPool,
+    intent_id: i64,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: &str,
+    request_id: Option<&str>,
+) -> Result<AppliedLedgerEntry> {
+    debit_gateway_intent_internal(
+        pool,
+        intent_id,
+        pubkey,
+        cost,
+        reference,
+        model,
+        request_id,
+        "estimated",
+    )
+    .await
+}
+
+async fn debit_gateway_intent_internal(
+    pool: &PgPool,
+    intent_id: i64,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: &str,
+    request_id: Option<&str>,
+    settle_basis: &str,
+) -> Result<AppliedLedgerEntry> {
+    let cost = i64::try_from(cost)
+        .map_err(|_| crate::error::DbError::InvalidAmount(format!("cost {cost} exceeds i64")))?;
+    let mut tx = pool.begin().await?;
+    let intent =
+        sqlx::query("SELECT pubkey,model FROM gateway_settlement_intents WHERE id=$1 FOR UPDATE")
+            .bind(intent_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| crate::error::DbError::NotFound("gateway settlement intent".into()))?;
+    let intent_pubkey: Vec<u8> = intent.try_get("pubkey")?;
+    let intent_model: String = intent.try_get("model")?;
+    if intent_pubkey != pubkey || intent_model != model {
+        return Err(crate::error::DbError::InvalidData(
+            "gateway settlement does not match its admission intent".into(),
+        ));
+    }
+    let applied = apply_entry_tx(
+        &mut tx,
+        EntryParams {
+            pubkey,
+            delta: -cost,
+            kind: "debit",
+            reference,
+            model: Some(model),
+            observed_cost: Some(cost),
+            request_id,
+            settle_basis: Some(settle_basis),
+        },
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE gateway_settlement_intents SET \
+         state=CASE WHEN state='resolved' THEN state ELSE 'debited' END, \
+         reserved_nanousd=0,updated_at=now() WHERE id=$1",
+    )
+    .bind(intent_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(applied)
 }
 
 async fn debit_internal(
@@ -797,6 +1043,17 @@ async fn apply_entry_applied(pool: &PgPool, params: EntryParams<'_>) -> Result<A
 ///   balance + delta`; the row lock serializes concurrent distinct-ref
 ///   settles, so no update is ever lost.
 async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<AppliedLedgerEntry> {
+    let mut tx = pool.begin().await?;
+
+    let result = apply_entry_tx(&mut tx, params).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+async fn apply_entry_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    params: EntryParams<'_>,
+) -> Result<AppliedLedgerEntry> {
     let pubkey = params.pubkey;
     let delta = params.delta;
     let kind = params.kind;
@@ -805,17 +1062,17 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
     let observed_cost = params.observed_cost;
     let request_id = params.request_id;
     let settle_basis = params.settle_basis;
-    let mut tx = pool.begin().await?;
 
     sqlx::query("INSERT INTO accounts (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING")
         .bind(pubkey)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
+    let service = (kind == "debit" && model.is_some()).then_some("model");
     let row = sqlx::query(
         "INSERT INTO credit_ledger \
-           (pubkey, delta, kind, ref, model, observed_cost, request_id, settle_basis) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+           (pubkey, delta, kind, ref, model, observed_cost, request_id, settle_basis, service) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          ON CONFLICT (pubkey, ref) DO NOTHING \
          RETURNING id, pubkey, delta, kind, ref, model, observed_cost, request_id, \
                    settle_basis, created_at",
@@ -828,7 +1085,8 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
     .bind(observed_cost)
     .bind(request_id)
     .bind(settle_basis)
-    .fetch_optional(&mut *tx)
+    .bind(service)
+    .fetch_optional(&mut **tx)
     .await?;
 
     let (entry, applied) = match row {
@@ -841,7 +1099,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
             )
             .bind(delta)
             .bind(pubkey)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
             (row_to_entry(&row)?, true)
         }
@@ -854,10 +1112,9 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
             // committed before ours — ours then sees the row and this branch
             // is taken — or it commits after ours, in which case ours won the
             // conflict and never reaches here. Either way the account UPDATE
-            // runs exactly once. `apply_entry` opening its own transaction is
-            // what keeps callers from weakening this: the conflict resolution
-            // and the re-select share one transaction, and no caller-supplied
-            // transaction can widen the window. Under REPEATABLE READ the
+            // runs exactly once. The conflict resolution and re-select share
+            // the caller's transaction, so no caller can widen that window.
+            // Under REPEATABLE READ the
             // same race fails loudly with a serialization error instead of
             // double-debiting — the dangerous direction always errors.
             let row = sqlx::query(
@@ -867,13 +1124,12 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
             )
             .bind(pubkey)
             .bind(reference)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
             (row_to_entry(&row)?, false)
         }
     };
 
-    tx.commit().await?;
     Ok(AppliedLedgerEntry { entry, applied })
 }
 
@@ -1015,6 +1271,126 @@ mod tests {
             2,
             "seed + exactly one debit recorded"
         );
+        drop_scratch(&admin, pool, &name).await;
+    }
+
+    /// A replay must wait on its existing intent before it can lock the
+    /// account. Settlement uses that same intent-then-account order, so the
+    /// two operations cannot form a lock cycle.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn gateway_replay_waits_on_intent_before_account() {
+        let admin = admin_pool().await;
+        let (pool, name) = scratch(&admin, "gateway_replay_lock_order").await;
+        let pubkey = random_pubkey();
+        seed(&pool, &pubkey, 1_000_000_000, "seed-gateway-lock-order")
+            .await
+            .expect("seed");
+        let reservation = create_gateway_settlement_intent(
+            &pool,
+            &pubkey,
+            "gateway:lock-order",
+            "deepseek-v4-flash",
+            50_000_000,
+            1,
+        )
+        .await
+        .expect("create gateway intent");
+        let GatewayIntentReservation::Reserved { intent, .. } = reservation else {
+            panic!("funded account must reserve the gateway intent");
+        };
+
+        let mut settlement = pool.begin().await.expect("begin settlement lock");
+        sqlx::query("SELECT id FROM gateway_settlement_intents WHERE id=$1 FOR UPDATE")
+            .bind(intent.id)
+            .fetch_one(&mut *settlement)
+            .await
+            .expect("lock intent as settlement does");
+
+        let replay_pool = pool.clone();
+        let replay_pubkey = pubkey.clone();
+        let replay = tokio::spawn(async move {
+            create_gateway_settlement_intent(
+                &replay_pool,
+                &replay_pubkey,
+                "gateway:lock-order",
+                "deepseek-v4-flash",
+                50_000_000,
+                1,
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let mut account_probe = pool.begin().await.expect("begin account probe");
+        sqlx::query("SELECT pubkey FROM accounts WHERE pubkey=$1 FOR UPDATE NOWAIT")
+            .bind(&pubkey)
+            .fetch_one(&mut *account_probe)
+            .await
+            .expect("replay must not lock the account while waiting on the intent");
+        account_probe
+            .rollback()
+            .await
+            .expect("release account probe");
+        settlement
+            .rollback()
+            .await
+            .expect("release settlement lock");
+
+        let replayed = tokio::time::timeout(std::time::Duration::from_secs(5), replay)
+            .await
+            .expect("replay must not deadlock")
+            .expect("replay task")
+            .expect("replay gateway intent");
+        let GatewayIntentReservation::Reserved {
+            intent: replayed_intent,
+            ..
+        } = replayed
+        else {
+            panic!("replay must return the existing reservation");
+        };
+        assert_eq!(replayed_intent.id, intent.id);
+
+        let mut second_settlement = pool.begin().await.expect("begin released-writer lock");
+        sqlx::query("SELECT id FROM gateway_settlement_intents WHERE id=$1 FOR UPDATE")
+            .bind(intent.id)
+            .fetch_one(&mut *second_settlement)
+            .await
+            .expect("lock intent before released writer replay");
+        let released_pool = pool.clone();
+        let released_pubkey = pubkey.clone();
+        let released_writer = tokio::spawn(async move {
+            sqlx::query(
+                "INSERT INTO gateway_settlement_intents (pubkey,reference,model) \
+                 VALUES ($1,'gateway:lock-order','deepseek-v4-flash') \
+                 ON CONFLICT (pubkey,reference) DO UPDATE SET updated_at=now() \
+                 RETURNING id",
+            )
+            .bind(&released_pubkey)
+            .fetch_one(&released_pool)
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let mut released_probe = pool.begin().await.expect("begin released-writer probe");
+        sqlx::query("SELECT pubkey FROM accounts WHERE pubkey=$1 FOR UPDATE NOWAIT")
+            .bind(&pubkey)
+            .fetch_one(&mut *released_probe)
+            .await
+            .expect("released replay must arbitrate the intent before locking the account");
+        released_probe
+            .rollback()
+            .await
+            .expect("release released-writer probe");
+        second_settlement
+            .rollback()
+            .await
+            .expect("release released-writer lock");
+        tokio::time::timeout(std::time::Duration::from_secs(5), released_writer)
+            .await
+            .expect("released writer must not deadlock")
+            .expect("released writer task")
+            .expect("released writer replay");
         drop_scratch(&admin, pool, &name).await;
     }
 

@@ -74,9 +74,6 @@ function redactAll(reason: string): Redactor {
 export const DEFAULT_REDACTORS: RedactorTable = {
   get_nsec: { result: redactAll("nsec") },
   start_pairing: { result: redactAll("pairing QR contains nsec") },
-  get_discovery_credential_status: {
-    result: redactAll("discovery credential status may echo secrets"),
-  },
   get_runtime_file_config: {
     result: redactAll("runtime config may hold keys"),
   },

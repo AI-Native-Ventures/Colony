@@ -196,6 +196,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // as if the routes did not exist.
         merged = merged.merge(crate::gateway::router(state.clone(), Arc::clone(gateway)));
     }
+    if let Some(gateway) = state.discovery_gateway.get() {
+        merged = merged.merge(crate::discovery_gateway::router(
+            state.clone(),
+            Arc::clone(gateway),
+        ));
+    }
     if let Some(admin_router) = admin_router {
         merged = merged.merge(admin_router);
     }

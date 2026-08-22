@@ -11,6 +11,8 @@ mod block_broker;
 pub mod blocks;
 mod company_broker;
 mod discovery_broker;
+/// Bounded Colony-hosted provider transport for paid Discovery runs.
+pub mod discovery_gateway;
 /// Restart-safe Discovery worker runtime.
 pub mod discovery_runtime;
 mod discovery_worker_broker;

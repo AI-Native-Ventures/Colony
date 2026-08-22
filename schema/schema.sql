@@ -799,7 +799,8 @@ INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('gateway_tokens',         'provisioned-mode tokens are identity-global, not community-scoped'),
     ('model_catalog',          'model allowlist is deployment-global'),
     ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable attribution/reconciliation'),
-    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement');
+    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement'),
+    ('discovery_budget_approval_claims', 'global single-use claims for human spending approvals');
 
 -- Colony Credits gateway tables. Keep the schema snapshot aligned with the
 -- migration path so a fresh isolated harness has the same money/admission
@@ -824,16 +825,76 @@ CREATE TABLE credit_ledger (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
     delta BIGINT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('debit', 'credit', 'seed', 'correction')),
+    kind TEXT NOT NULL CHECK (kind IN (
+        'debit', 'credit', 'seed', 'correction', 'hold', 'release'
+    )),
     ref TEXT NOT NULL,
     model TEXT,
     observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
     request_id TEXT,
     settle_basis TEXT CHECK (settle_basis IS NULL OR settle_basis IN ('observed', 'estimated')),
+    service TEXT CHECK (service IN ('model', 'discovery')),
+    quantity BIGINT CHECK (quantity IS NULL OR quantity > 0),
+    unit_price_nanousd BIGINT
+        CHECK (unit_price_nanousd IS NULL OR unit_price_nanousd > 0),
+    discovery_community_id UUID,
+    discovery_campaign_id UUID,
+    discovery_run_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (pubkey, ref)
+    UNIQUE (pubkey, ref),
+    CONSTRAINT discovery_ledger_attribution_complete CHECK (
+        (
+            service IS NULL
+            AND model IS NULL
+            AND quantity IS NULL
+            AND unit_price_nanousd IS NULL
+            AND discovery_community_id IS NULL
+            AND discovery_campaign_id IS NULL
+            AND discovery_run_id IS NULL
+        ) OR (
+            service = 'model'
+            AND model IS NOT NULL
+            AND quantity IS NULL
+            AND unit_price_nanousd IS NULL
+            AND discovery_community_id IS NULL
+            AND discovery_campaign_id IS NULL
+            AND discovery_run_id IS NULL
+        ) OR (
+            service = 'discovery'
+            AND kind IN ('debit', 'hold', 'release')
+            AND ((kind IN ('debit', 'hold') AND delta < 0)
+                 OR (kind = 'release' AND delta > 0))
+            AND model IS NULL
+            AND observed_cost IS NULL
+            AND request_id IS NULL
+            AND settle_basis IS NULL
+            AND quantity IS NOT NULL
+            AND unit_price_nanousd IS NOT NULL
+            AND discovery_community_id IS NOT NULL
+            AND discovery_campaign_id IS NOT NULL
+            AND discovery_run_id IS NOT NULL
+            AND abs(delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
+        )
+    ),
+    CONSTRAINT credit_ledger_model_service_complete CHECK (
+        model IS NULL OR service = 'model'
+    )
 );
+CREATE FUNCTION credit_ledger_compat_attribution() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.model IS NOT NULL AND NEW.service IS NULL THEN
+        NEW.service := 'model';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER credit_ledger_compat_attribution
+BEFORE INSERT OR UPDATE OF model,service ON credit_ledger
+FOR EACH ROW EXECUTE FUNCTION credit_ledger_compat_attribution();
 CREATE INDEX credit_ledger_created_at_idx ON credit_ledger (created_at);
+CREATE UNIQUE INDEX credit_ledger_discovery_run_idx
+    ON credit_ledger (pubkey, discovery_run_id)
+    WHERE service = 'discovery' AND kind = 'debit';
 
 CREATE TABLE gateway_tokens (
     token_hash BYTEA PRIMARY KEY CHECK (octet_length(token_hash) = 32),
@@ -882,14 +943,60 @@ CREATE TABLE gateway_settlement_intents (
     provider_status SMALLINT,
     reason TEXT,
     correction_ref TEXT,
+    reserved_nanousd BIGINT NOT NULL DEFAULT 0 CHECK (reserved_nanousd >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at TIMESTAMPTZ,
-    UNIQUE (pubkey, reference)
+    UNIQUE (pubkey, reference),
+    CHECK (
+        (state IN ('admitted','provider_completed','reconciliation')
+         AND reserved_nanousd > 0)
+        OR (state IN ('debited','resolved') AND reserved_nanousd = 0)
+    )
 );
+
+CREATE FUNCTION gateway_settlement_intent_reservation_compat() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.state IN ('admitted','provider_completed','reconciliation') THEN
+        IF NEW.reserved_nanousd = 0 THEN
+            NEW.reserved_nanousd := GREATEST(
+                COALESCE(
+                    (SELECT typical_call_cost_nanousd FROM accounts WHERE pubkey=NEW.pubkey),
+                    50000000
+                ),
+                1
+            );
+        END IF;
+    ELSIF NEW.state IN ('debited','resolved') THEN
+        NEW.reserved_nanousd := 0;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_reservation_compat
+BEFORE INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW EXECUTE FUNCTION gateway_settlement_intent_reservation_compat();
+
+CREATE FUNCTION gateway_settlement_intent_account_lock() RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM 1 FROM accounts WHERE pubkey=NEW.pubkey FOR UPDATE;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_account_lock
+AFTER INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW
+WHEN (NEW.state IN ('admitted','provider_completed','reconciliation'))
+EXECUTE FUNCTION gateway_settlement_intent_account_lock();
 CREATE INDEX gateway_settlement_intents_pending_idx
     ON gateway_settlement_intents (updated_at)
     WHERE state <> 'resolved';
+CREATE INDEX gateway_settlement_intents_account_reservations_idx
+    ON gateway_settlement_intents (pubkey)
+    INCLUDE (reserved_nanousd)
+    WHERE state <> 'resolved' AND reserved_nanousd > 0;
 
 ALTER TABLE gateway_reconciliation_outcomes
     ADD COLUMN intent_id BIGINT REFERENCES gateway_settlement_intents(id),
@@ -1268,19 +1375,78 @@ CREATE TABLE discovery_campaigns (
         AND array_position(source_keys, source_keys[1], 2) IS NULL
         AND (cardinality(source_keys) < 2 OR array_position(source_keys, source_keys[2], 3) IS NULL)
     ),
+    budget_payer_pubkey BYTEA
+        CHECK (budget_payer_pubkey IS NULL OR octet_length(budget_payer_pubkey) = 32),
+    budget_approved_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (budget_approved_nanousd >= 0),
+    budget_spent_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (budget_spent_nanousd >= 0),
+    budget_reserved_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (budget_reserved_nanousd >= 0),
+    budget_state TEXT NOT NULL DEFAULT 'unapproved'
+        CHECK (budget_state IN ('unapproved', 'active', 'paused', 'revoked', 'exhausted')),
+    budget_approval_event_id BYTEA
+        CHECK (budget_approval_event_id IS NULL OR octet_length(budget_approval_event_id) = 32),
+    budget_approved_at TIMESTAMPTZ,
+    budget_fingerprint BYTEA
+        CHECK (budget_fingerprint IS NULL OR octet_length(budget_fingerprint) = 32),
+    price_per_retained_lead_nanousd BIGINT
+        CHECK (price_per_retained_lead_nanousd IS NULL OR price_per_retained_lead_nanousd > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (community_id, id)
+    PRIMARY KEY (community_id, id),
+    CONSTRAINT discovery_campaigns_spent_and_reserved_within_approved CHECK (
+        budget_spent_nanousd::NUMERIC + budget_reserved_nanousd::NUMERIC
+            <= budget_approved_nanousd::NUMERIC
+    ),
+    CONSTRAINT discovery_campaigns_budget_approval_complete CHECK (
+        (
+            budget_state = 'unapproved'
+            AND budget_payer_pubkey IS NULL
+            AND budget_approved_nanousd = 0
+            AND budget_spent_nanousd = 0
+            AND budget_reserved_nanousd = 0
+            AND budget_approval_event_id IS NULL
+            AND budget_approved_at IS NULL
+            AND budget_fingerprint IS NULL
+            AND price_per_retained_lead_nanousd IS NULL
+        ) OR (
+            budget_state <> 'unapproved'
+            AND budget_payer_pubkey IS NOT NULL
+            AND budget_approved_nanousd > 0
+            AND budget_approval_event_id IS NOT NULL
+            AND budget_approved_at IS NOT NULL
+            AND budget_fingerprint IS NOT NULL
+            AND price_per_retained_lead_nanousd IS NOT NULL
+        )
+    )
 );
 
 CREATE INDEX discovery_campaigns_taxonomy_created_idx
     ON discovery_campaigns (community_id, industry_id, vertical_id, created_at DESC, id DESC);
+CREATE INDEX discovery_campaigns_budget_payer_active_idx
+    ON discovery_campaigns (budget_payer_pubkey, budget_state)
+    INCLUDE (budget_reserved_nanousd)
+    WHERE budget_payer_pubkey IS NOT NULL;
+CREATE UNIQUE INDEX discovery_campaign_budget_approval_event_unique
+    ON discovery_campaigns (community_id, budget_approval_event_id)
+    WHERE budget_approval_event_id IS NOT NULL;
+
+CREATE TABLE discovery_budget_approval_claims (
+    approval_event_id BYTEA PRIMARY KEY CHECK (octet_length(approval_event_id) = 32),
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE discovery_workspace_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL CHECK (operation IN (
         'access', 'create_campaign', 'update_campaign_sources',
+        'approve_campaign_budget', 'pause_campaign_budget',
+        'revoke_campaign_budget', 'get_campaign_budget',
         'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts',
         'get_lead', 'update_lead'
     )),
@@ -1299,9 +1465,9 @@ CREATE TABLE discovery_runs (
     requested_by BYTEA NOT NULL CHECK (octet_length(requested_by) = 32),
     start_idempotency_key UUID NOT NULL,
     discovery_protocol_version SMALLINT NOT NULL DEFAULT 1
-        CHECK (discovery_protocol_version IN (1, 2)),
+        CHECK (discovery_protocol_version IN (1, 2, 3)),
     lease_worker_protocol_version SMALLINT
-        CHECK (lease_worker_protocol_version IN (1, 2)),
+        CHECK (lease_worker_protocol_version IN (1, 2, 3)),
     lease_worker_protocol_claim_id UUID,
     state TEXT NOT NULL DEFAULT 'queued'
         CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
@@ -1313,12 +1479,79 @@ CREATE TABLE discovery_runs (
     attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
     terminal_reason TEXT
         CHECK (terminal_reason IN ('cancelled_by_actor', 'entitlement_revoked', 'executor_failed')),
+    payer_pubkey BYTEA
+        CHECK (payer_pubkey IS NULL OR octet_length(payer_pubkey) = 32),
+    price_per_retained_lead_nanousd BIGINT
+        CHECK (price_per_retained_lead_nanousd IS NULL OR price_per_retained_lead_nanousd > 0),
+    billable_lead_limit SMALLINT
+        CHECK (billable_lead_limit IS NULL OR billable_lead_limit BETWEEN 1 AND 500),
+    reserved_nanousd BIGINT
+        CHECK (reserved_nanousd IS NULL OR reserved_nanousd >= 0),
+    settled_nanousd BIGINT
+        CHECK (settled_nanousd IS NULL OR settled_nanousd >= 0),
+    released_nanousd BIGINT
+        CHECK (released_nanousd IS NULL OR released_nanousd >= 0),
+    billed_retained_lead_count SMALLINT
+        CHECK (billed_retained_lead_count IS NULL OR billed_retained_lead_count BETWEEN 0 AND 500),
+    settlement_ref TEXT CHECK (
+        settlement_ref IS NULL OR (
+            octet_length(settlement_ref) BETWEEN 1 AND 256
+            AND settlement_ref = btrim(settlement_ref)
+            AND settlement_ref !~ '[[:cntrl:]]'
+        )
+    ),
+    settled_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, id),
     UNIQUE (community_id, start_idempotency_key),
     CHECK (completed_steps <= total_steps),
-    CHECK ((claim_id IS NULL) = (lease_until IS NULL))
+    CHECK ((claim_id IS NULL) = (lease_until IS NULL)),
+    CONSTRAINT discovery_runs_billing_snapshot_complete CHECK (
+        (
+            discovery_protocol_version < 3
+            AND payer_pubkey IS NULL
+            AND price_per_retained_lead_nanousd IS NULL
+            AND billable_lead_limit IS NULL
+            AND reserved_nanousd IS NULL
+            AND settled_nanousd IS NULL
+            AND released_nanousd IS NULL
+            AND billed_retained_lead_count IS NULL
+            AND settlement_ref IS NULL
+            AND settled_at IS NULL
+        ) OR (
+            discovery_protocol_version = 3
+            AND payer_pubkey IS NOT NULL
+            AND price_per_retained_lead_nanousd IS NOT NULL
+            AND billable_lead_limit IS NOT NULL
+            AND reserved_nanousd IS NOT NULL
+            AND reserved_nanousd::NUMERIC =
+                price_per_retained_lead_nanousd::NUMERIC * billable_lead_limit::NUMERIC
+            AND (
+                (
+                    state IN ('queued', 'running')
+                    AND settled_nanousd IS NULL
+                    AND released_nanousd IS NULL
+                    AND billed_retained_lead_count IS NULL
+                    AND settlement_ref IS NULL
+                    AND settled_at IS NULL
+                ) OR (
+                    state IN ('succeeded', 'cancelled', 'failed')
+                    AND settled_nanousd IS NOT NULL
+                    AND released_nanousd IS NOT NULL
+                    AND billed_retained_lead_count IS NOT NULL
+                    AND billed_retained_lead_count <= billable_lead_limit
+                    AND settlement_ref IS NOT NULL
+                    AND settled_at IS NOT NULL
+                    AND settled_nanousd::NUMERIC + released_nanousd::NUMERIC
+                        = reserved_nanousd::NUMERIC
+                    AND settled_nanousd::NUMERIC =
+                        price_per_retained_lead_nanousd::NUMERIC
+                            * billed_retained_lead_count::NUMERIC
+                )
+            )
+        )
+    )
 );
 
 CREATE FUNCTION discovery_guard_active_campaign_run() RETURNS TRIGGER AS $$
@@ -1368,16 +1601,21 @@ BEGIN
         NEW.lease_worker_protocol_claim_id := NULL;
         RETURN NEW;
     END IF;
-    IF NEW.lease_worker_protocol_version=2
+    IF NEW.lease_worker_protocol_version IN (2, 3)
        AND NEW.lease_worker_protocol_claim_id=NEW.claim_id
     THEN
+        IF NEW.lease_worker_protocol_version <> NEW.discovery_protocol_version THEN
+            RAISE EXCEPTION
+                'Discovery worker protocol does not match the run protocol'
+                USING ERRCODE = 'check_violation';
+        END IF;
         RETURN NEW;
     END IF;
     NEW.lease_worker_protocol_version := 1;
     NEW.lease_worker_protocol_claim_id := NEW.claim_id;
-    IF NEW.discovery_protocol_version=2 THEN
+    IF NEW.discovery_protocol_version <> 1 THEN
         RAISE EXCEPTION
-            'Discovery protocol V1 worker cannot claim a protocol V2 run'
+            'Discovery protocol V1 worker cannot claim a newer protocol run'
             USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
@@ -1422,6 +1660,11 @@ CREATE INDEX discovery_runs_claimable_idx
 
 CREATE INDEX discovery_runs_community_created_idx
     ON discovery_runs (community_id, created_at DESC);
+CREATE INDEX discovery_runs_community_campaign_idx
+    ON discovery_runs (community_id, campaign_id, created_at DESC);
+CREATE UNIQUE INDEX discovery_runs_settlement_ref_idx
+    ON discovery_runs (community_id, settlement_ref)
+    WHERE settlement_ref IS NOT NULL;
 
 CREATE TABLE discovery_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
@@ -1563,6 +1806,7 @@ CREATE TABLE discovery_run_sources (
         'rate_limited', 'provider_unavailable', 'response_too_large',
         'request_timed_out', 'malformed_response', 'outcome_unknown', 'cancelled'
     )),
+    provider_poll_after TIMESTAMPTZ,
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1573,6 +1817,42 @@ CREATE TABLE discovery_run_sources (
     CHECK ((status = 'pending' AND started_at IS NULL) OR started_at IS NOT NULL),
     CHECK ((status IN ('pending', 'active') AND finished_at IS NULL) OR finished_at IS NOT NULL)
 );
+
+CREATE TABLE discovery_gateway_attempts (
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    run_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper','brave_search','exa_search')),
+    intent_id TEXT NOT NULL CHECK (
+        octet_length(intent_id) BETWEEN 1 AND 128
+        AND intent_id = btrim(intent_id)
+        AND intent_id !~ '[[:cntrl:]]'
+    ),
+    provider_request_id TEXT CHECK (
+        provider_request_id IS NULL OR (
+            octet_length(provider_request_id) BETWEEN 1 AND 128
+            AND provider_request_id = btrim(provider_request_id)
+            AND provider_request_id !~ '[[:cntrl:]]'
+        )
+    ),
+    status TEXT NOT NULL CHECK (status IN ('intent','pending','ready')),
+    observations JSONB NOT NULL DEFAULT '[]'::JSONB
+        CHECK (jsonb_typeof(observations) = 'array'),
+    returned_count INTEGER NOT NULL DEFAULT 0 CHECK (returned_count BETWEEN 0 AND 500),
+    retained_count INTEGER NOT NULL DEFAULT 0 CHECK (retained_count BETWEEN 0 AND 500),
+    duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count BETWEEN 0 AND 500),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, run_id, provider),
+    FOREIGN KEY (community_id, campaign_id)
+        REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_gateway_attempts_payer_recent_idx
+    ON discovery_gateway_attempts (payer_pubkey, created_at DESC);
 
 CREATE FUNCTION discovery_seed_legacy_run_plan() RETURNS TRIGGER AS $$
 DECLARE
@@ -1780,6 +2060,39 @@ CREATE TABLE discovery_business_observations (
     FOREIGN KEY (community_id, first_run_id)
         REFERENCES discovery_runs(community_id, id)
 );
+
+CREATE TABLE discovery_campaign_leads (
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    lead_id UUID NOT NULL,
+    discovered_run_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, campaign_id, lead_id),
+    FOREIGN KEY (community_id, campaign_id)
+        REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, lead_id)
+        REFERENCES discovery_business_observations(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, discovered_run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_campaign_leads_lead_idx
+    ON discovery_campaign_leads (community_id, lead_id);
+
+CREATE FUNCTION discovery_associate_observation_campaign() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO discovery_campaign_leads
+        (community_id,campaign_id,lead_id,discovered_run_id,created_at)
+    SELECT NEW.community_id,r.campaign_id,NEW.id,NEW.first_run_id,NEW.first_observed_at
+    FROM discovery_runs r
+    WHERE r.community_id=NEW.community_id AND r.id=NEW.first_run_id
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER discovery_associate_observation_campaign
+AFTER INSERT ON discovery_business_observations
+FOR EACH ROW EXECUTE FUNCTION discovery_associate_observation_campaign();
 
 CREATE FUNCTION discovery_guard_legacy_observation_insert() RETURNS TRIGGER AS $$
 BEGIN
@@ -2000,6 +2313,21 @@ CREATE TABLE discovery_observation_batches (
         REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE,
     CHECK (accepted_count + existing_count BETWEEN 1 AND 25)
 );
+
+CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.existing_count > 0 AND pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION
+            'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER discovery_guard_legacy_duplicate_batch
+BEFORE INSERT ON discovery_observation_batches
+FOR EACH ROW EXECUTE FUNCTION discovery_guard_legacy_duplicate_batch();
 
 CREATE TABLE discovery_source_observation_batches (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
@@ -2900,8 +3228,10 @@ SELECT attach_community_write_fence('delivery_log');
 SELECT attach_community_write_fence('discovery_action_claims');
 SELECT attach_community_write_fence('discovery_actor_grants');
 SELECT attach_community_write_fence('discovery_business_observations');
+SELECT attach_community_write_fence('discovery_campaign_leads');
 SELECT attach_community_write_fence('discovery_campaigns');
 SELECT attach_community_write_fence('discovery_entitlements');
+SELECT attach_community_write_fence('discovery_gateway_attempts');
 SELECT attach_community_write_fence('discovery_lead_profiles');
 SELECT attach_community_write_fence('discovery_observation_batches');
 SELECT attach_community_write_fence('discovery_run_business_searches');

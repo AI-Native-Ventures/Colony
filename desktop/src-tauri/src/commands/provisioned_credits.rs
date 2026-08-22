@@ -125,7 +125,7 @@ mod tests {
         let owner = signer.public_key().to_hex();
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind account gateway");
         let address = listener.local_addr().expect("account address");
-        let body = br#"{"balance_nanousd":"123456789","currency":"USD","status":"active"}"#;
+        let body = br#"{"balance_nanousd":"123456789","total_balance_nanousd":"273456789","discovery_reserved_nanousd":"100000000","gateway_reserved_nanousd":"50000000","available_balance_nanousd":"123456789","currency":"USD","status":"active"}"#;
         let expected_owner = owner.clone();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept account request");

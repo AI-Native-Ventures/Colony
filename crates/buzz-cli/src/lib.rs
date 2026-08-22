@@ -817,24 +817,6 @@ pub enum CompanyCmd {
     },
 }
 
-/// Workspace-scoped business Discovery operations.
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum DiscoverySourceModeArg {
-    Waterfall,
-    Concurrent,
-}
-
-/// Live Businesses source accepted by Discovery Campaign commands.
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum DiscoverySourceArg {
-    #[value(name = "google_maps")]
-    GoogleMaps,
-    #[value(name = "brave_search")]
-    BraveSearch,
-    #[value(name = "exa_search")]
-    ExaSearch,
-}
-
 /// Funnel status accepted by `buzz discovery lead-update`.
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum DiscoveryLeadStatusArg {
@@ -912,27 +894,54 @@ pub enum DiscoveryCmd {
         /// Optional ISO 3166-1 alpha-2 country code.
         #[arg(long)]
         region: Option<String>,
-        /// Source execution mode for future runs.
-        #[arg(long, value_enum, default_value = "waterfall")]
-        source_mode: DiscoverySourceModeArg,
-        /// Selected source in waterfall order. Repeat to select multiple.
-        #[arg(long = "source", value_enum)]
-        sources: Vec<DiscoverySourceArg>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
     },
-    /// Replace the source mode and selection used by future Campaign runs
-    CampaignSources {
+    /// Build the exact Approval Block for this Campaign without spending Credits
+    CampaignBudgetRequest {
         /// Campaign UUID.
         #[arg(long)]
         campaign: Uuid,
-        /// Source execution mode.
-        #[arg(long, value_enum)]
-        source_mode: DiscoverySourceModeArg,
-        /// Selected source in waterfall order. Repeat for each source.
-        #[arg(long = "source", value_enum, required = true)]
-        sources: Vec<DiscoverySourceArg>,
+        /// Number of seconds before the human approval expires.
+        #[arg(long, default_value_t = 900)]
+        expires_in: u64,
+        /// Stable retry key for reading the Campaign.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Approve or increase a Campaign spending budget from a strict JSON file
+    CampaignBudgetApprove {
+        /// JSON file containing the exact Campaign budget approval.
+        #[arg(long)]
+        file: String,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Pause new paid runs under an approved Campaign budget
+    CampaignBudgetPause {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Permanently revoke new paid runs under a Campaign budget
+    CampaignBudgetRevoke {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Read the current Campaign budget and remaining capacity
+    CampaignBudgetGet {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -1044,21 +1053,6 @@ pub enum DiscoveryCmd {
         /// Campaign UUID owned by the Discovery work surface.
         #[arg(long)]
         campaign: Uuid,
-        /// Business category or web-search phrase.
-        #[arg(long)]
-        query: String,
-        /// Geography included in every selected source query.
-        #[arg(long)]
-        location: String,
-        /// Maximum unique new organizations requested for the run.
-        #[arg(long, default_value_t = 100)]
-        limit: u16,
-        /// ISO 639-1 language code.
-        #[arg(long, default_value = "en")]
-        language: String,
-        /// Optional ISO 3166-1 alpha-2 country code.
-        #[arg(long)]
-        region: Option<String>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -3389,25 +3383,41 @@ mod tests {
                 "dentists",
                 "--location",
                 "Sandton, South Africa",
-                "--source-mode",
-                "concurrent",
-                "--source",
-                "brave_search",
-                "--source",
-                "exa_search",
             ],
             vec![
                 "buzz",
                 "discovery",
-                "campaign-sources",
+                "campaign-budget-request",
                 "--campaign",
                 campaign,
-                "--source-mode",
-                "waterfall",
-                "--source",
-                "exa_search",
-                "--source",
-                "google_maps",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-approve",
+                "--file",
+                "campaign-budget.json",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-pause",
+                "--campaign",
+                campaign,
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-revoke",
+                "--campaign",
+                campaign,
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-get",
+                "--campaign",
+                campaign,
             ],
             vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
             vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
@@ -3432,17 +3442,7 @@ mod tests {
                 "--notes",
                 "Warm intro",
             ],
-            vec![
-                "buzz",
-                "discovery",
-                "start",
-                "--campaign",
-                campaign,
-                "--query",
-                "dentists",
-                "--location",
-                "Sandton, South Africa",
-            ],
+            vec!["buzz", "discovery", "start", "--campaign", campaign],
             vec!["buzz", "discovery", "status", "--run", run],
             vec![
                 "buzz",
@@ -3463,18 +3463,37 @@ mod tests {
         assert!(
             Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", "dentists"]).is_err()
         );
-        assert!(
-            Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", campaign,]).is_err()
-        );
         assert!(Cli::try_parse_from(["buzz", "discovery", "status"]).is_err());
         assert!(Cli::try_parse_from([
             "buzz",
             "discovery",
-            "campaign-sources",
+            "campaign-create",
+            "--name",
+            "Sandton dentists",
+            "--industry",
+            "healthcare",
+            "--industry-name",
+            "Healthcare",
+            "--vertical",
+            "dentists",
+            "--vertical-name",
+            "Dentists",
+            "--query",
+            "dentists",
+            "--location",
+            "Sandton, South Africa",
+            "--source",
+            "exa_search",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "discovery",
+            "start",
             "--campaign",
             campaign,
-            "--source-mode",
-            "concurrent"
+            "--query",
+            "dentists",
         ])
         .is_err());
         assert!(Cli::try_parse_from([
