@@ -860,6 +860,7 @@ mod integration_tests {
                     rank,
                     hired_by: &owner.public_key().to_bytes(),
                     hire_event: &identity.public_key().to_bytes(),
+                    manager: None,
                 },
             )
             .await

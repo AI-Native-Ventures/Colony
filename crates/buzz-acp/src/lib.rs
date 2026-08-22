@@ -779,11 +779,12 @@ struct ObserverChunkKey {
     agent_index: Option<usize>,
 }
 
-/// Flush coalesced chunks before they exceed the NIP-44 plaintext limit (65,535 bytes).
-/// Leave headroom for the JSON envelope wrapping the text. This is a SOFT pre-flush
-/// of raw text below the hard cap; `fit_observer_event_to_budget` (the final ceiling,
-/// keyed to `OBSERVER_MAX_PLAINTEXT_LEN` in buzz-core/observer.rs:25) is what actually
-/// guarantees the serialized frame fits. Edit one of these two and review the other.
+/// Flush coalesced chunks before they exceed the NIP-44 plaintext limit
+/// (65,408 bytes). Leave headroom for the JSON envelope wrapping the text.
+/// This is a SOFT pre-flush of raw text below the hard cap; the hard cap is
+/// `OBSERVER_MAX_PLAINTEXT_LEN` in buzz-core/observer.rs, and
+/// `fit_observer_event_to_budget` (keyed to it) is what actually guarantees
+/// the serialized frame fits. Edit one of these two and review the other.
 const OBSERVER_CHUNK_MAX_TEXT_BYTES: usize = 60_000;
 
 impl ObserverChunkCoalescer {
@@ -7121,6 +7122,89 @@ mod observer_publish_queue_tests {
         assert_eq!(published, (1..=200).collect::<Vec<u64>>());
         assert_eq!(queue.dropped_events, 0);
     }
+
+    /// Every frame the packer produces must be encryptable AS-IS. Two
+    /// singletons far under the cap whose gathered batch weighs 65_472 bytes:
+    /// the old cap (65_535) accepted the batch, then NIP-44 rejected it whole,
+    /// taking every event inside it with it. Sized against the REAL serializer
+    /// via an affine probe so the arithmetic can never drift.
+    #[test]
+    fn every_gathered_batch_encrypts() {
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate().public_key();
+
+        fn padded(seq: u64, pad: usize) -> observer::ObserverEvent {
+            let mut e = event(seq, "acp_read", Some("chan-a"));
+            e.payload = serde_json::json!({ "pad": "x".repeat(pad) });
+            e
+        }
+
+        // Measure the zero-pad floors, then solve for the pad putting the pair
+        // at `target`: pair(pad) = pair_floor + 2 * pad (each pad byte appears
+        // once per inner copy).
+        let probe_a = padded(1, 0);
+        let probe_b = padded(2, 0);
+        let pair_floor = serialized_len(&batch_envelope(&[probe_a, probe_b]));
+
+        let dead_window_pair = {
+            const TARGET: usize = 65_472; // inside 65_409..=65_535
+            let pad = (TARGET - pair_floor) / 2;
+            assert!(pad > 0, "pair floor {} above target", pair_floor);
+            (padded(1, pad), padded(2, pad))
+        };
+        let (a, b) = &dead_window_pair;
+        let pair_len = serialized_len(&batch_envelope(&[a.clone(), b.clone()]));
+        assert!(
+            (65_409..=65_535).contains(&pair_len),
+            "scenario must land in the old dead window, got {pair_len}"
+        );
+        assert!(
+            serialized_len(a) < 65_408 && serialized_len(b) < 65_408,
+            "each singleton alone must sit far under the NIP-44 limit"
+        );
+
+        let mut queue = queue_of(vec![a.clone(), b.clone()]);
+        let frames = drain_frames(&mut queue);
+        assert!(!frames.is_empty(), "the queue must produce its frame(s)");
+        for frame in &frames {
+            let result = encrypt_observer_payload(&agent, &owner, frame);
+            assert!(
+                result.is_ok(),
+                "packed frame of {} bytes must encrypt, got {result:?}",
+                serialized_len(frame)
+            );
+        }
+    }
+
+    /// Positive control: a near-cap pair that fits UNDER the plaintext limit
+    /// genuinely gathers into one batch envelope, and that batch encrypts.
+    #[test]
+    fn near_cap_batch_gathers_and_encrypts() {
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate().public_key();
+
+        fn padded(seq: u64, pad: usize) -> observer::ObserverEvent {
+            let mut e = event(seq, "acp_read", Some("chan-a"));
+            e.payload = serde_json::json!({ "pad": "x".repeat(pad) });
+            e
+        }
+
+        let pair_floor = serialized_len(&batch_envelope(&[padded(1, 0), padded(2, 0)]));
+        const TARGET: usize = 64_900; // gathers under any plausible cap
+        let pad = (TARGET - pair_floor) / 2;
+        assert!(pad > 0);
+
+        let mut queue = queue_of(vec![padded(1, pad), padded(2, pad)]);
+        let frames = drain_frames(&mut queue);
+        assert_eq!(frames.len(), 1, "both events gather into one batch");
+        assert_eq!(frames[0].kind, OBSERVER_BATCH_KIND, "shipped as a batch");
+        let result = encrypt_observer_payload(&agent, &owner, &frames[0]);
+        assert!(
+            result.is_ok(),
+            "gathered batch of {} bytes must encrypt, got {result:?}",
+            serialized_len(&frames[0])
+        );
+    }
 }
 
 #[cfg(test)]
@@ -9600,5 +9684,52 @@ mod observer_payload_trim_tests {
         assert!(leaf.starts_with('…'));
         assert!(leaf.ends_with('…'));
         assert!(leaf.contains("[elided"));
+    }
+
+    /// Build a frame whose SERIALIZED form is exactly `target` bytes, using
+    /// this module's `serialized` helper so envelope/escaping arithmetic can
+    /// never drift from the real serializer.
+    fn event_serialized_to(target: usize) -> observer::ObserverEvent {
+        let mut event = event_with_payload("acp_read", serde_json::json!({ "body": "" }));
+        let floor = serialized(&event).len();
+        let pad = target
+            .checked_sub(floor)
+            .expect("target must exceed the empty-frame floor");
+        event.payload["body"] = serde_json::Value::String("x".repeat(pad));
+        assert_eq!(serialized(&event).len(), target, "padding must be affine");
+        event
+    }
+
+    /// `fit_observer_event_to_budget` output must always be encryptable. The
+    /// old cap (65_535) let fitted frames land in 65_409..=65_535, a window our
+    /// check accepted but NIP-44 rejects whole ("message too long") — the
+    /// passthrough sizes below are exactly where production lands, since the
+    /// early-return path hands naturally-sized frames through untouched.
+    #[test]
+    fn test_fitted_frames_always_encrypt_across_the_boundary() {
+        let sender = nostr::Keys::generate();
+        let owner = nostr::Keys::generate().public_key();
+        let cases = [
+            ("at the cap", OBSERVER_MAX_PLAINTEXT_LEN),
+            // nostr 0.44.7's private MAX_SUPPORTED_PLAINTEXT_SIZE + 1.
+            ("one over the NIP-44 limit", 65_409),
+            ("mid old dead window", 65_472),
+            ("at the old broken cap", 65_535),
+            ("genuinely oversized", 100_000),
+        ];
+        for (label, target) in cases {
+            let mut event = event_serialized_to(target);
+            fit_observer_event_to_budget(&mut event);
+            assert!(
+                serialized(&event).len() <= OBSERVER_MAX_PLAINTEXT_LEN,
+                "{label}: fitted frame must respect the cap"
+            );
+            let result = encrypt_observer_payload(&sender, &owner, &event);
+            assert!(
+                result.is_ok(),
+                "{label}: fitted frame of {} bytes must encrypt, got {result:?}",
+                serialized(&event).len()
+            );
+        }
     }
 }
