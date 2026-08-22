@@ -406,6 +406,15 @@ pub const KIND_CONTENT_POST: u32 = 30196;
 /// the record of why a rule existed survives its deletion.
 pub const KIND_CONTENT_STYLE: u32 = 30197;
 
+/// Colony content calendar: a brand kit (NIP-33 head, `d={kit id}`).
+///
+/// The source of truth every gate measures against: hues, type, marks, canvases,
+/// templates, and claim strictness. The relay validates the structure
+/// (shapes, hex colours, sha256 hashes, enum arms, caps) but does not
+/// interpret it, because the meaning of a palette or a type scale belongs to
+/// the kit, not to the relay. See [`crate::content_brand_kit`].
+pub const KIND_CONTENT_BRAND_KIT: u32 = 30198;
+
 /// Colony content calendar: the owner approving a post or sending it back.
 ///
 /// Separate from the post on purpose. The post belongs to the agent that made
@@ -995,6 +1004,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_CONTENT_CAMPAIGN,
     KIND_CONTENT_POST,
     KIND_CONTENT_STYLE,
+    KIND_CONTENT_BRAND_KIT,
     KIND_CONTENT_DECISION,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
@@ -1243,6 +1253,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 303
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_CAMPAIGN)); // 30195 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_POST)); // 30196 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_STYLE)); // 30197 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_BRAND_KIT)); // 30198 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
@@ -1497,12 +1508,14 @@ mod tests {
         assert_eq!(KIND_CONTENT_CAMPAIGN, 30195);
         assert_eq!(KIND_CONTENT_POST, 30196);
         assert_eq!(KIND_CONTENT_STYLE, 30197);
+        assert_eq!(KIND_CONTENT_BRAND_KIT, 30198);
         assert_eq!(KIND_CONTENT_DECISION, 40025);
 
         for kind in [
             KIND_CONTENT_CAMPAIGN,
             KIND_CONTENT_POST,
             KIND_CONTENT_STYLE,
+            KIND_CONTENT_BRAND_KIT,
             KIND_CONTENT_DECISION,
         ] {
             assert!(
@@ -1523,7 +1536,12 @@ mod tests {
 
         // Campaign, post, and style are current state, addressed by d tag:
         // republishing the same coordinate is how an agent revises a card.
-        for head in [KIND_CONTENT_CAMPAIGN, KIND_CONTENT_POST, KIND_CONTENT_STYLE] {
+        for head in [
+            KIND_CONTENT_CAMPAIGN,
+            KIND_CONTENT_POST,
+            KIND_CONTENT_STYLE,
+            KIND_CONTENT_BRAND_KIT,
+        ] {
             assert!(is_parameterized_replaceable(head));
         }
 
@@ -1540,6 +1558,7 @@ mod tests {
             KIND_CONTENT_CAMPAIGN,
             KIND_CONTENT_POST,
             KIND_CONTENT_STYLE,
+            KIND_CONTENT_BRAND_KIT,
             KIND_CONTENT_DECISION,
         ] {
             assert!(!P_GATED_KINDS.contains(&kind));

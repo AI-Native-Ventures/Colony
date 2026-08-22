@@ -16,6 +16,8 @@ pub mod company;
 pub mod company_roster;
 /// Colony content calendar — campaigns, posts, house style, owner decisions.
 pub mod content;
+/// Colony content calendar — the brand kit record (kind 30198).
+pub mod content_brand_kit;
 /// Core contracts for Colony business Discovery runs.
 pub mod discovery;
 /// Core contracts for trusted local Colony Discovery workers.
