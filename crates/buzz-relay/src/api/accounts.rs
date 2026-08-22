@@ -352,14 +352,13 @@ pub async fn recover(
         return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_recovery_code"));
     }
 
-    let token_bytes = random_32_bytes();
-    let token_hash = hex::encode(sha2::Sha256::digest(token_bytes));
+    let token = hex::encode(random_32_bytes());
 
     issue_reset_token(
         state.db.pool(),
         tenant.community(),
         account.id,
-        &token_hash,
+        &reset_token_hash(&token),
         chrono::Duration::minutes(RESET_TOKEN_TTL_MINS),
     )
     .await
@@ -368,7 +367,7 @@ pub async fn recover(
     Ok(Json(json!({
         "pubkey": account.pubkey,
         "recoveryBlob": account.recovery_blob,
-        "resetToken": hex::encode(token_bytes),
+        "resetToken": token,
     })))
 }
 
@@ -377,6 +376,20 @@ fn random_32_bytes() -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     bytes
+}
+
+/// Hash a reset token for storage and lookup.
+///
+/// Both sides must agree on what is hashed. They previously did not: `recover`
+/// hashed the raw random bytes while returning the token as hex, and
+/// `reset_password` hashed the hex text it received back. Those are different
+/// digests, so every reset failed with `invalid_reset_token` no matter what the
+/// caller did. Neither handler's own tests could see it, because each was
+/// self-consistent; only the round-trip exposes it.
+///
+/// One function now owns the answer, so the two cannot drift apart again.
+pub(crate) fn reset_token_hash(token: &str) -> String {
+    hex::encode(sha2::Sha256::digest(token.as_bytes()))
 }
 
 /// Body for `POST /api/accounts/reset-password`.
@@ -447,7 +460,7 @@ pub async fn reset_password(
     let auth_hash = hash_auth_key(&request.auth_key)
         .map_err(|error| internal_error(&format!("hash auth key: {error}")))?;
 
-    let token_hash = hex::encode(sha2::Sha256::digest(request.reset_token.as_bytes()));
+    let token_hash = reset_token_hash(&request.reset_token);
     let applied = consume_reset_and_rewrite(
         state.db.pool(),
         tenant.community(),
@@ -792,6 +805,26 @@ mod tests {
     #[test]
     fn reset_validation_accepts_a_well_formed_body() {
         assert!(validate_reset(&valid_reset()).is_ok());
+    }
+
+    #[test]
+    fn a_minted_reset_token_hashes_to_what_the_reset_looks_up() {
+        // The bug this pins: `recover` used to hash the raw random bytes while
+        // handing the caller hex, and `reset_password` hashed the hex it got
+        // back. Both were self-consistent, so both passed their own tests, and
+        // every real password reset failed with invalid_reset_token.
+        let minted = hex::encode(random_32_bytes());
+        let stored = reset_token_hash(&minted);
+        let looked_up = reset_token_hash(&minted);
+        assert_eq!(stored, looked_up);
+
+        // And the shape that caused it: hashing the bytes is not the same as
+        // hashing their hex text, so mixing the two silently never matches.
+        let bytes = random_32_bytes();
+        assert_ne!(
+            hex::encode(sha2::Sha256::digest(bytes)),
+            reset_token_hash(&hex::encode(bytes))
+        );
     }
 
     #[test]
