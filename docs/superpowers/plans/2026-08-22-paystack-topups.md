@@ -131,7 +131,10 @@ mod tests {
 
     /// Test-only helper mirroring what Paystack does when it signs a request.
     fn hex_hmac_sha512(secret: &str, body: &[u8]) -> String {
-        use hmac::{Hmac, Mac};
+        // KeyInit must be in scope for new_from_slice on the pinned hmac 0.13.
+        // Importing only Hmac and Mac fails with E0599 suggesting this import.
+        // House pattern: invite_token.rs:43, api/git/policy.rs:37.
+        use hmac::{Hmac, KeyInit, Mac};
         let mut mac = <Hmac<sha2::Sha512>>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
         hex::encode(mac.finalize().into_bytes())
