@@ -2078,6 +2078,9 @@ async fn account_read_is_exact_signer_bound_and_non_mutating() {
         serde_json::from_str::<Value>(&body).expect("account json"),
         json!({
             "balance_nanousd": exact.to_string(),
+            "total_balance_nanousd": exact.to_string(),
+            "discovery_reserved_nanousd": "0",
+            "available_balance_nanousd": exact.to_string(),
             "currency": "USD",
             "status": "active",
         })
@@ -2110,6 +2113,9 @@ async fn account_read_is_exact_signer_bound_and_non_mutating() {
         serde_json::from_str::<Value>(&body).expect("negative json"),
         json!({
             "balance_nanousd": (-exact).to_string(),
+            "total_balance_nanousd": (-exact).to_string(),
+            "discovery_reserved_nanousd": "0",
+            "available_balance_nanousd": (-exact).to_string(),
             "currency": "USD",
             "status": "depleted",
         })
@@ -2142,6 +2148,9 @@ async fn account_read_is_exact_signer_bound_and_non_mutating() {
         serde_json::from_str::<Value>(&body).expect("missing json"),
         json!({
             "balance_nanousd": "0",
+            "total_balance_nanousd": "0",
+            "discovery_reserved_nanousd": "0",
+            "available_balance_nanousd": "0",
             "currency": "USD",
             "status": "depleted",
         })

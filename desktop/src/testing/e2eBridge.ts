@@ -602,6 +602,9 @@ type E2eConfig = {
     /** Volatile Colony Credits account response used by settings specs. */
     colonyCreditsAccount?: {
       balance_nanousd: string;
+      total_balance_nanousd?: string;
+      discovery_reserved_nanousd?: string;
+      available_balance_nanousd?: string;
       currency: "USD";
       status: "active" | "depleted";
     };
@@ -8630,10 +8633,16 @@ let mockGlobalAgentConfig: {
 } | null = null;
 let mockColonyCreditsAccount: {
   balance_nanousd: string;
+  total_balance_nanousd?: string;
+  discovery_reserved_nanousd?: string;
+  available_balance_nanousd?: string;
   currency: "USD";
   status: "active" | "depleted";
 } = {
   balance_nanousd: "0",
+  total_balance_nanousd: "0",
+  discovery_reserved_nanousd: "0",
+  available_balance_nanousd: "0",
   currency: "USD" as const,
   status: "depleted" as const,
 };
@@ -11194,7 +11203,14 @@ export function maybeInstallE2eTauriMocks() {
     : null;
   mockColonyCreditsAccount = config.mock?.colonyCreditsAccount
     ? { ...config.mock.colonyCreditsAccount }
-    : { balance_nanousd: "0", currency: "USD", status: "depleted" };
+    : {
+        balance_nanousd: "0",
+        total_balance_nanousd: "0",
+        discovery_reserved_nanousd: "0",
+        available_balance_nanousd: "0",
+        currency: "USD",
+        status: "depleted",
+      };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
   resetMockDelegationGrantEvents(config);

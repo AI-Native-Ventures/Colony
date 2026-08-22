@@ -1399,6 +1399,19 @@ mod tests {
         assert!(discovery_credits.contains("state IN ('succeeded', 'cancelled', 'failed')"));
         assert!(discovery_credits.contains("request_id IS NULL"));
         assert!(discovery_credits.contains("settle_basis IS NULL"));
+        let desired_schema = include_str!("../../../schema/schema.sql");
+        for required in [
+            "CREATE TABLE discovery_gateway_attempts",
+            "CREATE TABLE discovery_campaign_leads",
+            "budget_reserved_nanousd BIGINT NOT NULL DEFAULT 0",
+            "discovery_protocol_version IN (1, 2, 3)",
+            "service TEXT CHECK (service IN ('model', 'discovery'))",
+        ] {
+            assert!(
+                desired_schema.contains(required),
+                "desired-state schema must mirror paid Discovery contract: {required}"
+            );
+        }
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {

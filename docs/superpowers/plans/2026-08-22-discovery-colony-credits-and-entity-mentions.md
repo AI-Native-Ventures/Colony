@@ -57,7 +57,7 @@ are jointly green on current `develop`.
 
 **Files:**
 
-- Create: `migrations/0061_discovery_colony_credits.sql`
+- Create: `migrations/0062_discovery_colony_credits.sql`
 - Modify: `crates/buzz-db/src/migration.rs`
 - Test: `crates/buzz-db/src/migration.rs`
 
@@ -107,7 +107,7 @@ schema and a populated pre-0061 fixture.
 **Step 4: Commit**
 
 ```bash
-git add migrations/0061_discovery_colony_credits.sql crates/buzz-db/src/migration.rs
+git add migrations/0062_discovery_colony_credits.sql crates/buzz-db/src/migration.rs
 git commit -m "feat(discovery): add Campaign budget schema" \
   --trailer "Co-authored-by: Basheer Phiri <phiribash@gmail.com>" \
   --trailer "Signed-off-by: Basheer Phiri <phiribash@gmail.com>"

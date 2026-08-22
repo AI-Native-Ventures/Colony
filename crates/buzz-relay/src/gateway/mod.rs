@@ -940,15 +940,25 @@ pub(crate) async fn account(
         false,
     )
     .await?;
-    let balance = buzz_db::credits::balance(state.app.db.pool(), &pubkey.to_bytes())
+    let account = buzz_db::credits::admission_account(state.app.db.pool(), &pubkey.to_bytes())
         .await
         .map_err(|error| {
             tracing::error!(%error, "gateway: account balance read failed");
             crate::api::internal_error("gateway account balance read failed")
         })?;
-    let status = if balance > 0 { "active" } else { "depleted" };
+    let available_balance = account
+        .balance
+        .saturating_sub(account.discovery_reserved_nanousd);
+    let status = if available_balance > 0 {
+        "active"
+    } else {
+        "depleted"
+    };
     let mut response = axum::Json(serde_json::json!({
-        "balance_nanousd": balance.to_string(),
+        "balance_nanousd": available_balance.to_string(),
+        "total_balance_nanousd": account.balance.to_string(),
+        "discovery_reserved_nanousd": account.discovery_reserved_nanousd.to_string(),
+        "available_balance_nanousd": available_balance.to_string(),
         "currency": "USD",
         "status": status,
     }))

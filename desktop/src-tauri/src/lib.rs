@@ -320,10 +320,6 @@ pub fn run() {
                 .load(std::sync::atomic::Ordering::Acquire);
             let recovery_mode = identity_lost || keyring_locked;
 
-            if !keyring_locked {
-                discovery_credentials::purge_legacy_provider_credentials();
-            }
-
             if discovery_worker::should_start_fake_local_worker(
                 recovery_mode,
                 state

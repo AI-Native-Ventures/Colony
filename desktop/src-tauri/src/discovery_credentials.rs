@@ -1,22 +1,4 @@
-//! One-time cleanup for retired device-local Discovery provider keys.
-
-use crate::secret_store::SecretStore;
-
-const LEGACY_PROVIDER_KEYS: [&str; 3] = [
-    "discovery.outscraper.api_key",
-    "discovery.brave_search.api_key",
-    "discovery.exa_search.api_key",
-];
-
-/// Remove provider keys that are no longer used by Colony-hosted Discovery.
-pub(crate) fn purge_legacy_provider_credentials() {
-    let store = SecretStore::shared(crate::app_state::keyring_service());
-    for key in LEGACY_PROVIDER_KEYS {
-        if let Err(error) = store.delete(key) {
-            eprintln!("buzz-desktop: legacy Discovery credential cleanup failed: {error}");
-        }
-    }
-}
+//! Discovery worker feature flags.
 
 /// Whether the proof-only fake worker is explicitly enabled.
 pub(crate) fn fake_local_worker_enabled() -> bool {

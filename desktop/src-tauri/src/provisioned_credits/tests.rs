@@ -59,6 +59,9 @@ fn one_day_lease_refreshes_before_expiry_without_an_immediate_loop() {
 fn account_requires_usd_and_matching_status() {
     let account: GatewayAccount = serde_json::from_value(serde_json::json!({
         "balance_nanousd": "-1",
+        "total_balance_nanousd": "9",
+        "discovery_reserved_nanousd": "10",
+        "available_balance_nanousd": "-1",
         "currency": "USD",
         "status": "depleted"
     }))
@@ -67,6 +70,9 @@ fn account_requires_usd_and_matching_status() {
 
     let mismatch = GatewayAccount {
         balance_nanousd: "0".to_string(),
+        total_balance_nanousd: "1".to_string(),
+        discovery_reserved_nanousd: "0".to_string(),
+        available_balance_nanousd: "0".to_string(),
         currency: "USD".to_string(),
         status: GatewayAccountStatus::Active,
     };

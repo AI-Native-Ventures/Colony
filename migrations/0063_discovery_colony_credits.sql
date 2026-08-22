@@ -236,24 +236,6 @@ ON CONFLICT DO NOTHING;
 SELECT attach_community_write_fence('discovery_gateway_attempts'::REGCLASS);
 SELECT attach_community_write_fence('discovery_campaign_leads'::REGCLASS);
 
--- The new desktop no longer carries user provider keys, so it cannot safely
--- resume interrupted protocol-2 work after upgrade. Close those runs before
--- protocol 3 becomes eligible and release their Campaign execution slot.
-UPDATE discovery_run_sources s
-SET status='cancelled',failure_class='cancelled',
-    started_at=COALESCE(started_at,now()),finished_at=COALESCE(finished_at,now()),
-    updated_at=now()
-FROM discovery_runs r
-WHERE s.community_id=r.community_id AND s.run_id=r.id
-  AND r.discovery_protocol_version=2 AND r.state IN ('queued','running')
-  AND s.status IN ('pending','active');
-
-UPDATE discovery_runs
-SET state='cancelled',cancel_requested=TRUE,terminal_reason='cancelled_by_actor',
-    claim_id=NULL,lease_until=NULL,worker_id=NULL,lease_owner_pubkey=NULL,
-    lease_worker_protocol_version=NULL,lease_worker_protocol_claim_id=NULL,updated_at=now()
-WHERE discovery_protocol_version=2 AND state IN ('queued','running');
-
 CREATE UNIQUE INDEX discovery_runs_settlement_ref_idx
     ON discovery_runs (community_id, settlement_ref)
     WHERE settlement_ref IS NOT NULL;

@@ -101,7 +101,7 @@ export function CreateCampaignSheet({
     void getColonyCreditsAccount()
       .then((account) => {
         if (active) {
-          setAvailableBalanceNanousd(account.balance_nanousd);
+          setAvailableBalanceNanousd(account.available_balance_nanousd);
           setBalanceStatus("ready");
         }
       })

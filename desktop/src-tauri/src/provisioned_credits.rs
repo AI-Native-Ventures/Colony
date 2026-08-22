@@ -87,12 +87,13 @@ pub enum GatewayAccountStatus {
     Depleted,
 }
 
-/// Typed account response. `balance_nanousd` intentionally remains a string
-/// at the Tauri/TypeScript boundary so no floating point conversion occurs.
+/// Typed account response using integer-safe decimal strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayAccount {
-    /// Signed decimal nanodollar balance supplied by the relay.
     pub balance_nanousd: String,
+    pub total_balance_nanousd: String,
+    pub discovery_reserved_nanousd: String,
+    pub available_balance_nanousd: String,
     /// The only supported presentation currency.
     pub currency: String,
     /// Relay-provided display status; callers also validate it against the
@@ -108,6 +109,12 @@ impl GatewayAccount {
             return Err("gateway account returned an unsupported currency".to_string());
         }
         let balance = parse_balance_nanousd(&self.balance_nanousd)?;
+        let total = parse_balance_nanousd(&self.total_balance_nanousd)?;
+        let reserved = parse_balance_nanousd(&self.discovery_reserved_nanousd)?;
+        let available = parse_balance_nanousd(&self.available_balance_nanousd)?;
+        if reserved < 0 || available != total.saturating_sub(reserved) || balance != available {
+            return Err("gateway account balance breakdown is inconsistent".to_string());
+        }
         let computed = if balance > 0 {
             GatewayAccountStatus::Active
         } else {

@@ -945,7 +945,9 @@ impl Db {
     pub async fn record_discovery_gateway_response(
         &self,
         community_id: CommunityId,
+        actor_pubkey: &[u8; 32],
         run_id: Uuid,
+        lease_id: Uuid,
         provider: DiscoveryProvider,
         expected_cursor: &str,
         provider_request_id: &str,
@@ -1036,15 +1038,56 @@ impl Db {
 
         let capacity_row = sqlx::query(
             "SELECT r.billable_lead_limit,\
+                    r.state,r.discovery_protocol_version,r.claim_id,r.lease_until,\
+                    r.lease_owner_pubkey,r.reserved_nanousd,r.settled_at,\
+                    c.budget_state,c.budget_reserved_nanousd,\
+                    c.budget_payer_pubkey,r.payer_pubkey,\
+                    EXISTS (SELECT 1 FROM discovery_entitlements d \
+                            WHERE d.community_id=r.community_id AND d.active \
+                              AND (d.expires_at IS NULL OR d.expires_at > now())) \
+                        AS entitlement_active,\
                     COALESCE((SELECT sum(retained_count) FROM discovery_run_sources totals \
                               WHERE totals.community_id=r.community_id \
                                 AND totals.run_id=r.id),0) AS retained_count \
-             FROM discovery_runs r WHERE r.community_id=$1 AND r.id=$2 FOR UPDATE",
+             FROM discovery_runs r \
+             JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+             WHERE r.community_id=$1 AND r.id=$2 FOR UPDATE OF r,c",
         )
         .bind(community_id.as_uuid())
         .bind(run_id)
         .fetch_one(&mut *tx)
         .await?;
+        let state: String = capacity_row.try_get("state")?;
+        let protocol_version: i16 = capacity_row.try_get("discovery_protocol_version")?;
+        let claim_id: Option<Uuid> = capacity_row.try_get("claim_id")?;
+        let lease_until: Option<DateTime<Utc>> = capacity_row.try_get("lease_until")?;
+        let lease_owner: Option<Vec<u8>> = capacity_row.try_get("lease_owner_pubkey")?;
+        let reserved_nanousd: Option<i64> = capacity_row.try_get("reserved_nanousd")?;
+        let settled_at: Option<DateTime<Utc>> = capacity_row.try_get("settled_at")?;
+        let budget_state: String = capacity_row.try_get("budget_state")?;
+        let campaign_reserved: i64 = capacity_row.try_get("budget_reserved_nanousd")?;
+        let campaign_payer: Option<Vec<u8>> = capacity_row.try_get("budget_payer_pubkey")?;
+        let run_payer: Option<Vec<u8>> = capacity_row.try_get("payer_pubkey")?;
+        let entitlement_active: bool = capacity_row.try_get("entitlement_active")?;
+        if state != "running"
+            || protocol_version
+                != i16::try_from(DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION)
+                    .expect("hosted protocol fits SMALLINT")
+            || claim_id != Some(lease_id)
+            || lease_until.is_none_or(|deadline| deadline <= Utc::now())
+            || lease_owner.as_deref() != Some(actor_pubkey.as_slice())
+            || reserved_nanousd.is_none_or(|reserved| reserved <= 0)
+            || settled_at.is_some()
+            || !matches!(budget_state.as_str(), "active" | "paused" | "exhausted")
+            || campaign_reserved < reserved_nanousd.unwrap_or_default()
+            || campaign_payer.is_none()
+            || campaign_payer != run_payer
+            || !entitlement_active
+        {
+            return Err(DbError::AccessDenied(
+                "Discovery hosted provider response lease is no longer active".into(),
+            ));
+        }
         let billable_limit: i16 = capacity_row.try_get("billable_lead_limit")?;
         let already_retained: i64 = capacity_row.try_get("retained_count")?;
         let remaining = i64::from(billable_limit).saturating_sub(already_retained);
@@ -4876,7 +4919,9 @@ mod tests {
         assert!(db
             .record_discovery_gateway_response(
                 community,
+                &actor_bytes,
                 run.id,
+                lease.lease_id,
                 DiscoveryProvider::Outscraper,
                 "colony_pending_wrong",
                 "provider-job-paid",
@@ -4887,7 +4932,9 @@ mod tests {
         let stored = db
             .record_discovery_gateway_response(
                 community,
+                &actor_bytes,
                 run.id,
+                lease.lease_id,
                 DiscoveryProvider::Outscraper,
                 &fence,
                 "provider-job-paid",
@@ -4900,6 +4947,38 @@ mod tests {
             DiscoveryGatewayStoredResponse::Pending { provider_request_id }
                 if provider_request_id == "provider-job-paid"
         ));
+        sqlx::query(
+            "UPDATE discovery_runs SET lease_until=now()-INTERVAL '1 second' \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run.id)
+        .execute(&db.pool)
+        .await
+        .expect("expire hosted provider lease");
+        assert!(matches!(
+            db.record_discovery_gateway_response(
+                community,
+                &actor_bytes,
+                run.id,
+                lease.lease_id,
+                DiscoveryProvider::Outscraper,
+                "provider-job-paid",
+                "provider-job-paid",
+                Some(&[]),
+            )
+            .await,
+            Err(DbError::AccessDenied(_))
+        ));
+        sqlx::query(
+            "UPDATE discovery_runs SET lease_until=now()+INTERVAL '1 minute' \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community.as_uuid())
+        .bind(run.id)
+        .execute(&db.pool)
+        .await
+        .expect("restore hosted provider lease");
         let provider_observations = (0..4)
             .map(|index| {
                 let mut observation = business_observation_for(
@@ -4915,7 +4994,9 @@ mod tests {
         let stored = db
             .record_discovery_gateway_response(
                 community,
+                &actor_bytes,
                 run.id,
+                lease.lease_id,
                 DiscoveryProvider::Outscraper,
                 "provider-job-paid",
                 "provider-job-paid",

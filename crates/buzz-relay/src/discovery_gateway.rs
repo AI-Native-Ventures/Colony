@@ -360,7 +360,9 @@ async fn submit(
         .db
         .record_discovery_gateway_response(
             tenant.community(),
+            &actor.to_bytes(),
             request.run_id,
+            request.lease_id,
             request.provider,
             &fence,
             parsed.provider_request_id(),
@@ -708,7 +710,9 @@ async fn poll(
         .db
         .record_discovery_gateway_response(
             tenant.community(),
+            &actor.to_bytes(),
             request.run_id,
+            request.lease_id,
             request.provider,
             &request.provider_request_id,
             parsed.provider_request_id(),

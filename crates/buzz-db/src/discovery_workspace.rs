@@ -371,15 +371,9 @@ async fn apply_workspace_operation_tx(
                 campaign: Box::new(load_campaign_tx(tx, community_id, campaign.campaign_id).await?),
             })
         }
-        DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
-            campaign_id,
-            source_config,
-        } => {
-            update_campaign_sources_tx(tx, community_id, *campaign_id, source_config).await?;
-            Ok(DiscoveryWorkspaceResult::Campaign {
-                campaign: Box::new(load_campaign_tx(tx, community_id, *campaign_id).await?),
-            })
-        }
+        DiscoveryWorkspaceActionPayload::UpdateCampaignSources { .. } => Err(
+            DbError::AccessDenied("Colony manages Discovery provider sources".into()),
+        ),
         DiscoveryWorkspaceActionPayload::ApproveCampaignBudget { approval } => {
             approve_campaign_budget_tx(
                 tx,
@@ -827,50 +821,6 @@ fn campaign_budget_from_row(
         .validate()
         .map_err(|error| DbError::InvalidData(error.to_string()))?;
     Ok(projection)
-}
-
-async fn update_campaign_sources_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    community_id: CommunityId,
-    campaign_id: Uuid,
-    source_config: &DiscoverySourceConfig,
-) -> Result<()> {
-    source_config
-        .validate()
-        .map_err(|error| DbError::InvalidData(error.to_string()))?;
-    let source_keys = source_config
-        .sources
-        .iter()
-        .copied()
-        .map(source_text)
-        .collect::<Vec<_>>();
-    let updated = sqlx::query(
-        "UPDATE discovery_campaigns SET source_mode=$3,source_keys=$4,updated_at=now() \
-         WHERE community_id=$1 AND id=$2 AND budget_state='unapproved' RETURNING id",
-    )
-    .bind(community_id.as_uuid())
-    .bind(campaign_id)
-    .bind(source_mode_text(source_config.mode))
-    .bind(source_keys)
-    .fetch_optional(&mut **tx)
-    .await?;
-    if updated.is_none() {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM discovery_campaigns WHERE community_id=$1 AND id=$2)",
-        )
-        .bind(community_id.as_uuid())
-        .bind(campaign_id)
-        .fetch_one(&mut **tx)
-        .await?;
-        return Err(if exists {
-            DbError::AccessDenied(
-                "Colony manages provider sources after a Campaign budget is approved".into(),
-            )
-        } else {
-            DbError::NotFound("Discovery campaign".into())
-        });
-    }
-    Ok(())
 }
 
 async fn load_campaign_tx(
