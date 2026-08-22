@@ -53,6 +53,8 @@ pub mod moderation;
 pub mod operator_analytics;
 /// Monthly table partition management.
 pub mod partition;
+/// Payment top-up intents: pending checkout records keyed by reference.
+pub mod payment_intents;
 /// Buzz product-feedback sidecar persistence.
 pub mod product_feedback;
 /// Community-scoped push lease and durable wake-outbox persistence.
