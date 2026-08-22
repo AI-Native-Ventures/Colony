@@ -633,6 +633,19 @@ pub const KIND_NIP43_LEAVE_REQUEST: u32 = 28936;
 /// assertion. See `docs/design/company-employees.html`.
 pub const KIND_HIRE_REQUEST: u32 = 9045;
 
+/// Colony: a community owner's request to change an existing employee's
+/// rank or reporting line, or to retire them (regular, stored).
+///
+/// The employee head (30190) is signed by a relay-held key, so an owner
+/// cannot edit it directly, and re-running hire (9045) would mint a
+/// SECOND identity for the same role, losing its memory and history.
+/// This kind is how rank, `manager`, and retirement reach an employee
+/// that already exists. Owner authority and every business rule are
+/// checked at ingest in `employee_broker::enforce_employee_update`; the
+/// side effect of the same name applies the row change and republishes
+/// the head.
+pub const KIND_EMPLOYEE_UPDATE: u32 = 9046;
+
 // NIP-IA identity archival requests (user/agent/owner-signed)
 /// NIP-IA: Request that the relay archive a target identity.
 pub const KIND_IA_ARCHIVE_REQUEST: u32 = 9035;
@@ -969,6 +982,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_DELEGATION_GRANT,
     KIND_HIRE_REQUEST,
     KIND_EMPLOYEE,
+    KIND_EMPLOYEE_UPDATE,
     KIND_JOB_HEAD,
     KIND_WORKSPACE_TAB_HEAD,
     KIND_JOB_FILING,
