@@ -85,6 +85,8 @@ export function BlockQuestion({
     environment?.declaredActionIds.has(node.submit_action) ?? false;
   const completed =
     environment?.completedActionIds?.has(node.submit_action) ?? false;
+  const answered =
+    completed || environment?.pendingActionId === node.submit_action;
   const disabledReason =
     environment?.disabledReason ??
     (!optionsResult.ok
@@ -94,11 +96,7 @@ export function BlockQuestion({
         : !actionDeclared
           ? "This question references an undeclared action."
           : undefined);
-  const disabled =
-    Boolean(disabledReason) ||
-    localPending ||
-    environment?.pendingActionId === node.submit_action ||
-    completed;
+  const disabled = Boolean(disabledReason) || localPending || answered;
 
   const toggle = (id: string) => {
     if (disabled) return;
@@ -191,11 +189,11 @@ export function BlockQuestion({
           size="sm"
           type="button"
         >
-          {completed ? "Submitted" : localPending ? "Submitting…" : "Submit"}
+          {answered ? "Answered" : localPending ? "Submitting…" : "Submit"}
         </Button>
         {disabledReason ? (
           <p className="text-xs text-muted-foreground">{disabledReason}</p>
-        ) : !submission.ok ? (
+        ) : !answered && !submission.ok ? (
           <p className="text-xs text-muted-foreground">{submission.reason}</p>
         ) : null}
       </div>

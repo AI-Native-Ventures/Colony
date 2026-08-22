@@ -70,6 +70,13 @@ pub struct EventQuery {
     /// Restrict results to events with an `e` tag referencing any of these event IDs (hex).
     /// Uses JSONB containment (`tags @> ...`) against the `tags` column.
     pub e_tags: Option<Vec<String>>,
+    /// Restrict results to events carrying this exact single-value tag
+    /// `(name, value)`. JSONB containment (`tags @> [["name","value"]]`)
+    /// against the `tags` column, served by the same GIN index as `e_tags`.
+    /// Used where a wire-format tag IS the indexable fact -- e.g. kind 30190 /
+    /// owner-authored 30177 heads carrying `["manager", <pubkey hex>]`, which
+    /// is how an agent's direct reports are found without scanning every head.
+    pub tag_contains: Option<(String, String)>,
     /// Restrict results to events in any of these channels, while retaining
     /// channel-less global events. Applied before SQL `LIMIT` so access-filtered
     /// historical pages have exact exhaustion semantics.
@@ -121,6 +128,7 @@ impl EventQuery {
             authors: None,
             ids: None,
             e_tags: None,
+            tag_contains: None,
             channel_ids: None,
             max_limit: None,
             shared_gated_reader: None,
@@ -722,6 +730,15 @@ pub(crate) async fn query_events_on(
             }
             qb.push(")");
         }
+    }
+
+    // Single-value tag containment: tags @> '[["<name>","<value>"]]'.
+    // Same GIN-served pushdown as `e_tags` above, for wire-format tags whose
+    // value is itself the lookup key (e.g. the `manager` reporting-line tag).
+    if let Some((tag_name, tag_value)) = &q.tag_contains {
+        let containment = serde_json::json!([[tag_name, tag_value]]);
+        qb.push(format!(" AND {col_prefix}tags @> "));
+        qb.push_bind(containment);
     }
 
     if let Some(s) = q.since {

@@ -9,12 +9,12 @@ on:
   pull_request:
     branches: [main, develop, release]
 
-# One run per ref, newest wins. Rapid promotions to main collapse into a
-# single run that tests the cumulative state instead of billing one full
-# matrix per merge.
+# Ordinary PRs and pushes keep only the newest run for each ref. A promotion PR
+# targeting main must finish its in-flight matrix even when develop advances
+# underneath it.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.base_ref != 'main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -321,18 +321,8 @@ jobs:
           shared-key: colony-tauri
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
       - name: Install Tauri dependencies (Linux)
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo apt-get install -y --no-install-recommends \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 \
-            -o DPkg::Lock::Timeout=120 \
+          scripts/ci-apt-install.sh \
             build-essential \
             curl \
             file \
@@ -439,7 +429,7 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: cd desktop && pnpm exec playwright install chromium
       - name: Install Playwright system dependencies
-        run: cd desktop && pnpm exec playwright install-deps chromium
+        run: cd desktop && ../scripts/ci-playwright-deps.sh chromium
       - name: Save Playwright browser cache
         if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && matrix.shard == 1
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -508,18 +498,8 @@ jobs:
           shared-key: colony-tauri
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
       - name: Install Tauri dependencies (Linux)
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo apt-get install -y --no-install-recommends \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 \
-            -o DPkg::Lock::Timeout=120 \
+          scripts/ci-apt-install.sh \
             build-essential \
             curl \
             file \
@@ -726,7 +706,7 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: cd desktop && pnpm exec playwright install chromium
       - name: Install Playwright system dependencies
-        run: cd desktop && pnpm exec playwright install-deps chromium
+        run: cd desktop && ../scripts/ci-playwright-deps.sh chromium
       - name: Save Playwright browser cache
         if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && matrix.shard == 1
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -759,6 +739,11 @@ jobs:
         with:
           name: desktop-e2e-relay
           path: target/ci
+      - name: Prefetch pgschema
+        # The bin/pgschema stub downloads on first use, so a 504 from GitHub
+        # Releases fails the schema step instead of reporting a fetch problem.
+        # Retry the download on its own before anything depends on it.
+        run: ./scripts/ci-prefetch-hermit-pkg.sh pgschema
       - name: Apply schema and seed deployment community
         # MT: the relay resolves each request's tenant from the communities host
         # map and fails closed on an unmapped host. The channel reconciler binds
@@ -933,18 +918,8 @@ jobs:
             desktop/src-tauri
           save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install Tauri and tmux dependencies (Linux)
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo apt-get install -y --no-install-recommends \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 \
-            -o DPkg::Lock::Timeout=120 \
+          scripts/ci-apt-install.sh \
             build-essential \
             curl \
             file \
@@ -982,7 +957,7 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: cd desktop && pnpm exec playwright install chromium
       - name: Install Playwright system dependencies
-        run: cd desktop && pnpm exec playwright install-deps chromium
+        run: cd desktop && ../scripts/ci-playwright-deps.sh chromium
       - name: Create Tauri sidecar placeholders
         # prove-blocks.sh runs `cargo test --manifest-path
         # desktop/src-tauri/Cargo.toml agent_proposal`, and Tauri's build.rs
@@ -1067,6 +1042,11 @@ jobs:
         with:
           name: desktop-e2e-relay
           path: target/ci
+      - name: Prefetch pgschema
+        # The bin/pgschema stub downloads on first use, so a 504 from GitHub
+        # Releases fails the schema step instead of reporting a fetch problem.
+        # Retry the download on its own before anything depends on it.
+        run: ./scripts/ci-prefetch-hermit-pkg.sh pgschema
       - name: Apply schema and seed deployment community
         # MT: the relay resolves each request's tenant from the communities host
         # map and fails closed on an unmapped host. The reminder scheduler binds
@@ -1814,18 +1794,8 @@ jobs:
           shared-key: colony-tauri
           save-if: "true"
       - name: Install Tauri dependencies (Linux)
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30
-          sudo apt-get install -y --no-install-recommends \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 \
-            -o DPkg::Lock::Timeout=120 \
+          scripts/ci-apt-install.sh \
             build-essential \
             curl \
             file \

@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "operator-console",
+  "description": "IPC for the operator console window only. This window loads remote content (the relay-served admin dashboard), so its capability is deliberately narrow: it grants no plugin or filesystem access beyond the two colonysigner commands, which refuse to sign for any origin but the deployment admin origin and refuse any non-GET request.",
+  "windows": ["operator-console"],
+  "remote": {
+    "urls": ["https://admin.colony.ainative.ventures"]
+  },
+  "permissions": [
+    "colonysigner:allow-operator-pubkey",
+    "colonysigner:allow-operator-sign-nip98"
+  ]
+}

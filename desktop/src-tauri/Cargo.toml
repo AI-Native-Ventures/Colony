@@ -7,7 +7,7 @@ members = ["crates/buzz-terminal"]
 
 [package]
 name = "buzz-desktop"
-version = "0.10.18"
+version = "0.10.22"
 description = "Buzz desktop app"
 authors = ["you"]
 edition = "2021"
@@ -116,6 +116,7 @@ buzz_persona_pkg = { package = "buzz-persona", path = "../../crates/buzz-persona
 buzz_sdk_pkg = { package = "buzz-sdk", path = "../../crates/buzz-sdk" }
 buzz_agent_pkg = { package = "buzz-agent", path = "../../crates/buzz-agent" }
 buzz_voice_pkg = { package = "buzz-voice", path = "../../crates/buzz-voice" }
+buzz_cli_pkg = { package = "buzz-cli", path = "../../crates/buzz-cli" }
 buzz_browser_pkg = { package = "buzz-browser", path = "../../crates/buzz-browser" }
 buzz_terminal = { package = "buzz-terminal", path = "crates/buzz-terminal" }
 portable-pty = "0.9"
