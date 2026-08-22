@@ -85,6 +85,14 @@ export function resolveReportingLine(
   return { managerPubkey: managerNormalized, managerLabel };
 }
 
+/**
+ * Stable empty defaults. A fresh `[]` / `new Set()` per render would give
+ * the memo below a new dependency identity every time, so the trusted-head
+ * list would churn on every render of every consumer.
+ */
+const NO_HEAD_EVENTS: never[] = [];
+const NO_OWNERS: ReadonlySet<string> = new Set<string>();
+
 type ReportingLineSources = {
   employees: ReadonlyMap<string, EmployeeHead> | null;
   isSettled: boolean;
@@ -105,11 +113,11 @@ function useReportingLineSources(
   });
 
   const owners = ownersQuery.data;
-  const headEvents = headEventsQuery.data ?? [];
+  const headEvents = headEventsQuery.data ?? NO_HEAD_EVENTS;
   // A missing owner set resolves to "nothing trusted yet" inside the memo,
   // so an in-flight owners read cannot churn the trusted-head list.
   const trustedHeads = React.useMemo(
-    () => trustedManagedAgentHeads(headEvents, owners ?? new Set<string>()),
+    () => trustedManagedAgentHeads(headEvents, owners ?? NO_OWNERS),
     [headEvents, owners],
   );
 

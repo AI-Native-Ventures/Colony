@@ -107,7 +107,7 @@ test("profile panel shows the reporting line under the rank", async ({
   );
   await expect(
     nadiaRow.getByTestId(`sidebar-member-reporting-line-${NADIA_PUBKEY}`),
-  ).toContainText("reports to charlie");
+  ).toContainText(/reports to\s*charlie/);
 
   await sidebar
     .getByTestId(`sidebar-member-open-profile-${NADIA_PUBKEY}`)
@@ -134,51 +134,37 @@ test("ask detail shows how the ask was routed", async ({ page }) => {
   // A worker asked its leader; the deadline passed, and the relay signed a
   // successor addressed to the owner: new p tag, prior naming the original,
   // filer carrying the original filer forward.
+  // The events are built here in Node, not inside `page.evaluate`: the
+  // callback is serialized into the browser, so a helper defined in this
+  // module is not in scope there.
+  const now = Math.floor(Date.now() / 1_000);
+  const priorEvent = askEvent({
+    id: PRIOR_ASK_ID,
+    pubkey: MIRA_PUBKEY,
+    createdAt: now - 3_600,
+    audiencePubkey: NADIA_PUBKEY,
+  });
+  const promotedEvent = askEvent({
+    id: PROMOTED_ASK_ID,
+    pubkey: RELAY_PUBKEY,
+    createdAt: now - 60,
+    audiencePubkey: OWNER_PUBKEY,
+    extraTags: [
+      ["prior", PRIOR_ASK_ID],
+      ["filer", MIRA_PUBKEY],
+    ],
+  });
   await page.evaluate(
-    ({
-      ownerPubkey,
-      leaderPubkey,
-      workerPubkey,
-      relayPubkey,
-      priorId,
-      promotedId,
-    }) => {
-      const now = Math.floor(Date.now() / 1_000);
+    ({ events }) => {
       const win = window as EmitWindow;
-      win.__BUZZ_E2E_EMIT_MOCK_EVENT__?.({
-        channelName: "general",
-        event: askEvent({
-          id: priorId,
-          pubkey: workerPubkey,
-          createdAt: now - 3_600,
-          audiencePubkey: leaderPubkey,
-        }),
-      });
-      win.__BUZZ_E2E_EMIT_MOCK_EVENT__?.({
-        channelName: "general",
-        event: askEvent({
-          id: promotedId,
-          pubkey: relayPubkey,
-          createdAt: now - 60,
-          audiencePubkey: ownerPubkey,
-          extraTags: [
-            ["prior", priorId],
-            ["filer", workerPubkey],
-          ],
-        }),
-      });
+      for (const event of events) {
+        win.__BUZZ_E2E_EMIT_MOCK_EVENT__?.({ channelName: "general", event });
+      }
       void win.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
         queryKey: ["open-asks"],
       });
     },
-    {
-      ownerPubkey: OWNER_PUBKEY,
-      leaderPubkey: NADIA_PUBKEY,
-      workerPubkey: MIRA_PUBKEY,
-      relayPubkey: RELAY_PUBKEY,
-      priorId: PRIOR_ASK_ID,
-      promotedId: PROMOTED_ASK_ID,
-    },
+    { events: [priorEvent, promotedEvent] },
   );
 
   const askRow = page.getByTestId(`home-inbox-item-${PROMOTED_ASK_ID}`);
