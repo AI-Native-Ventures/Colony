@@ -19,7 +19,9 @@ import {
   isManagedAgentActive,
 } from "@/features/agents/lib/managedAgentControlActions";
 import { useAgentRank } from "@/features/agents/employeeHeads";
+import { useAgentReportingLine } from "@/features/agents/reportingLine";
 import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { ReportingLineText } from "@/features/agents/ui/ReportingLineText";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
@@ -153,6 +155,13 @@ export function MembersSidebarMemberCard({
   // or personal agent) resolves to none and shows no badge.
   const { activeCommunity } = useCommunities();
   const rank = useAgentRank(activeCommunity?.id ?? "", member.pubkey);
+  // The reporting line reads the same records the relay enforces: the
+  // employee head first, then only owner-authored managed-agent heads. A
+  // member with no rank (a human or personal agent) shows no line at all.
+  const reportingLine = useAgentReportingLine(
+    activeCommunity?.id ?? "",
+    member.pubkey,
+  );
   const disabled = isActionPending || isArchived;
   const canViewActivity =
     memberIsBot &&
@@ -217,6 +226,13 @@ export function MembersSidebarMemberCard({
         {managedAgentRuntime || managedAgent || rank ? (
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {rank ? <AgentRankBadge rank={rank} /> : null}
+            {rank ? (
+              <ReportingLineText
+                line={reportingLine}
+                onOpenManager={onOpenProfile}
+                testId={`sidebar-member-reporting-line-${member.pubkey}`}
+              />
+            ) : null}
             {managedAgentRuntime || managedAgent ? (
               <Badge
                 className="normal-case tracking-normal"
