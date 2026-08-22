@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Org and Visibility</title>
+<style>
+  :root {
+    --bg: #fbfaf9; --fg: #1c1a19; --muted: #6b6560; --line: #e4e0dc;
+    --card: #ffffff; --accent: #b4276e; --ok: #1f7a4d; --warn: #a8620a; --bad: #a32020;
+    --code-bg: #f4f1ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17161a; --fg: #ece9e6; --muted: #9a938c; --line: #2f2c33;
+      --card: #1f1e23; --accent: #ef7fb4; --ok: #6cc79a; --warn: #e0a355; --bad: #e88; 
+      --code-bg: #26242b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header.top { border-bottom: 2px solid var(--fg); padding-bottom: 1.5rem; margin-bottom: 2.5rem; }
+  h1 { font-size: 2.1rem; line-height: 1.15; margin: 0 0 .5rem; letter-spacing: -.02em; }
+  .meta { color: var(--muted); font-size: .9rem; }
+  h2 {
+    font-size: 1.45rem; margin: 3rem 0 1rem; letter-spacing: -.01em;
+    padding-bottom: .4rem; border-bottom: 1px solid var(--line);
+  }
+  h3 { font-size: 1.1rem; margin: 2rem 0 .6rem; }
+  h4 { font-size: .95rem; margin: 1.4rem 0 .4rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  p, li { max-width: 46rem; }
+  code {
+    background: var(--code-bg); padding: .12em .4em; border-radius: 4px;
+    font: .87em ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  pre {
+    background: var(--code-bg); padding: 1rem 1.1rem; border-radius: 8px;
+    overflow-x: auto; border: 1px solid var(--line);
+  }
+  pre code { background: none; padding: 0; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.1rem 1.3rem; margin: 1rem 0;
+  }
+  .phase { border-left: 4px solid var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  .tag {
+    display: inline-block; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+    padding: .15rem .5rem; border-radius: 999px; border: 1px solid currentColor; font-weight: 600;
+  }
+  .t-bug { color: var(--bad); } .t-gap { color: var(--warn); } .t-new { color: var(--ok); }
+  .lede { font-size: 1.08rem; color: var(--muted); }
+  ul.tight li { margin: .2rem 0; }
+  .note { border-left: 3px solid var(--warn); padding-left: 1rem; color: var(--muted); }
+  svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Agent Org and Visibility</h1>
+  <p class="meta">Design spec &middot; 2026-08-21 &middot; Colony desktop, relay, ACP harness</p>
+  <p class="lede">
+    Seven gaps that share one shape: the relay enforces a rule, the CLI can set it,
+    and the desktop app shows nothing. This spec closes all seven in four shipping phases.
+  </p>
+</header>
+
+<h2>1. The problem</h2>
+
+<p>
+  Colony already models an agent hierarchy. <code>AgentTier</code> (worker, leader, executive)
+  is defined in <code>crates/buzz-core/src/interrupt.rs:110</code>, enforced at ingest in
+  <code>crates/buzz-relay/src/interrupt_gate.rs</code>, and carried on two records: the
+  managed-agent head (kind 30177, <code>tier</code> field in content JSON) and the employee
+  head (kind 30190, <code>rank</code> tag, parsed in <code>crates/buzz-core/src/employee.rs:80</code>).
+</p>
+
+<p>
+  None of it is operable from the desktop app. Rank is fixed at creation via
+  <code>buzz employees hire --rank</code>. There is no picker, no promotion path, no chart.
+  v0.10.22 shipped read-only rank badges, which made the gap visible without closing it.
+</p>
+
+<p>
+  Auditing for the same pattern found six more instances. All seven are in scope.
+</p>
+
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>#</th><th>Gap</th><th>Enforced where</th><th>Desktop today</th><th>Type</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td><td>Tier cannot be set or changed</td>
+      <td><code>interrupt_gate.rs</code></td><td>Read-only badge</td>
+      <td><span class="tag t-gap">gap</span></td>
+    </tr>
+    <tr>
+      <td>2</td><td>No reporting lines between agents</td>
+      <td>Nowhere: the data does not exist</td><td>Nothing</td>
+      <td><span class="tag t-new">new</span></td>
+    </tr>
+    <tr>
+      <td>3</td><td>Delegation grants (kind 30189) have no UI</td>
+      <td>Relay checks category and cap at ingest</td>
+      <td>Kind not even in <code>kinds.ts</code></td>
+      <td><span class="tag t-gap">gap</span></td>
+    </tr>
+    <tr>
+      <td>4</td><td>Decision log (kind 44303) is never read back</td>
+      <td>Relay validates against the grant</td><td>Nothing</td>
+      <td><span class="tag t-gap">gap</span></td>
+    </tr>
+    <tr>
+      <td>5</td><td>Employees cannot be hired or promoted in-app</td>
+      <td><code>employee_broker.rs</code></td><td>Nothing</td>
+      <td><span class="tag t-gap">gap</span></td>
+    </tr>
+    <tr>
+      <td>6</td><td>Asks can answer themselves on a timer, silently</td>
+      <td><code>ask_broker.rs:151</code> sets the deadline</td>
+      <td><code>AskDetailCard</code>, no countdown</td>
+      <td><span class="tag t-gap">gap</span></td>
+    </tr>
+    <tr>
+      <td>7</td><td>Channel activity shows one elapsed time for every agent</td>
+      <td>n/a</td><td>Wrong number rendered</td>
+      <td><span class="tag t-bug">bug</span></td>
+    </tr>
+    <tr>
+      <td>8</td><td>Agents look idle while doing real work</td>
+      <td>n/a</td><td>Badge disappears</td>
+      <td><span class="tag t-bug">bug</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p class="note">
+  Eight rows, seven gaps: #1 and #2 are one piece of work and ship together.
+</p>
+
+<h2>2. Phase 1: make the working indicator tell the truth</h2>
+
+<div class="card phase">
+  <p><strong>Ships first because the app is currently displaying wrong information every day.</strong>
+  Estimated 2 days. No relay changes.</p>
+</div>
+
+<h3>2.1 Per-agent elapsed time (bug #7)</h3>
+
+<p>
+  <code>ActiveChannelTurnSummary</code> carries a single <code>anchorAt</code> per channel,
+  set to the earliest live turn across all agents in that channel
+  (<code>desktop/src/features/agents/activeAgentTurnsStore.ts:67</code>).
+  <code>WorkingAgentRows</code> computes <code>elapsed</code> once from that value and passes the
+  same string into every row
+  (<code>desktop/src/features/sidebar/ui/ChannelActivityPopover.tsx:199</code>).
+</p>
+
+<p>
+  Two agents that started 40 seconds apart therefore display identical elapsed times, both
+  reporting the older one's duration.
+</p>
+
+<p>
+  The per-agent data is already correct upstream. The store tracks <code>startedAt</code> per turn
+  and applies a per-agent clock-skew offset, and its own documentation states that distinct agent
+  starts yield distinct anchors. The collapse happens only in the channel-level aggregate.
+</p>
+
+<h4>Change</h4>
+
+<pre><code>export type ActiveChannelTurnSummary = {
+  channelId: string;
+  anchorAt: number;          // kept: earliest, drives the sidebar's single badge
+  agentCount: number;
+  agentPubkeys: string[];
+  agentNames?: string[];
+  agentAnchorsAt: number[];  // NEW: per-agent, index-aligned with agentPubkeys
+};</code></pre>
+
+<ul class="tight">
+  <li><code>anchorAt</code> stays as-is. The collapsed sidebar badge (<code>8s (2)</code>) is
+      correctly the channel's oldest live turn.</li>
+  <li><code>agentAnchorsAt[i]</code> is agent <code>i</code>'s own earliest live turn in this
+      channel, skew-corrected the same way <code>anchorAt</code> already is.</li>
+  <li><code>WorkingAgentRows</code> computes <code>formatElapsed(now - agentAnchorsAt[index])</code>
+      per row.</li>
+  <li>Alignment failure (length mismatch) falls back to <code>anchorAt</code>, matching the
+      existing <code>alignedAgentNames</code> guard rather than rendering blank.</li>
+</ul>
+
+<h4>Tests</h4>
+<ul class="tight">
+  <li>Unit, in <code>activeAgentTurnsStore.test.mjs</code>: two agents, starts 40s apart, one
+      channel. Assert two distinct anchors, and that <code>anchorAt</code> equals the minimum.</li>
+  <li>Unit: an agent with two live turns in one channel anchors to its earliest.</li>
+  <li>Unit: array length invariant holds for pubkeys, names, and anchors together.</li>
+  <li>Run each against the unfixed store first and confirm it fails.</li>
+</ul>
+
+<h3>2.2 Agents that look idle while working (bug #8)</h3>
+
+<p>
+  <strong>This one gets a probe before it gets a fix.</strong> The obvious hypothesis is already
+  disproven, and shipping against the wrong cause here means tuning a timeout that hides the
+  symptom.
+</p>
+
+<h4>What is already ruled out</h4>
+
+<p>
+  The badge requires a liveness frame and prunes a turn after roughly 25 seconds of silence
+  (<code>LIVENESS_INTERVAL_MS</code> and <code>REMOVE_AFTER_MS</code>,
+  <code>activeAgentTurnsStore.ts:16-22</code>). The natural guess is that a long native subagent
+  call blocks the harness from emitting.
+</p>
+
+<p>
+  It does not. <code>run_turn_liveness</code> is spawned as an independent tokio task at
+  <code>turn_started</code> and pinned for the whole turn
+  (<code>crates/buzz-acp/src/pool.rs:1706</code>), with a default interval of 10 seconds. A blocked
+  tool call does not stop it. The comment there records that this was deliberate: session creation
+  and context fetches can each outlast the desktop's prune window.
+</p>
+
+<h4>The two remaining candidates</h4>
+
+<ol>
+  <li>
+    <strong>Work happening outside any ACP turn.</strong> Liveness is per-turn. If the agent's CLI
+    finishes its ACP turn and then keeps working, through a native subagent it spawned, a
+    background poll, or a scheduled job, there is no open turn to emit liveness for. The badge
+    correctly reports "no turn in flight" while the machine is genuinely busy. This is a modeling
+    gap, not a timing bug.
+  </li>
+  <li>
+    <strong>Native subagents that emit no observer frames.</strong> When a CLI harness spawns its
+    own child agents, those children are invisible to the observer stream. The parent turn stays
+    live and the badge survives, but the activity headline goes quiet, which reads as stalled.
+  </li>
+</ol>
+
+<h4>The probe (first task of the phase, roughly 1 hour)</h4>
+
+<ol>
+  <li>Run a live agent through a task that spawns a native subagent and takes over 60 seconds.</li>
+  <li>Capture the observer frame stream for that agent, timestamped.</li>
+  <li>Answer three questions with evidence, not inference:
+    <ul class="tight">
+      <li>Does <code>turn_completed</code> arrive before the work actually finishes?</li>
+      <li>Do <code>turn_liveness</code> frames continue at 10s across the blocked span?</li>
+      <li>Do any frames describe the subagent's work?</li>
+    </ul>
+  </li>
+</ol>
+
+<p>
+  Candidate 1 points at the harness: the turn must stay open, or a distinct
+  background-work signal must exist. Candidate 2 points at the transcript: the badge is right and
+  the headline needs a fallback such as "working, no detail reported". The fix is designed after
+  the probe reports, not before.
+</p>
+
+<p class="note">
+  Explicitly out of scope: raising <code>REMOVE_AFTER_MS</code>. Both candidate causes survive a
+  longer timeout, so that change would only lengthen the window in which a genuinely dead agent
+  still looks alive.
+</p>
+
+<h2>3. Phase 2: People and Roles</h2>
+
+<div class="card phase">
+  <p><strong>Closes gaps #1, #2 and #5.</strong> Estimated 4 days. Relay changes required.</p>
+</div>
+
+<h3>3.1 The data change: one new field</h3>
+
+<p>
+  Every agent gets an optional <code>manager</code>: a single 64-character hex pubkey.
+</p>
+
+<ul class="tight">
+  <li><strong>A <code>manager</code> tag on both kinds</strong>, 30177 and 30190. An earlier draft
+      put it in 30177's content JSON. That would have been unqueryable: the delete-protection rule
+      below has to find an agent's reports, and the relay indexes tags, not content fields. A
+      content mirror may be written for readability but the tag is authoritative.</li>
+  <li><strong>A migration adding <code>manager BYTEA NULL</code> to the <code>employees</code>
+      table</strong> (<code>migrations/0043_employees.sql</code> defines it; the next free number is
+      0061). <code>agent_tier</code> reads <code>employees.rank</code> before it looks at any event,
+      so a promotion that only republishes the head would be ignored by the gate. Kind 9046 must
+      update the row and the head together.</li>
+  <li>Executives have no manager. Absence is the root marker, not a sentinel value.</li>
+  <li>Workers and leaders may have none. They render in an Unassigned tray. Nothing breaks and no
+      migration is required.</li>
+</ul>
+
+<h3>3.2 Relay validation</h3>
+
+<p>Added alongside the existing tier checks in <code>interrupt_gate.rs</code>:</p>
+
+<ol>
+  <li>If <code>manager</code> is present, the manager's tier must equal
+      <code>filer_tier.escalation_target()</code> exactly. Worker to leader, leader to executive.
+      Anything else is rejected at ingest.</li>
+  <li>The manager must have a resolvable head in the same community.</li>
+  <li>An executive carrying a <code>manager</code> is rejected. There is no rank above it.</li>
+  <li>A manager pointing at the agent itself is rejected.</li>
+  <li><strong>Owner-signature on the tier head is already enforced.</strong> An earlier draft of
+      this spec claimed a self-published head could name its own rank. That was wrong:
+      <code>agent_tier</code> skips every candidate head whose author is not a current owner
+      (<code>crates/buzz-relay/src/interrupt_gate.rs:180-191</code>) before it reads the content
+      <code>tier</code> field at all. No change needed. Phase 2 adds a regression test pinning
+      that behaviour and nothing more.</li>
+</ol>
+
+<p>
+  Cycles are impossible by construction: the tier ladder is a strict total order and every edge
+  climbs exactly one rung. No cycle detection is needed, and none should be written, because a
+  cycle check would mask a broken tier rule rather than surface it.
+</p>
+
+<h3>3.3 Setting rank: two paths, two mechanisms</h3>
+
+<h4>Managed agents</h4>
+<p>
+  The head is owner-authored, so a tier or manager change is a republish of kind 30177 with new
+  values. No new event kind.
+</p>
+
+<h4>Employees: new kind 9046, employee update</h4>
+<p>
+  The employee head is signed by a relay-held key, so the owner cannot edit it directly, and
+  re-running <code>hire</code> would mint a second keypair for the same role, losing the identity,
+  its memory, and its history.
+</p>
+<p>
+  Kind 9046 is an owner-signed request carrying the employee pubkey plus the new
+  <code>rank</code> and/or <code>manager</code>. The relay verifies the signer is a current owner,
+  applies the same validation as above, and republishes the employee head at 30190. Identity,
+  role slug, and keypair are untouched.
+</p>
+<p>
+  Registered in <code>crates/buzz-core/src/kind.rs</code>, parsed in
+  <code>crates/buzz-core/src/employee.rs</code> beside the existing hire request, handled in
+  <code>crates/buzz-relay/src/employee_broker.rs</code>.
+</p>
+
+<h3>3.4 Lifecycle rules</h3>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Event</th><th>Rule</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Manager is deleted or retired</td>
+      <td>Reject the delete while it has reports. The error names them. The owner reassigns first.</td>
+      <td>Silent reparenting moves authority without the owner deciding it.</td>
+    </tr>
+    <tr>
+      <td>An agent is demoted below its reports' escalation target</td>
+      <td>Reject, naming the reports that would become invalid.</td>
+      <td>Same reasoning. Fail loudly rather than orphan quietly.</td>
+    </tr>
+    <tr>
+      <td>An agent is promoted while it has open asks</td>
+      <td>Open asks keep their original audience. Only new asks use the new line.</td>
+      <td>Re-targeting a live ask changes who is accountable for a decision mid-flight.</td>
+    </tr>
+    <tr>
+      <td>Manager is not running</td>
+      <td>Allowed. The org chart shows liveness on the node.</td>
+      <td>The relay already files stall asks. The chart must not imply a dead team is healthy.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>3.5 Ask routing</h3>
+
+<p>
+  <code>buzz asks raise --to</code> keeps requiring an explicit audience, and the relay keeps
+  enforcing the one-rank-up rule. What changes is the default: when the filer has a manager and
+  <code>--to</code> is omitted, the ask addresses that manager. An explicit <code>--to</code> still
+  wins, still validated.
+</p>
+<p>
+  This is the whole point of the phase. Escalation stops being a lottery among everyone at the next
+  rank.
+</p>
+
+<h3>3.6 Desktop: the People and Roles screen</h3>
+
+<p>A new top-level section under Agents, with three parts.</p>
+
+<h4>Org chart</h4>
+<ul class="tight">
+  <li>Agents only. Humans are never drawn: the owner sits above the entire structure and can
+      address any agent directly, so placing them in the tree would misrepresent both facts.</li>
+  <li>Executives are roots. Multiple executives means multiple roots, drawn side by side.</li>
+  <li>Each node shows: avatar, name, tier badge, live or idle state, and the count of active
+      grants (the grant detail itself lands in phase 3).</li>
+  <li>An Unassigned tray below the tree holds workers and leaders with no manager.</li>
+  <li>Drag to reassign is explicitly deferred. Reassignment is done through the edit dialog.</li>
+</ul>
+
+<h4>Role editing</h4>
+<ul class="tight">
+  <li>Tier picker and manager picker on the agent edit dialogs
+      (<code>AgentDefinitionDialog</code>, <code>AgentInstanceEditDialog</code>).</li>
+  <li>The manager list only contains agents exactly one rank up, so an invalid edge cannot be
+      composed in the first place. The relay still validates: the UI narrows, it does not
+      authorize.</li>
+  <li>Rejections surface the relay's own message. No client-side paraphrase.</li>
+</ul>
+
+<h4>Hiring</h4>
+<ul class="tight">
+  <li>Hire an employee: role slug, display name, rank, optional manager. Publishes kind 9045.</li>
+  <li>The head arrives asynchronously (the relay mints the keypair), so the row shows a pending
+      state until 30190 lands, rather than a spinner with no explanation.</li>
+  <li>Promote and demote through kind 9046.</li>
+  <li><code>KIND_EMPLOYEE</code>, <code>KIND_HIRE_REQUEST</code> and <code>KIND_EMPLOYEE_UPDATE</code>
+      added to <code>desktop/src/shared/constants/kinds.ts</code>.</li>
+</ul>
+
+<h3>3.7 Tests</h3>
+<ul class="tight">
+  <li>Rust ingest tests per rejection rule, following the existing
+      <code>crates/buzz-relay/tests/interrupt_gate.rs</code> pattern: wrong-tier manager,
+      cross-community manager, executive with manager, self-manager, self-declared tier on an
+      unsigned head.</li>
+  <li>Rust: kind 9046 from a non-owner is rejected; from an owner it republishes the head with the
+      same pubkey and role.</li>
+  <li>Rust: deleting a manager with reports is rejected and the error names them.</li>
+  <li>Desktop unit tests for the tree builder: multiple roots, orphans, a manager pointing at a
+      deleted agent, and an agent whose manager is in the Unassigned tray.</li>
+  <li>Playwright screenshot of the org chart with a populated tree and a non-empty tray.</li>
+</ul>
+
+<h2>4. Phase 3: Authority</h2>
+
+<div class="card phase">
+  <p><strong>Closes gap #3 and the coupling hole.</strong> Estimated 3 days.</p>
+</div>
+
+<p>
+  Tier answers "who may I interrupt". A delegation grant answers "what may I decide". They were
+  built separately and nothing joins them, so a worker can escalate correctly to its assigned
+  leader and that leader can be equally unable to decide. The tree routes perfectly and the work
+  still stalls, while the chart shows a healthy structure.
+</p>
+
+<p>
+  Grants are kind 30189, created by <code>buzz grants create</code> with a category, a precise
+  scope, and an optional cap in nanoUSD (<code>crates/buzz-cli/src/lib.rs:3097</code>). Wildcards
+  are refused. Hard-list categories (spend, external_send, hiring, legal, pricing, deletion,
+  vendor) are refused outright and always go to the owner. Revoking republishes the head with
+  <code>active=false</code>; the record is never deleted.
+</p>
+
+<h3>Scope</h3>
+<ul class="tight">
+  <li><code>KIND_DELEGATION_GRANT</code> added to <code>kinds.ts</code>.</li>
+  <li>A grants surface: every grant, its holder, category, scope, cap, and active state.</li>
+  <li>Create and revoke from the app. The owner key signs, exactly as the CLI does.</li>
+  <li>Grants shown on the agent's org chart node and in its profile, so authority and rank are read
+      in one place.</li>
+  <li>A warning on the chart when an agent has reports but no grants: it can receive escalations
+      and decide nothing.</li>
+</ul>
+
+<p>
+  Client-side validation mirrors the relay's refusals (no wildcard scope, no hard-list category) so
+  the owner is told why before signing, but the relay remains the authority.
+</p>
+
+<h2>5. Phase 4: Accountability</h2>
+
+<div class="card phase">
+  <p><strong>Closes gaps #4 and #6.</strong> Estimated 2 days.</p>
+</div>
+
+<h3>5.1 The decision log is written and never read</h3>
+
+<p>
+  A leader deciding under a grant logs it at kind 44303: the grant cited, the tasks covered, the
+  category, what was decided, the money moved, and an undo path. The undo path is mandatory, on the
+  stated principle that no undo path means no autonomy
+  (<code>crates/buzz-cli/src/lib.rs:3151</code>). The relay checks the category matches the grant
+  and the cap holds.
+</p>
+<p>
+  The kind is absent from the desktop app. Add it, and a reverse-chronological view filterable by
+  agent, grant, and category, reachable from an agent's profile and from the org chart node. The
+  undo path is rendered as the primary content of each row, since it is the only field the owner
+  acts on.
+</p>
+
+<h3>5.2 Asks that answer themselves</h3>
+
+<p>
+  An ask can carry a default option and a time window. The relay computes a deadline at file time
+  and applies the default when the window expires
+  (<code>crates/buzz-relay/src/ask_broker.rs:137-151</code>). When the ask does not set its own
+  window, a community-wide default fills in. Hard-list categories may never carry a default, so the
+  worst cases are already protected. Everything else is not.
+</p>
+<p>
+  <code>AskDetailCard</code> shows no countdown. A decision can be made by the owner's silence on a
+  surface that never mentioned a clock was running. Add:
+</p>
+<ul class="tight">
+  <li>A live countdown and the exact option that will apply on expiry.</li>
+  <li>Escalating visual weight as the deadline nears.</li>
+  <li>The same countdown wherever asks are summarized, not only in the detail card.</li>
+</ul>
+
+<h2>6. What this deliberately does not do</h2>
+
+<ul>
+  <li><strong>It does not put anyone between the owner and an agent.</strong> Direct messaging is
+      unchanged. The thread exemption in
+      <code>crates/buzz-relay/src/interrupt_gate.rs:378</code> already lets an agent reply to a
+      thread the owner started or was pulled into, and the manager is not copied on it.</li>
+  <li><strong>It does not route work downward.</strong> Nothing is auto-delegated. The chart makes
+      the upward path specific; it does not assign tasks.</li>
+  <li><strong>It does not add capacity limits.</strong> A leader with twenty workers is visible and
+      permitted. Making that visible is the point; policing it is a later decision with real
+      evidence behind it.</li>
+  <li><strong>It does not add a handoff view.</strong> When a worker escalates out of the owner's
+      thread, the ask carries its origin thread and the answer returns correctly, but the manager
+      must open the ask to see context. Worth doing, worth seeing whether it bites first.</li>
+</ul>
+
+<h2>7. Sequencing and acceptance</h2>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Phase</th><th>Days</th><th>Passes when</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>1. Working indicator</td><td>2</td>
+      <td>Two agents started 40s apart in one channel show different elapsed times in a live app,
+          and the probe has produced a written finding naming the cause of the idle-looking
+          badge.</td>
+    </tr>
+    <tr>
+      <td>2. People and Roles</td><td>4</td>
+      <td>An agent is promoted from worker to leader in the app, given a manager, appears correctly
+          in the chart, and its next ask reaches that manager by default with no
+          <code>--to</code>.</td>
+    </tr>
+    <tr>
+      <td>3. Authority</td><td>3</td>
+      <td>A grant is created and revoked in the app, and the chart shows which agents can decide
+          and which cannot.</td>
+    </tr>
+    <tr>
+      <td>4. Accountability</td><td>2</td>
+      <td>A logged decision is readable with its undo path, and an ask with a window shows a live
+          countdown naming the option that will apply.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  Roughly 11 days. Each phase ships independently and is proven in the running app, not in tests
+  alone. Phase 1 goes first because it is cheap and the app is currently showing wrong numbers.
+</p>
+
+<h2>8. Open questions</h2>
+
+<ol>
+  <li>Kind number 9046 for the employee update is provisional. Confirm it is free when the phase 2
+      work starts.</li>
+  <li>The probe in 2.2 may reclassify bug #8 as a harness change rather than a desktop one. If it
+      lands in the harness, phase 1 grows by roughly a day.</li>
+  <li>Whether the Unassigned tray should be a soft warning or a hard blocker on agent creation.
+      Recommendation: warning only, so an agent can be created before its manager exists.</li>
+</ol>
+
+</div>
+</body>
+</html>
