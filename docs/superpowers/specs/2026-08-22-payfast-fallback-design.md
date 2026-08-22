@@ -102,7 +102,7 @@ uses `!==`, which leaks the expected value to a patient attacker. Use
 ## Configuration
 
 ```
-COLONY_PAYMENT_PROVIDER = paystack | payfast   # default paystack
+COLONY_PAYMENT_PROVIDER = paystack | payfast   # no default; unset disables payments
 PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY
 PAYFAST_MERCHANT_ID, PAYFAST_MERCHANT_KEY, PAYFAST_PASSPHRASE
 ```
