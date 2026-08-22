@@ -139,10 +139,17 @@ rather than when it is needed.
 
 ## Data model
 
-`migrations/0061_accounts.sql`:
+`migrations/0061_email_accounts.sql`:
+
+**The table is `email_accounts`, not `accounts`.** Migration 0050 already
+created an `accounts` table holding pubkey-to-credit balances, so the obvious
+name is taken and `CREATE TABLE accounts` fails at migrate time. The Rust
+module is `buzz_db::email_accounts` for the same reason: a module called
+`accounts` sitting beside `credits.rs` would leave a reader unable to tell
+which of the two tables either one writes to.
 
 ```sql
-CREATE TABLE accounts (
+CREATE TABLE email_accounts (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     community_id        UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     email               TEXT NOT NULL,
@@ -159,16 +166,37 @@ CREATE TABLE accounts (
     locked_until        TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX accounts_community_email_idx
-    ON accounts (community_id, lower(email));
-CREATE UNIQUE INDEX accounts_community_pubkey_idx
-    ON accounts (community_id, pubkey);
+CREATE UNIQUE INDEX email_accounts_community_email_idx
+    ON email_accounts (community_id, lower(email));
+CREATE UNIQUE INDEX email_accounts_community_pubkey_idx
+    ON email_accounts (community_id, pubkey);
+
+SELECT attach_community_write_fence('email_accounts');
 ```
 
 **`community_id` is not optional.** Every table in this relay is tenant-scoped,
 and an account table without it would be the one cross-tenant seam in the
 system. Uniqueness is per community: the same person may hold accounts on two
 Colony communities, exactly as they may hold two workspaces.
+
+Two consequences follow from that, both enforced by existing contracts rather
+than by convention:
+
+- **The write fence is required.** Migration 0059 defines
+  `attach_community_write_fence`, and every scoped table calls it. Skipping it
+  leaves this table outside the deletion fence.
+- **The table must be registered in the deletion catalogs** in
+  `crates/buzz-db/src/deletion.rs`. This is a retention requirement, not a lint:
+  an unregistered table survives community deletion, so deleting a community
+  would leave rows holding email addresses and encrypted key blobs behind
+  forever.
+
+`account_reset_tokens` also carries `community_id`, with a composite primary key
+`(community_id, token_hash)` and a composite foreign key
+`(community_id, account_id)`. The tenant-isolation lint in `migration.rs`
+requires every key on a scoped table to lead with `community_id`, and the only
+alternative, registering the table as operator-global, would mislabel
+tenant-owned tokens as deployment-wide.
 
 The value comes from the request host, never from a request field, using the
 same call every other tenant-scoped HTTP path already makes:
