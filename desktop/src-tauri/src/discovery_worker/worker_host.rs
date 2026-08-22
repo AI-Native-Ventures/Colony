@@ -1,7 +1,4 @@
-use std::{
-    sync::atomic::Ordering,
-    time::Duration,
-};
+use std::{sync::atomic::Ordering, time::Duration};
 
 #[cfg(test)]
 use std::{
@@ -211,8 +208,7 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
-        protocol_version:
-            buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+        protocol_version: buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
         available_providers,
     };
     let lease = match protocol.claim(claim).await? {

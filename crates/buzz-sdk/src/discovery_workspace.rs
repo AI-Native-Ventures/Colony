@@ -389,8 +389,24 @@ fn receipt_for_wire_version(
     receipt: &DiscoveryWorkspaceReceipt,
 ) -> DiscoveryWorkspaceReceipt {
     let mut compatible = receipt.clone();
-    if wire_version != DiscoveryWorkspaceWireVersion::V3 {
-        match &mut compatible.result {
+    match wire_version {
+        DiscoveryWorkspaceWireVersion::V3 => {}
+        DiscoveryWorkspaceWireVersion::V2 => match &mut compatible.result {
+            DiscoveryWorkspaceResult::Campaign { campaign } => {
+                make_campaign_v2_compatible(campaign)
+            }
+            DiscoveryWorkspaceResult::Campaigns { page } => {
+                for campaign in &mut page.campaigns {
+                    make_campaign_v2_compatible(campaign);
+                }
+            }
+            DiscoveryWorkspaceResult::Access { .. }
+            | DiscoveryWorkspaceResult::Budget { .. }
+            | DiscoveryWorkspaceResult::Leads { .. }
+            | DiscoveryWorkspaceResult::LeadCounts { .. }
+            | DiscoveryWorkspaceResult::Lead { .. } => {}
+        },
+        DiscoveryWorkspaceWireVersion::V1 => match &mut compatible.result {
             DiscoveryWorkspaceResult::Campaign { campaign } => {
                 make_campaign_v1_compatible(campaign)
             }
@@ -404,11 +420,11 @@ fn receipt_for_wire_version(
                     lead.provider = buzz_core::discovery::DiscoveryProvider::Outscraper;
                 }
             }
-            DiscoveryWorkspaceResult::Access { .. } => {}
-            DiscoveryWorkspaceResult::Budget { .. } => {}
-            DiscoveryWorkspaceResult::LeadCounts { .. } => {}
-            DiscoveryWorkspaceResult::Lead { .. } => {}
-        }
+            DiscoveryWorkspaceResult::Access { .. }
+            | DiscoveryWorkspaceResult::Budget { .. }
+            | DiscoveryWorkspaceResult::LeadCounts { .. }
+            | DiscoveryWorkspaceResult::Lead { .. } => {}
+        },
     }
     compatible
 }
@@ -419,6 +435,23 @@ fn make_campaign_v1_compatible(
     campaign.source_config = buzz_core::discovery::DiscoverySourceConfig::default();
     campaign.latest_run_sources.clear();
     campaign.budget = None;
+    if let Some(run) = &mut campaign.latest_run {
+        make_run_released_compatible(run);
+    }
+}
+
+fn make_campaign_v2_compatible(
+    campaign: &mut buzz_core::discovery_workspace::DiscoveryCampaignProjection,
+) {
+    campaign.budget = None;
+    if let Some(run) = &mut campaign.latest_run {
+        make_run_released_compatible(run);
+    }
+}
+
+fn make_run_released_compatible(run: &mut buzz_core::discovery::DiscoveryRunProjection) {
+    run.protocol_version = buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION;
+    run.billing = None;
 }
 
 fn parse_wire_version(
@@ -859,5 +892,51 @@ mod tests {
             .expect("sign update lead");
         let parsed = parse_discovery_workspace_action(&event).expect("parse update lead");
         assert_eq!(parsed.request, request);
+    }
+
+    #[test]
+    fn released_v2_receipt_preserves_multi_source_campaign_state() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let source_config = buzz_core::discovery::DiscoverySourceConfig {
+            mode: buzz_core::discovery::DiscoverySourceMode::Concurrent,
+            sources: vec![
+                buzz_core::discovery::DiscoverySource::BraveSearch,
+                buzz_core::discovery::DiscoverySource::ExaSearch,
+            ],
+        };
+        let receipt = DiscoveryWorkspaceReceipt {
+            operation: DiscoveryWorkspaceOperation::GetCampaign,
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            result: DiscoveryWorkspaceResult::Campaign {
+                campaign: Box::new(DiscoveryCampaignProjection {
+                    campaign_id: Uuid::new_v4(),
+                    name: "Sandton dentists".into(),
+                    industry_id: "healthcare".into(),
+                    industry_name: "Healthcare".into(),
+                    vertical_id: "dentists".into(),
+                    vertical_name: "Dentists".into(),
+                    query: "dentists".into(),
+                    location: "Sandton".into(),
+                    target: 3,
+                    description: None,
+                    language: "en".into(),
+                    region: Some("ZA".into()),
+                    source_config: source_config.clone(),
+                    lead_count: 0,
+                    latest_run: None,
+                    latest_run_sources: Vec::new(),
+                    budget: None,
+                    created_at: now,
+                    updated_at: now,
+                }),
+            },
+        };
+
+        let compatible = receipt_for_wire_version(DiscoveryWorkspaceWireVersion::V2, &receipt);
+        let DiscoveryWorkspaceResult::Campaign { campaign } = compatible.result else {
+            panic!("campaign receipt");
+        };
+        assert_eq!(campaign.source_config, source_config);
     }
 }

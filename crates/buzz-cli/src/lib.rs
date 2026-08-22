@@ -898,6 +898,18 @@ pub enum DiscoveryCmd {
         #[arg(long)]
         idempotency_key: Option<Uuid>,
     },
+    /// Build the exact Approval Block for this Campaign without spending Credits
+    CampaignBudgetRequest {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Number of seconds before the human approval expires.
+        #[arg(long, default_value_t = 900)]
+        expires_in: u64,
+        /// Stable retry key for reading the Campaign.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
     /// Approve or increase a Campaign spending budget from a strict JSON file
     CampaignBudgetApprove {
         /// JSON file containing the exact Campaign budget approval.
@@ -3371,6 +3383,13 @@ mod tests {
                 "dentists",
                 "--location",
                 "Sandton, South Africa",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-request",
+                "--campaign",
+                campaign,
             ],
             vec![
                 "buzz",

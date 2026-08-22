@@ -59,6 +59,8 @@ pub struct LedgerEntry {
 pub struct AdmissionAccount {
     /// Current signed nanoUSD balance.
     pub balance: i64,
+    /// Credits held for active paid Discovery runs.
+    pub discovery_reserved_nanousd: i64,
     /// Typical call cost override, in nanoUSD.
     pub typical_call_cost_nanousd: Option<i64>,
     /// Concurrent gateway call limit override.
@@ -161,9 +163,13 @@ pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
 /// global defaults while holding the account's in-process admission gate.
 pub async fn admission_account(pool: &PgPool, pubkey: &[u8]) -> Result<AdmissionAccount> {
     let row = sqlx::query(
-        "SELECT balance, typical_call_cost_nanousd, max_in_flight, \
-                hourly_burn_cap_nanousd \
-         FROM accounts WHERE pubkey = $1",
+        "SELECT a.balance, a.typical_call_cost_nanousd, a.max_in_flight, \
+                a.hourly_burn_cap_nanousd, \
+                COALESCE((SELECT sum(c.budget_reserved_nanousd) \
+                          FROM discovery_campaigns c \
+                          WHERE c.budget_payer_pubkey=a.pubkey),0)::BIGINT \
+                    AS discovery_reserved_nanousd \
+         FROM accounts a WHERE a.pubkey = $1",
     )
     .bind(pubkey)
     .fetch_optional(pool)
@@ -171,12 +177,14 @@ pub async fn admission_account(pool: &PgPool, pubkey: &[u8]) -> Result<Admission
     match row {
         Some(row) => Ok(AdmissionAccount {
             balance: row.try_get("balance")?,
+            discovery_reserved_nanousd: row.try_get("discovery_reserved_nanousd")?,
             typical_call_cost_nanousd: row.try_get("typical_call_cost_nanousd")?,
             max_in_flight: row.try_get("max_in_flight")?,
             hourly_burn_cap_nanousd: row.try_get("hourly_burn_cap_nanousd")?,
         }),
         None => Ok(AdmissionAccount {
             balance: 0,
+            discovery_reserved_nanousd: 0,
             typical_call_cost_nanousd: None,
             max_in_flight: None,
             hourly_burn_cap_nanousd: None,
@@ -812,10 +820,11 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
         .execute(&mut *tx)
         .await?;
 
+    let service = (kind == "debit" && model.is_some()).then_some("model");
     let row = sqlx::query(
         "INSERT INTO credit_ledger \
-           (pubkey, delta, kind, ref, model, observed_cost, request_id, settle_basis) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+           (pubkey, delta, kind, ref, model, observed_cost, request_id, settle_basis, service) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          ON CONFLICT (pubkey, ref) DO NOTHING \
          RETURNING id, pubkey, delta, kind, ref, model, observed_cost, request_id, \
                    settle_basis, created_at",
@@ -828,6 +837,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
     .bind(observed_cost)
     .bind(request_id)
     .bind(settle_basis)
+    .bind(service)
     .fetch_optional(&mut *tx)
     .await?;
 

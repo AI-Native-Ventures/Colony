@@ -1,4 +1,4 @@
-import { Database, Play, RotateCcw, StopCircle, Target } from "lucide-react";
+import { Database, Play, StopCircle, Target } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
@@ -20,13 +20,13 @@ function terminalCopy(status: UseDiscoveryRunResult["run"]["status"]) {
     return "The target was not fully reached, but the leads found so far are ready to review.";
   }
   if (status === "cancelled") {
-    return "This run was cancelled. You can retry it when you are ready.";
+    return "This run was cancelled. Create a new Campaign before starting another paid search.";
   }
   if (status === "failed") {
-    return "The run stopped because a source failed. Retry to let the agent continue with the available sources.";
+    return "The run stopped safely. Create a new Campaign before starting another paid search.";
   }
   if (status === "completed") {
-    return "Discovery is complete. Review the leads or find more businesses for this campaign.";
+    return "Discovery is complete. Review the Leads retained for this Campaign.";
   }
   return "I'll search across global databases to discover and validate leads that match your campaign criteria.";
 }
@@ -34,10 +34,12 @@ function terminalCopy(status: UseDiscoveryRunResult["run"]["status"]) {
 function ActionButton({
   actionLabel,
   entitlement,
+  enabled,
   onRun,
 }: {
   actionLabel: string;
   entitlement: DiscoveryEntitlement | null;
+  enabled: boolean;
   onRun: () => void;
 }) {
   if (!canStartDiscovery({ state: entitlement?.state ?? "loading" })) {
@@ -59,6 +61,7 @@ function ActionButton({
           : actionLabel
       }
       className="h-12 rounded-full bg-foreground px-8 text-base font-semibold text-background shadow-lg shadow-primary/20 transition-transform hover:scale-[1.02] hover:bg-foreground/90 active:scale-[0.99]"
+      disabled={!enabled}
       onClick={onRun}
       size="lg"
       type="button"
@@ -110,7 +113,6 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
   const isRunning = runState.busy || status === "running";
   const isIdle = status === "idle" && runState.timeline.length === 0;
   const isCompleted = status === "completed" || status === "partial";
-  const actionLabel = isCompleted ? "Find More Leads" : "Start Discovery";
 
   return (
     <Card className="flex min-h-[37.5rem] flex-col overflow-hidden rounded-2xl border-border/60 bg-card p-0 shadow-sm">
@@ -166,7 +168,7 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
                 {isCompleted
                   ? `I found ${run.stored} new leads this session. You now have ${Math.max(campaign.leadCount, run.stored)} total leads.`
                   : isRunning
-                    ? "Scanning multiple data sources in real-time to find the best matches for your campaign."
+                    ? "Your desktop is running this search with Colony-hosted data access."
                     : terminalCopy(status)}
               </p>
 
@@ -181,28 +183,9 @@ function RunHero({ campaign, entitlement, runState }: DiscoveryRunTabProps) {
                   <ActionButton
                     actionLabel="Start Discovery Engine"
                     entitlement={entitlement}
+                    enabled={runState.canStart}
                     onRun={runState.start}
                   />
-                </div>
-              ) : null}
-
-              {isCompleted ? (
-                <div className="mt-6 flex flex-wrap items-center gap-3">
-                  <ActionButton
-                    actionLabel={actionLabel}
-                    entitlement={entitlement}
-                    onRun={runState.start}
-                  />
-                  <Button
-                    className="h-12 rounded-full px-6 text-sm font-medium text-muted-foreground hover:text-foreground"
-                    onClick={runState.reset}
-                    size="lg"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <RotateCcw aria-hidden="true" className="h-4 w-4" />
-                    Start Over
-                  </Button>
                 </div>
               ) : null}
 

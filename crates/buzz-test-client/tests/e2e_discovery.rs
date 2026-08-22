@@ -17,9 +17,9 @@ use buzz_core::{
         DiscoveryWorkerSourceProgressRequest,
     },
     discovery_workspace::{
-        DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryLeadPage, DiscoveryLeadStatus,
-        DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
-        DiscoveryWorkspaceResult,
+        DiscoveryCampaignCreateInput, DiscoveryCampaignInput, DiscoveryLeadListRequest,
+        DiscoveryLeadPage, DiscoveryLeadStatus, DiscoveryLeadUpdateInput,
+        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
     },
     kind::{
         KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKER_RECEIPT, KIND_DISCOVERY_WORKSPACE_ACTION,
@@ -246,21 +246,23 @@ async fn create_campaign(
         actor,
         relay,
         DiscoveryWorkspaceActionPayload::CreateCampaign {
-            campaign: Box::new(DiscoveryCampaignInput {
-                campaign_id,
-                name: "Sandton Dentists".to_owned(),
-                industry_id: "healthcare".to_owned(),
-                industry_name: "Healthcare".to_owned(),
-                vertical_id: "dentists".to_owned(),
-                vertical_name: "Dentists".to_owned(),
-                query: "dentists".to_owned(),
-                location: "Sandton, Johannesburg, South Africa".to_owned(),
-                target: 3,
-                description: Some("Dental practices serving Sandton".to_owned()),
-                language: "en".to_owned(),
-                region: Some("ZA".to_owned()),
-                source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
-            }),
+            campaign: Box::new(DiscoveryCampaignCreateInput::Legacy(
+                DiscoveryCampaignInput {
+                    campaign_id,
+                    name: "Sandton Dentists".to_owned(),
+                    industry_id: "healthcare".to_owned(),
+                    industry_name: "Healthcare".to_owned(),
+                    vertical_id: "dentists".to_owned(),
+                    vertical_name: "Dentists".to_owned(),
+                    query: "dentists".to_owned(),
+                    location: "Sandton, Johannesburg, South Africa".to_owned(),
+                    target: 3,
+                    description: Some("Dental practices serving Sandton".to_owned()),
+                    language: "en".to_owned(),
+                    region: Some("ZA".to_owned()),
+                    source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
+                },
+            )),
             budget_approval: None,
         },
     )
@@ -282,13 +284,14 @@ async fn start_campaign_run(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         campaign_id,
-        business_search: buzz_core::discovery::DiscoveryBusinessSearchSpec {
+        protocol_version: 2,
+        business_search: Some(buzz_core::discovery::DiscoveryBusinessSearchSpec {
             query: "dentists".to_owned(),
             location: "Sandton, Johannesburg, South Africa".to_owned(),
             limit: 3,
             language: "en".to_owned(),
             region: Some("ZA".to_owned()),
-        },
+        }),
     };
     let event = build_discovery_start_action(relay, &request)
         .expect("valid start action")
@@ -407,6 +410,7 @@ async fn generic_agent_and_desktop_worker_share_the_discovery_primitive() {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 worker_id: Uuid::new_v4(),
+                protocol_version: 2,
                 available_providers: vec![
                     DiscoveryProvider::BraveSearch,
                     DiscoveryProvider::ExaSearch,
@@ -432,6 +436,7 @@ async fn generic_agent_and_desktop_worker_share_the_discovery_primitive() {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 worker_id: capable_worker_id,
+                protocol_version: 2,
                 available_providers: vec![
                     DiscoveryProvider::Outscraper,
                     DiscoveryProvider::BraveSearch,
@@ -655,13 +660,14 @@ async fn entitled_human_gets_private_relay_signed_receipt() {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         campaign_id,
-        business_search: buzz_core::discovery::DiscoveryBusinessSearchSpec {
+        protocol_version: 2,
+        business_search: Some(buzz_core::discovery::DiscoveryBusinessSearchSpec {
             query: "dentists".to_owned(),
             location: "Sandton, Johannesburg, South Africa".to_owned(),
             limit: 3,
             language: "en".to_owned(),
             region: Some("ZA".to_owned()),
-        },
+        }),
     };
     let event = build_discovery_start_action(relay, &request)
         .expect("valid start action")
@@ -1341,6 +1347,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id: worker_a,
+        protocol_version: 2,
         available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let claimed_a = submit_worker_action(
@@ -1391,6 +1398,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id: worker_b,
+        protocol_version: 2,
         available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let claimed_b = submit_worker_action(
@@ -1486,6 +1494,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 worker_id: worker_b,
+                protocol_version: 2,
                 available_providers: vec![DiscoveryProvider::Outscraper],
             },
         )
@@ -1552,6 +1561,7 @@ async fn local_worker_is_restart_safe_private_and_fenced() {
                 request_id: Uuid::new_v4(),
                 idempotency_key: Uuid::new_v4(),
                 worker_id: worker_b,
+                protocol_version: 2,
                 available_providers: vec![DiscoveryProvider::Outscraper],
             },
         )

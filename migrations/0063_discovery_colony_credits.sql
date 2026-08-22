@@ -71,6 +71,13 @@ CREATE INDEX discovery_campaigns_budget_payer_active_idx
     INCLUDE (budget_reserved_nanousd)
     WHERE budget_payer_pubkey IS NOT NULL;
 
+CREATE UNIQUE INDEX discovery_campaign_budget_approval_event_unique
+    ON discovery_campaigns (community_id, budget_approval_event_id)
+    WHERE budget_approval_event_id IS NOT NULL;
+
+CREATE INDEX discovery_runs_community_campaign_idx
+    ON discovery_runs (community_id, campaign_id, created_at DESC);
+
 ALTER TABLE discovery_runs
     DROP CONSTRAINT discovery_runs_discovery_protocol_version_check,
     DROP CONSTRAINT discovery_runs_lease_worker_protocol_version_check,
@@ -152,6 +159,101 @@ ALTER TABLE discovery_runs
         )
     );
 
+ALTER TABLE discovery_run_sources
+    ADD COLUMN provider_poll_after TIMESTAMPTZ;
+
+-- Every Colony-funded provider attempt is durable before the request leaves
+-- the relay. One Campaign can spend at most once per provider, and a lost
+-- client acknowledgement can replay the exact stored result without buying
+-- the same search twice.
+CREATE TABLE discovery_gateway_attempts (
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    run_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper','brave_search','exa_search')),
+    intent_id TEXT NOT NULL CHECK (
+        octet_length(intent_id) BETWEEN 1 AND 128
+        AND intent_id = btrim(intent_id)
+        AND intent_id !~ '[[:cntrl:]]'
+    ),
+    provider_request_id TEXT CHECK (
+        provider_request_id IS NULL OR (
+            octet_length(provider_request_id) BETWEEN 1 AND 128
+            AND provider_request_id = btrim(provider_request_id)
+            AND provider_request_id !~ '[[:cntrl:]]'
+        )
+    ),
+    status TEXT NOT NULL CHECK (status IN ('intent','pending','ready')),
+    observations JSONB NOT NULL DEFAULT '[]'::JSONB
+        CHECK (jsonb_typeof(observations) = 'array'),
+    returned_count INTEGER NOT NULL DEFAULT 0 CHECK (returned_count BETWEEN 0 AND 500),
+    retained_count INTEGER NOT NULL DEFAULT 0 CHECK (retained_count BETWEEN 0 AND 500),
+    duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count BETWEEN 0 AND 500),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, campaign_id, provider),
+    UNIQUE (community_id, run_id, provider),
+    FOREIGN KEY (community_id, campaign_id)
+        REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_gateway_attempts_payer_recent_idx
+    ON discovery_gateway_attempts (payer_pubkey, created_at DESC);
+
+-- A workspace-unique Lead can belong to every Campaign that finds it. This
+-- keeps cross-provider dedupe from making a valid Campaign result disappear.
+CREATE TABLE discovery_campaign_leads (
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    lead_id UUID NOT NULL,
+    discovered_run_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, campaign_id, lead_id),
+    FOREIGN KEY (community_id, campaign_id)
+        REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, lead_id)
+        REFERENCES discovery_business_observations(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, discovered_run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_campaign_leads_lead_idx
+    ON discovery_campaign_leads (community_id, lead_id);
+
+INSERT INTO discovery_campaign_leads
+    (community_id,campaign_id,lead_id,discovered_run_id,created_at)
+SELECT o.community_id,r.campaign_id,o.id,o.first_run_id,o.first_observed_at
+FROM discovery_business_observations o
+JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id
+ON CONFLICT DO NOTHING;
+
+-- Migration 0059 attached the universal community write fence to every
+-- tenant table that existed at that point. These tables are newer, so attach
+-- the same fence explicitly before the relay can serve writes through them.
+SELECT attach_community_write_fence('discovery_gateway_attempts'::REGCLASS);
+SELECT attach_community_write_fence('discovery_campaign_leads'::REGCLASS);
+
+-- The new desktop no longer carries user provider keys, so it cannot safely
+-- resume interrupted protocol-2 work after upgrade. Close those runs before
+-- protocol 3 becomes eligible and release their Campaign execution slot.
+UPDATE discovery_run_sources s
+SET status='cancelled',failure_class='cancelled',
+    started_at=COALESCE(started_at,now()),finished_at=COALESCE(finished_at,now()),
+    updated_at=now()
+FROM discovery_runs r
+WHERE s.community_id=r.community_id AND s.run_id=r.id
+  AND r.discovery_protocol_version=2 AND r.state IN ('queued','running')
+  AND s.status IN ('pending','active');
+
+UPDATE discovery_runs
+SET state='cancelled',cancel_requested=TRUE,terminal_reason='cancelled_by_actor',
+    claim_id=NULL,lease_until=NULL,worker_id=NULL,lease_owner_pubkey=NULL,
+    lease_worker_protocol_version=NULL,lease_worker_protocol_claim_id=NULL,updated_at=now()
+WHERE discovery_protocol_version=2 AND state IN ('queued','running');
+
 CREATE UNIQUE INDEX discovery_runs_settlement_ref_idx
     ON discovery_runs (community_id, settlement_ref)
     WHERE settlement_ref IS NOT NULL;
@@ -232,6 +334,9 @@ ALTER TABLE credit_ledger
             AND discovery_run_id IS NOT NULL
             AND (-delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
         )
+    ),
+    ADD CONSTRAINT credit_ledger_model_service_complete CHECK (
+        model IS NULL OR (service IS NOT NULL AND service = 'model')
     );
 
 CREATE UNIQUE INDEX credit_ledger_discovery_run_idx

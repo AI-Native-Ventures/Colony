@@ -24,7 +24,6 @@ import { relaySupportsDiscovery } from "./relayDiscoverySupport";
 
 const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v3";
 const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v3";
-const RUN_ACTION_SCHEMA_V2 = "colony.discovery-action/v2";
 const RUN_RECEIPT_SCHEMA_V2 = "colony.discovery-receipt/v2";
 const RUN_ACTION_SCHEMA_V3 = "colony.discovery-action/v3";
 const RUN_RECEIPT_SCHEMA_V3 = "colony.discovery-receipt/v3";
@@ -432,10 +431,9 @@ export class DiscoveryBroker {
     const idempotencyKey = crypto.randomUUID();
     const target = operation === "start" ? input.campaignId : input.runId;
     if (!target) throw new Error("Discovery request target is missing.");
-    const wireVersion = operation === "start" ? "3" : "2";
+    const wireVersion = "3";
     const content = {
-      schema:
-        operation === "start" ? RUN_ACTION_SCHEMA_V3 : RUN_ACTION_SCHEMA_V2,
+      schema: RUN_ACTION_SCHEMA_V3,
       operation,
       request_id: requestId,
       idempotency_key: idempotencyKey,

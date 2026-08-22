@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use buzz_core::{
-    discovery::{DiscoveryAction, DiscoveryReceipt, DiscoveryRunProjection},
+    discovery::{
+        DiscoveryAction, DiscoveryReceipt, DiscoveryRunProjection,
+        DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+    },
     kind::{KIND_DISCOVERY_ACTION, KIND_DISCOVERY_RECEIPT},
     tenant::TenantContext,
 };
@@ -84,6 +87,13 @@ pub(crate) async fn handle_discovery_action(
             {
                 return Err(DiscoveryBrokerError::Invalid(
                     "Discovery execution is not enabled on this relay".into(),
+                ));
+            }
+            if request.protocol_version == DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+                && state.discovery_gateway.get().is_none()
+            {
+                return Err(DiscoveryBrokerError::Conflict(
+                    "desktop_upgrade_required".into(),
                 ));
             }
             DiscoveryCommandMutation::Start {
@@ -211,6 +221,25 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
             if message.contains("already has an active run") =>
         {
             DiscoveryBrokerError::Conflict(message)
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Campaign has no approved Credits budget" =>
+        {
+            DiscoveryBrokerError::Conflict("budget_unapproved".into())
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Campaign Credits budget is not active"
+                || message == "budget_exhausted" =>
+        {
+            DiscoveryBrokerError::Conflict("budget_exhausted".into())
+        }
+        buzz_db::DbError::AccessDenied(message) if message == "balance_depleted" => {
+            DiscoveryBrokerError::Conflict("balance_depleted".into())
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "campaign_search_already_executed" =>
+        {
+            DiscoveryBrokerError::Conflict("campaign_search_already_executed".into())
         }
         buzz_db::DbError::NotFound(message) if message.contains("campaign") => {
             DiscoveryBrokerError::Invalid("Discovery campaign not found".into())

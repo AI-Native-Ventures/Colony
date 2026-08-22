@@ -73,6 +73,9 @@ export function CreateCampaignSheet({
   const [availableBalanceNanousd, setAvailableBalanceNanousd] = React.useState<
     string | null
   >(null);
+  const [balanceStatus, setBalanceStatus] = React.useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const liveBusinessPhase = entitlement?.experience === "live";
 
   React.useEffect(() => {
@@ -90,15 +93,23 @@ export function CreateCampaignSheet({
   React.useEffect(() => {
     if (!open || !liveBusinessPhase) {
       setAvailableBalanceNanousd(null);
+      setBalanceStatus("idle");
       return;
     }
     let active = true;
+    setBalanceStatus("loading");
     void getColonyCreditsAccount()
       .then((account) => {
-        if (active) setAvailableBalanceNanousd(account.balance_nanousd);
+        if (active) {
+          setAvailableBalanceNanousd(account.balance_nanousd);
+          setBalanceStatus("ready");
+        }
       })
       .catch(() => {
-        if (active) setAvailableBalanceNanousd(null);
+        if (active) {
+          setAvailableBalanceNanousd(null);
+          setBalanceStatus("error");
+        }
       });
     return () => {
       active = false;
@@ -136,6 +147,21 @@ export function CreateCampaignSheet({
     }
     if (!Number.isFinite(targetNumber) || targetNumber < 1) {
       setError("Choose a lead target of at least one.");
+      return;
+    }
+    if (targetNumber > 500) {
+      setError("Choose a lead target of 500 or fewer.");
+      return;
+    }
+    if (
+      liveBusinessPhase &&
+      (balanceStatus !== "ready" || balanceBelowApproval)
+    ) {
+      setError(
+        balanceBelowApproval
+          ? "Top up Colony Credits before approving this Campaign."
+          : "Colony Credits could not be confirmed. Try again before approving.",
+      );
       return;
     }
     setSubmitting(true);
@@ -251,6 +277,7 @@ export function CreateCampaignSheet({
                   className="w-32 text-center font-mono"
                   id="discovery-campaign-target"
                   min="1"
+                  max="500"
                   onChange={(event) => setTarget(event.target.value)}
                   type="number"
                   value={target}
@@ -269,21 +296,25 @@ export function CreateCampaignSheet({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm font-semibold text-foreground">
-                      Campaign budget
+                      {liveBusinessPhase ? "Campaign budget" : "Preview only"}
                     </p>
                     <span className="text-sm font-semibold text-primary">
-                      Up to {approvedBudget}
+                      {liveBusinessPhase
+                        ? `Up to ${approvedBudget}`
+                        : "No Credits"}
                     </span>
                   </div>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    Colony charges 5¢ only for each newly retained, deduplicated
-                    lead. Failed requests and duplicate leads are not charged.
-                    Colony chooses and funds the data source.
+                    {liveBusinessPhase
+                      ? "Colony charges 5¢ only for each newly retained, deduplicated lead. Failed requests and duplicate leads are not charged. Colony chooses and funds the data source."
+                      : "This demo uses sample data and never approves or spends Colony Credits."}
                   </p>
-                  <p className="mt-2 text-xs font-medium text-foreground">
-                    Creating this Campaign approves up to {approvedBudget} in
-                    Colony Credits.
-                  </p>
+                  {liveBusinessPhase ? (
+                    <p className="mt-2 text-xs font-medium text-foreground">
+                      Creating this Campaign approves exactly {approvedBudget}{" "}
+                      in Colony Credits.
+                    </p>
+                  ) : null}
                   {availableBalance ? (
                     <p
                       className={`mt-1 text-xs ${
@@ -292,10 +323,19 @@ export function CreateCampaignSheet({
                           : "text-muted-foreground"
                       }`}
                     >
-                      Available balance: {availableBalance}
+                      Credits balance: {availableBalance}
                       {balanceBelowApproval
-                        ? ". Discovery will wait for a top-up before provider work starts."
-                        : "."}
+                        ? ". Top up before this Campaign can be approved and run."
+                        : ". Active Campaign reservations reduce the amount available to spend."}
+                    </p>
+                  ) : null}
+                  {balanceStatus === "error" ? (
+                    <p
+                      className="mt-1 text-xs font-medium text-destructive"
+                      role="alert"
+                    >
+                      Colony Credits could not be confirmed. Try again before
+                      approving this Campaign.
                     </p>
                   ) : null}
                 </div>
@@ -402,11 +442,20 @@ export function CreateCampaignSheet({
             >
               Cancel
             </Button>
-            <Button disabled={submitting} type="submit">
+            <Button
+              disabled={
+                submitting ||
+                (liveBusinessPhase &&
+                  (balanceStatus !== "ready" || balanceBelowApproval))
+              }
+              type="submit"
+            >
               {submitting ? (
                 <Loader2 aria-hidden="true" className="animate-spin" />
               ) : null}
-              Create and approve {approvedBudget}
+              {liveBusinessPhase
+                ? `Create and approve ${approvedBudget}`
+                : "Create Campaign"}
             </Button>
           </SheetFooter>
         </form>

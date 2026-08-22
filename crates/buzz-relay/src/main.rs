@@ -515,7 +515,7 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|_| anyhow::anyhow!("Discovery gateway initialized twice"))?;
         info!("Colony-hosted Discovery provider gateway enabled");
     } else {
-        info!("Colony-hosted Discovery provider gateway disabled (provider keys are incomplete)");
+        info!("Colony-hosted Discovery provider gateway disabled");
     }
     let state = Arc::new(app_state);
 

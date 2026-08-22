@@ -224,9 +224,15 @@ pub fn build_discovery_receipt_for_version(
     let run_text = receipt.run.run_id.to_string();
     let request_text = receipt.request_id.to_string();
     let idempotency_text = receipt.idempotency_key.to_string();
+    let mut compatible_receipt = receipt.clone();
+    if wire_version != DiscoveryWireVersion::V3 {
+        compatible_receipt.run.protocol_version =
+            buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION;
+        compatible_receipt.run.billing = None;
+    }
     let content = DiscoveryReceiptContent {
         schema: wire_version.receipt_schema().to_owned(),
-        receipt: receipt.clone(),
+        receipt: compatible_receipt,
     };
     let tags = [
         scalar_tag("p", &actor_text)?,

@@ -8,7 +8,10 @@ import { Card } from "@/shared/ui/card";
 import type { DiscoveryEntitlement } from "../entitlement";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { CampaignDetail, LeadPage } from "../types";
-import { formatDiscoveryNanousd } from "../data/campaignBudget";
+import {
+  approvedCampaignBudgetNanousd,
+  formatDiscoveryNanousd,
+} from "../data/campaignBudget";
 import { useDiscoveryRun } from "../useDiscoveryRun";
 import { EntitlementLock } from "./EntitlementLock";
 import { CampaignTabs, type CampaignTab } from "./CampaignTabs";
@@ -65,6 +68,14 @@ function SettingsTab({
   const budget = campaign.budget;
 
   async function change(action: "approve" | "pause" | "revoke"): Promise<void> {
+    if (
+      action === "revoke" &&
+      !window.confirm(
+        "Permanently revoke this Campaign budget? This cannot be resumed.",
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -147,7 +158,11 @@ function SettingsTab({
               {busy ? (
                 <Loader2 aria-hidden="true" className="animate-spin" />
               ) : null}
-              {budget?.state === "paused" ? "Resume budget" : "Approve budget"}
+              {budget?.state === "paused"
+                ? "Resume budget"
+                : `Approve ${formatDiscoveryNanousd(
+                    approvedCampaignBudgetNanousd(campaign.target),
+                  )}`}
             </Button>
           ) : null}
           {budget?.state === "active" ? (
@@ -238,13 +253,19 @@ export function CampaignDetailView({
           </div>
           {activeTab !== "discovery" ? (
             <div className="flex shrink-0 items-center gap-2 pt-1">
-              <EntitlementLock
-                actionLabel="Run Discovery"
-                entitlement={entitlement}
-                className="rounded-full px-5"
-                onRetry={() => window.location.reload()}
-                onRun={runState.start}
-              />
+              {entitlement?.state === "entitled" && !runState.canStart ? (
+                <Button className="rounded-full px-5" disabled>
+                  Run Discovery
+                </Button>
+              ) : (
+                <EntitlementLock
+                  actionLabel="Run Discovery"
+                  entitlement={entitlement}
+                  className="rounded-full px-5"
+                  onRetry={() => window.location.reload()}
+                  onRun={runState.start}
+                />
+              )}
             </div>
           ) : null}
         </div>
@@ -257,6 +278,11 @@ export function CampaignDetailView({
       </header>
 
       <div className="pt-7">
+        {runState.error ? (
+          <p className="mb-4 text-sm text-destructive" role="alert">
+            {runState.error}
+          </p>
+        ) : null}
         {outsideLivePhase ? (
           <Card className="border-border/60 bg-card/80 p-8 text-center shadow-none">
             <h2 className="text-xl font-semibold text-foreground">

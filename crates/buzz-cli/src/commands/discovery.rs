@@ -2,12 +2,14 @@
 
 use buzz_core::{
     discovery::{
-        DiscoveryRunRequest, DiscoveryStartRequest, DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+        DiscoveryNanoUsd, DiscoveryRunRequest, DiscoveryStartRequest,
+        DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION, DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD,
     },
     discovery_workspace::{
-        DiscoveryCampaignBudgetApproval, DiscoveryCampaignCreateInput, DiscoveryCampaignInputV2,
-        DiscoveryCampaignListRequest, DiscoveryLeadListRequest, DiscoveryLeadUpdateInput,
-        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
+        campaign_budget_fingerprint, DiscoveryCampaignBudgetApproval, DiscoveryCampaignCreateInput,
+        DiscoveryCampaignInputV2, DiscoveryCampaignListRequest, DiscoveryLeadListRequest,
+        DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
+        DiscoveryWorkspaceResult,
     },
     kind::{KIND_DISCOVERY_RECEIPT, KIND_DISCOVERY_WORKSPACE_RECEIPT},
 };
@@ -18,6 +20,7 @@ use buzz_sdk::discovery::{
 use buzz_sdk::discovery_workspace::{
     build_discovery_workspace_action, parse_discovery_workspace_receipt,
 };
+use chrono::{Duration, Utc};
 use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -91,6 +94,94 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
                 idempotency_key,
             )
             .await
+        }
+        DiscoveryCmd::CampaignBudgetRequest {
+            campaign,
+            expires_in,
+            idempotency_key,
+        } => {
+            if !(60..=3_600).contains(&expires_in) {
+                return Err(CliError::Usage(
+                    "--expires-in must be between 60 and 3600 seconds".to_owned(),
+                ));
+            }
+            let receipt = request_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::GetCampaign {
+                    campaign_id: campaign,
+                },
+                idempotency_key,
+            )
+            .await?;
+            let DiscoveryWorkspaceResult::Campaign { campaign } = receipt.receipt.result else {
+                return Err(CliError::Other(
+                    "Discovery Campaign lookup returned another result".to_owned(),
+                ));
+            };
+            let campaign_input = DiscoveryCampaignInputV2 {
+                campaign_id: campaign.campaign_id,
+                name: campaign.name,
+                industry_id: campaign.industry_id,
+                industry_name: campaign.industry_name,
+                vertical_id: campaign.vertical_id,
+                vertical_name: campaign.vertical_name,
+                query: campaign.query,
+                location: campaign.location,
+                target: campaign.target,
+                description: campaign.description,
+                language: campaign.language,
+                region: campaign.region,
+            };
+            let payer = client
+                .auth_tag_owner_hex()
+                .map(|value| {
+                    PublicKey::parse(&value).map_err(|_| {
+                        CliError::Other("managed agent owner pubkey is invalid".to_owned())
+                    })
+                })
+                .transpose()?
+                .unwrap_or_else(|| client.keys().public_key());
+            let price = DiscoveryNanoUsd::new(DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD)
+                .map_err(|error| CliError::Other(error.to_string()))?;
+            let approved = price
+                .checked_mul(campaign_input.target)
+                .map_err(|error| CliError::Usage(error.to_string()))?;
+            let fingerprint = campaign_budget_fingerprint(&campaign_input, &payer, price)
+                .map_err(|error| CliError::Usage(error.to_string()))?;
+            let expires_at = Utc::now()
+                + Duration::seconds(
+                    i64::try_from(expires_in)
+                        .map_err(|_| CliError::Usage("invalid approval expiry".to_owned()))?,
+                );
+            let approval = DiscoveryCampaignBudgetApproval {
+                campaign_id: campaign_input.campaign_id,
+                payer_pubkey: payer,
+                approved_nanousd: approved,
+                price_per_retained_lead_nanousd: price,
+                campaign_fingerprint: hex::encode(fingerprint),
+                approval_action_event_id: Some("0".repeat(64)),
+                approval_expires_at: Some(expires_at),
+            };
+            let proposal = approval
+                .approval_proposal()
+                .map_err(|error| CliError::Usage(error.to_string()))?;
+            println!(
+                "{}",
+                json!({
+                    "handle": "approval",
+                    "data": {
+                        "action": proposal.action,
+                        "destination": proposal.destination,
+                        "content": proposal.content,
+                        "expires_at": proposal.expires_at,
+                        "status": "pending"
+                    },
+                    "campaign_id": campaign_input.campaign_id,
+                    "price_per_lead_usd": "0.05",
+                    "maximum_leads": campaign_input.target
+                })
+            );
+            Ok(())
         }
         DiscoveryCmd::CampaignBudgetPause {
             campaign,
@@ -328,6 +419,32 @@ async fn publish_workspace_payload(
     payload: DiscoveryWorkspaceActionPayload,
     idempotency_key: Option<Uuid>,
 ) -> Result<(), CliError> {
+    let (_, output) = execute_workspace_payload(client, payload, idempotency_key).await?;
+    println!("{output}");
+    Ok(())
+}
+
+async fn request_workspace_payload(
+    client: &BuzzClient,
+    payload: DiscoveryWorkspaceActionPayload,
+    idempotency_key: Option<Uuid>,
+) -> Result<buzz_sdk::discovery_workspace::ParsedDiscoveryWorkspaceReceipt, CliError> {
+    execute_workspace_payload(client, payload, idempotency_key)
+        .await
+        .map(|(receipt, _)| receipt)
+}
+
+async fn execute_workspace_payload(
+    client: &BuzzClient,
+    payload: DiscoveryWorkspaceActionPayload,
+    idempotency_key: Option<Uuid>,
+) -> Result<
+    (
+        buzz_sdk::discovery_workspace::ParsedDiscoveryWorkspaceReceipt,
+        Value,
+    ),
+    CliError,
+> {
     let relay = relay_self(client).await?;
     let request = DiscoveryWorkspaceRequest {
         request_id: Uuid::new_v4(),
@@ -366,20 +483,17 @@ async fn publish_workspace_payload(
         .get("duplicate")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    println!(
-        "{}",
-        json!({
-            "event_id": submitted_event_id,
-            "accepted": accepted,
-            "duplicate": duplicate,
-            "request_id": request.request_id,
-            "idempotency_key": request.idempotency_key,
-            "receipt_event_id": receipt_id,
-            "receipt": receipt.receipt,
-        })
-    );
+    let output = json!({
+        "event_id": submitted_event_id,
+        "accepted": accepted,
+        "duplicate": duplicate,
+        "request_id": request.request_id,
+        "idempotency_key": request.idempotency_key,
+        "receipt_event_id": receipt_id,
+        "receipt": receipt.receipt,
+    });
     if accepted || duplicate {
-        Ok(())
+        Ok((receipt, output))
     } else {
         Err(CliError::Conflict(if message_text.is_empty() {
             "Discovery workspace command was refused".to_owned()

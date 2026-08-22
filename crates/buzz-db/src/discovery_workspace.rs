@@ -38,9 +38,9 @@ macro_rules! lead_status_projection {
 }
 
 const LIST_LEADS_COUNT_SQL: &str = concat!(
-    "SELECT count(*) FROM discovery_business_observations o ",
-    "JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id ",
-    "JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id ",
+    "SELECT count(DISTINCT o.id) FROM discovery_business_observations o ",
+    "JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id ",
+    "JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id ",
     "LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id ",
     "WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) ",
     "AND ($3::text IS NULL OR c.industry_id=$3) ",
@@ -51,14 +51,15 @@ const LIST_LEADS_COUNT_SQL: &str = concat!(
 );
 
 const LIST_LEADS_PAGE_SQL: &str = concat!(
-    "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,",
+    "SELECT * FROM (SELECT DISTINCT ON (o.id) o.id AS lead_id,c.id AS campaign_id,",
+    "c.industry_id,c.vertical_id,o.provider,o.name,",
     "o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,",
     "o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at,",
     lead_status_projection!(),
     " AS status ",
     "FROM discovery_business_observations o ",
-    "JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id ",
-    "JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id ",
+    "JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id ",
+    "JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id ",
     "LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id ",
     "WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) ",
     "AND ($3::text IS NULL OR c.industry_id=$3) ",
@@ -66,7 +67,8 @@ const LIST_LEADS_PAGE_SQL: &str = concat!(
     "AND ($5::text IS NULL OR ",
     lead_status_projection!(),
     "=$5) ",
-    "ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $6 OFFSET $7"
+    "ORDER BY o.id,cl.created_at,c.id) page ",
+    "ORDER BY first_observed_at DESC,lead_id DESC LIMIT $6 OFFSET $7"
 );
 
 /// Require a run search to exactly match its persisted immutable campaign.
@@ -584,7 +586,7 @@ async fn approve_campaign_budget_tx(
         "SELECT id,name,industry_id,industry_name,vertical_id,vertical_name,query,location,target,\
          description,language,region,budget_payer_pubkey,budget_approved_nanousd,\
          budget_spent_nanousd,budget_reserved_nanousd,budget_state,budget_fingerprint,\
-         price_per_retained_lead_nanousd FROM discovery_campaigns \
+         budget_approval_event_id,price_per_retained_lead_nanousd FROM discovery_campaigns \
          WHERE community_id=$1 AND id=$2 FOR UPDATE",
     )
     .bind(community_id.as_uuid())
@@ -621,11 +623,26 @@ async fn approve_campaign_budget_tx(
             "Campaign budget approval does not match the current Campaign".into(),
         ));
     }
+    let campaign_maximum = approval
+        .price_per_retained_lead_nanousd
+        .checked_mul(campaign.target)
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    if approval.approved_nanousd != campaign_maximum {
+        return Err(DbError::InvalidData(
+            "Campaign approval must cover its exact Lead target".into(),
+        ));
+    }
 
     let state: String = row.try_get("budget_state")?;
     if state == "revoked" {
         return Err(DbError::AccessDenied(
             "A revoked Campaign budget cannot be reactivated".into(),
+        ));
+    }
+    let existing_approval_event_id: Option<Vec<u8>> = row.try_get("budget_approval_event_id")?;
+    if existing_approval_event_id.as_deref() == Some(approval_event_id.as_slice()) {
+        return Err(DbError::AccessDenied(
+            "Campaign budget approval evidence has already been used".into(),
         ));
     }
     let spent: i64 = row.try_get("budget_spent_nanousd")?;
@@ -694,6 +711,22 @@ async fn set_campaign_budget_state_tx(
             ))
         }
     };
+    if state == DiscoveryCampaignBudgetState::Revoked {
+        let active_run: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM discovery_runs \
+             WHERE community_id=$1 AND campaign_id=$2 \
+               AND discovery_protocol_version=3 AND state IN ('queued','running'))",
+        )
+        .bind(community_id.as_uuid())
+        .bind(campaign_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if active_run {
+            return Err(DbError::AccessDenied(
+                "Cancel the active Discovery run before revoking its budget".into(),
+            ));
+        }
+    }
     let updated = sqlx::query(
         "UPDATE discovery_campaigns SET budget_state=$4,updated_at=now() \
          WHERE community_id=$1 AND id=$2 AND budget_payer_pubkey=$3 \
@@ -813,7 +846,7 @@ async fn update_campaign_sources_tx(
         .collect::<Vec<_>>();
     let updated = sqlx::query(
         "UPDATE discovery_campaigns SET source_mode=$3,source_keys=$4,updated_at=now() \
-         WHERE community_id=$1 AND id=$2 RETURNING id",
+         WHERE community_id=$1 AND id=$2 AND budget_state='unapproved' RETURNING id",
     )
     .bind(community_id.as_uuid())
     .bind(campaign_id)
@@ -822,7 +855,20 @@ async fn update_campaign_sources_tx(
     .fetch_optional(&mut **tx)
     .await?;
     if updated.is_none() {
-        return Err(DbError::NotFound("Discovery campaign".into()));
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM discovery_campaigns WHERE community_id=$1 AND id=$2)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(campaign_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        return Err(if exists {
+            DbError::AccessDenied(
+                "Colony manages provider sources after a Campaign budget is approved".into(),
+            )
+        } else {
+            DbError::NotFound("Discovery campaign".into())
+        });
     }
     Ok(())
 }
@@ -927,10 +973,10 @@ async fn list_lead_counts_tx(
     .fetch_one(&mut **tx)
     .await?;
     let industry_rows = sqlx::query(
-        "SELECT c.industry_id, count(*) AS lead_count \
+        "SELECT c.industry_id, count(DISTINCT cl.lead_id) AS lead_count \
          FROM discovery_business_observations o \
-         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
-         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id \
+         JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id \
          WHERE o.community_id=$1 \
          GROUP BY c.industry_id \
          ORDER BY lead_count DESC, c.industry_id ASC",
@@ -949,10 +995,10 @@ async fn list_lead_counts_tx(
         })
         .collect::<Result<Vec<_>>>()?;
     let vertical_rows = sqlx::query(
-        "SELECT c.industry_id, c.vertical_id, count(*) AS lead_count \
+        "SELECT c.industry_id, c.vertical_id, count(DISTINCT cl.lead_id) AS lead_count \
          FROM discovery_business_observations o \
-         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
-         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id \
+         JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id \
          WHERE o.community_id=$1 \
          GROUP BY c.industry_id, c.vertical_id \
          ORDER BY lead_count DESC, c.vertical_id ASC",
@@ -1010,9 +1056,8 @@ const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
       billed_retained_lead_count,settlement_ref,settled_at,created_at,updated_at FROM discovery_runs \
       WHERE community_id=c.community_id AND campaign_id=c.id \
       ORDER BY created_at DESC,id DESC LIMIT 1) r ON TRUE ",
-    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_business_observations o \
-      JOIN discovery_runs lr ON lr.community_id=o.community_id AND lr.id=o.first_run_id \
-      WHERE o.community_id=c.community_id AND lr.campaign_id=c.id) l ON TRUE ",
+    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_campaign_leads cl \
+      WHERE cl.community_id=c.community_id AND cl.campaign_id=c.id) l ON TRUE ",
     "WHERE c.community_id=$1 AND c.id=$2"
 );
 
@@ -1049,9 +1094,8 @@ const CAMPAIGN_PROJECTION_SELECT_FILTERED: &str = concat!(
       billed_retained_lead_count,settlement_ref,settled_at,created_at,updated_at FROM discovery_runs \
       WHERE community_id=c.community_id AND campaign_id=c.id \
       ORDER BY created_at DESC,id DESC LIMIT 1) r ON TRUE ",
-    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_business_observations o \
-      JOIN discovery_runs lr ON lr.community_id=o.community_id AND lr.id=o.first_run_id \
-      WHERE o.community_id=c.community_id AND lr.campaign_id=c.id) l ON TRUE ",
+    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_campaign_leads cl \
+      WHERE cl.community_id=c.community_id AND cl.campaign_id=c.id) l ON TRUE ",
     "WHERE c.community_id=$1 AND ($2::text IS NULL OR c.industry_id=$2) \
       AND ($3::text IS NULL OR c.vertical_id=$3) \
       ORDER BY c.created_at DESC,c.id DESC LIMIT $4 OFFSET $5"

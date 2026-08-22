@@ -259,10 +259,8 @@ async fn fetch_relay_information_document(
         .map_err(|_| "relay returned malformed NIP-11 document".to_string())
 }
 
-/// The NIP-11 `supported_extensions` token by which a relay advertises the
-/// Discovery capability. One spelling of the wire contract pinned in
-/// `crates/buzz-relay/src/nip11.rs` and `crates/buzz-test-client/tests/e2e_discovery.rs`.
-const DISCOVERY_EXTENSION: &str = "colony-discovery";
+/// The NIP-11 token proving the relay has the Colony-funded provider gateway.
+const DISCOVERY_EXTENSION: &str = "colony-discovery-hosted-v1";
 
 fn document_advertises_discovery(doc: &RelayInformationDocument) -> bool {
     doc.supported_extensions
@@ -467,9 +465,10 @@ mod tests {
 
     #[test]
     fn relay_information_document_advertises_discovery_when_token_present() {
-        let doc: RelayInformationDocument =
-            serde_json::from_str(r#"{"supported_extensions":["nip-er","colony-discovery"]}"#)
-                .expect("NIP-11 document");
+        let doc: RelayInformationDocument = serde_json::from_str(
+            r#"{"supported_extensions":["nip-er","colony-discovery-hosted-v1"]}"#,
+        )
+        .expect("NIP-11 document");
         assert!(document_advertises_discovery(&doc));
     }
 

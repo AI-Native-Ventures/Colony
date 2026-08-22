@@ -586,12 +586,15 @@ impl AdmissionController {
             let burn_cap = account
                 .hourly_burn_cap_nanousd
                 .unwrap_or(self.defaults.hourly_burn_cap_nanousd);
+            let available_balance = account
+                .balance
+                .saturating_sub(account.discovery_reserved_nanousd);
             let balance_guard = i64::from(runtime.in_flight)
                 .saturating_mul(typical)
                 .max(ADMISSION_FLOOR_NANOUSD);
-            if account.balance < balance_guard {
+            if available_balance < balance_guard {
                 return Err(AdmissionError::Payment {
-                    balance_nanousd: account.balance,
+                    balance_nanousd: available_balance,
                     required_nanousd: balance_guard,
                 });
             }

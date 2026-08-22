@@ -14,9 +14,12 @@ use buzz_core::discovery_worker::{
     deterministic_business_observation_id, DiscoveryBusinessObservationInput,
     DiscoveryBusinessStatus, DiscoveryProvider,
 };
+use buzz_db::discovery::DiscoveryGatewayStoredResponse;
+use dashmap::DashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 const DEFAULT_SEARCH_URL: &str = "https://api.outscraper.com/google-maps-search";
@@ -25,6 +28,9 @@ const DEFAULT_BRAVE_URL: &str = "https://api.search.brave.com/res/v1/web/search"
 const DEFAULT_EXA_URL: &str = "https://api.exa.ai/search";
 const OUTSCRAPER_FIELDS: &str = "name,place_id,google_id,cid,phone,site,website,full_address,address,city,state,postal_code,country,country_code,latitude,longitude,rating,reviews,type,category,subtypes,business_status,verified,location_link,photo,logo";
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CONCURRENT_PROVIDER_POLLS: usize = 64;
+
+type PollKey = (Uuid, [u8; 32], Uuid, u8);
 
 /// Server-only provider configuration.
 #[derive(Clone)]
@@ -56,15 +62,22 @@ impl std::fmt::Debug for DiscoveryGatewayConfig {
     }
 }
 
-/// Read hosted Discovery configuration. An absent key leaves the routes disabled.
+/// Read hosted Discovery configuration. No keys leaves the routes disabled;
+/// partial configuration fails startup so the relay never advertises a broken
+/// paid-Discovery capability.
 pub fn config_from_env() -> anyhow::Result<Option<DiscoveryGatewayConfig>> {
-    let Some(outscraper_api_key) = configured_secret("OUTSCRAPER_API_KEY") else {
+    let enabled = std::env::var("BUZZ_DISCOVERY_HOSTED_ENABLED")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    if !enabled {
         return Ok(None);
-    };
-    let Some(brave_api_key) = configured_secret("BRAVE_SEARCH_API_KEY") else {
-        return Ok(None);
-    };
-    let Some(exa_api_key) = configured_secret("EXA_SEARCH_API_KEY") else {
+    }
+    let Some((outscraper_api_key, brave_api_key, exa_api_key)) = complete_provider_keys(
+        configured_secret("OUTSCRAPER_API_KEY"),
+        configured_secret("BRAVE_SEARCH_API_KEY"),
+        configured_secret("EXA_SEARCH_API_KEY"),
+    )?
+    else {
         return Ok(None);
     };
     let search_url = std::env::var("BUZZ_DISCOVERY_OUTSCRAPER_SEARCH_URL")
@@ -75,16 +88,35 @@ pub fn config_from_env() -> anyhow::Result<Option<DiscoveryGatewayConfig>> {
         .unwrap_or_else(|_| DEFAULT_BRAVE_URL.to_owned());
     let exa_url = std::env::var("BUZZ_DISCOVERY_EXA_SEARCH_URL")
         .unwrap_or_else(|_| DEFAULT_EXA_URL.to_owned());
-    for (name, value) in [
-        ("BUZZ_DISCOVERY_OUTSCRAPER_SEARCH_URL", &search_url),
-        ("BUZZ_DISCOVERY_OUTSCRAPER_REQUESTS_URL", &requests_url),
-        ("BUZZ_DISCOVERY_BRAVE_SEARCH_URL", &brave_url),
-        ("BUZZ_DISCOVERY_EXA_SEARCH_URL", &exa_url),
+    for (name, value, expected_host) in [
+        (
+            "BUZZ_DISCOVERY_OUTSCRAPER_SEARCH_URL",
+            &search_url,
+            "api.outscraper.com",
+        ),
+        (
+            "BUZZ_DISCOVERY_OUTSCRAPER_REQUESTS_URL",
+            &requests_url,
+            "api.outscraper.com",
+        ),
+        (
+            "BUZZ_DISCOVERY_BRAVE_SEARCH_URL",
+            &brave_url,
+            "api.search.brave.com",
+        ),
+        ("BUZZ_DISCOVERY_EXA_SEARCH_URL", &exa_url, "api.exa.ai"),
     ] {
         let parsed = reqwest::Url::parse(value)
             .map_err(|_| anyhow::anyhow!("{name} must be an absolute HTTP URL"))?;
-        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-            anyhow::bail!("{name} must be an absolute HTTP URL");
+        if parsed.scheme() != "https"
+            || parsed.host_str() != Some(expected_host)
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.port().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            anyhow::bail!("{name} must use the pinned HTTPS provider endpoint");
         }
     }
     Ok(Some(DiscoveryGatewayConfig {
@@ -104,10 +136,37 @@ fn configured_secret(name: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+fn complete_provider_keys(
+    outscraper: Option<String>,
+    brave: Option<String>,
+    exa: Option<String>,
+) -> anyhow::Result<Option<(String, String, String)>> {
+    match (outscraper, brave, exa) {
+        (None, None, None) => Ok(None),
+        (Some(outscraper), Some(brave), Some(exa)) => Ok(Some((outscraper, brave, exa))),
+        (outscraper, brave, exa) => {
+            let missing = [
+                ("OUTSCRAPER_API_KEY", outscraper.is_none()),
+                ("BRAVE_SEARCH_API_KEY", brave.is_none()),
+                ("EXA_SEARCH_API_KEY", exa.is_none()),
+            ]
+            .into_iter()
+            .filter_map(|(name, absent)| absent.then_some(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+            anyhow::bail!(
+                "hosted Discovery provider configuration is incomplete; missing {missing}"
+            )
+        }
+    }
+}
+
 /// Shared hosted Discovery provider client.
 pub struct DiscoveryGatewayState {
     config: DiscoveryGatewayConfig,
     client: reqwest::Client,
+    poll_in_flight: DashSet<PollKey>,
+    poll_limit: Semaphore,
 }
 
 impl std::fmt::Debug for DiscoveryGatewayState {
@@ -128,7 +187,23 @@ impl DiscoveryGatewayState {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| anyhow::anyhow!("Discovery provider client: {error}"))?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            poll_in_flight: DashSet::new(),
+            poll_limit: Semaphore::new(MAX_CONCURRENT_PROVIDER_POLLS),
+        })
+    }
+}
+
+struct PollFlight<'a> {
+    in_flight: &'a DashSet<PollKey>,
+    key: PollKey,
+}
+
+impl Drop for PollFlight<'_> {
+    fn drop(&mut self) {
+        self.in_flight.remove(&self.key);
     }
 }
 
@@ -188,6 +263,35 @@ impl ProviderResponse {
             } => provider_request_id,
         }
     }
+
+    fn observations(&self) -> Option<&[DiscoveryBusinessObservationInput]> {
+        match self {
+            Self::Pending { .. } => None,
+            Self::Ready { observations, .. } => Some(observations),
+        }
+    }
+
+    fn from_stored(
+        response: DiscoveryGatewayStoredResponse,
+    ) -> Result<Self, (StatusCode, Json<Value>)> {
+        match response {
+            DiscoveryGatewayStoredResponse::Pending {
+                provider_request_id,
+            } => Ok(Self::Pending {
+                provider_request_id,
+            }),
+            DiscoveryGatewayStoredResponse::Ready {
+                provider_request_id,
+                observations,
+            } => Ok(Self::Ready {
+                provider_request_id,
+                observations,
+            }),
+            DiscoveryGatewayStoredResponse::OutcomeUnknown => {
+                Err(safe_error(StatusCode::CONFLICT, "provider_outcome_unknown"))
+            }
+        }
+    }
 }
 
 async fn submit(
@@ -218,7 +322,14 @@ async fn submit(
         .await
         .map_err(map_db_error)?;
     if context.request_cursor.is_some() {
-        return Err(safe_error(StatusCode::CONFLICT, "already_submitted"));
+        let stored = state
+            .app
+            .db
+            .discovery_gateway_stored_response(tenant.community(), request.run_id, request.provider)
+            .await
+            .map_err(map_db_error)?
+            .ok_or_else(|| safe_error(StatusCode::CONFLICT, "provider_outcome_unknown"))?;
+        return ProviderResponse::from_stored(stored).map(Json);
     }
     let fence = format!("colony_pending_{}", Uuid::new_v4().simple());
     let fenced = state
@@ -244,22 +355,20 @@ async fn submit(
         context.remaining_target,
     )
     .await?;
-    let finalized = state
+    let stored = state
         .app
         .db
-        .finalize_discovery_gateway_submission(
+        .record_discovery_gateway_response(
             tenant.community(),
             request.run_id,
             request.provider,
             &fence,
             parsed.provider_request_id(),
+            parsed.observations(),
         )
         .await
         .map_err(map_db_error)?;
-    if !finalized {
-        return Err(safe_error(StatusCode::CONFLICT, "request_not_fenced"));
-    }
-    Ok(Json(parsed))
+    ProviderResponse::from_stored(stored).map(Json)
 }
 
 async fn submit_to_provider(
@@ -520,9 +629,66 @@ async fn poll(
     if context.request_cursor.as_deref() != Some(&request.provider_request_id) {
         return Err(safe_error(StatusCode::FORBIDDEN, "request_not_fenced"));
     }
+    if let Some(DiscoveryGatewayStoredResponse::Ready {
+        provider_request_id,
+        observations,
+    }) = state
+        .app
+        .db
+        .discovery_gateway_stored_response(tenant.community(), request.run_id, request.provider)
+        .await
+        .map_err(map_db_error)?
+    {
+        return Ok(Json(ProviderResponse::Ready {
+            provider_request_id,
+            observations,
+        }));
+    }
     if request.provider != DiscoveryProvider::Outscraper {
         return Err(safe_error(StatusCode::CONFLICT, "request_already_ready"));
     }
+    let cadence_admitted = state
+        .app
+        .db
+        .admit_discovery_gateway_poll(
+            tenant.community(),
+            &actor.to_bytes(),
+            request.run_id,
+            request.lease_id,
+            request.provider,
+            &request.provider_request_id,
+        )
+        .await
+        .map_err(map_db_error)?;
+    if !cadence_admitted {
+        return Err(safe_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "poll_rate_limited",
+        ));
+    }
+    let provider_key = match request.provider {
+        DiscoveryProvider::Outscraper => 1,
+        DiscoveryProvider::BraveSearch => 2,
+        DiscoveryProvider::ExaSearch => 3,
+    };
+    let poll_key = (
+        *tenant.community().as_uuid(),
+        actor.to_bytes(),
+        request.run_id,
+        provider_key,
+    );
+    if !state.provider.poll_in_flight.insert(poll_key) {
+        return Err(safe_error(StatusCode::TOO_MANY_REQUESTS, "poll_in_flight"));
+    }
+    let _flight = PollFlight {
+        in_flight: &state.provider.poll_in_flight,
+        key: poll_key,
+    };
+    let _permit = state
+        .provider
+        .poll_limit
+        .try_acquire()
+        .map_err(|_| safe_error(StatusCode::TOO_MANY_REQUESTS, "poll_capacity"))?;
     let url = format!(
         "{}/{}",
         state.provider.config.requests_url.trim_end_matches('/'),
@@ -536,7 +702,21 @@ async fn poll(
         .send()
         .await
         .map_err(|_| safe_error(StatusCode::BAD_GATEWAY, "provider_unavailable"))?;
-    parse_provider_response(response).await.map(Json)
+    let parsed = parse_provider_response(response).await?;
+    let stored = state
+        .app
+        .db
+        .record_discovery_gateway_response(
+            tenant.community(),
+            request.run_id,
+            request.provider,
+            &request.provider_request_id,
+            parsed.provider_request_id(),
+            parsed.observations(),
+        )
+        .await
+        .map_err(map_db_error)?;
+    ProviderResponse::from_stored(stored).map(Json)
 }
 
 async fn authenticate(
@@ -1010,6 +1190,27 @@ mod tests {
         assert!(!format!("{config:?}").contains("fixture-secret-must-not-escape"));
         assert!(!format!("{config:?}").contains("fixture-brave-secret-must-not-escape"));
         assert!(!format!("{config:?}").contains("fixture-exa-secret-must-not-escape"));
+    }
+
+    #[test]
+    fn hosted_provider_keys_are_all_or_nothing() {
+        assert!(complete_provider_keys(None, None, None)
+            .expect("fully unset configuration")
+            .is_none());
+        assert!(complete_provider_keys(
+            Some("outscraper".into()),
+            Some("brave".into()),
+            Some("exa".into()),
+        )
+        .expect("complete configuration")
+        .is_some());
+
+        let error = complete_provider_keys(Some("outscraper".into()), None, None)
+            .expect_err("partial configuration must fail")
+            .to_string();
+        assert!(error.contains("BRAVE_SEARCH_API_KEY"));
+        assert!(error.contains("EXA_SEARCH_API_KEY"));
+        assert!(!error.contains("outscraper"));
     }
 
     #[test]

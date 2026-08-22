@@ -282,6 +282,10 @@ export function useDiscoveryRun(
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const generation = React.useRef(0);
+  const budgetReady = campaign.budget?.state === "active";
+  const campaignAlreadyRan = Boolean(
+    campaign.run && isTerminalDiscoveryRun(campaign.run),
+  );
 
   React.useEffect(() => {
     generation.current += 1;
@@ -321,6 +325,20 @@ export function useDiscoveryRun(
         );
         return;
       }
+      if (!budgetReady) {
+        setError(
+          campaign.budget?.state === "unapproved" || !campaign.budget
+            ? "Approve the exact Campaign budget before starting Discovery."
+            : "This Campaign budget cannot start a new Discovery run.",
+        );
+        return;
+      }
+      if (campaignAlreadyRan) {
+        setError(
+          "This Campaign search has already run. Create a new Campaign to run another paid search.",
+        );
+        return;
+      }
       generation.current += 1;
       const token = generation.current;
       // Every explicit start/retry is a fresh local session. Reusing a
@@ -335,7 +353,15 @@ export function useDiscoveryRun(
           : dataSource.startDiscovery(campaignId);
       void consume(stream, token);
     },
-    [campaign, campaignId, consume, dataSource, entitlement?.state],
+    [
+      budgetReady,
+      campaign,
+      campaignAlreadyRan,
+      campaignId,
+      consume,
+      dataSource,
+      entitlement?.state,
+    ],
   );
 
   const cancel = React.useCallback(() => {
@@ -360,7 +386,10 @@ export function useDiscoveryRun(
     ...state,
     busy,
     error,
-    canStart: canStartDiscovery({ state: entitlement?.state ?? "loading" }),
+    canStart:
+      canStartDiscovery({ state: entitlement?.state ?? "loading" }) &&
+      budgetReady &&
+      !campaignAlreadyRan,
     start: () => startStream("start"),
     retry: () => startStream("retry"),
     cancel,

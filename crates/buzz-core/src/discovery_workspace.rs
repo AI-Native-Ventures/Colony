@@ -723,7 +723,7 @@ pub struct DiscoveryCampaignProjection {
     /// Sources and execution mode used by future Campaign runs.
     #[serde(default, skip_serializing_if = "DiscoverySourceConfig::is_default")]
     pub source_config: DiscoverySourceConfig,
-    /// Count of unique Leads first retained by this campaign.
+    /// Count of workspace-unique Leads associated with this Campaign.
     pub lead_count: u32,
     /// Latest run, when the campaign has been executed.
     pub latest_run: Option<DiscoveryRunProjection>,
@@ -745,7 +745,7 @@ pub struct DiscoveryCampaignProjection {
 pub struct DiscoveryBusinessLeadProjection {
     /// Stable workspace business identifier.
     pub lead_id: Uuid,
-    /// Campaign that first retained this Lead.
+    /// Campaign through which this Lead is being listed.
     pub campaign_id: Uuid,
     /// Taxonomy industry inherited from the first campaign.
     pub industry_id: String,

@@ -1,6 +1,5 @@
 use buzz_core_pkg::{
-    discovery::DiscoveryProvider,
-    discovery_worker::DiscoveryBusinessObservationInput,
+    discovery::DiscoveryProvider, discovery_worker::DiscoveryBusinessObservationInput,
 };
 use nostr::Keys;
 use reqwest::Method;

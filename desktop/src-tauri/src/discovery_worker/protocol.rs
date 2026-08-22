@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Mutex, time::Duration};
 
 use buzz_core_pkg::{
     discovery::{
@@ -14,11 +14,13 @@ use buzz_core_pkg::{
 };
 use buzz_sdk_pkg::discovery::{build_discovery_status_action, parse_discovery_receipt};
 use buzz_sdk_pkg::discovery_worker::{
-    build_discovery_worker_checkpoint_action, build_discovery_worker_claim_action,
-    build_discovery_worker_complete_action, build_discovery_worker_fail_action,
-    build_discovery_worker_heartbeat_action, build_discovery_worker_salvage_observations_action,
-    build_discovery_worker_source_progress_action,
-    build_discovery_worker_store_observations_action, parse_discovery_worker_receipt,
+    build_discovery_worker_checkpoint_action_for_protocol, build_discovery_worker_claim_action,
+    build_discovery_worker_complete_action_for_protocol,
+    build_discovery_worker_fail_action_for_protocol,
+    build_discovery_worker_heartbeat_action_for_protocol,
+    build_discovery_worker_salvage_observations_action,
+    build_discovery_worker_source_progress_action_for_protocol,
+    build_discovery_worker_store_observations_action_for_protocol, parse_discovery_worker_receipt,
 };
 use nostr::{Event, EventBuilder, EventId, Keys, PublicKey};
 use serde_json::json;
@@ -93,6 +95,7 @@ pub(super) struct RelayWorkerProtocol<'a> {
     relay_pubkey: PublicKey,
     worker_id: Uuid,
     workspace_generation: u64,
+    lease_protocols: Mutex<HashMap<Uuid, u16>>,
 }
 
 impl<'a> RelayWorkerProtocol<'a> {
@@ -111,6 +114,7 @@ impl<'a> RelayWorkerProtocol<'a> {
             relay_pubkey,
             worker_id,
             workspace_generation,
+            lease_protocols: Mutex::new(HashMap::new()),
         })
     }
 
@@ -195,6 +199,34 @@ impl<'a> RelayWorkerProtocol<'a> {
             return Err("Discovery worker is shutting down".to_string());
         }
         Ok(())
+    }
+
+    fn protocol_for_run(&self, run_id: Uuid) -> Result<u16, String> {
+        self.lease_protocols
+            .lock()
+            .map_err(|_| "Discovery worker protocol state is unavailable".to_string())?
+            .get(&run_id)
+            .copied()
+            .ok_or_else(|| "Discovery worker lease protocol is unknown".to_string())
+    }
+
+    fn remember_lease_protocol(
+        &self,
+        outcome: &DiscoveryWorkerReceiptOutcome,
+    ) -> Result<(), String> {
+        if let DiscoveryWorkerReceiptOutcome::Lease(lease) = outcome {
+            self.lease_protocols
+                .lock()
+                .map_err(|_| "Discovery worker protocol state is unavailable".to_string())?
+                .insert(lease.run.run_id, lease.run.protocol_version);
+        }
+        Ok(())
+    }
+
+    fn forget_lease_protocol(&self, run_id: Uuid) {
+        if let Ok(mut protocols) = self.lease_protocols.lock() {
+            protocols.remove(&run_id);
+        }
     }
 }
 
@@ -341,56 +373,82 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
         Box::pin(async move {
             let builder = build_discovery_worker_claim_action(self.relay_pubkey, &request)
                 .map_err(|_| "invalid Discovery claim".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::Claim,
-                request.request_id,
-                request.idempotency_key,
-            )
-            .await
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::Claim,
+                    request.request_id,
+                    request.idempotency_key,
+                )
+                .await?;
+            self.remember_lease_protocol(&outcome)?;
+            Ok(outcome)
         })
     }
 
     fn heartbeat(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
-            let builder = build_discovery_worker_heartbeat_action(self.relay_pubkey, &request)
-                .map_err(|_| "invalid Discovery heartbeat".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::Heartbeat,
-                request.request_id,
-                request.idempotency_key,
+            let protocol_version = self.protocol_for_run(request.run_id)?;
+            let builder = build_discovery_worker_heartbeat_action_for_protocol(
+                self.relay_pubkey,
+                protocol_version,
+                &request,
             )
-            .await
+            .map_err(|_| "invalid Discovery heartbeat".to_string())?;
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::Heartbeat,
+                    request.request_id,
+                    request.idempotency_key,
+                )
+                .await?;
+            self.remember_lease_protocol(&outcome)?;
+            Ok(outcome)
         })
     }
 
     fn checkpoint(&self, request: DiscoveryWorkerCheckpointRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
-            let builder = build_discovery_worker_checkpoint_action(self.relay_pubkey, &request)
-                .map_err(|_| "invalid Discovery checkpoint".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::Checkpoint,
-                request.lease.request_id,
-                request.lease.idempotency_key,
+            let protocol_version = self.protocol_for_run(request.lease.run_id)?;
+            let builder = build_discovery_worker_checkpoint_action_for_protocol(
+                self.relay_pubkey,
+                protocol_version,
+                &request,
             )
-            .await
+            .map_err(|_| "invalid Discovery checkpoint".to_string())?;
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::Checkpoint,
+                    request.lease.request_id,
+                    request.lease.idempotency_key,
+                )
+                .await?;
+            self.remember_lease_protocol(&outcome)?;
+            Ok(outcome)
         })
     }
 
     fn source_progress(&self, request: DiscoveryWorkerSourceProgressRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
-            let builder =
-                build_discovery_worker_source_progress_action(self.relay_pubkey, &request)
-                    .map_err(|_| "invalid Discovery source progress".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::SourceProgress,
-                request.lease.request_id,
-                request.lease.idempotency_key,
+            let protocol_version = self.protocol_for_run(request.lease.run_id)?;
+            let builder = build_discovery_worker_source_progress_action_for_protocol(
+                self.relay_pubkey,
+                protocol_version,
+                &request,
             )
-            .await
+            .map_err(|_| "invalid Discovery source progress".to_string())?;
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::SourceProgress,
+                    request.lease.request_id,
+                    request.lease.idempotency_key,
+                )
+                .await?;
+            self.remember_lease_protocol(&outcome)?;
+            Ok(outcome)
         })
     }
 
@@ -399,16 +457,23 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
         request: DiscoveryWorkerObservationBatchRequest,
     ) -> ProtocolFuture<'_> {
         Box::pin(async move {
-            let builder =
-                build_discovery_worker_store_observations_action(self.relay_pubkey, &request)
-                    .map_err(|_| "invalid Discovery observation batch".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::StoreObservations,
-                request.lease.request_id,
-                request.lease.idempotency_key,
+            let protocol_version = self.protocol_for_run(request.lease.run_id)?;
+            let builder = build_discovery_worker_store_observations_action_for_protocol(
+                self.relay_pubkey,
+                protocol_version,
+                &request,
             )
-            .await
+            .map_err(|_| "invalid Discovery observation batch".to_string())?;
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::StoreObservations,
+                    request.lease.request_id,
+                    request.lease.idempotency_key,
+                )
+                .await?;
+            self.remember_lease_protocol(&outcome)?;
+            Ok(outcome)
         })
     }
 
@@ -432,29 +497,45 @@ impl WorkerProtocol for RelayWorkerProtocol<'_> {
 
     fn fail(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
-            let builder = build_discovery_worker_fail_action(self.relay_pubkey, &request)
-                .map_err(|_| "invalid Discovery failure".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::Fail,
-                request.request_id,
-                request.idempotency_key,
+            let protocol_version = self.protocol_for_run(request.run_id)?;
+            let builder = build_discovery_worker_fail_action_for_protocol(
+                self.relay_pubkey,
+                protocol_version,
+                &request,
             )
-            .await
+            .map_err(|_| "invalid Discovery failure".to_string())?;
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::Fail,
+                    request.request_id,
+                    request.idempotency_key,
+                )
+                .await?;
+            self.forget_lease_protocol(request.run_id);
+            Ok(outcome)
         })
     }
 
     fn complete(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
         Box::pin(async move {
-            let builder = build_discovery_worker_complete_action(self.relay_pubkey, &request)
-                .map_err(|_| "invalid Discovery completion".to_string())?;
-            self.execute(
-                builder,
-                DiscoveryWorkerOperation::Complete,
-                request.request_id,
-                request.idempotency_key,
+            let protocol_version = self.protocol_for_run(request.run_id)?;
+            let builder = build_discovery_worker_complete_action_for_protocol(
+                self.relay_pubkey,
+                protocol_version,
+                &request,
             )
-            .await
+            .map_err(|_| "invalid Discovery completion".to_string())?;
+            let outcome = self
+                .execute(
+                    builder,
+                    DiscoveryWorkerOperation::Complete,
+                    request.request_id,
+                    request.idempotency_key,
+                )
+                .await?;
+            self.forget_lease_protocol(request.run_id);
+            Ok(outcome)
         })
     }
 }

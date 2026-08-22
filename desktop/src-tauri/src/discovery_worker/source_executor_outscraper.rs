@@ -53,15 +53,38 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                     Some(SynchronousCallState::Intent | SynchronousCallState::OutcomeUnknown)
                 ) =>
             {
-                self.outbox.mark_outcome_unknown(call.call_id)?;
-                return self
-                    .finish_source_failure(
-                        provider,
-                        None,
-                        1,
-                        DiscoveryRunSourceFailureClass::OutcomeUnknown,
-                    )
-                    .await;
+                let response = match self
+                    .protocol
+                    .hosted_provider_submit(run_id, lease_id, provider)
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(_) => {
+                        self.outbox.mark_outcome_unknown(call.call_id)?;
+                        return self
+                            .finish_source_failure(
+                                provider,
+                                None,
+                                1,
+                                DiscoveryRunSourceFailureClass::OutcomeUnknown,
+                            )
+                            .await;
+                    }
+                };
+                let (request_id, observations) = match response {
+                    super::super::hosted_gateway::HostedProviderResponse::Pending {
+                        provider_request_id,
+                    } => (provider_request_id, None),
+                    super::super::hosted_gateway::HostedProviderResponse::Ready {
+                        provider_request_id,
+                        observations,
+                    } => (provider_request_id, Some(observations)),
+                };
+                self.outbox.mark_submitted(call.call_id, &request_id)?;
+                if !self.ensure_submitted(provider, &request_id).await? {
+                    return Ok(SourceExecution::LostLease);
+                }
+                (call.call_id, request_id, observations)
             }
             Some(_) => return Err("invalid hosted Discovery outbox state".to_owned()),
             None => {
@@ -93,8 +116,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                         observations,
                     } => (provider_request_id, Some(observations)),
                 };
-                self.outbox
-                    .mark_submitted(intent.call_id, &request_id)?;
+                self.outbox.mark_submitted(intent.call_id, &request_id)?;
                 if !self.ensure_submitted(provider, &request_id).await? {
                     return Ok(SourceExecution::LostLease);
                 }
@@ -102,7 +124,10 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
             }
         };
 
-        if !self.ensure_submitted(provider, &provider_request_id).await? {
+        if !self
+            .ensure_submitted(provider, &provider_request_id)
+            .await?
+        {
             return Ok(SourceExecution::LostLease);
         }
         let observations = if let Some(observations) = ready {
@@ -145,15 +170,8 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                 )
                 .await;
         }
-        self.outbox.record_results(
-            call_id,
-            Some(provider_request_id.clone()),
-            1,
-            observations.clone(),
-        )?;
-        if !self.drain_outbox(call_id).await? {
-            return Ok(SourceExecution::LostLease);
-        }
+        // Hosted protocol results are already durable and capacity-bounded in
+        // the relay transaction before they are returned to this device.
         let item_count = u32::try_from(observations.len())
             .map_err(|_| "Hosted Discovery returned too many businesses".to_owned())?;
         if !self
