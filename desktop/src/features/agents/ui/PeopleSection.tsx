@@ -27,6 +27,9 @@ import {
 import { EmployeeRoleDialog } from "@/features/agents/ui/EmployeeRoleDialog";
 import { HireEmployeeDialog } from "@/features/agents/ui/HireEmployeeDialog";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { Badge } from "@/shared/ui/badge";
@@ -96,6 +99,17 @@ export function PeopleSection() {
   );
 
   const tree = React.useMemo(() => buildOrgTree(members), [members]);
+  // Real avatars, batched in one query for every agent on the chart. Nodes
+  // rendered initials-only before this, which made the org read as a debug
+  // view rather than the company.
+  const memberPubkeys = React.useMemo(
+    () => members.map((member) => member.pubkey),
+    [members],
+  );
+  const profilesQuery = useUsersBatchQuery(memberPubkeys, {
+    enabled: memberPubkeys.length > 0,
+  });
+  const profiles = profilesQuery.data?.profiles;
   const isEmpty = !isLoading && members.length === 0;
 
   return (
@@ -159,6 +173,7 @@ export function PeopleSection() {
             >
               {tree.roots.map((root) => (
                 <OrgNodeCard
+                  profiles={profiles}
                   key={root.member.pubkey}
                   node={root}
                   onEdit={setEditingMember}
@@ -182,6 +197,7 @@ export function PeopleSection() {
               <div className="mt-3 flex flex-col gap-2">
                 {tree.unassigned.map((node) => (
                   <OrgNodeCard
+                    profiles={profiles}
                     key={node.member.pubkey}
                     node={node}
                     onEdit={setEditingMember}
@@ -254,20 +270,75 @@ function OrgNodeLiveness({ pubkey }: { pubkey: string }) {
   );
 }
 
+/**
+ * Span of control, and the two shapes worth flagging.
+ *
+ * A chart that only draws structure hides the thing the owner actually needs
+ * to see: whether the work is spread evenly. A lead carrying eleven reports
+ * and a lead carrying none look identical in a tree of boxes.
+ *
+ * Deliberately advisory, never enforcement. The relay permits any number of
+ * reports, and this only makes the shape legible.
+ */
+const CROWDED_DIRECT_REPORTS = 8;
+
+function OrgNodeLoad({ node }: { node: OrgTreeNode }) {
+  const { directReports, totalReports } = node.counts;
+  const managerRank =
+    node.member.rank === "leader" || node.member.rank === "executive";
+
+  if (directReports === 0) {
+    // Only a manager-rank agent with nobody under it is worth flagging: a
+    // worker having no reports is the normal case, not a gap.
+    return managerRank ? (
+      <span
+        className="text-2xs text-muted-foreground"
+        data-testid={`org-node-load-${node.member.pubkey}`}
+        title="No one reports to this agent yet"
+      >
+        no reports
+      </span>
+    ) : null;
+  }
+
+  const crowded = directReports >= CROWDED_DIRECT_REPORTS;
+  return (
+    <span
+      className={
+        crowded
+          ? "text-2xs font-medium text-warning"
+          : "text-2xs text-muted-foreground"
+      }
+      data-testid={`org-node-load-${node.member.pubkey}`}
+      title={
+        totalReports === directReports
+          ? undefined
+          : `${totalReports} in total underneath`
+      }
+    >
+      {directReports} direct
+      {totalReports > directReports ? ` / ${totalReports} total` : ""}
+    </span>
+  );
+}
+
 function OrgNodeCard({
   node,
   onEdit,
+  profiles,
   variant = "tree",
 }: {
   node: OrgTreeNode;
   onEdit: (member: OrgMember) => void;
+  profiles?: UserProfileLookup;
   variant?: "tree" | "tray";
 }) {
+  const profile = profiles?.[normalizePubkey(node.member.pubkey)];
   return (
     <div data-testid={`org-node-${node.member.pubkey}`}>
       <div className="flex min-w-0 items-center gap-2.5">
         <ProfileAvatar
-          avatarUrl={null}
+          avatarUrl={profile?.avatarUrl ?? null}
           className={variant === "tray" ? "h-7 w-7 text-xs" : "h-9 w-9 text-sm"}
           label={node.member.name}
         />
@@ -278,6 +349,7 @@ function OrgNodeCard({
             </span>
             <AgentRankBadge rank={node.member.rank} />
             <OrgNodeLiveness pubkey={node.member.pubkey} />
+            <OrgNodeLoad node={node} />
           </div>
           {node.member.role ? (
             <p className="truncate font-mono text-3xs text-muted-foreground">
@@ -303,6 +375,7 @@ function OrgNodeCard({
         >
           {node.reports.map((report) => (
             <OrgNodeCard
+              profiles={profiles}
               key={report.member.pubkey}
               node={report}
               onEdit={onEdit}

@@ -35,6 +35,18 @@ export type OrgMember = {
 export type OrgTreeNode = {
   member: OrgMember;
   reports: OrgTreeNode[];
+  counts: OrgNodeCounts;
+};
+
+/**
+ * Counts for one subtree, so the chart can show shape and load rather than
+ * only structure. `directReports` is the span of control the owner actually
+ * manages; `totalReports` is everyone underneath, which is what makes an
+ * unbalanced org visible at a glance.
+ */
+export type OrgNodeCounts = {
+  directReports: number;
+  totalReports: number;
 };
 
 export type OrgTree = {
@@ -122,7 +134,19 @@ export function buildOrgTree(members: readonly OrgMember[]): OrgTree {
         .filter((report) => !visited.has(report.pubkey))
         .map(descend),
     );
-    return { member, reports };
+    return {
+      member,
+      reports,
+      counts: {
+        directReports: reports.length,
+        // Everyone underneath, not just the next rung: a lead with four
+        // leads under it carries more than a lead with four workers.
+        totalReports: reports.reduce(
+          (total, report) => total + 1 + report.counts.totalReports,
+          0,
+        ),
+      },
+    };
   };
 
   const roots = sortTreeNodes(
