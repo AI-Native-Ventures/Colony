@@ -87,6 +87,7 @@ export function resolveReportingLine(
 
 type ReportingLineSources = {
   employees: ReadonlyMap<string, EmployeeHead> | null;
+  isSettled: boolean;
   trustedHeads: ManagedAgentHead[];
 };
 
@@ -114,6 +115,10 @@ function useReportingLineSources(
 
   return {
     employees: headsQuery.data ?? null,
+    isSettled:
+      !headsQuery.isPending &&
+      !ownersQuery.isPending &&
+      !headEventsQuery.isPending,
     // Owners still loading is indistinguishable from "no owners": nothing
     // off a kind-30177 head may be trusted yet, so only employee-head lines
     // resolve -- fail closed, as `orgMembers.ts` does.
@@ -124,8 +129,15 @@ function useReportingLineSources(
 /**
  * A stable lookup of one agent's reporting line by pubkey, for callers that
  * classify many agents against one set of sources (ask routing).
+ *
+ * `isSettled` says the underlying reads have finished (success or failure):
+ * before that, a missing manager is "not known yet", not "reports to
+ * nobody". Callers classifying routes must hold auto-vs-explicit judgments
+ * until it turns true, or they will misread an unloaded payroll as an
+ * explicit choice.
  */
 export function useReportingLineLookup(communityId: string): {
+  isSettled: boolean;
   lookup: (pubkey: string | null | undefined) => ReportingLine;
 } {
   const sources = useReportingLineSources(communityId, communityId !== "");
@@ -141,7 +153,7 @@ export function useReportingLineLookup(communityId: string): {
         : { managerPubkey: null, managerLabel: null },
     [employees, trustedHeads],
   );
-  return { lookup };
+  return { isSettled: sources.isSettled, lookup };
 }
 
 /**
