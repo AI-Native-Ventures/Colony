@@ -86,7 +86,16 @@ type ThemeProviderProps = {
   defaultTheme?: SyntaxThemeName;
 };
 
-const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
+/**
+ * Theme context consumed by `useTheme`. Exported so a host that only needs to
+ * satisfy the context (design-system previews, static renders) can supply a
+ * fixed value without running the full provider's stylesheet-variable work.
+ */
+export const ThemeContext = createContext<ThemeContextValue | undefined>(
+  undefined,
+);
+
+export type { ThemeContextValue };
 
 function isValidThemeName(name: string): name is SyntaxThemeName {
   return (SYNTAX_THEMES as readonly string[]).includes(name);
