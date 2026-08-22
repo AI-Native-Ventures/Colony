@@ -323,6 +323,80 @@ test("block question renders data-backed choices once as selectable described ca
   assert.equal(html.match(/aria-pressed="false"/g)?.length, 2);
 });
 
+test("block question shows a durable answer while its processor is still working", () => {
+  const html = render(BlockQuestion, {
+    data: {
+      prompt: "How should agents spend credits?",
+      choices: [
+        {
+          id: "campaign-budget",
+          label: "Approve campaign budget",
+          description: "Approve a maximum once.",
+        },
+      ],
+    },
+    environment: {
+      origin: "core",
+      trusted: true,
+      declaredActionIds: new Set(["brainstorm.submit"]),
+      pendingActionId: "brainstorm.submit",
+      submitSigned() {},
+    },
+    node: {
+      type: "question",
+      prompt: "{{prompt}}",
+      mode: "single-select",
+      options_path: "/choices",
+      min_selections: 1,
+      max_selections: 1,
+      allow_custom: false,
+      require_custom_input: false,
+      submit_action: "brainstorm.submit",
+    },
+  });
+
+  assert.match(html, />Answered</);
+  assert.doesNotMatch(html, />Submit</);
+  assert.match(html, /disabled/);
+});
+
+test("block question keeps its answered label after processing completes", () => {
+  const html = render(BlockQuestion, {
+    data: {
+      prompt: "How should agents spend credits?",
+      choices: [
+        {
+          id: "campaign-budget",
+          label: "Approve campaign budget",
+          description: "Approve a maximum once.",
+        },
+      ],
+    },
+    environment: {
+      origin: "core",
+      trusted: true,
+      declaredActionIds: new Set(["brainstorm.submit"]),
+      completedActionIds: new Set(["brainstorm.submit"]),
+      submitSigned() {},
+    },
+    node: {
+      type: "question",
+      prompt: "{{prompt}}",
+      mode: "single-select",
+      options_path: "/choices",
+      min_selections: 1,
+      max_selections: 1,
+      allow_custom: false,
+      require_custom_input: false,
+      submit_action: "brainstorm.submit",
+    },
+  });
+
+  assert.match(html, />Answered</);
+  assert.doesNotMatch(html, />Submit/);
+  assert.match(html, /disabled/);
+});
+
 test("block table resolver formats filters and stable-sorts typed cells", () => {
   const node = {
     type: "table",

@@ -7,6 +7,7 @@ import {
   Inbox,
   ListChecks,
   Receipt,
+  Users,
   Zap,
 } from "lucide-react";
 
@@ -48,6 +49,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
+  onSelectPeople: () => void;
   onSelectProjects: () => void;
   onSelectContent: () => void;
   onSelectPulse: () => void;
@@ -104,6 +106,7 @@ export function AppSidebarPrimaryMenu({
   onSelectAgents,
   onSelectDiscovery,
   onSelectHome,
+  onSelectPeople,
   onSelectProjects,
   onSelectContent,
   onSelectPulse,
@@ -213,6 +216,18 @@ export function AppSidebarPrimaryMenu({
             >
               Agents
             </SidebarMenuLabel>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            data-testid="open-people-view"
+            isActive={selectedView === "people"}
+            onClick={onSelectPeople}
+            tooltip="People and roles"
+            type="button"
+          >
+            <Users className="h-4 w-4" />
+            <SidebarMenuLabel>People and roles</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>

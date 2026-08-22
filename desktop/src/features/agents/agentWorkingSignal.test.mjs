@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it, mock } from "node:test";
 
 import {
   getAgentWorkingState,
@@ -141,6 +141,68 @@ describe("getWorkingChannels", () => {
         ["chan-2", "typing"],
       ],
     );
+  });
+});
+
+describe("per-agent anchors across the typing merge", () => {
+  const EPOCH = Date.parse("2024-06-01T00:00:00Z");
+  const absAt = (ms) => EPOCH + ms;
+
+  beforeEach(() => {
+    mock.timers.enable({ apis: ["Date"], now: EPOCH });
+  });
+
+  afterEach(() => {
+    mock.timers.reset();
+  });
+
+  it("keeps per-agent anchors aligned when a typing-only agent joins an observer channel", () => {
+    // Observer turn starts at EPOCH; processed with the desktop clock equal
+    // to its timestamp so the offset stays 0 and the anchor is the start.
+    startTurn(AGENT, "chan-1");
+    mock.timers.tick(40_000);
+    reportChannelBotTyping("chan-1", [AGENT_2]);
+
+    const summary = getWorkingChannels().find((c) => c.channelId === "chan-1");
+    assert.ok(summary, "the mixed channel must be summarized");
+    assert.deepEqual(summary.agentPubkeys, [AGENT, AGENT_2]);
+    assert.equal(
+      summary.agentAnchorsAt?.length,
+      summary.agentPubkeys.length,
+      "anchor array must not drift from the pubkey array",
+    );
+    assert.deepEqual(
+      summary.agentAnchorsAt,
+      [absAt(0), absAt(40_000)],
+      "the typing-only agent must carry its own first-seen anchor, aligned with agentPubkeys",
+    );
+    assert.equal(
+      summary.anchorAt,
+      absAt(0),
+      "channel badge still counts from the oldest start",
+    );
+  });
+
+  it("keeps anchors aligned for typing-only channels with multiple agents", () => {
+    reportChannelBotTyping("chan-2", [AGENT_2]);
+    mock.timers.tick(40_000);
+    // Re-report keeps AGENT_2's first-seen anchor and adds AGENT 40s later.
+    reportChannelBotTyping("chan-2", [AGENT_2, AGENT]);
+
+    const summary = getWorkingChannels().find((c) => c.channelId === "chan-2");
+    assert.ok(summary, "the typing-only channel must be summarized");
+    assert.deepEqual(summary.agentPubkeys, [AGENT_2, AGENT]);
+    assert.equal(
+      summary.agentAnchorsAt?.length,
+      summary.agentPubkeys.length,
+      "anchor array must not drift from the pubkey array",
+    );
+    assert.deepEqual(
+      summary.agentAnchorsAt,
+      [absAt(0), absAt(40_000)],
+      "each typing-only agent anchors to its own first-seen time",
+    );
+    assert.equal(summary.anchorAt, absAt(0));
   });
 });
 

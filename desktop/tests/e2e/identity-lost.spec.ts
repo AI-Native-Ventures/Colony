@@ -4,38 +4,21 @@ import { nsecEncode } from "nostr-tools/nip19";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
-test("normal first launch uses the already-persisted identity", async ({
+test("normal first launch uses the persisted identity through simple entry", async ({
   page,
 }) => {
-  await page.emulateMedia({ colorScheme: "dark" });
   await installMockBridge(page, undefined, {
     skipCommunitySeed: true,
     skipOnboardingSeed: true,
   });
   await page.goto("/");
 
-  const gate = page.getByTestId("machine-onboarding-gate");
-  await expect(gate).toBeVisible();
-  await expect(gate).toHaveCSS("background-color", "rgb(217, 205, 243)");
-  // Landing carries a subtle dot-grid pattern over the brand fill.
-  await expect(gate).toHaveCSS("background-image", /radial-gradient/);
-  await expect(gate).toHaveCSS("color", "rgb(23, 23, 23)");
+  await page.getByRole("button", { name: "Start with Colony" }).click();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+  await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Create a new identity key" }),
-  ).toHaveCSS("background-color", "rgb(23, 23, 23)");
-  await page.getByRole("button", { name: "Create a new identity key" }).click();
-
-  await expect(
-    page.getByRole("heading", {
-      name: "Your unique identity key has been created",
-    }),
-  ).toBeVisible();
-  // Non-landing pages layer the dot grid over the violet-to-light-blue gradient.
-  await expect(gate).toHaveCSS(
-    "background-image",
-    /radial-gradient\(.*\), linear-gradient\(.*rgb\(217, 205, 243\).*rgb\(215, 231, 246\)\)/s,
-  );
-  await expect(gate).toHaveCSS("color", "rgb(23, 23, 23)");
+  ).toHaveCount(0);
   const commands = await page.evaluate(
     () =>
       (
@@ -263,7 +246,7 @@ test("canceling recovery uses the standard pairing cancellation state", async ({
     .toBeGreaterThan(0);
 });
 
-test("phone recovery continues to harness setup without creating or restarting", async ({
+test("phone recovery returns to the app without creating or restarting", async ({
   page,
 }) => {
   await installMockBridge(
@@ -281,9 +264,8 @@ test("phone recovery continues to harness setup without creating or restarting",
     );
   });
 
-  await expect(
-    page.getByRole("heading", { name: "Set up your agent harnesses" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   await expect(page.getByTestId("relaunch-required")).toHaveCount(0);
   await expect(
     page.getByRole("heading", {

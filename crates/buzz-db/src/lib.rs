@@ -30,6 +30,8 @@ pub mod discovery;
 pub mod discovery_workspace;
 /// Direct message channel persistence.
 pub mod dm;
+/// Email and password account persistence (zero-knowledge key escrow).
+pub mod email_accounts;
 pub mod employees;
 /// Database error types.
 pub mod error;
@@ -5832,6 +5834,20 @@ impl Db {
     /// Retire an employee, freeing its role (see [`employees::retire_employee`]).
     pub async fn retire_employee(&self, community: CommunityId, pubkey: &[u8]) -> Result<bool> {
         employees::retire_employee(&self.pool, community, pubkey).await
+    }
+
+    /// Apply an owner-validated rank/manager/status change to an employee
+    /// (see [`employees::update_employee`]). `None` when no active row
+    /// matches, so a repeat retire settles instead of erroring.
+    pub async fn update_employee(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        rank: Option<&str>,
+        manager: Option<Option<&[u8]>>,
+        status: Option<&str>,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::update_employee(&self.pool, community, pubkey, rank, manager, status).await
     }
 
     /// File a job. `None` when this filing already produced one

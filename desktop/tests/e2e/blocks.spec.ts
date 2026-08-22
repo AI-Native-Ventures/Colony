@@ -254,6 +254,9 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
     .toBe(
       '{"custom_input":"Combine cinematic pacing with restrained editorial typography.","selected":["premium","motion"]}',
     );
+  await expect(
+    question.getByRole("button", { name: "Answered" }),
+  ).toBeDisabled();
 
   const approvalRow = page.locator(`[data-message-id="${events[1].id}"]`);
   await approvalRow.getByRole("button", { name: "Approve" }).click();
@@ -289,6 +292,9 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
   }
   await page.getByTestId("channel-random").click();
   await page.getByTestId("channel-general").click();
+  await expect(
+    question.getByRole("button", { name: "Answered" }),
+  ).toBeDisabled();
   await expect(approvalRow.getByText(/Action submitted/)).toBeVisible();
   await capture(
     page,

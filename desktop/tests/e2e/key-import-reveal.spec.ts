@@ -10,15 +10,19 @@ const SAMPLE_NSEC =
 // backup step.
 const BACKUP_INK = "rgb(113, 113, 6)";
 
-test("key import masks the key with a reveal toggle", async ({ page }) => {
+test("lost identity key import masks the key with a reveal toggle", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await installMockBridge(page, undefined, {
-    skipCommunitySeed: true,
-    skipOnboardingSeed: true,
-  });
+  await installMockBridge(
+    page,
+    { identityLost: true },
+    {
+      skipOnboardingSeed: true,
+    },
+  );
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Use an existing key" }).click();
   const input = page.getByTestId("nostr-import-nsec-input");
   await expect(input).toBeVisible();
   await waitForAnimations(page);

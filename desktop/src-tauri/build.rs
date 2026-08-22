@@ -133,12 +133,24 @@ fn main() {
     }
 
     tauri_build::try_build(
-        tauri_build::Attributes::new().plugin(
-            "websocket",
-            tauri_build::InlinedPlugin::new()
-                .commands(&["connect", "send", "disconnect", "disconnect_all"])
-                .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
-        ),
+        tauri_build::Attributes::new()
+            .plugin(
+                "websocket",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&["connect", "send", "disconnect", "disconnect_all"])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            )
+            // The operator console signs NIP-98 events for the remote admin
+            // dashboard. These two commands are exposed as an inline plugin so
+            // Tauri's ACL gates them for the console webview without turning
+            // on application-wide command ACLs. Keep this entry in sync with
+            // `operator_console.rs` (`COLONYSIGNER_PLUGIN_ID`) and
+            // `capabilities/operator-console.json`.
+            .plugin(
+                "colonysigner",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&["operator_pubkey", "operator_sign_nip98"]),
+            ),
     )
     .expect("failed to build Tauri application");
 }

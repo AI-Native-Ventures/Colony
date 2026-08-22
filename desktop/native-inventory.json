@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 404,
-    "rust_lines": 162674,
-    "tauri_coupled": 160,
-    "portable": 244,
-    "portable_lines": 91840,
+    "rust_total": 408,
+    "rust_lines": 163429,
+    "tauri_coupled": 162,
+    "portable": 246,
+    "portable_lines": 92001,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -37,6 +37,7 @@
       "src-tauri/src/commands/channels.rs",
       "src-tauri/src/commands/clipboard.rs",
       "src-tauri/src/commands/company_blueprint.rs",
+      "src-tauri/src/commands/company_scan.rs",
       "src-tauri/src/commands/discovery_export.rs",
       "src-tauri/src/commands/dms.rs",
       "src-tauri/src/commands/engrams.rs",
@@ -154,6 +155,7 @@
       "src-tauri/src/migration_avatar_refresh.rs",
       "src-tauri/src/mouse_nav.rs",
       "src-tauri/src/native_websocket.rs",
+      "src-tauri/src/operator_console.rs",
       "src-tauri/src/prevent_sleep.rs",
       "src-tauri/src/provisioned_credits.rs",
       "src-tauri/src/provisioned_credits/lease_http.rs",
@@ -320,6 +322,7 @@
       "src-tauri/src/managed_agents/discovery/runtime_metadata.rs",
       "src-tauri/src/managed_agents/discovery/tests.rs",
       "src-tauri/src/managed_agents/discovery/tests/codex_version.rs",
+      "src-tauri/src/managed_agents/discovery/tests/harness_registry_tests.rs",
       "src-tauri/src/managed_agents/discovery/tests/managed_path_resolution.rs",
       "src-tauri/src/managed_agents/discovery/tests/nvm.rs",
       "src-tauri/src/managed_agents/discovery/windows_install.rs",
@@ -355,6 +358,7 @@
       "src-tauri/src/managed_agents/runtime/metadata.rs",
       "src-tauri/src/managed_agents/runtime/path.rs",
       "src-tauri/src/managed_agents/runtime/prime_agent_config.rs",
+      "src-tauri/src/managed_agents/runtime/spend_tests.rs",
       "src-tauri/src/managed_agents/runtime/sweep.rs",
       "src-tauri/src/managed_agents/runtime/test_fixtures.rs",
       "src-tauri/src/managed_agents/runtime/tests.rs",
@@ -418,29 +422,31 @@
     ]
   },
   "commands": {
-    "registered": 338,
-    "defined": 338,
+    "registered": 342,
+    "defined": 342,
     "by_reach": {
-      "frontend": 334,
-      "frontend-plugin-prefixed": 2,
-      "NO CALLER FOUND": 2
+      "frontend": 336,
+      "NO CALLER FOUND": 4,
+      "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
+      "operator_pubkey",
+      "operator_sign_nip98",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 350,
-    "State": 252,
+    "AppHandle": 351,
+    "State": 254,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 347,
-      "State": 252,
+      "AppHandle": 348,
+      "State": 254,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -466,7 +472,7 @@
     ".opener()": 1,
     ".notification()": 1,
     ".updater()": 0,
-    ".get_webview_window(": 5,
+    ".get_webview_window(": 6,
     ".global_shortcut(": 1,
     ".request_restart(": 7,
     ".run_on_main_thread(": 3,
@@ -556,6 +562,7 @@
     "src-tauri/src/huddle/commands.rs": 3,
     "src-tauri/src/commands/ledger.rs": 3,
     "src-tauri/src/macos_notifications.rs": 3,
+    "src-tauri/src/operator_console.rs": 3,
     "src-tauri/src/commands/media.rs": 3,
     "src-tauri/src/commands/workspace_files.rs": 3,
     "src-tauri/src/commands/agent_settings.rs": 3,
@@ -604,6 +611,7 @@
     "src-tauri/src/huddle/reconnect.rs": 1,
     "src-tauri/src/commands/discovery_export.rs": 1,
     "src-tauri/src/commands/qr_download.rs": 1,
+    "src-tauri/src/commands/company_scan.rs": 1,
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
@@ -699,7 +707,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:264",
+        "src/features/communities/useCommunityInit.ts:268",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -2242,7 +2250,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:250",
+        "src/features/communities/useCommunityInit.ts:254",
         "src/parity/session/script.ts:321",
         "src/shared/api/tauriIdentity.ts:37"
       ]
@@ -2374,7 +2382,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/ledger/report.ts:388",
+        "src/features/ledger/report.ts:403",
         "src/parity/session/script.ts:1232"
       ]
     },
@@ -2674,6 +2682,16 @@
         "src/features/huddle/components/HuddleProfileControl.tsx:112"
       ]
     },
+    "open_operator_console": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/settings/ui/operatorConsole.ts:27",
+        "src/shared/api/operatorConsoleApi.ts:13"
+      ]
+    },
     "open_project_merge_recovery_terminal": {
       "defining_file": "src-tauri/src/commands/project_terminal.rs",
       "module": "project_terminal",
@@ -2693,6 +2711,20 @@
         "src/parity/session/script.ts:1214",
         "src/shared/api/projectGit.ts:338"
       ]
+    },
+    "operator_pubkey": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/operator_console.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "operator_sign_nip98": {
+      "defining_file": "src-tauri/src/operator_console.rs",
+      "module": "operator_console",
+      "registered_in": "src-tauri/src/operator_console.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "perform_sidebar_default_haptic": {
       "defining_file": "src-tauri/src/commands/window_chrome.rs",
@@ -2738,7 +2770,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/kinds/fileKind.tsx:71",
+        "src/features/workspace/kinds/fileKind.tsx:80",
         "src/features/workspace/kinds/imageKind.tsx:64"
       ]
     },
@@ -2901,7 +2933,7 @@
       "example_sites": [
         "src/features/workspace/kinds/imageKind.tsx:46",
         "src/features/workspace/lib/workspaceFileContent.ts:6",
-        "src/features/workspace/lib/workspaceFileContent.ts:32"
+        "src/features/workspace/lib/workspaceFileContent.ts:35"
       ]
     },
     "reconcile_inbound_persona_event": {
@@ -3135,6 +3167,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1577",
         "src/parity/session/script.ts:1578"
+      ]
+    },
+    "scan_onboarding_company_website": {
+      "defining_file": "src-tauri/src/commands/company_scan.rs",
+      "module": "company_scan",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriCompanyScan.ts:67"
       ]
     },
     "search_messages": {
@@ -3396,7 +3437,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1551",
         "src/parity/session/script.ts:1552",
-        "src/shared/theme/ThemeProvider.tsx:376"
+        "src/shared/theme/ThemeProvider.tsx:385"
       ]
     },
     "show_native_notification": {
@@ -3912,7 +3953,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:463"
+        "src/features/workspace/lib/webSessions.ts:652"
       ]
     },
     "workspace_web_close": {
@@ -3921,8 +3962,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:324",
-        "src/features/workspace/lib/webSessions.ts:482"
+        "src/features/workspace/lib/webSessions.ts:424",
+        "src/features/workspace/lib/webSessions.ts:451",
+        "src/features/workspace/lib/webSessions.ts:672"
       ]
     },
     "workspace_web_close_all": {
@@ -3931,7 +3973,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:511"
+        "src/features/workspace/lib/webSessions.ts:700"
       ]
     },
     "workspace_web_forward": {
@@ -3940,7 +3982,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:467"
+        "src/features/workspace/lib/webSessions.ts:656"
       ]
     },
     "workspace_web_key": {
@@ -3949,7 +3991,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:434"
+        "src/features/workspace/lib/webSessions.ts:623"
       ]
     },
     "workspace_web_mouse": {
@@ -3958,7 +4000,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:392"
+        "src/features/workspace/lib/webSessions.ts:581"
       ]
     },
     "workspace_web_navigate": {
@@ -3967,7 +4009,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:366"
+        "src/features/workspace/lib/webSessions.ts:554"
       ]
     },
     "workspace_web_reload": {
@@ -3976,7 +4018,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:471"
+        "src/features/workspace/lib/webSessions.ts:660"
       ]
     },
     "workspace_web_resize": {
@@ -3985,7 +4027,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:458"
+        "src/features/workspace/lib/webSessions.ts:647"
       ]
     },
     "workspace_web_start": {
@@ -3994,7 +4036,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:312"
+        "src/features/workspace/lib/webSessions.ts:439"
       ]
     },
     "workspace_web_text": {
@@ -4003,7 +4045,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:441"
+        "src/features/workspace/lib/webSessions.ts:630"
       ]
     },
     "workspace_web_wheel": {
@@ -4012,7 +4054,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:190"
+        "src/features/workspace/lib/webSessions.ts:333"
       ]
     }
   }
