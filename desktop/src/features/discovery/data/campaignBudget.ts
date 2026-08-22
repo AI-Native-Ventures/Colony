@@ -54,7 +54,11 @@ function concat(parts: Uint8Array[]): Uint8Array {
 export async function campaignBudgetFingerprint(
   input: CampaignBudgetFingerprintInput,
 ): Promise<string> {
-  if (!Number.isInteger(input.target) || input.target < 1 || input.target > 500) {
+  if (
+    !Number.isInteger(input.target) ||
+    input.target < 1 ||
+    input.target > 500
+  ) {
     throw new Error("Invalid Discovery lead target.");
   }
   const prefix = new TextEncoder().encode(
