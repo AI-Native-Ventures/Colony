@@ -63,6 +63,12 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     // the idle worker-reclamation window while the desktop launcher sets it.
     "BUZZ_ACP_IDLE_POOL_SLEEP",
     "BUZZ_ACP_NO_PRESENCE",
+    // Cost coverage is a Desktop-owned product invariant. Letting one saved
+    // global value disable the checkpoint for every managed agent makes the
+    // Spend screen silently stop at the day the value was added. Operators
+    // can still opt out when launching buzz-acp directly; managed Desktop
+    // agents must use the runtime-specific metering path selected by Colony.
+    "BUZZ_ACP_NO_METER",
     // Readiness handoff: desktop is the ONLY readiness source. A saved or
     // ambient env var must not be able to forge setup mode (NotReady) on a
     // Ready agent or suppress it (empty/stale payload) on a NotReady one.

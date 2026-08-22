@@ -15,7 +15,7 @@ use nostr::{Event, Timestamp};
 
 use crate::state::AppState;
 
-const CORE_BLOCK_ASSETS: [(&str, &str); 22] = [
+const CORE_BLOCK_ASSETS: [(&str, &str); 23] = [
     (
         "primitives/section.json",
         include_str!("core_blocks/primitives/section.json"),
@@ -103,6 +103,10 @@ const CORE_BLOCK_ASSETS: [(&str, &str); 22] = [
     (
         "composites/initiative.json",
         include_str!("core_blocks/composites/initiative.json"),
+    ),
+    (
+        "composites/handover.json",
+        include_str!("core_blocks/composites/handover.json"),
     ),
 ];
 
@@ -262,7 +266,7 @@ mod tests {
         "actions",
         "question",
     ];
-    const COMPOSITE_HANDLES: [&str; 11] = [
+    const COMPOSITE_HANDLES: [&str; 12] = [
         "lead-card",
         "approval",
         "agent-proposal",
@@ -274,6 +278,7 @@ mod tests {
         "company-blueprint",
         "interview",
         "initiative",
+        "handover",
     ];
 
     fn raw_assets() -> BTreeMap<String, Value> {
@@ -417,15 +422,145 @@ mod tests {
     }
 
     #[test]
-    fn loads_twenty_two_unique_valid_manifests_and_examples() {
+    fn handover_carries_both_ends_of_the_link_and_one_resolving_pickup() {
+        let assets = raw_assets();
+        let manifest = manifest_for_handle(&assets, "handover");
+
+        let required: BTreeSet<_> = manifest
+            .pointer("/input_schema/required")
+            .and_then(Value::as_array)
+            .expect("handover required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        for field in [
+            "source_channel",
+            "source_event_id",
+            "target_channel",
+            "assignee",
+            "links",
+        ] {
+            assert!(
+                required.contains(field),
+                "a handover without {field} cannot be linked back to its origin"
+            );
+        }
+
+        let links = manifest
+            .pointer("/input_schema/properties/links")
+            .expect("handover links schema");
+        assert_eq!(
+            links.get("minItems").and_then(Value::as_u64),
+            Some(1),
+            "a handover with no links hands over nothing"
+        );
+        assert_eq!(
+            links
+                .pointer("/contains/properties/role/const")
+                .and_then(Value::as_str),
+            Some("deliverable"),
+            "the finished work itself must be one of the links, not an optional extra"
+        );
+        let roles: BTreeSet<_> = links
+            .pointer("/items/properties/role/enum")
+            .and_then(Value::as_array)
+            .expect("link role enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            roles,
+            BTreeSet::from(["deliverable", "reference", "source"]),
+            "link roles must be typed, or the assignee cannot tell one URL from another"
+        );
+        let link_required: BTreeSet<_> = links
+            .pointer("/items/required")
+            .and_then(Value::as_array)
+            .expect("link required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(link_required.contains("role"));
+
+        let states: BTreeSet<_> = manifest
+            .pointer("/input_schema/properties/status/enum")
+            .and_then(Value::as_array)
+            .expect("handover status enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(states, BTreeSet::from(["declined", "open", "picked-up"]));
+
+        assert_eq!(
+            manifest
+                .pointer("/validation/requires_attention")
+                .and_then(Value::as_bool),
+            Some(true),
+            "an unclaimed handover must stay in the assignee's attention"
+        );
+
+        let actions = manifest["actions"].as_array().expect("handover actions");
+        let ids: BTreeSet<_> = actions
+            .iter()
+            .filter_map(|action| action.get("id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            ids,
+            BTreeSet::from(["handover.decline", "handover.pick-up"])
+        );
+
+        for action in actions {
+            assert_eq!(
+                action.pointer("/interaction/type").and_then(Value::as_str),
+                Some("signed"),
+                "handover actions must be signed by the person taking them"
+            );
+            assert_eq!(
+                action
+                    .pointer("/interaction/resolves_attention")
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                action.get("permissions").and_then(Value::as_array),
+                Some(&vec![]),
+                "picking up work must not require an escalated capability"
+            );
+        }
+
+        let pick_up = actions
+            .iter()
+            .find(|action| action.get("id").and_then(Value::as_str) == Some("handover.pick-up"))
+            .expect("pick-up declaration");
+        let pick_up_required: BTreeSet<_> = pick_up
+            .pointer("/input_schema/required")
+            .and_then(Value::as_array)
+            .expect("pick-up required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            pick_up_required.contains("target_event_id"),
+            "pick-up must carry the thread it opened, or the forward link is lost"
+        );
+
+        assert_eq!(
+            manifest["permissions"].as_array(),
+            Some(&vec![]),
+            "handover grants nothing"
+        );
+    }
+
+    #[test]
+    fn loads_twenty_three_unique_valid_manifests_and_examples() {
         let manifests = core_block_manifests().expect("Core manifests should validate");
-        assert_eq!(manifests.len(), 22);
+        assert_eq!(manifests.len(), 23);
 
         let handles: BTreeSet<_> = manifests
             .iter()
             .map(|manifest| manifest.handle.as_str())
             .collect();
-        assert_eq!(handles.len(), 22);
+        assert_eq!(handles.len(), 23);
 
         let expected: BTreeSet<_> = PRIMITIVE_HANDLES
             .into_iter()
@@ -716,8 +851,8 @@ mod tests {
             ensure_core_blocks_with(&db, &relay_keys, community)
                 .await
                 .expect("first seed"),
-            44,
-            "the first seed inserts twenty-two manifests and twenty-two heads"
+            46,
+            "the first seed inserts twenty-three manifests and twenty-three heads"
         );
         assert_eq!(
             ensure_core_blocks_with(&db, &relay_keys, community)
@@ -747,8 +882,8 @@ mod tests {
             })
             .await
             .expect("stored heads");
-        assert_eq!(manifests.len(), 22);
-        assert_eq!(heads.len(), 22);
+        assert_eq!(manifests.len(), 23);
+        assert_eq!(heads.len(), 23);
 
         let mut newer_manifest = core_block_manifests()
             .expect("bundled manifests")

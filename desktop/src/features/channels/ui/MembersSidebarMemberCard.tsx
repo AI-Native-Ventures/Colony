@@ -18,6 +18,9 @@ import {
   getManagedAgentPrimaryActionLabel,
   isManagedAgentActive,
 } from "@/features/agents/lib/managedAgentControlActions";
+import { useAgentRank } from "@/features/agents/employeeHeads";
+import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import {
@@ -144,6 +147,12 @@ export function MembersSidebarMemberCard({
   viewerIsOwner,
 }: MembersSidebarMemberCardProps) {
   const roleLabel = formatRoleLabel(member, memberIsBot);
+  // Rank comes from the employee heads, which are the authoritative record of
+  // who is employed here -- not from local bot classification, which only
+  // knows about agents this desktop can see. A member with no head (a human
+  // or personal agent) resolves to none and shows no badge.
+  const { activeCommunity } = useCommunities();
+  const rank = useAgentRank(activeCommunity?.id ?? "", member.pubkey);
   const disabled = isActionPending || isArchived;
   const canViewActivity =
     memberIsBot &&
@@ -205,26 +214,31 @@ export function MembersSidebarMemberCard({
             ) : null}
           </div>
         )}
-        {managedAgentRuntime || managedAgent ? (
-          <Badge
-            className="mt-1 normal-case tracking-normal"
-            data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
-            variant={
-              managedAgentRuntime
-                ? agentCommunityAvailability(managedAgentRuntime) === "Here"
-                  ? "default"
-                  : "secondary"
-                : managedAgent && isManagedAgentActive(managedAgent)
-                  ? "default"
-                  : "secondary"
-            }
-          >
-            {managedAgentRuntime
-              ? agentCommunityAvailability(managedAgentRuntime)
-              : managedAgent && isManagedAgentActive(managedAgent)
-                ? "Running"
-                : "Stopped"}
-          </Badge>
+        {managedAgentRuntime || managedAgent || rank ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {rank ? <AgentRankBadge rank={rank} /> : null}
+            {managedAgentRuntime || managedAgent ? (
+              <Badge
+                className="normal-case tracking-normal"
+                data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
+                variant={
+                  managedAgentRuntime
+                    ? agentCommunityAvailability(managedAgentRuntime) === "Here"
+                      ? "default"
+                      : "secondary"
+                    : managedAgent && isManagedAgentActive(managedAgent)
+                      ? "default"
+                      : "secondary"
+                }
+              >
+                {managedAgentRuntime
+                  ? agentCommunityAvailability(managedAgentRuntime)
+                  : managedAgent && isManagedAgentActive(managedAgent)
+                    ? "Running"
+                    : "Stopped"}
+              </Badge>
+            ) : null}
+          </div>
         ) : null}
         {managedAgent ? (
           <span

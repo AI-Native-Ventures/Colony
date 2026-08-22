@@ -1,0 +1,197 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "handover",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Handover",
+  "description": "Finished work passed from the thread that produced it to the person who takes it next.",
+  "origin": "core",
+  "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "handover_id",
+      "subject",
+      "summary",
+      "source_channel",
+      "source_event_id",
+      "target_channel",
+      "assignee",
+      "links",
+      "status"
+    ],
+    "properties": {
+      "handover_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "subject": { "type": "string", "minLength": 1, "maxLength": 160 },
+      "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+      "source_channel": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "source_event_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+      "target_channel": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "assignee": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "description": "Who the card names as taking this on. Attention routes on the p tag of the invoke, not on this string, so p tag the same person or the card lands in one queue under another name."
+      },
+      "links": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 10,
+        "contains": {
+          "type": "object",
+          "required": ["role"],
+          "properties": { "role": { "const": "deliverable" } }
+        },
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "label", "url"],
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": ["deliverable", "source", "reference"]
+            },
+            "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "url": { "type": "string", "format": "uri", "pattern": "^https?://" }
+          }
+        }
+      },
+      "status": {
+        "type": "string",
+        "enum": ["open", "picked-up", "declined"]
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "title": "Handover: {{subject}}",
+    "description": "{{summary}}",
+    "children": [
+      {
+        "type": "details",
+        "items": [
+          { "label": "Assignee", "value": "{{assignee}}" },
+          { "label": "Target channel", "value": "{{target_channel}}" },
+          { "label": "Source thread", "value": "{{source_event_id}}" }
+        ]
+      },
+      {
+        "type": "card-list",
+        "items_path": "/links",
+        "card": {
+          "type": "card",
+          "title": "{{label}}",
+          "description": "{{role}}: {{url}}",
+          "children": []
+        }
+      },
+      {
+        "type": "status",
+        "label": "Handover",
+        "state_path": "/status"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Pick up",
+            "interaction": {
+              "type": "signed",
+              "action_id": "handover.pick-up",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Decline",
+            "interaction": {
+              "type": "signed",
+              "action_id": "handover.decline",
+              "resolves_attention": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "handover.pick-up",
+      "label": "Pick up",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["handover_id", "target_event_id"],
+        "properties": {
+          "handover_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "target_event_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "handover.pick-up",
+        "resolves_attention": true
+      },
+      "permissions": []
+    },
+    {
+      "id": "handover.decline",
+      "label": "Decline",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["handover_id"],
+        "properties": {
+          "handover_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "reason": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "handover.decline",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "Handover: {{subject}}\n{{summary}}\nAssignee: {{assignee}}\nTarget channel: {{target_channel}}\nSource thread: {{source_event_id}}\nStatus: {{status}}",
+  "supported_clients": ["desktop"],
+  "primitive_versions": {
+    "card": 1,
+    "details": 1,
+    "card-list": 1,
+    "status": 1,
+    "actions": 1
+  },
+  "examples": [
+    {
+      "name": "Finished rebuild passed to sales",
+      "data": {
+        "handover_id": "rebuild-tennant-group",
+        "subject": "Tennant Group",
+        "summary": "Rebuild is finished and live. Original site is still up for comparison.",
+        "source_channel": "18d0183f-c525-48b0-9af2-a90d4143a1f9",
+        "source_event_id": "5555555555555555555555555555555555555555555555555555555555555555",
+        "target_channel": "70580e75-e0cd-4559-ab53-36d9a0b3470c",
+        "assignee": "Sarah",
+        "links": [
+          {
+            "role": "deliverable",
+            "label": "Live rebuild",
+            "url": "https://example.com/tennant-rebuild"
+          },
+          {
+            "role": "source",
+            "label": "Original site",
+            "url": "https://example.com"
+          }
+        ],
+        "status": "open"
+      }
+    }
+  ],
+  "validation": { "state": "tested", "requires_attention": true }
+}

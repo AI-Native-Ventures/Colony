@@ -1,10 +1,6 @@
 import * as React from "react";
 
-import {
-  setChannelSurfaceMode,
-  setWorkspaceExpanded,
-  useWorkspaceExpanded,
-} from "@/features/workspace/lib/channelSurfaceMode";
+import { setChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
   clearActiveTab,
@@ -35,7 +31,6 @@ export function ChannelWorkspace({
   channelId,
 }: ChannelWorkspaceProps): React.JSX.Element {
   const { tabs, activeTabId } = useWorkspace(channelId);
-  const isExpanded = useWorkspaceExpanded(channelId);
 
   const handleCreate = React.useCallback(
     (kind: string) => {
@@ -69,7 +64,6 @@ export function ChannelWorkspace({
         .finally(() => {
           closeTab(channelId, tabId);
           if (getWorkspace(channelId).tabs.length === 0) {
-            setWorkspaceExpanded(channelId, false);
             setChannelSurfaceMode(channelId, "timeline");
           }
         });
@@ -90,11 +84,12 @@ export function ChannelWorkspace({
     >
       <WorkspaceTabStrip
         activeTabId={activeTabId}
-        isExpanded={isExpanded}
+        onBackToConversation={() =>
+          setChannelSurfaceMode(channelId, "timeline")
+        }
         onClose={handleClose}
         onNewTab={handleNewTab}
         onSelect={(tabId) => setActiveTab(channelId, tabId)}
-        onToggleExpanded={() => setWorkspaceExpanded(channelId, !isExpanded)}
         tabs={tabs}
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">

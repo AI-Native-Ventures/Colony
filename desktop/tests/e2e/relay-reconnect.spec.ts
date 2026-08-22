@@ -174,6 +174,27 @@ test("failed initial relay dial retries automatically", async ({ page }) => {
   });
   await page.goto("/");
 
+  // The e2e bridge installs its seams from a lazily loaded chunk, so they are
+  // not guaranteed to exist the moment page.goto resolves. Measured locally:
+  // absent at the first read in 3 of 5 runs, landing 25ms to 55ms later. That
+  // is fatal rather than merely late here, because expect.poll does not retry a
+  // callback that throws, it rethrows on the first call (verified: 5 of 5, one
+  // call each). So a seam that is 30ms behind fails the test outright instead
+  // of being polled for, which is how this failed on CI: run 32129293431 shard
+  // 5 reported "Relay state seam is not installed" with no timeout message,
+  // then passed on retry. Reproduced locally 1 in 20 at BUZZ_E2E_CPU_THROTTLE=6.
+  // sidebar-relay-card.spec.ts already gates on this seam the same way.
+  await page.waitForFunction(
+    () =>
+      typeof (
+        window as Window & {
+          __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => string;
+        }
+      ).__BUZZ_E2E_GET_RELAY_CONNECTION_STATE__ === "function",
+    undefined,
+    { timeout: 10_000 },
+  );
+
   // App-shell preconnect owns a keep-alive request. The first native dial is
   // rejected before a socket ID exists; the session must still enter its
   // backoff loop and recover without a click, query, or reload.

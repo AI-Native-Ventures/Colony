@@ -19,6 +19,7 @@ import {
 import {
   agentProposalExecutionKey,
   pendingAcknowledgedAgentProposalActions,
+  processAgentProposalActionUntilTerminal,
   rememberAcknowledgedAgentProposalAction,
   isAuthoritativeAgentProposalReceipt,
   runAgentProposalActionOnce,
@@ -461,6 +462,62 @@ test("broker retains locally acknowledged actions until a broker can consume the
       (item) => item.event.id === event.id,
     ),
   );
+});
+
+test("broker retries a transiently missed action until its receipt is published", async () => {
+  const outcomes = ["retry", "complete"];
+  const delays = [];
+  let calls = 0;
+
+  const outcome = await processAgentProposalActionUntilTerminal({
+    isActive: () => true,
+    operation: async () => {
+      calls += 1;
+      return outcomes.shift();
+    },
+    wait: async (delayMs) => {
+      delays.push(delayMs);
+    },
+  });
+
+  assert.equal(outcome, "complete");
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [250]);
+});
+
+test("broker retries a transient processing error but stops for an ignored action", async () => {
+  let calls = 0;
+  const waits = [];
+  const recovered = await processAgentProposalActionUntilTerminal({
+    isActive: () => true,
+    operation: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("transient relay failure");
+      return "complete";
+    },
+    wait: async (delayMs) => {
+      waits.push(delayMs);
+    },
+  });
+
+  assert.equal(recovered, "complete");
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [250]);
+
+  let ignoredCalls = 0;
+  const ignored = await processAgentProposalActionUntilTerminal({
+    isActive: () => true,
+    operation: async () => {
+      ignoredCalls += 1;
+      return "ignored";
+    },
+    wait: async () => {
+      assert.fail("ignored actions must not retry");
+    },
+  });
+
+  assert.equal(ignored, "ignored");
+  assert.equal(ignoredCalls, 1);
 });
 
 test("only the owner processor's valid same-channel receipt is authoritative", () => {

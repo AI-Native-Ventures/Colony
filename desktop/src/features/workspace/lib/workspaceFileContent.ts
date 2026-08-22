@@ -17,9 +17,12 @@ type NativeWorkspaceFile = {
 export type LoadedWorkspaceFile = {
   name: string;
   mime: string;
-  isText: boolean;
+  presentation: WorkspaceFilePresentation;
   bytesBase64: string;
 };
+
+/** The renderer the file workspace should use for loaded bytes. */
+export type WorkspaceFilePresentation = "text" | "pdf" | "binary";
 
 type LoadDependencies = {
   fetchBytes: (url: string) => Promise<Uint8Array>;
@@ -32,9 +35,44 @@ const DEFAULT_DEPENDENCIES: LoadDependencies = {
     invoke<NativeWorkspaceFile>("read_workspace_file", { path }),
 };
 
-/** Whether a MIME type renders in the `file` kind's text view. */
-export function isTextMime(mime: string): boolean {
-  return mime.startsWith("text/") || mime === "application/json";
+const TEXT_EXTENSIONS = new Set([
+  ".csv",
+  ".json",
+  ".log",
+  ".markdown",
+  ".md",
+  ".txt",
+]);
+
+function extensionOf(name: string): string {
+  const index = name.lastIndexOf(".");
+  return index < 0 ? "" : name.slice(index).toLowerCase();
+}
+
+/** Choose a safe workspace renderer from a file's name and reported MIME. */
+export function resolveWorkspaceFilePresentation(
+  name: string,
+  mime: string,
+): WorkspaceFilePresentation {
+  const normalizedMime = mime.toLowerCase();
+  const extension = extensionOf(name);
+  if (normalizedMime === "application/pdf" || extension === ".pdf") {
+    return "pdf";
+  }
+  if (
+    normalizedMime === "text/html" ||
+    normalizedMime === "application/xhtml+xml"
+  ) {
+    return "binary";
+  }
+  if (
+    normalizedMime.startsWith("text/") ||
+    normalizedMime === "application/json" ||
+    TEXT_EXTENSIONS.has(extension)
+  ) {
+    return "text";
+  }
+  return "binary";
 }
 
 /** Base64 for bytes, chunked so a large file cannot blow the argument limit. */
@@ -63,7 +101,7 @@ export async function loadWorkspaceFile(
     return {
       name: file.name,
       mime: file.mime,
-      isText: file.is_text,
+      presentation: resolveWorkspaceFilePresentation(file.name, file.mime),
       bytesBase64: file.bytes_base64,
     };
   }
@@ -72,7 +110,7 @@ export async function loadWorkspaceFile(
   return {
     name: source.name,
     mime: source.mime,
-    isText: isTextMime(source.mime),
+    presentation: resolveWorkspaceFilePresentation(source.name, source.mime),
     bytesBase64: encodeBase64(bytes),
   };
 }

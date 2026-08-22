@@ -4,11 +4,36 @@ import {
 } from "@/features/communities/communityStorage";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 import type { Profile } from "@/shared/api/types";
+import {
+  createAdditionalCommunityOnboardingV2Draft,
+  createOnboardingV2Draft,
+  migrateOnboardingV2Draft,
+  type OnboardingV2Draft,
+} from "./onboardingV2";
 
 const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 
+/**
+ * A transaction parked in "finalizing" is mid-handoff. If it is still there
+ * after this long, the handoff died without settling (e.g. the relay never
+ * answered) and replaying the curtain on every launch would trap the user
+ * out of their own communities. Sweep it on load instead.
+ */
+const FINALIZING_STALE_AFTER_MS = 2 * 60 * 1000;
+
+export function finalizingTransactionIsStale(
+  transaction: Pick<CommunityOnboardingTransaction, "stage" | "updatedAt">,
+  now = Date.now(),
+): boolean {
+  if (transaction.stage !== "finalizing") return false;
+  const updatedAt = Date.parse(transaction.updatedAt);
+  if (Number.isNaN(updatedAt)) return true;
+  return now - updatedAt > FINALIZING_STALE_AFTER_MS;
+}
+
 export type CommunityOnboardingSource =
   | "first-community"
+  | "create-community"
   | "add-community"
   | "membership-recovery"
   | "deep-link-connect"
@@ -55,6 +80,8 @@ export type CommunityOnboardingTransaction = {
   // Deep links are persisted before machine onboarding completes. Set when
   // the user dismisses the acknowledgment so it stays dismissed on relaunch.
   acknowledged?: boolean;
+  /** Durable company-creation journey. Never created for join flows. */
+  onboardingV2?: OnboardingV2Draft;
 };
 
 export type CommunityOnboardingTransactionPatch = Partial<
@@ -68,6 +95,7 @@ export type CommunityOnboardingTransactionPatch = Partial<
     | "communityName"
     | "error"
     | "acknowledged"
+    | "onboardingV2"
   >
 >;
 
@@ -113,6 +141,9 @@ function isTransaction(
       "finalizing",
       "entering",
     ].includes(transaction.stage ?? "")
+    // onboardingV2 is deliberately not validated here: persisted drafts from
+    // older builds must survive the load path so migrateOnboardingV2Draft can
+    // carry them forward.
   );
 }
 
@@ -123,7 +154,31 @@ export function loadCommunityOnboardingTransaction(
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isTransaction(parsed) ? parsed : null;
+    if (!isTransaction(parsed)) return null;
+    if (finalizingTransactionIsStale(parsed)) {
+      // The community itself was already added and activated; dropping the
+      // transaction lands the user inside the app instead of replaying a
+      // dead handoff forever.
+      storage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    if (parsed.onboardingV2 !== undefined) {
+      // Drafts predate the stage-machine rework sometimes (app upgraded
+      // mid-onboarding). Migrate what was captured instead of replaying old
+      // steps; an unusable draft restarts its journey rather than falling
+      // back to the join flow.
+      const migrated = migrateOnboardingV2Draft(parsed.onboardingV2);
+      const fallbackDraft =
+        parsed.source === "first-community"
+          ? createOnboardingV2Draft()
+          : createAdditionalCommunityOnboardingV2Draft();
+      const repaired = { ...parsed, onboardingV2: migrated ?? fallbackDraft };
+      if (repaired.onboardingV2 !== parsed.onboardingV2) {
+        saveCommunityOnboardingTransaction(repaired, storage);
+      }
+      return repaired;
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -187,6 +242,12 @@ export function startCommunityOnboarding(
     policyReceipt: input.policyReceipt,
     createdAt: timestamp,
     updatedAt: timestamp,
+    ...(input.source === "first-community" && {
+      onboardingV2: createOnboardingV2Draft(),
+    }),
+    ...(input.source === "create-community" && {
+      onboardingV2: createAdditionalCommunityOnboardingV2Draft(),
+    }),
   };
   saveCommunityOnboardingTransaction(transaction, storage);
   return transaction;
@@ -212,6 +273,15 @@ export function updateCurrentCommunityOnboardingTransaction(
 ): CommunityOnboardingTransaction | null {
   if (!current || (expectedId && current.id !== expectedId)) return current;
   return updateCommunityOnboardingTransaction(current, patch, storage, now);
+}
+
+export function shouldForceFirstCommunityJourney(
+  transaction: CommunityOnboardingTransaction,
+): boolean {
+  return (
+    transaction.source === "first-community" &&
+    transaction.onboardingV2 !== undefined
+  );
 }
 
 export function markCommunityOnboardingComplete(

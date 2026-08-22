@@ -83,6 +83,15 @@ type MockRelayAgentSeed = {
   status?: "online" | "away" | "offline";
 };
 
+/** Employee heads (kind 30190) the mock relay serves: who is employed at what rank. */
+export type MockEmployeeHeadSeed = {
+  /** The employee pubkey; also the head's `d` tag and author. */
+  pubkey: string;
+  role?: string;
+  name?: string;
+  rank: "worker" | "leader" | "executive";
+};
+
 type MockHuddleSeed = {
   parentChannelId: string;
   ephemeralChannelId: string;
@@ -330,6 +339,8 @@ type MockBridgeOptions = {
   personaSharePublicationStatuses?: Array<"published" | "queued">;
   teams?: MockTeamSeed[];
   relayAgents?: MockRelayAgentSeed[];
+  /** Employee heads (kind 30190) served by the mock relay: who is employed at what rank. */
+  employeeHeads?: MockEmployeeHeadSeed[];
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];
@@ -523,10 +534,17 @@ type MockBridgeOptions = {
    * Pass a config with a provider to test Inherit-from-global behavior.
    */
   globalAgentConfig?: {
+    credential_mode?: "byok" | "colony_credits";
     env_vars: Record<string, string>;
     provider: string | null;
     model: string | null;
     preferred_runtime?: string | null;
+  };
+  /** Volatile Colony Credits account returned by the authenticated mock command. */
+  colonyCreditsAccount?: {
+    balance_nanousd: string;
+    currency: "USD";
+    status: "active" | "depleted";
   };
   /** Reject the explicit Colony Credits reconnect action with this message. */
   colonyCreditsReconnectError?: string;

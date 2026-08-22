@@ -116,6 +116,9 @@ export PGSCHEMA_PLAN_DB=buzz
 export PGSCHEMA_PLAN_USER=buzz
 export PGSCHEMA_PLAN_PASSWORD=buzz_dev
 
+# The stub downloads pgschema on first use; retry that fetch on its own so a
+# transient GitHub Releases error is not reported as a schema failure.
+./scripts/ci-prefetch-hermit-pkg.sh pgschema
 ./bin/pgschema apply --file schema/schema.sql --auto-approve
 # pgschema does not manage extensions; see scripts/create-required-extensions.sql.
 docker exec -i -e PGPASSWORD="${PGPASSWORD}" buzz-postgres \

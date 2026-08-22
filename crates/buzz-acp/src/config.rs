@@ -341,9 +341,9 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_NO_MENTION_FILTER")]
     pub no_mention_filter: bool,
 
-    /// Disable wire metering. Agents then hold real provider credentials and
-    /// their spend is invisible to the cost ledger, so this is an explicit
-    /// opt-out rather than a side effect of configuration.
+    /// Disable wire metering. Agents then hold real provider credentials.
+    /// Guarded cumulative Codex ACP counters still reach the ledger as imputed
+    /// subscription usage; runtimes without those counters remain invisible.
     #[arg(long, env = "BUZZ_ACP_NO_METER")]
     pub no_meter: bool,
 
@@ -659,7 +659,8 @@ pub struct Config {
     pub session_title: Option<String>,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
-    /// Wire metering is off; agents keep their own provider credentials.
+    /// Wire metering is off; agents keep their own provider credentials. Codex
+    /// can still publish guarded cumulative ACP counters as imputed usage.
     pub no_meter: bool,
     /// True only for a desktop Colony Credits launch. This boundary prevents
     /// an ambient no-meter flag from bypassing the local meter.
