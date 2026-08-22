@@ -2,18 +2,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
-import { getRelayHttpUrl } from "@/shared/api/tauri";
-import {
-  createNcryptsecBackup,
-  getIdentity,
-  importIdentity,
-} from "@/shared/api/tauriIdentity";
 import {
   getStorageItem,
   removeStorageItem,
   setStorageItem,
 } from "@/shared/lib/safeStorage";
-import { createAuthService, type AuthFailure } from "../../authService";
+import type { AuthFailure } from "../../authService";
+import { createWiredAuthService } from "../../lib/wiredAuthService";
 import type { OnboardingServices, ScrapeResult } from "../../contracts";
 import {
   clearAnswers,
@@ -77,42 +72,6 @@ function readReducedMotion(): boolean {
  */
 const FAKE_INSTALL_MS = 3400;
 const FAKE_INSTALL_REDUCED_MS = 900;
-
-/** Bound account requests so an unreachable server fails in seconds instead
- *  of hanging on the OS-level connect timeout (mirrors invites.ts). */
-const AUTH_REQUEST_TIMEOUT_MS = 15_000;
-
-/** POST JSON to the active community's server. Network failures throw and
- *  become `unreachable` inside authService; non-2xx responses are returned as
- *  data, never thrown. */
-async function postJson(path: string, body: unknown) {
-  const base = await getRelayHttpUrl();
-  const response = await fetch(`${base.replace(/\/+$/, "")}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
-  });
-  const parsed: unknown = await response.json().catch(() => ({}));
-  return { status: response.status, body: parsed };
-}
-
-/**
- * The real auth service wired to the identity this computer already holds:
- * the app generated and persisted it on first launch, so there is something
- * to back up before onboarding runs. Nothing runs until the account screen
- * is submitted.
- */
-function createWiredAuthService() {
-  return createAuthService({
-    post: postJson,
-    createBackup: createNcryptsecBackup,
-    importIdentity: async (blob, password) => {
-      await importIdentity(blob, password);
-    },
-    getPubkey: async () => (await getIdentity()).pubkey,
-  });
-}
 
 const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
 
