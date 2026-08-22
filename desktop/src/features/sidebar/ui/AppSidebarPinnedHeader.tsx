@@ -223,11 +223,11 @@ export function AppSidebarPrimaryMenu({
             data-testid="open-people-view"
             isActive={selectedView === "people"}
             onClick={onSelectPeople}
-            tooltip="People"
+            tooltip="People and roles"
             type="button"
           >
             <Users className="h-4 w-4" />
-            <SidebarMenuLabel>People</SidebarMenuLabel>
+            <SidebarMenuLabel>People and roles</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
