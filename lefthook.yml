@@ -48,13 +48,22 @@ commit-msg:
 
 pre-push:
   parallel: true
+  # Rust work is gated in CI, not here. `rust-tests` (`just test-unit`) and
+  # `desktop-tauri-checks` (Tauri clippy + tests) both ran the SAME commands
+  # the required "Unit Tests" and "Desktop Core" jobs run, so they gated
+  # nothing a merge could skip -- they only moved the failure earlier. The
+  # cost was not earlier: on a three-crate change in a fresh worktree,
+  # `rust-tests` took 3099 seconds and `desktop-tauri-checks` 1275 on a
+  # developer's machine, because every new worktree pays a cold Cargo compile
+  # that CI's cached runners do not. Agents create worktrees constantly, so
+  # this was an hour of a shared laptop per Rust push, for a check GitHub was
+  # about to run anyway.
+  #
+  # The desktop steps below stay: they finish in seconds to a minute and catch
+  # the breakage that actually reaches a push.
   commands:
     branch-skew:
       run: ./scripts/check-branch-skew.sh
-    rust-tests:
-      files: ./scripts/list-pre-push-files.sh
-      glob: ["crates/**", "migrations/**", "schema/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "scripts/run-tests.sh", "justfile"]
-      run: just test-unit
     desktop-check:
       files: ./scripts/list-pre-push-files.sh
       glob: ["desktop/**", "pnpm-lock.yaml"]
@@ -79,13 +88,6 @@ pre-push:
       files: ./scripts/list-pre-push-files.sh
       glob: ["desktop/src-tauri/**"]
       run: just desktop-file-sizes
-    desktop-tauri-checks:
-      # Keep local lint parity with Desktop Core CI for every path that can
-      # affect the Tauri crate or its path dependencies. Run clippy and tests
-      # serially so parallel pre-push hooks do not contend for Cargo's lock.
-      files: ./scripts/list-pre-push-files.sh
-      glob: ["desktop/src-tauri/**", "crates/**", "migrations/**", "schema/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "scripts/run-tests.sh", "justfile"]
-      run: just desktop-tauri-clippy && just desktop-tauri-test
     mobile-test:
       files: ./scripts/list-pre-push-files.sh
       glob: ["mobile/**"]

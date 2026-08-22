@@ -178,10 +178,14 @@ Run `just test` for integration tests if you touched `buzz-relay`,
 formatting via `stage_fixed`. Pre-commit runs fix variants in parallel (Rust
 fmt, Tauri Rust fmt, desktop biome fix, web biome fix, mobile dart format).
 Auto-fixable issues are fixed and re-staged; unfixable lint issues block the
-commit. **Pre-push hooks** run clippy (workspace + Tauri), desktop TypeScript
-typechecking (`tsc --noEmit`), and fast unit tests in parallel (Rust, desktop
-JS, Tauri Rust, mobile Flutter) — no overlap with pre-commit. Builds are
-CI-only. Run `just fix-all` to auto-fix all formatting in one shot. Run
+commit. **Pre-push hooks** run the desktop and mobile checks in parallel:
+branch-skew, biome lint, TypeScript typechecking (`tsc --noEmit`), desktop unit
+tests, the file-size ratchet, and Flutter tests — no overlap with pre-commit.
+**Rust is NOT gated pre-push.** `just test-unit` and the Tauri clippy/test pair
+run the same commands as the required "Unit Tests" and "Desktop Core" CI jobs,
+so locally they gated nothing a merge could skip while costing roughly an hour
+of cold Cargo compilation in a fresh worktree. Push Rust changes and let CI run
+the matrix. Builds are CI-only. Run `just fix-all` to auto-fix all formatting in one shot. Run
 `just ci` for the full local gate. Run `just hooks` to
 re-install hooks after env changes. Before agents run Git or hooks, activate the
 repo's Hermit environment (`. ./bin/activate-hermit`); do not rewrite hook
