@@ -157,3 +157,41 @@ test("ordering is deterministic", () => {
   assert.deepEqual(flatten(first.roots[0]), flatten(second.roots[0]));
   assert.deepEqual(flatten(first.roots[0]), [EXEC, LEAD, WORKER2, WORKER]);
 });
+
+test("counts report direct span and everyone underneath", () => {
+  const tree = buildOrgTree([
+    member({ pubkey: EXEC, rank: "executive" }),
+    member({ pubkey: LEAD, rank: "leader", manager: EXEC }),
+    member({ pubkey: WORKER, rank: "worker", manager: LEAD }),
+    member({ pubkey: WORKER2, rank: "worker", manager: LEAD }),
+  ]);
+
+  const [exec] = tree.roots;
+  // The executive manages one lead directly but carries three underneath:
+  // that difference is the whole point of tracking both.
+  assert.equal(exec.counts.directReports, 1);
+  assert.equal(exec.counts.totalReports, 3);
+
+  const [lead] = exec.reports;
+  assert.equal(lead.counts.directReports, 2);
+  assert.equal(lead.counts.totalReports, 2);
+
+  for (const worker of lead.reports) {
+    assert.equal(worker.counts.directReports, 0);
+    assert.equal(worker.counts.totalReports, 0);
+  }
+});
+
+test("counts hold for members in the unassigned tray", () => {
+  const tree = buildOrgTree([
+    member({ pubkey: LEAD, rank: "leader" }),
+    member({ pubkey: WORKER, rank: "worker", manager: LEAD }),
+  ]);
+
+  // A lead with no manager is unplaced, but its own reports still resolve
+  // beneath it, so its span of control must still be visible.
+  assert.equal(tree.roots.length, 0);
+  assert.equal(tree.unassigned.length, 1);
+  assert.equal(tree.unassigned[0].counts.directReports, 1);
+  assert.equal(tree.unassigned[0].counts.totalReports, 1);
+});
