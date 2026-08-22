@@ -140,6 +140,28 @@ spinner, and it deliberately does **not** credit anything: a client-triggered
 route must never move money. If the webhook has not arrived yet this returns
 `{ "paid": false }` and the screen keeps waiting.
 
+### `POST /api/payments/balance`
+
+```jsonc
+// request
+{}
+// 200
+{ "usdCents": 500 }
+```
+
+The pubkey comes from the NIP-98 signature, so the body is empty.
+
+**This route exists so the conversion stays on one side of the wire.** The
+ledger stores nanoUSD and `GET /api/gateway/account` returns nanoUSD as a
+string; consuming that from the client would drag a nanoUSD-to-cents conversion
+into TypeScript and break the rule that the multiplication lives in exactly one
+place. This route converts and answers in cents.
+
+It is also screen 9's recovery path. If a user pays and the confirmation is
+slow, or the callback never arrives, the balance still answers with what the
+workspace actually holds, so nobody is stranded staring at a spinner over money
+they have already spent.
+
 ### `POST /api/payments/webhook`
 
 Unauthenticated by design, verified by signature. Returns `200` for every
