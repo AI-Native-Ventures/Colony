@@ -24,3 +24,4 @@ hex          = { workspace = true }
 rand         = { workspace = true }
 uuid         = { workspace = true }
 url          = { workspace = true }
+argon2       = { workspace = true }

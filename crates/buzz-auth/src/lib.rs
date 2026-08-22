@@ -17,6 +17,8 @@
 
 /// Channel access checking trait and helpers.
 pub mod access;
+/// Server-side verification of client-derived auth keys.
+pub mod account_verifier;
 /// Authentication error types.
 pub mod error;
 /// NIP-42 challenge–response authentication.
