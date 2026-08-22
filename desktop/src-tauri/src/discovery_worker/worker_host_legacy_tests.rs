@@ -43,11 +43,14 @@ async fn legacy_drain_claims_released_protocols_with_only_stored_keys() {
             .iter()
             .map(|claim| claim.protocol_version)
             .collect::<Vec<_>>(),
-        vec![buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION, 1]
+        vec![
+            buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            1
+        ]
     );
-    assert!(claims.iter().all(|claim| {
-        claim.available_providers == vec![DiscoveryProvider::Outscraper]
-    }));
+    assert!(claims
+        .iter()
+        .all(|claim| { claim.available_providers == vec![DiscoveryProvider::Outscraper] }));
     outscraper_server.abort();
     source_server.abort();
 }

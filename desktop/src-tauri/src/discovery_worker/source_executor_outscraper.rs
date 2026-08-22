@@ -102,9 +102,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                         if failure == DiscoveryRunSourceFailureClass::OutcomeUnknown {
                             self.outbox.mark_outcome_unknown(call.call_id)?;
                         }
-                        return self
-                            .finish_source_failure(provider, None, 1, failure)
-                            .await;
+                        return self.finish_source_failure(provider, None, 1, failure).await;
                     }
                 };
                 let (request_id, observations) = match response {
@@ -134,9 +132,7 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
                         if failure == DiscoveryRunSourceFailureClass::OutcomeUnknown {
                             self.outbox.mark_outcome_unknown(intent.call_id)?;
                         }
-                        return self
-                            .finish_source_failure(provider, None, 1, failure)
-                            .await;
+                        return self.finish_source_failure(provider, None, 1, failure).await;
                     }
                 };
                 let (request_id, observations) = match response {

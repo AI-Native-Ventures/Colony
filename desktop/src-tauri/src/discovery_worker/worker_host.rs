@@ -4,10 +4,7 @@ use std::{
 };
 
 #[cfg(test)]
-use std::{
-    future::Future,
-    pin::Pin,
-};
+use std::{future::Future, pin::Pin};
 
 #[cfg(test)]
 use buzz_core_pkg::discovery_worker::{

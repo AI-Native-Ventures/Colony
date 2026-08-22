@@ -13,10 +13,7 @@ impl GatewayAccount {
         let expected = total
             .saturating_sub(reserved)
             .saturating_sub(gateway_reserved);
-        if reserved < 0 || gateway_reserved < 0
-            || available != expected
-            || balance != available
-        {
+        if reserved < 0 || gateway_reserved < 0 || available != expected || balance != available {
             return Err("gateway account balance breakdown is inconsistent".to_string());
         }
         let computed = if balance > 0 {
