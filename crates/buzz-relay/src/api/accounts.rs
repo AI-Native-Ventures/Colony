@@ -133,12 +133,14 @@ pub(crate) async fn tenant_from_host(
 /// bounds bulk harvesting. Signin does not make the same disclosure.
 pub async fn signup(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     headers: HeaderMap,
     Json(request): Json<SignupRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     if let Err(reason) = validate_signup(&request) {
         return Err(api_error(StatusCode::BAD_REQUEST, reason));
     }
+    enforce_limits(&headers, &extensions, "signup", &request.email)?;
     let tenant = tenant_from_host(&state, &headers).await?;
 
     let auth_hash = hash_auth_key(&request.auth_key)
@@ -226,12 +228,14 @@ fn locked_error(until: chrono::DateTime<chrono::Utc>) -> (StatusCode, Json<Value
 /// credential stuffing a free oracle.
 pub async fn signin(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     headers: HeaderMap,
     Json(request): Json<SigninRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     if let Err(reason) = validate_signin(&request) {
         return Err(api_error(StatusCode::BAD_REQUEST, reason));
     }
+    enforce_limits(&headers, &extensions, "signin", &request.email)?;
     let tenant = tenant_from_host(&state, &headers).await?;
     let email = normalise_email(&request.email);
 
@@ -311,12 +315,14 @@ pub(crate) fn validate_recover(request: &RecoverRequest) -> Result<(), &'static 
 /// enumeration oracle either.
 pub async fn recover(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     headers: HeaderMap,
     Json(request): Json<RecoverRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     if let Err(reason) = validate_recover(&request) {
         return Err(api_error(StatusCode::BAD_REQUEST, reason));
     }
+    enforce_limits(&headers, &extensions, "recover", &request.email)?;
     let tenant = tenant_from_host(&state, &headers).await?;
     let email = normalise_email(&request.email);
 
@@ -428,12 +434,14 @@ pub(crate) fn validate_reset(request: &ResetPasswordRequest) -> Result<(), &'sta
 /// `invalid_reset_token` with nothing to distinguish them.
 pub async fn reset_password(
     State(state): State<Arc<AppState>>,
+    extensions: axum::http::Extensions,
     headers: HeaderMap,
     Json(request): Json<ResetPasswordRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     if let Err(reason) = validate_reset(&request) {
         return Err(api_error(StatusCode::BAD_REQUEST, reason));
     }
+    enforce_limits(&headers, &extensions, "reset-password", &request.email)?;
     let tenant = tenant_from_host(&state, &headers).await?;
 
     let auth_hash = hash_auth_key(&request.auth_key)
@@ -461,6 +469,161 @@ pub async fn reset_password(
     }
 
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Per-route limits, all fixed-window over one hour.
+///
+/// The fixed-window algorithm allows up to 2x burst at boundaries. That is
+/// acceptable here: the account lockout in `signin` is the real defence
+/// against credential stuffing, and these limits exist to bound bulk probing.
+pub(crate) struct RouteLimits {
+    /// Attempts allowed per client address per window.
+    pub per_ip: u64,
+    /// Attempts allowed per email address per window. `None` for routes where
+    /// the address is not yet bound to anything (`signup`).
+    pub per_email: Option<u64>,
+}
+
+/// Limits from the spec's rate-limit table. Unknown routes are unlimited,
+/// which is safe because only these four call sites exist.
+pub(crate) fn limits_for(route: &str) -> Option<RouteLimits> {
+    Some(match route {
+        "signup" => RouteLimits {
+            per_ip: 5,
+            per_email: None,
+        },
+        "signin" => RouteLimits {
+            per_ip: 30,
+            per_email: Some(10),
+        },
+        "recover" => RouteLimits {
+            per_ip: 20,
+            per_email: Some(5),
+        },
+        "reset-password" => RouteLimits {
+            per_ip: 10,
+            per_email: Some(5),
+        },
+        _ => return None,
+    })
+}
+
+/// Rate-limit key for an address, hashed so the limiter keyspace never holds
+/// a plaintext list of every Colony user's email address.
+pub(crate) fn email_rate_key(route: &str, email: &str) -> String {
+    let digest = sha2::Sha256::digest(normalise_email(email).as_bytes());
+    format!("acct:{route}:{}", hex::encode(digest))
+}
+
+/// Window length shared by every account route.
+pub(crate) const RATE_WINDOW_SECS: u64 = 3600;
+/// Upper bound on tracked keys. Legitimate traffic stays far below this; the
+/// cap exists so a flood of distinct addresses turns into bounded memory
+/// rather than unbounded growth.
+const RATE_CACHE_CAPACITY: u64 = 100_000;
+
+/// One fixed-window counter. `started_at` anchors the window so a rejected
+/// caller can be told when it resets.
+struct WindowCounter {
+    count: std::sync::atomic::AtomicU32,
+    started_at: std::time::Instant,
+}
+
+impl WindowCounter {
+    fn new() -> Self {
+        Self {
+            count: std::sync::atomic::AtomicU32::new(0),
+            started_at: std::time::Instant::now(),
+        }
+    }
+}
+
+type RateCache = moka::sync::Cache<String, Arc<WindowCounter>>;
+
+fn rate_cache() -> &'static RateCache {
+    static CACHE: std::sync::OnceLock<RateCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(RATE_CACHE_CAPACITY)
+            .time_to_live(std::time::Duration::from_secs(RATE_WINDOW_SECS))
+            .build()
+    })
+}
+
+/// Count one attempt against a fixed window, returning seconds until the
+/// window resets once the allowance is spent.
+fn charge_window(cache: &RateCache, key: String, limit: u64) -> Option<u64> {
+    let entry = cache.get_with(key, || Arc::new(WindowCounter::new()));
+    let seen = entry
+        .count
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if u64::from(seen) < limit {
+        None
+    } else {
+        Some(RATE_WINDOW_SECS.saturating_sub(entry.started_at.elapsed().as_secs()))
+    }
+}
+
+/// Resolve the caller's address for rate limiting.
+///
+/// Behind Fly's proxy the socket peer is the proxy, so `Fly-Client-IP` (which
+/// the proxy sets itself, overwriting any client-supplied value) carries the
+/// real source. A directly exposed relay would see a spoofable header here;
+/// that is why the value is used only for rate limiting, never authz.
+fn client_ip(headers: &HeaderMap, extensions: &axum::http::Extensions) -> std::net::IpAddr {
+    headers
+        .get("fly-client-ip")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<std::net::IpAddr>().ok())
+        .or_else(|| {
+            extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0.ip())
+        })
+        // A request whose source is unknown must not bypass the per-IP
+        // limit; it falls into one shared bucket instead of an exemption.
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]))
+}
+
+fn rate_limited_error(retry_after_secs: u64) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({
+            "error": "rate_limited",
+            "retryAfterSecs": retry_after_secs,
+        })),
+    )
+}
+
+/// Apply the route's fixed-window limits. Every attempt charges both
+/// counters, including requests that would fail later checks anyway, so a
+/// caller cannot probe for free.
+///
+/// Deliberately process-local (the mechanism `invites.rs` uses for claims):
+/// the Redis-backed admission limiter can only key on community and pubkey,
+/// neither of which exists for an unauthenticated caller here.
+pub(crate) fn enforce_limits(
+    headers: &HeaderMap,
+    extensions: &axum::http::Extensions,
+    route: &str,
+    email: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let Some(limits) = limits_for(route) else {
+        return Ok(());
+    };
+
+    let ip_key = format!("acct:{route}:ip:{}", client_ip(headers, extensions));
+    if let Some(retry) = charge_window(rate_cache(), ip_key, limits.per_ip) {
+        return Err(rate_limited_error(retry));
+    }
+
+    if let Some(per_email) = limits.per_email {
+        if let Some(retry) = charge_window(rate_cache(), email_rate_key(route, email), per_email) {
+            return Err(rate_limited_error(retry));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -629,5 +792,43 @@ mod tests {
     #[test]
     fn reset_validation_accepts_a_well_formed_body() {
         assert!(validate_reset(&valid_reset()).is_ok());
+    }
+
+    #[test]
+    fn rate_limit_keys_hash_the_email() {
+        // The rate-limit keyspace must not become a plaintext list of every
+        // user's address. Anyone with cache access would otherwise have the
+        // mailing list.
+        let key = email_rate_key("signin", "founder@example.com");
+        assert!(!key.contains("founder"));
+        assert!(!key.contains('@'));
+        assert!(key.starts_with("acct:signin:"));
+    }
+
+    #[test]
+    fn rate_limit_keys_normalise_before_hashing() {
+        assert_eq!(
+            email_rate_key("signin", " Founder@Example.COM "),
+            email_rate_key("signin", "founder@example.com")
+        );
+    }
+
+    #[test]
+    fn every_route_has_a_configured_limit() {
+        for route in ["signup", "signin", "recover", "reset-password"] {
+            let limits = limits_for(route).expect("every route needs limits");
+            assert!(limits.per_ip > 0, "{route} has no IP limit");
+        }
+    }
+
+    #[test]
+    fn a_spent_window_reports_retry_and_blocks() {
+        let cache = moka::sync::Cache::builder().build();
+        for _ in 0..3 {
+            assert!(charge_window(&cache, "acct:signin:test".into(), 3).is_none());
+        }
+        let retry = charge_window(&cache, "acct:signin:test".into(), 3)
+            .expect("the fourth attempt must be blocked");
+        assert!(retry > 0 && retry <= RATE_WINDOW_SECS, "got {retry}");
     }
 }
