@@ -292,7 +292,7 @@ enum Cmd {
     /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
-    /// Plan, render, and approve social content (kinds 30195-30197, 40025)
+    /// Plan, render, and approve social content (kinds 30195-30198, 40025)
     #[command(subcommand)]
     Content(ContentCmd),
 }
@@ -362,6 +362,28 @@ pub enum ContentCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Create or replace a brand kit head (kind 30198)
+    ///
+    /// The kit is the source of truth every content gate measures against.
+    /// The relay validates the structure (shapes, hex colours, hashes, enum
+    /// arms, caps) and does not interpret it, so this command stores what a
+    /// scan produced or a human edited; it never derives anything itself.
+    KitSet {
+        /// Kit id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the kit JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one brand kit head
+    KitGet {
+        /// Kit id
+        #[arg(long)]
+        id: String,
+    },
+    /// List brand kits, newest head per id
+    KitList {},
     /// Approve a post or send it back (kind 40025)
     ///
     /// Built from the post as it currently stands on the relay: the decision
@@ -4013,6 +4035,9 @@ mod tests {
                 "campaign-set",
                 "decide",
                 "decisions",
+                "kit-get",
+                "kit-list",
+                "kit-set",
                 "post-get",
                 "post-list",
                 "post-set",
