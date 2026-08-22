@@ -61,6 +61,11 @@ impl DiscoveryExecutor for DeterministicFakeDiscoveryExecutor {
 ///
 /// This function is a no-op unless the fake executor is explicitly enabled.
 pub fn spawn_workers(state: Arc<AppState>, shutdown: CancellationToken) {
+    let reaper_db = state.db.clone();
+    let reaper_shutdown = shutdown.child_token();
+    tokio::spawn(async move {
+        run_paid_reservation_reaper(reaper_db, reaper_shutdown).await;
+    });
     if !state.config.discovery.fake_executor_enabled {
         return;
     }
@@ -87,6 +92,25 @@ pub fn spawn_workers(state: Arc<AppState>, shutdown: CancellationToken) {
         steps = state.config.discovery.fake_total_steps,
         "deterministic Discovery fake executor started"
     );
+}
+
+async fn run_paid_reservation_reaper(db: Db, shutdown: CancellationToken) {
+    let mut interval = tokio::time::interval(StdDuration::from_secs(30));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            _ = interval.tick() => match db.reap_unauthorized_paid_discovery_runs().await {
+                Ok(count) if count > 0 => {
+                    info!(count, "released unauthorized Discovery reservations");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    error!(%error, "Discovery reservation reaper failed");
+                }
+            }
+        }
+    }
 }
 
 async fn run_worker(

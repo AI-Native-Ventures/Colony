@@ -604,6 +604,7 @@ type E2eConfig = {
       balance_nanousd: string;
       total_balance_nanousd?: string;
       discovery_reserved_nanousd?: string;
+      gateway_reserved_nanousd?: string;
       available_balance_nanousd?: string;
       currency: "USD";
       status: "active" | "depleted";
@@ -8635,6 +8636,7 @@ let mockColonyCreditsAccount: {
   balance_nanousd: string;
   total_balance_nanousd?: string;
   discovery_reserved_nanousd?: string;
+  gateway_reserved_nanousd?: string;
   available_balance_nanousd?: string;
   currency: "USD";
   status: "active" | "depleted";
@@ -8642,6 +8644,7 @@ let mockColonyCreditsAccount: {
   balance_nanousd: "0",
   total_balance_nanousd: "0",
   discovery_reserved_nanousd: "0",
+  gateway_reserved_nanousd: "0",
   available_balance_nanousd: "0",
   currency: "USD" as const,
   status: "depleted" as const,
@@ -11207,6 +11210,7 @@ export function maybeInstallE2eTauriMocks() {
         balance_nanousd: "0",
         total_balance_nanousd: "0",
         discovery_reserved_nanousd: "0",
+        gateway_reserved_nanousd: "0",
         available_balance_nanousd: "0",
         currency: "USD",
         status: "depleted",

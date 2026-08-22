@@ -227,7 +227,6 @@ impl DiscoveryOutbox {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn submitted_recovery_due(
         &self,
         call_id: Uuid,
@@ -252,7 +251,6 @@ impl DiscoveryOutbox {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn defer_submitted_recovery(&self, call_id: Uuid, now: u64) -> Result<(), String> {
         self.update(|state| {
             let call = state

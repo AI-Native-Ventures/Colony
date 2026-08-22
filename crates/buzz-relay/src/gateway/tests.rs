@@ -679,19 +679,96 @@ fn admission_restart_rejects_more_than_full_width_capacity() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn durable_gateway_reservations_serialize_account_admission() {
+    let state = crate::state::tests::test_state_with_redis("redis://127.0.0.1:1").await;
+    let pool = state.db.pool().clone();
+    seed(&pool).await;
+    sqlx::query("UPDATE accounts SET balance=75000000 WHERE pubkey=$1")
+        .bind(TEST_PUBKEY.as_slice())
+        .execute(&pool)
+        .await
+        .expect("limit account for concurrent reservations");
+
+    let first_pool = pool.clone();
+    let first = tokio::spawn(async move {
+        buzz_db::credits::create_gateway_settlement_intent(
+            &first_pool,
+            &TEST_PUBKEY,
+            "gateway:concurrent-first",
+            "deepseek-v4-flash",
+            50_000_000,
+            1,
+        )
+        .await
+        .expect("first concurrent reservation")
+    });
+    let second_pool = pool.clone();
+    let second = tokio::spawn(async move {
+        buzz_db::credits::create_gateway_settlement_intent(
+            &second_pool,
+            &TEST_PUBKEY,
+            "gateway:concurrent-second",
+            "deepseek-v4-flash",
+            50_000_000,
+            1,
+        )
+        .await
+        .expect("second concurrent reservation")
+    });
+    let outcomes = [
+        first.await.expect("first reservation task"),
+        second.await.expect("second reservation task"),
+    ];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(
+                outcome,
+                buzz_db::credits::GatewayIntentReservation::Reserved { .. }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(
+                outcome,
+                buzz_db::credits::GatewayIntentReservation::Insufficient { .. }
+            ))
+            .count(),
+        1
+    );
+    let reserved: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(reserved_nanousd),0)::BIGINT \
+         FROM gateway_settlement_intents WHERE pubkey=$1 AND state <> 'resolved'",
+    )
+    .bind(TEST_PUBKEY.as_slice())
+    .fetch_one(&pool)
+    .await
+    .expect("read durable concurrent reservation");
+    assert_eq!(reserved, 50_000_000);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn pending_gateway_intent_resolver_requires_exact_identity_and_is_idempotent() {
     let mock = MockUpstream::default();
     let (state, _router) = build_router_with_gateway(&mock).await;
     let pool = state.db.pool().clone();
     seed(&pool).await;
-    let intent = buzz_db::credits::create_gateway_settlement_intent(
+    let reservation = buzz_db::credits::create_gateway_settlement_intent(
         &pool,
         &TEST_PUBKEY,
         "gateway:export-correlation",
         "deepseek-v4-flash",
+        50_000_000,
+        1,
     )
     .await
     .expect("create intent");
+    let buzz_db::credits::GatewayIntentReservation::Reserved { intent, .. } = reservation else {
+        panic!("funded test account must reserve the intent");
+    };
     buzz_db::credits::mark_gateway_provider_completed(
         &pool,
         intent.id,
@@ -767,14 +844,19 @@ async fn resolver_restart_without_provider_id_reuses_committed_intent_reference(
     let state = crate::state::tests::test_state_with_redis("redis://127.0.0.1:1").await;
     let pool = state.db.pool().clone();
     seed(&pool).await;
-    let intent = buzz_db::credits::create_gateway_settlement_intent(
+    let reservation = buzz_db::credits::create_gateway_settlement_intent(
         &pool,
         &TEST_PUBKEY,
         "gateway:lost-ack-without-provider-id",
         "deepseek-v4-flash",
+        50_000_000,
+        1,
     )
     .await
     .expect("create intent");
+    let buzz_db::credits::GatewayIntentReservation::Reserved { intent, .. } = reservation else {
+        panic!("funded test account must reserve the intent");
+    };
     buzz_db::credits::mark_gateway_provider_completed(
         &pool,
         intent.id,
@@ -890,7 +972,15 @@ async fn gateway_shutdown_closes_admission_and_waits_for_settlement_tasks() {
     });
     gateway.shutdown().await;
     assert!(completed.load(std::sync::atomic::Ordering::Acquire));
-    let result = gateway.admission.admit(state.db.pool(), &TEST_PUBKEY).await;
+    let result = gateway
+        .admission
+        .admit(
+            state.db.pool(),
+            &TEST_PUBKEY,
+            "gateway:shutdown-test",
+            "deepseek-v4-flash",
+        )
+        .await;
     assert!(matches!(
         result,
         Err(super::AdmissionError::Rate {
@@ -2080,6 +2170,7 @@ async fn account_read_is_exact_signer_bound_and_non_mutating() {
             "balance_nanousd": exact.to_string(),
             "total_balance_nanousd": exact.to_string(),
             "discovery_reserved_nanousd": "0",
+            "gateway_reserved_nanousd": "0",
             "available_balance_nanousd": exact.to_string(),
             "currency": "USD",
             "status": "active",
@@ -2115,6 +2206,7 @@ async fn account_read_is_exact_signer_bound_and_non_mutating() {
             "balance_nanousd": (-exact).to_string(),
             "total_balance_nanousd": (-exact).to_string(),
             "discovery_reserved_nanousd": "0",
+            "gateway_reserved_nanousd": "0",
             "available_balance_nanousd": (-exact).to_string(),
             "currency": "USD",
             "status": "depleted",
@@ -2150,6 +2242,7 @@ async fn account_read_is_exact_signer_bound_and_non_mutating() {
             "balance_nanousd": "0",
             "total_balance_nanousd": "0",
             "discovery_reserved_nanousd": "0",
+            "gateway_reserved_nanousd": "0",
             "available_balance_nanousd": "0",
             "currency": "USD",
             "status": "depleted",

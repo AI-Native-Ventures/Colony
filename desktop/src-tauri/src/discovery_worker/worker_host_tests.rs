@@ -241,6 +241,7 @@ async fn start_local_synchronous_sources() -> (
 struct FakeProtocol {
     outcomes: Mutex<VecDeque<DiscoveryWorkerReceiptOutcome>>,
     calls: Mutex<Vec<&'static str>>,
+    claims: Mutex<Vec<DiscoveryWorkerClaimRequest>>,
     observation_requests: Mutex<Vec<DiscoveryWorkerObservationBatchRequest>>,
 }
 
@@ -249,6 +250,7 @@ impl FakeProtocol {
         Self {
             outcomes: Mutex::new(outcomes.into()),
             calls: Mutex::new(Vec::new()),
+            claims: Mutex::new(Vec::new()),
             observation_requests: Mutex::new(Vec::new()),
         }
     }
@@ -268,8 +270,11 @@ impl WorkerProtocol for FakeProtocol {
         Box::pin(async { Err("status fixture is not configured".to_owned()) })
     }
 
-    fn claim(&self, _: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
-        Box::pin(async { self.next("claim") })
+    fn claim(&self, request: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            self.claims.lock().expect("claims").push(request);
+            self.next("claim")
+        })
     }
 
     fn heartbeat(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {

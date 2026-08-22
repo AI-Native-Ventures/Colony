@@ -1727,7 +1727,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriProvisionedCredits.ts:15"
+        "src/shared/api/tauriProvisionedCredits.ts:16"
       ]
     },
     "get_contact_list": {
@@ -2942,7 +2942,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriProvisionedCredits.ts:20"
+        "src/shared/api/tauriProvisionedCredits.ts:21"
       ]
     },
     "reconnect_huddle_audio": {

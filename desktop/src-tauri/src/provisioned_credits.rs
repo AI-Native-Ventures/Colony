@@ -87,23 +87,18 @@ pub enum GatewayAccountStatus {
     Depleted,
 }
 
-/// Typed account response using integer-safe decimal strings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayAccount {
     pub balance_nanousd: String,
     pub total_balance_nanousd: String,
     pub discovery_reserved_nanousd: String,
+    pub gateway_reserved_nanousd: String,
     pub available_balance_nanousd: String,
-    /// The only supported presentation currency.
     pub currency: String,
-    /// Relay-provided display status; callers also validate it against the
-    /// integer balance before showing it.
     pub status: GatewayAccountStatus,
 }
 
 impl GatewayAccount {
-    /// Parse the signed decimal balance with integer-safe semantics and verify
-    /// the account contract. The returned value is nanodollars, not USD.
     pub fn balance_nanousd_i128(&self) -> Result<i128, String> {
         if self.currency != "USD" {
             return Err("gateway account returned an unsupported currency".to_string());
@@ -111,8 +106,15 @@ impl GatewayAccount {
         let balance = parse_balance_nanousd(&self.balance_nanousd)?;
         let total = parse_balance_nanousd(&self.total_balance_nanousd)?;
         let reserved = parse_balance_nanousd(&self.discovery_reserved_nanousd)?;
+        let gateway_reserved = parse_balance_nanousd(&self.gateway_reserved_nanousd)?;
         let available = parse_balance_nanousd(&self.available_balance_nanousd)?;
-        if reserved < 0 || available != total.saturating_sub(reserved) || balance != available {
+        let expected = total
+            .saturating_sub(reserved)
+            .saturating_sub(gateway_reserved);
+        if reserved < 0 || gateway_reserved < 0
+            || available != expected
+            || balance != available
+        {
             return Err("gateway account balance breakdown is inconsistent".to_string());
         }
         let computed = if balance > 0 {
@@ -127,7 +129,6 @@ impl GatewayAccount {
     }
 }
 
-/// Parse a signed decimal nanodollar balance without a precision-losing float.
 pub fn parse_balance_nanousd(value: &str) -> Result<i128, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -138,7 +139,6 @@ pub fn parse_balance_nanousd(value: &str) -> Result<i128, String> {
         .map_err(|_| "gateway account balance is not a valid signed decimal".to_string())
 }
 
-/// Opaque token wrapper whose debug output cannot disclose the token.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RedactedToken(String);
 

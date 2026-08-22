@@ -5,6 +5,7 @@ export type ColonyCreditsAccount = {
   balance_nanousd: string;
   total_balance_nanousd: string;
   discovery_reserved_nanousd: string;
+  gateway_reserved_nanousd: string;
   available_balance_nanousd: string;
   currency: "USD";
   status: ColonyCreditsAccountStatus;

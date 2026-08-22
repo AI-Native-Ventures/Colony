@@ -223,6 +223,44 @@ CREATE TABLE discovery_campaign_leads (
 CREATE INDEX discovery_campaign_leads_lead_idx
     ON discovery_campaign_leads (community_id, lead_id);
 
+-- During a rolling relay deployment, a released writer can still insert the
+-- observation row without the new Campaign junction. Keep those writes
+-- visible to the upgraded read path until every old replica has drained.
+CREATE FUNCTION discovery_associate_observation_campaign() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO discovery_campaign_leads
+        (community_id,campaign_id,lead_id,discovered_run_id,created_at)
+    SELECT NEW.community_id,r.campaign_id,NEW.id,NEW.first_run_id,NEW.first_observed_at
+    FROM discovery_runs r
+    WHERE r.community_id=NEW.community_id AND r.id=NEW.first_run_id
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER discovery_associate_observation_campaign
+AFTER INSERT ON discovery_business_observations
+FOR EACH ROW EXECUTE FUNCTION discovery_associate_observation_campaign();
+
+-- Released relays cannot associate a duplicate Lead with the Campaign that
+-- found it because their duplicate path writes no observation row. Abort that
+-- old transaction at its batch journal instead of committing an invisible
+-- Campaign result. An upgraded relay can safely replay the same batch.
+CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.existing_count > 0 THEN
+        RAISE EXCEPTION
+            'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER discovery_guard_legacy_duplicate_batch
+BEFORE INSERT ON discovery_observation_batches
+FOR EACH ROW EXECUTE FUNCTION discovery_guard_legacy_duplicate_batch();
+
 INSERT INTO discovery_campaign_leads
     (community_id,campaign_id,lead_id,discovered_run_id,created_at)
 SELECT o.community_id,r.campaign_id,o.id,o.first_run_id,o.first_observed_at
@@ -271,6 +309,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 ALTER TABLE credit_ledger
+    DROP CONSTRAINT credit_ledger_kind_check,
+    ADD CONSTRAINT credit_ledger_kind_check
+        CHECK (kind IN ('debit', 'credit', 'seed', 'correction', 'hold', 'release')),
     ADD COLUMN service TEXT CHECK (service IN ('model', 'discovery')),
     ADD COLUMN quantity BIGINT CHECK (quantity IS NULL OR quantity > 0),
     ADD COLUMN unit_price_nanousd BIGINT
@@ -278,6 +319,21 @@ ALTER TABLE credit_ledger
     ADD COLUMN discovery_community_id UUID,
     ADD COLUMN discovery_campaign_id UUID,
     ADD COLUMN discovery_run_id UUID;
+
+-- Released relay replicas do not know the service column. Derive it from the
+-- already-required model attribution before the new constraints evaluate.
+CREATE FUNCTION credit_ledger_compat_attribution() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.model IS NOT NULL AND NEW.service IS NULL THEN
+        NEW.service := 'model';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER credit_ledger_compat_attribution
+BEFORE INSERT OR UPDATE OF model,service ON credit_ledger
+FOR EACH ROW EXECUTE FUNCTION credit_ledger_compat_attribution();
 
 UPDATE credit_ledger
 SET service = 'model'
@@ -303,8 +359,9 @@ ALTER TABLE credit_ledger
             AND discovery_run_id IS NULL
         ) OR (
             service = 'discovery'
-            AND kind = 'debit'
-            AND delta < 0
+            AND kind IN ('debit', 'hold', 'release')
+            AND ((kind IN ('debit', 'hold') AND delta < 0)
+                 OR (kind = 'release' AND delta > 0))
             AND model IS NULL
             AND observed_cost IS NULL
             AND request_id IS NULL
@@ -314,7 +371,7 @@ ALTER TABLE credit_ledger
             AND discovery_community_id IS NOT NULL
             AND discovery_campaign_id IS NOT NULL
             AND discovery_run_id IS NOT NULL
-            AND (-delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
+            AND abs(delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
         )
     ),
     ADD CONSTRAINT credit_ledger_model_service_complete CHECK (
@@ -323,4 +380,15 @@ ALTER TABLE credit_ledger
 
 CREATE UNIQUE INDEX credit_ledger_discovery_run_idx
     ON credit_ledger (pubkey, discovery_run_id)
-    WHERE service = 'discovery';
+    WHERE service = 'discovery' AND kind = 'debit';
+
+-- New model calls reserve their admission estimate durably so Discovery and
+-- every relay replica see one account-level capacity budget.
+ALTER TABLE gateway_settlement_intents
+    ADD COLUMN reserved_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (reserved_nanousd >= 0);
+
+CREATE INDEX gateway_settlement_intents_account_reservations_idx
+    ON gateway_settlement_intents (pubkey)
+    INCLUDE (reserved_nanousd)
+    WHERE state <> 'resolved' AND reserved_nanousd > 0;

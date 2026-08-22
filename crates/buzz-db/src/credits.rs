@@ -61,6 +61,8 @@ pub struct AdmissionAccount {
     pub balance: i64,
     /// Credits held for active paid Discovery runs.
     pub discovery_reserved_nanousd: i64,
+    /// Credits held for admitted model calls that have not resolved yet.
+    pub gateway_reserved_nanousd: i64,
     /// Typical call cost override, in nanoUSD.
     pub typical_call_cost_nanousd: Option<i64>,
     /// Concurrent gateway call limit override.
@@ -109,12 +111,33 @@ pub struct GatewaySettlementIntent {
     pub reason: Option<String>,
     /// Ledger reference used for an exact correction.
     pub correction_ref: Option<String>,
+    /// Admission estimate held until the call is debited or resolved.
+    pub reserved_nanousd: i64,
     /// Creation time.
     pub created_at: DateTime<Utc>,
     /// Last lifecycle update.
     pub updated_at: DateTime<Utc>,
     /// Resolution time, if complete.
     pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// Atomic result of reserving one hosted model call against the account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayIntentReservation {
+    /// Capacity was held and the durable intent was created.
+    Reserved {
+        /// Durable provider-call identity.
+        intent: GatewaySettlementIntent,
+        /// Account admission settings read under the same row lock.
+        account: AdmissionAccount,
+    },
+    /// The account did not have enough unreserved Credits.
+    Insufficient {
+        /// Balance remaining after all durable reservations.
+        available_nanousd: i64,
+        /// Estimate required for this admission.
+        required_nanousd: i64,
+    },
 }
 
 /// One exact provider-export row used by the pending-intent resolver. The
@@ -146,10 +169,14 @@ pub struct AppliedLedgerEntry {
 /// Return the account's current balance in nanoUSD. Accounts that have never
 /// been seen have a balance of zero (their row is created on first activity).
 pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
-    let row = sqlx::query("SELECT balance FROM accounts WHERE pubkey = $1")
-        .bind(pubkey)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT a.balance + COALESCE((SELECT sum(c.budget_reserved_nanousd) \
+         FROM discovery_campaigns c WHERE c.budget_payer_pubkey=a.pubkey),0)::BIGINT AS balance \
+         FROM accounts a WHERE a.pubkey = $1",
+    )
+    .bind(pubkey)
+    .fetch_optional(pool)
+    .await?;
     Ok(match row {
         Some(row) => row.try_get("balance")?,
         None => 0,
@@ -163,28 +190,38 @@ pub async fn balance(pool: &PgPool, pubkey: &[u8]) -> Result<i64> {
 /// global defaults while holding the account's in-process admission gate.
 pub async fn admission_account(pool: &PgPool, pubkey: &[u8]) -> Result<AdmissionAccount> {
     let row = sqlx::query(
-        "SELECT a.balance, a.typical_call_cost_nanousd, a.max_in_flight, \
+        "SELECT a.balance AS spendable_balance, a.typical_call_cost_nanousd, a.max_in_flight, \
                 a.hourly_burn_cap_nanousd, \
                 COALESCE((SELECT sum(c.budget_reserved_nanousd) \
                           FROM discovery_campaigns c \
                           WHERE c.budget_payer_pubkey=a.pubkey),0)::BIGINT \
-                    AS discovery_reserved_nanousd \
+                    AS discovery_reserved_nanousd, \
+                COALESCE((SELECT sum(i.reserved_nanousd) \
+                          FROM gateway_settlement_intents i \
+                          WHERE i.pubkey=a.pubkey AND i.state <> 'resolved'),0)::BIGINT \
+                    AS gateway_reserved_nanousd \
          FROM accounts a WHERE a.pubkey = $1",
     )
     .bind(pubkey)
     .fetch_optional(pool)
     .await?;
     match row {
-        Some(row) => Ok(AdmissionAccount {
-            balance: row.try_get("balance")?,
-            discovery_reserved_nanousd: row.try_get("discovery_reserved_nanousd")?,
-            typical_call_cost_nanousd: row.try_get("typical_call_cost_nanousd")?,
-            max_in_flight: row.try_get("max_in_flight")?,
-            hourly_burn_cap_nanousd: row.try_get("hourly_burn_cap_nanousd")?,
-        }),
+        Some(row) => {
+            let discovery_reserved_nanousd: i64 = row.try_get("discovery_reserved_nanousd")?;
+            let spendable_balance: i64 = row.try_get("spendable_balance")?;
+            Ok(AdmissionAccount {
+                balance: spendable_balance.saturating_add(discovery_reserved_nanousd),
+                discovery_reserved_nanousd,
+                gateway_reserved_nanousd: row.try_get("gateway_reserved_nanousd")?,
+                typical_call_cost_nanousd: row.try_get("typical_call_cost_nanousd")?,
+                max_in_flight: row.try_get("max_in_flight")?,
+                hourly_burn_cap_nanousd: row.try_get("hourly_burn_cap_nanousd")?,
+            })
+        }
         None => Ok(AdmissionAccount {
             balance: 0,
             discovery_reserved_nanousd: 0,
+            gateway_reserved_nanousd: 0,
             typical_call_cost_nanousd: None,
             max_in_flight: None,
             hourly_burn_cap_nanousd: None,
@@ -255,6 +292,7 @@ fn row_to_gateway_intent(row: &sqlx::postgres::PgRow) -> Result<GatewaySettlemen
         provider_status: row.try_get("provider_status")?,
         reason: row.try_get("reason")?,
         correction_ref: row.try_get("correction_ref")?,
+        reserved_nanousd: row.try_get("reserved_nanousd")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         resolved_at: row.try_get("resolved_at")?,
@@ -263,7 +301,7 @@ fn row_to_gateway_intent(row: &sqlx::postgres::PgRow) -> Result<GatewaySettlemen
 
 const GATEWAY_INTENT_COLUMNS: &str =
     "id, pubkey, reference, model, state, provider_request_id, observed_cost, \
-     provider_status, reason, correction_ref, created_at, updated_at, resolved_at";
+     provider_status, reason, correction_ref, reserved_nanousd, created_at, updated_at, resolved_at";
 
 /// Create (or replay) the durable attribution intent before a provider call.
 /// Replays return the existing row without resetting a later lifecycle state.
@@ -272,10 +310,54 @@ pub async fn create_gateway_settlement_intent(
     pubkey: &[u8],
     reference: &str,
     model: &str,
-) -> Result<GatewaySettlementIntent> {
+    default_typical_call_cost_nanousd: i64,
+    minimum_reservation_nanousd: i64,
+) -> Result<GatewayIntentReservation> {
+    let mut tx = pool.begin().await?;
+    let account = sqlx::query(
+        "SELECT balance,typical_call_cost_nanousd,max_in_flight,hourly_burn_cap_nanousd \
+         FROM accounts WHERE pubkey=$1 FOR UPDATE",
+    )
+    .bind(pubkey)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(account) = account else {
+        tx.rollback().await?;
+        return Ok(GatewayIntentReservation::Insufficient {
+            available_nanousd: 0,
+            required_nanousd: default_typical_call_cost_nanousd.max(minimum_reservation_nanousd),
+        });
+    };
+    let balance: i64 = account.try_get("balance")?;
+    let discovery_reserved_nanousd: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(budget_reserved_nanousd),0)::BIGINT \
+         FROM discovery_campaigns WHERE budget_payer_pubkey=$1",
+    )
+    .bind(pubkey)
+    .fetch_one(&mut *tx)
+    .await?;
+    let gateway_reserved_nanousd: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(reserved_nanousd),0)::BIGINT \
+         FROM gateway_settlement_intents WHERE pubkey=$1 AND state <> 'resolved'",
+    )
+    .bind(pubkey)
+    .fetch_one(&mut *tx)
+    .await?;
+    let required_nanousd: i64 = account
+        .try_get::<Option<i64>, _>("typical_call_cost_nanousd")?
+        .unwrap_or(default_typical_call_cost_nanousd)
+        .max(minimum_reservation_nanousd);
+    let available_nanousd = balance.saturating_sub(gateway_reserved_nanousd);
+    if available_nanousd < required_nanousd {
+        tx.rollback().await?;
+        return Ok(GatewayIntentReservation::Insufficient {
+            available_nanousd,
+            required_nanousd,
+        });
+    }
     let query = format!(
-        "INSERT INTO gateway_settlement_intents (pubkey, reference, model) \
-         VALUES ($1, $2, $3) \
+        "INSERT INTO gateway_settlement_intents (pubkey, reference, model, reserved_nanousd) \
+         VALUES ($1, $2, $3, $4) \
          ON CONFLICT (pubkey, reference) DO UPDATE SET updated_at = now() \
          RETURNING {GATEWAY_INTENT_COLUMNS}"
     );
@@ -283,9 +365,22 @@ pub async fn create_gateway_settlement_intent(
         .bind(pubkey)
         .bind(reference)
         .bind(model)
-        .fetch_one(pool)
+        .bind(required_nanousd)
+        .fetch_one(&mut *tx)
         .await?;
-    row_to_gateway_intent(&row)
+    let intent = row_to_gateway_intent(&row)?;
+    tx.commit().await?;
+    Ok(GatewayIntentReservation::Reserved {
+        intent,
+        account: AdmissionAccount {
+            balance: balance.saturating_add(discovery_reserved_nanousd),
+            discovery_reserved_nanousd,
+            gateway_reserved_nanousd: gateway_reserved_nanousd.saturating_add(required_nanousd),
+            typical_call_cost_nanousd: account.try_get("typical_call_cost_nanousd")?,
+            max_in_flight: account.try_get("max_in_flight")?,
+            hourly_burn_cap_nanousd: account.try_get("hourly_burn_cap_nanousd")?,
+        },
+    })
 }
 
 /// Mark that provider usage was observed. Replays never move a later
@@ -323,6 +418,7 @@ pub async fn mark_gateway_intent_debited(
     let query = format!(
         "UPDATE gateway_settlement_intents SET \
            state = CASE WHEN state = 'resolved' THEN state ELSE 'debited' END, \
+           reserved_nanousd = 0, \
            updated_at = now() WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
     );
     let row = sqlx::query(sqlx::AssertSqlSafe(query))
@@ -341,7 +437,8 @@ pub async fn resolve_gateway_intent_no_charge(
     provider_status: i16,
 ) -> Result<GatewaySettlementIntent> {
     let query = format!(
-        "UPDATE gateway_settlement_intents SET state = 'resolved', observed_cost = COALESCE(observed_cost, 0), \
+        "UPDATE gateway_settlement_intents SET state = 'resolved', reserved_nanousd = 0, \
+           observed_cost = COALESCE(observed_cost, 0), \
            provider_status = $2, reason = COALESCE(reason, 'provider_non_success'), \
            resolved_at = COALESCE(resolved_at, now()), updated_at = now() \
          WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
@@ -496,7 +593,7 @@ pub async fn resolve_gateway_settlement_intent(
         .await?;
     }
     let updated_query = format!(
-        "UPDATE gateway_settlement_intents SET state = 'resolved', \
+        "UPDATE gateway_settlement_intents SET state = 'resolved', reserved_nanousd = 0, \
            provider_request_id = COALESCE($2, provider_request_id), observed_cost = $3, \
            correction_ref = $4, resolved_at = COALESCE(resolved_at, now()), updated_at = now() \
          WHERE id = $1 RETURNING {GATEWAY_INTENT_COLUMNS}"
@@ -645,6 +742,24 @@ pub async fn debit_observed_applied(
     .await
 }
 
+/// Apply an observed model debit and release its durable admission hold in
+/// the same transaction. A committed charge can never leave stale reserved
+/// Credits behind.
+pub async fn debit_observed_for_gateway_intent(
+    pool: &PgPool,
+    intent_id: i64,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: &str,
+    request_id: Option<&str>,
+) -> Result<AppliedLedgerEntry> {
+    debit_gateway_intent_internal(
+        pool, intent_id, pubkey, cost, reference, model, request_id, "observed",
+    )
+    .await
+}
+
 /// Debit an **estimated** cost, idempotent on `reference`.
 ///
 /// The provider stated no usable cost (an unfamiliar usage shape), so the
@@ -685,6 +800,82 @@ pub async fn debit_estimated_applied(
         Some("estimated"),
     )
     .await
+}
+
+/// Apply an estimated model debit and release its durable admission hold in
+/// the same transaction.
+pub async fn debit_estimated_for_gateway_intent(
+    pool: &PgPool,
+    intent_id: i64,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: &str,
+    request_id: Option<&str>,
+) -> Result<AppliedLedgerEntry> {
+    debit_gateway_intent_internal(
+        pool,
+        intent_id,
+        pubkey,
+        cost,
+        reference,
+        model,
+        request_id,
+        "estimated",
+    )
+    .await
+}
+
+async fn debit_gateway_intent_internal(
+    pool: &PgPool,
+    intent_id: i64,
+    pubkey: &[u8],
+    cost: u64,
+    reference: &str,
+    model: &str,
+    request_id: Option<&str>,
+    settle_basis: &str,
+) -> Result<AppliedLedgerEntry> {
+    let cost = i64::try_from(cost)
+        .map_err(|_| crate::error::DbError::InvalidAmount(format!("cost {cost} exceeds i64")))?;
+    let mut tx = pool.begin().await?;
+    let intent =
+        sqlx::query("SELECT pubkey,model FROM gateway_settlement_intents WHERE id=$1 FOR UPDATE")
+            .bind(intent_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| crate::error::DbError::NotFound("gateway settlement intent".into()))?;
+    let intent_pubkey: Vec<u8> = intent.try_get("pubkey")?;
+    let intent_model: String = intent.try_get("model")?;
+    if intent_pubkey != pubkey || intent_model != model {
+        return Err(crate::error::DbError::InvalidData(
+            "gateway settlement does not match its admission intent".into(),
+        ));
+    }
+    let applied = apply_entry_tx(
+        &mut tx,
+        EntryParams {
+            pubkey,
+            delta: -cost,
+            kind: "debit",
+            reference,
+            model: Some(model),
+            observed_cost: Some(cost),
+            request_id,
+            settle_basis: Some(settle_basis),
+        },
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE gateway_settlement_intents SET \
+         state=CASE WHEN state='resolved' THEN state ELSE 'debited' END, \
+         reserved_nanousd=0,updated_at=now() WHERE id=$1",
+    )
+    .bind(intent_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(applied)
 }
 
 async fn debit_internal(
@@ -805,6 +996,17 @@ async fn apply_entry_applied(pool: &PgPool, params: EntryParams<'_>) -> Result<A
 ///   balance + delta`; the row lock serializes concurrent distinct-ref
 ///   settles, so no update is ever lost.
 async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<AppliedLedgerEntry> {
+    let mut tx = pool.begin().await?;
+
+    let result = apply_entry_tx(&mut tx, params).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+async fn apply_entry_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    params: EntryParams<'_>,
+) -> Result<AppliedLedgerEntry> {
     let pubkey = params.pubkey;
     let delta = params.delta;
     let kind = params.kind;
@@ -813,11 +1015,10 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
     let observed_cost = params.observed_cost;
     let request_id = params.request_id;
     let settle_basis = params.settle_basis;
-    let mut tx = pool.begin().await?;
 
     sqlx::query("INSERT INTO accounts (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING")
         .bind(pubkey)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
     let service = (kind == "debit" && model.is_some()).then_some("model");
@@ -838,7 +1039,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
     .bind(request_id)
     .bind(settle_basis)
     .bind(service)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
 
     let (entry, applied) = match row {
@@ -851,7 +1052,7 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
             )
             .bind(delta)
             .bind(pubkey)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
             (row_to_entry(&row)?, true)
         }
@@ -877,13 +1078,12 @@ async fn apply_entry_inner(pool: &PgPool, params: EntryParams<'_>) -> Result<App
             )
             .bind(pubkey)
             .bind(reference)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
             (row_to_entry(&row)?, false)
         }
     };
 
-    tx.commit().await?;
     Ok(AppliedLedgerEntry { entry, applied })
 }
 

@@ -24,7 +24,6 @@ import { relaySupportsDiscovery } from "./relayDiscoverySupport";
 
 const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v3";
 const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v3";
-const RUN_RECEIPT_SCHEMA_V2 = "colony.discovery-receipt/v2";
 const RUN_ACTION_SCHEMA_V3 = "colony.discovery-action/v3";
 const RUN_RECEIPT_SCHEMA_V3 = "colony.discovery-receipt/v3";
 const WORKER_RECEIPT_SCHEMAS = new Set([
@@ -269,9 +268,8 @@ function parseRunReceipt(
   requestId: string,
   idempotencyKey: string,
 ): RunProjection | null {
-  const wireVersion = operation === "start" ? "3" : "2";
-  const receiptSchema =
-    operation === "start" ? RUN_RECEIPT_SCHEMA_V3 : RUN_RECEIPT_SCHEMA_V2;
+  const wireVersion = "3";
+  const receiptSchema = RUN_RECEIPT_SCHEMA_V3;
   if (
     !trustedEvent(event, KIND_DISCOVERY_RECEIPT, relayPubkey) ||
     !exactTags(event, ["p", "e", "run", "discovery-receipt"])

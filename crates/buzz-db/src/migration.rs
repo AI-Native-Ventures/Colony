@@ -1797,13 +1797,13 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
-    async fn migration_0061_preserves_legacy_discovery_and_enforces_paid_run_accounting() {
+    async fn migration_0062_preserves_legacy_discovery_and_enforces_paid_run_accounting() {
         let pool = connect_test_pool().await;
         reset_public_schema(&pool).await;
         MIGRATOR
-            .run_to(60, &pool)
+            .run_to(61, &pool)
             .await
-            .expect("apply migrations 1-60");
+            .expect("apply migrations 1-61");
 
         let community_id = uuid::Uuid::new_v4();
         let campaign_id = uuid::Uuid::new_v4();
@@ -1811,7 +1811,7 @@ mod tests {
         let payer = vec![31_u8; 32];
         sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
             .bind(community_id)
-            .bind(format!("pre-0061-{}.example", community_id.simple()))
+            .bind(format!("pre-0062-{}.example", community_id.simple()))
             .execute(&pool)
             .await
             .expect("insert community");
@@ -1856,8 +1856,8 @@ mod tests {
 
         run_migrations(&pool)
             .await
-            .expect("0061 must apply additively on a populated schema");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(61));
+            .expect("0062 must apply additively on a populated schema");
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(62));
 
         let legacy_campaign: (String, i64, i64, i64) = sqlx::query_as(
             "SELECT budget_state,budget_approved_nanousd,budget_spent_nanousd,\
@@ -1885,6 +1885,50 @@ mod tests {
                 .await
                 .expect("read migrated ledger attribution");
         assert_eq!(services, vec![Some("model".to_owned()), None]);
+
+        sqlx::query(
+            "INSERT INTO credit_ledger \
+             (pubkey,delta,kind,ref,model,observed_cost,request_id,settle_basis) \
+             VALUES ($1,-2000,'debit','rolling-model-debit','deepseek-v4-flash',2000,\
+                     'rolling-request','observed')",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("released model ledger writer remains compatible after 0062");
+        let rolling_service: Option<String> = sqlx::query_scalar(
+            "SELECT service FROM credit_ledger WHERE pubkey=$1 AND ref='rolling-model-debit'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read rolling writer attribution");
+        assert_eq!(rolling_service.as_deref(), Some("model"));
+
+        let observation_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,\
+              observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper','rolling-lead','Rolling Lead',$4)",
+        )
+        .bind(community_id)
+        .bind(observation_id)
+        .bind(legacy_run_id)
+        .bind(vec![34_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("released observation writer remains compatible after 0062");
+        let association: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
+            "SELECT campaign_id,discovered_run_id FROM discovery_campaign_leads \
+             WHERE community_id=$1 AND lead_id=$2",
+        )
+        .bind(community_id)
+        .bind(observation_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("read rolling observation association");
+        assert_eq!(association, Some((campaign_id, legacy_run_id)));
 
         let approval_event_id = vec![32_u8; 32];
         let budget_fingerprint = vec![33_u8; 32];

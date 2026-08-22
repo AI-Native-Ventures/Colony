@@ -1,10 +1,12 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(test)]
 use std::{
     future::Future,
     pin::Pin,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(test)]
@@ -18,15 +20,13 @@ use buzz_core_pkg::discovery_worker::{
     DiscoveryWorkerSalvageBatchRequest,
 };
 use tauri::{AppHandle, Manager as _};
-#[cfg(test)]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::outscraper::OutscraperPollOutcome;
 #[cfg(test)]
-use super::outscraper::{
-    OutscraperClient, OutscraperError, OutscraperPollOutcome, OutscraperSubmission,
-};
+use super::outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission};
 use super::{
     adapter::FakeOutscraperAdapter,
     installation::load_or_create_worker_id,
@@ -178,8 +178,20 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 tokio::time::sleep(POLL_INTERVAL).await;
                 continue;
             }
-            let credentials = LocalProviderCredentials::empty();
-            if let Err(error) = run_multi_source_production_once(
+            let credentials = LocalProviderCredentials::load()
+                .unwrap_or_else(|_| LocalProviderCredentials::empty());
+            if let Err(error) = recover_terminal_outscraper_submissions(
+                &protocol,
+                &providers,
+                &credentials,
+                &outbox,
+                worker_id,
+            )
+            .await
+            {
+                eprintln!("buzz-desktop: Discovery legacy recovery paused safely: {error}");
+            }
+            let hosted = run_multi_source_production_once(
                 &protocol,
                 &providers,
                 &credentials,
@@ -187,9 +199,40 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 worker_id,
                 Vec::new(),
             )
-            .await
-            {
-                eprintln!("buzz-desktop: Discovery run paused safely: {error}");
+            .await;
+            match hosted {
+                Ok(HostRunOutcome::Idle) => {
+                    let available = credentials.available_providers();
+                    if !available.is_empty() {
+                        for protocol_version in [
+                            buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+                            1,
+                        ] {
+                            match run_multi_source_production_for_protocol_once(
+                                &protocol,
+                                &providers,
+                                &credentials,
+                                &outbox,
+                                worker_id,
+                                available.clone(),
+                                protocol_version,
+                            )
+                            .await
+                            {
+                                Ok(HostRunOutcome::Idle) => continue,
+                                Ok(_) => break,
+                                Err(error) => {
+                                    eprintln!("buzz-desktop: Discovery legacy drain paused safely: {error}");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("buzz-desktop: Discovery run paused safely: {error}");
+                }
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
@@ -204,11 +247,32 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
     worker_id: Uuid,
     available_providers: Vec<DiscoveryProvider>,
 ) -> Result<HostRunOutcome, String> {
+    run_multi_source_production_for_protocol_once(
+        protocol,
+        providers,
+        credentials,
+        outbox,
+        worker_id,
+        available_providers,
+        buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+    )
+    .await
+}
+
+async fn run_multi_source_production_for_protocol_once<P: WorkerProtocol>(
+    protocol: &P,
+    providers: &ProductionProviderClients,
+    credentials: &LocalProviderCredentials,
+    outbox: &DiscoveryOutbox,
+    worker_id: Uuid,
+    available_providers: Vec<DiscoveryProvider>,
+    protocol_version: u16,
+) -> Result<HostRunOutcome, String> {
     let claim = DiscoveryWorkerClaimRequest {
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
-        protocol_version: buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+        protocol_version,
         available_providers,
     };
     let lease = match protocol.claim(claim).await? {
@@ -225,7 +289,6 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
     }
 }
 
-#[cfg(test)]
 async fn recover_terminal_outscraper_submissions<P: WorkerProtocol>(
     protocol: &P,
     providers: &ProductionProviderClients,

@@ -52,6 +52,10 @@ pub(crate) fn is_discovery_action_candidate(event: &Event) -> bool {
     event.kind.as_u16() as u32 == KIND_DISCOVERY_ACTION
 }
 
+fn accepts_new_start(fake_executor_enabled: bool, protocol_version: u16) -> bool {
+    fake_executor_enabled || protocol_version == DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+}
+
 /// Apply one authenticated actor-signed Discovery command.
 pub(crate) async fn handle_discovery_action(
     tenant: &TenantContext,
@@ -87,6 +91,14 @@ pub(crate) async fn handle_discovery_action(
             {
                 return Err(DiscoveryBrokerError::Invalid(
                     "Discovery execution is not enabled on this relay".into(),
+                ));
+            }
+            if !accepts_new_start(
+                state.config.discovery.fake_executor_enabled,
+                request.protocol_version,
+            ) {
+                return Err(DiscoveryBrokerError::Conflict(
+                    "desktop_upgrade_required".into(),
                 ));
             }
             if request.protocol_version == DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
@@ -286,5 +298,16 @@ mod tests {
             .sign_with_keys(&actor)
             .expect("valid signature");
         assert!(is_discovery_action_candidate(&event));
+    }
+
+    #[test]
+    fn production_accepts_only_new_paid_starts_while_fake_runs_remain_compatible() {
+        assert!(accepts_new_start(
+            false,
+            DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+        ));
+        assert!(!accepts_new_start(false, 2));
+        assert!(!accepts_new_start(false, 1));
+        assert!(accepts_new_start(true, 1));
     }
 }

@@ -61,6 +61,7 @@ fn account_requires_usd_and_matching_status() {
         "balance_nanousd": "-1",
         "total_balance_nanousd": "9",
         "discovery_reserved_nanousd": "10",
+        "gateway_reserved_nanousd": "0",
         "available_balance_nanousd": "-1",
         "currency": "USD",
         "status": "depleted"
@@ -72,6 +73,7 @@ fn account_requires_usd_and_matching_status() {
         balance_nanousd: "0".to_string(),
         total_balance_nanousd: "1".to_string(),
         discovery_reserved_nanousd: "0".to_string(),
+        gateway_reserved_nanousd: "0".to_string(),
         available_balance_nanousd: "0".to_string(),
         currency: "USD".to_string(),
         status: GatewayAccountStatus::Active,

@@ -824,7 +824,9 @@ CREATE TABLE credit_ledger (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
     delta BIGINT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('debit', 'credit', 'seed', 'correction')),
+    kind TEXT NOT NULL CHECK (kind IN (
+        'debit', 'credit', 'seed', 'correction', 'hold', 'release'
+    )),
     ref TEXT NOT NULL,
     model TEXT,
     observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
@@ -858,8 +860,9 @@ CREATE TABLE credit_ledger (
             AND discovery_run_id IS NULL
         ) OR (
             service = 'discovery'
-            AND kind = 'debit'
-            AND delta < 0
+            AND kind IN ('debit', 'hold', 'release')
+            AND ((kind IN ('debit', 'hold') AND delta < 0)
+                 OR (kind = 'release' AND delta > 0))
             AND model IS NULL
             AND observed_cost IS NULL
             AND request_id IS NULL
@@ -869,17 +872,28 @@ CREATE TABLE credit_ledger (
             AND discovery_community_id IS NOT NULL
             AND discovery_campaign_id IS NOT NULL
             AND discovery_run_id IS NOT NULL
-            AND (-delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
+            AND abs(delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
         )
     ),
     CONSTRAINT credit_ledger_model_service_complete CHECK (
         model IS NULL OR service = 'model'
     )
 );
+CREATE FUNCTION credit_ledger_compat_attribution() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.model IS NOT NULL AND NEW.service IS NULL THEN
+        NEW.service := 'model';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER credit_ledger_compat_attribution
+BEFORE INSERT OR UPDATE OF model,service ON credit_ledger
+FOR EACH ROW EXECUTE FUNCTION credit_ledger_compat_attribution();
 CREATE INDEX credit_ledger_created_at_idx ON credit_ledger (created_at);
 CREATE UNIQUE INDEX credit_ledger_discovery_run_idx
     ON credit_ledger (pubkey, discovery_run_id)
-    WHERE service = 'discovery';
+    WHERE service = 'discovery' AND kind = 'debit';
 
 CREATE TABLE gateway_tokens (
     token_hash BYTEA PRIMARY KEY CHECK (octet_length(token_hash) = 32),
@@ -928,6 +942,7 @@ CREATE TABLE gateway_settlement_intents (
     provider_status SMALLINT,
     reason TEXT,
     correction_ref TEXT,
+    reserved_nanousd BIGINT NOT NULL DEFAULT 0 CHECK (reserved_nanousd >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at TIMESTAMPTZ,
@@ -936,6 +951,10 @@ CREATE TABLE gateway_settlement_intents (
 CREATE INDEX gateway_settlement_intents_pending_idx
     ON gateway_settlement_intents (updated_at)
     WHERE state <> 'resolved';
+CREATE INDEX gateway_settlement_intents_account_reservations_idx
+    ON gateway_settlement_intents (pubkey)
+    INCLUDE (reserved_nanousd)
+    WHERE state <> 'resolved' AND reserved_nanousd > 0;
 
 ALTER TABLE gateway_reconciliation_outcomes
     ADD COLUMN intent_id BIGINT REFERENCES gateway_settlement_intents(id),
@@ -2010,6 +2029,36 @@ CREATE TABLE discovery_campaign_leads (
 
 CREATE INDEX discovery_campaign_leads_lead_idx
     ON discovery_campaign_leads (community_id, lead_id);
+
+CREATE FUNCTION discovery_associate_observation_campaign() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO discovery_campaign_leads
+        (community_id,campaign_id,lead_id,discovered_run_id,created_at)
+    SELECT NEW.community_id,r.campaign_id,NEW.id,NEW.first_run_id,NEW.first_observed_at
+    FROM discovery_runs r
+    WHERE r.community_id=NEW.community_id AND r.id=NEW.first_run_id
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER discovery_associate_observation_campaign
+AFTER INSERT ON discovery_business_observations
+FOR EACH ROW EXECUTE FUNCTION discovery_associate_observation_campaign();
+
+CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.existing_count > 0 THEN
+        RAISE EXCEPTION
+            'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER discovery_guard_legacy_duplicate_batch
+BEFORE INSERT ON discovery_observation_batches
+FOR EACH ROW EXECUTE FUNCTION discovery_guard_legacy_duplicate_batch();
 
 CREATE FUNCTION discovery_guard_legacy_observation_insert() RETURNS TRIGGER AS $$
 BEGIN

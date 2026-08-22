@@ -11,6 +11,7 @@ import {
   canonicalDiscoveryJson,
   RelayDiscoveryDataSource,
 } from "./RelayDiscoveryDataSource.ts";
+import { DiscoveryBroker } from "./relayBroker.ts";
 import { mapCampaign } from "./relayDiscoveryModels.ts";
 import {
   buildLeadUpdateInput,
@@ -600,6 +601,30 @@ test("hosted Discovery starts without reading local provider keys", async () => 
     // The hosted run completes through the signed worker receipt.
   }
   assert.equal(live.runActions, 1);
+});
+
+test("cancel uses and accepts the protocol V3 action and receipt", async () => {
+  const live = harness(true);
+  const source = new RelayDiscoveryDataSource(live.dependencies);
+  await source.createCampaign({
+    name: "Cancel receipt",
+    industryId: "automotive",
+    verticalId: "auto-repair",
+    location: "Sandton, South Africa",
+    target: 25,
+  });
+  const broker = new DiscoveryBroker(live.dependencies);
+  const result = await broker.run("cancel", {
+    runId: "7112c2bb-9a11-48b4-a516-7b2a7bb7f5fb",
+  });
+  assert.equal(result.run.protocol_version, 3);
+  const action = live.publishedEvents.at(-1);
+  const content = JSON.parse(action.content);
+  assert.equal(content.schema, "colony.discovery-action/v3");
+  assert.equal(
+    action.tags.find((tag) => tag[0] === "discovery-action")[1],
+    "3",
+  );
 });
 
 test("inactive workspaces stay on the cost-free demo and cannot create live records", async () => {

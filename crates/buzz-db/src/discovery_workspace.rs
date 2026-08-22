@@ -673,7 +673,9 @@ async fn approve_campaign_budget_tx(
     sqlx::query(
         "UPDATE discovery_campaigns SET budget_payer_pubkey=$3,budget_approved_nanousd=$4,\
          budget_state=$5,budget_approval_event_id=$6,budget_approved_at=now(),\
-         budget_fingerprint=$7,price_per_retained_lead_nanousd=$8,updated_at=now() \
+         budget_fingerprint=$7,price_per_retained_lead_nanousd=$8,\
+         source_mode='waterfall',\
+         source_keys=ARRAY['google_maps','brave_search','exa_search']::TEXT[],updated_at=now() \
          WHERE community_id=$1 AND id=$2",
     )
     .bind(community_id.as_uuid())
