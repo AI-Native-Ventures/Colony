@@ -143,11 +143,11 @@ export function ContentDayDetail({
         </Badge>
       </div>
 
-      {post.image ? (
+      {post.images.length > 0 ? (
         <img
           alt={post.alt ?? post.headline ?? "Rendered card"}
           className="w-full rounded-lg border border-border/60 object-contain"
-          src={rewriteRelayUrl(post.image.url)}
+          src={rewriteRelayUrl(post.images[0].url)}
         />
       ) : (
         <div className="rounded-lg border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
@@ -161,7 +161,7 @@ export function ContentDayDetail({
         </p>
       ) : null}
 
-      <ContentChecksPanel report={post.gateReport} />
+      <ContentChecksPanel reports={post.gateReports} />
       <ContentClaimsList claims={post.claims} />
 
       {post.caption ? (
