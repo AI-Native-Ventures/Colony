@@ -2,7 +2,6 @@ use buzz_core_pkg::discovery::DiscoveryProvider;
 use zeroize::Zeroizing;
 
 use super::{brave::BraveSearchClient, exa::ExaSearchClient, outscraper::OutscraperClient};
-use crate::discovery_credentials::{self, DiscoveryCredentialProvider};
 
 pub(super) struct ProductionProviderClients {
     pub(super) outscraper: OutscraperClient,
@@ -40,18 +39,12 @@ pub(super) struct LocalProviderCredentials {
 }
 
 impl LocalProviderCredentials {
-    pub(super) fn load() -> Result<Self, String> {
-        Ok(Self {
-            outscraper: discovery_credentials::load_discovery_credential(
-                DiscoveryCredentialProvider::Outscraper,
-            )?,
-            brave: discovery_credentials::load_discovery_credential(
-                DiscoveryCredentialProvider::BraveSearch,
-            )?,
-            exa: discovery_credentials::load_discovery_credential(
-                DiscoveryCredentialProvider::ExaSearch,
-            )?,
-        })
+    pub(super) const fn empty() -> Self {
+        Self {
+            outscraper: None,
+            brave: None,
+            exa: None,
+        }
     }
 
     #[cfg(test)]
@@ -65,17 +58,6 @@ impl LocalProviderCredentials {
             brave: brave.map(|value| Zeroizing::new(value.to_owned())),
             exa: exa.map(|value| Zeroizing::new(value.to_owned())),
         }
-    }
-
-    pub(super) fn available_providers(&self) -> Vec<DiscoveryProvider> {
-        [
-            (DiscoveryProvider::Outscraper, self.outscraper.is_some()),
-            (DiscoveryProvider::BraveSearch, self.brave.is_some()),
-            (DiscoveryProvider::ExaSearch, self.exa.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(provider, available)| available.then_some(provider))
-        .collect()
     }
 
     pub(super) fn credential(&self, provider: DiscoveryProvider) -> Option<&Zeroizing<String>> {

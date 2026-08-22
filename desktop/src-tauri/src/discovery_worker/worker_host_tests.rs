@@ -628,11 +628,13 @@ fn run_projection() -> DiscoveryRunProjection {
     DiscoveryRunProjection {
         run_id: Uuid::new_v4(),
         campaign_id: Uuid::new_v4(),
+        protocol_version: buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
         state: DiscoveryRunState::Running,
         completed_steps: 0,
         total_steps: 2,
         cancel_requested: false,
         terminal_reason: None,
+        billing: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     }

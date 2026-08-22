@@ -19,7 +19,6 @@ import {
   Smile,
   Sun,
   SunMoon,
-  Telescope,
   Ticket,
   UserRound,
   Volume2,
@@ -72,7 +71,6 @@ import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { OperatorConsoleCard } from "./OperatorConsoleCard";
 import { AgentsSettingsPanel } from "./AgentsSettingsPanel";
-import { DiscoverySettingsCard } from "./DiscoverySettingsCard";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
@@ -90,7 +88,6 @@ export type SettingsSection =
   | "compute"
   | "appearance"
   | "shortcuts"
-  | "discovery"
   | "community-members"
   | "moderation"
   | "operator-console"
@@ -112,7 +109,6 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "compute",
   "appearance",
   "shortcuts",
-  "discovery",
   "community-members",
   "moderation",
   "operator-console",
@@ -199,11 +195,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "shortcuts",
     label: "Shortcuts",
     icon: Keyboard,
-  },
-  {
-    value: "discovery",
-    label: "Discovery",
-    icon: Telescope,
   },
   {
     value: "blocks",
@@ -879,8 +870,6 @@ export function renderSettingsSection(
       return <ThemeSettingsCard />;
     case "shortcuts":
       return <KeyboardShortcutsCard />;
-    case "discovery":
-      return <DiscoverySettingsCard />;
     case "blocks":
       return <BlocksSettingsCard />;
     case "community-members":

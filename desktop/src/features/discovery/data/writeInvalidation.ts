@@ -63,8 +63,12 @@ export function withWriteInvalidation(
         source.sendConversationReply(campaignId, conversationId, body),
       ),
     createCampaign: (input) => afterWrite(source.createCampaign(input)),
-    updateSourceConfig: (campaignId, config) =>
-      afterWrite(source.updateSourceConfig(campaignId, config)),
+    approveCampaignBudget: (campaignId) =>
+      afterWrite(source.approveCampaignBudget(campaignId)),
+    pauseCampaignBudget: (campaignId) =>
+      afterWrite(source.pauseCampaignBudget(campaignId)),
+    revokeCampaignBudget: (campaignId) =>
+      afterWrite(source.revokeCampaignBudget(campaignId)),
     cancelDiscovery: (campaignId) =>
       afterWrite(source.cancelDiscovery(campaignId)),
     startDiscovery: (campaignId) => afterRun(source.startDiscovery(campaignId)),

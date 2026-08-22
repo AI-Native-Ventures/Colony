@@ -1,13 +1,7 @@
-import { getDiscoveryCredentialStatus } from "@/shared/api/discoveryCredentials";
+import { getIdentity } from "@/shared/api/tauriIdentity";
 
 import type { DiscoveryEntitlement } from "../entitlement";
-import {
-  DISCOVERY_SOURCE_LABELS,
-  DISCOVERY_SOURCE_PROVIDERS,
-  isLiveDiscoverySource,
-  type CampaignSourceConfig,
-  type DiscoverySource,
-} from "../sourceConfig";
+import type { DiscoverySource } from "../sourceConfig";
 import type {
   CampaignDetail,
   CampaignDraft,
@@ -34,6 +28,11 @@ import type { DiscoveryDataSource } from "./DiscoveryDataSource";
 import { createFixtureDiscoveryDataSource } from "./FixtureDiscoveryDataSource";
 import { sourceEvents, sourceFingerprint } from "./relayDiscoveryEvents";
 import {
+  approvedCampaignBudgetNanousd,
+  campaignBudgetFingerprint,
+  DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD,
+} from "./campaignBudget";
+import {
   DEMO_DISCOVERY_ENTITLEMENT,
   relaySupportsDiscovery,
 } from "./relayDiscoverySupport";
@@ -50,7 +49,6 @@ import {
   DEFAULT_BROKER,
   DiscoveryBroker,
   type DiscoveryBrokerDependencies,
-  liveSourcePayload,
   RUN_STATUS_INTERVAL_MS,
 } from "./relayBroker";
 
@@ -139,12 +137,16 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
    */
   private leadCountsPromise: Promise<LeadCounts> | null = null;
   private readonly activeRuns = new Map<string, string>();
-  private readonly credentialStatus: typeof getDiscoveryCredentialStatus;
+  private readonly identityPubkey: () => Promise<string>;
   private readonly relaySupportsDiscovery: () => Promise<boolean>;
   constructor(dependencies: DiscoveryBrokerDependencies = DEFAULT_BROKER) {
     this.broker = new DiscoveryBroker(dependencies);
-    this.credentialStatus =
-      dependencies.credentialStatus ?? getDiscoveryCredentialStatus;
+    this.identityPubkey =
+      dependencies.identityPubkey ??
+      (async () => {
+        const identity = await getIdentity();
+        return identity.pubkey;
+      });
     this.relaySupportsDiscovery =
       dependencies.relaySupportsDiscovery ?? relaySupportsDiscovery;
   }
@@ -460,28 +462,26 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       this.demo.getVertical(input.industryId, input.verticalId),
     ]);
     if (!industry) throw new Error("This Discovery industry is unavailable.");
-    const sourceConfig = liveSourcePayload(input.sourceConfig);
-    const isDefaultSourceConfig =
-      sourceConfig.mode === "waterfall" &&
-      sourceConfig.sources.length === 1 &&
-      sourceConfig.sources[0] === "google_maps";
+    const campaignId = crypto.randomUUID();
+    const campaignInput = {
+      campaign_id: campaignId,
+      name: input.name.trim() || `${vertical.name} campaign`,
+      industry_id: industry.id,
+      industry_name: industry.name,
+      vertical_id: vertical.id,
+      vertical_name: vertical.name,
+      query: vertical.name,
+      location: input.location.trim(),
+      target,
+      description: input.description?.trim() || null,
+      language: "en",
+      region: null,
+    };
+    const budgetApproval = await this.campaignBudgetApproval(campaignInput);
     const result = await this.broker.workspace("create_campaign", {
       operation: "create_campaign",
-      campaign: {
-        campaign_id: crypto.randomUUID(),
-        name: input.name.trim() || `${vertical.name} campaign`,
-        industry_id: industry.id,
-        industry_name: industry.name,
-        vertical_id: vertical.id,
-        vertical_name: vertical.name,
-        query: vertical.name,
-        location: input.location.trim(),
-        target,
-        description: input.description?.trim() || null,
-        language: "en",
-        region: null,
-        ...(isDefaultSourceConfig ? {} : { source_config: sourceConfig }),
-      },
+      campaign: campaignInput,
+      budget_approval: budgetApproval,
     });
     if (result.result !== "campaign") {
       throw new Error("The relay returned the wrong campaign result.");
@@ -489,21 +489,83 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     return mapCampaign(result.campaign);
   }
 
-  async updateSourceConfig(
-    campaignId: string,
-    config: CampaignSourceConfig,
-  ): Promise<CampaignDetail> {
-    if (!(await this.live()))
-      return this.demo.updateSourceConfig(campaignId, config);
-    const result = await this.broker.workspace("update_campaign_sources", {
-      operation: "update_campaign_sources",
-      campaign_id: campaignId,
-      source_config: liveSourcePayload(config),
-    });
-    if (result.result !== "campaign") {
-      throw new Error("The relay returned the wrong campaign result.");
+  async approveCampaignBudget(campaignId: string): Promise<CampaignDetail> {
+    if (!(await this.live())) {
+      throw new Error("Campaign budgets apply to live Discovery only.");
     }
-    return mapCampaign(result.campaign);
+    const campaign = await this.getCampaignProjection(campaignId);
+    const approval = await this.broker.workspace("approve_campaign_budget", {
+      operation: "approve_campaign_budget",
+      approval: await this.campaignBudgetApproval(campaign),
+    });
+    if (approval.result !== "budget") {
+      throw new Error("The relay did not confirm the Campaign budget.");
+    }
+    return mapCampaign({ ...campaign, budget: approval.budget });
+  }
+
+  async pauseCampaignBudget(campaignId: string): Promise<CampaignDetail> {
+    return this.changeCampaignBudget("pause_campaign_budget", campaignId);
+  }
+
+  async revokeCampaignBudget(campaignId: string): Promise<CampaignDetail> {
+    return this.changeCampaignBudget("revoke_campaign_budget", campaignId);
+  }
+
+  private async campaignBudgetApproval(
+    campaign: Pick<
+      CampaignProjection,
+      | "campaign_id"
+      | "industry_id"
+      | "vertical_id"
+      | "query"
+      | "location"
+      | "target"
+      | "language"
+      | "region"
+    >,
+  ) {
+    const payerPubkey = await this.identityPubkey();
+    const approvedNanousd = approvedCampaignBudgetNanousd(campaign.target);
+    const fingerprint = await campaignBudgetFingerprint({
+      campaignId: campaign.campaign_id,
+      industryId: campaign.industry_id,
+      verticalId: campaign.vertical_id,
+      query: campaign.query,
+      location: campaign.location,
+      target: campaign.target,
+      language: campaign.language,
+      region: campaign.region,
+      payerPubkey,
+    });
+    return {
+      campaign_id: campaign.campaign_id,
+      payer_pubkey: payerPubkey,
+      approved_nanousd: approvedNanousd,
+      price_per_retained_lead_nanousd:
+        DISCOVERY_RETAINED_LEAD_PRICE_NANOUSD.toString(),
+      campaign_fingerprint: fingerprint,
+      approval_action_event_id: null,
+      approval_expires_at: null,
+    };
+  }
+
+  private async changeCampaignBudget(
+    operation: "pause_campaign_budget" | "revoke_campaign_budget",
+    campaignId: string,
+  ): Promise<CampaignDetail> {
+    if (!(await this.live())) {
+      throw new Error("Campaign budgets apply to live Discovery only.");
+    }
+    const result = await this.broker.workspace(operation, {
+      operation,
+      campaign_id: campaignId,
+    });
+    if (result.result !== "budget") {
+      throw new Error("The relay did not confirm the Campaign budget change.");
+    }
+    const campaign = await this.getCampaignProjection(campaignId);
+    return mapCampaign({ ...campaign, budget: result.budget });
   }
 
   startDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent> {
@@ -529,46 +591,11 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       throw new Error("Discovery access is required to run live Discovery.");
     }
     const current = await this.getCampaign(campaignId);
-    const unsupported = current.sourceConfig.order.filter(
-      (source) => !isLiveDiscoverySource(source),
-    );
-    if (unsupported.length > 0) {
+    if (current.budget?.state !== "active") {
       throw new Error(
-        `These sources are not available for live Discovery yet: ${unsupported
-          .map((source) => DISCOVERY_SOURCE_LABELS[source])
-          .join(", ")}.`,
-      );
-    }
-    const credentialStatuses = await Promise.all(
-      current.sourceConfig.order
-        .filter(isLiveDiscoverySource)
-        .map(async (source) => {
-          try {
-            return {
-              source,
-              status: await this.credentialStatus(
-                DISCOVERY_SOURCE_PROVIDERS[source],
-              ),
-            };
-          } catch {
-            return { source, status: "unavailable" as const };
-          }
-        }),
-    );
-    const unavailable = credentialStatuses.filter(
-      ({ status }) => status === "unavailable",
-    );
-    if (unavailable.length > 0) {
-      throw new Error(
-        "Colony cannot access the secure Discovery credential store on this device.",
-      );
-    }
-    const missing = credentialStatuses
-      .filter(({ status }) => status === "missing")
-      .map(({ source }) => DISCOVERY_SOURCE_LABELS[source]);
-    if (missing.length > 0) {
-      throw new Error(
-        `Connect API keys in Settings > Discovery for: ${missing.join(", ")}.`,
+        current.budget?.state === "exhausted"
+          ? "This Campaign has used its approved Colony Credits budget."
+          : "Approve a Colony Credits budget before starting Discovery.",
       );
     }
     const signal = new RunSignal();
@@ -578,13 +605,6 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
       "start",
       {
         campaignId,
-        businessSearch: {
-          query: current.verticalName,
-          location: current.location,
-          limit: current.target,
-          language: "en",
-          region: null,
-        },
       },
       async (actorPubkey, relayPubkey) => {
         workerSubscription.stop = await this.broker.subscribeToWorker(

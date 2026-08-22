@@ -67,6 +67,7 @@ pub(super) struct OutscraperSubmission {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum OutscraperPollOutcome {
     Pending,
     Ready(Vec<DiscoveryBusinessObservationInput>),
@@ -363,6 +364,7 @@ impl OutscraperClient {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn poll_once_with_preflight<P, PFut>(
         &self,
         request_id: &str,

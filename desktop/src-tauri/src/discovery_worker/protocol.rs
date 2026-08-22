@@ -1,7 +1,9 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
 use buzz_core_pkg::{
-    discovery::{DiscoveryOperation, DiscoveryRunProjection, DiscoveryRunRequest},
+    discovery::{
+        DiscoveryOperation, DiscoveryProvider, DiscoveryRunProjection, DiscoveryRunRequest,
+    },
     discovery_worker::{
         DiscoveryWorkerCheckpointRequest, DiscoveryWorkerClaimRequest, DiscoveryWorkerLeaseRequest,
         DiscoveryWorkerObservationBatchRequest, DiscoveryWorkerOperation,
@@ -28,6 +30,13 @@ pub(super) type ProtocolFuture<'a> =
     Pin<Box<dyn Future<Output = Result<DiscoveryWorkerReceiptOutcome, String>> + Send + 'a>>;
 pub(super) type RunStatusFuture<'a> =
     Pin<Box<dyn Future<Output = Result<DiscoveryRunProjection, String>> + Send + 'a>>;
+pub(super) type HostedProviderFuture<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<super::hosted_gateway::HostedProviderResponse, String>>
+            + Send
+            + 'a,
+    >,
+>;
 
 pub(super) trait WorkerProtocol: Send + Sync {
     fn status(&self, run_id: Uuid) -> RunStatusFuture<'_>;
@@ -47,6 +56,23 @@ pub(super) trait WorkerProtocol: Send + Sync {
     }
     fn fail(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
     fn complete(&self, request: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_>;
+    fn hosted_provider_submit(
+        &self,
+        _run_id: Uuid,
+        _lease_id: Uuid,
+        _provider: DiscoveryProvider,
+    ) -> HostedProviderFuture<'_> {
+        Box::pin(async { Err("hosted Discovery provider is unavailable".to_owned()) })
+    }
+    fn hosted_provider_poll<'a>(
+        &'a self,
+        _run_id: Uuid,
+        _lease_id: Uuid,
+        _provider: DiscoveryProvider,
+        _provider_request_id: &'a str,
+    ) -> HostedProviderFuture<'a> {
+        Box::pin(async { Err("hosted Discovery provider is unavailable".to_owned()) })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -197,6 +223,48 @@ fn expected_action_event_id(
 }
 
 impl WorkerProtocol for RelayWorkerProtocol<'_> {
+    fn hosted_provider_submit(
+        &self,
+        run_id: Uuid,
+        lease_id: Uuid,
+        provider: DiscoveryProvider,
+    ) -> HostedProviderFuture<'_> {
+        Box::pin(async move {
+            self.ensure_current()?;
+            super::hosted_gateway::submit(
+                self.state,
+                &self.keys,
+                &self.api_base_url,
+                run_id,
+                lease_id,
+                provider,
+            )
+            .await
+        })
+    }
+
+    fn hosted_provider_poll<'a>(
+        &'a self,
+        run_id: Uuid,
+        lease_id: Uuid,
+        provider: DiscoveryProvider,
+        provider_request_id: &'a str,
+    ) -> HostedProviderFuture<'a> {
+        Box::pin(async move {
+            self.ensure_current()?;
+            super::hosted_gateway::poll(
+                self.state,
+                &self.keys,
+                &self.api_base_url,
+                run_id,
+                lease_id,
+                provider,
+                provider_request_id,
+            )
+            .await
+        })
+    }
+
     fn status(&self, run_id: Uuid) -> RunStatusFuture<'_> {
         Box::pin(async move {
             self.ensure_current()?;
@@ -462,6 +530,7 @@ mod tests {
             request_id,
             idempotency_key,
             worker_id,
+            protocol_version: buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
             available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let action = build_discovery_worker_claim_action(relay.public_key(), &request)

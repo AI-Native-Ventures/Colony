@@ -1,10 +1,14 @@
 use std::{
     sync::atomic::Ordering,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[cfg(test)]
-use std::{future::Future, pin::Pin};
+use std::{
+    future::Future,
+    pin::Pin,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(test)]
 use buzz_core_pkg::discovery_worker::{
@@ -17,13 +21,15 @@ use buzz_core_pkg::discovery_worker::{
     DiscoveryWorkerSalvageBatchRequest,
 };
 use tauri::{AppHandle, Manager as _};
+#[cfg(test)]
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::outscraper::OutscraperPollOutcome;
 #[cfg(test)]
-use super::outscraper::{OutscraperClient, OutscraperError, OutscraperSubmission};
+use super::outscraper::{
+    OutscraperClient, OutscraperError, OutscraperPollOutcome, OutscraperSubmission,
+};
 use super::{
     adapter::FakeOutscraperAdapter,
     installation::load_or_create_worker_id,
@@ -32,7 +38,7 @@ use super::{
     provider_context::{LocalProviderCredentials, ProductionProviderClients},
     source_executor::{execute_production_source_plan, CoordinatedRunOutcome},
 };
-use crate::{app_state::AppState, discovery_credentials, relay};
+use crate::{app_state::AppState, relay};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const FAKE_STEP_DELAY: Duration = Duration::from_millis(250);
@@ -41,6 +47,7 @@ const OBSERVATION_BATCH_SIZE: usize = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HostRunOutcome {
+    #[cfg(test)]
     NoCredential,
     Idle,
     LostLease,
@@ -174,38 +181,14 @@ pub(crate) fn start_production_local_worker(app: AppHandle) {
                 tokio::time::sleep(POLL_INTERVAL).await;
                 continue;
             }
-            let credentials = match LocalProviderCredentials::load() {
-                Ok(credentials) => credentials,
-                Err(_) => {
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                    continue;
-                }
-            };
-            if let Err(error) = recover_terminal_outscraper_submissions(
-                &protocol,
-                &providers,
-                &credentials,
-                &outbox,
-                worker_id,
-            )
-            .await
-            {
-                eprintln!("buzz-desktop: Discovery paid-result polling paused safely: {error}");
-                tokio::time::sleep(POLL_INTERVAL).await;
-                continue;
-            }
-            let available_providers = credentials.available_providers();
-            if available_providers.is_empty() {
-                tokio::time::sleep(POLL_INTERVAL).await;
-                continue;
-            }
+            let credentials = LocalProviderCredentials::empty();
             if let Err(error) = run_multi_source_production_once(
                 &protocol,
                 &providers,
                 &credentials,
                 &outbox,
                 worker_id,
-                available_providers,
+                Vec::new(),
             )
             .await
             {
@@ -228,6 +211,8 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        protocol_version:
+            buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
         available_providers,
     };
     let lease = match protocol.claim(claim).await? {
@@ -244,6 +229,7 @@ async fn run_multi_source_production_once<P: WorkerProtocol>(
     }
 }
 
+#[cfg(test)]
 async fn recover_terminal_outscraper_submissions<P: WorkerProtocol>(
     protocol: &P,
     providers: &ProductionProviderClients,
@@ -435,6 +421,7 @@ where
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        protocol_version: buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
         available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let mut lease = match protocol.claim(claim).await? {
@@ -712,14 +699,16 @@ async fn run_once<P: WorkerProtocol>(
     worker_id: Uuid,
     step_delay: Duration,
 ) -> Result<HostRunOutcome, String> {
-    run_once_with_loader(protocol, worker_id, step_delay, || {
-        discovery_credentials::load_discovery_credential(
-            discovery_credentials::DiscoveryCredentialProvider::Outscraper,
-        )
-    })
+    run_once_with_credential(
+        protocol,
+        worker_id,
+        step_delay,
+        Zeroizing::new("fake-local-worker".to_owned()),
+    )
     .await
 }
 
+#[cfg(test)]
 async fn run_once_with_loader<P, F>(
     protocol: &P,
     worker_id: Uuid,
@@ -746,6 +735,7 @@ async fn run_once_with_credential<P: WorkerProtocol>(
         request_id: Uuid::new_v4(),
         idempotency_key: Uuid::new_v4(),
         worker_id,
+        protocol_version: buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
         available_providers: vec![DiscoveryProvider::Outscraper],
     };
     let lease = match protocol.claim(claim).await? {

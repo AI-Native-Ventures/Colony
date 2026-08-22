@@ -128,6 +128,11 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         {
             return Ok(SourceExecution::LostLease);
         }
+        if self.lease.lock().await.run.protocol_version
+            == buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+        {
+            return self.execute_hosted_source(provider, remaining_target).await;
+        }
         match provider {
             DiscoveryProvider::Outscraper => self.execute_outscraper(remaining_target).await,
             DiscoveryProvider::BraveSearch => self.execute_brave(remaining_target, fresh).await,

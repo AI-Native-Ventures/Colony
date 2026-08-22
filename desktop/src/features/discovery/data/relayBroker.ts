@@ -2,7 +2,6 @@ import { verifyEvent } from "nostr-tools/pure";
 
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { relayClient } from "@/shared/api/relayClient";
-import { getDiscoveryCredentialStatus } from "@/shared/api/discoveryCredentials";
 import { signRelayEvent } from "@/shared/api/tauri";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
@@ -14,47 +13,34 @@ import {
   KIND_DISCOVERY_WORKSPACE_RECEIPT,
 } from "@/shared/constants/kinds";
 
-import {
-  isLiveDiscoverySource,
-  type CampaignSourceConfig,
-} from "../sourceConfig";
 import type { LeadCounts, LeadDetail } from "../types";
 import type {
+  CampaignBudgetProjection,
   CampaignProjection,
   LeadProjection,
   RunProjection,
 } from "./relayDiscoveryModels";
 import { relaySupportsDiscovery } from "./relayDiscoverySupport";
 
-const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v2";
-const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v2";
-const RUN_ACTION_SCHEMA = "colony.discovery-action/v2";
-const RUN_RECEIPT_SCHEMA = "colony.discovery-receipt/v2";
+const WORKSPACE_ACTION_SCHEMA = "colony.discovery-workspace-action/v3";
+const WORKSPACE_RECEIPT_SCHEMA = "colony.discovery-workspace-receipt/v3";
+const RUN_ACTION_SCHEMA_V2 = "colony.discovery-action/v2";
+const RUN_RECEIPT_SCHEMA_V2 = "colony.discovery-receipt/v2";
+const RUN_ACTION_SCHEMA_V3 = "colony.discovery-action/v3";
+const RUN_RECEIPT_SCHEMA_V3 = "colony.discovery-receipt/v3";
 const WORKER_RECEIPT_SCHEMAS = new Set([
   "colony.discovery-worker-receipt/v1",
   "colony.discovery-worker-receipt/v2",
+  "colony.discovery-worker-receipt/v3",
 ]);
 const RECEIPT_ATTEMPTS = 20;
 const RECEIPT_INTERVAL_MS = 300;
 export const RUN_STATUS_INTERVAL_MS = 10_000;
 
-export function liveSourcePayload(config?: CampaignSourceConfig) {
-  const selected = config ?? { mode: "waterfall", order: ["google_maps"] };
-  if (
-    (selected.mode !== "waterfall" && selected.mode !== "concurrent") ||
-    selected.order.length < 1 ||
-    selected.order.length > 3 ||
-    new Set(selected.order).size !== selected.order.length ||
-    selected.order.some((source) => !isLiveDiscoverySource(source))
-  ) {
-    throw new Error("Choose one or more available Discovery sources.");
-  }
-  return { mode: selected.mode, sources: [...selected.order] };
-}
-
 export type WorkspaceResult =
   | { result: "access"; active: boolean }
   | { result: "campaign"; campaign: CampaignProjection }
+  | { result: "budget"; budget: CampaignBudgetProjection }
   | {
       result: "campaigns";
       page: {
@@ -86,6 +72,10 @@ export type WorkspaceOperation =
   | "access"
   | "create_campaign"
   | "update_campaign_sources"
+  | "approve_campaign_budget"
+  | "pause_campaign_budget"
+  | "revoke_campaign_budget"
+  | "get_campaign_budget"
   | "get_campaign"
   | "list_campaigns"
   | "list_leads"
@@ -95,7 +85,7 @@ export type WorkspaceOperation =
 export type RunOperation = "start" | "status" | "cancel";
 
 export type DiscoveryBrokerDependencies = {
-  credentialStatus?: typeof getDiscoveryCredentialStatus;
+  identityPubkey?: () => Promise<string>;
   delay: (ms: number) => Promise<void>;
   fetchFirstEvent: (
     filter: RelaySubscriptionFilter,
@@ -111,7 +101,6 @@ export type DiscoveryBrokerDependencies = {
 };
 
 export const DEFAULT_BROKER: DiscoveryBrokerDependencies = {
-  credentialStatus: getDiscoveryCredentialStatus,
   delay: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms)),
   fetchFirstEvent: (filter) => relayClient.fetchFirstEvent(filter),
   publish: (event) =>
@@ -250,7 +239,7 @@ function parseWorkspaceReceipt(
     e[2] !== "" ||
     e[3] !== "discovery-workspace-action" ||
     tuple?.length !== 5 ||
-    tuple[1] !== "2" ||
+    tuple[1] !== "3" ||
     tuple[2] !== operation ||
     tuple[3] !== requestId ||
     tuple[4] !== idempotencyKey
@@ -281,6 +270,9 @@ function parseRunReceipt(
   requestId: string,
   idempotencyKey: string,
 ): RunProjection | null {
+  const wireVersion = operation === "start" ? "3" : "2";
+  const receiptSchema =
+    operation === "start" ? RUN_RECEIPT_SCHEMA_V3 : RUN_RECEIPT_SCHEMA_V2;
   if (
     !trustedEvent(event, KIND_DISCOVERY_RECEIPT, relayPubkey) ||
     !exactTags(event, ["p", "e", "run", "discovery-receipt"])
@@ -299,7 +291,7 @@ function parseRunReceipt(
     e[3] !== "discovery-action" ||
     run?.length !== 2 ||
     tuple?.length !== 6 ||
-    tuple[1] !== "2" ||
+    tuple[1] !== wireVersion ||
     tuple[2] !== operation ||
     tuple[3] !== requestId ||
     tuple[4] !== idempotencyKey ||
@@ -309,7 +301,7 @@ function parseRunReceipt(
   }
   const content = parseCanonicalContent(event);
   if (
-    content?.schema !== RUN_RECEIPT_SCHEMA ||
+    content?.schema !== receiptSchema ||
     content.operation !== operation ||
     content.request_id !== requestId ||
     content.idempotency_key !== idempotencyKey ||
@@ -336,7 +328,7 @@ function workerRunId(
   const tuple = oneTag(event, "discovery-worker-receipt");
   if (
     tuple?.length !== 6 ||
-    (tuple[1] !== "1" && tuple[1] !== "2") ||
+    (tuple[1] !== "1" && tuple[1] !== "2" && tuple[1] !== "3") ||
     content?.schema !== `colony.discovery-worker-receipt/v${tuple[1]}` ||
     !WORKER_RECEIPT_SCHEMAS.has(content.schema) ||
     !isPlainObject(content.outcome)
@@ -390,7 +382,7 @@ export class DiscoveryBroker {
         ["p", relayPubkey],
         [
           "discovery-workspace-action",
-          "2",
+          "3",
           operation,
           requestId,
           idempotencyKey,
@@ -432,7 +424,6 @@ export class DiscoveryBroker {
     input: {
       campaignId?: string;
       runId?: string;
-      businessSearch?: Record<string, unknown>;
     },
     beforePublish?: (actorPubkey: string, relayPubkey: string) => Promise<void>,
   ): Promise<{ actorPubkey: string; relayPubkey: string; run: RunProjection }> {
@@ -441,14 +432,16 @@ export class DiscoveryBroker {
     const idempotencyKey = crypto.randomUUID();
     const target = operation === "start" ? input.campaignId : input.runId;
     if (!target) throw new Error("Discovery request target is missing.");
+    const wireVersion = operation === "start" ? "3" : "2";
     const content = {
-      schema: RUN_ACTION_SCHEMA,
+      schema:
+        operation === "start" ? RUN_ACTION_SCHEMA_V3 : RUN_ACTION_SCHEMA_V2,
       operation,
       request_id: requestId,
       idempotency_key: idempotencyKey,
       campaign_id: operation === "start" ? target : null,
       run_id: operation === "start" ? null : target,
-      business_search: operation === "start" ? input.businessSearch : null,
+      ...(operation === "start" ? { protocol_version: 3 } : {}),
     };
     const action = await this.dependencies.sign({
       kind: KIND_DISCOVERY_ACTION,
@@ -456,7 +449,7 @@ export class DiscoveryBroker {
       tags: [
         ["p", relayPubkey],
         [operation === "start" ? "campaign" : "run", target],
-        ["discovery-action", "2", operation, requestId, idempotencyKey],
+        ["discovery-action", wireVersion, operation, requestId, idempotencyKey],
       ],
     });
     await beforePublish?.(action.pubkey, relayPubkey);

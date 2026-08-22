@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowLeft, CalendarDays } from "lucide-react";
+import { ArrowLeft, CalendarDays, Coins, Loader2 } from "lucide-react";
 
 import type { DiscoverySearch } from "@/app/routes/discovery";
 import { Badge } from "@/shared/ui/badge";
@@ -8,12 +8,12 @@ import { Card } from "@/shared/ui/card";
 import type { DiscoveryEntitlement } from "../entitlement";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
 import type { CampaignDetail, LeadPage } from "../types";
+import { formatDiscoveryNanousd } from "../data/campaignBudget";
 import { useDiscoveryRun } from "../useDiscoveryRun";
 import { EntitlementLock } from "./EntitlementLock";
 import { CampaignTabs, type CampaignTab } from "./CampaignTabs";
 import { DiscoveryRunTab } from "./DiscoveryRunTab";
 import { OverviewTab } from "./OverviewTab";
-import { SourceConfigEditor } from "./SourceConfigEditor";
 import { LeadsWorkspace } from "./LeadsWorkspace";
 import { campaignTabForSearch } from "./discoveryLayout";
 import { CampaignOutreachTab } from "./CampaignOutreachTab";
@@ -60,6 +60,32 @@ function SettingsTab({
   entitlement: DiscoveryEntitlement | null;
   onUpdated: (campaign: CampaignDetail) => void;
 }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const budget = campaign.budget;
+
+  async function change(action: "approve" | "pause" | "revoke"): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const updated =
+        action === "approve"
+          ? await dataSource.approveCampaignBudget(campaign.id)
+          : action === "pause"
+            ? await dataSource.pauseCampaignBudget(campaign.id)
+            : await dataSource.revokeCampaignBudget(campaign.id);
+      onUpdated(updated);
+    } catch (cause: unknown) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "The Campaign budget could not be changed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -67,15 +93,85 @@ function SettingsTab({
           Campaign settings
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Manage discovery strategy, source order, and provider access.
+          Manage the Colony Credits approved for this Campaign.
         </p>
       </div>
-      <SourceConfigEditor
-        campaign={campaign}
-        dataSource={dataSource}
-        entitlement={entitlement}
-        onUpdated={onUpdated}
-      />
+      <Card className="space-y-5 border-border/60 p-6 shadow-none">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+            <Coins aria-hidden="true" className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-semibold text-foreground">
+                Discovery budget
+              </h3>
+              <Badge
+                variant={budget?.state === "active" ? "success" : "secondary"}
+              >
+                {budget?.state ?? "unapproved"}
+              </Badge>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              5¢ per newly retained, deduplicated lead. Colony chooses and funds
+              the data source.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            ["Approved", budget?.approvedNanousd ?? "0"],
+            ["Spent", budget?.spentNanousd ?? "0"],
+            ["Reserved", budget?.reservedNanousd ?? "0"],
+            ["Remaining", budget?.remainingNanousd ?? "0"],
+          ].map(([label, value]) => (
+            <div className="rounded-xl bg-muted/50 p-3" key={label}>
+              <p className="text-xs text-muted-foreground">{label}</p>
+              <p className="mt-1 font-mono text-sm font-semibold text-foreground">
+                {formatDiscoveryNanousd(value)}
+              </p>
+            </div>
+          ))}
+        </div>
+        {error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {(!budget ||
+            budget.state === "unapproved" ||
+            budget.state === "paused") &&
+          entitlement?.experience === "live" ? (
+            <Button disabled={busy} onClick={() => void change("approve")}>
+              {busy ? (
+                <Loader2 aria-hidden="true" className="animate-spin" />
+              ) : null}
+              {budget?.state === "paused" ? "Resume budget" : "Approve budget"}
+            </Button>
+          ) : null}
+          {budget?.state === "active" ? (
+            <Button
+              disabled={busy}
+              onClick={() => void change("pause")}
+              variant="outline"
+            >
+              Pause new runs
+            </Button>
+          ) : null}
+          {budget &&
+          budget.state !== "unapproved" &&
+          budget.state !== "revoked" ? (
+            <Button
+              disabled={busy}
+              onClick={() => void change("revoke")}
+              variant="destructive"
+            >
+              Revoke budget
+            </Button>
+          ) : null}
+        </div>
+      </Card>
     </div>
   );
 }

@@ -75,7 +75,6 @@ function relay({ leadTotal = 0 } = {}) {
       delay: async () => {},
       relaySelf: async () => RELAY_PUBKEY,
       relaySupportsDiscovery: async () => true,
-      credentialStatus: async () => "configured",
       subscribe: async () => async () => {},
       sign: async ({ kind, content, createdAt, tags }) =>
         finalizeEvent(
@@ -167,14 +166,14 @@ function relay({ leadTotal = 0 } = {}) {
               ["e", actionEvent.id, "", "discovery-workspace-action"],
               [
                 "discovery-workspace-receipt",
-                "2",
+                "3",
                 operation,
                 request.request_id,
                 request.idempotency_key,
               ],
             ],
             content: canonicalDiscoveryJson({
-              schema: "colony.discovery-workspace-receipt/v2",
+              schema: "colony.discovery-workspace-receipt/v3",
               receipt: {
                 operation,
                 request_id: request.request_id,

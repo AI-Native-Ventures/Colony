@@ -18,6 +18,7 @@ import {
 } from "../ui/leadEditForm.ts";
 
 const ACTOR_SECRET = generateSecretKey();
+const ACTOR_PUBKEY = getPublicKey(ACTOR_SECRET);
 const RELAY_SECRET = generateSecretKey();
 const RELAY_PUBKEY = getPublicKey(RELAY_SECRET);
 const NOW = "2026-08-02T10:00:00Z";
@@ -25,8 +26,7 @@ const NOW = "2026-08-02T10:00:00Z";
 function harness(
   active,
   receiptSecret = RELAY_SECRET,
-  credentialStatuses = {},
-  workerReceiptVersion = "2",
+  workerReceiptVersion = "3",
 ) {
   let published = null;
   let campaign = null;
@@ -68,6 +68,7 @@ function harness(
       return runActions;
     },
     dependencies: {
+      identityPubkey: async () => ACTOR_PUBKEY,
       delay: async () => {},
       relaySelf: async () => RELAY_PUBKEY,
       relaySupportsDiscovery: async () => true,
@@ -97,6 +98,15 @@ function harness(
             total_steps: 4,
             cancel_requested: false,
             terminal_reason: null,
+            protocol_version: 3,
+            billing: {
+              payer_pubkey: ACTOR_PUBKEY,
+              reserved_nanousd: "1250000000",
+              price_per_retained_lead_nanousd: "50000000",
+              billable_lead_limit: 25,
+              settled_nanousd: null,
+              settled_retained_leads: null,
+            },
             created_at: NOW,
             updated_at: NOW,
           };
@@ -121,8 +131,6 @@ function harness(
         }
         return event;
       },
-      credentialStatus: async (provider) =>
-        credentialStatuses[provider] ?? "configured",
       subscribe: async (_filter, onEvent) => {
         workerListener = onEvent;
         return async () => {
@@ -150,7 +158,7 @@ function harness(
                 ["run", run.run_id],
                 [
                   "discovery-receipt",
-                  "2",
+                  "3",
                   action.operation,
                   action.request_id,
                   action.idempotency_key,
@@ -158,7 +166,7 @@ function harness(
                 ],
               ],
               content: canonicalDiscoveryJson({
-                schema: "colony.discovery-receipt/v2",
+                schema: "colony.discovery-receipt/v3",
                 operation: action.operation,
                 request_id: action.request_id,
                 idempotency_key: action.idempotency_key,
@@ -257,6 +265,19 @@ function harness(
             lead_count: 0,
             latest_run: null,
             latest_run_sources: [],
+            budget: {
+              state: "active",
+              payer_pubkey: request.payload.budget_approval.payer_pubkey,
+              approved_nanousd:
+                request.payload.budget_approval.approved_nanousd,
+              spent_nanousd: "0",
+              reserved_nanousd: "0",
+              price_per_retained_lead_nanousd: "50000000",
+              campaign_fingerprint:
+                request.payload.budget_approval.campaign_fingerprint,
+              approval_action_event_id: null,
+              approved_at: NOW,
+            },
             created_at: NOW,
             updated_at: NOW,
           };
@@ -365,14 +386,14 @@ function harness(
               ["e", actionEvent.id, "", "discovery-workspace-action"],
               [
                 "discovery-workspace-receipt",
-                "2",
+                "3",
                 operation,
                 request.request_id,
                 request.idempotency_key,
               ],
             ],
             content: canonicalDiscoveryJson({
-              schema: "colony.discovery-workspace-receipt/v2",
+              schema: "colony.discovery-workspace-receipt/v3",
               receipt: {
                 operation,
                 request_id: request.request_id,
@@ -496,7 +517,7 @@ test("active Discovery access switches taxonomy campaigns onto persisted relay d
   );
   assert.ok(createEvent, "the workspace create action was published");
   const createContent = JSON.parse(createEvent.content);
-  assert.equal(createContent.schema, "colony.discovery-workspace-action/v2");
+  assert.equal(createContent.schema, "colony.discovery-workspace-action/v3");
   assert.equal(
     Object.hasOwn(createContent.request.payload.campaign, "source_config"),
     false,
@@ -504,8 +525,13 @@ test("active Discovery access switches taxonomy campaigns onto persisted relay d
   );
   assert.equal(
     createEvent.tags.find((tag) => tag[0] === "discovery-workspace-action")[1],
-    "2",
+    "3",
   );
+  assert.equal(
+    createContent.request.payload.budget_approval.approved_nanousd,
+    "1250000000",
+  );
+  assert.equal(created.budget?.state, "active");
 
   const vertical = await source.getVertical("automotive", "auto-repair");
   assert.deepEqual(
@@ -519,7 +545,7 @@ test("active Discovery access switches taxonomy campaigns onto persisted relay d
   );
 });
 
-test("live campaigns persist and reload the selected source plan", async () => {
+test("live Campaign creation ignores client source controls", async () => {
   const live = harness(true);
   const source = new RelayDiscoveryDataSource(live.dependencies);
   const created = await source.createCampaign({
@@ -534,49 +560,29 @@ test("live campaigns persist and reload the selected source plan", async () => {
     },
   });
   assert.deepEqual(created.sourceConfig, {
-    mode: "concurrent",
-    order: ["brave_search", "exa_search"],
-  });
-
-  const updated = await source.updateSourceConfig(created.id, {
     mode: "waterfall",
-    order: ["exa_search", "google_maps", "brave_search"],
+    order: ["google_maps"],
   });
-  assert.deepEqual(updated.sourceConfig, {
-    mode: "waterfall",
-    order: ["exa_search", "google_maps", "brave_search"],
-  });
-  assert.ok(live.operations.includes("update_campaign_sources"));
-  const workspaceEvents = live.publishedEvents.filter((event) => {
-    if (event.kind !== 40021) return false;
-    const operation = JSON.parse(event.content).request.payload.operation;
-    return (
-      operation === "create_campaign" || operation === "update_campaign_sources"
-    );
-  });
-  assert.deepEqual(
-    JSON.parse(workspaceEvents[0].content).request.payload.campaign
-      .source_config,
-    { mode: "concurrent", sources: ["brave_search", "exa_search"] },
+  const createEvent = live.publishedEvents.find(
+    (event) =>
+      event.kind === 40021 &&
+      JSON.parse(event.content).request.payload.operation === "create_campaign",
   );
-  assert.deepEqual(
-    JSON.parse(workspaceEvents[1].content).request.payload.source_config,
-    {
-      mode: "waterfall",
-      sources: ["exa_search", "google_maps", "brave_search"],
-    },
+  assert.equal(
+    Object.hasOwn(
+      JSON.parse(createEvent.content).request.payload.campaign,
+      "source_config",
+    ),
+    false,
   );
   assert.deepEqual((await source.getCampaign(created.id)).sourceConfig, {
     mode: "waterfall",
-    order: ["exa_search", "google_maps", "brave_search"],
+    order: ["google_maps"],
   });
 });
 
-test("start lists every selected source whose local key is missing", async () => {
-  const live = harness(true, RELAY_SECRET, {
-    brave_search: "missing",
-    exa_search: "missing",
-  });
+test("hosted Discovery starts without reading local provider keys", async () => {
+  const live = harness(true);
   const source = new RelayDiscoveryDataSource(live.dependencies);
   const campaign = await source.createCampaign({
     name: "Missing credentials",
@@ -590,12 +596,10 @@ test("start lists every selected source whose local key is missing", async () =>
     },
   });
 
-  await assert.rejects(async () => {
-    for await (const _event of source.startDiscovery(campaign.id)) {
-      // The stream must fail before the run action is published.
-    }
-  }, /Brave Web Search, Exa Neural Search/);
-  assert.equal(live.runActions, 0);
+  for await (const _event of source.startDiscovery(campaign.id)) {
+    // The hosted run completes through the signed worker receipt.
+  }
+  assert.equal(live.runActions, 1);
 });
 
 test("inactive workspaces stay on the cost-free demo and cannot create live records", async () => {
@@ -717,14 +721,8 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
     events.some(
       (event) =>
         event.type === "source_completed" &&
-        event.source === "brave_search" &&
+        event.source === "google_maps" &&
         event.sourceMetric.stored === 1,
-    ),
-  );
-  assert.ok(
-    events.some(
-      (event) =>
-        event.type === "source_exhausted" && event.source === "exa_search",
     ),
   );
   assert.equal(events.at(-1).type, "session_completed");
@@ -740,8 +738,8 @@ test("a signed UI run follows worker progress and exposes the automatic new Lead
   assert.equal(page.leads[0].companyName, "Sandton Auto Works");
   assert.equal(page.leads[0].status, "candidate");
   assert.equal(page.leads[0].score, 0);
-  assert.equal(page.leads[0].source, "brave_search");
-  assert.equal(page.leads[0].sourceLabel, "Brave Web Search");
+  assert.equal(page.leads[0].source, "google_maps");
+  assert.equal(page.leads[0].sourceLabel, "Outscraper (Google Maps)");
 });
 
 test("getLeads forwards the funnel status to the relay payload", async () => {
@@ -862,8 +860,8 @@ test("pipeline totals follow the relay after a status move", async () => {
   assert.equal(byStatus.get("accepted").leads[0].id, lead.id);
 });
 
-test("a released V1 worker receipt still wakes the V2 desktop run loop", async () => {
-  const live = harness(true, RELAY_SECRET, {}, "1");
+test("a released V1 worker receipt still wakes the V3 desktop run loop", async () => {
+  const live = harness(true, RELAY_SECRET, "1");
   const source = new RelayDiscoveryDataSource(live.dependencies);
   const campaign = await source.createCampaign({
     name: "Legacy worker compatibility",

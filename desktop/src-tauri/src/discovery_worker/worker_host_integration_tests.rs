@@ -5,8 +5,8 @@ use super::*;
 async fn native_host_real_relay_completes_and_recovers_after_restart() {
     use buzz_core_pkg::discovery::{DiscoveryBusinessSearchSpec, DiscoveryStartRequest};
     use buzz_core_pkg::discovery_workspace::{
-        DiscoveryCampaignInput, DiscoveryLeadListRequest, DiscoveryWorkspaceActionPayload,
-        DiscoveryWorkspaceRequest,
+        DiscoveryCampaignCreateInput, DiscoveryCampaignInput, DiscoveryLeadListRequest,
+        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceRequest,
     };
     use buzz_sdk_pkg::{
         discovery::build_discovery_start_action,
@@ -125,7 +125,7 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: Box::new(DiscoveryCampaignInput {
+                campaign: Box::new(DiscoveryCampaignCreateInput::Legacy(DiscoveryCampaignInput {
                     campaign_id,
                     name: "Sandton dentists".to_owned(),
                     industry_id: "healthcare".to_owned(),
@@ -139,7 +139,8 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
                     language: "en".to_owned(),
                     region: Some("ZA".to_owned()),
                     source_config: buzz_core_pkg::discovery::DiscoverySourceConfig::default(),
-                }),
+                })),
+                budget_approval: None,
             },
         };
         let campaign_response = relay::submit_event_at_with_keys(
@@ -156,13 +157,14 @@ async fn native_host_real_relay_completes_and_recovers_after_restart() {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             campaign_id,
-            business_search: DiscoveryBusinessSearchSpec {
+            protocol_version: buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(DiscoveryBusinessSearchSpec {
                 query: "dentists".to_owned(),
                 location: "Sandton, Johannesburg, South Africa".to_owned(),
                 limit: 3,
                 language: "en".to_owned(),
                 region: Some("ZA".to_owned()),
-            },
+            }),
         };
         let response = relay::submit_event_at_with_keys(
             build_discovery_start_action(relay_pubkey, &request).expect("Discovery start builder"),

@@ -73,7 +73,6 @@ const settingsNavGroups: Array<{
     sections: [
       "agents",
       "blocks",
-      "discovery",
       "compute",
       "experimental",
       "mobile",
