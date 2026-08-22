@@ -163,6 +163,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/accounts/reset-password",
             post(api::accounts::reset_password),
         )
+        // Paystack card top-ups: two NIP-98-signed client routes plus the
+        // signature-verified provider webhook, the only thing that credits
+        // (see api::payments).
+        .route("/api/payments/initialize", post(api::payments::initialize))
+        .route("/api/payments/verify", post(api::payments::verify))
+        .route("/api/payments/balance", post(api::payments::balance))
         // Moderation queue reads (NIP-98 auth + mod-authz gate, L6)
         .route("/moderation/reports", get(api::bridge::moderation_reports))
         .route("/moderation/audit", get(api::bridge::moderation_audit))
