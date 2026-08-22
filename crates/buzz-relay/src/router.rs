@@ -169,6 +169,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/payments/initialize", post(api::payments::initialize))
         .route("/api/payments/verify", post(api::payments::verify))
         .route("/api/payments/balance", post(api::payments::balance))
+        .route("/api/payments/webhook", post(api::payments::webhook))
         // Moderation queue reads (NIP-98 auth + mod-authz gate, L6)
         .route("/moderation/reports", get(api::bridge::moderation_reports))
         .route("/moderation/audit", get(api::bridge::moderation_audit))

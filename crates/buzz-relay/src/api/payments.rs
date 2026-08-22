@@ -539,6 +539,177 @@ pub async fn balance(
     balance_payment(&store, pubkey.to_bytes()).await
 }
 
+/// `webhook` core: verify, then credit and settle exactly once.
+///
+/// The signature is checked over the raw bytes before anything parses them:
+/// Paystack signs the bytes it sent, and re-serialised JSON differs for the
+/// same object, so verifying after parsing would reject every real delivery
+/// while passing any struct round-trip test.
+///
+/// Every event this understands is acknowledged with 200, including events
+/// that are ignored (other event types) and references we do not recognise
+/// (they may belong to another environment sharing the key). A non-200 makes
+/// Paystack retry forever. Only a store failure answers 5xx so that a retry
+/// can converge; see the module docs for why credit precedes settle.
+pub(crate) async fn webhook_payment(
+    store: &dyn PaymentStore,
+    webhook_secret: &str,
+    community: CommunityId,
+    signature_header: &str,
+    body: &[u8],
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    // Signature over the raw bytes, before anything parses them.
+    if !verify_signature(body, signature_header, webhook_secret) {
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_signature"));
+    }
+
+    let event: Value = match serde_json::from_slice(body) {
+        Ok(event) => event,
+        Err(_) => {
+            // Signed but unparseable can only be a key shared with something
+            // that is not Paystack. Nothing is understood, so nothing moves;
+            // acknowledging stops a retry loop over a body we will never read
+            // differently.
+            tracing::warn!("paystack webhook: signed body was not JSON");
+            return Ok(StatusCode::OK);
+        }
+    };
+
+    match event.get("event").and_then(Value::as_str) {
+        Some("charge.success") => {}
+        // Understood envelope, ignored event type (charge.failed and friends).
+        // Acknowledged so Paystack does not retry an event we will never act
+        // on; the intent stays pending, which is the truthful state.
+        _ => return Ok(StatusCode::OK),
+    }
+
+    let data = event.get("data");
+    let Some(reference) = data
+        .and_then(|data| data.get("reference"))
+        .and_then(Value::as_str)
+    else {
+        tracing::warn!("paystack webhook: charge.success without a reference");
+        return Ok(StatusCode::OK);
+    };
+
+    // The contract is USD end to end. A different currency means the amount
+    // is a different unit, so crediting it as cents would misprice it; out of
+    // contract, so refused loudly and acknowledged rather than retried.
+    if let Some(currency) = data
+        .and_then(|data| data.get("currency"))
+        .and_then(Value::as_str)
+    {
+        if !currency.eq_ignore_ascii_case("USD") {
+            tracing::error!(
+                reference = %reference,
+                currency = %currency,
+                "paystack webhook: refusing a non-USD charge"
+            );
+            return Ok(StatusCode::OK);
+        }
+    }
+
+    let Some(paid_cents) = data
+        .and_then(|data| data.get("amount"))
+        .and_then(Value::as_i64)
+    else {
+        tracing::warn!(reference = %reference, "paystack webhook: charge.success without an amount");
+        return Ok(StatusCode::OK);
+    };
+
+    let intent = match store.find_intent(community, reference).await {
+        Ok(Some(intent)) => intent,
+        Ok(None) => {
+            // May belong to another environment sharing the key. Not ours,
+            // not an error, nothing to credit.
+            tracing::warn!(
+                reference = %reference,
+                "paystack webhook: unknown reference"
+            );
+            return Ok(StatusCode::OK);
+        }
+        Err(error) => return Err(internal_error(&format!("find payment intent: {error}"))),
+    };
+
+    // Paystack retries deliveries, so a settled intent meeting this event
+    // again is the common replay path, not an anomaly. The ledger's UNIQUE
+    // (pubkey, ref) is the second idempotency layer behind this early return.
+    if intent.status == "paid" {
+        tracing::info!(reference = %reference, "paystack webhook: replay for a settled payment");
+        return Ok(StatusCode::OK);
+    }
+
+    // The amount is checked against our own record, not trusted from the
+    // callback: what was actually paid is what gets credited, and any
+    // mismatch between the two numbers is logged, never silently resolved in
+    // either direction.
+    if paid_cents != intent.usd_cents {
+        tracing::warn!(
+            reference = %reference,
+            asked_cents = intent.usd_cents,
+            paid_cents,
+            "paystack webhook: paid amount differed from the requested amount"
+        );
+    }
+
+    let nanousd = match nano_usd_from_cents(paid_cents) {
+        Ok(nanousd) => nanousd,
+        Err(error) => {
+            tracing::error!(
+                reference = %reference,
+                error = %error,
+                "paystack webhook: refusing to credit an unconvertible amount"
+            );
+            return Ok(StatusCode::OK);
+        }
+    };
+
+    store
+        .credit(&intent.pubkey, nanousd, reference)
+        .await
+        .map_err(|error| internal_error(&format!("credit payment: {error}")))?;
+
+    store
+        .settle_intent(community, reference, paid_cents)
+        .await
+        .map(|_| StatusCode::OK)
+        .map_err(|error| internal_error(&format!("settle payment intent: {error}")))
+}
+
+/// `POST /api/payments/webhook`.
+///
+/// Unauthenticated by design: identity comes from the HMAC signature over
+/// the raw body, verified against the deployment secret. The tenant still
+/// binds from the request host like every HTTP path here, so an intent in
+/// community A can only be settled through A's host.
+pub async fn webhook(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let raw_host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let tenant = crate::tenant::bind_community(&state.db, raw_host)
+        .await
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "unknown_community"))?;
+
+    // Without the secret nothing can be verified, so every delivery fails
+    // closed. The header value itself is never logged.
+    let Some(secret) = webhook_secret() else {
+        tracing::error!("paystack webhook secret unset; refusing every delivery");
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_signature"));
+    };
+    let signature = headers
+        .get(SIGNATURE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+
+    let store = RealStore::new(state.db.pool().clone());
+    webhook_payment(&store, &secret, tenant.community(), signature, &body).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,19 +838,6 @@ mod tests {
                     usd_cents,
                     status: "pending".into(),
                     paid_cents: None,
-                },
-            );
-        }
-
-        fn insert_paid(&self, reference: &str, pubkey: [u8; 32], usd_cents: i64) {
-            self.intents.lock().unwrap().insert(
-                reference.to_string(),
-                PaymentIntent {
-                    reference: reference.to_string(),
-                    pubkey: pubkey.to_vec(),
-                    usd_cents,
-                    status: "paid".into(),
-                    paid_cents: Some(usd_cents),
                 },
             );
         }
@@ -1039,5 +1197,232 @@ mod tests {
         let retry =
             charge_pubkey_window(&cache, key, 3).expect("the fourth attempt must be blocked");
         assert!(retry > 0 && retry <= RATE_WINDOW_SECS, "got {retry}");
+    }
+
+    // ---- webhook ----
+    //
+    // The webhook is the only path allowed to move money, so its tests pin
+    // behaviour at the handler level against a faked store: who got credited,
+    // how much, and how many times.
+
+    const TEST_WEBHOOK_SECRET: &str = "whsec_test_example";
+
+    /// Test-only helper mirroring what Paystack does when it signs a delivery.
+    fn sign(secret: &str, body: &[u8]) -> String {
+        use hmac::{Hmac, KeyInit, Mac};
+        let mut mac = <Hmac<sha2::Sha512>>::new_from_slice(secret.as_bytes())
+            .expect("hmac accepts any key length");
+        mac.update(body);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn success_body(reference: &str, usd_cents: i64) -> Vec<u8> {
+        serde_json::json!({
+            "event": "charge.success",
+            "data": {
+                "reference": reference,
+                "amount": usd_cents,
+                "currency": "USD",
+                "status": "success",
+            },
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    async fn deliver(
+        store: &FakeStore,
+        signature: &str,
+        body: &[u8],
+    ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+        webhook_payment(store, TEST_WEBHOOK_SECRET, store.community, signature, body).await
+    }
+
+    /// Lifts the webhook's result into the shape `assert_typed_error` reads;
+    /// the webhook's error path is what the assertion targets.
+    fn as_handler_result(result: &Result<StatusCode, (StatusCode, Json<Value>)>) -> HandlerResult {
+        result
+            .clone()
+            .map(|status| Json(json!({ "status": status.as_u16() })))
+    }
+
+    fn assert_credits(store: &FakeStore, expected: &[(Vec<u8>, i64, &str)]) {
+        let calls = store.credit_calls();
+        let expected: Vec<(Vec<u8>, i64, String)> = expected
+            .iter()
+            .map(|(pubkey, delta, reference)| (pubkey.clone(), *delta, reference.to_string()))
+            .collect();
+        assert_eq!(calls, expected);
+    }
+
+    #[tokio::test]
+    async fn a_correct_signature_on_charge_success_credits_exactly_once() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        let body = success_body("ref-1", 500);
+
+        let status = deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("delivery acknowledged");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_credits(&store, &[(key.to_vec(), 5_000_000_000, "ref-1")]);
+        assert_eq!(store.settle_calls.load(Ordering::SeqCst), 1);
+        let settled = store.get("ref-1").expect("intent exists");
+        assert_eq!(settled.status, "paid");
+        assert_eq!(settled.paid_cents, Some(500));
+    }
+
+    #[tokio::test]
+    async fn a_replayed_delivery_credits_zero_more_times() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        let body = success_body("ref-1", 500);
+        let signature = sign(TEST_WEBHOOK_SECRET, &body);
+
+        deliver(&store, &signature, &body)
+            .await
+            .expect("first delivery");
+        deliver(&store, &signature, &body)
+            .await
+            .expect("replayed delivery");
+
+        assert_credits(&store, &[(key.to_vec(), 5_000_000_000, "ref-1")]);
+    }
+
+    #[tokio::test]
+    async fn a_tampered_signature_returns_401_and_credits_nothing() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        let signed_body = success_body("ref-1", 500);
+        let tampered_body = success_body("ref-1", 9_999);
+        // Signature over the honest body, delivered with a doctored one.
+        let signature = sign(TEST_WEBHOOK_SECRET, &signed_body);
+
+        let result = deliver(&store, &signature, &tampered_body).await;
+
+        assert_typed_error(
+            &as_handler_result(&result),
+            StatusCode::UNAUTHORIZED,
+            "invalid_signature",
+        );
+        assert!(
+            store.credit_calls().is_empty(),
+            "a tampered delivery must never credit"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_reference_returns_200_and_credits_nothing() {
+        let store = FakeStore::new(community());
+        let body = success_body("not-ours", 500);
+
+        let status = deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("unknown reference still acknowledged");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(store.credit_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_event_type_we_do_not_handle_returns_200_and_credits_nothing() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        let body = serde_json::json!({
+            "event": "charge.failed",
+            "data": { "reference": "ref-1", "amount": 500, "currency": "USD" },
+        })
+        .to_string()
+        .into_bytes();
+
+        let status = deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("ignored event acknowledged");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(store.credit_calls().is_empty());
+        assert_eq!(store.get("ref-1").expect("intent exists").status, "pending");
+    }
+
+    #[tokio::test]
+    async fn the_amount_actually_paid_is_what_gets_credited() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        // The provider collected more than we asked for.
+        let body = success_body("ref-1", 700);
+
+        deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("delivery acknowledged");
+
+        assert_credits(&store, &[(key.to_vec(), 7_000_000_000, "ref-1")]);
+        let settled = store.get("ref-1").expect("intent exists");
+        assert_eq!(settled.usd_cents, 500, "the asked amount must not move");
+        assert_eq!(settled.paid_cents, Some(700));
+    }
+
+    #[tokio::test]
+    async fn a_non_usd_charge_never_credits() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        // A different currency means the amount is a different unit; crediting
+        // it as USD cents would misprice it. Out of contract, so ignored.
+        let body = serde_json::json!({
+            "event": "charge.success",
+            "data": { "reference": "ref-1", "amount": 500, "currency": "GBP" },
+        })
+        .to_string()
+        .into_bytes();
+
+        let status = deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("out-of-contract event acknowledged");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(store.credit_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_settle_answers_500_so_paystack_retries() {
+        let store = FakeStore::new(community()).failing_settle();
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        let body = success_body("ref-1", 500);
+
+        let result = deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body).await;
+
+        // The credit landed before the settle failed. Answering anything but
+        // 5xx would tell Paystack to stop retrying and the intent would stay
+        // pending forever; the retry converges because the credit is
+        // idempotent on the ledger reference.
+        assert!(result.is_err(), "a failed settle must not answer 200");
+        assert_credits(&store, &[(key.to_vec(), 5_000_000_000, "ref-1")]);
+    }
+
+    #[tokio::test]
+    async fn verification_runs_before_parsing() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        // Not JSON at all. If parsing ran before verification this would be a
+        // parse error rather than an auth rejection, and a re-serialised
+        // struct would have already broken every real delivery.
+        let body = b"<html>this is not json</html>";
+
+        let result = deliver(&store, "deadbeef", body).await;
+
+        assert_typed_error(
+            &as_handler_result(&result),
+            StatusCode::UNAUTHORIZED,
+            "invalid_signature",
+        );
+        assert!(store.credit_calls().is_empty());
     }
 }
