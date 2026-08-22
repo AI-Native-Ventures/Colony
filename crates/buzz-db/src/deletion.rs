@@ -54,6 +54,7 @@ pub const CONTROL_PLANE_TABLES: &[&str] = &[
 /// approval and again before PostgreSQL purge. A new tenant table therefore
 /// blocks deletion until this manifest is intentionally updated.
 pub const EXPECTED_SCOPED_TABLES: &[&str] = &[
+    "account_reset_tokens",
     "api_tokens",
     "archived_identities",
     "asks",
@@ -83,6 +84,7 @@ pub const EXPECTED_SCOPED_TABLES: &[&str] = &[
     "discovery_worker_action_claims",
     "discovery_workspace_action_claims",
     "discovery_workspace_protocols",
+    "email_accounts",
     "employees",
     "event_mentions",
     "events",
@@ -115,6 +117,8 @@ pub const EXPECTED_SCOPED_TABLES: &[&str] = &[
 
 /// Foreign-key-safe child-before-parent order for the PostgreSQL purge.
 pub const PURGE_SCOPED_TABLES: &[&str] = &[
+    "account_reset_tokens",
+    "email_accounts",
     "discovery_action_claims",
     "discovery_run_checkpoints",
     "discovery_worker_action_claims",
@@ -4159,6 +4163,36 @@ mod postgres_tests {
         .execute(&db.pool)
         .await
         .expect("insert guarded NIP-RS row");
+        // Tenant-owned account surface: prove the purge covers it and that
+        // reset tokens do not outlive their accounts.
+        let account_id = Uuid::from_bytes([7_u8; 16]);
+        sqlx::query(
+            "INSERT INTO email_accounts \
+             (community_id, id, email, pubkey, auth_hash, password_blob, \
+              recovery_blob, recovery_code_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(request.community_id.as_uuid())
+        .bind(account_id)
+        .bind("founder@example.com")
+        .bind("8".repeat(64))
+        .bind("$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2FsdA$dGVzdGF1dGhoYXNo")
+        .bind(format!("ncryptsec1{}", "p".repeat(40)))
+        .bind(format!("ncryptsec1{}", "q".repeat(40)))
+        .bind("9".repeat(64))
+        .execute(&db.pool)
+        .await
+        .expect("seed tenant account");
+        sqlx::query(
+            "INSERT INTO account_reset_tokens (community_id, account_id, token_hash, expires_at) \
+             VALUES ($1, $2, $3, now() + interval '15 minutes')",
+        )
+        .bind(request.community_id.as_uuid())
+        .bind(account_id)
+        .bind("seeded-reset-token-hash")
+        .execute(&db.pool)
+        .await
+        .expect("seed account reset token");
         store
             .approve(request.id, "approver", None)
             .await
@@ -4225,6 +4259,16 @@ mod postgres_tests {
             .expect("bindings");
         let first = store.purge_postgres(&token).await.expect("purge postgres");
         assert_eq!(first.len(), EXPECTED_SCOPED_TABLES.len());
+        assert_eq!(
+            first.get("email_accounts"),
+            Some(&1),
+            "purge must report the tenant account row"
+        );
+        assert_eq!(
+            first.get("account_reset_tokens"),
+            Some(&1),
+            "purge must report the reset token row"
+        );
         assert!(
             store.purge_postgres(&token).await.is_err(),
             "completed stage cannot be replayed under stale checkpoint state"
@@ -4237,6 +4281,25 @@ mod postgres_tests {
             .verify_postgres_logically_deleted(&token)
             .await
             .expect("logical postgres verify");
+        // The logical verify iterates EXPECTED_SCOPED_TABLES, which now covers
+        // both account tables. Belt and braces: prove absence directly.
+        let remaining_accounts: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM email_accounts WHERE community_id = $1")
+                .bind(request.community_id.as_uuid())
+                .fetch_one(&db.pool)
+                .await
+                .expect("count remaining accounts");
+        assert_eq!(
+            remaining_accounts, 0,
+            "tenant accounts must not survive purge"
+        );
+        let remaining_tokens: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM account_reset_tokens WHERE community_id = $1")
+                .bind(request.community_id.as_uuid())
+                .fetch_one(&db.pool)
+                .await
+                .expect("count remaining reset tokens");
+        assert_eq!(remaining_tokens, 0, "reset tokens must not survive purge");
         store
             .mark_logically_verified(&token, serde_json::json!({"all": true}))
             .await

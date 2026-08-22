@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Progress } from "@/shared/ui/progress";
+import type { AuthFailure } from "../../../authService";
 import {
   PASSWORD_MIN,
   isEmail,
@@ -28,17 +29,43 @@ type Props = {
   onChange: (patch: Partial<AccountValues>) => void;
   onSubmit: () => void;
   isSubmitting: boolean;
+  /** Why the last signup attempt failed, if one did. Cleared on any edit. */
+  failure?: AuthFailure | null;
 };
+
+/** Seconds left on a lockout, ticking once per second while one is active. */
+function useSecondsRemaining(totalSecs: number | null): number {
+  const [remaining, setRemaining] = useState(0);
+  useEffect(() => {
+    if (totalSecs === null) return undefined;
+    setRemaining(totalSecs);
+    const id = setInterval(() => {
+      setRemaining((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [totalSecs]);
+  return remaining;
+}
+
+function clockFormat(totalSecs: number): string {
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
 
 export function AccountScreen({
   values,
   onChange,
   onSubmit,
   isSubmitting,
+  failure = null,
 }: Props) {
   const [emailTouched, setEmailTouched] = useState(false);
   const ready = accountReady(values);
   const shortfall = passwordShortfall(values.password);
+  const lockSeconds = useSecondsRemaining(
+    failure?.kind === "locked" ? failure.retryAfterSecs : null,
+  );
 
   return (
     <div className="onb-screen">
@@ -74,6 +101,11 @@ export function AccountScreen({
               if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
             }}
           />
+          {failure?.kind === "email-taken" ? (
+            <p className="onb-note onb-note-warn">
+              That email already has an account.
+            </p>
+          ) : null}
           {emailTouched && values.email && !isEmail(values.email) ? (
             <p className="onb-note onb-note-warn">
               That does not look like an email address.
@@ -114,6 +146,19 @@ export function AccountScreen({
           <p className="onb-note">Change it if we got it wrong.</p>
         </label>
       </div>
+      {failure !== null && failure.kind !== "email-taken" ? (
+        <p className="onb-note onb-note-warn" role="alert">
+          {failure.kind === "invalid-credentials"
+            ? "That information does not match an account. Check it and try again."
+            : failure.kind === "locked"
+              ? lockSeconds > 0
+                ? `Too many attempts. Try again in ${clockFormat(lockSeconds)}.`
+                : "You can try again now."
+              : failure.kind === "update-required"
+                ? "This version of Colony is out of date. Update the app, then try again."
+                : "We could not reach your workspace. Check your connection and try again."}
+        </p>
+      ) : null}
       <div className="onb-actions">
         <Button size="lg" disabled={!ready || isSubmitting} onClick={onSubmit}>
           {isSubmitting ? "Creating your account" : "Continue"}
