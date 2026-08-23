@@ -148,6 +148,16 @@ pub struct SessionState {
     /// fetch fails — all fail open. Cleared on session invalidation alongside
     /// `core_sections` so the next session picks up any canvas change.
     pub canvas_sections: HashMap<Uuid, String>,
+    /// (`channel_id`, level-1 thread root event id) → rendered `[Thread Canvas]`
+    /// section carrying the thread's canvas content **inline**.
+    ///
+    /// Same lifecycle as `canvas_sections`: populated once before session
+    /// creation for turns whose triggering event carries a NIP-10 root tag,
+    /// committed only after session creation succeeds, and cleared on session
+    /// invalidation so the next session picks up any canvas change. Absent when
+    /// the turn is not a thread reply, the channel is a DM, no thread canvas
+    /// exists, the latest revision is blank, or the fetch fails — all fail open.
+    pub thread_canvas_sections: HashMap<(Uuid, String), String>,
     /// Per-channel successful-delivery state. Created with the ACP session and
     /// cleared atomically with every invalidation path.
     pub deliveries: HashMap<Uuid, ChannelDeliveryState>,
@@ -182,6 +192,8 @@ impl SessionState {
         self.turn_counts.remove(channel_id);
         self.core_sections.remove(channel_id);
         self.canvas_sections.remove(channel_id);
+        self.thread_canvas_sections
+            .retain(|(cid, _), _| cid != channel_id);
         self.onboarding_resolution.remove(channel_id);
         self.deliveries.remove(channel_id);
         self.sessions.remove(channel_id).is_some()
@@ -196,6 +208,7 @@ impl SessionState {
         self.heartbeat_standing_context_sent = false;
         self.core_sections.clear();
         self.canvas_sections.clear();
+        self.thread_canvas_sections.clear();
         self.onboarding_resolution.clear();
         self.deliveries.clear();
     }
@@ -217,6 +230,10 @@ impl SessionState {
             || self.turn_counts.contains_key(channel_id)
             || self.core_sections.contains_key(channel_id)
             || self.canvas_sections.contains_key(channel_id)
+            || self
+                .thread_canvas_sections
+                .keys()
+                .any(|(cid, _)| cid == channel_id)
             || self.deliveries.contains_key(channel_id)
             || self.onboarding_resolution.contains_key(channel_id)
     }
@@ -1153,6 +1170,7 @@ async fn create_session_and_apply_model(
     ctx: &PromptContext,
     agent_core: Option<&str>,
     agent_canvas: Option<&str>,
+    thread_canvas: Option<&str>,
     channel_name: Option<&str>,
     onboarding_section: Option<&str>,
     channel_id: Option<Uuid>,
@@ -1164,20 +1182,28 @@ async fn create_session_and_apply_model(
     // request below. Legacy agents receive the same content as user-message
     // sections via `format_prompt`. Onboarding, core, and canvas each carry
     // their own header (`[Company Onboarding]`, the core memory header,
-    // `[Channel Canvas]`); all are appended with a blank-line separator.
+    // `[Channel Canvas]`, `[Thread Canvas]`); all are appended with a
+    // blank-line separator.
     let is_goose = agent.agent_name == "goose";
-    let combined_system_prompt = with_canvas(
-        with_core(
-            with_team(
-                with_company_onboarding(
-                    framed_system_prompt(&ctx.cwd, ctx.base_prompt, ctx.system_prompt.as_deref()),
-                    onboarding_section,
+    let combined_system_prompt = with_thread_canvas(
+        with_canvas(
+            with_core(
+                with_team(
+                    with_company_onboarding(
+                        framed_system_prompt(
+                            &ctx.cwd,
+                            ctx.base_prompt,
+                            ctx.system_prompt.as_deref(),
+                        ),
+                        onboarding_section,
+                    ),
+                    ctx.team_instructions.as_deref(),
                 ),
-                ctx.team_instructions.as_deref(),
+                agent_core,
             ),
-            agent_core,
+            agent_canvas,
         ),
-        agent_canvas,
+        thread_canvas,
     );
 
     let session_title = ctx
@@ -1623,6 +1649,21 @@ fn with_canvas(prompt: Option<String>, canvas: Option<&str>) -> Option<String> {
     }
 }
 
+/// Append the `[Thread Canvas]` inline section onto the accumulated system prompt.
+///
+/// Mirrors [`with_canvas`]: the section already carries its `[Thread Canvas]`
+/// header (from `render_thread_canvas_section`), so it is joined with a
+/// blank-line separator. Either side may be absent. Placed after the channel
+/// canvas so this thread's working memory reads after the cross-thread pointer.
+fn with_thread_canvas(prompt: Option<String>, thread_canvas: Option<&str>) -> Option<String> {
+    match (prompt, thread_canvas) {
+        (Some(prompt), Some(thread_canvas)) => Some(format!("{prompt}\n\n{thread_canvas}")),
+        (Some(prompt), None) => Some(prompt),
+        (None, Some(thread_canvas)) => Some(thread_canvas.to_string()),
+        (None, None) => None,
+    }
+}
+
 /// Return `agent` to the pool via `result_tx`, clearing any steer receiver first.
 ///
 /// Every path that returns an `OwnedAgent` to the pool via `PromptResult` goes
@@ -1867,6 +1908,17 @@ pub async fn run_prompt_task(
     // prevents a stale revision A surviving a failed create and being re-used by
     // the next attempt after the canvas was cleared.
     let mut pending_canvas: Option<(Uuid, String)> = None;
+    // Level-1 thread root of this turn's triggering event, if any. Resolved
+    // from the last batch event exactly as `fetch_conversation_context`
+    // resolves it, so a nested reply lands on its level-1 ancestor's canvas.
+    let thread_root: Option<String> = batch
+        .as_ref()
+        .and_then(|b| b.events.last())
+        .map(|be| crate::queue::parse_thread_tags(&be.event))
+        .and_then(|tags| tags.root_event_id);
+    // Same pending-then-commit lifecycle as `pending_canvas`, keyed on
+    // (channel, thread root).
+    let mut pending_thread_canvas: Option<((Uuid, String), String)> = None;
     // Channel name for the session title, from the same single resolve the
     // canvas DM check uses — see `resolve_new_session_channel_context`.
     let mut title_channel: Option<String> = None;
@@ -1874,6 +1926,13 @@ pub async fn run_prompt_task(
     if let PromptSource::Channel(cid) = &source {
         let is_new_channel_session = !agent.state.sessions.contains_key(cid);
         let needs_canvas = is_new_channel_session && !agent.state.canvas_sections.contains_key(cid);
+        let needs_thread_canvas = is_new_channel_session
+            && thread_root.as_ref().is_some_and(|root| {
+                !agent
+                    .state
+                    .thread_canvas_sections
+                    .contains_key(&(*cid, root.clone()))
+            });
         if is_new_channel_session {
             let (is_dm, resolved_channel, resolved_channel_type) =
                 resolve_new_session_channel_context(&ctx.channel_info, *cid).await;
@@ -1881,9 +1940,20 @@ pub async fn run_prompt_task(
             origin_channel_type = resolved_channel_type;
             // A confirmed DM never receives a canvas section; an undeterminable
             // channel type fails closed as a DM for the same reason.
-            if needs_canvas && !is_dm {
-                if let Some(section) = fetch_canvas_section(*cid, &ctx.rest_client).await {
-                    pending_canvas = Some((*cid, section));
+            if !is_dm {
+                if needs_canvas {
+                    if let Some(section) = fetch_canvas_section(*cid, &ctx.rest_client).await {
+                        pending_canvas = Some((*cid, section));
+                    }
+                }
+                if let Some(root) = &thread_root {
+                    if needs_thread_canvas {
+                        if let Some(section) =
+                            fetch_thread_canvas_section(*cid, root, &ctx.rest_client).await
+                        {
+                            pending_thread_canvas = Some(((*cid, root.clone()), section));
+                        }
+                    }
                 }
             }
         }
@@ -1918,6 +1988,19 @@ pub async fn run_prompt_task(
         PromptSource::Heartbeat | PromptSource::Ask { .. } => None,
     };
 
+    // The inline thread canvas section — scoped to (channel, this turn's thread
+    // root), absent for heartbeats/asks and for turns outside any thread. Same
+    // cache-then-pending preference as `agent_canvas`.
+    let agent_thread_canvas: Option<String> = match (&source, thread_root.as_ref()) {
+        (PromptSource::Channel(cid), Some(root)) => agent
+            .state
+            .thread_canvas_sections
+            .get(&(*cid, root.clone()))
+            .cloned()
+            .or_else(|| pending_thread_canvas.as_ref().map(|(_, s)| s.clone())),
+        _ => None,
+    };
+
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
             if let Some(sid) = agent.state.sessions.get(cid) {
@@ -1932,6 +2015,7 @@ pub async fn run_prompt_task(
                     &ctx,
                     agent_core.as_deref(),
                     agent_canvas.as_deref(),
+                    agent_thread_canvas.as_deref(),
                     title_channel.as_deref(),
                     onboarding_section,
                     Some(*cid),
@@ -1955,6 +2039,9 @@ pub async fn run_prompt_task(
                         // Commit canvas only after session creation succeeds (I3).
                         if let Some((pending_cid, section)) = pending_canvas.take() {
                             agent.state.canvas_sections.insert(pending_cid, section);
+                        }
+                        if let Some((key, section)) = pending_thread_canvas.take() {
+                            agent.state.thread_canvas_sections.insert(key, section);
                         }
                         (sid, true)
                     }
@@ -1991,7 +2078,7 @@ pub async fn run_prompt_task(
                 (sid.clone(), false)
             } else {
                 match create_session_and_apply_model(
-                    &mut agent, &ctx, None, None, None, None, None, None,
+                    &mut agent, &ctx, None, None, None, None, None, None, None,
                 )
                 .await
                 {
@@ -2063,6 +2150,7 @@ pub async fn run_prompt_task(
         team_instructions: ctx.team_instructions.as_deref(),
         agent_core: agent_core.as_deref(),
         agent_canvas: agent_canvas.as_deref(),
+        agent_thread_canvas: agent_thread_canvas.as_deref(),
     };
     // Delivery state is committed only after ACP confirms success. Existing
     // sessions created before this field existed fail safe by behaving as
@@ -2347,6 +2435,7 @@ pub async fn run_prompt_task(
                 system_prompt: standing.system_prompt,
                 team_instructions: standing.team_instructions,
                 agent_canvas: standing.agent_canvas,
+                agent_thread_canvas: standing.agent_thread_canvas,
                 standing_context_sent,
             },
         )
@@ -3064,6 +3153,81 @@ async fn fetch_canvas_section(channel_id: Uuid, rest: &RestClient) -> Option<Str
     canvas_section_from_query_response(events, &channel_id.to_string())
 }
 
+/// Fetch the latest thread-canvas event for `(channel_id, thread_root)` and
+/// return a `[Thread Canvas]` section with the content inline, or `None` if
+/// absent/blank/error.
+///
+/// Same posture as [`fetch_canvas_section`]: 3s timeout, fail open on any
+/// error. The filter pins both the `h` tag (channel) and the `e` tag (level-1
+/// thread root), and the validation layer re-checks the `e` tag on the
+/// returned event so a misbehaving relay cannot substitute another thread's
+/// memory.
+async fn fetch_thread_canvas_section(
+    channel_id: Uuid,
+    thread_root: &str,
+    rest: &RestClient,
+) -> Option<String> {
+    use nostr::{Alphabet, SingleLetterTag};
+
+    if thread_root.is_empty() {
+        tracing::debug!(
+            target: "canvas::fetch",
+            channel = %channel_id,
+            "empty thread root — no thread canvas fetch"
+        );
+        return None;
+    }
+
+    let h_tag = SingleLetterTag::lowercase(Alphabet::H);
+    let e_tag = SingleLetterTag::lowercase(Alphabet::E);
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(buzz_core::kind::KIND_CANVAS as u16))
+        .custom_tags(h_tag, [channel_id.to_string()])
+        .custom_tags(e_tag, [thread_root.to_string()])
+        .limit(1);
+
+    const CANVAS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+    let json = match tokio::time::timeout(
+        CANVAS_FETCH_TIMEOUT,
+        rest.query(std::slice::from_ref(&filter)),
+    )
+    .await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::warn!(
+                target: "canvas::fetch",
+                channel = %channel_id,
+                "thread canvas query failed: {e} — emitting no section"
+            );
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "canvas::fetch",
+                channel = %channel_id,
+                timeout_ms = CANVAS_FETCH_TIMEOUT.as_millis() as u64,
+                "thread canvas fetch timed out — emitting no section"
+            );
+            return None;
+        }
+    };
+
+    let events = match json.as_array() {
+        Some(arr) => arr,
+        None => {
+            tracing::warn!(
+                target: "canvas::fetch",
+                channel = %channel_id,
+                "thread canvas query response is not a JSON array — emitting no section"
+            );
+            return None;
+        }
+    };
+
+    thread_canvas_section_from_query_response(events, &channel_id.to_string(), thread_root)
+}
+
 /// Parse a canvas query response array and render a `[Channel Canvas]` section.
 ///
 /// Extracted as a pure function so tests can exercise the parsing/validation
@@ -3076,8 +3240,69 @@ pub(crate) fn canvas_section_from_query_response(
     events: &[serde_json::Value],
     channel_uuid: &str,
 ) -> Option<String> {
-    let raw = events.first()?;
+    let validated = validate_canvas_event(events.first()?, channel_uuid, None)?;
+    tracing::info!(
+        target: "canvas::fetch",
+        channel = %channel_uuid,
+        event_id = %validated.event_id,
+        "injected channel canvas metadata section into system prompt"
+    );
+    Some(render_canvas_section(
+        &validated.event_id,
+        &validated.timestamp,
+        channel_uuid,
+    ))
+}
 
+/// Parse a thread-canvas query response array and return a `[Thread Canvas]`
+/// section carrying the canvas content **inline**.
+///
+/// Same validation chain as [`canvas_section_from_query_response`] plus one
+/// extra gate: the event must carry an `e` tag matching `thread_root`, so a
+/// misbehaving relay cannot substitute another thread's memory.
+///
+/// Returns `None` on everything that rejects a channel canvas (empty array,
+/// blank content, malformed/tampered event, wrong kind or `h` tag, out-of-range
+/// timestamp) and additionally on a missing or mismatched `e` tag.
+pub(crate) fn thread_canvas_section_from_query_response(
+    events: &[serde_json::Value],
+    channel_uuid: &str,
+    thread_root: &str,
+) -> Option<String> {
+    let validated = validate_canvas_event(events.first()?, channel_uuid, Some(thread_root))?;
+    tracing::info!(
+        target: "canvas::fetch",
+        channel = %channel_uuid,
+        event_id = %validated.event_id,
+        thread_root,
+        "injected inline thread canvas section into prompt"
+    );
+    Some(render_thread_canvas_section(&validated.content))
+}
+
+/// A canvas event that passed the full validation chain, ready to render.
+pub(crate) struct ValidatedCanvas {
+    /// Canonical 64-char lowercase hex event id.
+    pub(crate) event_id: String,
+    /// RFC3339 UTC timestamp with `Z` suffix.
+    pub(crate) timestamp: String,
+    /// Raw event content (guaranteed non-blank).
+    pub(crate) content: String,
+}
+
+/// Validate one raw JSON canvas event against the channel it was queried for.
+///
+/// Shared validation chain for the channel-canvas and thread-canvas readers:
+/// deserialize as a complete `nostr::Event`, verify signature, require kind
+/// 40100, require an `h` tag matching `channel_uuid`, optionally require an
+/// `e` tag matching `expected_e_tag`, reject blank content (a cleared canvas
+/// must not fall back to older revisions), and convert `created_at` with
+/// checked range handling. Returns `None` on any failure, logging why.
+fn validate_canvas_event(
+    raw: &serde_json::Value,
+    channel_uuid: &str,
+    expected_e_tag: Option<&str>,
+) -> Option<ValidatedCanvas> {
     // Deserialise as a complete Nostr Event. Partial objects (missing pubkey,
     // sig, kind, or tags) are rejected here rather than trusted implicitly.
     let event = match serde_json::from_value::<nostr::Event>(raw.clone()) {
@@ -3132,6 +3357,24 @@ pub(crate) fn canvas_section_from_query_response(
         return None;
     }
 
+    // Thread canvases must also carry the thread root in their `e` tag, so a
+    // misbehaving relay cannot hand back another thread's memory.
+    if let Some(expected_root) = expected_e_tag {
+        let e_tag_matches = event.tags.iter().any(|tag| {
+            let v = tag.as_slice();
+            v.len() >= 2 && v[0] == "e" && v[1] == expected_root
+        });
+        if !e_tag_matches {
+            tracing::warn!(
+                target: "canvas::fetch",
+                channel = %channel_uuid,
+                thread_root = %expected_root,
+                "thread canvas event is missing expected e-tag — emitting no section",
+            );
+            return None;
+        }
+    }
+
     // Blank content means the canvas was cleared; do not fall back to older events.
     if event.content.trim().is_empty() {
         tracing::debug!(
@@ -3172,13 +3415,11 @@ pub(crate) fn canvas_section_from_query_response(
         }
     };
 
-    tracing::info!(
-        target: "canvas::fetch",
-        channel = %channel_uuid,
-        event_id = %id,
-        "injected channel canvas metadata section into system prompt"
-    );
-    Some(render_canvas_section(&id, &timestamp, channel_uuid))
+    Some(ValidatedCanvas {
+        event_id: id,
+        timestamp,
+        content: event.content,
+    })
 }
 
 /// Render the `[Channel Canvas]` metadata section string.
@@ -3192,6 +3433,17 @@ pub(crate) fn render_canvas_section(event_id: &str, timestamp: &str, channel_uui
          Last modified: {timestamp}\n\
          Fetch current content with: buzz canvas get --channel {channel_uuid}"
     )
+}
+
+/// Render the `[Thread Canvas]` section with the canvas body inline.
+///
+/// Unlike [`render_canvas_section`] (a metadata pointer the agent must choose
+/// to fetch), a thread canvas exists so an agent joining mid-thread is useful
+/// without reading 200 messages — the content has to already be in the prompt.
+/// Pure function, kept separate for the same testability reason as its
+/// channel-canvas counterpart.
+pub(crate) fn render_thread_canvas_section(content: &str) -> String {
+    format!("[Thread Canvas]\n{}", content.trim())
 }
 
 fn conversation_context_event_ids(context: Option<&ConversationContext>) -> HashSet<String> {
@@ -5089,6 +5341,7 @@ mod tests {
             team_instructions: Some("ship small"),
             agent_core: Some("[Agent Memory — core]\nremember this"),
             agent_canvas: Some("[Channel Canvas]\ncanvas content"),
+            agent_thread_canvas: Some("[Thread Canvas]\nthread working memory"),
         }
     }
 
@@ -5104,6 +5357,7 @@ mod tests {
             "[Team Instructions]",
             "[Agent Memory — core]",
             "[Channel Canvas]",
+            "[Thread Canvas]",
             "do the thing",
         ]
         .iter()
@@ -8607,6 +8861,293 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             !section.contains("+00:00"),
             "timestamp must not use +00:00 offset"
         );
+    }
+
+    // ── thread canvas: rendering ─────────────────────────────────────────────
+
+    const THREAD_ROOT: &str = "5f5ab3f7e9e64a1cb2d0f3c8b7a6e5d4c3b2a1908f7e6d5c4b3a29180fedcba9";
+
+    #[test]
+    fn test_render_thread_canvas_section_carries_content_inline() {
+        let section = render_thread_canvas_section("hero scroll: GSAP pinned\nstatus: approved");
+        // By-value injection is the point: header plus full body, no fetch hint.
+        assert_eq!(
+            section,
+            "[Thread Canvas]\nhero scroll: GSAP pinned\nstatus: approved"
+        );
+    }
+
+    #[test]
+    fn test_render_thread_canvas_section_trims_outer_whitespace() {
+        let section = render_thread_canvas_section("\n\n  body only  \n");
+        assert_eq!(section, "[Thread Canvas]\nbody only");
+    }
+
+    // ── thread canvas: query-response validation ─────────────────────────────
+
+    /// Build a real, cryptographically signed thread-canvas event for tests:
+    /// kind 40100 with an `h` tag carrying `CHANNEL_UUID` and an `e` tag
+    /// carrying `root_id`, so every structural validation passes.
+    fn make_thread_canvas_event_value(content: &str, root_id: &str) -> serde_json::Value {
+        let keys = Keys::generate();
+        let h_tag = Tag::parse(["h", CHANNEL_UUID]).expect("h tag");
+        let e_tag = Tag::parse(["e", root_id]).expect("e tag");
+        let event = EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_CANVAS as u16), content)
+            .tags([h_tag, e_tag])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        serde_json::to_value(&event).expect("serialise")
+    }
+
+    /// Positive control for the whole thread-canvas chain: a correctly signed,
+    /// correctly tagged event yields the body inline — not a fetch pointer.
+    #[test]
+    fn test_thread_canvas_happy_path_returns_content_inline() {
+        let ev = make_thread_canvas_event_value(
+            "\n## Working memory\nHero scroll approved.\n",
+            THREAD_ROOT,
+        );
+        let result = thread_canvas_section_from_query_response(&[ev], CHANNEL_UUID, THREAD_ROOT);
+        let section = result.expect("expected Some for a valid thread canvas");
+        assert!(section.starts_with("[Thread Canvas]"));
+        assert!(
+            section.contains("## Working memory\nHero scroll approved."),
+            "content must be carried inline; got: {section}"
+        );
+        assert!(
+            !section.contains("buzz canvas get"),
+            "thread canvas is by value — it must not degrade into a pointer"
+        );
+    }
+
+    #[test]
+    fn test_thread_canvas_empty_array_returns_none() {
+        let result = thread_canvas_section_from_query_response(&[], CHANNEL_UUID, THREAD_ROOT);
+        assert!(result.is_none());
+    }
+
+    /// The latest revision is blank (canvas was cleared): no section, and the
+    /// older non-blank revision behind it in the response must NOT be resurrected.
+    #[test]
+    fn test_thread_canvas_blank_latest_returns_none_without_falling_back() {
+        let cleared = make_thread_canvas_event_value("   ", THREAD_ROOT);
+        let older_valid = make_thread_canvas_event_value("stale memory", THREAD_ROOT);
+        let result = thread_canvas_section_from_query_response(
+            &[cleared, older_valid],
+            CHANNEL_UUID,
+            THREAD_ROOT,
+        );
+        assert!(
+            result.is_none(),
+            "blank latest revision must return None — never fall back to an older one"
+        );
+    }
+
+    #[test]
+    fn test_thread_canvas_partial_object_returns_none() {
+        let partial = serde_json::json!({
+            "id": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            "created_at": 1705312200_i64,
+            "content": "some instructions"
+        });
+        let result =
+            thread_canvas_section_from_query_response(&[partial], CHANNEL_UUID, THREAD_ROOT);
+        assert!(result.is_none(), "partial event object must return None");
+    }
+
+    #[test]
+    fn test_thread_canvas_tampered_event_returns_none() {
+        let mut ev = make_thread_canvas_event_value("original", THREAD_ROOT);
+        ev["content"] = serde_json::Value::String("injected instructions".into());
+        let result = thread_canvas_section_from_query_response(&[ev], CHANNEL_UUID, THREAD_ROOT);
+        assert!(result.is_none(), "tampered event must fail verify()");
+    }
+
+    #[test]
+    fn test_thread_canvas_wrong_kind_returns_none() {
+        let keys = Keys::generate();
+        let h_tag = Tag::parse(["h", CHANNEL_UUID]).expect("h tag");
+        let e_tag = Tag::parse(["e", THREAD_ROOT]).expect("e tag");
+        let ev = serde_json::to_value(
+            EventBuilder::new(Kind::Custom(9), "content")
+                .tags([h_tag, e_tag])
+                .sign_with_keys(&keys)
+                .expect("sign"),
+        )
+        .expect("serialise");
+        let result = thread_canvas_section_from_query_response(&[ev], CHANNEL_UUID, THREAD_ROOT);
+        assert!(result.is_none(), "wrong kind must return None");
+    }
+
+    #[test]
+    fn test_thread_canvas_wrong_h_tag_returns_none() {
+        let keys = Keys::generate();
+        let wrong_h = Tag::parse(["h", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"]).expect("h tag");
+        let e_tag = Tag::parse(["e", THREAD_ROOT]).expect("e tag");
+        let ev = serde_json::to_value(
+            EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_CANVAS as u16), "content")
+                .tags([wrong_h, e_tag])
+                .sign_with_keys(&keys)
+                .expect("sign"),
+        )
+        .expect("serialise");
+        let result = thread_canvas_section_from_query_response(&[ev], CHANNEL_UUID, THREAD_ROOT);
+        assert!(result.is_none(), "mismatched h-tag must return None");
+    }
+
+    /// A relay handing back another thread's canvas (or the channel-level
+    /// canvas without any `e` tag) must be rejected: the event's `e` tag has
+    /// to match the queried thread root. Positive control re-runs the same
+    /// query against a correctly tagged event so this cannot pass on a
+    /// blanket-None bug.
+    #[test]
+    fn test_thread_canvas_wrong_e_tag_returns_none() {
+        let other_root = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let from_other_thread =
+            make_thread_canvas_event_value("another thread's memory", other_root);
+        let result = thread_canvas_section_from_query_response(
+            &[from_other_thread],
+            CHANNEL_UUID,
+            THREAD_ROOT,
+        );
+        assert!(
+            result.is_none(),
+            "an event whose e-tag names another thread must be rejected"
+        );
+
+        let channel_level = make_canvas_event_value("channel-level canvas, no e tag");
+        let result =
+            thread_canvas_section_from_query_response(&[channel_level], CHANNEL_UUID, THREAD_ROOT);
+        assert!(
+            result.is_none(),
+            "an event with no e tag at all must be rejected for a thread query"
+        );
+
+        let correct = make_thread_canvas_event_value("this thread's memory", THREAD_ROOT);
+        let result =
+            thread_canvas_section_from_query_response(&[correct], CHANNEL_UUID, THREAD_ROOT);
+        assert!(
+            result.is_some(),
+            "positive control: the same query with a matching e-tag must succeed"
+        );
+    }
+
+    // ── thread canvas cache invalidation ─────────────────────────────────────
+
+    #[test]
+    fn test_invalidate_channel_clears_thread_canvases_of_that_channel_only() {
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let mut s = SessionState::default();
+        s.sessions.insert(ch_a, "sess-a".into());
+        s.sessions.insert(ch_b, "sess-b".into());
+        s.thread_canvas_sections
+            .insert((ch_a, THREAD_ROOT.into()), "thread-a".into());
+        s.thread_canvas_sections
+            .insert((ch_b, THREAD_ROOT.into()), "thread-b".into());
+
+        s.invalidate_channel(&ch_a);
+
+        assert!(
+            !s.thread_canvas_sections
+                .contains_key(&(ch_a, THREAD_ROOT.into())),
+            "invalidated channel's thread canvases must be gone"
+        );
+        assert_eq!(
+            s.thread_canvas_sections.get(&(ch_b, THREAD_ROOT.into())),
+            Some(&"thread-b".to_string()),
+            "another channel's thread canvas must survive"
+        );
+    }
+
+    #[test]
+    fn test_invalidate_channel_clears_every_thread_of_the_channel() {
+        let ch = Uuid::new_v4();
+        let other_root = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let mut s = SessionState::default();
+        s.sessions.insert(ch, "sess".into());
+        s.thread_canvas_sections
+            .insert((ch, THREAD_ROOT.into()), "one".into());
+        s.thread_canvas_sections
+            .insert((ch, other_root.into()), "two".into());
+
+        s.invalidate_channel(&ch);
+
+        assert!(
+            s.thread_canvas_sections.is_empty(),
+            "every thread of the invalidated channel must be cleared"
+        );
+    }
+
+    #[test]
+    fn test_invalidate_all_clears_thread_canvases() {
+        let ch_a = Uuid::new_v4();
+        let ch_b = Uuid::new_v4();
+        let mut s = SessionState::default();
+        s.thread_canvas_sections
+            .insert((ch_a, THREAD_ROOT.into()), "a".into());
+        s.thread_canvas_sections
+            .insert((ch_b, THREAD_ROOT.into()), "b".into());
+        s.sessions.insert(ch_a, "sess-a".into());
+
+        s.invalidate_all();
+
+        assert!(s.thread_canvas_sections.is_empty());
+        assert!(s.sessions.is_empty());
+    }
+
+    #[test]
+    fn test_has_channel_state_true_when_only_thread_canvas_present() {
+        let ch = Uuid::new_v4();
+        let mut s = SessionState::default();
+        s.thread_canvas_sections
+            .insert((ch, THREAD_ROOT.into()), "canvas".into());
+        assert!(s.has_channel_state(&ch));
+    }
+
+    // ── with_thread_canvas composition ───────────────────────────────────────
+
+    #[test]
+    fn test_with_thread_canvas_appends_after_channel_canvas() {
+        let composed = with_thread_canvas(
+            with_canvas(Some("base".into()), Some("[Channel Canvas]\npointer")),
+            Some("[Thread Canvas]\ninline"),
+        );
+        let composed = composed.expect("both present");
+        assert!(composed.starts_with("base"));
+        let channel_pos = composed
+            .find("[Channel Canvas]")
+            .expect("channel canvas present");
+        let thread_pos = composed
+            .find("[Thread Canvas]")
+            .expect("thread canvas present");
+        assert!(
+            channel_pos < thread_pos,
+            "thread canvas reads after the cross-thread channel pointer; got: {composed}"
+        );
+    }
+
+    #[test]
+    fn test_with_thread_canvas_appends_to_existing_prompt() {
+        let result = with_thread_canvas(Some("base".into()), Some("[Thread Canvas]\ninline"));
+        assert_eq!(result.unwrap(), "base\n\n[Thread Canvas]\ninline");
+    }
+
+    #[test]
+    fn test_with_thread_canvas_returns_canvas_alone_when_no_prompt() {
+        let result = with_thread_canvas(None, Some("[Thread Canvas]\ninline"));
+        assert_eq!(result.unwrap(), "[Thread Canvas]\ninline");
+    }
+
+    #[test]
+    fn test_with_thread_canvas_prompt_preserved_when_no_thread_canvas() {
+        let result = with_thread_canvas(Some("base".into()), None);
+        assert_eq!(result.unwrap(), "base");
+    }
+
+    #[test]
+    fn test_with_thread_canvas_returns_none_when_both_absent() {
+        assert!(with_thread_canvas(None, None).is_none());
     }
 
     // ── new-session channel context (one resolve, two consumers) ─────────────
