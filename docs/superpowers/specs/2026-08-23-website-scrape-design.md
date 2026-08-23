@@ -139,12 +139,24 @@ cached description rather than spending again; and the whole step honours its
 - Storing page content beyond the generated description.
 - Any crawl beyond 5 pages of one origin.
 
-## Open questions
+## Decisions
 
-1. **Whether the summary should quote the site.** Cheap and factual, but a
-   scraped sentence can read oddly in the user's own voice. Assumed no: write
-   original prose from what was read.
-2. **What the counter does on a failed run.** Charging an account for a fetch
-   that returned nothing is unfair; not charging invites a retry loop against
-   Colony's spend. Assumed: a run that never reached the model does not count,
-   a run that reached the model does.
+**The description is original prose, never quoted from the site.** Screen 8
+presents this text as the user's own account of their business, and a lifted
+marketing sentence reads wrong in a founder's voice. Quoting is cheaper and
+factually safer, which is the argument for it, but the text has to survive
+being read aloud by the person it describes. The prompt asks for plain
+description of what the business does and who it serves, in the words a person
+would use, and explicitly forbids marketing register.
+
+**A run counts against the account only once it reaches the model.** Charging
+for a fetch that returned nothing is unfair, and the user did not get anything.
+Never charging invites a retry loop against Colony's inference spend. Drawing
+the line where money is actually spent is both fair and bounded: a user whose
+site is unreachable can fix the URL and try again, while a user who got a
+description has had their one run.
+
+The counter therefore increments **after** a successful model call, in the same
+transaction that stores the description. A crash between the model call and the
+write costs Colony one summary, which is a fraction of a cent and strictly
+better than the alternative of charging a user for something they never saw.
