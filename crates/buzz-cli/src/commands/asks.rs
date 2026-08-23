@@ -15,7 +15,8 @@ use nostr::{EventBuilder, Kind, PublicKey, Tag};
 
 use buzz_core::interrupt::{parse_ask, parse_resolution, parse_withdrawal, AskType, NO_INITIATIVE};
 use buzz_core::kind::{
-    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_EMPLOYEE, KIND_MANAGED_AGENT,
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_STATE, KIND_ASK_WITHDRAWAL, KIND_EMPLOYEE,
+    KIND_MANAGED_AGENT,
 };
 
 use crate::client::{
@@ -375,6 +376,12 @@ async fn cmd_raise_ask(
 /// `--status open` is computed here from the public event stream: an ask
 /// is open unless a resolution or withdrawal (kind 44301/44302) names it
 /// via `e`.
+///
+/// Each listed ask also carries its ask-state head (kind 30200) under an
+/// `ask_state` key when one exists: the relay-signed `deadline_at` and the
+/// named expiry outcome, exactly as a subscribing app sees them. The value
+/// is never recomputed here -- the CLI and the app read the same head, so
+/// they cannot disagree.
 async fn cmd_list_asks(
     client: &BuzzClient,
     audience: Option<&str>,
@@ -395,11 +402,76 @@ async fn cmd_list_asks(
         asks = filter_open_asks(client, asks).await?;
     }
 
+    let head_ids: Vec<String> = asks
+        .iter()
+        .filter_map(|event| event.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    if !head_ids.is_empty() {
+        let heads_filter = serde_json::json!({
+            "kinds": [KIND_ASK_STATE],
+            "#d": head_ids,
+        });
+        let heads = client.query_all(heads_filter).await?;
+        asks = attach_ask_states(asks, &heads);
+    }
+
     println!(
         "{}",
         serde_json::to_string(&asks).unwrap_or_else(|_| "[]".to_string())
     );
     Ok(())
+}
+
+/// Attach each ask's ask-state head content under an `ask_state` key,
+/// keyed by the head's `d` tag matching the ask's event id. When several
+/// revisions of one head come back (an older relay that did not replace),
+/// the newest `created_at` wins, mirroring NIP-33 latest-wins. An ask with
+/// no head is left untouched.
+fn attach_ask_states(
+    mut asks: Vec<serde_json::Value>,
+    heads: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let mut by_d: std::collections::HashMap<String, (i64, serde_json::Value)> =
+        std::collections::HashMap::new();
+    for head in heads {
+        let d_tag = extract_tag_value(head, "d");
+        if d_tag.is_empty() {
+            continue;
+        }
+        let created_at = match head.get("created_at").and_then(serde_json::Value::as_i64) {
+            Some(created_at) => created_at,
+            None => continue,
+        };
+        // Event content arrives as raw JSON text; attach it parsed so
+        // consumers read `ask_state.deadline_at` directly. A head whose
+        // content does not parse is skipped rather than attached as a
+        // string an agent would have to re-parse.
+        let content = match head.get("content").and_then(serde_json::Value::as_str) {
+            Some(raw) => match serde_json::from_str::<serde_json::Value>(raw) {
+                Ok(content) => content,
+                Err(_) => continue,
+            },
+            None => continue,
+        };
+        match by_d.get(&d_tag) {
+            // Keep the newest revision per coordinate.
+            Some((existing_at, _)) if *existing_at >= created_at => {}
+            _ => {
+                by_d.insert(d_tag, (created_at, content));
+            }
+        }
+    }
+    for ask in asks.iter_mut() {
+        let id = match ask.get("id").and_then(serde_json::Value::as_str) {
+            Some(id) => id.to_owned(),
+            None => continue,
+        };
+        if let Some((_, content)) = by_d.get(&id) {
+            ask["ask_state"] = content.clone();
+        }
+    }
+    asks
 }
 
 /// Drop any ask event that already has a resolution or withdrawal
@@ -772,6 +844,49 @@ mod tests {
         assert_eq!(
             write_conflict_reason(r#"{"accepted":true,"message":"stored"}"#),
             None
+        );
+    }
+
+    /// `buzz asks list` must surface the same deadline value the app reads:
+    /// the ask-state head content attached verbatim under `ask_state`,
+    /// newest revision winning, asks without a head left untouched.
+    #[test]
+    fn attach_ask_states_merges_the_newest_head_per_ask() {
+        let ask_id = "1".repeat(64);
+        let other_id = "2".repeat(64);
+        let asks = vec![
+            serde_json::json!({ "id": ask_id, "content": "ask" }),
+            serde_json::json!({ "id": other_id, "content": "other" }),
+        ];
+        let heads = vec![
+            // Older revision of the first ask's head: superseded below.
+            serde_json::json!({
+                "id": "a".repeat(64),
+                "created_at": 100,
+                "tags": [["d", ask_id]],
+                "content": r#"{"status":"open","deadline_at":900}"#,
+            }),
+            serde_json::json!({
+                "id": "b".repeat(64),
+                "created_at": 200,
+                "tags": [["d", ask_id]],
+                "content": r#"{"status":"resolved","closed_at":250}"#,
+            }),
+        ];
+
+        let merged = attach_ask_states(asks, &heads);
+        let first_state = merged[0].get("ask_state").expect("head attached");
+        assert_eq!(
+            first_state
+                .get("status")
+                .and_then(serde_json::Value::as_str),
+            Some("resolved"),
+            "the newest head revision must win"
+        );
+        assert_eq!(first_state.get("deadline_at"), None);
+        assert!(
+            merged[1].get("ask_state").is_none(),
+            "an ask with no head must be left untouched"
         );
     }
 

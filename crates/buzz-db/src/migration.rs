@@ -734,7 +734,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 64);
+        assert_eq!(migrations.len(), 65);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1325,6 +1325,17 @@ mod tests {
         assert!(
             recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
         );
+
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let canvas_drop = migrations
+            .iter()
+            .find(|migration| migration.version == 65)
+            .expect("drop channels.canvas migration")
+            .sql
+            .as_str();
+        assert!(canvas_drop.contains("ALTER TABLE channels"));
+        assert!(canvas_drop.contains("DROP COLUMN IF EXISTS canvas"));
         // Looked up by version rather than by index. Two branches both claimed
         // 61 while in flight, and this migration was renumbered to 62 on merge;
         // an index-based assertion silently points at whichever migration
