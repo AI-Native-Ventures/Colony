@@ -108,6 +108,10 @@ export function useContentClaimStrictness(communityId: string, enabled = true) {
 export function useClaimVerification(communityId: string, post: ContentPost) {
   const ownersQuery = useCommunityOwnersQuery(communityId);
   const owners = ownersQuery.data;
+  // In the key so verification re-runs once the snapshot lands: an owner
+  // claim checked against a still-loading set failed closed, and it must not
+  // keep that verdict after ownership becomes known.
+  const ownersKey = owners ? [...owners].sort().join(",") : "loading";
   return useQuery({
     enabled: post.claims.length > 0,
     queryFn: () =>
@@ -118,6 +122,7 @@ export function useClaimVerification(communityId: string, post: ContentPost) {
       "claim-verification",
       post.eventId,
       post.updatedAt,
+      ownersKey,
     ],
     staleTime: 0,
   });
