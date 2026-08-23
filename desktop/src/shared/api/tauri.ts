@@ -29,7 +29,6 @@ import type {
   SendChannelMessageResult,
   SetCanvasInput,
   SetCanvasResult,
-  SetThreadCanvasInput,
   ThreadCursor,
   ThreadRepliesResponse,
   CreateManagedAgentInput,
@@ -235,13 +234,13 @@ type RawListRelayMembersResponse = {
   members: RawRelayMember[];
 };
 
-type RawCanvasResponse = {
+export type RawCanvasResponse = {
   content: string | null;
   updated_at: number | null;
   author: string | null;
 };
 
-type RawSetCanvasResult = {
+export type RawSetCanvasResult = {
   ok: boolean;
   event_id: string;
 };
@@ -421,35 +420,6 @@ export async function setCanvas(
 ): Promise<SetCanvasResult> {
   const response = await invokeTauri<RawSetCanvasResult>("set_canvas", {
     channelId: input.channelId,
-    content: input.content,
-  });
-  return {
-    ok: response.ok,
-    eventId: response.event_id,
-  };
-}
-
-export async function getThreadCanvas(
-  channelId: string,
-  threadRootId: string,
-): Promise<CanvasResponse> {
-  const response = await invokeTauri<RawCanvasResponse>("get_thread_canvas", {
-    channelId,
-    threadRootId,
-  });
-  return {
-    content: response.content,
-    updatedAt: response.updated_at ?? null,
-    author: response.author ?? null,
-  };
-}
-
-export async function setThreadCanvas(
-  input: SetThreadCanvasInput,
-): Promise<SetCanvasResult> {
-  const response = await invokeTauri<RawSetCanvasResult>("set_thread_canvas", {
-    channelId: input.channelId,
-    threadRootId: input.threadRootId,
     content: input.content,
   });
   return {

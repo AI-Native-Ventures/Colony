@@ -701,19 +701,11 @@ pub fn build_remove_reaction(reaction_event_id: EventId) -> Result<EventBuilder,
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 
-/// Kind 40100 — set canvas, channel-scoped or thread-scoped.
-///
-/// One builder for both scopes because it is one rule with two branches: `h`
-/// alone is the channel canvas, `h` plus `e` is the canvas for that level-1
-/// thread root. Tag construction is delegated to the SDK so the rule lives in
-/// exactly one place; a second copy here would drift the moment either side
-/// changes.
-///
-/// `check_content` stays in this crate deliberately: it is the client-side
-/// guard shared with the other builders in this file and gives a local error
-/// before a round trip. It allows 64KB, while the relay caps channel canvas at
-/// 16KB and thread canvas at 4KB — the relay is the authority and returns the
-/// precise per-scope error.
+/// Kind 40100 — set canvas. `h` alone is the channel canvas, `h` plus `e` is
+/// the canvas for that level-1 thread root. Tags are built by the SDK so the
+/// rule lives in one place. `check_content` stays here: it is this crate's
+/// client-side guard, shared with the other builders, and the relay enforces
+/// the real per-scope caps.
 pub fn build_set_canvas(
     channel_id: Uuid,
     content: &str,

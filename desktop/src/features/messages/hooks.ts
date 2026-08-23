@@ -46,11 +46,10 @@ import {
   addReaction,
   deleteMessage,
   editMessage,
-  getThreadCanvas,
   removeReaction,
   sendChannelMessage,
-  setThreadCanvas,
 } from "@/shared/api/tauri";
+import { getThreadCanvas, setThreadCanvas } from "@/shared/api/threadCanvas";
 import { getChannelWindowEvents } from "@/shared/api/channelWindow";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 // Same .mjs the renderer uses, so the cache-update projection can't drift
