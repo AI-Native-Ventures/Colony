@@ -3820,25 +3820,6 @@ impl Db {
         channel::get_channel(&self.pool, community_id, channel_id).await
     }
 
-    /// Returns the canvas content for a channel, if any.
-    pub async fn get_canvas(
-        &self,
-        community_id: CommunityId,
-        channel_id: Uuid,
-    ) -> Result<Option<String>> {
-        channel::get_canvas(&self.pool, community_id, channel_id).await
-    }
-
-    /// Sets or clears the canvas content for a channel.
-    pub async fn set_canvas(
-        &self,
-        community_id: CommunityId,
-        channel_id: Uuid,
-        canvas: Option<&str>,
-    ) -> Result<()> {
-        channel::set_canvas(&self.pool, community_id, channel_id, canvas).await
-    }
-
     /// Adds a member to a channel.
     pub async fn add_member(
         &self,
