@@ -30,6 +30,10 @@ pub struct PaymentIntent {
     pub usd_cents: i64,
     /// Lifecycle state: `pending`, `paid`, `failed`, or `abandoned`.
     pub status: String,
+    /// The gateway that issued this reference at initialize time
+    /// (`paystack` or `payfast`). A callback arriving through any other
+    /// gateway must never settle the row.
+    pub provider: String,
     /// The amount actually paid, in USD cents, recorded at settlement.
     pub paid_cents: Option<i64>,
 }
@@ -45,19 +49,21 @@ pub async fn create_intent(
     reference: &str,
     pubkey: &[u8],
     usd_cents: i64,
+    provider: &str,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
     DeletionStore::new(pool.clone())
         .guard_transaction(&mut tx, community)
         .await?;
     sqlx::query(
-        "INSERT INTO payment_intents (community_id, reference, pubkey, usd_cents) \
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO payment_intents (community_id, reference, pubkey, usd_cents, provider) \
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(community.as_uuid())
     .bind(reference)
     .bind(pubkey)
     .bind(usd_cents)
+    .bind(provider)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -71,7 +77,7 @@ pub async fn find_intent(
     reference: &str,
 ) -> Result<Option<PaymentIntent>> {
     let row = sqlx::query(
-        "SELECT reference, pubkey, usd_cents, status, paid_cents \
+        "SELECT reference, pubkey, usd_cents, status, provider, paid_cents \
          FROM payment_intents \
          WHERE community_id = $1 AND reference = $2",
     )
@@ -85,6 +91,7 @@ pub async fn find_intent(
             pubkey: row.try_get("pubkey")?,
             usd_cents: row.try_get("usd_cents")?,
             status: row.try_get("status")?,
+            provider: row.try_get("provider")?,
             paid_cents: row.try_get("paid_cents")?,
         })),
         None => Ok(None),
@@ -193,7 +200,7 @@ mod tests {
     async fn creates_then_finds_an_intent() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500)
+        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
             .await
             .expect("create should succeed");
 
@@ -206,6 +213,7 @@ mod tests {
         assert_eq!(found.usd_cents, 500);
         assert_eq!(found.status, "pending");
         assert_eq!(found.paid_cents, None);
+        assert_eq!(found.provider, "paystack");
         delete_test_community(&pool, community).await;
     }
 
@@ -214,10 +222,11 @@ mod tests {
     async fn rejects_a_duplicate_reference() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500)
+        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
             .await
             .expect("first insert");
-        let second = create_intent(&pool, community, "ref-1", &sample_pubkey(), 500).await;
+        let second =
+            create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack").await;
         assert!(second.is_err(), "a duplicate reference must be rejected");
         delete_test_community(&pool, community).await;
     }
@@ -228,7 +237,7 @@ mod tests {
         let pool = setup_pool().await;
         let first = make_test_community(&pool).await;
         let second = make_test_community(&pool).await;
-        create_intent(&pool, first, "ref-1", &sample_pubkey(), 500)
+        create_intent(&pool, first, "ref-1", &sample_pubkey(), 500, "paystack")
             .await
             .expect("first community");
         let found = find_intent(&pool, second, "ref-1")
@@ -244,7 +253,7 @@ mod tests {
     async fn settles_once_and_refuses_a_replay() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500)
+        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
             .await
             .expect("create");
 
@@ -271,7 +280,7 @@ mod tests {
     async fn a_settled_intent_keeps_its_original_amount_alongside_paid_cents() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500)
+        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
             .await
             .expect("create");
 
