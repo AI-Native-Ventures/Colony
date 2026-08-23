@@ -8,6 +8,7 @@ import {
   effectiveFilerPubkey,
 } from "@/features/asks/lib/askRouting";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
+import { useResolvedAsks } from "@/features/asks/useAskResolutions";
 import { useActiveCompany, useCompanyTasks } from "@/features/company/hooks";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useHomeFeedQuery } from "@/features/home/hooks";
@@ -21,6 +22,8 @@ import {
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useFeatureEnabled } from "@/shared/features";
 import { relayClient } from "@/shared/api/relayClient";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type {
   HomeFeedResponse,
   Workflow,
@@ -78,6 +81,7 @@ export function useActionCenterItems({
   const communityId = activeCommunity?.id ?? "";
   const homeFeedQuery = useHomeFeedQuery();
   const openAsks = useOpenAsks();
+  const resolvedAsksResult = useResolvedAsks();
   const remindersQuery = useRemindersQuery(identityQuery.data?.pubkey);
   const channelsQuery = useChannelsQuery();
   const memberChannelIds = React.useMemo(
@@ -195,6 +199,34 @@ export function useActionCenterItems({
   const feed = homeFeedQuery.data?.feed;
   const reminders = remindersQuery.data ?? [];
   const { lookup: reportingLineLookup } = useReportingLineLookup(communityId);
+  const resolvedAsks = resolvedAsksResult.resolvedAsks;
+  const humanResolverPubkeys = React.useMemo(
+    () =>
+      [
+        ...new Set(
+          resolvedAsks
+            .filter((entry) => !entry.resolution.defaultExecuted)
+            .map((entry) => entry.resolution.resolverPubkey),
+        ),
+      ].sort(),
+    [resolvedAsks],
+  );
+  const resolverLabelsQuery = useUsersBatchQuery(humanResolverPubkeys, {
+    enabled: humanResolverPubkeys.length > 0,
+  });
+  const resolverLabelsByPubkey = React.useMemo(() => {
+    const labels = new Map<string, string>();
+    const profiles = resolverLabelsQuery.data?.profiles;
+    if (!profiles) return labels;
+    for (const pubkey of humanResolverPubkeys) {
+      const profile = profiles[normalizePubkey(pubkey)];
+      labels.set(
+        pubkey,
+        profile?.displayName?.trim() || truncatePubkey(normalizePubkey(pubkey)),
+      );
+    }
+    return labels;
+  }, [humanResolverPubkeys, resolverLabelsQuery.data]);
   const askRoutingNotesByAskId = React.useMemo(() => {
     const notes = new Map<string, string>();
     for (const ask of openAsks.asks) {
@@ -211,6 +243,8 @@ export function useActionCenterItems({
     () =>
       buildActionCenterItems({
         asks: openAsks.asks,
+        resolvedAsks,
+        resolverLabelsByPubkey,
         askRoutingNotesByAskId,
         doneIds: localDoneIds,
         feed: feed
@@ -231,6 +265,8 @@ export function useActionCenterItems({
       localDoneIds,
       openAsks.asks,
       reminders,
+      resolvedAsks,
+      resolverLabelsByPubkey,
       taskSources,
       workflowSources,
     ],
