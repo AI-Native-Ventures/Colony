@@ -357,19 +357,18 @@ async fn cmd_kit_derive(
         Err(error) => return Err(CliError::Other(error.to_string())),
     };
 
-    if scan.pages.iter().all(|page| page.brand.colors.is_empty()) {
-        eprintln!(
-            "warning: no colours were found on any scanned page; the site may render its \
-             styling with JavaScript. The proposal will carry no hues."
-        );
-    }
-
     let branding = summarize_scan(&scan);
     let scanned_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let mut body = derive_kit_body(&scan.canonical_url, scanned_at, &branding);
+    if body["hues"].as_array().is_some_and(|hues| hues.is_empty()) {
+        eprintln!(
+            "warning: no usable colours were found on any scanned page or stylesheet; the site \
+             may render its styling with JavaScript. The proposal will carry no hues."
+        );
+    }
 
     let mut marks: Vec<ProposedMark> = Vec::new();
     if !skip_marks {

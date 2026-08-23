@@ -21,7 +21,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 
-use super::extract::{extract_page, LinkCategory, PageEvidence};
+use super::extract::{extract_page_with_styles, LinkCategory, PageEvidence};
 use super::sitemap::{parse_sitemap, sitemap_urls_in_robots};
 use super::url_guard::{check_redirect, check_url_shape, resolve_public, CheckedUrl, UrlRejection};
 
@@ -249,6 +249,104 @@ async fn read_capped(
     Ok((String::from_utf8_lossy(&buffer).into_owned(), bytes))
 }
 
+/// Fetch a stylesheet the scanned site links, as text.
+///
+/// Unlike pages, sheets are frequently served from a CDN on another origin,
+/// so this validates the URL's shape and public reachability without a
+/// same-origin requirement. Every redirect hop is still re-validated, and the
+/// body is still capped while streaming.
+async fn fetch_stylesheet(
+    raw_url: &str,
+    limits: &ScanLimits,
+) -> Result<(String, usize), ScanError> {
+    let mut current = check_url_shape(raw_url)?;
+
+    for _hop in 0..=limits.max_redirects {
+        let addresses = resolve_public(&current).await?;
+
+        let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(limits.request_timeout)
+            .user_agent(USER_AGENT);
+        for address in &addresses {
+            builder = builder.resolve(&current.host, *address);
+        }
+        let client = builder.build().map_err(|error| ScanError::Unreachable {
+            url: current.url.to_string(),
+            reason: error.to_string(),
+        })?;
+
+        let response = client
+            .get(current.url.clone())
+            .send()
+            .await
+            .map_err(|error| ScanError::Unreachable {
+                url: current.url.to_string(),
+                reason: error.to_string(),
+            })?;
+
+        let status = response.status();
+        if status.is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| ScanError::Unreachable {
+                    url: current.url.to_string(),
+                    reason: "redirect without a location".to_owned(),
+                })?
+                .to_owned();
+            current = check_redirect(&location, &current)?;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(ScanError::Unreachable {
+                url: current.url.to_string(),
+                reason: format!("HTTP {}", status.as_u16()),
+            });
+        }
+        return read_capped(response, limits.max_page_bytes.min(512 * 1024)).await;
+    }
+
+    Err(ScanError::Unreachable {
+        url: raw_url.to_owned(),
+        reason: format!("more than {} redirects", limits.max_redirects),
+    })
+}
+
+/// Fetch up to [`MAX_STYLESHEETS_PER_PAGE`] linked sheets and concatenate
+/// their CSS, charging every byte to the scan's total budget.
+///
+/// Failures are silent here by design: a sheet that will not load is one
+/// fewer colour source, not a broken scan.
+async fn stylesheets_for(
+    html: &str,
+    page_url: &str,
+    limits: &ScanLimits,
+    seen: &mut std::collections::BTreeSet<String>,
+    result: &mut CompanyScanResult,
+) -> String {
+    const MAX_STYLESHEETS_PER_PAGE: usize = 3;
+    let mut css = String::new();
+    for href in super::extract::stylesheet_hrefs(html, page_url)
+        .into_iter()
+        .take(MAX_STYLESHEETS_PER_PAGE)
+    {
+        if css.len() >= 512 * 1024 || result.bytes_read >= limits.max_total_bytes {
+            break;
+        }
+        if !seen.insert(href.clone()) {
+            continue;
+        }
+        if let Ok((text, bytes)) = fetch_stylesheet(&href, limits).await {
+            result.bytes_read += bytes;
+            css.push_str(&text);
+            css.push('\n');
+        }
+    }
+    css
+}
+
 /// Order pages so the most informative are read before a budget runs out.
 ///
 /// Services and pricing first because they become the company's services and
@@ -302,7 +400,17 @@ pub async fn scan_site(raw_url: &str, limits: ScanLimits) -> Result<CompanyScanR
     result.canonical_url = home.final_url.url.to_string();
     result.bytes_read += home.bytes;
     let origin = home.final_url.clone();
-    let home_evidence = extract_page(&home.body, &result.canonical_url);
+    let mut seen_sheets: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let canonical = result.canonical_url.clone();
+    let home_css = stylesheets_for(
+        &home.body,
+        &canonical,
+        &limits,
+        &mut seen_sheets,
+        &mut result,
+    )
+    .await;
+    let home_evidence = extract_page_with_styles(&home.body, &canonical, &home_css);
 
     let mut queue: Vec<(u8, usize, String)> = home_evidence
         .links
@@ -381,7 +489,17 @@ pub async fn scan_site(raw_url: &str, limits: ScanLimits) -> Result<CompanyScanR
                 // is how the homepage came back twice in a real scan.
                 let landed_elsewhere = url != candidate;
                 if !landed_elsewhere || seen.insert(url.clone()) {
-                    result.pages.push(extract_page(&fetched.body, &url));
+                    let css = stylesheets_for(
+                        &fetched.body,
+                        &url,
+                        &limits,
+                        &mut seen_sheets,
+                        &mut result,
+                    )
+                    .await;
+                    result
+                        .pages
+                        .push(extract_page_with_styles(&fetched.body, &url, &css));
                 }
             }
             Err(error) => result.warnings.push(format!("{candidate}: {error}")),

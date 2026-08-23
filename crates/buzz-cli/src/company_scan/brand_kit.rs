@@ -309,12 +309,21 @@ fn hue_distance(a: f64, b: f64) -> f64 {
 /// violet and blue apart.
 const HUE_FAMILY_TOLERANCE_DEG: f64 = 24.0;
 
+/// Lightness band a colour must sit in to count as an accent.
+///
+/// HSL saturation stays high near white and black — a cream page background
+/// measures s=0.7 — so saturation alone cannot tell a brand hue from a wash.
+/// Lightness can: page-scale washes live past ~92%, true accents do not.
+fn is_accent_like(lightness: f64) -> bool {
+    (0.06..=0.92).contains(&lightness)
+}
+
 struct HueCluster {
     hue: f64,
     members: Vec<ColorCandidate>,
 }
 
-fn cluster_hues(candidates: &[ColorCandidate]) -> Vec<HueCluster> {
+fn cluster_hues(candidates: &[ColorCandidate], accents_only: bool) -> Vec<HueCluster> {
     let mut ranked: Vec<&ColorCandidate> = candidates.iter().collect();
     ranked.sort_by(|left, right| {
         right
@@ -328,10 +337,14 @@ fn cluster_hues(candidates: &[ColorCandidate]) -> Vec<HueCluster> {
         let Some(rgb) = hex_to_rgb(&candidate.hex) else {
             continue;
         };
+        let (_, _, lightness) = rgb_to_hsl(rgb);
         if candidate.saturation() < 0.08 {
             continue;
         }
-        let (h, _, _) = rgb_to_hsl(rgb);
+        if accents_only && !is_accent_like(lightness) {
+            continue;
+        }
+        let h = rgb_to_hsl(rgb).0;
         if let Some(cluster) = clusters
             .iter_mut()
             .find(|cluster| hue_distance(cluster.hue, h) <= HUE_FAMILY_TOLERANCE_DEG)
@@ -384,28 +397,35 @@ pub struct DerivedHue {
 /// words, suffixed `-2`, `-3` when one site leans on two families with the
 /// same name.
 pub fn derive_hues(colors: &[ColorCandidate]) -> Vec<DerivedHue> {
+    // Accents lead; page-scale washes only join when the site offered nothing
+    // else, because a cream background is a real choice too.
     let mut hues: Vec<DerivedHue> = Vec::new();
-    for cluster in cluster_hues(colors) {
-        if hues.len() >= MAX_DERIVED_HUES {
+    for clusters in [cluster_hues(colors, true), cluster_hues(colors, false)] {
+        for cluster in clusters {
+            if hues.len() >= MAX_DERIVED_HUES {
+                break;
+            }
+            // The heaviest member is the family's face: it keeps the exact
+            // bytes the site actually uses rather than an average nobody chose.
+            let base = &cluster.members[0].hex;
+            let Some(ramp) = solved_ramp(base) else {
+                continue;
+            };
+            let name = hue_name(cluster.hue);
+            let ordinal = hues.iter().filter(|hue| hue.name.starts_with(name)).count();
+            hues.push(DerivedHue {
+                name: if ordinal == 0 {
+                    name.to_owned()
+                } else {
+                    format!("{name}-{}", ordinal + 1)
+                },
+                base: base.clone(),
+                ramp,
+            });
+        }
+        if !hues.is_empty() {
             break;
         }
-        // The heaviest member is the family's face: it keeps the exact bytes
-        // the site actually uses rather than an average nobody chose.
-        let base = &cluster.members[0].hex;
-        let Some(ramp) = solved_ramp(base) else {
-            continue;
-        };
-        let name = hue_name(cluster.hue);
-        let ordinal = hues.iter().filter(|hue| hue.name.starts_with(name)).count();
-        hues.push(DerivedHue {
-            name: if ordinal == 0 {
-                name.to_owned()
-            } else {
-                format!("{name}-{}", ordinal + 1)
-            },
-            base: base.clone(),
-            ramp,
-        });
     }
     hues
 }
@@ -425,12 +445,53 @@ pub struct ScanBranding {
     pub icon_urls: Vec<String>,
 }
 
+/// Families every CSS engine resolves itself; they are fallbacks, not
+/// identity, so they rank after any real name.
+const GENERIC_FAMILIES: [&str; 8] = [
+    "serif",
+    "sans-serif",
+    "monospace",
+    "cursive",
+    "fantasy",
+    "system-ui",
+    "ui-sans-serif",
+    "ui-monospace",
+];
+
+/// True when a declaration fragment can act as a font family name.
+///
+/// Sites leak CSS tokens (`var(--font-display)`, `inherit`,
+/// `!important`) into their stacks; none of those names anything a renderer
+/// can load.
+fn is_usable_family(raw: &str) -> bool {
+    let name = raw.trim();
+    !name.is_empty()
+        && !name.contains(['(', ')'])
+        && !name.contains('!')
+        && !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "inherit" | "initial" | "unset" | "revert"
+        )
+}
+
 fn push_font(fonts: &mut Vec<String>, raw: &str) {
     let cleaned: String = raw.trim().trim_matches('"').trim_matches('\'').to_owned();
-    if cleaned.is_empty() || fonts.iter().any(|held| held == &cleaned) {
+    if !is_usable_family(&cleaned) || fonts.iter().any(|held| held == &cleaned) {
         return;
     }
-    fonts.push(cleaned);
+    // Real family names precede generics regardless of declaration order,
+    // because a generic first would make the kit's headline font a browser
+    // default even when the site names one later in its own stack.
+    let generics_start = fonts
+        .iter()
+        .position(|font| GENERIC_FAMILIES.contains(&font.to_ascii_lowercase().as_str()))
+        .unwrap_or(fonts.len());
+    if GENERIC_FAMILIES.contains(&cleaned.to_ascii_lowercase().as_str()) {
+        // Generics keep declaration order among themselves.
+        fonts.push(cleaned);
+    } else {
+        fonts.insert(generics_start, cleaned);
+    }
 }
 
 /// Aggregate per-page brand evidence into [`ScanBranding`].
@@ -969,6 +1030,62 @@ mod tests {
         assert_eq!(branding.fonts, vec!["Inter".to_owned()]);
         assert_eq!(branding.logo_urls, vec!["https://acme.test/logo.png"]);
         assert_eq!(branding.icon_urls, vec!["https://acme.test/favicon.ico"]);
+    }
+
+    #[test]
+    fn css_tokens_and_generics_do_not_lead_the_font_list() {
+        let mut branding = ScanBranding::default();
+        for font in [
+            "var(--font-display)",
+            "inherit",
+            "monospace",
+            "\"Sohne\"",
+            "Sohne",
+            "system-ui",
+        ] {
+            push_font(&mut branding.fonts, font);
+        }
+        assert_eq!(
+            branding.fonts,
+            vec![
+                "Sohne".to_owned(),
+                "monospace".to_owned(),
+                "system-ui".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_page_wash_does_not_lead_when_a_real_accent_exists() {
+        // #fbf0df is a cream that HSL calls saturated (s=0.77 at L=0.93);
+        // it must not become the kit's orange.
+        let colors = vec![
+            ColorCandidate {
+                hex: "#fbf0df".to_owned(),
+                occurrences: 40,
+                declared: false,
+            },
+            ColorCandidate {
+                hex: "#22d3ee".to_owned(),
+                occurrences: 6,
+                declared: false,
+            },
+        ];
+        let hues = derive_hues(&colors);
+        assert_eq!(hues.len(), 1);
+        assert_eq!(hues[0].base, "#22d3ee");
+    }
+
+    #[test]
+    fn a_wash_only_site_still_gets_its_hue() {
+        let colors = vec![ColorCandidate {
+            hex: "#fbf0df".to_owned(),
+            occurrences: 12,
+            declared: false,
+        }];
+        let hues = derive_hues(&colors);
+        assert_eq!(hues.len(), 1);
+        assert_eq!(hues[0].base, "#fbf0df");
     }
 
     /// The whole point: a derived body must pass the same parser the relay
