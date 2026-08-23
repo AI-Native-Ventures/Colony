@@ -49,8 +49,13 @@ export function ThreadCanvasPanel({
   // Defer the single large Markdown parse so opening the panel commits the
   // surrounding chrome immediately and the heavy render reconciles after.
   const deferredCanvasContent = React.useDeferredValue(canvasContent);
+  // "Has content" is the emptiness test, not "is not null". Both the Tauri
+  // command and the mock bridge return `content: ""` for a thread that has no
+  // canvas, so a `!== null` check treats every empty thread as populated and
+  // opens the panel on threads that have nothing to show.
+  const hasCanvasContent = (canvasContent ?? "").trim() !== "";
   const expanded =
-    userExpanded ?? (canvasQuery.isSuccess ? canvasContent !== null : false);
+    userExpanded ?? (canvasQuery.isSuccess ? hasCanvasContent : false);
 
   if (canvasQuery.isPending) {
     return null;
