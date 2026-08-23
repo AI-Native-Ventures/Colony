@@ -51,10 +51,17 @@
        The custom property names still say buzz (renaming them is part of the
        deferred technical pass), but the values are Colony's: derived from the
        brand violet hsl(258 90% 66%) so the app's dominant surface matches the
-       mark and the marketing site. Mobile mirrors these in
+       mark and the marketing site.
+
+       The sidebar is one flat violet, not a gradient: both light stops hold
+       the same value so every rule consuming them paints flat. It sat between
+       HUE_CANVAS_MID and HUE_CANVAS (site/src/brand/hue.ts) so a white
+       selection still has somewhere to go darker. The bottom stop used to be
+       #c4d0da, a grey-blue, which drained the colour out entirely. Mobile
+       mirrors these in
        mobile/lib/shared/theme/colony_theme.dart; change both together. */
-    --buzz-gradient-light-top: #d9cdf3;
-    --buzz-gradient-light-bottom: #c4d0da;
+    --buzz-gradient-light-top: #c9b6f7;
+    --buzz-gradient-light-bottom: #c9b6f7;
     --buzz-gradient-dark-top: #2a1e48;
     --buzz-gradient-dark-bottom: #0a1423;
     --buzz-content-dark: 0 0% 10.1960784314%;
@@ -445,14 +452,29 @@
 }
 
 /*
- * By default, selected navigation uses a darker version of the hover tint,
- * matching Buzz's established production treatment. The optional prominent
- * preference repaints that same row with the higher-contrast tab surface.
+ * Selected navigation is the brand accent with white label and icon.
+ *
+ * This used to paint `--sidebar-row-subtle-active-surface`, a 7% black wash
+ * inherited from Buzz's production treatment. It overrode `bg-sidebar-active`
+ * from the component layer, so the accent token could never reach the row no
+ * matter what it held, and selection read as a faint grey pill on a violet
+ * sidebar. The accent is the whole point of a selected row: it should be the
+ * one saturated thing in the column.
  */
 :root[data-buzz-sidebar] [data-testid="app-sidebar"] [data-active="true"],
 :root[data-buzz-sidebar] [data-testid="settings-sidebar"] [data-active="true"] {
-  background-color: var(--sidebar-row-subtle-active-surface);
+  background-color: hsl(var(--sidebar-active));
+  color: hsl(var(--sidebar-active-foreground));
   box-shadow: none;
+}
+
+/* The icon follows the label rather than keeping its resting tint. */
+:root[data-buzz-sidebar] [data-testid="app-sidebar"] [data-active="true"] svg,
+:root[data-buzz-sidebar]
+  [data-testid="settings-sidebar"]
+  [data-active="true"]
+  svg {
+  color: hsl(var(--sidebar-active-foreground));
 }
 
 :root[data-buzz-sidebar][data-prominent-active-tab]

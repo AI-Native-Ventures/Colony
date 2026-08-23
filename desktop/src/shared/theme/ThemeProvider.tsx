@@ -23,8 +23,28 @@ import {
 } from "./theme-loader";
 
 export const THEME_STORAGE_KEY = "buzz-theme";
-const CACHE_KEY = "buzz-theme-cache";
-export const ACCENT_STORAGE_KEY = "buzz-accent-color";
+/**
+ * Bumped when the token values behind the cache change.
+ *
+ * applyCachedVars writes this cache back onto :root synchronously before the
+ * provider runs, to avoid a flash of unstyled theme. That means a stale cache
+ * silently wins over new defaults: after the accent moved from a forced
+ * neutral to the brand violet, anyone with an existing cache kept the old
+ * greyscale sidebar and had no way to know why. A new key retires those
+ * caches instead of leaving them to mask the change.
+ */
+const CACHE_KEY = "buzz-theme-cache.v2";
+/**
+ * Bumped when a previously stored value can no longer be trusted as a choice.
+ *
+ * Colony themes used to force the accent to neutral and persist it, so every
+ * existing install holds "neutral" whether or not anyone picked it. Reading
+ * that back now would keep the workspace greyscale forever and make the
+ * selected sidebar row resolve to the near-black foreground. A new key drops
+ * those imposed values so the brand default applies, and a genuine choice
+ * made from here on is stored under the new key and honoured.
+ */
+export const ACCENT_STORAGE_KEY = "buzz-accent-color.v2";
 export const GLASS_BACKGROUND_STORAGE_KEY = "buzz-glass-background";
 export const GLASS_OPACITY_STORAGE_KEY = "buzz-glass-opacity";
 export const PROMINENT_ACTIVE_TAB_STORAGE_KEY = "buzz-prominent-active-tab";
@@ -40,20 +60,27 @@ const VIDEO_REVIEW_TEXT_CONTRAST = 4.5;
 const VIDEO_REVIEW_CHIP_BACKGROUND_ALPHAS = [0.15, 0.3] as const;
 const GLASS_VIBRANCY_MATERIAL = "sidebar";
 
+/**
+ * Accents are the Colony brand hues, hex-converted from
+ * shared/ui/colony-logo/palette.ts, which mirrors docs/BRAND.md.
+ *
+ * This list used to be Tailwind's stock ramp (blue-500, cyan-500, and so on):
+ * ten colours, none of them Colony's, so the default workspace opened in a
+ * generic blue that appears nowhere else in the product. The five brand hues
+ * are the same set the landing page and onboarding cycle through, which is
+ * what makes the app read as a continuation of them.
+ */
 export const ACCENT_COLORS = [
+  { name: "Violet", value: "#895AF6" },
+  { name: "Blue", value: "#3C83F6" },
+  { name: "Pink", value: "#EC4699" },
+  { name: "Amber", value: "#F59F0A" },
+  { name: "Green", value: "#2EB88A" },
   { name: "Neutral", value: NEUTRAL_ACCENT },
-  { name: "Blue", value: "#3b82f6" },
-  { name: "Cyan", value: "#06b6d4" },
-  { name: "Green", value: "#22c55e" },
-  { name: "Orange", value: "#f97316" },
-  { name: "Red", value: "#ef4444" },
-  { name: "Pink", value: "#ec4899" },
-  { name: "Lilac", value: "#c0a2f1" },
-  { name: "Purple", value: "#a855f7" },
-  { name: "Indigo", value: "#6366f1" },
 ] as const;
 
-const DEFAULT_ACCENT = "#3b82f6";
+/** Violet leads the brand, so it leads the workspace. */
+const DEFAULT_ACCENT = "#895AF6";
 
 type ThemeContextValue = {
   themeName: string;
@@ -245,25 +272,33 @@ function applyAccentColor(value: string) {
 }
 
 /**
- * The Buzz themes ship with a fixed neutral accent (the GitHub black/white
- * foreground) rather than a user-selectable accent color. When a Buzz theme is
- * active we force `NEUTRAL_ACCENT` regardless of the stored preference, and the
- * appearance panel hides the accent picker. The user's chosen accent is left
- * untouched in storage so it returns when they switch back to another theme.
+ * Whether a theme is one of Colony's own.
+ *
+ * These used to pin the accent to neutral (a GitHub-style black and white
+ * foreground) and hide the accent picker entirely. That is why the default
+ * workspace opened colourless: the default theme IS a Colony theme, so the
+ * brand accent was overridden before it could be applied and the picker that
+ * would have let anyone fix it was not rendered.
+ *
+ * Colony themes now take the selected accent like every other theme, which
+ * defaults to the brand violet.
  */
 export function isBuzzTheme(themeName: string): boolean {
   return themeName === "buzz" || themeName === "buzz-dark";
 }
 
 /**
- * Resolve the accent to actually apply for a theme: Buzz themes are pinned to
- * the neutral accent; every other theme uses the stored/selected accent.
+ * Resolve the accent to actually apply.
+ *
+ * Every theme, Colony's included, uses the selected accent. Colony themes
+ * used to be forced to neutral here, which meant the default workspace could
+ * never show a brand colour no matter what was stored.
  */
 function resolveEffectiveAccent(
-  themeName: string,
+  _themeName: string,
   accentColor: string,
 ): string {
-  return isBuzzTheme(themeName) ? NEUTRAL_ACCENT : accentColor;
+  return accentColor;
 }
 
 /** Toggle the Buzz-specific gradient marker independently from glass. */
