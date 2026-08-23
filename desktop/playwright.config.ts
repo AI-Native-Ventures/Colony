@@ -43,6 +43,7 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
+        "**/onboarding-tour.spec.ts",
         "**/blocks.spec.ts",
         "**/ledger.spec.ts",
         "**/blocks-faults.spec.ts",

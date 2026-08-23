@@ -23,7 +23,9 @@ export function CompanyScreen({ values, onChange, onSubmit, onBack }: Props) {
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Now, your company.</h1>
+        <h1 className="onb-headline">
+          Now, your <em>company</em>.
+        </h1>
         <p className="onb-sub">
           This becomes your workspace. You can change the name later.
         </p>

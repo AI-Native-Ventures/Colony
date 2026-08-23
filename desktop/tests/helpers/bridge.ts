@@ -895,6 +895,18 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
+  } else {
+    // The redesigned flow is the product default now, so a first-run spec
+    // that says nothing would suddenly be driving different screens. Specs
+    // opt into the redesign by setting this key to "1" themselves, which
+    // runs first and this leaves alone; everything else stays on the flow it
+    // was written against.
+    await page.addInitScript(() => {
+      const key = "colony.e2e.newOnboarding";
+      if (window.localStorage.getItem(key) === null) {
+        window.localStorage.setItem(key, "0");
+      }
+    });
   }
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.

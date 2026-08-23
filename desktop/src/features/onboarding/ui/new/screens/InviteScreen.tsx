@@ -59,7 +59,9 @@ export function InviteScreen({
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Who else is coming?</h1>
+        <h1 className="onb-headline">
+          Who else is <em>coming</em>?
+        </h1>
         <p className="onb-sub">
           They get an email with a link that brings them straight into your
           workspace.

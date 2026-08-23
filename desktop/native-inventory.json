@@ -3446,7 +3446,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1551",
         "src/parity/session/script.ts:1552",
-        "src/shared/theme/ThemeProvider.tsx:385"
+        "src/shared/theme/ThemeProvider.tsx:457"
       ]
     },
     "show_native_notification": {

@@ -72,11 +72,13 @@ export function CreditsScreen({
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Put your colony to work.</h1>
+        <h1 className="onb-headline">
+          Put something in the <em>tin</em>.
+        </h1>
         <p className="onb-sub">
           {track === "colony"
-            ? "Credits are what your agents run on: finding customers, reaching out, research, and work that carries on while you sleep. Your agent runs on Colony, so credits keep it working."
-            : "Credits pay for the work your agents do out in the world: finding customers, reaching out, and research."}
+            ? "Finding customers, reaching out, research: work that carries on while you sleep. Your helpers run on Colony, and credits keep them working."
+            : "Your helpers work for free using what's on your computer. Add money only when you want them working while you sleep."}
         </p>
       </div>
       <div className="onb-amounts">
@@ -114,14 +116,14 @@ export function CreditsScreen({
             className="onb-amount"
             onClick={() => setUsingCustom(true)}
           >
-            Other
+            Another amount
           </button>
         )}
       </div>
       <div className="onb-panel">
         <div className="onb-handoff">
           <p className="onb-handoff-title">
-            You will pay with Paystack, then come straight back here.
+            You'll pay with Paystack, then come straight back here.
           </p>
           <p className="onb-handoff-methods">
             Colony never sees your card details.
@@ -134,7 +136,7 @@ export function CreditsScreen({
             ? "That payment was not completed. Nothing has been charged."
             : usingCustom && custom && !valid
               ? `The minimum is $${MIN_USD}.`
-              : `$${MIN_USD} minimum. Reading your website cost 4 cents, and that comes off this first payment.`}
+              : `$${MIN_USD} minimum. Anything we spent reading your website comes off this first payment.`}
         </p>
       </div>
       <div className="onb-actions">
@@ -151,7 +153,7 @@ export function CreditsScreen({
         </Button>
         {track === "byo" ? (
           <button type="button" className="onb-quiet-action" onClick={onSkip}>
-            I will use my own agent for now
+            I will run my own helpers for now
           </button>
         ) : null}
         <button type="button" className="onb-quiet-action" onClick={onBack}>
