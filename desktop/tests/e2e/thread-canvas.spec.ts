@@ -208,8 +208,9 @@ test.describe("thread canvas panel", () => {
     await expect(page.getByTestId("thread-canvas-content")).toContainText(
       "Canvas A: hero scroll treatment.",
     );
-    await page.getByTestId("message-thread-back").click();
-
+    // Wide layouts keep the timeline interactive beside the open thread
+    // panel, so switching threads is a direct summary-row click; the back
+    // control only exists in the narrow single-panel view.
     await openThread(page, ROOT_B);
     await expect(page.getByTestId("thread-canvas-content")).toContainText(
       "Canvas B: refund flow edge cases.",
