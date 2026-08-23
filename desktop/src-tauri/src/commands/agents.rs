@@ -787,6 +787,8 @@ pub(crate) async fn create_managed_agent_with_creation_request(
             } else {
                 relay_mesh.clone()
             },
+            // Instances are community-scoped via their own `relay_url`.
+            community: None,
         };
 
         records.push(record);

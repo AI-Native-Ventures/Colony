@@ -1530,6 +1530,7 @@ mod tests {
             definition_respond_to_allowlist: Vec::new(),
             definition_parallelism: None,
             relay_mesh: None,
+            community: None,
         };
 
         let runtime = known_acp_runtime_exact("buzz-agent");

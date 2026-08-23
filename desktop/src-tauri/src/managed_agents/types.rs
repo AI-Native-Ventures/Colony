@@ -155,6 +155,7 @@ impl AgentDefinition {
             definition_respond_to_allowlist: self.respond_to_allowlist,
             definition_parallelism: self.parallelism,
             relay_mesh: None,
+            community: None,
         }
     }
 }
@@ -456,6 +457,21 @@ pub struct ManagedAgentRecord {
     /// deserialize as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_mesh: Option<RelayMeshConfig>,
+    /// The community (relay URL) that owns a definition record.
+    ///
+    /// `Some(relay)` on a key-less definition means the definition belongs to
+    /// that community alone: renaming or reconfiguring it cannot leak into any
+    /// other community (finding F6). `None` is an unscoped definition — either
+    /// pre-migration shared state, or a template no community has adopted yet
+    /// (adopted in place by the first community that mints an instance from
+    /// it, via `community_defs::ensure_definition_for_community`). Always
+    /// `None` for keyed instances, which carry their own `relay_url`.
+    ///
+    /// `#[serde(default)]` keeps old stores parsing; `skip_serializing_if`
+    /// keeps unscoped records byte-stable so a downgrade reads them exactly
+    /// as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community: Option<String>,
 }
 
 #[derive(Debug)]

@@ -330,6 +330,7 @@ fn create_agent_input(
         respond_to: behavior.respond_to,
         respond_to_allowlist: behavior.respond_to_allowlist,
         relay_mesh: None,
+        community: None,
     })
 }
 

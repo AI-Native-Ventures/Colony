@@ -390,6 +390,7 @@ fn bare_record() -> ManagedAgentRecord {
         source_team_persona_slug: None,
         catalog_source: None,
         relay_mesh: None,
+        community: None,
         auto_restart_on_config_change: false,
         definition_respond_to: None,
         definition_respond_to_allowlist: vec![],
