@@ -351,6 +351,16 @@ type MockBridgeOptions = {
   deepHistoryMessageCount?: number;
   feedReadError?: string;
   canvasReadError?: string;
+  /** Reject `get_thread_canvas` calls with this message. */
+  threadCanvasReadError?: string;
+  /** Thread canvases seeded for `get_thread_canvas`, per (channel, thread root). */
+  threadCanvases?: Array<{
+    channelId: string;
+    threadRootId: string;
+    content: string;
+  }>;
+  /** Reject successive `set_thread_canvas` calls with these messages, then resume. */
+  threadCanvasSaveErrors?: string[];
   /** Delay (ms) for `apply_workspace`; see e2eBridge mock config. */
   applyCommunityDelayMs?: number;
   openDmDelayMs?: number;

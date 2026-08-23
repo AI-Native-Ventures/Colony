@@ -674,6 +674,8 @@ pub fn run() {
             leave_channel,
             get_canvas,
             set_canvas,
+            get_thread_canvas,
+            set_thread_canvas,
             get_feed,
             search_messages,
             send_channel_message,

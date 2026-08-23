@@ -708,6 +708,24 @@ pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder,
     Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
 }
 
+/// Kind 40100 — set a thread-scoped canvas.
+///
+/// Same kind as the channel canvas, scoped to one level-1 thread by an
+/// additional `e` tag carrying the thread root event id. Absent `e` remains
+/// the channel canvas (canvas-as-scoped-memory data model).
+pub fn build_set_thread_canvas(
+    channel_id: Uuid,
+    thread_root_id: EventId,
+    content: &str,
+) -> Result<EventBuilder, String> {
+    check_content(content)?;
+    let tags = vec![
+        tag(vec!["h", &channel_id.to_string()])?,
+        tag(vec!["e", &thread_root_id.to_hex()])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
+}
+
 // ── Profile ──────────────────────────────────────────────────────────────────
 
 /// Kind 0 — NIP-01 profile metadata (full snapshot).

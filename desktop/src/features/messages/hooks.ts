@@ -46,8 +46,10 @@ import {
   addReaction,
   deleteMessage,
   editMessage,
+  getThreadCanvas,
   removeReaction,
   sendChannelMessage,
+  setThreadCanvas,
 } from "@/shared/api/tauri";
 import { getChannelWindowEvents } from "@/shared/api/channelWindow";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
@@ -837,6 +839,48 @@ export function useEditMessageMutation(channel: Channel | null) {
         channelMessagesKey(channel.id),
         (current = []) => current.map(applyEdit),
       );
+    },
+  });
+}
+
+// ── Thread canvas ─────────────────────────────────────────────────────────────
+// Mirrors the channel-canvas hooks in features/channels/hooks.ts, scoped to a
+// level-1 thread root: kind 40100 keyed on (channel, thread root).
+export function useThreadCanvasQuery(
+  channelId: string | null,
+  threadRootId: string | null,
+) {
+  return useQuery({
+    queryKey: ["thread-canvas", channelId, threadRootId],
+    queryFn: () => {
+      if (!channelId || !threadRootId) {
+        return Promise.reject(new Error("No thread selected"));
+      }
+      return getThreadCanvas(channelId, threadRootId);
+    },
+    enabled: channelId !== null && threadRootId !== null,
+  });
+}
+
+export function useSetThreadCanvasMutation(
+  channelId: string | null,
+  threadRootId: string | null,
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (content: string) => {
+      if (!channelId || !threadRootId) {
+        return Promise.reject(new Error("No thread selected"));
+      }
+      return setThreadCanvas({ channelId, threadRootId, content });
+    },
+    onSuccess: () => {
+      if (channelId && threadRootId) {
+        void queryClient.invalidateQueries({
+          queryKey: ["thread-canvas", channelId, threadRootId],
+        });
+      }
     },
   });
 }
