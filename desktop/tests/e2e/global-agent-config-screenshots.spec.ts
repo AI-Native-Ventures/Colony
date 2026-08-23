@@ -811,7 +811,7 @@ test.describe("global agent config screenshots", () => {
       page.locator("#persona-runtime"),
       "Claude Code",
     );
-    await page.getByRole("tab", { name: "Use harness defaults" }).click();
+    await page.getByRole("tab", { name: "Use agent defaults" }).click();
 
     // Provider picker hidden — the runtime drives its own provider.
     await expect(page.locator("#persona-llm-provider")).not.toBeVisible();

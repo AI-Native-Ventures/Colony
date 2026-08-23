@@ -140,9 +140,7 @@ pub(crate) fn resolve_effective_harness_descriptor(
     let harness_def = resolved_runtime_id
         .as_ref()
         .and_then(|resolved| resolved.value.as_deref())
-        .and_then(
-            crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id,
-        );
+        .and_then(crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id);
 
     // Args: explicit non-empty instance args win; otherwise use definition args.
     let args = {
@@ -188,16 +186,11 @@ pub(crate) fn resolve_effective_agent_env(
     // Look up the harness definition for definition-level env (preset/custom).
     // Same inherited chain as the descriptor: record runtime id → persona
     // runtime id → global.preferred_runtime.
-    let harness_def = super::effective_config::resolve_effective_runtime_id(
-        record,
-        personas,
-        global,
-    )
-    .and_then(|resolved| resolved.value)
-    .as_deref()
-    .and_then(
-        crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id,
-    );
+    let harness_def =
+        super::effective_config::resolve_effective_runtime_id(record, personas, global)
+            .and_then(|resolved| resolved.value)
+            .as_deref()
+            .and_then(crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id);
 
     resolve_effective_agent_env_with_def(record, personas, runtime, global, harness_def)
 }
@@ -1807,9 +1800,8 @@ mod tests {
             ..Default::default()
         };
 
-        let descriptor =
-            resolve_effective_harness_descriptor(&record, &[], &global)
-                .expect("global preferred_runtime must resolve to a known preset harness");
+        let descriptor = resolve_effective_harness_descriptor(&record, &[], &global)
+            .expect("global preferred_runtime must resolve to a known preset harness");
 
         assert_eq!(
             descriptor.command, "omp",
@@ -1826,9 +1818,8 @@ mod tests {
             ..Default::default()
         };
 
-        let descriptor =
-            resolve_effective_harness_descriptor(&record, &[], &global)
-                .expect("pinned runtime id must resolve");
+        let descriptor = resolve_effective_harness_descriptor(&record, &[], &global)
+            .expect("pinned runtime id must resolve");
 
         assert_eq!(
             descriptor.command, "goose",
@@ -1870,9 +1861,8 @@ mod tests {
             ..Default::default()
         };
 
-        let descriptor =
-            resolve_effective_harness_descriptor(&record, &[definition], &global)
-                .expect("definition runtime id must resolve");
+        let descriptor = resolve_effective_harness_descriptor(&record, &[definition], &global)
+            .expect("definition runtime id must resolve");
 
         assert_eq!(
             descriptor.command, "claude-agent-acp",
@@ -1892,8 +1882,7 @@ mod tests {
             .expect_err("a dangling global preferred runtime must fail like a dangling pin");
 
         assert_eq!(
-            error,
-            "DANGLING_HARNESS_ID:deleted-harness",
+            error, "DANGLING_HARNESS_ID:deleted-harness",
             "the typed dangling-id sentinel must carry the unresolved global id"
         );
     }

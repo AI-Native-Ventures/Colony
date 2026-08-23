@@ -155,8 +155,7 @@ pub fn resolve_effective_harness_command(
     match resolve_effective_runtime_id(record, definitions, global) {
         Some(resolved) => {
             let id = resolved.value.unwrap_or_default();
-            super::command_for_runtime_id(&id)
-                .ok_or_else(|| format!("DANGLING_HARNESS_ID:{id}"))
+            super::command_for_runtime_id(&id).ok_or_else(|| format!("DANGLING_HARNESS_ID:{id}"))
         }
         None => Ok(super::default_agent_command()),
     }
@@ -350,10 +349,11 @@ pub fn resolve_effective_config(
 ) -> EffectiveConfigResult {
     // One harness chain for both shapes: instance pin → definition pin →
     // global preferred runtime (`resolve_effective_runtime_id`).
-    let harness = resolve_effective_runtime_id(record, definitions, global).unwrap_or(ResolvedField {
-        value: None,
-        source: ConfigSource::Global,
-    });
+    let harness =
+        resolve_effective_runtime_id(record, definitions, global).unwrap_or(ResolvedField {
+            value: None,
+            source: ConfigSource::Global,
+        });
     match &record.persona_id {
         Some(pid) => match definitions.iter().find(|d| d.id == *pid) {
             Some(def) => {

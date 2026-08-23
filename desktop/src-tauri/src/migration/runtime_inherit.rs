@@ -96,10 +96,9 @@ fn clear_runtime_pins_in_dir(dir: &Path) {
 /// nsecs on keyringless hosts, so the same rule as `patch_json_records`
 /// applies.
 fn clear_runtime_pins_in_file(path: &Path) -> Result<bool, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read: {e}"))?;
-    let mut records: Vec<serde_json::Value> = serde_json::from_str(&content)
-        .map_err(|e| format!("failed to parse: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("failed to read: {e}"))?;
+    let mut records: Vec<serde_json::Value> =
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse: {e}"))?;
     let mut changed = false;
     for record in &mut records {
         if let Some(obj) = record.as_object_mut() {
@@ -107,8 +106,8 @@ fn clear_runtime_pins_in_file(path: &Path) -> Result<bool, String> {
         }
     }
     if changed {
-        let bytes = serde_json::to_vec_pretty(&records)
-            .map_err(|e| format!("failed to serialize: {e}"))?;
+        let bytes =
+            serde_json::to_vec_pretty(&records).map_err(|e| format!("failed to serialize: {e}"))?;
         crate::managed_agents::atomic_write_json_restricted(path, &bytes)?;
     }
     Ok(changed)
@@ -117,7 +116,9 @@ fn clear_runtime_pins_in_file(path: &Path) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::clear_runtime_pins_in_dir;
-    use crate::migration::test_support::{read_agents_json, write_agents_json, write_personas_json};
+    use crate::migration::test_support::{
+        read_agents_json, write_agents_json, write_personas_json,
+    };
 
     #[test]
     fn clears_runtime_on_records_and_definitions_and_writes_marker_once() {
@@ -150,7 +151,10 @@ mod tests {
             records[1].get("runtime").is_none(),
             "record runtime must be cleared"
         );
-        assert_eq!(records[2], serde_json::json!({ "pubkey": "def456", "name": "Scout" }));
+        assert_eq!(
+            records[2],
+            serde_json::json!({ "pubkey": "def456", "name": "Scout" })
+        );
     }
 
     #[test]

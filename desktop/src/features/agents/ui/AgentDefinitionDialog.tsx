@@ -77,7 +77,7 @@ import {
 } from "./AgentAiConfigurationMode";
 import {
   agentAiConfigurationModeSatisfied,
-  agentAiConfigurationPairForMode,
+  agentAiConfigurationStateForMode,
   initialAgentAiConfigurationMode,
 } from "./agentAiConfigurationPolicy";
 import { useProviderApiKeyFieldState } from "./providerApiKeyFieldState";
@@ -220,6 +220,7 @@ export function AgentDefinitionDialog({
       initialAgentAiConfigurationMode({
         provider: initialValues.provider ?? "",
         model: initialValues.model ?? "",
+        runtime: initialValues.runtime ?? "",
       }),
     );
     setIsCustomProviderEditing(false);
@@ -346,6 +347,7 @@ export function AgentDefinitionDialog({
       runtime,
       model: aiConfigurationMode === "defaults" ? "" : model,
       provider: aiConfigurationMode === "defaults" ? "" : provider,
+      isDefaultsMode: aiConfigurationMode === "defaults",
       isEditMode: "id" in initialValues,
       isAutoSeeded: isRuntimeAutoSeededRef.current,
       initialPreviousRuntime: initialValues.runtime?.trim() ?? "",
@@ -416,19 +418,43 @@ export function AgentDefinitionDialog({
     setAiConfigurationMode(nextMode);
     setIsCustomProviderEditing(false);
     setIsCustomModelEditing(false);
-    const nextPair = agentAiConfigurationPairForMode({
-      current: { provider, model },
+    const nextState = agentAiConfigurationStateForMode({
+      current: { runtime, provider, model },
       inherited: runtimeCanChooseLlmProvider
         ? {
             provider: inheritedProviderDefault.value,
             model: inheritedModelDefault.value,
+            runtimeId: defaultRuntime?.id,
           }
-        : { provider: "", model: runtimeFileConfig?.model?.trim() ?? "" },
+        : {
+            provider: "",
+            model: runtimeFileConfig?.model?.trim() ?? "",
+            runtimeId: defaultRuntime?.id,
+          },
       mode: nextMode,
       needsProviderSelection: runtimeCanChooseLlmProvider,
     });
-    setProvider(nextPair.provider);
-    setModel(nextPair.model);
+    setRuntime(nextState.runtime);
+    setProvider(nextState.provider);
+    setModel(nextState.model);
+    if (nextMode === "defaults") {
+      // The toggle owns effort too. Effort values persist under each
+      // harness's thinking env key (a runtime-catalog capability fact), so a
+      // pin left behind under any known key would silently override the
+      // global defaults after the agent stops being customized.
+      const effortEnvKeys = new Set(
+        runtimes
+          .map((entry) => entry.thinkingEnvVar?.trim())
+          .filter((key): key is string => Boolean(key)),
+      );
+      if (effortEnvKeys.size > 0) {
+        setEnvVars((prev) =>
+          Object.fromEntries(
+            Object.entries(prev).filter(([key]) => !effortEnvKeys.has(key)),
+          ),
+        );
+      }
+    }
   }
   const { data: bakedEnvKeys } = useBakedBuildEnvKeysQuery({ enabled: open });
   const localModeGate = React.useMemo(
@@ -507,7 +533,11 @@ export function AgentDefinitionDialog({
   // source of truth with the readiness gate so display and Save can't drift.
   const canSubmit =
     canSubmitPersonaDialog({ displayName, isPending }) &&
-    (!isCreateMode || runtime.trim().length > 0) &&
+    // In defaults mode the harness is inherited from the global default, so
+    // create does not require an explicit runtime pin — only Customize does.
+    (!isCreateMode ||
+      aiConfigurationMode === "defaults" ||
+      runtime.trim().length > 0) &&
     (!isCreateMode || selectedRuntimeIsAvailable) &&
     (!isCreateMode || !createSubmitBlocked) &&
     // Crash-loop guard, create AND edit: an empty allowlist would crash
@@ -825,7 +855,6 @@ export function AgentDefinitionDialog({
         {modelFieldVisible ? (
           <AgentAiConfigurationModeField
             mode={aiConfigurationMode}
-            needsProviderSelection={runtimeCanChooseLlmProvider}
             onModeChange={handleAiConfigurationModeChange}
           />
         ) : null}
