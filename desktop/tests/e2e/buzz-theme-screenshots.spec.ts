@@ -1252,7 +1252,8 @@ test("accent picker reveals/hides when toggling Buzz", async ({ page }) => {
         return { x: box.x, y: box.y };
       }),
     );
-  expect(swatchBoxes).toHaveLength(10);
+  // Eleven since Violet joined the ramp as Colony's own hue and the default.
+  expect(swatchBoxes).toHaveLength(11);
   expect(new Set(swatchBoxes.map((box) => Math.round(box.y))).size).toBe(1);
   await expect(page.getByTestId("accent-color-options")).toHaveCSS(
     "overflow-x",

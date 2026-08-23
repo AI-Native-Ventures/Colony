@@ -61,22 +61,24 @@ const VIDEO_REVIEW_CHIP_BACKGROUND_ALPHAS = [0.15, 0.3] as const;
 const GLASS_VIBRANCY_MATERIAL = "sidebar";
 
 /**
- * Accents are the Colony brand hues, hex-converted from
- * shared/ui/colony-logo/palette.ts, which mirrors docs/BRAND.md.
- *
- * This list used to be Tailwind's stock ramp (blue-500, cyan-500, and so on):
- * ten colours, none of them Colony's, so the default workspace opened in a
- * generic blue that appears nowhere else in the product. The five brand hues
- * are the same set the landing page and onboarding cycle through, which is
- * what makes the app read as a continuation of them.
+ * Violet leads because it is Colony's own hue, the one the landing page and
+ * onboarding cycle through; opening the workspace in Tailwind's stock blue
+ * made the app read as unrelated to either. It is added to the existing ramp
+ * rather than replacing it: which accent someone picked is their choice, and
+ * removing the colour they chose is not a default change.
  */
 export const ACCENT_COLORS = [
   { name: "Violet", value: "#895AF6" },
-  { name: "Blue", value: "#3C83F6" },
-  { name: "Pink", value: "#EC4699" },
-  { name: "Amber", value: "#F59F0A" },
-  { name: "Green", value: "#2EB88A" },
   { name: "Neutral", value: NEUTRAL_ACCENT },
+  { name: "Blue", value: "#3b82f6" },
+  { name: "Cyan", value: "#06b6d4" },
+  { name: "Green", value: "#22c55e" },
+  { name: "Orange", value: "#f97316" },
+  { name: "Red", value: "#ef4444" },
+  { name: "Pink", value: "#ec4899" },
+  { name: "Lilac", value: "#c0a2f1" },
+  { name: "Purple", value: "#a855f7" },
+  { name: "Indigo", value: "#6366f1" },
 ] as const;
 
 /** Violet leads the brand, so it leads the workspace. */

@@ -115,6 +115,16 @@
       grid-template-columns: minmax(0, 1fr);
     }
 
+    /* Actions stack rather than wrap. A wrapped row leaves the primary and
+       secondary on different centres, which reads as two unrelated controls
+       and pushes the second one off the optical axis the rest of the screen
+       sits on. */
+    :where(.onb-canvas) .onb-actions {
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+
     :where(.onb-canvas) .onb-screen .onb-col-head,
     :where(.onb-canvas) .onb-screen .onb-panel,
     :where(.onb-canvas) .onb-screen .onb-options,
