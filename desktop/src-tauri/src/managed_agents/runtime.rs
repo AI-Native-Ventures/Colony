@@ -731,7 +731,19 @@ fn spawn_agent_child_inner(
     // Prompt, model, and provider come from the single `effective_cfg` resolve
     // (the SAME resolve `spawn_config_hash` performs, so env write and restart
     // badge cannot disagree); definition-less instances fall back to their own
-    // fields, then global. Derive the mesh decision before moving fields out:
+    // fields, then global.
+    //
+    // Model/provider reach EVERY harness through these two universal keys:
+    // buzz-acp reads them and applies the model on session creation via ACP
+    // switching (`session/set_config_option(configId:"model")` or unstable
+    // `session/set_model`, matched against the adapter's own catalog — both
+    // proven live 2026-08-23 for codex-acp, claude-agent-acp and
+    // `opencode acp`). Harness-specific env vars (`GOOSE_MODEL`,
+    // `BUZZ_AGENT_MODEL`, ...) are layered separately below from
+    // `KnownAcpRuntime.model_env_var`; runtimes without one rely solely on
+    // this universal path.
+    //
+    // Derive the mesh decision before moving fields out:
     // `relay_mesh_model_id` is the single authoritative gate.
     #[cfg(feature = "mesh-llm")]
     let mesh_model_id = effective_cfg.relay_mesh_model_id();
