@@ -193,6 +193,17 @@ pub struct Config {
     /// are permitted regardless of auth method (API token, NIP-42).
     pub require_relay_membership: bool,
 
+    /// Identity-boundary gate (spec F5): when true, PROFILE (kind:0 and
+    /// agent-profile) and membership-write events are accepted only from a
+    /// pubkey with a `relay_members` row in this community. The NIP-OA owner
+    /// cascade is deliberately NOT sufficient here — an owner's member status
+    /// used to let ANY of their agents publish a profile to any relay the
+    /// owner joined, which is exactly how one community's agent appeared in
+    /// another community under its stale name. Default false; enabling
+    /// requires that agent provisioning lands a relay_members row before the
+    /// agent's first profile publish.
+    pub require_provisioned_identity_writes: bool,
+
     /// Whether this deployment can serve huddle (voice) audio.
     ///
     /// Huddle audio frames are relayed peer-to-peer *within a single pod*
@@ -713,6 +724,11 @@ impl Config {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        let require_provisioned_identity_writes =
+            std::env::var("BUZZ_REQUIRE_PROVISIONED_IDENTITY_WRITES")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false);
+
         // Defaults true → single-pod (N=1) keeps today's huddle behavior. A
         // horizontally-scaled deployment sets this false; see the field doc.
         let huddle_audio_available = std::env::var("BUZZ_HUDDLE_AUDIO_AVAILABLE")
@@ -1209,6 +1225,7 @@ impl Config {
             metrics_port,
             pubkey_allowlist_enabled,
             require_relay_membership,
+            require_provisioned_identity_writes,
             huddle_audio_available,
             mesh,
             mesh_demo_echo,

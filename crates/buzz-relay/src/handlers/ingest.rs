@@ -465,6 +465,45 @@ fn map_push_accept_error(error: super::push_lease::AcceptError) -> IngestError {
     }
 }
 
+/// Kinds the identity-boundary gate covers: anything that establishes who a
+/// pubkey IS in the community (profiles) or WHO BELONGS (membership writes).
+///
+/// Membership-write authors must be members for the same reason profile
+/// authors must: an admin action performed by a pubkey the community never
+/// provisioned is not this community's governance.
+fn is_provisioned_identity_write(kind: u32) -> bool {
+    matches!(
+        kind,
+        KIND_PROFILE
+            | KIND_AGENT_PROFILE
+            | KIND_NIP29_PUT_USER
+            | KIND_NIP29_REMOVE_USER
+            | RELAY_ADMIN_ADD_MEMBER
+            | RELAY_ADMIN_CHANGE_ROLE
+    )
+}
+
+/// The F5 gate itself: refuse unless the author has a `relay_members` row in
+/// this community. Deliberately narrow — no NIP-OA owner cascade, no channel
+/// membership fallback — because both of those are satisfiable by an agent
+/// that was never provisioned here, which is the leak being closed.
+async fn ensure_relay_member(
+    state: &AppState,
+    community: CommunityId,
+    pubkey: &nostr::PublicKey,
+) -> Result<(), IngestError> {
+    let pubkey_hex = pubkey.to_hex();
+    match state.db.is_relay_member(community, &pubkey_hex).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(IngestError::AuthFailed(
+            "restricted: identity is not provisioned in this community".into(),
+        )),
+        Err(e) => Err(IngestError::Internal(format!(
+            "error: internal error checking provisioning: {e}"
+        ))),
+    }
+}
+
 /// Determine the required scope for a given event kind.
 ///
 /// Returns `Err` for unknown kinds — the relay rejects them.
@@ -2087,6 +2126,19 @@ async fn ingest_event_inner(
         .await
         .map_err(IngestError::AuthFailed)?;
 
+    // Identity-boundary gate (F5): profile and membership writes must come
+    // from a pubkey provisioned in THIS community. The NIP-OA owner cascade
+    // is deliberately not honored here — it is the mechanism that let one
+    // community's agent publish a stale profile onto another community's
+    // relay. Deploy-gated: `require_provisioned_identity_writes` defaults to
+    // false, and enabling requires agent provisioning to land a
+    // `relay_members` row before the agent's first profile publish.
+    if state.config.require_provisioned_identity_writes
+        && is_provisioned_identity_write(kind_u32)
+    {
+        ensure_relay_member(state, tenant.community(), auth.pubkey()).await?;
+    }
+
     // DM open and DM add-member are command kinds (`is_command_kind`) but are
     // deliberately excluded from the generic command branch above (see
     // `takes_generic_command_branch`) so they reach the ban/timeout
@@ -3618,6 +3670,39 @@ async fn ingest_event_inner(
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+
+    /// The identity gate covers exactly the identity-establishing kinds.
+    /// A kind that establishes who a pubkey IS or WHO BELONGS must be listed
+    /// here; anything else must not sneak in, or ordinary member writes break.
+    #[test]
+    fn provisioned_identity_gate_covers_profiles_and_membership_writes_only() {
+        for kind in [
+            KIND_PROFILE,
+            KIND_AGENT_PROFILE,
+            KIND_NIP29_PUT_USER,
+            KIND_NIP29_REMOVE_USER,
+            RELAY_ADMIN_ADD_MEMBER,
+            RELAY_ADMIN_CHANGE_ROLE,
+        ] {
+            assert!(
+                is_provisioned_identity_write(kind),
+                "kind {kind} is an identity write and must be gated"
+            );
+        }
+        // Ordinary member content and state stays ungated.
+        for kind in [
+            KIND_TEXT_NOTE,
+            KIND_STREAM_MESSAGE,
+            KIND_DELETION,
+            KIND_CONTACT_LIST,
+            KIND_DM_OPEN,
+        ] {
+            assert!(
+                !is_provisioned_identity_write(kind),
+                "kind {kind} is not an identity write"
+            );
+        }
+    }
 
     use super::*;
     use buzz_conformance::{TraceStep, Tracer};

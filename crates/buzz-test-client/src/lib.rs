@@ -70,6 +70,11 @@ impl From<WsClientError> for TestClientError {
             WsClientError::AuthFailed(s) => TestClientError::AuthFailed(s),
             WsClientError::EventRejected(s) => TestClientError::EventRejected(s),
             WsClientError::NoAuthChallenge => TestClientError::NoAuthChallenge,
+            WsClientError::ForeignRelay { pinned, requested } => {
+                TestClientError::AuthFailed(format!(
+                    "refusing relay {requested}: identity is pinned to {pinned}"
+                ))
+            }
         }
     }
 }
