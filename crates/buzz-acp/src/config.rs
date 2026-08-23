@@ -341,6 +341,16 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_NO_MENTION_FILTER")]
     pub no_mention_filter: bool,
 
+    /// Do not ask a stopped agent whether the request was actually finished.
+    ///
+    /// The check is on by default: a model stops when it has written a good
+    /// message, which is not the same as having done the work, and nothing
+    /// downstream can tell those apart. Opting out restores the older
+    /// behaviour, where an agent that stops mid-job stays stopped until a
+    /// human notices.
+    #[arg(long, env = "BUZZ_ACP_NO_COMPLETION_CHECK")]
+    pub no_completion_check: bool,
+
     /// Disable wire metering. Agents then hold real provider credentials.
     /// Guarded cumulative Codex ACP counters still reach the ledger as imputed
     /// subscription usage; runtimes without those counters remain invisible.
@@ -637,6 +647,9 @@ pub struct Config {
     pub kinds_override: Option<Vec<u32>>,
     pub channels_override: Option<Vec<String>>,
     pub no_mention_filter: bool,
+    /// Whether a stopped channel turn is asked if the request is actually
+    /// finished. See [`crate::completion_check`].
+    pub completion_check: bool,
     pub config_path: PathBuf,
     pub context_message_limit: u32,
     /// Maximum turns per session before proactive rotation. 0 = disabled.
@@ -1274,6 +1287,7 @@ impl Config {
             kinds_override: args.kinds,
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
+            completion_check: !args.no_completion_check,
             no_meter: args.no_meter,
             provisioned: args.provisioned,
             meter_anthropic_key: args.meter_anthropic_key.clone(),
@@ -1648,6 +1662,7 @@ mod tests {
             kinds_override: None,
             channels_override: None,
             no_mention_filter: false,
+            completion_check: true,
             no_meter: true,
             provisioned: false,
             meter_anthropic_key: None,
