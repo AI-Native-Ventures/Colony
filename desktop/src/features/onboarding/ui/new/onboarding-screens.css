@@ -597,6 +597,46 @@
     text-align: left;
   }
 
+  /* Chips: a compact multiple-choice row for a short optional answer, where
+     the full option rows would outweigh the question being asked. */
+  :where(.onb-canvas) .onb-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  :where(.onb-canvas) .onb-chip {
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--onb-shell-line);
+    background: var(--onb-shell);
+    color: inherit;
+    font: inherit;
+    font-size: 0.9375rem;
+    cursor: pointer;
+    transition:
+      border-color 240ms var(--onb-ease),
+      background 240ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-chip:hover {
+    border-color: var(--onb-rule);
+  }
+
+  :where(.onb-canvas) .onb-chip[data-selected="true"] {
+    background: var(--onb-ink);
+    border-color: var(--onb-ink);
+    color: #ffffff;
+  }
+
+  /* A fieldset carrying a chip group is a layout element, not a box. */
+  :where(.onb-canvas) fieldset.onb-field {
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
   :where(.onb-canvas) .onb-option {
     display: flex;
     align-items: center;
