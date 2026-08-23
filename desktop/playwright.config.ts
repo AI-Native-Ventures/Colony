@@ -183,6 +183,7 @@ export default defineConfig({
         "**/discovery-pipeline.spec.ts",
         "**/huddle-transcription.spec.ts",
         "**/ask-card.spec.ts",
+        "**/ask-resolution-screenshots.spec.ts",
         "**/delegation-grant-screenshots.spec.ts",
       ],
       use: {

@@ -1,4 +1,8 @@
 import type { OpenAsk } from "@/features/asks/lib/askEvent";
+import type {
+  AskResolution,
+  ResolvedAsk,
+} from "@/features/asks/lib/askResolution";
 import type { CompanyTask } from "@/features/company/contracts";
 import type { TaskRunHead } from "@/features/company/taskRunContracts";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
@@ -60,6 +64,13 @@ export type ActionCapability =
 export type ActionAskSource = {
   kind: "ask";
   ask: OpenAsk;
+  /**
+   * The full resolution that closed this ask, set only on CLOSED rows.
+   * Surfaces read `defaultExecuted` to mark an executed default (the relay
+   * answered because the deadline passed with nobody answering) and must
+   * never render it like an ordinary human answer.
+   */
+  resolution?: AskResolution;
 };
 
 export type ActionMessageSource = {
@@ -115,6 +126,15 @@ export type ActionMessageItem = Omit<ActionItem, "kind" | "source"> & {
 
 export type ActionCenterProjectionInput = {
   asks: readonly OpenAsk[];
+  /**
+   * Asks already closed by a resolution, shown as completed rows so the
+   * owner can see which of their asks were answered by people and which
+   * were executed by silence. Absent means the surface reads no
+   * resolutions.
+   */
+  resolvedAsks?: readonly ResolvedAsk[];
+  /** Display labels for human resolvers, keyed by pubkey. */
+  resolverLabelsByPubkey?: ReadonlyMap<string, string>;
   /**
    * Short routing phrases by ask id ("Auto-routed to the filer's
    * manager", ...). Absent means the summary stays as it was.
