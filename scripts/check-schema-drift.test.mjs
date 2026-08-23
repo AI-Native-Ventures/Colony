@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createdTables, findDrift } from "./check-schema-drift.mjs";
+import { createdColumns, createdTables, findColumnDrift, findDrift } from "./check-schema-drift.mjs";
 
 test("a table only in migrations is drift", () => {
   assert.deepEqual(
@@ -76,6 +76,77 @@ test("drift is reported sorted and deduplicated across migrations", () => {
   );
 });
 
+test("a column added by ALTER TABLE is drift when schema.sql lacks it", () => {
+  // The 0060 failure class: pre_quiesce_archived_at shipped in a migration,
+  // never entered the mirror, and the Postgres-gated suite died on
+  // ColumnNotFound against a CI database provisioned from schema.sql.
+  const migrationsSql =
+    "CREATE TABLE requests (id UUID, stage TEXT);\n" +
+    "ALTER TABLE requests ADD COLUMN pre_quiesce_archived_at TIMESTAMPTZ;";
+  const schemaSql = "CREATE TABLE requests (\n    id UUID,\n    stage TEXT\n);";
+  assert.deepEqual(findColumnDrift(migrationsSql, schemaSql).inMigrationsOnly, [
+    ["requests", "pre_quiesce_archived_at"],
+  ]);
+});
+
+test("multi-clause ALTER TABLE adds every named column", () => {
+  const migrationsSql =
+    "ALTER TABLE discovery_runs\n" +
+    "    ADD COLUMN worker_id UUID,\n" +
+    "    ADD COLUMN lease_owner_pubkey BYTEA CHECK (octet_length(lease_owner_pubkey) = 32),\n" +
+    "    ADD CONSTRAINT shape CHECK (worker_id IS NULL OR worker_id IS NOT NULL);";
+  const cols = createdColumns(migrationsSql).get("discovery_runs");
+  assert.deepEqual([...cols].sort(), ["lease_owner_pubkey", "worker_id"]);
+});
+
+test("DROP COLUMN then re-add lands on the final state", () => {
+  // search_tsv was rebuilt several times; only the last spelling counts.
+  const text =
+    "CREATE TABLE events (\n    id UUID,\n    old_col TEXT\n);\n" +
+    "ALTER TABLE events DROP COLUMN old_col;\n" +
+    "ALTER TABLE events DROP COLUMN search_tsv;\n" +
+    "ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (NULL) STORED;";
+  const cols = createdColumns(text).get("events");
+  assert.deepEqual([...cols].sort(), ["id", "search_tsv"]);
+});
+
+test("table-constraint lines and comments are not columns", () => {
+  const text =
+    "CREATE TABLE t (\n" +
+    "    -- a comment mentioning ghost_column should not count\n" +
+    "    id UUID PRIMARY KEY,\n" +
+    "    payload TEXT CHECK (length(payload) > 0),\n" +
+    "    PRIMARY KEY (id),\n" +
+    "    UNIQUE (payload),\n" +
+    "    CONSTRAINT c CHECK (payload <> 'x'),\n" +
+    "    FOREIGN KEY (id) REFERENCES other (id)\n" +
+    ");";
+  assert.deepEqual([...createdColumns(text).get("t")], ["id", "payload"]);
+});
+
+test("a semicolon inside a comment does not truncate the table body", () => {
+  // The real files contain comments like "(Quinn option A; Max's caveat)".
+  // A body parser that stops at the first semicolon silently loses every
+  // column after the comment -- and reported nothing, which is worse than
+  // crashing.
+  const text =
+    "CREATE TABLE t (\n" +
+    "    -- keep in sync (Quinn option A; Max's caveat: avoid btree_gin).\n" +
+    "    id UUID PRIMARY KEY,\n" +
+    "    late_column TEXT\n" +
+    ");";
+  assert.deepEqual([...createdColumns(text).get("t")].sort(), [
+    "id",
+    "late_column",
+  ]);
+});
+
+test("partition children contribute no columns", () => {
+  const text =
+    "CREATE TABLE events_p2026_01 PARTITION OF events FOR VALUES FROM ('a') TO ('b');";
+  assert.equal(createdColumns(text).size, 0);
+});
+
 test("a paid-down entry warns but does not fail", async () => {
   // The regression that broke develop: #170 and #181 merged between this
   // guard being authored and merged, five KNOWN_DRIFT entries became stale,
@@ -96,7 +167,7 @@ test("a paid-down entry warns but does not fail", async () => {
     join(here, "check-schema-drift.mjs"),
     "utf8",
   );
-  const paidDown = src.slice(src.indexOf("if (fixed.length > 0)"), src.indexOf("if (unexpected.length > 0)"));
+  const paidDown = src.slice(src.indexOf("if (fixed.length > 0)"), src.indexOf("if (unexpectedTables.length > 0)"));
   assert.match(paidDown, /console\.warn/);
   assert.doesNotMatch(paidDown, /process\.exit/);
   assert.equal(r.status, 0);
@@ -117,7 +188,7 @@ test("the repo's real schema has no drift beyond KNOWN_DRIFT", async () => {
   // is precisely how this script silently no-opped when its entrypoint check
   // compared unresolved paths across the /tmp -> /private/tmp symlink. The
   // guard has to prove it did something, not merely that it did not fail.
-  assert.match(r.stdout, /schema\.sql covers every table/);
+  assert.match(r.stdout, /schema\.sql covers every table and column/);
 });
 
 test("the entrypoint check survives a symlinked path", async () => {

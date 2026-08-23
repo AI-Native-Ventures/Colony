@@ -304,12 +304,22 @@ const MessageTimelineBase = React.forwardRef<
     isLoading: timelineIsLoading,
     liveCount: messages.length,
   });
-  const timelineBodySurface = selectTimelineBodySurface({
+  // A caller-pinned intro (the huddle transcript) replaces the loading
+  // skeleton outright: ChannelPane opts that surface out of `isLoading`, but
+  // the deferred-commit lag term still resolved to the skeleton surface on
+  // first mount, painting ~400px of skeleton rows between the participant
+  // tray and the pinned intro. Resolve those frames to the intro-only surface.
+  const pinIntroOverSkeleton = pinnedIntro != null && !isLoading;
+  const requestedBodySurface = selectTimelineBodySurface({
     deferredCount: deferredMessages.length,
     preserveSettledEmptyIntro,
-    isLoading: timelineIsLoading,
+    isLoading: pinIntroOverSkeleton ? false : timelineIsLoading,
     liveCount: messages.length,
   });
+  const timelineBodySurface =
+    pinIntroOverSkeleton && requestedBodySurface === "skeleton"
+      ? "empty"
+      : requestedBodySurface;
   const showTimelineSkeleton = timelineBodySurface === "skeleton";
   const [isSemanticallyAtBottom, setIsSemanticallyAtBottom] =
     React.useState(true);
