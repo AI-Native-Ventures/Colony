@@ -384,6 +384,28 @@ pub enum ContentCmd {
     },
     /// List brand kits, newest head per id
     KitList {},
+    /// Create or replace an asset library head (kind 30199)
+    ///
+    /// The library is an index over media that already lives in Blossom,
+    /// not a second store: each item names a sha256 plus its tags, alt
+    /// text, rights note, provenance, and whether the depicted subject is
+    /// fictional. This command stores the index; it never uploads anything.
+    LibrarySet {
+        /// Library id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the library JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one asset library head
+    LibraryGet {
+        /// Library id
+        #[arg(long)]
+        id: String,
+    },
+    /// List asset libraries, newest head per id
+    LibraryList {},
     /// Approve a post or send it back (kind 40025)
     ///
     /// Built from the post as it currently stands on the relay: the decision
@@ -4038,6 +4060,9 @@ mod tests {
                 "kit-get",
                 "kit-list",
                 "kit-set",
+                "library-get",
+                "library-list",
+                "library-set",
                 "post-get",
                 "post-list",
                 "post-set",
