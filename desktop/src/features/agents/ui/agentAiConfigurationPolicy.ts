@@ -48,8 +48,17 @@ export function agentAiConfigurationPairForMode({
 
 /**
  * The one toggle owns harness + provider + model (+ effort, via the env-var
- * draft) TOGETHER. "Use agent defaults" clears all four so the agent follows
- * the global defaults; "Customize for this agent" pins all four.
+ * draft) TOGETHER at the PERSISTENCE level: a defaults submission omits
+ * runtime/model/provider entirely (`buildRuntimeModelProviderPayload`'s
+ * `isDefaultsMode`), so the saved definition carries no pins and follows the
+ * global defaults.
+ *
+ * The in-dialog DRAFT deliberately keeps the last-viewed harness when
+ * switching to defaults: the picker is hidden on that tab, credential/readiness
+ * gates must evaluate the harness that inheritance would actually run, and
+ * returning to Customize resumes where the user left off. Clearing the draft
+ * instead makes those gates evaluate a blank runtime and dead-ends submit
+ * (the CLI-login "Add agent" regression).
  *
  * `inheritedRuntimeId` seeds the harness picker when entering Customize with
  * no explicit pin yet, mirroring how the provider/model pair seeds from the
@@ -67,7 +76,11 @@ export function agentAiConfigurationStateForMode({
   needsProviderSelection?: boolean;
 }): AgentAiConfigurationState {
   if (mode === "defaults") {
-    return { runtime: "", provider: "", model: "" };
+    return {
+      runtime: current.runtime.trim(),
+      provider: "",
+      model: "",
+    };
   }
 
   return {

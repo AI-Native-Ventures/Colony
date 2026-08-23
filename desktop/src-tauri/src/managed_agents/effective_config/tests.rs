@@ -879,3 +879,63 @@ fn linked_record_with_legacy_bytes_inherits_global_not_mesh() {
     assert_eq!(cfg.model.value.as_deref(), Some("gpt-5"));
     assert_eq!(cfg.relay_mesh_model_id(), None);
 }
+
+// ── resolve_effective_harness_command: command-level semantics ────────────────
+//
+// Moved here from discovery/tests.rs (file-size ratchet): these pin the
+// command conversion of THIS module's resolver — dangling sentinel, safe
+// default when nothing is pinned, and override-pin precedence.
+
+#[test]
+fn harness_command_dangling_record_runtime_is_typed_error() {
+    let mut rec = record(None, None, None, None);
+    rec.runtime = Some("my-deleted-harness".to_string());
+    let result = resolve_effective_harness_command(&rec, &[], &GlobalAgentConfig::default());
+    assert!(
+        result.is_err(),
+        "dangling runtime id must produce Err, got Ok({:?})",
+        result.ok()
+    );
+    assert!(
+        result.unwrap_err().contains("DANGLING_HARNESS_ID"),
+        "error must name the dangling id"
+    );
+}
+
+#[test]
+fn harness_command_dangling_definition_runtime_is_typed_error() {
+    let rec = record(Some("d1"), None, None, None);
+    let defs = vec![definition("d1", None, None, "")];
+    let mut def_with_runtime = defs;
+    def_with_runtime[0].runtime = Some("ghost-harness".to_string());
+    let result =
+        resolve_effective_harness_command(&rec, &def_with_runtime, &GlobalAgentConfig::default());
+    assert!(
+        result.is_err(),
+        "dangling definition runtime id must produce Err"
+    );
+}
+
+#[test]
+fn harness_command_no_pins_falls_back_to_safe_default() {
+    let rec = record(None, None, None, None);
+    let result = resolve_effective_harness_command(&rec, &[], &GlobalAgentConfig::default());
+    assert_eq!(
+        result,
+        Ok(crate::managed_agents::default_agent_command()),
+        "no pins anywhere must fall back to the bundled default harness"
+    );
+}
+
+#[test]
+fn harness_command_override_beats_dangling_id() {
+    let mut rec = record(None, None, None, None);
+    rec.runtime = Some("gone-harness".to_string());
+    rec.agent_command_override = Some("cursor-agent".to_string());
+    let result = resolve_effective_harness_command(&rec, &[], &GlobalAgentConfig::default());
+    assert_eq!(
+        result,
+        Ok("cursor-agent".to_string()),
+        "explicit override must beat a dangling runtime id"
+    );
+}

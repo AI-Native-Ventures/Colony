@@ -317,3 +317,27 @@ fn erode_tail(bytes: &[u8]) -> &[u8] {
 #[cfg(test)]
 #[path = "install_capture_tests.rs"]
 mod tests;
+
+/// Persist a start/install failure onto the record under the store lock so the
+/// UI surfaces a diagnosable stopped state instead of losing the error.
+pub(super) fn persist_last_error_on_install(
+    app: &tauri::AppHandle,
+    pubkey: &str,
+    error: &str,
+) -> Result<(), String> {
+    use crate::{
+        app_state::AppState,
+        managed_agents::{find_managed_agent_mut, load_managed_agents, save_managed_agents},
+    };
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| format!("failed to acquire store lock: {e}"))?;
+    let mut records = load_managed_agents(app)?;
+    let record = find_managed_agent_mut(&mut records, pubkey)?;
+    record.last_error = Some(error.to_string());
+    record.updated_at = crate::util::now_iso();
+    save_managed_agents(app, &records)
+}

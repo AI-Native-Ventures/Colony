@@ -8847,6 +8847,12 @@ async function handleCreatePersona(args: {
     args.input.roleId,
     args.input.roleTitle,
   );
+  // Mirror the backend's effective-config inheritance: a definition saved
+  // with no pins follows the global defaults (effective_config resolves
+  // record -> definition -> global). Without this, an e2e spec cannot observe
+  // what a defaults-mode create actually resolves to.
+  const inherit = (value: string | undefined, fallback: string | null) =>
+    value?.trim() || fallback || null;
   const persona: RawPersona = {
     id: crypto.randomUUID(),
     role_id: roleId,
@@ -8854,9 +8860,15 @@ async function handleCreatePersona(args: {
     display_name: args.input.displayName.trim(),
     avatar_url: args.input.avatarUrl?.trim() || null,
     system_prompt: args.input.systemPrompt.trim(),
-    runtime: args.input.runtime?.trim() || null,
-    model: args.input.model?.trim() || null,
-    provider: args.input.provider?.trim() || null,
+    runtime: inherit(
+      args.input.runtime,
+      mockGlobalAgentConfig?.preferred_runtime ?? null,
+    ),
+    model: inherit(args.input.model, mockGlobalAgentConfig?.model ?? null),
+    provider: inherit(
+      args.input.provider,
+      mockGlobalAgentConfig?.provider ?? null,
+    ),
     is_builtin: false,
     is_active: true,
     shared: false,
