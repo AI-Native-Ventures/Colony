@@ -14,9 +14,12 @@ const RUNTIME_LOGOS: Record<string, string> = {
   claude: claudeLogoUrl,
 };
 
-// Public-path logos for bundled presets. Served from /harness-logos/ at runtime.
-// Keys match the preset `id` values emitted by the backend PRESET_HARNESSES.
-export const PRESET_LOGOS: Record<string, string> = {
+// Public-path logos for bundled harnesses. Served from /harness-logos/ at
+// runtime. Keys match `id` values the backend emits, from either tier: the
+// tier-2 `PRESET_HARNESSES` list or the compiled-in `KNOWN_ACP_RUNTIMES` table.
+// OpenCode lives in the latter since its promotion to a first-class runtime,
+// and keeps its bundled mark; a logo does not follow a harness's tier.
+export const HARNESS_LOGOS: Record<string, string> = {
   devin: "/harness-logos/devin.svg",
   omp: "/harness-logos/omp.svg",
   grok: "/harness-logos/grok.svg",
@@ -40,7 +43,7 @@ export function getRuntimeDisplayLabel(
 
 function getRuntimeLogoUrl(runtime: AcpRuntimeCatalogEntry): string | null {
   const id = runtime.id.trim().toLowerCase();
-  return RUNTIME_LOGOS[id] ?? PRESET_LOGOS[id] ?? null;
+  return RUNTIME_LOGOS[id] ?? HARNESS_LOGOS[id] ?? null;
 }
 
 export function RuntimeIcon({
