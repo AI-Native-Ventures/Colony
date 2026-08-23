@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 407,
-    "rust_lines": 163064,
-    "tauri_coupled": 161,
+    "rust_total": 408,
+    "rust_lines": 163600,
+    "tauri_coupled": 162,
     "portable": 246,
-    "portable_lines": 92171,
+    "portable_lines": 92405,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -151,6 +151,7 @@
       "src-tauri/src/migration/detach.rs",
       "src-tauri/src/migration/fold.rs",
       "src-tauri/src/migration/materialize.rs",
+      "src-tauri/src/migration/runtime_inherit.rs",
       "src-tauri/src/migration/team_suffix.rs",
       "src-tauri/src/migration_avatar_refresh.rs",
       "src-tauri/src/mouse_nav.rs",
@@ -434,7 +435,7 @@
     ]
   },
   "params": {
-    "AppHandle": 350,
+    "AppHandle": 351,
     "State": 252,
     "Window": 7,
     "ipc::Request": 1,
@@ -442,7 +443,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 347,
+      "AppHandle": 348,
       "State": 252,
       "Window": 7,
       "ipc::Request": 1,
@@ -475,7 +476,7 @@
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 26,
+    ".path()": 27,
     ".exit(": 1
   },
   "events": {
