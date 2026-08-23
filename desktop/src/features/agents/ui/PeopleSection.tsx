@@ -39,6 +39,7 @@ import { DelegatedAuthoritySection } from "@/features/agents/ui/DelegatedAuthori
 import { EmployeeRoleDialog } from "@/features/agents/ui/EmployeeRoleDialog";
 import { HireEmployeeDialog } from "@/features/agents/ui/HireEmployeeDialog";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
+import { AgentDecisionLogEntry } from "@/features/asks/ui/AgentDecisionLogEntry";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -491,6 +492,10 @@ function OrgNodeCard({
             </span>
           </p>
         </div>
+        <AgentDecisionLogEntry
+          agentName={node.member.name}
+          pubkey={node.member.pubkey}
+        />
         <Button
           aria-label={`Edit role for ${node.member.name}`}
           className="ml-auto shrink-0"
