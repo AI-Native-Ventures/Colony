@@ -42,7 +42,7 @@ export function InstallScreen({ state, onRetry, onContinueAnyway }: Props) {
         <div className="onb-col-head">
           <h1 className="onb-headline">That did not work.</h1>
           <p className="onb-sub">
-            We could not finish setting up your agent. Check your internet
+            We could not finish setting up your helper. Check your internet
             connection and try again.
           </p>
         </div>
@@ -65,9 +65,11 @@ export function InstallScreen({ state, onRetry, onContinueAnyway }: Props) {
   return (
     <div className="onb-screen" data-solo="true">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Setting up your agent.</h1>
+        <h1 className="onb-headline">
+          Setting up your first <em>helper</em>.
+        </h1>
         <p className="onb-sub">
-          Colony is putting an agent to work for you. Nothing for you to do.
+          Colony is putting a helper to work for you. Nothing for you to do.
         </p>
       </div>
       <div className="onb-install">

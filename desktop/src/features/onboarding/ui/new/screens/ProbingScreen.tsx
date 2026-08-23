@@ -7,9 +7,9 @@ import type { TrackResult } from "../../../flow/track";
 import type { GlobalAgentConfig } from "@/shared/api/types";
 
 export const PROBE_LINES = [
-  "Building your workspace",
-  "Checking what is already on your computer",
-  "Getting your agents ready",
+  "Making your workspace",
+  "Looking at what is already on your computer",
+  "Getting your first helpers ready",
 ];
 
 /** Minimum time on screen, so a fast probe reads as a step and not a flash. */
@@ -72,7 +72,9 @@ export function ProbingScreen({
   return (
     <div className="onb-screen" data-solo="true">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Getting things ready.</h1>
+        <h1 className="onb-headline">
+          Building your <em>workspace</em>.
+        </h1>
       </div>
       <div className="onb-search" aria-hidden="true">
         <WalkingAnt className="onb-search-ant" />

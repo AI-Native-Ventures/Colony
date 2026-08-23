@@ -70,9 +70,12 @@ export function AccountScreen({
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Welcome to the colony.</h1>
+        <h1 className="onb-headline">
+          Let's get your <em>colony</em> started.
+        </h1>
         <p className="onb-sub">
-          A few quick questions and your workspace is ready.
+          Two minutes. We'll set up your workspace and get your first helpers
+          working.
         </p>
       </div>
       <div className="onb-panel">

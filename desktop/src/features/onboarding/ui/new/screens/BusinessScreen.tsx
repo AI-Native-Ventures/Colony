@@ -56,7 +56,9 @@ export function BusinessScreen({
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Tell us about the work.</h1>
+        <h1 className="onb-headline">
+          Tell us about the <em>work</em>.
+        </h1>
       </div>
       <div className="onb-panel">
         <div className="onb-stack">

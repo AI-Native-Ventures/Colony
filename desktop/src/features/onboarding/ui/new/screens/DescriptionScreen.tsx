@@ -8,7 +8,7 @@ import type { ScrapeFailureReason } from "../../../contracts";
  * Every failure gets the same plain sentence. A user whose site sits behind a
  * bot wall does not need to be taught what a bot wall is.
  */
-const UNREACHABLE = "We could not reach that website.";
+const UNREACHABLE = "We couldn't reach that site.";
 
 export const SCRAPE_FAILURE_COPY: Record<ScrapeFailureReason, string> = {
   unreachable: UNREACHABLE,
@@ -26,7 +26,7 @@ export function descriptionCopy(input: {
   if (!input.hasWebsite) {
     return {
       title: "Tell us what you do.",
-      sub: "A line or two is enough. Your agents work from this.",
+      sub: "A line or two is enough. Your helpers work from this.",
     };
   }
   if (input.scrapeFailed) {
@@ -37,7 +37,7 @@ export function descriptionCopy(input: {
   }
   return {
     title: "Here is what we found.",
-    sub: "Change anything we got wrong. Your agents work from this.",
+    sub: "Change anything we got wrong. Your helpers work from this.",
   };
 }
 

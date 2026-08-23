@@ -18,13 +18,15 @@ export function BrainScreen({
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">You are already set up.</h1>
+        <h1 className="onb-headline">
+          Pick who does the <em>thinking</em>.
+        </h1>
         <p className="onb-sub">
-          We found these on your computer. Pick the one your agents should think
-          with. You can change it any time.
+          Your helpers need a brain to think with. We found these on your
+          computer. You can change it any time.
         </p>
       </div>
-      <div className="onb-options" role="listbox" aria-label="Your agents">
+      <div className="onb-options" role="listbox" aria-label="Your helpers">
         {installed.map((name) => (
           <button
             type="button"

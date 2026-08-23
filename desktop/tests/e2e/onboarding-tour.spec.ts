@@ -37,7 +37,7 @@ test("tour", async ({ page }) => {
 
   await shot(page, "05-probing");
   await page
-    .getByRole("heading", { name: "You are already set up." })
+    .getByRole("heading", { name: "Pick who does the thinking." })
     .waitFor({ timeout: 15_000 });
   await shot(page, "06-brain");
   await page.getByRole("button", { name: "Continue" }).click();

@@ -35,7 +35,7 @@ test("a non-technical user can get from the first screen to the end", async ({
 
   // Screen 1: account. The primary button is dead until every field answers.
   await expect(
-    page.getByRole("heading", { name: "Welcome to the colony." }),
+    page.getByRole("heading", { name: "Let's get your colony started." }),
   ).toBeVisible();
   await page.getByLabel("Your name").fill("Aisha Bello");
   await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
@@ -44,7 +44,7 @@ test("a non-technical user can get from the first screen to the end", async ({
 
   // Screen 2: recovery code. Continue stays locked until the box is ticked.
   await expect(
-    page.getByRole("heading", { name: "Keep this code somewhere safe." }),
+    page.getByRole("heading", { name: "Your way back in." }),
   ).toBeVisible();
   await page.getByLabel("I have saved my code").click();
   await page.getByRole("button", { name: "Continue" }).click();
@@ -57,7 +57,7 @@ test("a non-technical user can get from the first screen to the end", async ({
   await page.getByRole("button", { name: "Create workspace" }).click();
 
   // Screen 4: the probe resolves on its own, no interaction.
-  await expect(page.getByText("Getting things ready.")).toBeVisible();
+  await expect(page.getByText("Building your workspace.")).toBeVisible();
 
   // Screen 5: the default mock runtime catalog reports Oh My Pi ready with no
   // login needed, so resolveTrack lands on the byo track: the brain picker
@@ -66,7 +66,7 @@ test("a non-technical user can get from the first screen to the end", async ({
   // nothing is ready, this screen becomes the timed Colony install instead
   // and credits loses its skip path, which breaks the rest of this walk.
   await expect(
-    page.getByRole("heading", { name: "You are already set up." }),
+    page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Continue" }).click();
 
@@ -92,11 +92,11 @@ test("a non-technical user can get from the first screen to the end", async ({
   // Screen 9: credits. The byo track offers the skip path, so no payment
   // handoff is needed to finish.
   await expect(
-    page.getByRole("heading", { name: "Put your colony to work." }),
+    page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
 
   await page
-    .getByRole("button", { name: "I will use my own agent for now" })
+    .getByRole("button", { name: "I will run my own helpers for now" })
     .click();
 
   // The flow hands control back to the app: the canvas unmounts and the main
@@ -119,7 +119,7 @@ test("a taken email address is explained inline and keeps the form intact", asyn
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Welcome to the colony." }),
+    page.getByRole("heading", { name: "Let's get your colony started." }),
   ).toBeVisible();
   await page.getByLabel("Your name").fill("Aisha Bello");
   await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
@@ -135,7 +135,7 @@ test("a taken email address is explained inline and keeps the form intact", asyn
     emailField.getByText("That email already has an account."),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Welcome to the colony." }),
+    page.getByRole("heading", { name: "Let's get your colony started." }),
   ).toBeVisible();
 
   // A failed signup never clears what was typed.
@@ -168,7 +168,7 @@ test("a disabled primary action always says what is missing", async ({
   await page.getByLabel("Company name").fill("Rosebank Auto Care");
   await page.getByRole("button", { name: "Create workspace" }).click();
   await expect(
-    page.getByRole("heading", { name: "You are already set up." }),
+    page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(
