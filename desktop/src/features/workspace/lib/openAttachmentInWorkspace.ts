@@ -1,5 +1,8 @@
+import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
+
 import { setChannelSurfaceMode } from "./channelSurfaceMode";
 import { getTabKind } from "./tabKindRegistry";
+import { parseWorkspaceUrl } from "./openUrlInWorkspace";
 import { openTab } from "./workspaceTabs";
 
 /** A message attachment as the timeline knows it. */
@@ -16,12 +19,14 @@ export type OpenAttachmentResult =
 
 type OpenAttachmentDependencies = {
   getKind: (kind: string) => unknown;
+  getRelayOrigin: () => string | null;
   openTab: typeof openTab;
   setSurfaceMode: typeof setChannelSurfaceMode;
 };
 
 const DEFAULT_DEPENDENCIES: OpenAttachmentDependencies = {
   getKind: getTabKind,
+  getRelayOrigin: getCachedRelayOrigin,
   openTab,
   setSurfaceMode: setChannelSurfaceMode,
 };
@@ -48,6 +53,15 @@ export function openAttachmentInWorkspace(
   dependencies: OpenAttachmentDependencies = DEFAULT_DEPENDENCIES,
 ): OpenAttachmentResult {
   const { attachment } = input;
+  const safeUrl = parseWorkspaceUrl(attachment.url);
+  const relayOrigin = dependencies.getRelayOrigin();
+  if (!safeUrl || (relayOrigin && safeUrl.origin !== relayOrigin)) {
+    return {
+      ok: false,
+      message: "This attachment does not have a safe relay URL.",
+    };
+  }
+
   const kind = ATTACHMENT_TAB_KIND;
   if (dependencies.getKind(kind) === undefined) {
     return {
@@ -62,7 +76,7 @@ export function openAttachmentInWorkspace(
       title: attachment.filename,
       createdBy: "local",
       payload: {
-        url: attachment.url,
+        url: safeUrl.href,
         name: attachment.filename,
         mime: attachment.mime,
       },

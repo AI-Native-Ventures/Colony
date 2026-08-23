@@ -347,6 +347,7 @@ mod tests {
                 timestamp: "2026-08-03T10:00:00Z".to_string(),
                 payment_mode: PaymentMode::Metered,
                 tokens: Some(breakdown),
+                unknown_token_fields: Vec::new(),
                 amount_nanousd: None,
                 observed_cost_nanousd: None,
                 harness: None,
@@ -400,6 +401,19 @@ mod tests {
             "cache-inclusive input must agree, got {:?}",
             report.findings
         );
+    }
+
+    #[test]
+    fn adapter_estimates_never_masquerade_as_wire_evidence() {
+        let mut estimated = wire_record("e1", Some(AGENT), breakdown(1_000, 0, 50));
+        estimated.payload.source = UsageSource::AdapterEstimate;
+
+        let report = cross_check(&[estimated], &[turn(1_000, 50, true)], 100, 10);
+        assert!(report.rows.iter().all(|row| row.wire_total() == 0));
+        assert!(matches!(
+            report.findings.as_slice(),
+            [CrossCheckFinding::NoWireRecords { .. }]
+        ));
     }
 
     /// An unreliable delta is excluded, not summed.

@@ -16,8 +16,14 @@ export async function seedActiveIdentity(
   );
 }
 
-/** Continue past the created-key page without opening optional backup options. */
+/**
+ * Pass the key-backup step without creating a backup: the primary action
+ * opens the consequence acknowledgement, and confirming it finishes
+ * onboarding. This is the deliberate no-backup exit, not a quiet skip.
+ */
 export async function passThroughBackupStep(page: Page) {
   await expect(page.getByTestId("onboarding-page-backup")).toBeVisible();
   await page.getByTestId("onboarding-next").click();
+  await expect(page.getByTestId("onboarding-backup-ack-dialog")).toBeVisible();
+  await page.getByTestId("onboarding-backup-ack-confirm").click();
 }

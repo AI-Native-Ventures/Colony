@@ -1,6 +1,18 @@
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import type { OpenAsk } from "@/features/asks/lib/askEvent";
+import { readAsk } from "@/features/asks/lib/askEvent";
+import {
+  classifyAskRouting,
+  effectiveFilerPubkey,
+} from "@/features/asks/lib/askRouting";
+import { useReportingLineLookup } from "@/features/agents/reportingLine";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { useCommunities } from "@/features/communities/useCommunities";
+import { relayClient } from "@/shared/api/relayClient";
+import { KIND_ASK } from "@/shared/constants/kinds";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 type AskDetailCardProps = {
   ask: OpenAsk;
@@ -9,11 +21,86 @@ type AskDetailCardProps = {
 };
 
 /**
+ * How an ask reached the person reading it: who it is addressed to, whether
+ * that was the filer's manager by default or somebody's explicit choice, and
+ * when the relay promoted it up the ladder, that it moved and from whom.
+ *
+ * Everything here reads the event stream itself -- the `p` tag, and the
+ * `prior`/`filer` pair only the relay's promotions carry. Deadlines are
+ * deliberately absent: they live in the relay's asks table alone today.
+ */
+function AskRoutingNote({ ask }: { ask: OpenAsk }): React.JSX.Element | null {
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
+  const { isSettled, lookup } = useReportingLineLookup(communityId);
+  const routing = classifyAskRouting(
+    ask,
+    // An unsettled payroll must not read as "explicit choice": hold the
+    // auto-vs-explicit judgment until the reporting-line reads finish.
+    isSettled ? lookup(effectiveFilerPubkey(ask)).managerPubkey : null,
+  );
+
+  const priorAskId = routing?.kind === "promoted" ? routing.priorAskId : null;
+  const priorQuery = useQuery({
+    enabled: priorAskId !== null,
+    queryKey: ["open-ask-prior", communityId, priorAskId],
+    queryFn: async () => {
+      const events = await relayClient.fetchEvents({
+        ids: priorAskId ? [priorAskId] : [],
+        kinds: [KIND_ASK],
+        limit: 1,
+      });
+      return events[0] ?? null;
+    },
+    staleTime: 30_000,
+  });
+  const priorAsk = priorQuery.data ? readAsk(priorQuery.data) : null;
+
+  const labelPubkeys = [ask.audiencePubkey, priorAsk?.audiencePubkey].flatMap(
+    (pubkey) => (pubkey ? [pubkey] : []),
+  );
+  const labelsQuery = useUsersBatchQuery(labelPubkeys, {
+    enabled: labelPubkeys.length > 0,
+  });
+  const labelFor = (pubkey: string) =>
+    labelsQuery.data?.profiles[normalizePubkey(pubkey)]?.displayName?.trim() ||
+    truncatePubkey(normalizePubkey(pubkey));
+
+  if (!routing) return null;
+
+  return (
+    <div
+      className="flex flex-col gap-0.5 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-4 text-muted-foreground"
+      data-testid="ask-routing"
+    >
+      {routing.kind === "promoted" ? (
+        <span data-testid="ask-routing-promoted">
+          Promoted up the ladder by the relay
+          {priorAsk?.audiencePubkey
+            ? ` · was addressed to ${labelFor(priorAsk.audiencePubkey)}`
+            : ""}
+        </span>
+      ) : null}
+      {routing.kind === "auto" ? (
+        <span data-testid="ask-routing-auto">
+          Auto-routed to {labelFor(routing.audiencePubkey)}, the filer's manager
+        </span>
+      ) : null}
+      {routing.kind === "explicit" ? (
+        <span data-testid="ask-routing-explicit">
+          Addressed directly to {labelFor(routing.audiencePubkey)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The card the founder answers an ask from.
  *
  * `ask_broker` already accepts an owner answering by replying in the thread;
- * this is the other half it was written against, so a founder does not have to
- * find the thread to unblock somebody.
+ * this is the other half it was written against, so a founder does not have
+ * to find the thread to unblock somebody.
  */
 export function AskDetailCard({
   ask,
@@ -38,6 +125,7 @@ export function AskDetailCard({
             Waiting costs: {ask.costOfDelay}
           </p>
         ) : null}
+        <AskRoutingNote ask={ask} />
       </div>
 
       <label className="flex flex-col gap-1">

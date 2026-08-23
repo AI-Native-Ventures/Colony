@@ -24,7 +24,7 @@ function restoreTauriMock() {
 const preference = {
   version: 1,
   theme: "houston",
-  accent: "#3b82f6",
+  accent: "#ec4899",
   followSystem: false,
 };
 

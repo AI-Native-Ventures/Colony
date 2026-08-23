@@ -97,8 +97,9 @@ export function sortEvents(events: RelayEvent[]) {
     // Same (created_at, id) tiebreak as the cache sort (sortMessages) so a
     // history REQ resolves same-second events in a stable, relay-matching
     // order. Currently every consumer re-sorts downstream, but keeping the
-    // two sorts on one invariant avoids a latent ordering drift.
-    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+    // two sorts on one invariant avoids a latent ordering drift. Descending on
+    // id, because the relay's canonical order is (created_at DESC, id ASC).
+    return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
   });
 }
 

@@ -233,6 +233,23 @@ mod tests {
     // Covers the case where runtime was cleared by an "inherit from persona"
     // update: summary must resolve via the LIVE persona, not stale agent_command.
 
+    /// Seed the process-global loaded-harness registry with the static preset
+    /// list and fence it for the duration of `f`.
+    ///
+    /// Preset harness ids ("openclaw", "omp", …) are not tier-1 builtins: they
+    /// resolve through the mutable global registry, which starts EMPTY in the
+    /// test binary and is replaced/cleared by other tests under
+    /// `registry_test_lock`. A test that resolves a preset id without holding
+    /// that guard passes or fails depending on which other tests ran first —
+    /// the exact flake seen in CI. Hold the guard from before the warm until
+    /// after the asserts so no concurrent writer can swap the registry
+    /// mid-assertion.
+    fn with_preset_registry<T>(f: impl FnOnce() -> T) -> T {
+        let _lock = crate::managed_agents::custom_harnesses::registry_test_lock();
+        crate::managed_agents::custom_harnesses::warm_harness_registry_from_dir(None);
+        f()
+    }
+
     /// Stale agent_command="openclaw", live persona=goose → summary resolves goose → uncapped.
     #[test]
     fn summary_persona_inherited_stale_openclaw_live_goose_is_uncapped() {
@@ -250,22 +267,29 @@ mod tests {
     }
 
     /// Stale agent_command="goose", live persona=openclaw → summary resolves openclaw → capped.
+    ///
+    /// Regression guard for the CI flake where this ran on an empty or freshly
+    /// cleared harness registry and resolved to buzz-agent instead of openclaw.
     #[test]
     fn summary_persona_inherited_stale_goose_live_openclaw_is_capped() {
-        let persona = persona_def("p-openclaw", Some("openclaw"));
-        let mut record = record_with(None, 10);
-        record.persona_id = Some("p-openclaw".to_string());
-        record.agent_command = "goose".to_string();
-        let cmd =
-            crate::managed_agents::record_agent_command(&record, std::slice::from_ref(&persona));
-        assert_eq!(
-            cmd, "openclaw",
-            "live persona must win over stale agent_command"
-        );
-        assert_eq!(
-            super::effective_parallelism(&cmd, record.parallelism),
-            super::OPENCLAW_MAX_PARALLELISM
-        );
+        with_preset_registry(|| {
+            let persona = persona_def("p-openclaw", Some("openclaw"));
+            let mut record = record_with(None, 10);
+            record.persona_id = Some("p-openclaw".to_string());
+            record.agent_command = "goose".to_string();
+            let cmd = crate::managed_agents::record_agent_command(
+                &record,
+                std::slice::from_ref(&persona),
+            );
+            assert_eq!(
+                cmd, "openclaw",
+                "live persona must win over stale agent_command"
+            );
+            assert_eq!(
+                super::effective_parallelism(&cmd, record.parallelism),
+                super::OPENCLAW_MAX_PARALLELISM
+            );
+        });
     }
 
     // ── Snapshot export: requested-definition / effective-instance contract ───

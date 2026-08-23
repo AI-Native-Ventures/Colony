@@ -83,7 +83,6 @@ CREATE TABLE channels (
     channel_type    channel_type NOT NULL DEFAULT 'stream',
     visibility      channel_visibility NOT NULL DEFAULT 'open',
     description     TEXT,
-    canvas          TEXT,
     created_by      BYTEA NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -219,10 +218,14 @@ CREATE TABLE events (
     -- Privacy: encrypted/private routing wrappers and p-gated membership notices
     -- must never be discoverable through NIP-50 full-text search. NULL tsvector
     -- never matches `@@`.
-    -- Keep in sync with migrations (final state: 0001 + 0005 + 0009 + 0031).
+    -- Keep in sync with migrations. The migrated final state (0008's positive
+    -- allowlist, later wrapped by 0014/0037 exclusions that are no-ops under
+    -- the allowlist) indexes exactly kinds 0, 9, 40002, 45001, 45003; every
+    -- other kind stays NULL.
     search_tsv  TSVECTOR GENERATED ALWAYS AS (
-        CASE WHEN kind IN (1059, 30179, 30180, 30181, 30300, 30350, 30622, 40013, 40014, 40015, 40016, 40017, 40018, 40019, 40020, 40021, 40022, 44100, 44101, 44200, 44210) THEN NULL::tsvector
-             ELSE to_tsvector('simple', content)
+        CASE WHEN kind IN (0, 9, 40002, 45001, 45003)
+             THEN to_tsvector('simple', content)
+             ELSE NULL::tsvector
         END
     ) STORED,
     sig         BYTEA NOT NULL,
@@ -278,6 +281,11 @@ CREATE INDEX idx_events_not_before ON events (community_id, not_before)
 -- EXPLAIN before its work lands (Quinn option A; Max's index-spelling caveat).
 CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
 
+-- E-tag containment lookups (migration 0004): tags @> '[["e","<hex>"]]' fan-out
+-- resolves through this GIN; jsonb_path_ops supports exactly the @> operator
+-- the query path uses. Partition children inherit it at ATTACH time.
+CREATE INDEX idx_events_tags_gin ON events USING GIN (tags jsonb_path_ops);
+
 -- ── Event mentions ────────────────────────────────────────────────────────────
 -- Conformance: "Channel-less global events and DMs" (#p fan-out). The join to
 -- events MUST carry the community tuple (e.community_id = m.community_id AND
@@ -298,6 +306,11 @@ CREATE INDEX idx_event_mentions_pubkey_created
     ON event_mentions (community_id, pubkey_hex, event_created_at DESC);
 CREATE INDEX idx_event_mentions_pubkey_kind_created
     ON event_mentions (community_id, pubkey_hex, event_kind, event_created_at DESC);
+
+-- Community-scoped mention join (migration 0007): the relay's per-community
+-- mention hydration filters (community_id, event_id) directly.
+CREATE INDEX idx_event_mentions_community_event
+    ON event_mentions (community_id, event_id);
 
 -- ── Subscriptions ─────────────────────────────────────────────────────────────
 -- Conformance: "Mesh, agents, ACP/MCP, and CLI" (persisted subscriptions).
@@ -506,6 +519,30 @@ CREATE TABLE rate_limit_violations (
     actual_value    INT,
     action_taken    VARCHAR(64)
 );
+
+-- ── Product feedback (migration 0017, amended by 0060) ──────────────────────
+-- OPERATOR-GLOBAL: accepted through a dedicated signed event kind and
+-- sidecarred here instead of entering the ordinary events table. Rows remain
+-- attributable to their source community; deployment operators review the
+-- table across communities through internal tooling. community_id is
+-- provenance only (nullable since 0060: SET NULL on tenant deletion) and the
+-- table is excluded from the community write fence.
+CREATE TABLE product_feedback (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    community_id        UUID REFERENCES communities(id) ON DELETE SET NULL,
+    event_id            BYTEA NOT NULL UNIQUE CHECK (length(event_id) = 32),
+    submitter_pubkey    BYTEA NOT NULL CHECK (length(submitter_pubkey) = 32),
+    category            TEXT CHECK (category IN ('bug', 'praise', 'needs-work')),
+    body                TEXT NOT NULL CHECK (length(btrim(body)) > 0),
+    tags                JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
+    event_created_at    TIMESTAMPTZ NOT NULL,
+    received_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_product_feedback_received
+    ON product_feedback (received_at DESC, id);
+CREATE INDEX idx_product_feedback_community_received
+    ON product_feedback (community_id, received_at DESC, id);
 
 -- ── Thread metadata ───────────────────────────────────────────────────────────
 -- Conformance: thread lookups filter by community before event matching.
@@ -793,6 +830,7 @@ CREATE TABLE _operator_global_tables (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('communities',           'the tenant registry itself; id IS the community key'),
     ('rate_limit_violations', 'deployment abuse/health; never tenant-observable; community_id is an attribution label only'),
+    ('product_feedback',      'deployment product inbox; community_id is provenance only'),
     ('_operator_global_tables', 'the registry table itself'),
     ('accounts',               'credit balances are identity-global, not community-scoped'),
     ('credit_ledger',          'append-only money journal is identity-global, not community-scoped'),
@@ -2147,13 +2185,19 @@ CREATE TABLE IF NOT EXISTS employees (
     -- events alone rather than trusting this table.
     hired_by      BYTEA NOT NULL,
     hire_event    BYTEA NOT NULL,
+    -- The agent this employee reports to, one rung up the interrupt ladder
+    -- (migration 0061). NULL means no manager: the root marker for
+    -- executives and the Unassigned-tray state for everyone else. Read by
+    -- interrupt_gate::agent_manager before any event is consulted.
+    manager       BYTEA,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
     created_at    BIGINT NOT NULL,
     updated_at    BIGINT NOT NULL,
     PRIMARY KEY (community_id, pubkey),
     CHECK (LENGTH(pubkey) = 32),
     CHECK (LENGTH(hired_by) = 32),
-    CHECK (LENGTH(hire_event) = 32)
+    CHECK (LENGTH(hire_event) = 32),
+    CONSTRAINT employees_manager_len CHECK (manager IS NULL OR LENGTH(manager) = 32)
 );
 
 -- Hiring is driven by a best-effort side effect, which may run more than once
@@ -2191,6 +2235,10 @@ CREATE TABLE jobs (
     head_at          BIGINT NOT NULL DEFAULT 0,
     created_at       BIGINT NOT NULL,
     updated_at       BIGINT NOT NULL,
+    -- Execution stamps (migration 0047): which seat ran the work and on what
+    -- provider and model.
+    provider         TEXT,
+    model            TEXT,
     task_id          TEXT,
     checkpoint_seq   BIGINT NOT NULL DEFAULT 0,
     checkpoint       JSONB,
@@ -2407,15 +2455,19 @@ CREATE TABLE operator_access_log (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('operator_access_log', 'deployment-wide operator accountability; filter and target values are stored only as digests');
 
--- Ported from migrations/0059_community_deletion.sql (upstream community-deletion + storage-sweep tables)
+-- Ported from migrations/0059_community_deletion.sql + 0060_community_deletion_recovery.sql
+-- (upstream community-deletion + storage-sweep tables; 0060 adds terminal abort recovery)
 CREATE TABLE community_deletion_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    community_id UUID NOT NULL UNIQUE REFERENCES communities(id),
+    -- 0060 dropped the blanket UNIQUE here: an aborted request must not
+    -- permanently consume the community's one active deletion slot. The one-
+    -- active-slot rule lives in the partial unique index below.
+    community_id UUID NOT NULL REFERENCES communities(id),
     community_host TEXT NOT NULL,
     stage TEXT NOT NULL DEFAULT 'submitted' CHECK (stage IN (
         'submitted', 'inventoried', 'approved', 'fenced', 'drained',
         'bindings_removed', 'postgres_purged', 'cache_purged',
-        'logically_verified', 'retention_pending'
+        'logically_verified', 'retention_pending', 'aborted'
     )),
     requested_by TEXT NOT NULL,
     reason TEXT,
@@ -2444,8 +2496,17 @@ CREATE TABLE community_deletion_requests (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMPTZ,
+    -- 0060 terminal abort recovery.
+    pre_quiesce_archived_at TIMESTAMPTZ,
+    quiescing_started_at TIMESTAMPTZ,
+    aborted_by TEXT,
+    abort_reason TEXT,
+    aborted_at TIMESTAMPTZ,
     CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL)),
     CHECK ((inventory_frozen_at IS NULL) = (inventory_digest IS NULL)),
+    CHECK ((stage = 'aborted') = (aborted_at IS NOT NULL)),
+    CHECK ((aborted_at IS NULL) = (aborted_by IS NULL)),
+    CHECK ((aborted_at IS NULL) = (abort_reason IS NULL)),
     UNIQUE (id, community_id, inventory_digest)
 );;
 
@@ -2510,6 +2571,12 @@ CREATE TABLE community_deletion_executor_heartbeats (
     stopped_at TIMESTAMPTZ
 );;
 
+
+-- Aborted requests remain immutable audit evidence, but must not permanently
+-- consume the community's one active deletion slot (migration 0060).
+CREATE UNIQUE INDEX community_deletion_requests_active_community
+    ON community_deletion_requests (community_id)
+    WHERE stage <> 'aborted';
 CREATE INDEX community_deletion_requests_runnable
     ON community_deletion_requests (next_attempt_at, created_at)
     WHERE blocked_at IS NULL
@@ -2536,6 +2603,117 @@ CREATE TABLE community_deletion_approvals (
         REFERENCES community_deletion_requests(id, community_id, inventory_digest)
         ON DELETE RESTRICT
 );;
+
+
+-- ── Deletion evidence immutability guards (migration 0059) ──────────────────
+-- The approval identity is only meaningful while its frozen target and
+-- inventory remain unchanged. Make those facts irreversible in the database,
+-- not merely conventions in the worker.
+CREATE FUNCTION prevent_community_deletion_request_retargeting()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.community_id IS DISTINCT FROM OLD.community_id
+        OR NEW.community_host IS DISTINCT FROM OLD.community_host
+    THEN
+        RAISE EXCEPTION 'community deletion target identity is immutable'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF OLD.inventory_frozen_at IS NOT NULL AND (
+        NEW.schema_manifest IS DISTINCT FROM OLD.schema_manifest
+        OR NEW.storage_manifest IS DISTINCT FROM OLD.storage_manifest
+        OR NEW.inventory_manifest IS DISTINCT FROM OLD.inventory_manifest
+        OR NEW.inventory_digest IS DISTINCT FROM OLD.inventory_digest
+        OR NEW.inventory_frozen_at IS DISTINCT FROM OLD.inventory_frozen_at
+    ) THEN
+        RAISE EXCEPTION 'frozen community deletion inventory is immutable'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF OLD.destructive_storage_frozen_at IS NOT NULL AND (
+        NEW.destructive_storage_manifest IS DISTINCT FROM OLD.destructive_storage_manifest
+        OR NEW.destructive_storage_frozen_at IS DISTINCT FROM OLD.destructive_storage_frozen_at
+    ) THEN
+        RAISE EXCEPTION 'frozen destructive storage manifest is immutable'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER community_deletion_request_retargeting_guard
+BEFORE UPDATE ON community_deletion_requests
+FOR EACH ROW
+EXECUTE FUNCTION prevent_community_deletion_request_retargeting();
+
+CREATE FUNCTION prevent_community_deletion_approval_removal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'community deletion approval evidence is immutable'
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+
+CREATE TRIGGER community_deletion_approval_removal_guard
+BEFORE UPDATE OR DELETE ON community_deletion_approvals
+FOR EACH ROW
+EXECUTE FUNCTION prevent_community_deletion_approval_removal();
+
+-- Chunk content is immutable once written; the only permitted update is the
+-- one-way deleted_at stamp. New chunks are permitted only while the request is
+-- fenced and its destructive manifest remains unfrozen. Removal is permitted
+-- only while the destructive manifest has not yet frozen (a retried partial
+-- freeze rewrites its chunks) or once the request has passed logical
+-- verification (terminal cleanup).
+CREATE FUNCTION protect_community_deletion_manifest_keys()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    frozen_at TIMESTAMPTZ;
+    request_stage TEXT;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.request_id IS DISTINCT FROM OLD.request_id
+            OR NEW.chunk_no IS DISTINCT FROM OLD.chunk_no
+            OR NEW.prefix IS DISTINCT FROM OLD.prefix
+            OR NEW.keys IS DISTINCT FROM OLD.keys
+            OR OLD.deleted_at IS NOT NULL
+        THEN
+            RAISE EXCEPTION 'community deletion manifest key chunks are immutable'
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+        RETURN NEW;
+    END IF;
+    SELECT destructive_storage_frozen_at, stage
+      INTO frozen_at, request_stage
+      FROM community_deletion_requests
+     WHERE id = CASE WHEN TG_OP = 'INSERT' THEN NEW.request_id ELSE OLD.request_id END
+     FOR UPDATE;
+    IF TG_OP = 'INSERT' THEN
+        IF FOUND AND frozen_at IS NULL AND request_stage = 'fenced' THEN
+            RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'community deletion manifest key chunks require an unfrozen fenced request'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF NOT FOUND
+        OR frozen_at IS NULL
+        OR request_stage IN ('logically_verified', 'retention_pending')
+    THEN
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'community deletion manifest key chunks cannot be removed mid-execution'
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+
+CREATE TRIGGER community_deletion_manifest_keys_guard
+BEFORE INSERT OR UPDATE OR DELETE ON community_deletion_manifest_keys
+FOR EACH ROW
+EXECUTE FUNCTION protect_community_deletion_manifest_keys();
 
 -- ── Git repo name registry (NIP-34 kind:30617) ───────────────────────────────
 -- Ported from migrations/0002_git_repo_names.sql (was KNOWN_DRIFT; needed by the
@@ -2564,6 +2742,208 @@ CREATE TABLE parameterized_event_watermarks (
     event_id      BYTEA NOT NULL,
     PRIMARY KEY (community_id, kind, pubkey, d_tag)
 );;
+
+-- ── NIP-RS / mesh-status database guards ─────────────────────────────────────
+-- Ported from migrations/0009 + 0010 + 0011 + 0019 (final bodies: 0011 and
+-- 0019). These enforce retention invariants against pre-migration relay
+-- binaries during a rolling deployment, so they belong to the desired state,
+-- not only to the migration history.
+--
+-- Every conforming NIP-RS insert must advance the watermark; an insert older
+-- than the greatest accepted tuple is rejected even when no live row remains.
+-- Exact replay is a durable coordinate-level no-op, independent of whether the
+-- physically retained payload still exists.
+CREATE FUNCTION guard_nip_rs_watermark() RETURNS trigger AS $$
+DECLARE
+    advanced BOOLEAN;
+BEGIN
+    IF NEW.kind = 30078
+       AND NEW.d_tag ~ '^read-state:[0-9a-f]{32}$'
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND tag->0 = '"d"'::jsonb
+       ) = 1
+       AND EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND jsonb_array_length(tag) >= 2
+             AND jsonb_typeof(tag->1) = 'string'
+             AND tag->>0 = 'd'
+             AND tag->>1 = NEW.d_tag
+       )
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE tag = '["t", "read-state"]'::jsonb
+       ) = 1 THEN
+        INSERT INTO parameterized_event_watermarks
+            (community_id, kind, pubkey, d_tag, created_at, event_id)
+        VALUES
+            (NEW.community_id, NEW.kind, NEW.pubkey, NEW.d_tag, NEW.created_at, NEW.id)
+        ON CONFLICT (community_id, kind, pubkey, d_tag) DO UPDATE SET
+            created_at = EXCLUDED.created_at,
+            event_id = EXCLUDED.event_id
+        WHERE EXCLUDED.created_at > parameterized_event_watermarks.created_at
+           OR (EXCLUDED.created_at = parameterized_event_watermarks.created_at
+               AND EXCLUDED.event_id < parameterized_event_watermarks.event_id)
+        RETURNING TRUE INTO advanced;
+
+        IF NOT COALESCE(advanced, FALSE) THEN
+            IF EXISTS (
+                SELECT 1
+                FROM parameterized_event_watermarks
+                WHERE community_id = NEW.community_id
+                  AND kind = NEW.kind
+                  AND pubkey = NEW.pubkey
+                  AND d_tag = NEW.d_tag
+                  AND created_at = NEW.created_at
+                  AND event_id = NEW.id
+            ) THEN
+                RETURN NULL;
+            END IF;
+
+            RAISE EXCEPTION 'stale NIP-RS event rejected by durable watermark'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- A relay binary from before migration 0011 can classify an incoming event by
+-- broad EXISTS predicates and hard-delete the current coordinate before its
+-- corrected INSERT guard runs. Fail the whole old-writer transaction rather
+-- than silently skipping the DELETE. Corrected paths opt in transaction-locally.
+CREATE FUNCTION guard_nip_rs_hard_delete() RETURNS trigger AS $$
+BEGIN
+    IF current_setting('buzz.nip_rs_hard_delete', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION 'NIP-RS hard delete requires corrected writer opt-in'
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+-- NIP-RS payloads have no historical product value. Enforce physical removal
+-- when old relay binaries use their legacy soft-delete path, including NIP-09
+-- coordinate deletion during a mixed-version rollout.
+CREATE OR REPLACE FUNCTION purge_soft_deleted_nip_rs() RETURNS trigger AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL
+       AND NEW.deleted_at IS NOT NULL
+       AND NEW.kind = 30078
+       AND NEW.d_tag ~ '^read-state:[0-9a-f]{32}$'
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND tag->0 = '"d"'::jsonb
+       ) = 1
+       AND EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND jsonb_array_length(tag) >= 2
+             AND jsonb_typeof(tag->1) = 'string'
+             AND tag->>0 = 'd'
+             AND tag->>1 = NEW.d_tag
+       )
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE tag = '["t", "read-state"]'::jsonb
+       ) = 1 THEN
+        PERFORM set_config('buzz.nip_rs_hard_delete', 'on', true);
+
+        DELETE FROM events
+        WHERE community_id = NEW.community_id
+          AND created_at = NEW.created_at
+          AND id = NEW.id;
+
+        DELETE FROM event_mentions
+        WHERE community_id = NEW.community_id AND event_id = NEW.id;
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Mesh status is a heartbeat carried in a reserved kind:30003 coordinate
+-- (migration 0019). Only the live head has product value; purge superseded
+-- soft-deleted payloads written by older relay binaries during rolling deploys.
+CREATE FUNCTION purge_soft_deleted_buzz_mesh_status() RETURNS trigger AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL
+       AND NEW.deleted_at IS NOT NULL
+       AND NEW.kind = 30003
+       AND NEW.d_tag LIKE 'buzz-mesh-member-status:%'
+       AND NEW.tags @> '[["k", "buzz-mesh-status"]]'::jsonb THEN
+        DELETE FROM events
+        WHERE community_id = NEW.community_id
+          AND created_at = NEW.created_at
+          AND id = NEW.id;
+
+        DELETE FROM event_mentions
+        WHERE community_id = NEW.community_id AND event_id = NEW.id;
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Mention indexing runs after the event transaction commits. Lock the live event
+-- row while a mention is inserted so a concurrent hard delete cannot leave an
+-- orphan behind; if deletion already won, silently skip the stale index row.
+-- (Migration 0009; unchanged by 0010/0011.)
+CREATE FUNCTION guard_event_mention_live() RETURNS trigger AS $$
+BEGIN
+    IF NEW.event_kind IS DISTINCT FROM 30078 THEN
+        RETURN NEW;
+    END IF;
+
+    PERFORM 1
+    FROM events
+    WHERE community_id = NEW.community_id
+      AND id = NEW.event_id
+      AND created_at = NEW.event_created_at
+      AND deleted_at IS NULL
+    FOR KEY SHARE;
+
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Triggers on the partitioned parent propagate to every attached partition.
+CREATE TRIGGER trg_events_nip_rs_watermark
+    BEFORE INSERT ON events
+    FOR EACH ROW EXECUTE FUNCTION guard_nip_rs_watermark();
+
+CREATE TRIGGER trg_events_guard_nip_rs_hard_delete
+    BEFORE DELETE ON events
+    FOR EACH ROW
+    WHEN (OLD.kind = 30078 AND OLD.d_tag ~ '^read-state:[0-9a-f]{32}$')
+    EXECUTE FUNCTION guard_nip_rs_hard_delete();
+
+CREATE TRIGGER trg_events_purge_soft_deleted_nip_rs
+    AFTER UPDATE OF deleted_at ON events
+    FOR EACH ROW EXECUTE FUNCTION purge_soft_deleted_nip_rs();
+
+CREATE TRIGGER trg_events_purge_soft_deleted_buzz_mesh_status
+    AFTER UPDATE OF deleted_at ON events
+    FOR EACH ROW EXECUTE FUNCTION purge_soft_deleted_buzz_mesh_status();
+
+CREATE TRIGGER trg_event_mentions_require_live_event
+    BEFORE INSERT ON event_mentions
+    FOR EACH ROW EXECUTE FUNCTION guard_event_mention_live();
 
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('community_deletion_requests', 'deployment deletion lifecycle and frozen inventory'),
@@ -2753,6 +3133,84 @@ END
 $$;
 CREATE TRIGGER communities_deletion_tombstone BEFORE UPDATE OR DELETE ON communities
 FOR EACH ROW EXECUTE FUNCTION enforce_community_tombstone();
+-- Email and password accounts with zero-knowledge key escrow.
+--
+-- The relay stores two opaque NIP-49 blobs per account. Both encrypt the same
+-- private key: one under the user's password, one under their recovery code.
+-- Neither the password nor the key is ever transmitted, so neither can be
+-- recovered from this table.
+--
+-- Named email_accounts because migration 0050 already owns `accounts` for
+-- identity-global credit balances. These rows are tenant scoped instead.
+CREATE TABLE email_accounts (
+    community_id       UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    id                 UUID NOT NULL DEFAULT gen_random_uuid(),
+    email              TEXT NOT NULL,
+    pubkey             TEXT NOT NULL CHECK (length(pubkey) = 64),
+    auth_hash          TEXT NOT NULL,
+    password_blob      TEXT NOT NULL,
+    recovery_blob      TEXT NOT NULL,
+    recovery_code_hash TEXT NOT NULL CHECK (length(recovery_code_hash) = 64),
+    kdf_version        SMALLINT NOT NULL DEFAULT 1 CHECK (kdf_version > 0),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_signin_at     TIMESTAMPTZ,
+    failed_attempts    INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    locked_until       TIMESTAMPTZ,
+    PRIMARY KEY (community_id, id)
+);
+
+-- Uniqueness is per community, and lower() in the index means the database
+-- enforces normalisation rather than trusting every caller to apply it.
+CREATE UNIQUE INDEX email_accounts_community_email_idx
+    ON email_accounts (community_id, lower(email));
+CREATE UNIQUE INDEX email_accounts_community_pubkey_idx
+    ON email_accounts (community_id, pubkey);
+
+-- Single-use, short-lived proof that a recovery code was presented, so the
+-- password reset that follows does not have to carry the code again. Tenant
+-- scoped like its parent so the write fence and the deletion purge cover it
+-- directly instead of relying on cascade timing.
+CREATE TABLE account_reset_tokens (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    account_id   UUID NOT NULL,
+    token_hash   TEXT NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, token_hash),
+    FOREIGN KEY (community_id, account_id)
+        REFERENCES email_accounts (community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX account_reset_tokens_expiry_idx
+    ON account_reset_tokens (expires_at);
+
+-- Payment top-up intents.
+--
+-- One row per checkout attempt, written before the user leaves for the
+-- hosted payment page. The reference maps a later provider callback back to
+-- the member and the amount we asked for; the callback's own numbers are
+-- never trusted without this row to check them against.
+--
+-- Tenant scoped like every table here: the primary key leads with
+-- community_id, so the same reference may exist in two communities.
+CREATE TABLE payment_intents (
+    community_id  UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    reference     TEXT NOT NULL,
+    pubkey        BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500),
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'paid', 'failed', 'abandoned')),
+    provider      TEXT NOT NULL DEFAULT 'paystack'
+                  CHECK (provider IN ('paystack', 'payfast')),
+    paid_cents    BIGINT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    settled_at    TIMESTAMPTZ,
+    PRIMARY KEY (community_id, reference)
+);
+
+CREATE INDEX payment_intents_pubkey_idx ON payment_intents (community_id, pubkey);
+
 -- Attach the universal fence to one community-scoped relation. Future
 -- migrations must invoke this helper explicitly after CREATE/ALTER introduces
 -- community_id; the migration lint enforces that contract.
@@ -2827,6 +3285,7 @@ $$;
 -- these explicit calls as first-class catalog declarations. They also make the
 -- fence contract visible to migration linting instead of hiding it only in the
 -- dynamic bootstrap loop above.
+SELECT attach_community_write_fence('account_reset_tokens');
 SELECT attach_community_write_fence('api_tokens');
 SELECT attach_community_write_fence('archived_identities');
 SELECT attach_community_write_fence('asks');
@@ -2856,6 +3315,7 @@ SELECT attach_community_write_fence('discovery_usage');
 SELECT attach_community_write_fence('discovery_worker_action_claims');
 SELECT attach_community_write_fence('discovery_workspace_action_claims');
 SELECT attach_community_write_fence('discovery_workspace_protocols');
+SELECT attach_community_write_fence('email_accounts');
 SELECT attach_community_write_fence('employees');
 SELECT attach_community_write_fence('event_mentions');
 SELECT attach_community_write_fence('events');
@@ -2869,6 +3329,7 @@ SELECT attach_community_write_fence('operator_activity_cursor');
 SELECT attach_community_write_fence('operator_activity_daily');
 SELECT attach_community_write_fence('parameterized_event_watermarks');
 SELECT attach_community_write_fence('party_action_claims');
+SELECT attach_community_write_fence('payment_intents');
 SELECT attach_community_write_fence('pubkey_allowlist');
 SELECT attach_community_write_fence('push_leases');
 SELECT attach_community_write_fence('push_match_queue');

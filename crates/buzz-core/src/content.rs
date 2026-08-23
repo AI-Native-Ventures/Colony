@@ -28,8 +28,10 @@
 //!    report, which is the easiest way for this whole system to lie.
 //!
 //! [`parse_content_decision`] carries the same idea into approval: an approval
-//! names the image hash and the verdict it was issued against, so a card edited
-//! after approval does not inherit the sign-off.
+//! names a digest of the ordered slide hashes and the verdict it was issued
+//! against, so a card edited after approval does not inherit the sign-off.
+//! Editing one slide of an approved carousel invalidates the approval of the
+//! post, not just the slide.
 //!
 //! Style parameters are deliberately opaque. `family`, `hues`, `variant` and
 //! `layout` mean something to Colony's own brand kit and nothing to the next
@@ -84,6 +86,14 @@ pub const MAX_GATES: usize = 32;
 
 /// Largest number of assets one post may carry.
 pub const MAX_ASSETS: usize = 16;
+
+/// Largest number of slides one post may carry.
+///
+/// A schema sanity bound, not a product limit. The effective limit for any
+/// given post comes from the platform it targets (Instagram allows 10,
+/// LinkedIn 20), and the cost of a render is the customer's, so Colony caps
+/// at the highest target rather than below it.
+pub const MAX_SLIDES: usize = 20;
 
 /// Largest number of accumulated house rules.
 ///
@@ -182,16 +192,16 @@ pub enum ContentParseError {
         /// What its gates actually add up to.
         derived: &'static str,
     },
-    /// The gate report measured an image other than the one the post carries.
-    #[error("gate report measured image {report}, but the post carries {post}")]
+    /// The gate report measured an image other than any slide on the post.
+    #[error("gate report measured image {report}, but no slide on this post carries that hash")]
     ReportImageMismatch {
         /// Hash the report says it measured.
         report: String,
-        /// Hash of the image actually on the post.
+        /// A slide hash on the post, for context.
         post: String,
     },
-    /// A post carried a gate report but no image for it to describe.
-    #[error("a gate report needs the image it measured")]
+    /// A post carried a gate report but no slides for it to describe.
+    #[error("a gate report needs a slide to describe")]
     ReportWithoutImage,
     /// A claim id was referenced by a field but never defined.
     #[error("field `{field}` cites claim `{claim}`, which is not defined on this post")]
@@ -201,12 +211,15 @@ pub enum ContentParseError {
         /// The claim id it cited.
         claim: String,
     },
-    /// A post claimed ready without a rendered image.
-    #[error("a ready post must carry an image")]
+    /// A post claimed ready without at least one slide.
+    #[error("a ready post must carry at least one slide")]
     ReadyWithoutImage,
     /// A post claimed ready without a gate report.
     #[error("a ready post must carry a gate report")]
     ReadyWithoutReport,
+    /// A ready post had a slide with no gate report covering it.
+    #[error("a ready post must carry a gate report for every slide; slide {0} has none")]
+    ReadyMissingReport(String),
     /// A post claimed ready with a gate missing from its report.
     #[error("a ready post must report the `{0}` gate, as pass, fail, or skip")]
     ReadyMissingGate(String),
@@ -965,7 +978,10 @@ pub struct PostAsset {
     pub fictional: bool,
 }
 
-/// The rendered image a post carries.
+/// One rendered slide of a post.
+///
+/// A post carries an ordered list of these, one per slide in the carousel.
+/// A single-image post is a one-slide carousel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostImage {
     /// Where the PNG lives, as returned by `buzz upload file`.
@@ -976,6 +992,25 @@ pub struct PostImage {
     pub width: u32,
     /// Pixel height.
     pub height: u32,
+}
+
+/// The SHA-256 of the ordered slide hashes, so a decision names the whole set.
+///
+/// The decision event carries this digest rather than a single image hash, so
+/// editing one slide of an approved carousel invalidates the approval of the
+/// post, not just the slide. The relay stores the decision without
+/// interpreting it; the digest is computed by whoever builds the decision (the
+/// CLI or the desktop app) and compared by whoever reads it.
+///
+/// The input is the list of [`PostImage`] in slide order; the output is bare
+/// lowercase hex, the same shape the rest of the module stores sha256 values in.
+pub fn slides_digest(images: &[PostImage]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for image in images {
+        hasher.update(image.sha256.as_bytes());
+    }
+    hex::encode(hasher.finalize())
 }
 
 /// How finished a post is.
@@ -1046,8 +1081,8 @@ pub struct ParsedContentPost {
     /// Brand-kit style parameters. Opaque: their meaning belongs to the kit at
     /// `style_version`, not to the relay.
     pub style: Option<serde_json::Value>,
-    /// The rendered card.
-    pub image: Option<PostImage>,
+    /// The rendered slides, in order. One for a single-image post.
+    pub images: Vec<PostImage>,
     /// Files the card was built from.
     pub assets: Vec<PostAsset>,
     /// Every assertion this post makes, with its evidence.
@@ -1056,24 +1091,43 @@ pub struct ParsedContentPost {
     /// Lets the gate fail with a locator rather than a verdict: not "this card
     /// has an unsourced claim" but "the caption does".
     pub claim_fields: Vec<(String, Vec<String>)>,
-    /// The measured gate report, when the card has been rendered.
-    pub gate_report: Option<GateReport>,
+    /// The measured gate report for each slide, bound by `image_hash`.
+    pub gate_reports: Vec<GateReport>,
     /// Draft or ready.
     pub status: PostStatus,
 }
 
 impl ParsedContentPost {
-    /// The verdict the gates add up to, or `None` when nothing was measured.
+    /// The verdict the gates add up to across all slides, or `None` when
+    /// nothing was measured.
+    ///
+    /// The worst verdict wins: a single failing slide makes the whole post fail,
+    /// and a single incomplete slide makes the whole post incomplete. Only when
+    /// every report passes is the post fully passing.
     pub fn verdict(&self) -> Option<GateVerdict> {
-        self.gate_report.as_ref().map(|report| report.verdict)
+        if self.gate_reports.is_empty() {
+            return None;
+        }
+        let mut worst = GateVerdict::Pass;
+        for report in &self.gate_reports {
+            match report.verdict {
+                GateVerdict::Fail => return Some(GateVerdict::Fail),
+                GateVerdict::Incomplete => worst = GateVerdict::Incomplete,
+                GateVerdict::Pass => {}
+            }
+        }
+        Some(worst)
     }
 
-    /// Whether every gate in [`REQUIRED_GATES`] passed.
+    /// Whether every gate in [`REQUIRED_GATES`] passed on every slide.
     ///
     /// Distinct from "did not fail". A card whose claims gate was skipped is
     /// not gated, and this returns false for it.
     pub fn fully_gated(&self) -> bool {
-        self.gate_report.as_ref().is_some_and(|report| {
+        if self.gate_reports.is_empty() {
+            return false;
+        }
+        self.gate_reports.iter().all(|report| {
             REQUIRED_GATES.iter().all(|id| {
                 report
                     .gate(id)
@@ -1121,12 +1175,12 @@ pub fn post_address(campaign: &str, slug: &str) -> String {
 
 /// Parse and validate a post record (kind [`KIND_CONTENT_POST`]).
 ///
-/// A `draft` is permissive: no image, no gates, unsourced claims, because that
+/// A `draft` is permissive: no slides, no gates, unsourced claims, because that
 /// is what a work in progress looks like. A `ready` post is the one offered to
-/// the owner, and it must carry a rendered image, a gate report measured
-/// against exactly those bytes, every gate in [`REQUIRED_GATES`] reported in
-/// some status, no gate failing, and a source on every claim. There is no flag
-/// that relaxes this.
+/// the owner, and it must carry at least one rendered slide, a gate report
+/// measured against every slide, every gate in [`REQUIRED_GATES`] reported in
+/// some status on every report, no gate failing, and a source on every claim.
+/// There is no flag that relaxes this.
 ///
 /// A skipped gate does not block ready. It produces
 /// [`GateVerdict::Incomplete`], which is the honest state for a card whose
@@ -1176,28 +1230,39 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         })
         .unwrap_or_default();
 
-    let image = match content.get("image") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(raw) => Some(PostImage {
-            url: required_str_at(raw, "url", "image.url")?,
+    let raw_images = content
+        .get("images")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if raw_images.len() > MAX_SLIDES {
+        return Err(ContentParseError::TooManyEntries {
+            field: "images".to_string(),
+            max: MAX_SLIDES,
+        });
+    }
+    let mut images = Vec::with_capacity(raw_images.len());
+    for raw in &raw_images {
+        images.push(PostImage {
+            url: required_str_at(raw, "url", "images[].url")?,
             sha256: require_sha256(
-                &required_str_at(raw, "sha256", "image.sha256")?,
-                "image.sha256",
+                &required_str_at(raw, "sha256", "images[].sha256")?,
+                "images[].sha256",
             )?,
             width: raw
                 .get("width")
                 .and_then(serde_json::Value::as_u64)
                 .filter(|n| *n > 0)
-                .ok_or_else(|| ContentParseError::EmptyField("image.width".to_string()))?
+                .ok_or_else(|| ContentParseError::EmptyField("images[].width".to_string()))?
                 as u32,
             height: raw
                 .get("height")
                 .and_then(serde_json::Value::as_u64)
                 .filter(|n| *n > 0)
-                .ok_or_else(|| ContentParseError::EmptyField("image.height".to_string()))?
+                .ok_or_else(|| ContentParseError::EmptyField("images[].height".to_string()))?
                 as u32,
-        }),
-    };
+        });
+    }
 
     let raw_assets = content
         .get("assets")
@@ -1263,24 +1328,31 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         }
     }
 
-    let gate_report = match content.get("gate_report") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(raw) => Some(parse_gate_report(raw)?),
-    };
+    let raw_reports = content
+        .get("gate_reports")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut gate_reports = Vec::with_capacity(raw_reports.len());
+    for raw in &raw_reports {
+        gate_reports.push(parse_gate_report(raw)?);
+    }
 
-    // The report describes an image, so it needs one, and it must be the image
-    // the post carries. Without this a re-render silently keeps the old
-    // passing report, which is the easiest way for the whole system to lie.
-    if let Some(report) = &gate_report {
-        match &image {
-            None => return Err(ContentParseError::ReportWithoutImage),
-            Some(image) if image.sha256 != report.image_hash => {
-                return Err(ContentParseError::ReportImageMismatch {
-                    report: report.image_hash.clone(),
-                    post: image.sha256.clone(),
-                })
-            }
-            Some(_) => {}
+    // Each report describes a slide, so it needs one, and its image_hash must
+    // match a slide on this post. Without this a re-render silently keeps the
+    // old passing report, which is the easiest way for the whole system to lie.
+    if !gate_reports.is_empty() && images.is_empty() {
+        return Err(ContentParseError::ReportWithoutImage);
+    }
+    for report in &gate_reports {
+        if !images.iter().any(|image| image.sha256 == report.image_hash) {
+            return Err(ContentParseError::ReportImageMismatch {
+                report: report.image_hash.clone(),
+                post: images
+                    .first()
+                    .map(|image| image.sha256.clone())
+                    .unwrap_or_default(),
+            });
         }
     }
 
@@ -1308,11 +1380,11 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
         hashtags,
         style_version,
         style,
-        image,
+        images,
         assets,
         claims,
         claim_fields,
-        gate_report,
+        gate_reports,
         status,
     };
 
@@ -1324,28 +1396,42 @@ pub fn parse_content_post(event: &nostr::Event) -> Result<ParsedContentPost, Con
     }
 
     if parsed.status == PostStatus::Ready {
-        if parsed.image.is_none() {
+        if parsed.images.is_empty() {
             return Err(ContentParseError::ReadyWithoutImage);
         }
-        let report = parsed
-            .gate_report
-            .as_ref()
-            .ok_or(ContentParseError::ReadyWithoutReport)?;
-        for gate_id in REQUIRED_GATES {
-            match report.gate(gate_id) {
-                None => return Err(ContentParseError::ReadyMissingGate((*gate_id).to_string())),
-                Some(gate) if gate.status == GateStatus::Fail => {
-                    return Err(ContentParseError::ReadyFailedGate((*gate_id).to_string()))
-                }
-                Some(_) => {}
+        if parsed.gate_reports.is_empty() {
+            return Err(ContentParseError::ReadyWithoutReport);
+        }
+        // Every slide must have a gate report whose image_hash matches it.
+        for image in &parsed.images {
+            if !parsed
+                .gate_reports
+                .iter()
+                .any(|report| report.image_hash == image.sha256)
+            {
+                return Err(ContentParseError::ReadyMissingReport(image.sha256.clone()));
             }
         }
-        if let Some(gate) = report
-            .gates
-            .iter()
-            .find(|gate| gate.status == GateStatus::Fail)
-        {
-            return Err(ContentParseError::ReadyFailedGate(gate.id.clone()));
+        // Every report must carry all required gates with none failing.
+        for report in &parsed.gate_reports {
+            for gate_id in REQUIRED_GATES {
+                match report.gate(gate_id) {
+                    None => {
+                        return Err(ContentParseError::ReadyMissingGate((*gate_id).to_string()))
+                    }
+                    Some(gate) if gate.status == GateStatus::Fail => {
+                        return Err(ContentParseError::ReadyFailedGate((*gate_id).to_string()))
+                    }
+                    Some(_) => {}
+                }
+            }
+            if let Some(gate) = report
+                .gates
+                .iter()
+                .find(|gate| gate.status == GateStatus::Fail)
+            {
+                return Err(ContentParseError::ReadyFailedGate(gate.id.clone()));
+            }
         }
         if let Some(unsourced) = parsed.claims.iter().find(|claim| claim.source.is_none()) {
             return Err(ContentParseError::ReadyUnsourcedClaim(unsourced.id.clone()));
@@ -1542,15 +1628,19 @@ pub struct Correction {
 
 /// Exactly what a decision was made against.
 ///
-/// The image hash is not decoration. Without it an approval points at a
-/// coordinate whose contents can change afterwards, and a replaceable event
-/// means they can change without anyone noticing. With it, a reader tells
-/// "approved" from "approved, then edited" by comparing two strings.
+/// The `image_sha256` is not decoration, and it is not a single image hash:
+/// it is an ordered digest over every slide hash (see [`slides_digest`]).
+/// Without it an approval points at a coordinate whose contents can change
+/// afterwards, and a replaceable event means they can change without anyone
+/// noticing. With it, a reader tells "approved" from "approved, then edited"
+/// by comparing two strings, and editing one slide of a carousel invalidates
+/// the approval of the whole post.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionTarget {
     /// `30196:<pubkey>:<campaign>:<slug>`, from the `a` tag.
     pub coordinate: String,
-    /// SHA-256 of the image that was on screen when the decision was made.
+    /// SHA-256 digest of the ordered slide hashes that were on screen when the
+    /// decision was made.
     pub image_sha256: Option<String>,
     /// The gate verdict the decision was made against.
     pub verdict: GateVerdict,
@@ -1899,21 +1989,21 @@ mod tests {
             "status": status
         });
         if image {
-            body["image"] = serde_json::json!({
+            body["images"] = serde_json::json!([{
                 "url": "https://example.test/media/abc.png",
                 "sha256": image_hash(),
                 "width": 1080,
                 "height": 1350
-            });
+            }]);
         }
         if let Some(gates) = gates {
-            body["gate_report"] = serde_json::json!({
+            body["gate_reports"] = serde_json::json!([{
                 "image_hash": format!("sha256:{}", image_hash()),
                 "rendered_at": "2026-08-16T15:40:12Z",
                 "renderer": { "engine": "chromium", "version": "129.0.6668.29" },
                 "style_version": "colony-launch/3",
                 "gates": gates
-            });
+            }]);
         }
         body
     }
@@ -1945,7 +2035,7 @@ mod tests {
         assert_eq!(parsed.verdict(), Some(GateVerdict::Incomplete));
         assert!(!parsed.fully_gated());
 
-        let report = parsed.gate_report.as_ref().expect("report");
+        let report = &parsed.gate_reports[0];
         assert_eq!(report.image_hash, image_hash());
         assert_eq!(
             report.gate("contrast").expect("contrast").measured,
@@ -1963,10 +2053,9 @@ mod tests {
 
     #[test]
     fn ready_requires_an_image() {
+        // No images but a report: the report has nothing to bind to.
         assert_eq!(
             parse_content_post(&post_event("ready", Some(gate_list("skip")), false)),
-            // No image means the report has nothing to bind to, and that is
-            // caught before the ready check.
             Err(ContentParseError::ReportWithoutImage)
         );
     }
@@ -2033,7 +2122,7 @@ mod tests {
         // The stale-report hole: re-render the card, keep the old passing
         // report, and every reader believes gates that never saw these pixels.
         let mut body = post_body("ready", Some(gate_list("pass")), true);
-        body["image"]["sha256"] = serde_json::json!("c".repeat(64));
+        body["images"][0]["sha256"] = serde_json::json!("c".repeat(64));
         assert!(matches!(
             parse_content_post(&post_event_from(body)),
             Err(ContentParseError::ReportImageMismatch { .. })
@@ -2043,7 +2132,7 @@ mod tests {
     #[test]
     fn a_report_declaring_a_verdict_its_gates_contradict_is_refused() {
         let mut body = post_body("draft", Some(gate_list("skip")), true);
-        body["gate_report"]["verdict"] = serde_json::json!("pass");
+        body["gate_reports"][0]["verdict"] = serde_json::json!("pass");
         assert_eq!(
             parse_content_post(&post_event_from(body)),
             Err(ContentParseError::VerdictDisagreesWithGates {
@@ -2056,7 +2145,7 @@ mod tests {
     #[test]
     fn a_report_agreeing_with_its_gates_is_accepted() {
         let mut body = post_body("ready", Some(gate_list("skip")), true);
-        body["gate_report"]["verdict"] = serde_json::json!("incomplete");
+        body["gate_reports"][0]["verdict"] = serde_json::json!("incomplete");
         assert_eq!(
             parse_content_post(&post_event_from(body))
                 .expect("parse")
@@ -2092,16 +2181,210 @@ mod tests {
     #[test]
     fn duplicate_gate_ids_are_refused() {
         let mut body = post_body("draft", Some(gate_list("skip")), true);
-        let gates = body["gate_report"]["gates"]
+        let gates = body["gate_reports"][0]["gates"]
             .as_array()
             .expect("array")
             .clone();
         let mut doubled = gates.clone();
         doubled.push(gates[0].clone());
-        body["gate_report"]["gates"] = serde_json::Value::Array(doubled);
+        body["gate_reports"][0]["gates"] = serde_json::Value::Array(doubled);
         assert_eq!(
             parse_content_post(&post_event_from(body)),
             Err(ContentParseError::DuplicateGate("contrast".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_carousel_with_multiple_slides_round_trips() {
+        let mut body = post_body("ready", None, false);
+        let hash_a = "a".repeat(64);
+        let hash_b = "b".repeat(64);
+        body["images"] = serde_json::json!([
+            { "url": "https://example.test/a.png", "sha256": hash_a, "width": 1080, "height": 1350 },
+            { "url": "https://example.test/b.png", "sha256": hash_b, "width": 1080, "height": 1350 }
+        ]);
+        body["gate_reports"] = serde_json::json!([
+            {
+                "image_hash": format!("sha256:{hash_a}"),
+                "gates": gate_list("pass"),
+                "rendered_at": "2026-08-16T15:40:12Z",
+                "renderer": { "engine": "chromium", "version": "129" }
+            },
+            {
+                "image_hash": format!("sha256:{hash_b}"),
+                "gates": gate_list("pass"),
+                "rendered_at": "2026-08-16T15:41:12Z",
+                "renderer": { "engine": "chromium", "version": "129" }
+            }
+        ]);
+        let parsed = parse_content_post(&post_event_from(body)).expect("parse");
+        assert_eq!(parsed.images.len(), 2);
+        assert_eq!(parsed.images[0].sha256, hash_a);
+        assert_eq!(parsed.images[1].sha256, hash_b);
+        assert_eq!(parsed.gate_reports.len(), 2);
+        assert_eq!(parsed.verdict(), Some(GateVerdict::Pass));
+        assert!(parsed.fully_gated());
+    }
+
+    #[test]
+    fn a_ready_post_with_a_slide_missing_a_report_is_refused() {
+        let mut body = post_body("ready", Some(gate_list("pass")), true);
+        // Add a second slide with no matching report.
+        body["images"] = serde_json::json!([
+            { "url": "https://example.test/a.png", "sha256": image_hash(), "width": 1080, "height": 1350 },
+            { "url": "https://example.test/b.png", "sha256": "b".repeat(64), "width": 1080, "height": 1350 }
+        ]);
+        // gate_reports still has only the one report for image_hash().
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::ReadyMissingReport("b".repeat(64)))
+        );
+    }
+
+    #[test]
+    fn a_ready_post_with_a_failing_report_on_one_slide_is_refused() {
+        let mut body = post_body("ready", None, false);
+        let hash_a = "a".repeat(64);
+        let hash_b = "b".repeat(64);
+        body["images"] = serde_json::json!([
+            { "url": "https://example.test/a.png", "sha256": hash_a, "width": 1080, "height": 1350 },
+            { "url": "https://example.test/b.png", "sha256": hash_b, "width": 1080, "height": 1350 }
+        ]);
+        let mut failing_gates = gate_list("pass");
+        failing_gates[0]["status"] = serde_json::json!("fail");
+        body["gate_reports"] = serde_json::json!([
+            {
+                "image_hash": format!("sha256:{hash_a}"),
+                "gates": gate_list("pass"),
+                "rendered_at": "2026-08-16T15:40:12Z",
+                "renderer": { "engine": "chromium", "version": "129" }
+            },
+            {
+                "image_hash": format!("sha256:{hash_b}"),
+                "gates": failing_gates,
+                "rendered_at": "2026-08-16T15:41:12Z",
+                "renderer": { "engine": "chromium", "version": "129" }
+            }
+        ]);
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::ReadyFailedGate("contrast".to_string()))
+        );
+    }
+
+    #[test]
+    fn editing_one_slide_invalidates_the_digest() {
+        // The invariant: editing slide 3 of an approved 4-slide carousel must
+        // invalidate the approval of the post. The approval names
+        // slides_digest over all slide hashes, so changing one hash changes
+        // the digest, and the comparison fails.
+        let mut images = vec![
+            PostImage {
+                url: "a".into(),
+                sha256: "a".repeat(64),
+                width: 1080,
+                height: 1350,
+            },
+            PostImage {
+                url: "b".into(),
+                sha256: "b".repeat(64),
+                width: 1080,
+                height: 1350,
+            },
+            PostImage {
+                url: "c".into(),
+                sha256: "c".repeat(64),
+                width: 1080,
+                height: 1350,
+            },
+            PostImage {
+                url: "d".into(),
+                sha256: "d".repeat(64),
+                width: 1080,
+                height: 1350,
+            },
+        ];
+        let approved_digest = slides_digest(&images);
+
+        // Edit slide 3 (index 2): change its hash.
+        images[2].sha256 = "e".repeat(64);
+        let edited_digest = slides_digest(&images);
+
+        assert_ne!(
+            approved_digest, edited_digest,
+            "editing one slide must change the digest"
+        );
+    }
+
+    #[test]
+    fn slides_digest_is_order_sensitive() {
+        let images_a = vec![
+            PostImage {
+                url: "a".into(),
+                sha256: "a".repeat(64),
+                width: 1,
+                height: 1,
+            },
+            PostImage {
+                url: "b".into(),
+                sha256: "b".repeat(64),
+                width: 1,
+                height: 1,
+            },
+        ];
+        let images_b = vec![
+            PostImage {
+                url: "b".into(),
+                sha256: "b".repeat(64),
+                width: 1,
+                height: 1,
+            },
+            PostImage {
+                url: "a".into(),
+                sha256: "a".repeat(64),
+                width: 1,
+                height: 1,
+            },
+        ];
+        assert_ne!(
+            slides_digest(&images_a),
+            slides_digest(&images_b),
+            "reordering slides must change the digest"
+        );
+    }
+
+    #[test]
+    fn max_slides_is_enforced() {
+        let mut body = post_body("draft", None, false);
+        let mut slides: Vec<serde_json::Value> = Vec::new();
+        for i in 0..MAX_SLIDES {
+            slides.push(serde_json::json!({
+                "url": format!("https://example.test/{i}.png"),
+                "sha256": format!("{i:064x}"),
+                "width": 1080,
+                "height": 1350
+            }));
+        }
+        body["images"] = serde_json::Value::Array(slides);
+        // MAX_SLIDES is accepted.
+        assert!(parse_content_post(&post_event_from(body.clone())).is_ok());
+
+        // MAX_SLIDES + 1 is rejected.
+        body["images"]
+            .as_array_mut()
+            .expect("array")
+            .push(serde_json::json!({
+                "url": "https://example.test/overflow.png",
+                "sha256": "f".repeat(64),
+                "width": 1080,
+                "height": 1350
+            }));
+        assert_eq!(
+            parse_content_post(&post_event_from(body)),
+            Err(ContentParseError::TooManyEntries {
+                field: "images".to_string(),
+                max: MAX_SLIDES,
+            })
         );
     }
 
@@ -2169,7 +2452,7 @@ mod tests {
         assert_eq!(parsed.status, PostStatus::Draft);
         assert_eq!(parsed.verdict(), None);
         assert!(!parsed.fully_gated());
-        assert!(parsed.image.is_none());
+        assert!(parsed.images.is_empty());
     }
 
     #[test]

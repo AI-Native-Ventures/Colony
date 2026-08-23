@@ -83,6 +83,17 @@ type MockRelayAgentSeed = {
   status?: "online" | "away" | "offline";
 };
 
+/** Employee heads (kind 30190) the mock relay serves: who is employed at what rank. */
+export type MockEmployeeHeadSeed = {
+  /** The employee pubkey; also the head's `d` tag and author. */
+  pubkey: string;
+  role?: string;
+  name?: string;
+  rank: "worker" | "leader" | "executive";
+  /** The agent this employee reports to (pubkey); omitted means no manager. */
+  manager?: string;
+};
+
 type MockHuddleSeed = {
   parentChannelId: string;
   ephemeralChannelId: string;
@@ -182,6 +193,11 @@ type MockBridgeOptions = {
   discoveryCredentialSaveDelayMs?: number;
   /** Signed Block manifests/catalog events served by the mock relay. */
   blockEvents?: RelayEvent[];
+  /**
+   * Owner-authored delegation grant heads (kind 30189) served by the mock
+   * relay, keyed by their `d` tag; drives the promotion confirmation.
+   */
+  delegationGrantEvents?: RelayEvent[];
   /** Signed Block timeline events seeded before the app subscribes. */
   blockTimelineEvents?: Array<{
     channelName: string;
@@ -330,6 +346,8 @@ type MockBridgeOptions = {
   personaSharePublicationStatuses?: Array<"published" | "queued">;
   teams?: MockTeamSeed[];
   relayAgents?: MockRelayAgentSeed[];
+  /** Employee heads (kind 30190) served by the mock relay: who is employed at what rank. */
+  employeeHeads?: MockEmployeeHeadSeed[];
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];
@@ -445,6 +463,13 @@ type MockBridgeOptions = {
    */
   relayRole?: "owner" | "admin" | "member" | null;
   /**
+   * Serve `list_relay_members` from the mock member table. Opt-in because
+   * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+   * (community owners, delegation-grant authorship), and every existing
+   * spec was built against the command being unsupported.
+   */
+  relayMembers?: boolean;
+  /**
    * Descriptors returned by the mocked `pick_and_upload_media` /
    * `upload_media_bytes` commands. When omitted, the bridge returns a single
    * generic PDF so the file-attachment flow can be exercised by default. An
@@ -533,10 +558,17 @@ type MockBridgeOptions = {
    * Pass a config with a provider to test Inherit-from-global behavior.
    */
   globalAgentConfig?: {
+    credential_mode?: "byok" | "colony_credits";
     env_vars: Record<string, string>;
     provider: string | null;
     model: string | null;
     preferred_runtime?: string | null;
+  };
+  /** Volatile Colony Credits account returned by the authenticated mock command. */
+  colonyCreditsAccount?: {
+    balance_nanousd: string;
+    currency: "USD";
+    status: "active" | "depleted";
   };
   /** Reject the explicit Colony Credits reconnect action with this message. */
   colonyCreditsReconnectError?: string;
@@ -873,6 +905,18 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
+  } else {
+    // The redesigned flow is the product default now, so a first-run spec
+    // that says nothing would suddenly be driving different screens. Specs
+    // opt into the redesign by setting this key to "1" themselves, which
+    // runs first and this leaves alone; everything else stays on the flow it
+    // was written against.
+    await page.addInitScript(() => {
+      const key = "colony.e2e.newOnboarding";
+      if (window.localStorage.getItem(key) === null) {
+        window.localStorage.setItem(key, "0");
+      }
+    });
   }
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.

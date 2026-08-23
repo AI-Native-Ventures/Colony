@@ -9,6 +9,7 @@ import {
   RestartDiffList,
 } from "@/features/agents/ui/RestartDiffBadge";
 import type { ActiveTurnSummary } from "@/features/agents/activeAgentTurnsStore";
+import { AgentDecisionLogIngressRow } from "@/features/asks/ui/AgentDecisionLogEntry";
 import {
   COLONY_CREDITS_GATEWAY_STATUS_401_MARKER,
   COLONY_CREDITS_GATEWAY_STATUS_402_MARKER,
@@ -134,6 +135,7 @@ export function ProfileInfoTabContent({
   onEditAgent,
   pubkey,
   showActivityIngress,
+  showDecisionLogIngress,
   showInstructionBlock,
 }: {
   activeTurns: ActiveTurnSummary[];
@@ -154,6 +156,7 @@ export function ProfileInfoTabContent({
   onOpenActivity: (channelId?: string | null) => void;
   pubkey: string | null;
   showActivityIngress: boolean;
+  showDecisionLogIngress?: boolean;
   showInstructionBlock: boolean;
 }) {
   const infoFields: ProfileField[] = isArchived
@@ -208,6 +211,9 @@ export function ProfileInfoTabContent({
             trailing="View"
           />
         )
+      ) : null}
+      {showDecisionLogIngress === true && pubkey !== null ? (
+        <AgentDecisionLogIngressRow pubkey={pubkey} />
       ) : null}
       {hasInfoFields || showInstructionBlock ? (
         <ProfileSectionGroup testId="user-profile-info-section" title="Info">

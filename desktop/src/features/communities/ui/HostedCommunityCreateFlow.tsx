@@ -115,7 +115,7 @@ export function HostedCommunityCreateFlow({
           );
         }
         const started = onboarding.start({
-          source: "add-community",
+          source: "create-community",
           relayUrl,
           communityName: response.community.name ?? response.community.slug,
         });

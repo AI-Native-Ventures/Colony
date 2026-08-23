@@ -44,6 +44,12 @@ pub struct EmployeeRow {
     /// The owner-signed hire request this employee answers, so authority can
     /// be re-derived from events without trusting this table.
     pub hire_event: Vec<u8>,
+    /// The agent this employee reports to (32 raw bytes), one rung up the
+    /// interrupt ladder. `None` means no manager: the root marker for
+    /// executives and the Unassigned-tray state for everyone else. Read by
+    /// the relay's `agent_manager` before any event is consulted, so kind
+    /// 9046 updates this column and the 30190 head together.
+    pub manager: Option<Vec<u8>>,
     /// `active` or `retired`.
     pub status: String,
     /// Unix seconds when the employee was hired.
@@ -70,6 +76,9 @@ pub struct NewEmployee<'a> {
     pub hired_by: &'a [u8],
     /// The owner-signed hire request being answered.
     pub hire_event: &'a [u8],
+    /// The agent this employee reports to (32 raw bytes), or `None` when the
+    /// new hire starts with no manager.
+    pub manager: Option<&'a [u8]>,
 }
 
 fn row_to_employee(row: sqlx::postgres::PgRow) -> Result<EmployeeRow> {
@@ -81,11 +90,20 @@ fn row_to_employee(row: sqlx::postgres::PgRow) -> Result<EmployeeRow> {
         rank: row.try_get("rank")?,
         hired_by: row.try_get("hired_by")?,
         hire_event: row.try_get("hire_event")?,
+        manager: row.try_get("manager")?,
         status: row.try_get("status")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
 }
+
+/// Every column a row-producing `employees` query returns, in the order
+/// [`row_to_employee`] reads them. One constant so a new column cannot be
+/// added to some SELECTs and not others -- the exact drift a second copy of
+/// this list per query would invite.
+const EMPLOYEE_COLUMNS: &str =
+    "pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, manager, status, \
+     created_at, updated_at";
 
 /// Record a newly hired employee.
 ///
@@ -101,10 +119,10 @@ pub async fn insert_employee(
     let now = Utc::now().timestamp();
     let row = sqlx::query(
         "INSERT INTO employees (community_id, pubkey, sealed_key, role_id, display_name, \
-                                rank, hired_by, hire_event, status, created_at, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$9) \
+                                rank, hired_by, hire_event, manager, status, created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'active',$10,$10) \
          ON CONFLICT DO NOTHING \
-         RETURNING pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, status, created_at, updated_at",
+         RETURNING pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, manager, status, created_at, updated_at",
     )
     .bind(community.as_uuid())
     .bind(employee.pubkey)
@@ -114,6 +132,7 @@ pub async fn insert_employee(
     .bind(employee.rank)
     .bind(employee.hired_by)
     .bind(employee.hire_event)
+    .bind(employee.manager)
     .bind(now)
     .fetch_optional(pool)
     .await?;
@@ -128,10 +147,12 @@ pub async fn find_employee_by_hire_event(
     community: CommunityId,
     hire_event: &[u8],
 ) -> Result<Option<EmployeeRow>> {
-    let row = sqlx::query(
-        "SELECT pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, status, created_at, updated_at FROM employees \
-         WHERE community_id = $1 AND hire_event = $2",
-    )
+    // EMPLOYEE_COLUMNS is a compile-time constant; nothing user-supplied is
+    // interpolated, so the composed string is safe to assert.
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {EMPLOYEE_COLUMNS} FROM employees \
+         WHERE community_id = $1 AND hire_event = $2"
+    )))
     .bind(community.as_uuid())
     .bind(hire_event)
     .fetch_optional(pool)
@@ -147,9 +168,9 @@ pub async fn find_employee(
     community: CommunityId,
     pubkey: &[u8],
 ) -> Result<Option<EmployeeRow>> {
-    let row = sqlx::query(
-        "SELECT pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, status, created_at, updated_at FROM employees WHERE community_id = $1 AND pubkey = $2",
-    )
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {EMPLOYEE_COLUMNS} FROM employees WHERE community_id = $1 AND pubkey = $2"
+    )))
     .bind(community.as_uuid())
     .bind(pubkey)
     .fetch_optional(pool)
@@ -177,10 +198,10 @@ pub async fn find_active_employee_by_role(
     community: CommunityId,
     role_id: &str,
 ) -> Result<Option<EmployeeRow>> {
-    let row = sqlx::query(
-        "SELECT pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, status, created_at, updated_at \
-         FROM employees WHERE community_id = $1 AND role_id = $2 AND status = 'active'",
-    )
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {EMPLOYEE_COLUMNS} \
+         FROM employees WHERE community_id = $1 AND role_id = $2 AND status = 'active'"
+    )))
     .bind(community.as_uuid())
     .bind(role_id)
     .fetch_optional(pool)
@@ -194,16 +215,56 @@ pub async fn list_active_employees(
     pool: &PgPool,
     community: CommunityId,
 ) -> Result<Vec<EmployeeRow>> {
-    let rows = sqlx::query(
-        "SELECT pubkey, sealed_key, role_id, display_name, rank, hired_by, hire_event, status, created_at, updated_at FROM employees \
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {EMPLOYEE_COLUMNS} FROM employees \
          WHERE community_id = $1 AND status = 'active' \
-         ORDER BY created_at, pubkey",
-    )
+         ORDER BY created_at, pubkey"
+    )))
     .bind(community.as_uuid())
     .fetch_all(pool)
     .await?;
 
     rows.into_iter().map(row_to_employee).collect()
+}
+
+/// Apply an owner-validated change to an employee's rank, manager, or
+/// employment status, returning the updated row.
+///
+/// Each field is `None` to leave it untouched; `manager` distinguishes
+/// "leave" from "clear" with a nested option (`Some(None)` clears). This is
+/// the write side of the reporting-line contract: the relay's interrupt gate
+/// reads `rank` and `manager` from THIS row before it looks at any event, so
+/// kind 9046 applies its change here first and republishes the 30190 head
+/// after -- the reverse order would briefly show clients a new head the gate
+/// does not yet believe.
+pub async fn update_employee(
+    pool: &PgPool,
+    community: CommunityId,
+    pubkey: &[u8],
+    rank: Option<&str>,
+    manager: Option<Option<&[u8]>>,
+    status: Option<&str>,
+) -> Result<Option<EmployeeRow>> {
+    let now = Utc::now().timestamp();
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE employees SET \
+            rank = COALESCE($3, rank), \
+            manager = COALESCE($4, manager), \
+            status = COALESCE($5, status), \
+            updated_at = $6 \
+         WHERE community_id = $1 AND pubkey = $2 AND status <> 'retired' \
+         RETURNING {EMPLOYEE_COLUMNS}"
+    )))
+    .bind(community.as_uuid())
+    .bind(pubkey)
+    .bind(rank)
+    .bind(manager)
+    .bind(status)
+    .bind(now)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(row_to_employee).transpose()
 }
 
 /// Retire an employee, freeing its role slug for a future hire. Returns

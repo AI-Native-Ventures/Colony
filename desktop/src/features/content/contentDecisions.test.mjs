@@ -47,37 +47,41 @@ function postBody(overrides = {}) {
         },
       },
     ],
-    gate_report: {
-      gates: [
-        {
-          bar: { op: "gte", unit: "ratio", value: 4.5 },
-          id: "contrast",
-          measured: 8.18,
-          status: "pass",
-        },
-        { id: "grain", measured: 1.89, status: "pass" },
-        { id: "fonts", measured: 0, status: "pass" },
-        { id: "canvas", measured: [1080, 1350], status: "pass" },
-        { id: "housestyle", measured: 0, status: "pass" },
-        {
-          detail: { reason: "no claim index in this render" },
-          id: "claims",
-          status: "skip",
-        },
-      ],
-      image_hash: `sha256:${IMAGE_HASH}`,
-      rendered_at: "2026-08-16T15:40:12Z",
-      renderer: { engine: "chromium", version: "129" },
-      style_version: "colony-launch/3",
-    },
+    gate_reports: [
+      {
+        gates: [
+          {
+            bar: { op: "gte", unit: "ratio", value: 4.5 },
+            id: "contrast",
+            measured: 8.18,
+            status: "pass",
+          },
+          { id: "grain", measured: 1.89, status: "pass" },
+          { id: "fonts", measured: 0, status: "pass" },
+          { id: "canvas", measured: [1080, 1350], status: "pass" },
+          { id: "housestyle", measured: 0, status: "pass" },
+          {
+            detail: { reason: "no claim index in this render" },
+            id: "claims",
+            status: "skip",
+          },
+        ],
+        image_hash: `sha256:${IMAGE_HASH}`,
+        rendered_at: "2026-08-16T15:40:12Z",
+        renderer: { engine: "chromium", version: "129" },
+        style_version: "colony-launch/3",
+      },
+    ],
     hashtags: ["#AI", "agents"],
     headline: "Run your company with AI agents.",
-    image: {
-      height: 1350,
-      sha256: IMAGE_HASH,
-      url: "https://x/y.png",
-      width: 1080,
-    },
+    images: [
+      {
+        height: 1350,
+        sha256: IMAGE_HASH,
+        url: "https://x/y.png",
+        width: 1080,
+      },
+    ],
     job: "who",
     schema: "colony/content-post/v1",
     scheduled_for: "2026-08-17",
@@ -105,8 +109,8 @@ test("parsePost_readsTheRealReportShape", () => {
   assert.equal(post.slug, "w1-mon-colony");
   assert.equal(post.job, "who");
   assert.deepEqual(post.hashtags, ["AI", "agents"]);
-  assert.equal(post.gateReport.gates.length, 6);
-  assert.equal(post.gateReport.gates[0].measured, 8.18);
+  assert.equal(post.gateReports[0].gates.length, 6);
+  assert.equal(post.gateReports[0].gates[0].measured, 8.18);
 });
 
 test("parsePost_normalisesThePrefixedImageHash", () => {
@@ -114,12 +118,12 @@ test("parsePost_normalisesThePrefixedImageHash", () => {
   // two spellings did not converge, the report-to-image comparison that voids
   // a stale report would fail on every card.
   const post = parsedPost();
-  assert.equal(post.gateReport.imageHash, IMAGE_HASH);
-  assert.equal(post.image.sha256, IMAGE_HASH);
+  assert.equal(post.gateReports[0].imageHash, IMAGE_HASH);
+  assert.equal(post.images[0].sha256, IMAGE_HASH);
 });
 
 test("parsePost_derivesIncompleteFromASkippedGate", () => {
-  assert.equal(parsedPost().gateReport.verdict, "incomplete");
+  assert.equal(parsedPost().gateReports[0].verdict, "incomplete");
 });
 
 test("parsePost_ignoresAVerdictTheGatesContradict", () => {
@@ -127,9 +131,9 @@ test("parsePost_ignoresAVerdictTheGatesContradict", () => {
   // from an older relay or from somewhere unexpected. Either way the summary
   // is not what the UI shows.
   const post = parsedPost({
-    gate_report: { ...postBody().gate_report, verdict: "pass" },
+    gate_reports: [{ ...postBody().gate_reports[0], verdict: "pass" }],
   });
-  assert.equal(post.gateReport.verdict, "incomplete");
+  assert.equal(post.gateReports[0].verdict, "incomplete");
 });
 
 test("parsePost_returnsNullOnAnAddressWithNoCampaign", () => {
@@ -254,14 +258,16 @@ test("parseDecision_readsAnApproval", () => {
 
 test("postVerdict_withNoReport_isIncompleteNotPass", () => {
   // A post nothing has measured must never read as measured and clean.
-  assert.equal(postVerdict(parsedPost({ gate_report: null })), "incomplete");
+  assert.equal(postVerdict(parsedPost({ gate_reports: [] })), "incomplete");
 });
 
 test("buildDecisionEvent_approvalNamesTheBytesAndTheVerdict", () => {
   const draft = buildDecisionEvent({ decision: "approve", post: parsedPost() });
   assert.equal(draft.ok, true);
   const content = JSON.parse(draft.event.content);
-  assert.equal(content.target.image_sha256, IMAGE_HASH);
+  // The decision names the slides digest, not a single image hash.
+  assert.equal(typeof content.target.image_sha256, "string");
+  assert.equal(content.target.image_sha256.length, 64);
   assert.equal(content.target.verdict, "incomplete");
   assert.equal(draft.event.tags[0][0], "a");
   assert.match(draft.event.tags[0][1], /^30196:/);
@@ -269,10 +275,12 @@ test("buildDecisionEvent_approvalNamesTheBytesAndTheVerdict", () => {
 
 test("buildDecisionEvent_refusesToApproveAFailingCard", () => {
   const failing = parsedPost({
-    gate_report: {
-      ...postBody().gate_report,
-      gates: [{ id: "contrast", measured: 2.7, status: "fail" }],
-    },
+    gate_reports: [
+      {
+        ...postBody().gate_reports[0],
+        gates: [{ id: "contrast", measured: 2.7, status: "fail" }],
+      },
+    ],
   });
   const draft = buildDecisionEvent({ decision: "approve", post: failing });
   assert.equal(draft.ok, false);
@@ -282,7 +290,7 @@ test("buildDecisionEvent_refusesToApproveAFailingCard", () => {
 test("buildDecisionEvent_refusesToApproveAnUnrenderedCard", () => {
   const draft = buildDecisionEvent({
     decision: "approve",
-    post: parsedPost({ gate_report: null, image: null, status: "draft" }),
+    post: parsedPost({ gate_reports: [], images: [], status: "draft" }),
   });
   assert.equal(draft.ok, false);
   assert.match(draft.reason, /not been rendered/i);

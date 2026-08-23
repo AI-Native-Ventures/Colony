@@ -22,6 +22,8 @@ import {
   ProfileAvatarEditor,
 } from "@/features/profile/ui/ProfileAvatarEditor";
 import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
+import { sendChannelMessage } from "@/shared/api/tauri";
+import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
 import {
@@ -42,6 +44,10 @@ import {
   OnboardingChrome,
 } from "./OnboardingChrome";
 import { OnboardingFooter, OnboardingFooterProvider } from "./OnboardingFooter";
+import {
+  buildOnboardingFirstTaskMessage,
+  onboardingFirstTaskMarker,
+} from "../onboardingV2FirstTask";
 
 function isRelayMembershipDeniedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -60,6 +66,13 @@ const ENTERING_CURTAIN_FADE_MS = 500;
  * fade anyway rather than stranding the user on the onboarding screen.
  */
 const ENTERING_CURTAIN_MAX_WAIT_MS = 8_000;
+
+/**
+ * Hard deadline for the Scout handoff (channel creation + first-task
+ * delivery) against a possibly brand-new relay. Bounded failure with Retry
+ * and Skip beats an eternal "Bringing Scout online…".
+ */
+const FINALIZE_TIMEOUT_MS = 15_000;
 
 const NEUTRAL_EMOJI_PICKER_THEME_VARS = {
   "--buzz-emoji-picker-rgb-background":
@@ -244,34 +257,90 @@ export function CommunityOnboardingFlow({
     if (isPending || !relayUrl) return;
     setIsPending(true);
     update({ stage: "finalizing", error: undefined });
+    // The handoff talks to a possibly brand-new relay. Without a deadline a
+    // relay that never answers leaves the user on "Bringing Scout online…"
+    // forever with no error and no way forward — the exact trap this guard
+    // exists for. On timeout the catch below surfaces Retry / Skip for now.
+    const deadline = new Promise<never>((_, reject) => {
+      window.setTimeout(
+        () =>
+          reject(
+            new Error("Scout setup timed out. Try again or skip for now."),
+          ),
+        FINALIZE_TIMEOUT_MS,
+      );
+    });
     try {
-      const identity = await getIdentity();
-      const result = await initializeStarterChannels(queryClient, {
-        focus: true,
-        pubkey: identity.pubkey,
-        communityScope: relayUrl,
-      });
-      // Public starter channels are optional; initializeStarterChannels still
-      // returns a focus channel when the required private Welcome channel was
-      // created successfully. Only a failure without a focus target should
-      // keep onboarding open.
-      if (!result.ok && !result.focusChannelId) {
-        throw new Error(result.reason);
-      }
-      if (result.focusChannelId) {
-        // Direct entry: point the router at the Welcome channel *before* the
-        // app mounts, so it never lands on Home first. Consume the pending
-        // entry — it exists for the Home-route fallback, and leaving it would
-        // yank a later Home visit back to Welcome.
-        takePendingWelcomeChannelForDirectEntry();
-        window.location.hash = `/channels/${result.focusChannelId}`;
-        markCommunityOnboardingComplete(identity.pubkey, relayUrl);
-        // Keep this screen mounted as a curtain over the loading app; the
-        // "entering" stage fades it out once Welcome reports ready.
-        update({ stage: "entering", error: undefined });
-        return;
-      }
-      await finish();
+      const work = (async () => {
+        const identity = await getIdentity();
+        const result = await initializeStarterChannels(queryClient, {
+          focus: true,
+          pubkey: identity.pubkey,
+          communityScope: relayUrl,
+        });
+        // Public starter channels are optional; initializeStarterChannels still
+        // returns a focus channel when the required private Welcome channel was
+        // created successfully. Only a failure without a focus target should
+        // keep onboarding open.
+        if (!result.ok && !result.focusChannelId) {
+          throw new Error(result.reason);
+        }
+        if (result.focusChannelId) {
+          let onboardingV2 = transaction?.onboardingV2;
+          if (
+            onboardingV2?.firstTask.content.trim() &&
+            !onboardingV2.firstTask.deliveredEventId
+          ) {
+            const marker = onboardingFirstTaskMarker(onboardingV2);
+            const exists = await hasManagedAgentChannelMessageMarker({
+              channelId: result.focusChannelId,
+              marker,
+              markerScope: "channel",
+            });
+            let deliveredEventId = "already-delivered";
+            if (!exists) {
+              const sent = await sendChannelMessage(
+                result.focusChannelId,
+                buildOnboardingFirstTaskMessage(onboardingV2),
+                null,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                [["client", marker]],
+              );
+              deliveredEventId = sent.eventId;
+            }
+            onboardingV2 = {
+              ...onboardingV2,
+              firstTask: {
+                ...onboardingV2.firstTask,
+                deliveredEventId,
+              },
+            };
+          }
+          // Direct entry: point the router at the Welcome channel *before* the
+          // app mounts, so it never lands on Home first. Consume the pending
+          // entry — it exists for the Home-route fallback, and leaving it would
+          // yank a later Home visit back to Welcome.
+          takePendingWelcomeChannelForDirectEntry();
+          window.location.hash = `/channels/${result.focusChannelId}`;
+          markCommunityOnboardingComplete(identity.pubkey, relayUrl);
+          // Keep this screen mounted as a curtain over the loading app; the
+          // "entering" stage fades it out once Welcome reports ready.
+          update({
+            stage: "entering",
+            error: undefined,
+            onboardingV2: onboardingV2
+              ? { ...onboardingV2, stage: "entering" }
+              : undefined,
+          });
+          return;
+        }
+        await finish();
+      })();
+      await Promise.race([work, deadline]);
     } catch (error) {
       setStarterChannelFailureCount((count) => count + 1);
       update({
@@ -279,7 +348,14 @@ export function CommunityOnboardingFlow({
       });
       setIsPending(false);
     }
-  }, [finish, isPending, queryClient, relayUrl, update]);
+  }, [
+    finish,
+    isPending,
+    queryClient,
+    relayUrl,
+    transaction?.onboardingV2,
+    update,
+  ]);
 
   const backToProfile = React.useCallback(() => {
     if (isPending) return;
@@ -435,6 +511,13 @@ export function CommunityOnboardingFlow({
       setIsPending(false);
     }
   };
+
+  // OnboardingV2Flow used to render here, asking for the founder's name,
+  // country, city and gender and for the company website. The redesigned flow
+  // asks all of it, so showing both meant answering the same questions twice
+  // in one sitting. The draft it produced is still the brief's payload and is
+  // filled by that flow now (see flow/stashFounderBrief.ts); only the screens
+  // are gone, and the delivery below is untouched.
 
   return (
     <div

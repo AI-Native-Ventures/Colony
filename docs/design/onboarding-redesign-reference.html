@@ -1,0 +1,589 @@
+<title>Colony onboarding, redesigned</title>
+<style>
+  :root {
+    --ink: oklch(0.14 0.028 285);
+    --ink-2: oklch(0.19 0.032 285);
+    --ink-3: oklch(0.26 0.035 285);
+    --paper: oklch(0.97 0.006 285);
+    --dim: oklch(0.72 0.018 285);
+    --violet: oklch(0.68 0.20 295);
+    --violet-soft: oklch(0.55 0.15 295);
+    --blue: oklch(0.68 0.16 250);
+    --pink: oklch(0.72 0.18 350);
+    --amber: oklch(0.80 0.15 75);
+    --green: oklch(0.74 0.14 165);
+    --r: 0.625rem;
+    --gait: 0.42s;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: "Inter Variable", Inter, "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  /* The field the colony lives in. Radial warmth from the lower left, as if a
+     lamp sits just off screen at a kitchen table. */
+  .field {
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(120vmax 90vmax at 8% 92%, oklch(0.24 0.06 295 / 0.55), transparent 62%),
+      radial-gradient(90vmax 70vmax at 92% 8%, oklch(0.22 0.05 250 / 0.4), transparent 60%);
+    pointer-events: none;
+  }
+
+  .grain {
+    position: fixed;
+    inset: 0;
+    opacity: 0.5;
+    pointer-events: none;
+    background-image: radial-gradient(oklch(1 0 0 / 0.045) 0.5px, transparent 0.5px);
+    background-size: 0.5rem 0.5rem;
+  }
+
+  /* ---------- layout ---------- */
+
+  .stage {
+    position: relative;
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    height: 100vh;
+  }
+
+  @media (max-width: 60rem) {
+    .stage { grid-template-columns: 1fr; }
+    .rail { display: none; }
+  }
+
+  /* ---------- the trail rail ---------- */
+  /* Progress as a pheromone trail rather than dots. The trail is what an ant
+     leaves behind, so it reads as ground already covered. */
+
+  .rail {
+    position: relative;
+    padding: 3rem 0 3rem 3rem;
+    border-right: 1px solid oklch(1 0 0 / 0.07);
+  }
+
+  .rail-line {
+    position: absolute;
+    left: 3.6rem;
+    top: 4.2rem;
+    bottom: 4.2rem;
+    width: 2px;
+    background: oklch(1 0 0 / 0.09);
+  }
+
+  .rail-fill {
+    position: absolute;
+    left: 3.6rem;
+    top: 4.2rem;
+    width: 2px;
+    background: linear-gradient(180deg, var(--violet), var(--violet-soft));
+    box-shadow: 0 0 0.75rem oklch(0.68 0.2 295 / 0.6);
+    transition: height 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .steps { position: relative; display: grid; gap: 1.55rem; }
+
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    font-size: 0.8125rem;
+    color: var(--dim);
+    opacity: 0.45;
+    transition: opacity 0.5s, color 0.5s;
+  }
+
+  .step .dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: oklch(1 0 0 / 0.2);
+    margin-left: 0.35rem;
+    flex: none;
+    transition: background 0.5s, transform 0.5s, box-shadow 0.5s;
+  }
+
+  .step.done { opacity: 0.8; }
+  .step.done .dot { background: var(--violet-soft); }
+
+  .step.now {
+    opacity: 1;
+    color: var(--paper);
+  }
+
+  .step.now .dot {
+    background: var(--violet);
+    transform: scale(1.5);
+    box-shadow: 0 0 0 0.28rem oklch(0.68 0.2 295 / 0.18);
+  }
+
+  /* ---------- panels ---------- */
+
+  .panels { position: relative; overflow: hidden; }
+
+  .panel {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    align-content: center;
+    justify-items: start;
+    padding: 4rem clamp(2rem, 7vw, 7rem);
+    gap: 1.15rem;
+    opacity: 0;
+    transform: translateY(1.25rem);
+    pointer-events: none;
+    transition: opacity 0.55s ease, transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .panel.on { opacity: 1; transform: none; pointer-events: auto; }
+
+  .eyebrow {
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--violet);
+    font-weight: 600;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(2rem, 4.4vw, 3.1rem);
+    line-height: 1.03;
+    letter-spacing: -0.03em;
+    font-weight: 620;
+    max-width: 18ch;
+  }
+
+  h1 em {
+    font-style: normal;
+    color: var(--violet);
+  }
+
+  p.lede {
+    margin: 0;
+    color: var(--dim);
+    font-size: 1.0625rem;
+    line-height: 1.55;
+    max-width: 46ch;
+  }
+
+  /* ---------- fields ---------- */
+
+  .fields { display: grid; gap: 0.9rem; width: min(30rem, 100%); margin-top: 0.6rem; }
+  .row { display: grid; gap: 0.9rem; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 40rem) { .row { grid-template-columns: 1fr; } }
+
+  label { display: grid; gap: 0.4rem; }
+
+  label span {
+    font-size: 0.8125rem;
+    color: var(--dim);
+  }
+
+  input {
+    font: inherit;
+    font-size: 1rem;
+    color: var(--paper);
+    background: oklch(1 0 0 / 0.045);
+    border: 1px solid oklch(1 0 0 / 0.1);
+    border-radius: var(--r);
+    padding: 0.8rem 0.95rem;
+    outline: none;
+    transition: border-color 0.25s, background 0.25s, box-shadow 0.25s;
+  }
+
+  input::placeholder { color: oklch(0.72 0.018 285 / 0.5); }
+
+  input:focus {
+    border-color: var(--violet);
+    background: oklch(1 0 0 / 0.07);
+    box-shadow: 0 0 0 0.22rem oklch(0.68 0.2 295 / 0.16);
+  }
+
+  /* ---------- buttons ---------- */
+
+  .actions { display: flex; align-items: center; gap: 1rem; margin-top: 1.1rem; }
+
+  button.primary {
+    position: relative;
+    font: inherit;
+    font-size: 0.9375rem;
+    font-weight: 560;
+    color: oklch(0.16 0.03 285);
+    background: var(--violet);
+    border: 0;
+    border-radius: var(--r);
+    padding: 0.8rem 1.5rem;
+    cursor: pointer;
+    overflow: hidden;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s;
+    box-shadow: 0 0.5rem 1.5rem oklch(0.68 0.2 295 / 0.25);
+  }
+
+  button.primary:hover { transform: translateY(-1px); box-shadow: 0 0.7rem 2rem oklch(0.68 0.2 295 / 0.35); }
+  button.primary:active { transform: translateY(0); }
+
+  button.ghost {
+    font: inherit;
+    font-size: 0.9375rem;
+    color: var(--dim);
+    background: none;
+    border: 0;
+    cursor: pointer;
+    padding: 0.8rem 0.4rem;
+  }
+
+  button.ghost:hover { color: var(--paper); }
+
+  /* an ant walks the button on hover, carrying the click forward */
+  button.primary .walker {
+    position: absolute;
+    left: -1.6rem;
+    top: 50%;
+    width: 0.9rem;
+    height: 0.9rem;
+    margin-top: -0.45rem;
+    opacity: 0;
+  }
+
+  button.primary:hover .walker {
+    animation: cross 1.15s linear;
+  }
+
+  @keyframes cross {
+    0% { left: -1.6rem; opacity: 0; }
+    12% { opacity: 0.65; }
+    88% { opacity: 0.65; }
+    100% { left: calc(100% + 1rem); opacity: 0; }
+  }
+
+  /* ---------- choice cards ---------- */
+
+  .choices { display: grid; gap: 0.75rem; width: min(34rem, 100%); margin-top: 0.5rem; }
+
+  .choice {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 1rem;
+    text-align: left;
+    font: inherit;
+    color: var(--paper);
+    background: oklch(1 0 0 / 0.04);
+    border: 1px solid oklch(1 0 0 / 0.09);
+    border-radius: var(--r);
+    padding: 1.05rem 1.15rem;
+    cursor: pointer;
+    transition: border-color 0.25s, background 0.25s, transform 0.25s;
+  }
+
+  .choice:hover { background: oklch(1 0 0 / 0.07); transform: translateX(2px); }
+  .choice[aria-pressed="true"] { border-color: var(--violet); background: oklch(0.68 0.2 295 / 0.1); }
+
+  .choice b { display: block; font-weight: 560; font-size: 1rem; }
+  .choice small { color: var(--dim); font-size: 0.8125rem; }
+
+  .badge {
+    font-size: 0.6875rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--green);
+    border: 1px solid oklch(0.74 0.14 165 / 0.35);
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+  }
+
+  /* ---------- working scene ---------- */
+
+  .work { width: min(38rem, 100%); margin-top: 0.8rem; }
+
+  .worklines { display: grid; gap: 0.75rem; margin-top: 1.4rem; }
+
+  .workline {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    color: var(--dim);
+    font-size: 0.9375rem;
+    opacity: 0.3;
+    transition: opacity 0.5s, color 0.5s;
+  }
+
+  .workline.on { opacity: 1; color: var(--paper); }
+  .workline.done { opacity: 0.65; }
+
+  .tick {
+    width: 1.15rem; height: 1.15rem; flex: none;
+    border-radius: 50%;
+    border: 1.5px solid oklch(1 0 0 / 0.18);
+    display: grid; place-items: center;
+    transition: border-color 0.4s, background 0.4s;
+  }
+
+  .workline.done .tick { border-color: var(--green); background: oklch(0.74 0.14 165 / 0.18); }
+  .workline.done .tick::after { content: ""; width: 0.34rem; height: 0.34rem; border-radius: 50%; background: var(--green); }
+  .workline.on .tick { border-color: var(--violet); }
+
+  /* ---------- amount chips ---------- */
+
+  .chips { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.6rem; }
+
+  .chip {
+    font: inherit;
+    font-size: 1rem;
+    color: var(--paper);
+    background: oklch(1 0 0 / 0.045);
+    border: 1px solid oklch(1 0 0 / 0.1);
+    border-radius: var(--r);
+    padding: 0.7rem 1.15rem;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, transform 0.2s;
+  }
+
+  .chip:hover { transform: translateY(-1px); background: oklch(1 0 0 / 0.075); }
+  .chip[aria-pressed="true"] { border-color: var(--violet); background: oklch(0.68 0.2 295 / 0.12); }
+
+  .note { color: var(--dim); font-size: 0.8125rem; margin: 0.5rem 0 0; max-width: 44ch; }
+
+  /* ---------- the ants ---------- */
+  /* Wrapper elements move; the SVG inside never animates. Animating SVG
+     children paints on the main thread and stutters under load. */
+
+  .ant { position: absolute; will-change: transform; }
+  .ant svg { display: block; }
+
+  .legs { animation: gait var(--gait) steps(2, end) infinite; transform-origin: 50% 50%; }
+  @keyframes gait { 0% { transform: translateY(0); } 50% { transform: translateY(0.055rem); } 100% { transform: translateY(0); } }
+
+  /* scatter field ants drift slowly, each with its own delay */
+  .drift { animation: drift 26s linear infinite; }
+  @keyframes drift {
+    0%   { transform: translate3d(0,0,0) rotate(0deg); }
+    25%  { transform: translate3d(2.2rem, -1.4rem, 0) rotate(9deg); }
+    50%  { transform: translate3d(0.6rem, 2.1rem, 0) rotate(-6deg); }
+    75%  { transform: translate3d(-1.9rem, 0.7rem, 0) rotate(4deg); }
+    100% { transform: translate3d(0,0,0) rotate(0deg); }
+  }
+
+  /* the marching column on the working screen */
+  .march { animation: march 5.5s linear infinite; }
+  @keyframes march {
+    from { transform: translateX(-3rem); }
+    to   { transform: translateX(calc(100% + 3rem)); }
+  }
+
+  .trailpath { stroke-dasharray: 3 5; animation: flow 1.4s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -8; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .legs, .drift, .march, .trailpath, button.primary:hover .walker { animation: none !important; }
+    .panel { transition: opacity 0.2s; transform: none; }
+  }
+
+  .scatter { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+</style>
+
+<div class="field"></div>
+<div class="grain"></div>
+
+<div class="stage">
+  <aside class="rail">
+    <div class="rail-line"></div>
+    <div class="rail-fill" id="fill" style="height:0"></div>
+    <div class="steps" id="steps"></div>
+  </aside>
+
+  <main class="panels" id="panels">
+    <div class="scatter" id="scatter"></div>
+
+    <!-- 1 -->
+    <section class="panel on" data-step="0">
+      <div class="eyebrow">Welcome</div>
+      <h1>Let's get your <em>colony</em> started.</h1>
+      <p class="lede">Two minutes. We'll set up your workspace and get your first helpers working.</p>
+      <div class="fields">
+        <label><span>Your name</span><input placeholder="Aisha Bello"></label>
+        <div class="row">
+          <label><span>Email</span><input placeholder="aisha@rosebankauto.co.za"></label>
+          <label><span>Password</span><input type="password" placeholder="At least 10 characters"></label>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" data-go="1"><span class="walker"></span>Continue</button>
+        <button class="ghost">I already have an account</button>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section class="panel" data-step="1">
+      <div class="eyebrow">Keep this safe</div>
+      <h1>Your way back <em>in</em>.</h1>
+      <p class="lede">If you ever forget your password, this is the only way back into your workspace. We cannot recover it for you.</p>
+      <div class="work">
+        <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:1.5rem;letter-spacing:0.06em;background:oklch(1 0 0 / 0.05);border:1px solid oklch(1 0 0 / 0.1);border-radius:var(--r);padding:1.1rem 1.25rem;">TRAIL-9F2K-4QD8-MZ71</div>
+      </div>
+      <div class="actions">
+        <button class="primary" data-go="2"><span class="walker"></span>I've saved it</button>
+        <button class="ghost">Copy</button>
+        <button class="ghost">Download</button>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section class="panel" data-step="2">
+      <div class="eyebrow">Setting up</div>
+      <h1>Building your <em>workspace</em>.</h1>
+      <p class="lede">Your helpers are moving in. This takes a few seconds.</p>
+      <div class="work">
+        <div style="position:relative;height:3.5rem;overflow:hidden;border-radius:var(--r);background:oklch(1 0 0 / 0.03);border:1px solid oklch(1 0 0 / 0.07);">
+          <svg width="100%" height="100%" style="position:absolute;inset:0;">
+            <path class="trailpath" d="M0,28 C120,10 260,46 420,28 C560,12 680,44 900,28" fill="none" stroke="var(--violet-soft)" stroke-width="1.5" opacity="0.7"/>
+          </svg>
+          <div class="ant march" style="top:1.1rem;left:0" id="marcher"></div>
+        </div>
+        <div class="worklines" id="worklines">
+          <div class="workline"><span class="tick"></span>Making your workspace</div>
+          <div class="workline"><span class="tick"></span>Looking at what's on your computer</div>
+          <div class="workline"><span class="tick"></span>Getting your first helpers ready</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section class="panel" data-step="3">
+      <div class="eyebrow">Almost there</div>
+      <h1>Pick who does the <em>thinking</em>.</h1>
+      <p class="lede">Your helpers need a brain to think with. You already have one on this computer, so this is free.</p>
+      <div class="choices">
+        <button class="choice" aria-pressed="true">
+          <span style="width:1.6rem;display:grid;place-items:center" id="brain-ant"></span>
+          <span><b>Use what's already here</b><small>Found on your computer. Nothing to install, nothing to pay.</small></span>
+          <span class="badge">Ready</span>
+        </button>
+        <button class="choice">
+          <span style="width:1.6rem;display:grid;place-items:center;opacity:0.5">+</span>
+          <span><b>Let Colony handle it</b><small>We set one up for you. You add money later, when you need it.</small></span>
+        </button>
+      </div>
+      <div class="actions"><button class="primary" data-go="4"><span class="walker"></span>Continue</button></div>
+    </section>
+
+    <!-- 5 -->
+    <section class="panel" data-step="4">
+      <div class="eyebrow">Last step</div>
+      <h1>Put something in the <em>tin</em>.</h1>
+      <p class="lede">Your helpers work for free using what's on your computer. Add money only when you want them working while you sleep.</p>
+      <div class="chips">
+        <button class="chip" aria-pressed="true">$5</button>
+        <button class="chip">$10</button>
+        <button class="chip">$25</button>
+        <button class="chip">Another amount</button>
+      </div>
+      <p class="note">You'll pay on a secure page. Colony never sees your card.</p>
+      <div class="actions">
+        <button class="primary" data-go="0"><span class="walker"></span>Add money</button>
+        <button class="ghost">Skip for now</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  const ANT = (c, s) => `<svg width="${s}" height="${s * 0.62}" viewBox="0 0 32 20" fill="none">
+    <g class="legs" stroke="${c}" stroke-width="1.5" stroke-linecap="round">
+      <path d="M13 11 L9 17"/><path d="M16 11 L16 18"/><path d="M19 11 L23 17"/>
+    </g>
+    <ellipse cx="8" cy="10" rx="6.4" ry="5.4" fill="${c}"/>
+    <ellipse cx="17" cy="10" rx="3.6" ry="3.2" fill="${c}"/>
+    <circle cx="23.5" cy="9.4" r="3.1" fill="${c}"/>
+    <path d="M25 7 C28 4, 30 3, 31 1" stroke="${c}" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+    <path d="M25.6 9 C29 8, 30.5 7, 31.6 6" stroke="${c}" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  </svg>`;
+
+  const HUES = ["var(--violet)", "var(--blue)", "var(--pink)", "var(--amber)", "var(--green)"];
+
+  // scatter field: a colony going about its business behind the work
+  const scatter = document.getElementById("scatter");
+  for (let i = 0; i < 26; i++) {
+    const a = document.createElement("div");
+    a.className = "ant drift";
+    a.style.left = Math.random() * 100 + "%";
+    a.style.top = Math.random() * 100 + "%";
+    a.style.opacity = 0.1 + Math.random() * 0.16;
+    a.style.animationDelay = (-Math.random() * 26) + "s";
+    a.style.animationDuration = (20 + Math.random() * 16) + "s";
+    a.innerHTML = ANT(HUES[i % HUES.length], 12 + Math.random() * 10);
+    a.querySelector(".legs").style.animationDelay = (-Math.random() * 0.42) + "s";
+    scatter.appendChild(a);
+  }
+
+  document.getElementById("marcher").innerHTML = ANT("var(--violet)", 20);
+  document.getElementById("brain-ant").innerHTML = ANT("var(--violet)", 18);
+
+  const LABELS = ["Your details", "Your way back in", "Setting up", "The thinking", "Money in the tin"];
+  const stepsEl = document.getElementById("steps");
+  LABELS.forEach((l, i) => {
+    const d = document.createElement("div");
+    d.className = "step" + (i === 0 ? " now" : "");
+    d.innerHTML = `<span class="dot"></span>${l}`;
+    stepsEl.appendChild(d);
+  });
+
+  const panels = [...document.querySelectorAll(".panel")];
+  const steps = [...document.querySelectorAll(".step")];
+  const fill = document.getElementById("fill");
+  let cur = 0;
+
+  function go(n) {
+    cur = n;
+    panels.forEach((p, i) => p.classList.toggle("on", i === n));
+    steps.forEach((s, i) => {
+      s.classList.toggle("now", i === n);
+      s.classList.toggle("done", i < n);
+    });
+    const track = stepsEl.getBoundingClientRect().height;
+    fill.style.height = (track * (n / (LABELS.length - 1))) + "px";
+    if (n === 2) runWork();
+  }
+
+  document.querySelectorAll("[data-go]").forEach((b) =>
+    b.addEventListener("click", () => go(+b.dataset.go)),
+  );
+
+  document.querySelectorAll(".choice, .chip").forEach((b) =>
+    b.addEventListener("click", () => {
+      const sibs = b.parentElement.children;
+      [...sibs].forEach((s) => s.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+    }),
+  );
+
+  // the working screen advances itself, then moves on
+  let workTimer = null;
+  function runWork() {
+    const lines = [...document.querySelectorAll(".workline")];
+    lines.forEach((l) => l.classList.remove("on", "done"));
+    clearTimeout(workTimer);
+    let i = 0;
+    const tick = () => {
+      if (i > 0) lines[i - 1].classList.replace("on", "done");
+      if (i < lines.length) {
+        lines[i].classList.add("on");
+        i++;
+        workTimer = setTimeout(tick, 1150);
+      } else {
+        workTimer = setTimeout(() => go(3), 700);
+      }
+    };
+    tick();
+  }
+</script>

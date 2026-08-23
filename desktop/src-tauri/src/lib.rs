@@ -32,6 +32,7 @@ mod models;
 mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
+mod operator_console;
 mod prevent_sleep;
 mod provisioned_credits;
 mod ptt_shortcut;
@@ -194,6 +195,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(native_websocket::init())
+        .plugin(operator_console::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
 
@@ -631,6 +633,8 @@ pub fn run() {
             get_default_relay_url,
             get_build_default_relay_url,
             auto_connect_default_relay_enabled,
+            scan_onboarding_company_website,
+            fetch_claim_source_page,
             get_legacy_workspace_storage,
             is_shared_identity,
             get_relay_ws_url,
@@ -817,6 +821,7 @@ pub fn run() {
             get_huddle_state,
             close_huddle_companion,
             open_huddle_window,
+            operator_console::open_operator_console,
             push_audio_pcm,
             reconnect_huddle_audio,
             start_stt_pipeline,

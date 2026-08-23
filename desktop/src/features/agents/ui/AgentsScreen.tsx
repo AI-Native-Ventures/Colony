@@ -38,7 +38,14 @@ const AGENTS_PROFILE_SEARCH_KEYS = [
   "profileView",
 ] as const;
 
-export function AgentsScreen() {
+export type AgentsFocusSection = "people";
+
+export function AgentsScreen({
+  focusSection,
+}: {
+  /** Section anchor requested by the route (`/agents?section=...`). */
+  focusSection?: AgentsFocusSection;
+} = {}) {
   const identityQuery = useIdentityQuery();
   const personasQuery = usePersonasQuery();
   const { applyPatch, values } = useHistorySearchState(
@@ -124,7 +131,7 @@ export function AgentsScreen() {
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           <React.Suspense fallback={<ViewLoadingFallback kind="agents" />}>
-            <AgentsView />
+            <AgentsView focusSection={focusSection} />
           </React.Suspense>
           {profilePanelTarget ? (
             <UserProfilePanel

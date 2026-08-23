@@ -927,6 +927,17 @@ fn filter_to_query_params(
         }
     });
 
+    // Thread-scoped canvas exclusion: a kind 40100 query with no `#e`
+    // constraint reads channel canvases only, so thread canvases are pushed
+    // out of the SQL candidate page instead of being dropped after LIMIT.
+    // The core `filters_match` rule still post-filters every delivered event;
+    // this pushdown keeps LIMIT semantics correct when a thread canvas is
+    // newer than the channel canvas being looked up.
+    let filter_targets_canvas = kinds
+        .as_ref()
+        .is_some_and(|ks| ks.contains(&(buzz_core::kind::KIND_CANVAS as i32)));
+    let exclude_thread_canvas = filter_targets_canvas && e_tags.is_none();
+
     // Push single-value #p tag into SQL via event_mentions join.
     // This is critical for gift-wrap (kind:1059) and membership notification
     // queries where >500 events for other recipients would otherwise push
@@ -985,6 +996,7 @@ fn filter_to_query_params(
         authors,
         ids,
         e_tags,
+        exclude_thread_canvas,
         ..EventQuery::for_community(community)
     }
 }

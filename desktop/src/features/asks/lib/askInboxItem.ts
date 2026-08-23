@@ -10,8 +10,16 @@ import { KIND_ASK } from "@/shared/constants/kinds";
  * Asks go through the existing inbox rather than a new screen: the inbox
  * already models "this needs you" through `isActionRequired` and the
  * `needs_action` filter, and a founder with two inboxes checks neither.
+ *
+ * `routingNote`, when set, rides at the end of the preview so the owner can
+ * see how the ask reached them (auto-routed, explicit, promoted) without
+ * opening it.
  */
-export function askToInboxItem(ask: OpenAsk, senderLabel: string): InboxItem {
+export function askToInboxItem(
+  ask: OpenAsk,
+  senderLabel: string,
+  routingNote: string | null = null,
+): InboxItem {
   const timestamp = new Date(ask.createdAt * 1_000);
   const cost = ask.costOfDelay
     ? `Waiting costs: ${ask.costOfDelay}`
@@ -41,7 +49,7 @@ export function askToInboxItem(ask: OpenAsk, senderLabel: string): InboxItem {
     isActionRequired: true,
     latestActivityAt: ask.createdAt,
     mentionNames: [],
-    preview: cost,
+    preview: routingNote ? `${cost} · ${routingNote}` : cost,
     senderLabel,
     subject: ask.headline,
     timestampLabel: timestamp.toLocaleTimeString(),
