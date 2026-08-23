@@ -186,7 +186,7 @@ export function AccountScreen({
         <p className="onb-note">Change these if we got them wrong.</p>
         <fieldset className="onb-field">
           <legend className="onb-label">Gender (optional)</legend>
-          <div className="onb-chips" role="group">
+          <div className="onb-chips">
             {FOUNDER_GENDERS.map((option) => (
               <button
                 type="button"
