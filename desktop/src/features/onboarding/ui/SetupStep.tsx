@@ -24,7 +24,6 @@ import {
   getVisibleOnboardingRuntimes,
   runtimeIsReadyForOnboarding,
 } from "./onboardingRuntimeSelection";
-import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
 import { RuntimeErrorTooltip } from "./RuntimeErrorTooltip";
 import { OnboardingFooter } from "./OnboardingFooter";
 import { getRuntimeDisplayLabel, RuntimeIcon } from "./RuntimeIcon";
@@ -618,14 +617,14 @@ function RuntimeProvidersSection({
   const orderedItems = getVisibleOnboardingRuntimes(items);
 
   return (
-    <section className="flex min-h-full w-full flex-col items-center">
-      <div className="w-full max-w-[820px] text-center">
-        <h1 className="text-title font-normal text-foreground">
-          Set up your agent harnesses
+    <section className="onb-screen" data-wide="true">
+      <div className="onb-col-head">
+        <h1 className="onb-headline">
+          Find the <em>brains</em> on this computer.
         </h1>
-        <p className="mx-auto mt-3 max-w-[760px] text-sm leading-6 text-foreground/90">
-          Colony checks for command-line harnesses on this machine. Install the
-          CLI or sign in to at least one to continue.
+        <p className="onb-sub">
+          We looked for thinking tools already installed here. Set up at least
+          one and your helpers can start work.
         </p>
       </div>
 
@@ -709,8 +708,9 @@ function SetupStepContent({
 
   return (
     <OnboardingSlideTransition
-      className="flex min-h-full w-full flex-col items-center"
+      className="onb-screen"
       data-testid="onboarding-page-2"
+      data-wide="true"
       direction={direction}
       transitionKey={`setup-${direction}`}
     >
@@ -723,23 +723,22 @@ function SetupStepContent({
 
       <OnboardingFooter>
         <Button
-          className={`${ONBOARDING_PRIMARY_CTA_CLASS} text-sm`}
           data-testid="onboarding-setup-next"
           disabled={readyRuntimeIds.length === 0}
           onClick={() => actions.next(readyRuntimeIds)}
+          size="lg"
           type="button"
         >
           Next
         </Button>
-        <Button
-          className="h-9 whitespace-nowrap rounded-full px-6 text-sm hover:bg-foreground/10"
+        <button
+          className="onb-quiet-action"
           data-testid="onboarding-setup-skip"
           onClick={() => actions.next([])}
           type="button"
-          variant="ghost"
         >
           Skip for now
-        </Button>
+        </button>
       </OnboardingFooter>
     </OnboardingSlideTransition>
   );

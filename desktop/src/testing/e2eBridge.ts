@@ -55,6 +55,8 @@ import {
   KIND_GIT_STATUS_OPEN,
   KIND_HUDDLE_STARTED,
   KIND_EMPLOYEE,
+  KIND_DELEGATION_GRANT,
+  KIND_DECISION_LOG,
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
@@ -145,6 +147,8 @@ type MockEmployeeHeadSeed = {
   role?: string;
   name?: string;
   rank: "worker" | "leader" | "executive";
+  /** The agent this employee reports to (pubkey); omitted means no manager. */
+  manager?: string;
 };
 
 type MockPersonaSeed = {
@@ -227,6 +231,16 @@ type E2eConfig = {
     };
     /** Signed Block manifests/catalog events served by the mock relay. */
     blockEvents?: RelayEvent[];
+    /**
+     * Owner-authored delegation grant heads (kind 30189) served by the mock
+     * relay, keyed by their `d` tag; drives the promotion confirmation.
+     */
+    delegationGrantEvents?: RelayEvent[];
+    /**
+     * Agent-authored decision logs (kind 44303) served by the mock relay;
+     * drives the decision log view.
+     */
+    decisionLogEvents?: RelayEvent[];
     /** Signed Block timeline events seeded before the app subscribes. */
     blockTimelineEvents?: Array<{
       channelName: string;
@@ -394,6 +408,16 @@ type E2eConfig = {
     deepHistoryMessageCount?: number;
     feedReadError?: string;
     canvasReadError?: string;
+    /** Reject `get_thread_canvas` calls with this message. */
+    threadCanvasReadError?: string;
+    /** Thread canvases seeded for `get_thread_canvas`, per (channel, thread root). */
+    threadCanvases?: Array<{
+      channelId: string;
+      threadRootId: string;
+      content: string;
+    }>;
+    /** Reject successive `set_thread_canvas` calls with these messages, then resume. */
+    threadCanvasSaveErrors?: string[];
     /** Delay (ms) for `apply_workspace` so e2e tests can observe the
      *  community-switch gate. 0/undefined = instant. */
     applyCommunityDelayMs?: number;
@@ -499,6 +523,13 @@ type E2eConfig = {
     /** Delay EOSE for membership snapshots after delivering the event. */
     relayMembershipEoseDelayMs?: number;
     relayRole?: "owner" | "admin" | "member" | null;
+    /**
+     * Serve `list_relay_members` from the mock member table. Opt-in because
+     * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+     * (community owners, delegation-grant authorship), and every existing
+     * spec was built against the command being unsupported.
+     */
+    relayMembers?: boolean;
     // Descriptors returned by the mocked `pick_and_upload_media` /
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
     // (e.g. a generic PDF) without a real upload pipeline. See
@@ -1110,6 +1141,7 @@ type MockFilter = {
   "#a"?: string[];
   "#d"?: string[];
   "#e"?: string[];
+  "#grant"?: string[];
   "#h"?: string[];
   "#p"?: string[];
   authors?: string[];
@@ -2456,18 +2488,17 @@ function resetMockEmployeeHeadEvents(config?: E2eConfig) {
   for (const seed of config?.mock?.employeeHeads ?? []) {
     // A head is keyed by (and signed by) its own employee pubkey, so the
     // author carries the same hex the `d` tag does.
+    const tags: string[][] = [
+      ["d", seed.pubkey.toLowerCase()],
+      ["role", seed.role ?? "role"],
+      ["name", seed.name ?? "Employee"],
+      ["rank", seed.rank],
+    ];
+    if (seed.manager !== undefined) {
+      tags.push(["manager", seed.manager.toLowerCase()]);
+    }
     mockEmployeeHeadEvents.push(
-      createMockEvent(
-        KIND_EMPLOYEE,
-        "",
-        [
-          ["d", seed.pubkey.toLowerCase()],
-          ["role", seed.role ?? "role"],
-          ["name", seed.name ?? "Employee"],
-          ["rank", seed.rank],
-        ],
-        seed.pubkey.toLowerCase(),
-      ),
+      createMockEvent(KIND_EMPLOYEE, "", tags, seed.pubkey.toLowerCase()),
     );
   }
 }
@@ -3236,6 +3267,8 @@ export type CompanyWorkContextConfig = {
 
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
+const mockDelegationGrantEvents: RelayEvent[] = [];
+const mockDecisionLogEvents: RelayEvent[] = [];
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
@@ -3516,6 +3549,66 @@ function resetMockBlockEvents(config: E2eConfig | undefined) {
   }
 }
 
+function resetMockDelegationGrantEvents(config: E2eConfig | undefined) {
+  mockDelegationGrantEvents.length = 0;
+  for (const event of config?.mock?.delegationGrantEvents ?? []) {
+    mockDelegationGrantEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
+function resetMockDecisionLogEvents(config: E2eConfig | undefined) {
+  mockDecisionLogEvents.length = 0;
+  for (const event of config?.mock?.decisionLogEvents ?? []) {
+    mockDecisionLogEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
+/** Serve delegation grant heads (kind 30189) for one REQ filter. */
+function filterMockDelegationGrantEvents(filter: MockFilter): RelayEvent[] {
+  return mockDelegationGrantEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const dValues = filter["#d"];
+    if (dValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "d")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/** Serve decision logs (kind 44303) for one REQ filter. */
+function filterMockDecisionLogEvents(filter: MockFilter): RelayEvent[] {
+  return mockDecisionLogEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const grantValues = filter["#grant"];
+    if (grantValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "grant")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => grantValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 function mockEventMatchesFilter(
   event: RelayEvent,
   filter: MockFilter,
@@ -3572,6 +3665,31 @@ type MockSaveSubscriptionRow = {
   kinds: string; // JSON-encoded integer array, e.g. "[9,40002]"
 };
 let mockSaveSubscriptions: MockSaveSubscriptionRow[] = [];
+
+// Thread-canvas mock state — mutable so a `set_thread_canvas` write is
+// returned by the next `get_thread_canvas` read, letting specs prove the
+// edit/save/refresh round-trip without a relay.
+type MockThreadCanvasRow = {
+  content: string;
+  updated_at: number;
+  author: string;
+};
+let mockThreadCanvases = new Map<string, MockThreadCanvasRow>();
+
+function threadCanvasKey(channelId: string, threadRootId: string) {
+  return `${channelId}:${threadRootId}`;
+}
+
+function resetMockThreadCanvases(config: E2eConfig | undefined) {
+  mockThreadCanvases = new Map();
+  for (const seed of config?.mock?.threadCanvases ?? []) {
+    mockThreadCanvases.set(threadCanvasKey(seed.channelId, seed.threadRootId), {
+      content: seed.content,
+      updated_at: Math.floor(Date.now() / 1000),
+      author: DEFAULT_MOCK_IDENTITY.pubkey,
+    });
+  }
+}
 
 // Deterministic gate for `observer_archive_default_enabled`. Tests that assert
 // archive sync has NOT started yet hold the policy here and release it
@@ -8464,7 +8582,7 @@ async function handleDiscoverAcpRuntimes(
       id: "claude",
       label: "Claude Code",
       avatar_url: "",
-      availability: "adapter_missing",
+      availability: "available",
       command: null,
       binary_path: null,
       default_args: [],
@@ -8476,7 +8594,7 @@ async function handleDiscoverAcpRuntimes(
       requires_external_cli: true,
       underlying_cli_path: "/usr/local/bin/claude",
       node_required: false,
-      auth_status: { status: "unknown" },
+      auth_status: { status: "logged_in" },
       source: "builtin",
       login_hint: undefined,
     },
@@ -8484,7 +8602,7 @@ async function handleDiscoverAcpRuntimes(
       id: "codex",
       label: "Codex",
       avatar_url: "",
-      availability: "not_installed",
+      availability: "available",
       command: null,
       binary_path: null,
       default_args: [],
@@ -10730,6 +10848,20 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
+    if (filter.kinds?.includes(KIND_DELEGATION_GRANT)) {
+      for (const event of filterMockDelegationGrantEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+    if (filter.kinds?.includes(KIND_DECISION_LOG)) {
+      for (const event of filterMockDecisionLogEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (
       filter.kinds?.some((kind) =>
         mockBlockEvents.some((event) => event.kind === kind),
@@ -11007,6 +11139,19 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (event.kind === KIND_DELEGATION_GRANT) {
+      // NIP-33 heads are replaceable per (author, kind, d), but the relay
+      // keeps every published head and its newest-first owner scan picks the
+      // winner, so the mock stores each publish too.
+      mockDelegationGrantEvents.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      emitMockGlobalEvent(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     if (isMockProjectScopedEvent(event)) {
       if (event.pubkey !== DEFAULT_MOCK_IDENTITY.pubkey) {
         sendWsText(socket.handler, [
@@ -11174,6 +11319,8 @@ export function maybeInstallE2eTauriMocks() {
     : { balance_nanousd: "0", currency: "USD", status: "depleted" };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
+  resetMockDelegationGrantEvents(config);
+  resetMockDecisionLogEvents(config);
   resetMockEmployeeHeadEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);
@@ -11187,6 +11334,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockUserStatuses();
   resetMockPersonaCatalogEvents(config);
   resetMockSaveSubscriptions(config);
+  resetMockThreadCanvases(config);
   resetObserverArchivePolicyGate();
   resetMockPendingCommunityDeepLinks(config);
   initializeMockHuddle(config.mock?.huddle, config);
@@ -13205,6 +13353,17 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
+      case "list_relay_members": {
+        // Opt-in via mock.relayMembers: returning the member table makes the
+        // viewer the community owner, which changes what owner-gated reads
+        // (grant authorship, shared heads) may trust.
+        if (!activeConfig?.mock?.relayMembers) {
+          throw new Error(
+            "Unsupported mocked Tauri command: list_relay_members",
+          );
+        }
+        return { members: mockRelayMembers };
+      }
       case "list_personas":
         return handleListPersonas();
       case "create_persona":
@@ -14333,6 +14492,40 @@ export function maybeInstallE2eTauriMocks() {
         }
         // Return the no-canvas success shape — content null means no canvas set.
         return { content: null, updated_at: null, author: null };
+      }
+      case "get_thread_canvas": {
+        const threadCanvasReadError = activeConfig?.mock?.threadCanvasReadError;
+        if (threadCanvasReadError) {
+          throw new Error(threadCanvasReadError);
+        }
+        const req = payload as { channelId: string; threadRootId: string };
+        const row = mockThreadCanvases.get(
+          threadCanvasKey(req.channelId, req.threadRootId),
+        );
+        if (!row) {
+          return { content: "", updated_at: null, author: null };
+        }
+        return row;
+      }
+      case "set_thread_canvas": {
+        const saveErrors = activeConfig?.mock?.threadCanvasSaveErrors;
+        if (saveErrors && saveErrors.length > 0) {
+          throw new Error(saveErrors.shift());
+        }
+        const req = payload as {
+          channelId: string;
+          threadRootId: string;
+          content: string;
+        };
+        mockThreadCanvases.set(
+          threadCanvasKey(req.channelId, req.threadRootId),
+          {
+            content: req.content,
+            updated_at: Math.floor(Date.now() / 1000),
+            author: (activeConfig?.identity ?? DEFAULT_MOCK_IDENTITY).pubkey,
+          },
+        );
+        return { ok: true, event_id: mockEventId() };
       }
       // ── Local-save archive ──────────────────────────────────────────────
       // These stubs drive the LocalArchiveSettingsCard in screenshot / UI tests

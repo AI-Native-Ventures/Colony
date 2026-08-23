@@ -852,6 +852,7 @@ dependencies = [
  "buzz-ws-client",
  "chrono",
  "clap",
+ "dirs",
  "evalexpr",
  "futures-util",
  "hex",
@@ -863,6 +864,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.29.0",
@@ -954,6 +956,7 @@ dependencies = [
 name = "buzz-auth"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "buzz-core",
  "hex",
  "nostr",
@@ -961,6 +964,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1368,6 +1372,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "infer",
+ "md-5",
  "mesh-llm-host-runtime",
  "mesh-llm-sdk",
  "metrics",

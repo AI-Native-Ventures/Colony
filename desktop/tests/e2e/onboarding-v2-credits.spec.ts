@@ -93,7 +93,10 @@ async function seedRuntimeCheck(
             version: 1,
           },
           relayUrl: "wss://default.example.com",
-          source: "first-community",
+          // The returning-founder journey, which is the one V2 still serves.
+          // First-run belongs to the redesigned flow now, and showing both
+          // meant asking for the founder's details twice in one sitting.
+          source: "create-community",
           stage: "profile",
           updatedAt: timestamp,
         }),
@@ -292,7 +295,10 @@ test("zero-credit Colony Agent onboarding reaches the first task without payment
             version: 1,
           },
           relayUrl: "wss://default.example.com",
-          source: "first-community",
+          // The returning-founder journey, which is the one V2 still serves.
+          // First-run belongs to the redesigned flow now, and showing both
+          // meant asking for the founder's details twice in one sitting.
+          source: "create-community",
           stage: "profile",
           updatedAt: timestamp,
         }),
@@ -337,7 +343,11 @@ test("zero-credit Colony Agent onboarding reaches the first task without payment
   );
   await expect(page.getByText(/link a card/i)).toHaveCount(0);
   await expect(page.getByText(/payment method/i)).toHaveCount(0);
-  const startCompany = page.getByRole("button", { name: "Start my company" });
+  // "Start this company" is the returning-founder wording; the first-run
+  // journey said "Start my company" and belongs to the redesigned flow now.
+  const startCompany = page.getByRole("button", {
+    name: "Start this company",
+  });
   await expect(startCompany).toBeEnabled();
   await startCompany.click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {

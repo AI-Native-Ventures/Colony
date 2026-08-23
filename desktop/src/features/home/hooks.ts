@@ -1,8 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCommunities } from "@/features/communities/useCommunities";
+import {
+  pendingLiveMentionsQueryKey,
+  reconcileHomeFeedRead,
+} from "@/features/home/lib/liveMentionFeed";
 import { getHomeFeed } from "@/shared/api/tauri";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
+import type { FeedItem } from "@/shared/api/types";
 import { useFocusedRefetchInterval } from "@/shared/lib/useDocumentVisible";
 
 /** Keeps focused polling at the established 30-second cadence. */
@@ -21,6 +26,7 @@ export const homeFeedQueryKey = (communityId: string) =>
   ["home-feed", communityId] as const;
 
 export function useHomeFeedQuery() {
+  const queryClient = useQueryClient();
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
   const connectionState = useRelayConnection();
@@ -32,11 +38,22 @@ export function useHomeFeedQuery() {
   return useQuery({
     queryKey: homeFeedQueryKey(communityId),
     enabled: communityId !== "",
-    queryFn: () =>
-      getHomeFeed({
-        limit: 50,
-        types: "mentions,needs_action,activity,agent_activity",
-      }),
+    queryFn: ({ signal }) => {
+      const pendingKey = pendingLiveMentionsQueryKey(communityId);
+      return reconcileHomeFeedRead({
+        readDurable: () =>
+          getHomeFeed({
+            limit: 50,
+            types: "mentions,needs_action,activity,agent_activity",
+          }),
+        readPending: () =>
+          queryClient.getQueryData<FeedItem[]>(pendingKey) ?? [],
+        signal,
+        writePending: (pending) => {
+          queryClient.setQueryData(pendingKey, pending);
+        },
+      });
+    },
     gcTime: 5 * 60 * 1_000,
     // Pause background polling on degraded/stalled/disconnected connections.
     // The relay can't serve the request anyway, and the spurious failures

@@ -6,9 +6,11 @@ import { installMockBridge } from "../helpers/bridge";
 const SAMPLE_NSEC =
   "nsec1u70xptkumvfc4k4hu0rc4fnzcexvw63zvq2ng9vmqujsaayhparqu8eju9";
 
-// --buzz-onboarding-backup-ink (#717106), the olive key ink shared with the
-// backup step.
-const BACKUP_INK = "rgb(113, 113, 6)";
+// --onb-ink (#171717), the canvas ink every field in the flow now uses. The
+// key used to wear an olive tied to the backup step's shell; that shell is
+// gone, and olive on a saturated canvas both clashes and loses contrast. The
+// redesign's rule is that ink stays constant while only the canvas moves.
+const KEY_INK = "rgb(23, 23, 23)";
 
 test("lost identity key import masks the key with a reveal toggle", async ({
   page,
@@ -28,11 +30,11 @@ test("lost identity key import masks the key with a reveal toggle", async ({
   await waitForAnimations(page);
 
   // Masked by default; no toggle until there is input; key text uses the
-  // shared backup ink.
+  // canvas ink.
   const toggle = page.getByTestId("nostr-import-reveal-toggle");
   await expect(input).toHaveAttribute("type", "password");
   await expect(toggle).toHaveCSS("opacity", "0");
-  await expect(input).toHaveCSS("color", BACKUP_INK);
+  await expect(input).toHaveCSS("color", KEY_INK);
 
   // The toggle is absolutely positioned: its appearance must not resize the
   // input or shift the centered text.

@@ -1,11 +1,18 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
 
 import { homeFeedQueryKey } from "@/features/home/hooks";
-import { mergeLiveMentionsIntoHomeFeed } from "@/features/home/lib/liveMentionFeed";
-import type { Channel, HomeFeedResponse, RelayEvent } from "@/shared/api/types";
-
-const PENDING_LIVE_MENTION_LIMIT = 50;
+import {
+  appendPendingLiveMention,
+  mergePendingLiveMentionsIntoHomeFeed,
+  pendingLiveMentionsQueryKey,
+} from "@/features/home/lib/liveMentionFeed";
+import type {
+  Channel,
+  FeedItem,
+  HomeFeedResponse,
+  RelayEvent,
+} from "@/shared/api/types";
 
 export function useLiveMentionFeedRepair(
   communityId: string,
@@ -13,41 +20,49 @@ export function useLiveMentionFeedRepair(
   refetchHomeFeed: () => Promise<unknown>,
 ) {
   const queryClient = useQueryClient();
-  const pendingRef = React.useRef<{
-    communityId: string;
-    events: Map<string, RelayEvent>;
-  }>({ communityId: "", events: new Map() });
+  const pendingKey = React.useMemo(
+    () => pendingLiveMentionsQueryKey(communityId),
+    [communityId],
+  );
+  // Keep unresolved events observed until the durable projection catches up.
+  // The cleanup prevents a prior community from leaking into a later session.
+  useQuery<FeedItem[]>({
+    queryKey: pendingKey,
+    enabled: communityId.length > 0,
+    queryFn: () => [],
+    initialData: [],
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+  });
+
+  React.useEffect(
+    () => () => {
+      queryClient.removeQueries({ queryKey: pendingKey, exact: true });
+    },
+    [pendingKey, queryClient],
+  );
 
   return React.useEffectEvent((event: RelayEvent) => {
     if (communityId.length === 0) return;
-    if (pendingRef.current.communityId !== communityId) {
-      pendingRef.current = { communityId, events: new Map() };
-    }
-
-    pendingRef.current.events.set(event.id, event);
-    while (pendingRef.current.events.size > PENDING_LIVE_MENTION_LIMIT) {
-      const oldestEventId = pendingRef.current.events.keys().next().value;
-      if (oldestEventId === undefined) break;
-      pendingRef.current.events.delete(oldestEventId);
-    }
 
     const queryKey = homeFeedQueryKey(communityId);
-    const repairLiveMentions = () => {
-      const pending = pendingRef.current;
-      if (pending.communityId !== communityId) return;
-      queryClient.setQueryData<HomeFeedResponse>(queryKey, (current) =>
-        mergeLiveMentionsIntoHomeFeed(
-          current,
-          [...pending.events.values()],
-          channels,
-        ),
-      );
-    };
+    const currentPending =
+      queryClient.getQueryData<FeedItem[]>(pendingKey) ?? [];
+    const nextPending = appendPendingLiveMention(
+      currentPending,
+      event,
+      channels,
+    );
+    if (nextPending === currentPending) return;
+
+    queryClient.setQueryData(pendingKey, nextPending);
+    queryClient.setQueryData<HomeFeedResponse>(queryKey, (current) =>
+      mergePendingLiveMentionsIntoHomeFeed(current, nextPending),
+    );
 
     // The relay can fan out the committed event before a feed projection
-    // read observes it. Preserve the live event immediately, then repair
-    // the cache again after the recheck so a stale response cannot erase it.
-    repairLiveMentions();
-    void refetchHomeFeed().finally(repairLiveMentions);
+    // read observes it. Every home-feed query reconciles this pending item,
+    // so polling, focus, and Inbox refetches cannot erase it while stale.
+    void refetchHomeFeed();
   });
 }

@@ -2,11 +2,6 @@ import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
-import type {
-  AcpRuntimeCatalogEntry,
-  CreatePersonaInput,
-  UpdatePersonaInput,
-} from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
@@ -53,6 +48,11 @@ import {
 import { RequiredFieldLabel } from "./agentConfigControls";
 import { relayMeshModelPickerState } from "./relayMeshModelPicker";
 import {
+  AgentOrgPlacementSection,
+  emptyOrgPlacementDraft,
+  type OrgPlacementDraft,
+} from "./AgentOrgPlacementSection";
+import {
   buildModelDropdownOptionsForScope,
   buildProviderDropdownOptions,
   selectionOnModelDropdownChange,
@@ -80,41 +80,14 @@ import { buildRuntimeModelProviderPayload } from "./agentDefinitionSubmitPayload
 import { AgentDefinitionDialogFooter } from "./AgentDefinitionDialogFooter";
 import { AgentDefinitionDialogShell } from "./AgentDefinitionDialogShell";
 import { AddCustomHarnessDialog } from "./AddCustomHarnessDialog";
+import type { AgentDefinitionDialogProps } from "./agentDefinitionDialogProps";
+
+export type { AgentDefinitionSubmitOptions } from "./agentDefinitionDialogProps";
 import {
   ADD_CUSTOM_HARNESS_OPTION,
   runtimeDropdownAction,
   usePendingHarnessSelection,
 } from "./addCustomHarness";
-
-type AgentDefinitionDialogProps = {
-  open: boolean;
-  embedded?: boolean;
-  title: string;
-  description: string;
-  submitLabel: string;
-  initialValues: CreatePersonaInput | UpdatePersonaInput | null;
-  error: Error | null;
-  isPending: boolean;
-  runtimes: AcpRuntimeCatalogEntry[];
-  runtimeCatalogStatus?: "loading" | "ready" | "error";
-  runtimesLoading?: boolean;
-  secondaryAction?: { label: string; onSelect: () => void };
-  onDirtyChange?: (dirty: boolean) => void;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: (
-    input: CreatePersonaInput | UpdatePersonaInput,
-    options: AgentDefinitionSubmitOptions,
-  ) => Promise<unknown>;
-  /** Publishes saved changes when the edited agent is shared in the catalog. */
-  publishCatalogUpdatesOnSave?: boolean;
-  createRunSection?: React.ReactNode;
-  /** Extra create-mode submit gate (e.g. incomplete provider config). */
-  createSubmitBlocked?: boolean;
-};
-
-export type AgentDefinitionSubmitOptions = {
-  publishCatalogUpdates: boolean;
-};
 
 export function AgentDefinitionDialog({
   open,
@@ -134,6 +107,7 @@ export function AgentDefinitionDialog({
   onSubmit,
   publishCatalogUpdatesOnSave = false,
   createRunSection,
+  orgPlacement = false,
   createSubmitBlocked = false,
 }: AgentDefinitionDialogProps) {
   const runtimesLoading =
@@ -152,6 +126,11 @@ export function AgentDefinitionDialog({
   const [isCustomProviderEditing, setIsCustomProviderEditing] =
     React.useState(false);
   const [namePoolText, setNamePoolText] = React.useState("");
+  // Create-mode rank + manager. Published on the agent's owner-authored
+  // kind-30177 head only after the instance exists, so it travels through the
+  // submit options rather than the persona payload the relay mints from.
+  const [orgPlacementDraft, setOrgPlacementDraft] =
+    React.useState<OrgPlacementDraft>(emptyOrgPlacementDraft);
   const [envVars, setEnvVars] = React.useState<EnvVarsValue>({});
   const [behaviorDraft, setBehaviorDraft] = React.useState(
     emptyPersonaBehaviorDraft,
@@ -228,6 +207,7 @@ export function AgentDefinitionDialog({
     const nextBehaviorDraft = draftFromBehavior(initialValues.behavior);
     behaviorSeedRef.current = draftFromBehavior(initialValues.behavior);
     setBehaviorDraft(nextBehaviorDraft);
+    setOrgPlacementDraft(emptyOrgPlacementDraft());
     setNamePoolText(nextNamePoolText);
     setEnvVars(nextEnvVars);
     // Advanced always starts collapsed and only changes from its toggle.
@@ -317,6 +297,7 @@ export function AgentDefinitionDialog({
       setNamePoolText("");
       setEnvVars({});
       setBehaviorDraft(emptyPersonaBehaviorDraft);
+      setOrgPlacementDraft(emptyOrgPlacementDraft());
       behaviorSeedRef.current = emptyPersonaBehaviorDraft;
       setShowAdvancedFields(false);
       setIsAvatarUploadPending(false);
@@ -386,7 +367,15 @@ export function AgentDefinitionDialog({
       return;
     }
 
-    await onSubmit(baseInput, { publishCatalogUpdates: false });
+    await onSubmit(baseInput, {
+      publishCatalogUpdates: false,
+      ...(orgPlacementDraft.rank
+        ? {
+            orgRank: orgPlacementDraft.rank,
+            orgManager: orgPlacementDraft.manager || undefined,
+          }
+        : {}),
+    });
   }
 
   function handleSubmitForm(event: React.FormEvent<HTMLFormElement>) {
@@ -1004,6 +993,16 @@ export function AgentDefinitionDialog({
             ) : null}
           </AnimatePresence>
         </div>
+
+        {isCreateMode && orgPlacement ? (
+          <AgentOrgPlacementSection
+            onChange={(next) => {
+              setHasUserChanges(true);
+              setOrgPlacementDraft(next);
+            }}
+            value={orgPlacementDraft}
+          />
+        ) : null}
 
         {error ? (
           <p className="text-sm text-destructive">{error.message}</p>

@@ -9,7 +9,9 @@ import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDi
 import { ChannelHeaderStatusBadge } from "@/features/channels/ui/ChannelHeaderStatusBadge";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { useAgentRank } from "@/features/agents/employeeHeads";
+import { useAgentReportingLine } from "@/features/agents/reportingLine";
 import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { ReportingLineText } from "@/features/agents/ui/ReportingLineText";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
   DEFAULT_HOVER_PROFILE_STATUS_GEOMETRY,
@@ -17,6 +19,7 @@ import {
   scaleProfileAvatarStatusGeometry,
 } from "@/features/profile/ui/ProfileAvatarWithStatus";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
+import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { Button } from "@/shared/ui/button";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -85,12 +88,20 @@ export function ChannelScreenHeader({
   // A DM with a company-hired agent shows its rank next to the name. A human
   // or personal-agent DM resolves to no rank and renders nothing extra.
   const { activeCommunity } = useCommunities();
+  const isDirectAgentDm = activeChannel?.channelType === "dm" && !isGroupDm;
   const dmParticipantRank = useAgentRank(
     activeCommunity?.id ?? "",
-    activeChannel?.channelType === "dm" && !isGroupDm
+    isDirectAgentDm ? (activeDmParticipant?.pubkey ?? null) : null,
+  );
+  // The reporting line reads the same records the relay enforces: the
+  // employee head first, then only owner-authored managed-agent heads.
+  const dmParticipantReportingLine = useAgentReportingLine(
+    activeCommunity?.id ?? "",
+    isDirectAgentDm && dmParticipantRank
       ? (activeDmParticipant?.pubkey ?? null)
       : null,
   );
+  const { openProfilePanel } = useProfilePanel();
   const showJoinButton =
     activeChannel !== null &&
     !activeChannel.isMember &&
@@ -221,7 +232,19 @@ export function ChannelScreenHeader({
       statusBadge={
         <>
           {dmParticipantRank ? (
-            <AgentRankBadge rank={dmParticipantRank} />
+            <>
+              <AgentRankBadge rank={dmParticipantRank} />
+              <ReportingLineText
+                className="max-w-40"
+                line={dmParticipantReportingLine}
+                onOpenManager={
+                  openProfilePanel
+                    ? (managerPubkey) => openProfilePanel(managerPubkey)
+                    : null
+                }
+                testId="chat-header-dm-reporting-line"
+              />
+            </>
           ) : null}
           <ChannelHeaderStatusBadge
             ephemeralDisplay={activeChannelEphemeralDisplay}

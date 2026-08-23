@@ -234,13 +234,13 @@ type RawListRelayMembersResponse = {
   members: RawRelayMember[];
 };
 
-type RawCanvasResponse = {
+export type RawCanvasResponse = {
   content: string | null;
   updated_at: number | null;
   author: string | null;
 };
 
-type RawSetCanvasResult = {
+export type RawSetCanvasResult = {
   ok: boolean;
   event_id: string;
 };
