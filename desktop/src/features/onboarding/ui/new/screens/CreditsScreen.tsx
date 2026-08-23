@@ -77,8 +77,8 @@ export function CreditsScreen({
         </h1>
         <p className="onb-sub">
           {track === "colony"
-            ? "Finding customers, reaching out, research: work that carries on while you sleep. Your helpers run on Colony, and credits keep them working."
-            : "Your helpers work for free using what's on your computer. Add money only when you want them working while you sleep."}
+            ? "Finding customers, reaching out, research: work that carries on while you sleep. Your helpers run on Colony, and credits are what they run on."
+            : "You picked a tool you already pay for, so it covers your helpers' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."}
         </p>
       </div>
       <div className="onb-amounts">
@@ -123,7 +123,7 @@ export function CreditsScreen({
       <div className="onb-panel">
         <div className="onb-handoff">
           <p className="onb-handoff-title">
-            You'll pay with Paystack, then come straight back here.
+            Payment opens in your browser, then you come straight back here.
           </p>
           <p className="onb-handoff-methods">
             Colony never sees your card details.
@@ -146,7 +146,7 @@ export function CreditsScreen({
           onClick={pay}
         >
           {state === "leaving"
-            ? "Taking you to Paystack"
+            ? "Opening checkout"
             : state === "abandoned"
               ? "Try again"
               : `Pay $${valid ? chosen : MIN_USD}`}

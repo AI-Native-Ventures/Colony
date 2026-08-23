@@ -72,6 +72,15 @@
     align-self: start;
     margin: 0 !important;
     max-width: none !important;
+    /* The canvas is fixed to the viewport and clips, so a list longer than
+       the screen used to push the action row out of sight with nothing to
+       scroll: a dead end, not a layout nit. The brain list is as long as the
+       number of tools someone has installed, which is unbounded. The column
+       scrolls itself and leaves the actions where they are. */
+    max-height: min(62vh, 34rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 0.25rem;
   }
 
   :where(.onb-canvas)
@@ -599,6 +608,18 @@
 
   /* Chips: a compact multiple-choice row for a short optional answer, where
      the full option rows would outweigh the question being asked. */
+  /* A scrollable column needs to look scrollable. The default overlay bar is
+     invisible against these canvases until it moves, which is exactly when it
+     is too late to tell someone there is more below. */
+  :where(.onb-canvas) .onb-options::-webkit-scrollbar {
+    width: 0.375rem;
+  }
+
+  :where(.onb-canvas) .onb-options::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--onb-rule);
+  }
+
   :where(.onb-canvas) .onb-chips {
     display: flex;
     flex-wrap: wrap;

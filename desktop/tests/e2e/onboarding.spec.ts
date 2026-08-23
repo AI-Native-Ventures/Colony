@@ -1118,7 +1118,7 @@ test("first-community owner can connect an existing hosted community", async ({
   await expect(page.getByText("North Star")).toBeVisible();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Let’s start with you" }),
+    page.getByRole("heading", { name: "Build your profile" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1200,8 +1200,11 @@ test("first-community owner can create and connect a hosted community", async ({
     surfaceBox.y + surfaceBox.height,
   );
   await page.getByRole("button", { name: "Next" }).click();
+  // V2's founder screen used to sit in front of this one. It serves the
+  // returning-founder journey now, because asking for the founder's details
+  // here as well as in the redesigned flow meant asking twice in one sitting.
   await expect(
-    page.getByRole("heading", { name: "Let’s start with you" }),
+    page.getByRole("heading", { name: "Build your profile" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1426,8 +1429,11 @@ test("first-community direct join reaches founder setup", async ({ page }) => {
     .fill("wss://onboarding.communities.buzz.xyz");
   await page.getByTestId("invite-redeem-submit").click();
 
+  // V2's founder screen used to sit in front of this one. It serves the
+  // returning-founder journey now, because asking for the founder's details
+  // here as well as in the redesigned flow meant asking twice in one sitting.
   await expect(
-    page.getByRole("heading", { name: "Let’s start with you" }),
+    page.getByRole("heading", { name: "Build your profile" }),
   ).toBeVisible();
   await expect(page.getByText("Connecting securely…")).toHaveCount(0);
   await expect(page.getByText("Create an identity key")).toHaveCount(0);
