@@ -732,3 +732,43 @@ dd {
     margin-top: 0.9rem;
   }
 }
+
+.reply-path {
+  margin-bottom: 2rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid rgb(35 30 30 / 14%);
+  border-radius: 1rem;
+}
+
+.reply-path h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.reply-path p {
+  max-width: 60ch;
+  margin: 0 0 0.9rem;
+  color: rgb(35 30 30 / 75%);
+  line-height: 1.55;
+}
+
+.copy-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.copy-field code {
+  padding: 0.45rem 0.7rem;
+  font-size: 0.8rem;
+  color: #231e1e;
+  background: rgb(35 30 30 / 5%);
+  border-radius: 0.5rem;
+}
+
+.copy-field button {
+  padding: 0.4rem 1.1rem;
+  font-size: 0.85rem;
+}

@@ -139,6 +139,7 @@ type AppSidebarProps = {
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
+  onSelectPeople: () => void;
   onSelectProjects: () => void;
   onSelectContent: () => void;
   onSelectPulse: () => void;
@@ -174,7 +175,6 @@ type AppSidebarProps = {
   starredChannelIds?: ReadonlySet<string>;
   onStarChannel?: (channelId: string) => void;
   onUnstarChannel?: (channelId: string) => void;
-  workspaceExpanded?: boolean;
 } & Pick<AppSidebarPinnedHeaderProps, "commandActions">;
 export function AppSidebar({
   addCommunityPrefill,
@@ -216,6 +216,7 @@ export function AppSidebar({
   onSelectActionCenter,
   onSelectAgents,
   onSelectDiscovery,
+  onSelectPeople,
   onSelectProjects,
   onSelectContent,
   onSelectPulse,
@@ -245,7 +246,6 @@ export function AppSidebar({
   starredChannelIds,
   onStarChannel,
   onUnstarChannel,
-  workspaceExpanded = false,
 }: AppSidebarProps) {
   const { feedItemState } = useAppShell();
   const actionCenter = useActionCenterItems({
@@ -526,7 +526,6 @@ export function AppSidebar({
       className="!z-[100] !border-r-0"
       collapsible="offcanvas"
       data-testid="app-sidebar"
-      hidden={workspaceExpanded}
       onClick={(event) => {
         if (isSidebarBackgroundTarget(event.target)) {
           onBackgroundClick?.();
@@ -590,6 +589,7 @@ export function AppSidebar({
                 onSelectAgents={onSelectAgents}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}
+                onSelectPeople={onSelectPeople}
                 onSelectProjects={onSelectProjects}
                 onSelectContent={onSelectContent}
                 onSelectPulse={onSelectPulse}

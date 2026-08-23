@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { after, before, test } from "node:test";
 
+import { JSDOM } from "jsdom";
 import React from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AuxiliaryPanel } from "./AuxiliaryPanel/index.ts";
@@ -14,6 +17,26 @@ import {
   AuxiliaryPanelContext,
   useAuxiliaryPanel,
 } from "./AuxiliaryPanel/index.ts";
+
+const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+  url: "http://localhost",
+});
+
+before(() => {
+  Object.assign(globalThis, {
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    window: dom.window,
+  });
+  dom.window.matchMedia = () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  });
+});
+
+after(() => dom.window.close());
 
 function render(element) {
   return renderToStaticMarkup(element);
@@ -35,6 +58,7 @@ test("AuxiliaryPanel provides layout mode through context", () => {
       {
         layout: "split",
         onClose: () => {},
+        testId: "message-thread-panel",
         widthPx: 420,
       },
       React.createElement(ContextProbe),
@@ -42,6 +66,55 @@ test("AuxiliaryPanel provides layout mode through context", () => {
   );
 
   assert.match(html, /docked:split:true/);
+  assert.doesNotMatch(html, /data-testid="message-thread-panel"/);
+});
+
+test("AuxiliaryPanel preserves descendants when its layout changes", async () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const child = React.createElement(
+    "div",
+    { "data-testid": "persistent-child" },
+    React.createElement("input", {
+      "data-testid": "persistent-input",
+      defaultValue: "draft",
+    }),
+  );
+  const renderLayout = async (layout) => {
+    await act(async () => {
+      root.render(
+        React.createElement(
+          AuxiliaryPanel,
+          { layout, onClose: () => {}, widthPx: 420 },
+          child,
+        ),
+      );
+    });
+  };
+
+  await renderLayout("standalone");
+  const childBefore = container.querySelector(
+    '[data-testid="persistent-child"]',
+  );
+  const inputBefore = container.querySelector(
+    '[data-testid="persistent-input"]',
+  );
+  assert.ok(childBefore);
+  assert.ok(inputBefore);
+  childBefore.scrollTop = 37;
+
+  await renderLayout("split");
+  assert.equal(
+    container.querySelector('[data-testid="persistent-child"]'),
+    childBefore,
+  );
+  assert.equal(
+    container.querySelector('[data-testid="persistent-input"]'),
+    inputBefore,
+  );
+  assert.equal(childBefore.scrollTop, 37);
+
+  await act(async () => root.unmount());
 });
 
 test("AuxiliaryPanelBody accepts a mode override and applies panel padding", () => {
@@ -147,6 +220,7 @@ test("AuxiliaryPanel applies className in standalone layout", () => {
       {
         className: "custom-panel-class",
         onClose: () => {},
+        testId: "message-thread-panel",
         widthPx: 420,
       },
       "Panel",
@@ -154,6 +228,8 @@ test("AuxiliaryPanel applies className in standalone layout", () => {
   );
 
   assert.match(html, /custom-panel-class/);
+  assert.match(html, /data-testid="message-thread-panel"/);
+  assert.match(html, /role="complementary"/);
 });
 
 test("AuxiliaryPanelHeader renders a generic close action from context", () => {

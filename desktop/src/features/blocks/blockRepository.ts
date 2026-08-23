@@ -60,6 +60,8 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "6936a3f3b147ad3739dc19fae71df77fb2010de6953fb4039e6d7f06e359b2a5",
   // initiative
   "1e350094a920530ccaf8ee6d521ab0dc8bf2a3103b6a0200ab578aba77d36967",
+  // handover
+  "542e2eefd8e515e35fb1d72063271b90d7975bedfc59afb98594a5216dd43198",
 ]);
 
 type CachedManifest = {
@@ -93,6 +95,10 @@ const cacheByCommunity = new Map<string, Map<string, CachedManifest>>();
 const inflightByCommunity = new Map<
   string,
   Map<string, Promise<BlockParseResult<CachedManifest>>>
+>();
+const memberRolesInflight = new Map<
+  string,
+  Promise<Map<string, "owner" | "admin" | "member">>
 >();
 let repositoryGeneration = 0;
 
@@ -424,12 +430,16 @@ export function createBlockRepository(
   };
 }
 
-async function defaultWorkspaceTrust(
-  publisherPubkey: string,
+export async function loadDefaultMemberRoles(
   relaySelfPubkey: string | null,
-): Promise<BlockWorkspaceTrust> {
+): Promise<Map<string, "owner" | "admin" | "member">> {
   const memberRoles = new Map<string, "owner" | "admin" | "member">();
-  if (relaySelfPubkey) {
+  if (!relaySelfPubkey) return memberRoles;
+
+  const existing = memberRolesInflight.get(relaySelfPubkey);
+  if (existing) return existing;
+
+  const request = (async () => {
     const snapshot = await relayClient.fetchFirstEvent({
       kinds: [KIND_NIP43_MEMBERSHIP_LIST],
       authors: [relaySelfPubkey],
@@ -444,7 +454,27 @@ async function defaultWorkspaceTrust(
         memberRoles.set(normalizeHex(member.pubkey), member.role);
       }
     }
+    return memberRoles;
+  })();
+  memberRolesInflight.set(relaySelfPubkey, request);
+
+  try {
+    return await request;
+  } finally {
+    if (memberRolesInflight.get(relaySelfPubkey) === request) {
+      memberRolesInflight.delete(relaySelfPubkey);
+    }
   }
+}
+
+async function defaultWorkspaceTrust(
+  publisherPubkey: string,
+  relaySelfPubkey: string | null,
+): Promise<BlockWorkspaceTrust> {
+  // A channel can mount many Blocks at once. Share the authoritative roster
+  // request while it is in flight so those mounts do not burst identical REQs
+  // through the relay admission window.
+  const memberRoles = await loadDefaultMemberRoles(relaySelfPubkey);
 
   const verifiedAgentOwners = new Map<string, string>();
   const profiles = await getUsersBatch([publisherPubkey]);
@@ -494,4 +524,5 @@ export function resetBlockRepository(): void {
   repositoryGeneration += 1;
   cacheByCommunity.clear();
   inflightByCommunity.clear();
+  memberRolesInflight.clear();
 }

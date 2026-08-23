@@ -46,6 +46,11 @@ function formatAge(timestamp: number): string {
 function sourceLabel(item: ActionItem): string {
   switch (item.source.kind) {
     case "ask":
+      // A closed ask's meta line names HOW it closed. An executed default
+      // (the relay answered because the deadline passed with nobody
+      // answering) must be tellable from a human answer at a glance.
+      if (item.source.resolution?.defaultExecuted) return "Default executed";
+      if (item.source.resolution) return "Answered";
       return item.source.ask.channelId ? "Ask from a thread" : "Global ask";
     case "message":
       return item.source.item.channelName
@@ -105,7 +110,15 @@ export function ActionCenterRow({
             {formatAge(item.updatedAt)}
           </span>
         </span>
-        <span className="mt-0.5 block truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+        <span
+          className={cn(
+            "mt-0.5 block truncate text-2xs font-medium uppercase tracking-wide",
+            item.source.kind === "ask" &&
+              item.source.resolution?.defaultExecuted === true
+              ? "text-warning"
+              : "text-muted-foreground",
+          )}
+        >
           {sourceLabel(item)}
         </span>
         <span className="mt-1 block truncate text-sm text-muted-foreground">

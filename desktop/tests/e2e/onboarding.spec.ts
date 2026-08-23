@@ -7,6 +7,7 @@ import { GUIDE_NAME, STARTER_PERSONA_IDS } from "../helpers/starterTeam";
 import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
+  passThroughBackupStep,
   seedActiveIdentity,
 } from "../helpers/onboarding";
 
@@ -54,6 +55,81 @@ async function setRelayConnectionState(
     }
     setConnectionState(nextState);
   }, state);
+}
+
+async function installControlledRelayProbe(page: Page, relayUrl: string) {
+  await page.addInitScript((targetRelayUrl) => {
+    const NativeWebSocket = window.WebSocket;
+
+    class ControlledProbeSocket extends EventTarget {
+      binaryType: BinaryType = "blob";
+      bufferedAmount = 0;
+      extensions = "";
+      onclose: ((this: WebSocket, event: CloseEvent) => unknown) | null = null;
+      onerror: ((this: WebSocket, event: Event) => unknown) | null = null;
+      onmessage: ((this: WebSocket, event: MessageEvent) => unknown) | null =
+        null;
+      onopen: ((this: WebSocket, event: Event) => unknown) | null = null;
+      protocol = "";
+      readyState = NativeWebSocket.CONNECTING;
+      readonly url: string;
+
+      constructor(url: string) {
+        super();
+        this.url = url;
+      }
+
+      close() {
+        if (this.readyState === NativeWebSocket.CLOSED) return;
+        this.readyState = NativeWebSocket.CLOSED;
+        pendingProbe = null;
+        this.onclose?.call(
+          this as unknown as WebSocket,
+          new CloseEvent("close"),
+        );
+      }
+
+      send() {
+        throw new DOMException(
+          "The controlled relay probe is not open.",
+          "InvalidStateError",
+        );
+      }
+    }
+
+    let pendingProbe: ControlledProbeSocket | null = null;
+    const normalizedTarget = targetRelayUrl.replace(/\/+$/, "");
+
+    window.WebSocket = new Proxy(NativeWebSocket, {
+      construct(target, args, newTarget) {
+        const requestedUrl = String(args[0]);
+        if (requestedUrl.replace(/\/+$/, "") !== normalizedTarget) {
+          return Reflect.construct(target, args, newTarget);
+        }
+
+        if (pendingProbe) {
+          throw new Error("A controlled relay probe is already pending.");
+        }
+
+        pendingProbe = new ControlledProbeSocket(requestedUrl);
+        return pendingProbe;
+      },
+    });
+
+    (
+      window as Window & {
+        __BUZZ_E2E_FAIL_CONTROLLED_RELAY_PROBE__?: () => void;
+      }
+    ).__BUZZ_E2E_FAIL_CONTROLLED_RELAY_PROBE__ = () => {
+      if (!pendingProbe) {
+        throw new Error("The controlled relay probe did not start.");
+      }
+      pendingProbe.onerror?.call(
+        pendingProbe as unknown as WebSocket,
+        new Event("error"),
+      );
+    };
+  }, relayUrl);
 }
 
 const HOME_SEEN_STORAGE_KEY_PREFIX = "buzz-home-feed-seen.v1:";
@@ -647,6 +723,7 @@ async function completeProfileOnboarding(page: Page) {
     .getByTestId("onboarding-avatar-url")
     .fill("https://example.com/onboarding-avatar.png");
   await page.getByTestId("onboarding-next").click();
+  await passThroughBackupStep(page);
 }
 
 test("completed users skip the loading gate while profile is still settling", async ({
@@ -662,20 +739,27 @@ test("completed users skip the loading gate while profile is still settling", as
   await expectHomeView(page);
 });
 
-test("first-launch key import continues to machine setup", async ({ page }) => {
+test("first launch offers simple account entry without technical key choices", async ({
+  page,
+}) => {
   await installMockBridge(page, undefined, {
     skipCommunitySeed: true,
     skipOnboardingSeed: true,
   });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Use an existing key" }).click();
-  const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
-  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
-  await page.getByTestId("nostr-import-submit").click();
-
-  await expect(page.getByTestId("onboarding-page-2")).toBeVisible();
-  await expect(page.getByTestId("machine-onboarding-gate")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start with Colony" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign in to an existing account" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create a new identity key" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Use an existing key" }),
+  ).toHaveCount(0);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
 });
 
@@ -1034,7 +1118,7 @@ test("first-community owner can connect an existing hosted community", async ({
   await expect(page.getByText("North Star")).toBeVisible();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
+    page.getByRole("heading", { name: "Let’s start with you" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1050,21 +1134,13 @@ test("first-community owner can connect an existing hosted community", async ({
       ),
     )
     .toContain("wss://north-star.colony.ainative.ventures");
-  await page.getByTestId("community-profile-back").click();
-  await expect(
-    page.getByRole("heading", { name: "Choose a community" }),
-  ).toBeVisible();
-  await expect(page.getByText("North Star")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Join a community" }),
-  ).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(() =>
         window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
       ),
     )
-    .toBeNull();
+    .toContain('"stage":"founder"');
 });
 
 test("first-community owner can create and connect a hosted community", async ({
@@ -1125,7 +1201,7 @@ test("first-community owner can create and connect a hosted community", async ({
   );
   await page.getByRole("button", { name: "Next" }).click();
   await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
+    page.getByRole("heading", { name: "Let’s start with you" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1329,7 +1405,7 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(page.getByTestId("onboarding-finish")).toBeEnabled();
 });
 
-test("first-community direct join reaches profile", async ({ page }) => {
+test("first-community direct join reaches founder setup", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
@@ -1351,7 +1427,7 @@ test("first-community direct join reaches profile", async ({ page }) => {
   await page.getByTestId("invite-redeem-submit").click();
 
   await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
+    page.getByRole("heading", { name: "Let’s start with you" }),
   ).toBeVisible();
   await expect(page.getByText("Connecting securely…")).toHaveCount(0);
   await expect(page.getByText("Create an identity key")).toHaveCount(0);
@@ -2533,6 +2609,7 @@ test("avatar step accepts an avatar URL before completing onboarding", async ({
   expect(box?.height).toBeCloseTo(192, 0);
 
   await page.getByTestId("onboarding-next").click();
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -2568,6 +2645,7 @@ test("failed avatar saves can continue without saving the avatar", async ({
   ).toBeVisible();
   await page.getByTestId("onboarding-next-without-saving").click();
 
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -2927,8 +3005,12 @@ test("failed first profile saves can be skipped for the current session", async 
   await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
   await page.getByTestId("onboarding-skip").click();
 
+  // The profile error-recovery skip now leads to the key-backup step instead
+  // of exiting onboarding; the explicit acknowledgement is the only exit, and
+  // completing through it lands on the standard first-run Welcome channel.
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectHomeView(page);
+  await expectWelcomeView(page);
 });
 
 test("generic relay save failures use the generic reconnect card", async ({
@@ -3227,6 +3309,7 @@ test("onboarding relay reconnect — connected without a prior click does not sh
 test("membership denied shows all four affordances and change-community edits non-destructively", async ({
   page,
 }) => {
+  const replacementRelayUrl = "wss://new-relay.example.com";
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
@@ -3236,6 +3319,7 @@ test("membership denied shows all four affordances and change-community edits no
     },
     { skipOnboardingSeed: true },
   );
+  await installControlledRelayProbe(page, replacementRelayUrl);
   await page.goto("/");
 
   // Fill the display name and advance — membership check triggers denial.
@@ -3260,21 +3344,36 @@ test("membership denied shows all four affordances and change-community edits no
   const overlay = page.getByTestId("community-change-overlay");
   await expect(overlay).toBeVisible();
 
-  // Change the relay URL to a new one. The probe will time out for a fake URL
-  // so we wait for the "Use anyway" button.
-  await overlay
-    .locator("#community-edit-url")
-    .fill("wss://new-relay.example.com");
+  // Hold this probe open so the pending state is deterministic. External DNS
+  // can fail between two assertions and produce a false mixed-state failure.
+  const nameInput = overlay.locator("#community-edit-name");
+  const urlInput = overlay.locator("#community-edit-url");
+  await urlInput.fill(replacementRelayUrl);
   await overlay.getByRole("button", { name: "Save changes" }).click();
 
   // The fields are frozen while the probe is pending, so the saved URL and
   // any warning cannot get out of sync with a subsequent edit.
-  await expect(overlay.locator("#community-edit-url")).toBeDisabled();
-  await expect(overlay.locator("#community-edit-name")).toBeDisabled();
-  await expect(
-    overlay.getByRole("button", { name: "Use anyway" }),
-  ).toBeVisible();
-  await overlay.getByRole("button", { name: "Use anyway" }).click();
+  await expect(urlInput).toBeDisabled();
+  await expect(nameInput).toBeDisabled();
+
+  await page.evaluate(() => {
+    const failProbe = (
+      window as Window & {
+        __BUZZ_E2E_FAIL_CONTROLLED_RELAY_PROBE__?: () => void;
+      }
+    ).__BUZZ_E2E_FAIL_CONTROLLED_RELAY_PROBE__;
+    if (!failProbe) {
+      throw new Error("The controlled relay probe hook is unavailable.");
+    }
+    failProbe();
+  });
+
+  const useAnywayButton = overlay.getByRole("button", { name: "Use anyway" });
+  await expect(useAnywayButton).toBeVisible();
+  await expect(urlInput).toBeEnabled();
+  await expect(nameInput).toBeEnabled();
+  await nameInput.fill("E2E Test edited");
+  await useAnywayButton.click();
 
   // The community update triggers a remount (reinitKey bump). The persisted
   // community should now point to the new relay URL.
@@ -3283,12 +3382,18 @@ test("membership denied shows all four affordances and change-community edits no
       page.evaluate(() => {
         const raw = window.localStorage.getItem("buzz-communities");
         const communities = raw
-          ? (JSON.parse(raw) as Array<{ relayUrl?: string }>)
+          ? (JSON.parse(raw) as Array<{ name?: string; relayUrl?: string }>)
           : [];
-        return communities[0]?.relayUrl ?? null;
+        return {
+          name: communities[0]?.name ?? null,
+          relayUrl: communities[0]?.relayUrl ?? null,
+        };
       }),
     )
-    .toBe("wss://new-relay.example.com");
+    .toEqual({
+      name: "E2E Test edited",
+      relayUrl: replacementRelayUrl,
+    });
 
   // Identity was NOT wiped — the override storage key is still intact.
   await expect

@@ -90,7 +90,6 @@ export function MachineOnboardingFlow({
     React.useState<OnboardingTransitionDirection>("forward");
   const [error, setError] = React.useState<string | null>(null);
   const [isPending, setIsPending] = React.useState(false);
-  const [identityWasImported, setIdentityWasImported] = React.useState(false);
   const [keyImportStage, setKeyImportStage] =
     React.useState<NostrKeyImportStage>("key-entry");
   const [isKeyImporting, setIsKeyImporting] = React.useState(false);
@@ -99,12 +98,8 @@ export function MachineOnboardingFlow({
     "backup" | "phone" | null
   >(null);
   const [phoneRecoveryStep, setPhoneRecoveryStep] = React.useState("loading");
-  const [selectedPubkey, setSelectedPubkey] = React.useState<string | null>(
-    null,
-  );
-  const [identityStorage, setIdentityStorage] = React.useState<
-    IdentityStorage | undefined
-  >();
+  const selectedPubkey: string | null = null;
+  const identityStorage: IdentityStorage | undefined = undefined;
   const [readyRuntimeIds, setReadyRuntimeIds] = React.useState<string[]>([]);
   const [defaultConfigDraft, setDefaultConfigDraft] =
     React.useState<DefaultConfigDraft | null>(null);
@@ -135,13 +130,11 @@ export function MachineOnboardingFlow({
     try {
       const identity = await getIdentity();
       queryClient.setQueryData(["identity"], identity);
-      setSelectedPubkey(identity.pubkey);
-      setIdentityStorage(identity.storage);
-      setBackupDirection("forward");
-      setTransitionDirection("forward");
-      setReturningFromSecurity(false);
-      setBackupSubview("created");
-      setPage("backup");
+      window.localStorage.setItem(
+        `buzz-identity-backup-reminder.v1:${identity.pubkey}`,
+        "pending",
+      );
+      complete(identity.pubkey);
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Failed to load identity",
@@ -149,7 +142,7 @@ export function MachineOnboardingFlow({
     } finally {
       setIsPending(false);
     }
-  }, [queryClient]);
+  }, [complete, queryClient]);
 
   const loadRecoveredIdentity = React.useCallback(async () => {
     setIsPending(true);
@@ -158,11 +151,7 @@ export function MachineOnboardingFlow({
       const identity = await getIdentity();
       continueWithRecoveredIdentity(identity.pubkey);
       queryClient.setQueryData(["identity"], identity);
-      setIdentityWasImported(true);
-      setSelectedPubkey(identity.pubkey);
-      setIdentityStorage(identity.storage);
-      setTransitionDirection("forward");
-      setPage("setup");
+      complete(identity.pubkey);
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Failed to load identity",
@@ -170,7 +159,7 @@ export function MachineOnboardingFlow({
     } finally {
       setIsPending(false);
     }
-  }, [continueWithRecoveredIdentity, queryClient]);
+  }, [complete, continueWithRecoveredIdentity, queryClient]);
 
   const replaceLostIdentity = React.useCallback(async () => {
     const confirmed = window.confirm(
@@ -183,13 +172,11 @@ export function MachineOnboardingFlow({
     try {
       const identity = await persistCurrentIdentity();
       queryClient.setQueryData(["identity"], identity);
-      setSelectedPubkey(identity.pubkey);
-      setIdentityStorage(identity.storage);
-      setBackupDirection("forward");
-      setTransitionDirection("forward");
-      setReturningFromSecurity(false);
-      setBackupSubview("created");
-      setPage("backup");
+      window.localStorage.setItem(
+        `buzz-identity-backup-reminder.v1:${identity.pubkey}`,
+        "pending",
+      );
+      complete(identity.pubkey);
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Failed to save identity",
@@ -197,19 +184,16 @@ export function MachineOnboardingFlow({
     } finally {
       setIsPending(false);
     }
-  }, [queryClient]);
+  }, [complete, queryClient]);
 
   const importExistingIdentity = React.useCallback(
     async (nsec: string, password?: string) => {
       const identity = await importIdentity(nsec, password);
       continueWithIdentity(identity.pubkey);
       queryClient.setQueryData(["identity"], identity);
-      setIdentityWasImported(true);
-      setSelectedPubkey(identity.pubkey);
-      setTransitionDirection("forward");
-      setPage("setup");
+      complete(identity.pubkey);
     },
-    [continueWithIdentity, queryClient],
+    [complete, continueWithIdentity, queryClient],
   );
 
   const backFromKeyImport = React.useCallback(() => {
@@ -236,13 +220,6 @@ export function MachineOnboardingFlow({
   }, [backupSession]);
 
   const backFromSetup = React.useCallback(() => {
-    if (identityWasImported) {
-      setKeyImportFormKey((current) => current + 1);
-      setKeyImportStage("key-entry");
-      setTransitionDirection("backward");
-      setPage("key-import");
-      return;
-    }
     if (backupSubview === "password") {
       backupSessionToPasswordEntry(backupSession);
     }
@@ -250,7 +227,7 @@ export function MachineOnboardingFlow({
     setTransitionDirection("backward");
     setReturningFromSecurity(false);
     setPage("backup");
-  }, [backupSession, backupSubview, identityWasImported]);
+  }, [backupSession, backupSubview]);
 
   const chromeBackAction =
     page === "key-import" &&
@@ -317,7 +294,8 @@ export function MachineOnboardingFlow({
                 src="/landing/colony-wordmark.svg"
               />
               <p className="mt-2 max-w-[560px] text-center text-2xl font-normal leading-none text-foreground">
-                Your people, your agents, your projects —<br />
+                Your people, your agents, your projects,
+                <br />
                 all in one place.
               </p>
               {error ? (
@@ -331,10 +309,10 @@ export function MachineOnboardingFlow({
                   type="button"
                 >
                   {isPending
-                    ? "Loading identity…"
+                    ? "Starting Colony…"
                     : selectedPubkey
-                      ? "Continue setup"
-                      : "Create a new identity key"}
+                      ? "Continue"
+                      : "Start with Colony"}
                 </Button>
                 <Button
                   className={`${ONBOARDING_SECONDARY_CTA_CLASS} px-5`}
@@ -349,8 +327,8 @@ export function MachineOnboardingFlow({
                   variant="ghost"
                 >
                   {selectedPubkey
-                    ? "Use a different key instead"
-                    : "Use an existing key"}
+                    ? "Use a different account"
+                    : "Sign in to an existing account"}
                 </Button>
               </div>
               <IdentityKeyHelpDialog />

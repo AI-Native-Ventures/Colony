@@ -2,9 +2,10 @@
 
 `draft` `optional`
 
-A deterministic ledger of what a company's agents actually cost, built from
-usage captured at the model-provider wire rather than from what an agent says
-it spent.
+A deterministic ledger of what a company's agents actually cost. Provider-wire
+records remain authoritative. Subscription runtimes that do not expose their
+wire may contribute clearly labeled estimates from guarded cumulative adapter
+counters.
 
 ## Motivation
 
@@ -99,14 +100,20 @@ Rules:
 - **Exactly one** of `tokens` or `amountNanousd` MUST be present. Token records
   are priced by the price book; amount records carry their own money (an
   infrastructure invoice line, a subscription seat).
-- `source` is `wire` (observed by the checkpoint) or `manual` (entered by the
-  owner).
+- `source` is `wire` (observed by the checkpoint), `adapter_estimate` (derived
+  from cumulative counters exposed by a version-guarded runtime adapter), or
+  `manual` (entered by the owner).
 - `paymentMode` is `metered` (real money per token) or `imputed` (subscription
   seat, recorded at API-equivalent prices so unit economics stay honest).
   Imputed spend is excluded from reconciliation, since it appears on no invoice.
-- Token counts are the provider's own itemization. Zero means the provider
-  reported zero. A call whose usage could not be parsed produces **no record**
-  rather than a record of zeroes.
+- Wire token counts are the provider's own itemization. Zero means the provider
+  reported zero. A wire call whose usage could not be parsed produces **no
+  record** rather than a record of zeroes.
+- Adapter estimates MUST list every unreported cache category in
+  `unknownTokenFields`. Their numeric token breakdown keeps zero placeholders
+  for compatibility, but consumers MUST NOT interpret a listed category as a
+  provider-confirmed zero. Adapter estimates are never wire evidence for the
+  NIP-AM cross-check.
 - `agentPubkey` is bound by the checkpoint from the authenticating virtual key.
   It is not self-reported.
 - Consumers MUST ignore unknown top-level fields.
@@ -124,6 +131,10 @@ The five categories map to what providers actually bill:
 - `outputTokens`: output. Reasoning and thinking tokens are billed inside this
   count, not separately. Output has no cache tier.
 
+`unknownTokenFields`, when present, is an array containing any of
+`cacheRead`, `cacheWrite5m`, or `cacheWrite1h`. It is valid only for token
+records and MUST be empty for `wire` records.
+
 Image input is converted by providers into input tokens and is already inside
 the input counters.
 
@@ -131,8 +142,9 @@ the input counters.
 
 The dedupe key is:
 
-- `wire` records: `"{provider}:{requestId}"`. The provider's own identifier for
-  the call, so a republished record cannot be counted twice while two providers
+- `wire` and `adapter_estimate` records: `"{provider}:{requestId}"`. Wire uses
+  the provider's own identifier. Adapter estimates use a stable turn id. In
+  both cases a republished record cannot be counted twice while two providers
   issuing the same id stay distinct.
 - `manual` records: the event id, since an owner-supplied reference is not
   guaranteed unique across vendors.

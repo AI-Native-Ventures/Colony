@@ -25,7 +25,13 @@ pub const FORMAT: &str = "buzz-private-managed-agent";
 /// Current decrypted payload schema version.
 pub const VERSION: u32 = 1;
 /// NIP-44 v2 plaintext limit.
-pub const MAX_PLAINTEXT_BYTES: usize = 65_535;
+///
+/// Must stay at or below nostr's NIP-44 v2 hard limit, the private constant
+/// `nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`: 65_536 - 128 =
+/// 65_408. (The constant cannot be imported; the boundary test in this module
+/// pins us to the encryptor's real behaviour instead.) Above it,
+/// `nip44::encrypt` fails and `build_event` reports a bare `Error::Encrypt`.
+pub const MAX_PLAINTEXT_BYTES: usize = 65_408;
 /// Maximum plausible NIP-44 v2 ciphertext length.
 pub const MAX_CIPHERTEXT_BYTES: usize = 87_472;
 /// Largest integer represented exactly by interoperable JSON implementations.
@@ -895,6 +901,53 @@ mod tests {
         assert_eq!(envelope.owner_pubkey, owner.public_key());
         assert_eq!(envelope.generation, 1);
         assert_eq!(envelope.state, State::Active);
+    }
+
+    /// A payload whose serialized form is exactly `MAX_PLAINTEXT_BYTES` bytes
+    /// must encrypt successfully. This pins the cap to the encryptor's real
+    /// limit: nostr's NIP-44 v2 rejects anything above its private
+    /// `MAX_SUPPORTED_PLAINTEXT_SIZE` (65_536 - 128 = 65_408), so if the
+    /// constant drifts above the encryptor's limit again, this test fails
+    /// with `Error::Encrypt`.
+    #[test]
+    fn payload_at_exact_plaintext_cap_encrypts() {
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let mut candidate = payload(&owner, &agent);
+        // Pad through two extension values so each stays within
+        // MAX_VALUE_BYTES. String values grow the serialized form 1:1
+        // (plain ASCII, no JSON escaping), so sizing against the serializer
+        // is exact.
+        candidate
+            .extensions
+            .insert("t:pad-a".into(), Value::String(String::new()));
+        candidate
+            .extensions
+            .insert("t:pad-b".into(), Value::String(String::new()));
+        let floor = serde_json::to_vec(&candidate).unwrap().len();
+        let need = MAX_PLAINTEXT_BYTES - floor;
+        let pad_a_len = need / 2 + 1;
+        let pad_b_len = need - pad_a_len;
+        assert!(
+            pad_a_len <= MAX_VALUE_BYTES && pad_b_len <= MAX_VALUE_BYTES,
+            "pads must respect the per-value limit"
+        );
+        candidate
+            .extensions
+            .insert("t:pad-a".into(), Value::String("x".repeat(pad_a_len)));
+        candidate
+            .extensions
+            .insert("t:pad-b".into(), Value::String("x".repeat(pad_b_len)));
+        assert_eq!(
+            serde_json::to_vec(&candidate).unwrap().len(),
+            MAX_PLAINTEXT_BYTES,
+            "payload must serialize to exactly the cap"
+        );
+
+        let event = build_event(&owner, &candidate, 1_785_780_000)
+            .expect("a payload at exactly the plaintext cap must encrypt");
+        let (_, decoded) = validate_and_decrypt(&event, &owner).expect("round-trip must decrypt");
+        assert_eq!(decoded, candidate, "payload must survive the round trip");
     }
 
     #[test]

@@ -26,6 +26,7 @@ const ALLOWLIST = [
   "features/onboarding/lib/keyImportInput.ts",
   "features/onboarding/lib/keyImportInput.test.mjs",
   "features/onboarding/ui/BackupStep.tsx",
+  "features/onboarding/ui/onboardingFlowBackup.test.mjs",
   "features/onboarding/ui/BackupPasswordTimeline.tsx",
   "features/onboarding/ui/BackupTestFlow.tsx",
   "features/onboarding/ui/EncryptedBackupCreator.tsx",
@@ -37,6 +38,15 @@ const ALLOWLIST = [
   "features/settings/ui/BackupTestFlow.tsx",
   "features/settings/ui/EncryptedBackupCreator.tsx",
   "features/settings/ui/ProfileSettingsCard.tsx",
+  // Account signup. The service itself never names the codec: it receives
+  // already-encrypted blobs and forwards them as opaque strings. Only these
+  // two files spell it out, and both are deliberately small. The wiring
+  // module exists so the identity call sits in one file with one job rather
+  // than inside the flow component, and the test's fixture has to look like
+  // the real wire format or it stops proving the request body carries a blob
+  // rather than the password.
+  "features/onboarding/lib/wiredAuthService.ts",
+  "features/onboarding/authService.test.mjs",
   // e2e-only mock bridge (never in the production bundle):
   "testing/e2eBridge.ts",
   // this scan:

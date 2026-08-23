@@ -59,6 +59,36 @@ function ask(id = "ask-1") {
   };
 }
 
+const CLOSED_ASK_HEX = "a".repeat(64);
+
+function closedAsk(id = CLOSED_ASK_HEX) {
+  return {
+    ...ask(),
+    id,
+    headline: "Pick the refund policy",
+  };
+}
+
+function resolution(eventId, askId, createdAt, content, pubkey = PUBKEY) {
+  return {
+    eventId,
+    askId,
+    resolverPubkey: pubkey,
+    createdAt,
+    defaultExecuted: content.default_executed === true,
+    appliedOption:
+      typeof content.answer?.option === "string" ? content.answer.option : null,
+    decision:
+      typeof content.answer?.decision === "string"
+        ? content.answer.decision
+        : null,
+    rationale:
+      typeof content.answer?.rationale === "string"
+        ? content.answer.rationale
+        : null,
+  };
+}
+
 test("projects actionable sources into stable, sorted items", () => {
   const items = buildActionCenterItems({
     asks: [ask()],
@@ -250,5 +280,97 @@ test("applies optional state filters without changing the default queue", () => 
   assert.equal(
     filterActionCenterItems(items, "needs-action", "completed").length,
     0,
+  );
+});
+
+test("a resolved ask appears as a completed item whose summary accounts for the answer", () => {
+  const items = buildActionCenterItems({
+    asks: [],
+    resolvedAsks: [
+      {
+        resolution: resolution("res-human", CLOSED_ASK_HEX, 400, {
+          answer: { decision: "Refund in full" },
+        }),
+        ask: closedAsk(),
+      },
+    ],
+    resolverLabelsByPubkey: new Map([[PUBKEY, "Basheer"]]),
+    feed: { mentions: [], needsAction: [], activity: [], agentActivity: [] },
+    reminders: [],
+  });
+
+  const [item] = items;
+  assert.equal(item.id, `resolved-ask:${CLOSED_ASK_HEX}`);
+  assert.equal(item.kind, "ask");
+  assert.equal(item.state, "completed");
+  assert.equal(
+    item.summary.includes("Basheer"),
+    true,
+    "a human answer names who answered",
+  );
+  assert.equal(item.summary.includes("Refund in full"), true);
+  assert.equal(countActionableItems(items), 0);
+});
+
+test("an executed default is visibly distinct and names the applied option", () => {
+  const relayPubkey = "b".repeat(64);
+  const items = buildActionCenterItems({
+    asks: [],
+    resolvedAsks: [
+      {
+        resolution: resolution(
+          "res-default",
+          CLOSED_ASK_HEX,
+          400,
+          {
+            answer: { option: "Ship v2 to every customer" },
+            default_executed: true,
+          },
+          relayPubkey,
+        ),
+        ask: closedAsk(),
+      },
+    ],
+    resolverLabelsByPubkey: new Map(),
+    feed: { mentions: [], needsAction: [], activity: [], agentActivity: [] },
+    reminders: [],
+  });
+
+  const [item] = items;
+  assert.equal(item.state, "completed");
+  assert.equal(
+    item.source.resolution?.defaultExecuted,
+    true,
+    "the row must know this was an executed default so it can be marked",
+  );
+  assert.equal(item.summary.includes("Nobody answered"), true);
+  assert.equal(item.summary.includes("deadline"), true);
+  assert.equal(item.summary.includes("Ship v2 to every customer"), true);
+});
+
+test("resolved asks show under the asks filter alongside open ones", () => {
+  const items = buildActionCenterItems({
+    asks: [ask("ask-open")],
+    resolvedAsks: [
+      {
+        resolution: resolution("res-1", CLOSED_ASK_HEX, 400, {
+          answer: { decision: "Done" },
+        }),
+        ask: closedAsk(),
+      },
+    ],
+    feed: { mentions: [], needsAction: [], activity: [], agentActivity: [] },
+    reminders: [],
+  });
+
+  const askFilter = filterActionCenterItems(items, "asks");
+  assert.deepEqual(askFilter.map((item) => item.id).sort(), [
+    "ask:ask-open",
+    `resolved-ask:${CLOSED_ASK_HEX}`,
+  ]);
+  assert.equal(
+    filterActionCenterItems(items, "asks", "completed").length,
+    1,
+    "the state filter reaches closed asks too",
   );
 });

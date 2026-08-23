@@ -54,6 +54,9 @@ import {
   KIND_GIT_STATUS_MERGED,
   KIND_GIT_STATUS_OPEN,
   KIND_HUDDLE_STARTED,
+  KIND_EMPLOYEE,
+  KIND_DELEGATION_GRANT,
+  KIND_DECISION_LOG,
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
@@ -138,6 +141,16 @@ type MockRelayAgentSeed = {
   status?: PresenceStatus;
 };
 
+type MockEmployeeHeadSeed = {
+  /** The employee pubkey; also the head's `d` tag and author. */
+  pubkey: string;
+  role?: string;
+  name?: string;
+  rank: "worker" | "leader" | "executive";
+  /** The agent this employee reports to (pubkey); omitted means no manager. */
+  manager?: string;
+};
+
 type MockPersonaSeed = {
   id?: string;
   displayName: string;
@@ -218,6 +231,16 @@ type E2eConfig = {
     };
     /** Signed Block manifests/catalog events served by the mock relay. */
     blockEvents?: RelayEvent[];
+    /**
+     * Owner-authored delegation grant heads (kind 30189) served by the mock
+     * relay, keyed by their `d` tag; drives the promotion confirmation.
+     */
+    delegationGrantEvents?: RelayEvent[];
+    /**
+     * Agent-authored decision logs (kind 44303) served by the mock relay;
+     * drives the decision log view.
+     */
+    decisionLogEvents?: RelayEvent[];
     /** Signed Block timeline events seeded before the app subscribes. */
     blockTimelineEvents?: Array<{
       channelName: string;
@@ -357,6 +380,9 @@ type E2eConfig = {
     personaSharePublicationStatuses?: Array<"published" | "queued">;
     teams?: MockTeamSeed[];
     relayAgents?: MockRelayAgentSeed[];
+    /** Employee heads (kind 30190) the mock relay serves: who is employed at
+     *  what rank. Drives the rank badges and the ladder UI. */
+    employeeHeads?: MockEmployeeHeadSeed[];
     /** Native-like huddle state seeded from authoritative role-bearing membership. */
     huddle?: MockHuddleSeed;
     agentListDelayMs?: number;
@@ -487,6 +513,13 @@ type E2eConfig = {
     /** Delay EOSE for membership snapshots after delivering the event. */
     relayMembershipEoseDelayMs?: number;
     relayRole?: "owner" | "admin" | "member" | null;
+    /**
+     * Serve `list_relay_members` from the mock member table. Opt-in because
+     * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+     * (community owners, delegation-grant authorship), and every existing
+     * spec was built against the command being unsupported.
+     */
+    relayMembers?: boolean;
     // Descriptors returned by the mocked `pick_and_upload_media` /
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
     // (e.g. a generic PDF) without a real upload pipeline. See
@@ -1098,6 +1131,7 @@ type MockFilter = {
   "#a"?: string[];
   "#d"?: string[];
   "#e"?: string[];
+  "#grant"?: string[];
   "#h"?: string[];
   "#p"?: string[];
   authors?: string[];
@@ -2437,6 +2471,48 @@ function resetMockRelayAgents(config?: E2eConfig) {
   }
 }
 
+const mockEmployeeHeadEvents: RelayEvent[] = [];
+
+function resetMockEmployeeHeadEvents(config?: E2eConfig) {
+  mockEmployeeHeadEvents.length = 0;
+  for (const seed of config?.mock?.employeeHeads ?? []) {
+    // A head is keyed by (and signed by) its own employee pubkey, so the
+    // author carries the same hex the `d` tag does.
+    const tags: string[][] = [
+      ["d", seed.pubkey.toLowerCase()],
+      ["role", seed.role ?? "role"],
+      ["name", seed.name ?? "Employee"],
+      ["rank", seed.rank],
+    ];
+    if (seed.manager !== undefined) {
+      tags.push(["manager", seed.manager.toLowerCase()]);
+    }
+    mockEmployeeHeadEvents.push(
+      createMockEvent(KIND_EMPLOYEE, "", tags, seed.pubkey.toLowerCase()),
+    );
+  }
+}
+
+/** Serve employee heads for one REQ filter. */
+function filterMockEmployeeHeadEvents(filter: MockFilter): RelayEvent[] {
+  return mockEmployeeHeadEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const dValues = filter["#d"];
+    if (dValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "d")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
 function resetMockManagedAgents(config?: E2eConfig) {
   mockManagedAgents = [];
   mockManagedAgentRuntimes = (config?.mock?.managedAgentRuntimes ?? []).map(
@@ -3181,6 +3257,8 @@ export type CompanyWorkContextConfig = {
 
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
+const mockDelegationGrantEvents: RelayEvent[] = [];
+const mockDecisionLogEvents: RelayEvent[] = [];
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
@@ -3459,6 +3537,66 @@ function resetMockBlockEvents(config: E2eConfig | undefined) {
       tags: event.tags.map((tag) => [...tag]),
     });
   }
+}
+
+function resetMockDelegationGrantEvents(config: E2eConfig | undefined) {
+  mockDelegationGrantEvents.length = 0;
+  for (const event of config?.mock?.delegationGrantEvents ?? []) {
+    mockDelegationGrantEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
+function resetMockDecisionLogEvents(config: E2eConfig | undefined) {
+  mockDecisionLogEvents.length = 0;
+  for (const event of config?.mock?.decisionLogEvents ?? []) {
+    mockDecisionLogEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
+/** Serve delegation grant heads (kind 30189) for one REQ filter. */
+function filterMockDelegationGrantEvents(filter: MockFilter): RelayEvent[] {
+  return mockDelegationGrantEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const dValues = filter["#d"];
+    if (dValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "d")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/** Serve decision logs (kind 44303) for one REQ filter. */
+function filterMockDecisionLogEvents(filter: MockFilter): RelayEvent[] {
+  return mockDecisionLogEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const grantValues = filter["#grant"];
+    if (grantValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "grant")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => grantValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 function mockEventMatchesFilter(
@@ -10656,6 +10794,27 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
+    if (filter.kinds?.includes(KIND_EMPLOYEE)) {
+      for (const event of filterMockEmployeeHeadEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+    if (filter.kinds?.includes(KIND_DELEGATION_GRANT)) {
+      for (const event of filterMockDelegationGrantEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+    if (filter.kinds?.includes(KIND_DECISION_LOG)) {
+      for (const event of filterMockDecisionLogEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (
       filter.kinds?.some((kind) =>
         mockBlockEvents.some((event) => event.kind === kind),
@@ -10933,6 +11092,19 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (event.kind === KIND_DELEGATION_GRANT) {
+      // NIP-33 heads are replaceable per (author, kind, d), but the relay
+      // keeps every published head and its newest-first owner scan picks the
+      // winner, so the mock stores each publish too.
+      mockDelegationGrantEvents.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      emitMockGlobalEvent(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     if (isMockProjectScopedEvent(event)) {
       if (event.pubkey !== DEFAULT_MOCK_IDENTITY.pubkey) {
         sendWsText(socket.handler, [
@@ -11100,6 +11272,9 @@ export function maybeInstallE2eTauriMocks() {
     : { balance_nanousd: "0", currency: "USD", status: "depleted" };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
+  resetMockDelegationGrantEvents(config);
+  resetMockDecisionLogEvents(config);
+  resetMockEmployeeHeadEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);
   resetMockPersonas(config);
@@ -13130,6 +13305,17 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
+      case "list_relay_members": {
+        // Opt-in via mock.relayMembers: returning the member table makes the
+        // viewer the community owner, which changes what owner-gated reads
+        // (grant authorship, shared heads) may trust.
+        if (!activeConfig?.mock?.relayMembers) {
+          throw new Error(
+            "Unsupported mocked Tauri command: list_relay_members",
+          );
+        }
+        return { members: mockRelayMembers };
+      }
       case "list_personas":
         return handleListPersonas();
       case "create_persona":

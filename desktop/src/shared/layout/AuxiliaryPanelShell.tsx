@@ -128,37 +128,31 @@ export function AuxiliaryPanel({
       </button>
     ) : null;
 
-  if (isSplitLayout) {
-    return (
-      <AuxiliaryPanelContext.Provider value={contextValue}>
-        <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
-          {header}
-          {children}
-          {footer}
-        </div>
-        {siblings}
-      </AuxiliaryPanelContext.Provider>
-    );
-  }
-
   return (
     <AuxiliaryPanelContext.Provider value={contextValue}>
-      {isFloatingOverlay ? <OverlayPanelBackdrop onClose={onClose} /> : null}
-      <aside
-        className={cn(
-          enterMotion ? PANEL_ENTER_BASE_CLASS : PANEL_BASE_CLASS,
-          isSinglePanelView && "border-l-0",
-          isFloatingOverlay && PANEL_OVERLAY_CLASS,
-          className,
-        )}
-        data-testid={testId}
-        style={{ width: panelWidth }}
+      {!isSplitLayout && isFloatingOverlay ? (
+        <OverlayPanelBackdrop onClose={onClose} />
+      ) : null}
+      <div
+        className={
+          isSplitLayout
+            ? cn("flex min-h-0 flex-1 flex-col", className)
+            : cn(
+                enterMotion ? PANEL_ENTER_BASE_CLASS : PANEL_BASE_CLASS,
+                isSinglePanelView && "border-l-0",
+                isFloatingOverlay && PANEL_OVERLAY_CLASS,
+                className,
+              )
+        }
+        data-testid={isSplitLayout ? undefined : testId}
+        role={isSplitLayout ? undefined : "complementary"}
+        style={isSplitLayout ? undefined : { width: panelWidth }}
       >
         {resizeHandle}
         {header}
         {children}
         {footer}
-      </aside>
+      </div>
       {siblings}
     </AuxiliaryPanelContext.Provider>
   );
