@@ -507,6 +507,13 @@ type E2eConfig = {
     /** Delay EOSE for membership snapshots after delivering the event. */
     relayMembershipEoseDelayMs?: number;
     relayRole?: "owner" | "admin" | "member" | null;
+    /**
+     * Serve `list_relay_members` from the mock member table. Opt-in because
+     * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+     * (community owners, delegation-grant authorship), and every existing
+     * spec was built against the command being unsupported.
+     */
+    relayMembers?: boolean;
     // Descriptors returned by the mocked `pick_and_upload_media` /
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
     // (e.g. a generic PDF) without a real upload pipeline. See
@@ -13239,6 +13246,17 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
+      case "list_relay_members": {
+        // Opt-in via mock.relayMembers: returning the member table makes the
+        // viewer the community owner, which changes what owner-gated reads
+        // (grant authorship, shared heads) may trust.
+        if (!activeConfig?.mock?.relayMembers) {
+          throw new Error(
+            "Unsupported mocked Tauri command: list_relay_members",
+          );
+        }
+        return { members: mockRelayMembers };
+      }
       case "list_personas":
         return handleListPersonas();
       case "create_persona":
