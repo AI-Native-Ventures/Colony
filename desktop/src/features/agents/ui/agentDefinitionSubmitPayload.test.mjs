@@ -90,3 +90,23 @@ test("explicit-runtime-chosen: runtime and model both persisted when user explic
   assert.equal(result.model, "claude-opus-4-8", "model must be persisted");
   assert.equal(result.provider, undefined, "empty provider must be omitted");
 });
+
+// ── defaults-mode ──────────────────────────────────────────────────────────────
+//
+// S1: the one toggle owns harness + provider + model together. "Use agent
+// defaults" submits NO pins at all — not even an auto-seeded runtime — so the
+// definition follows the global defaults everywhere.
+
+test("defaults-mode: no pins submitted even when a seeded harness is in the draft", () => {
+  const result = buildRuntimeModelProviderPayload({
+    ...BUILTIN_EDIT_BASE,
+    runtime: "codex",
+    model: "gpt-5.6-sol",
+    provider: "openai",
+    isDefaultsMode: true,
+    isAutoSeeded: true,
+  });
+  assert.equal(result.runtime, undefined, "harness pin must be omitted");
+  assert.equal(result.model, undefined, "model pin must be omitted");
+  assert.equal(result.provider, undefined, "provider pin must be omitted");
+});

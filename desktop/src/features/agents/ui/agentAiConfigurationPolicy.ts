@@ -5,10 +5,22 @@ export type AgentAiConfigurationPair = {
   model: string;
 };
 
+/**
+ * The full set of AI-configuration fields the mode toggle owns: harness
+ * (runtime id) plus the provider/model pair. Effort travels in the env-var
+ * draft and is cleared by the caller using the runtime catalog's
+ * `thinkingEnvVar` facts, not here.
+ */
+export type AgentAiConfigurationState = AgentAiConfigurationPair & {
+  runtime: string;
+};
+
 export function initialAgentAiConfigurationMode(
-  pair: Partial<AgentAiConfigurationPair>,
+  state: Partial<AgentAiConfigurationState>,
 ): AgentAiConfigurationMode {
-  return pair.provider?.trim() || pair.model?.trim() ? "custom" : "defaults";
+  return state.provider?.trim() || state.model?.trim() || state.runtime?.trim()
+    ? "custom"
+    : "defaults";
 }
 
 export function agentAiConfigurationPairForMode({
@@ -27,6 +39,39 @@ export function agentAiConfigurationPairForMode({
   }
 
   return {
+    provider: needsProviderSelection
+      ? current.provider.trim() || inherited.provider
+      : "",
+    model: current.model.trim() || inherited.model,
+  };
+}
+
+/**
+ * The one toggle owns harness + provider + model (+ effort, via the env-var
+ * draft) TOGETHER. "Use agent defaults" clears all four so the agent follows
+ * the global defaults; "Customize for this agent" pins all four.
+ *
+ * `inheritedRuntimeId` seeds the harness picker when entering Customize with
+ * no explicit pin yet, mirroring how the provider/model pair seeds from the
+ * inherited values.
+ */
+export function agentAiConfigurationStateForMode({
+  current,
+  inherited,
+  mode,
+  needsProviderSelection = true,
+}: {
+  current: AgentAiConfigurationState;
+  inherited: AgentAiConfigurationPair & { runtimeId?: string | null };
+  mode: AgentAiConfigurationMode;
+  needsProviderSelection?: boolean;
+}): AgentAiConfigurationState {
+  if (mode === "defaults") {
+    return { runtime: "", provider: "", model: "" };
+  }
+
+  return {
+    runtime: current.runtime.trim() || inherited.runtimeId || "",
     provider: needsProviderSelection
       ? current.provider.trim() || inherited.provider
       : "",

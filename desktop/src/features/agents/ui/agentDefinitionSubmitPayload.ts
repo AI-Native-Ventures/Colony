@@ -14,6 +14,7 @@ export function buildRuntimeModelProviderPayload({
   runtime,
   model,
   provider,
+  isDefaultsMode = false,
   isEditMode,
   isAutoSeeded,
   initialPreviousRuntime,
@@ -24,6 +25,12 @@ export function buildRuntimeModelProviderPayload({
   runtime: string;
   model: string;
   provider: string;
+  /**
+   * "Use agent defaults" mode: the toggle owns harness + provider + model
+   * together, so the definition submits no pins at all and inherits the
+   * global defaults at spawn/readiness/deploy time.
+   */
+  isDefaultsMode?: boolean;
   isEditMode: boolean;
   isAutoSeeded: boolean;
   initialPreviousRuntime: string;
@@ -35,6 +42,9 @@ export function buildRuntimeModelProviderPayload({
   model: string | undefined;
   provider: string | undefined;
 } {
+  if (isDefaultsMode) {
+    return { runtime: undefined, model: undefined, provider: undefined };
+  }
   const trimmedRuntime = runtime.trim();
   const previousRuntime = initialPreviousRuntime;
   const isAutoSeededRuntimeForBuiltinEdit =

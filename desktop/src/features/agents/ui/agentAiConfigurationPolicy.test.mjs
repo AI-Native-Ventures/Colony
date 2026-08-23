@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   agentAiConfigurationModeSatisfied,
   agentAiConfigurationPairForMode,
+  agentAiConfigurationStateForMode,
   initialAgentAiConfigurationMode,
 } from "./agentAiConfigurationPolicy.ts";
 
@@ -148,5 +149,60 @@ test("entering Customize pins unresolved fields from the inherited pair", () => 
       mode: "custom",
     }),
     { provider: "anthropic", model: "llama" },
+  );
+});
+
+// ── S1: the one toggle owns harness + provider + model together ──
+
+test("a pinned harness alone opens the dialog in Customize", () => {
+  // The toggle owns all four fields together, so a harness pin with no
+  // provider/model is still an explicit customization.
+  assert.equal(initialAgentAiConfigurationMode({ runtime: "codex" }), "custom");
+  assert.equal(
+    initialAgentAiConfigurationMode({ provider: "", model: "", runtime: "" }),
+    "defaults",
+  );
+});
+
+test("Use agent defaults clears harness, provider, and model together", () => {
+  assert.deepEqual(
+    agentAiConfigurationStateForMode({
+      current: {
+        runtime: "codex",
+        provider: "anthropic",
+        model: "claude-opus",
+      },
+      inherited: {
+        provider: "databricks_v2",
+        model: "llama",
+        runtimeId: "omp",
+      },
+      mode: "defaults",
+    }),
+    { runtime: "", provider: "", model: "" },
+  );
+});
+
+test("Customize pins the harness, seeding from the inherited default when blank", () => {
+  assert.deepEqual(
+    agentAiConfigurationStateForMode({
+      current: { runtime: "", provider: "", model: "" },
+      inherited: {
+        provider: "databricks_v2",
+        model: "llama",
+        runtimeId: "omp",
+      },
+      mode: "custom",
+    }),
+    { runtime: "omp", provider: "databricks_v2", model: "llama" },
+  );
+  // An explicit selection always survives.
+  assert.equal(
+    agentAiConfigurationStateForMode({
+      current: { runtime: "codex", provider: "", model: "" },
+      inherited: { provider: "", model: "", runtimeId: "omp" },
+      mode: "custom",
+    }).runtime,
+    "codex",
   );
 });

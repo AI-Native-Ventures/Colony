@@ -67,11 +67,9 @@ export function AgentCreateAiDefaultsSummary({
 
 export function AgentAiConfigurationModeField({
   mode,
-  needsProviderSelection = true,
   onModeChange,
 }: {
   mode: AgentAiConfigurationMode;
-  needsProviderSelection?: boolean;
   onModeChange: (mode: AgentAiConfigurationMode) => void;
 }) {
   return (
@@ -96,9 +94,7 @@ export function AgentAiConfigurationModeField({
             className="relative z-10 h-full rounded-md bg-transparent text-xs font-medium shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:shadow-none"
             value="defaults"
           >
-            {needsProviderSelection
-              ? "Use agent defaults"
-              : "Use harness defaults"}
+            Use agent defaults
           </TabsTrigger>
           <TabsTrigger
             className="relative z-10 h-full rounded-md bg-transparent text-xs font-medium shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:shadow-none"
