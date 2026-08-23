@@ -90,6 +90,7 @@ export default defineConfig({
         "**/doctor-cta-screenshots.spec.ts",
         "**/pubkey-display-screenshots.spec.ts",
         "**/agent-rank-screenshots.spec.ts",
+        "**/org-delegation-authority-screenshots.spec.ts",
         "**/context-surfaces-screenshots.spec.ts",
         "**/org-chart-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
@@ -180,6 +181,7 @@ export default defineConfig({
         "**/discovery-pipeline.spec.ts",
         "**/huddle-transcription.spec.ts",
         "**/ask-card.spec.ts",
+        "**/delegation-grant-screenshots.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
