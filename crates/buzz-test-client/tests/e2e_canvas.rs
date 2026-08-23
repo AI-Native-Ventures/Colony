@@ -99,7 +99,6 @@ async fn query_events_http(
 /// Create a real channel via a signed kind:9007 event; the creator becomes
 /// its owner and only member.
 async fn create_channel(client: &Client, keys: &Keys) -> String {
-    let pubkey_hex = keys.public_key().to_hex();
     let channel_uuid = uuid::Uuid::new_v4();
     let channel_name = format!("canvas-e2e-{}", channel_uuid);
 
@@ -301,7 +300,7 @@ async fn test_unknown_root_rejected_with_positive_control() {
     let channel = create_channel(&client, &keys).await;
 
     // A syntactically valid id that was never stored.
-    let phantom = format!("{:064x}", 0xdeadbeef);
+    let phantom = format!("{:064x}", 0xdeadbeefu32);
     let bad = canvas_event(&keys, &channel, "memory", Some(&phantom));
     let (accepted, msg) = submit_event_http(&client, &keys, &bad).await;
     assert!(!accepted, "unknown thread root must be rejected");
@@ -408,9 +407,9 @@ async fn test_h_only_query_returns_channel_canvas_not_thread_canvas() {
     let results = query_events_http(
         &client,
         &pubkey_hex,
-        vec![Filter::new().kind(Kind::Custom(KIND_CANVAS)).custom_tag(
+        vec![Filter::new().kind(Kind::Custom(KIND_CANVAS)).custom_tags(
             nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
-            [&channel],
+            [channel.as_str()],
         )],
     )
     .await;
@@ -433,9 +432,9 @@ async fn test_h_only_query_returns_channel_canvas_not_thread_canvas() {
         &pubkey_hex,
         vec![Filter::new()
             .kind(Kind::Custom(KIND_CANVAS))
-            .custom_tag(
+            .custom_tags(
                 nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
-                [&channel],
+                [channel.as_str()],
             )
             .event(root)],
     )
@@ -475,10 +474,10 @@ async fn test_websocket_req_path_honors_canvas_scope() {
     let sub = format!("canvas-scope-{}", uuid::Uuid::new_v4());
     ws.subscribe(
         &sub,
-        Filter::new().kind(Kind::Custom(KIND_CANVAS)).custom_tag(
+        vec![Filter::new().kind(Kind::Custom(KIND_CANVAS)).custom_tags(
             nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
-            [&channel],
-        ),
+            [channel.as_str()],
+        )],
     )
     .await
     .expect("subscribe");
