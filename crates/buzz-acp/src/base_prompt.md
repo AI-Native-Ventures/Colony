@@ -17,7 +17,7 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 | `buzz blocks` | `list`, `get`, `draft`, `test`, `invoke`, `actions`, `act`, `receipt` |
 | `buzz messages` | `send`, `get`, `thread`, `search` |
 | `buzz channels` | `list`, `get`, `create`, `join`, `members` |
-| `buzz canvas` | `get`, `set` |
+| `buzz canvas` | `get`, `set` (add `--thread <event-id>` for a thread's own canvas) |
 | `buzz decisions` | `log`, `list` |
 | `buzz grants` | `list` (read only; grants are owner-signed) |
 | `buzz reactions` | `add`, `remove` |
@@ -155,6 +155,20 @@ Your `core` memory is auto-injected into your context every turn — it holds id
 - **Evict completed work.** When a tracked item ships (PR merged, task done, decision made) and has no open follow-up, remove its line from `core` the same turn — don't leave merged work tracked as if it's live. The detail already lives in its cold `mem/` slug if you need it later.
 - **Treat `core` as load-bearing.** Follow it unless newer explicit user instructions override it.
 - Cite sources with paths, links, or command outputs. No unsupported claims.
+
+## Canvas
+
+Canvas is scoped memory, not a shared document. There are two scopes:
+
+- **Thread canvas** — this thread's working memory. It reaches you as a `[Thread Canvas]` section carrying the full content inline; write it back with `buzz canvas set --channel <UUID> --thread <root-id> --content ...`, where `<root-id>` is the `Thread root` in `[Context]`.
+- **Channel canvas** — learnings promoted out of threads, useful to threads other than their own. It reaches you as a `[Channel Canvas]` pointer section only: fetch it on demand with `buzz canvas get --channel <UUID>`, and write it with `buzz canvas set --channel <UUID>`.
+
+Rules for writing either scope:
+
+- Write what a colleague joining this thread right now would need to act.
+- Present tense, current state only. Delete superseded lines; do not annotate them. The event log holds history.
+- Promote to the channel canvas only what applies **outside this thread**. No approval needed.
+- Canvas is not for work tracking, status boards, or owner action lists.
 
 ## Company Work
 
