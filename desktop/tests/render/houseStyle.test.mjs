@@ -19,6 +19,7 @@ const {
   bannedWordsGate,
   canvasGate,
   emDashGate,
+  houseStyleGate,
   mayRender,
   preRenderTextGates,
 } = await import(
@@ -160,8 +161,31 @@ test("kit words are matched literally, never compiled as a pattern", () => {
 
 test("a clean card clears every pre-render gate", () => {
   const entries = preRenderTextGates(card(), 1080, 1350, KIT);
-  assert.equal(entries.length, 3);
+  assert.equal(entries.length, 2);
   assert.equal(mayRender(entries).ok, true);
+});
+
+test("the gates report under the ids a report is required to carry", () => {
+  // REQUIRED_GATES names housestyle, not em-dash or banned-words. Reporting
+  // the granular ids would leave housestyle missing, and a post whose report
+  // is missing a required gate cannot be ready.
+  const ids = preRenderTextGates(card(), 1080, 1350, KIT).map((g) => g.id);
+  assert.deepEqual(ids.sort(), ["canvas", "housestyle"]);
+});
+
+test("housestyle folds both rules but keeps which one failed", () => {
+  const g = houseStyleGate(card({ headline: "Synergy — at last." }), KIT);
+  assert.equal(g.status, "fail");
+  assert.equal(g.measured["em-dash"].status, "fail");
+  assert.equal(g.measured["banned-words"].status, "fail");
+  assert.match(g.detail, /plain dash/);
+  assert.match(g.detail, /does not use/);
+});
+
+test("housestyle passes when both rules pass", () => {
+  const g = houseStyleGate(card(), KIT);
+  assert.equal(g.status, "pass");
+  assert.equal(g.measured["em-dash"].status, "pass");
 });
 
 test("any single failure stops the render", () => {
@@ -175,8 +199,8 @@ test("any single failure stops the render", () => {
   assert.equal(verdict.ok, false);
   assert.equal(
     verdict.blocking.length,
-    3,
-    "all three should fail on this card",
+    2,
+    "canvas and housestyle both fail on this card",
   );
 });
 
@@ -192,7 +216,7 @@ test("the expensive step never happens on a failing card", () => {
   assert.equal(mayRender(entries).ok, false);
   assert.equal(
     mayRender(entries).blocking[0].id,
-    "em-dash",
-    "and the report names which rule stopped it",
+    "housestyle",
+    "and the report names which gate stopped it",
   );
 });

@@ -189,7 +189,36 @@ export function bannedWordsGate(text: CardText, rules: HouseRules): GateEntry {
 }
 
 /**
- * Run every pre-render text gate this module owns.
+ * The em-dash and banned-word rules folded into the one `housestyle` gate a
+ * report is required to carry.
+ *
+ * `REQUIRED_GATES` in `../contracts` (mirroring `buzz-core`) names six ids:
+ * contrast, grain, fonts, canvas, housestyle and claims. Reporting `em-dash`
+ * and `banned-words` as separate entries would leave `housestyle` missing, and
+ * a post whose report is missing a required gate cannot be ready. The
+ * individual verdicts survive inside `measured`, so the day detail can still
+ * say which rule failed rather than only that one did.
+ */
+export function houseStyleGate(text: CardText, rules: HouseRules): GateEntry {
+  const parts = [emDashGate(text), bannedWordsGate(text, rules)];
+  const failed = parts.filter((p) => p.status === "fail");
+  return {
+    bar: 0,
+    detail:
+      failed.length === 0
+        ? "House style clean."
+        : failed.map((p) => p.detail).join(" "),
+    id: "housestyle",
+    measured: Object.fromEntries(
+      parts.map((p) => [p.id, { measured: p.measured, status: p.status }]),
+    ),
+    status: failed.length === 0 ? "pass" : "fail",
+  };
+}
+
+/**
+ * Run every pre-render text gate this module owns, under the ids a report is
+ * required to carry.
  *
  * The claims gate is not here: it needs network verification and lives in
  * `../claimVerifier`. The render pipeline runs both and concatenates the
@@ -201,11 +230,7 @@ export function preRenderTextGates(
   height: number,
   rules: HouseRules,
 ): GateEntry[] {
-  return [
-    emDashGate(text),
-    canvasGate(width, height, rules),
-    bannedWordsGate(text, rules),
-  ];
+  return [canvasGate(width, height, rules), houseStyleGate(text, rules)];
 }
 
 /**
