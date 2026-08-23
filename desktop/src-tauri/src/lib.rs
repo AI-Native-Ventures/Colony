@@ -634,6 +634,7 @@ pub fn run() {
             get_build_default_relay_url,
             auto_connect_default_relay_enabled,
             scan_onboarding_company_website,
+            fetch_claim_source_page,
             get_legacy_workspace_storage,
             is_shared_identity,
             get_relay_ws_url,

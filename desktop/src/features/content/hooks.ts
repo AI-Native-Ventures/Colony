@@ -8,10 +8,14 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 
+import { verifyClaims } from "./claimVerifier";
+import { claimVerifierDependencies } from "./claimVerifierRuntime";
 import { contentRepository, HOUSE_STYLE_SCOPE } from "./contentRepository";
+import type { ContentPost } from "./contracts";
 import type { DecisionInput } from "./contentDecisions";
 import { buildDecisionEvent } from "./contentDecisions";
 
@@ -89,6 +93,33 @@ export function useContentClaimStrictness(communityId: string, enabled = true) {
     queryFn: () => contentRepository.getClaimStrictness(),
     queryKey: claimStrictnessQueryKey(communityId),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Live claim verification for one post, keyed by claim id.
+ *
+ * Runs on every mount of the day detail: a page check is a local HTTP
+ * request, so freshness is free, and a stale tick is the one thing this
+ * screen must not show. Owner pubkeys come from the membership snapshot; a
+ * still-loading set fails closed, so nothing reads owner-signed before
+ * ownership is known.
+ */
+export function useClaimVerification(communityId: string, post: ContentPost) {
+  const ownersQuery = useCommunityOwnersQuery(communityId);
+  const owners = ownersQuery.data;
+  return useQuery({
+    enabled: post.claims.length > 0,
+    queryFn: () =>
+      verifyClaims(post.claims, claimVerifierDependencies(owners ?? new Set())),
+    queryKey: [
+      CONTENT_ROOT,
+      communityId,
+      "claim-verification",
+      post.eventId,
+      post.updatedAt,
+    ],
+    staleTime: 0,
   });
 }
 

@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 
-import { KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
+import {
+  KIND_CONTENT_BRAND_KIT,
+  KIND_STREAM_MESSAGE,
+} from "@/shared/constants/kinds";
 
+import { parseClaimStrictness } from "./contracts.ts";
 import {
   evaluateClaimGate,
   hashSourceText,
@@ -285,4 +289,36 @@ test("a claim missing from the verdict map is treated as unchecked", () => {
   const outcome = evaluateClaimGate([claim()], {}, "strict");
   assert.equal(outcome.status, "fail");
   assert.match(outcome.warnings[0], /not been checked/);
+});
+
+function brandKit(rules) {
+  return {
+    content: JSON.stringify({ rules }),
+    created_at: 1,
+    id: "d".repeat(64),
+    kind: KIND_CONTENT_BRAND_KIT,
+    pubkey: "e".repeat(64),
+    sig: "0".repeat(128),
+    tags: [["d", "kit"]],
+  };
+}
+
+test("brand kit strictness parses both modes and nothing else", () => {
+  assert.equal(
+    parseClaimStrictness(brandKit({ claim_strictness: "advisory" })),
+    "advisory",
+  );
+  assert.equal(
+    parseClaimStrictness(brandKit({ claim_strictness: "strict" })),
+    "strict",
+  );
+  assert.equal(
+    parseClaimStrictness(brandKit({ claim_strictness: "yolo" })),
+    null,
+  );
+  assert.equal(parseClaimStrictness(brandKit({})), null);
+  assert.equal(
+    parseClaimStrictness({ ...brandKit({}), content: "not json" }),
+    null,
+  );
 });
