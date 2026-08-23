@@ -1118,30 +1118,10 @@ pub fn reconcile_databricks_v1_to_v2(app: &tauri::AppHandle) {
     }
 }
 
-fn rename_provider_to_runtime_in_personas(path: &Path) {
-    patch_json_records(path, |obj| {
-        if obj.contains_key("runtime") {
-            return false;
-        }
-        if let Some(value) = obj.remove("provider") {
-            obj.insert("runtime".to_string(), value);
-            true
-        } else {
-            false
-        }
-    });
-}
-
-pub fn migrate_persona_provider_to_runtime(app: &tauri::AppHandle) {
-    let Ok(dir) = app.path().app_data_dir() else {
-        return;
-    };
-    let path = dir.join("agents/personas.json");
-    if !path.exists() {
-        return;
-    }
-    rename_provider_to_runtime_in_personas(&path);
-}
+mod persona_provider_rename;
+pub use persona_provider_rename::migrate_persona_provider_to_runtime;
+#[cfg(test)]
+pub(crate) use persona_provider_rename::rename_provider_to_runtime_in_personas;
 mod materialize;
 pub use materialize::materialize_agent_runtimes;
 mod runtime_inherit;

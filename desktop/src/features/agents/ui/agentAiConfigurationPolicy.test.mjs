@@ -164,7 +164,12 @@ test("a pinned harness alone opens the dialog in Customize", () => {
   );
 });
 
-test("Use agent defaults clears harness, provider, and model together", () => {
+test("Use agent defaults clears provider and model; the harness draft is kept for gate evaluation", () => {
+  // Persistence-level clearing happens at submit (isDefaultsMode omits
+  // runtime/model/provider). The draft keeps the last-viewed harness because
+  // the picker is hidden on the defaults tab and the credential/readiness
+  // gates must evaluate what inheritance would actually run — clearing it
+  // dead-ended submit for CLI-login runtimes.
   assert.deepEqual(
     agentAiConfigurationStateForMode({
       current: {
@@ -179,7 +184,7 @@ test("Use agent defaults clears harness, provider, and model together", () => {
       },
       mode: "defaults",
     }),
-    { runtime: "", provider: "", model: "" },
+    { runtime: "codex", provider: "", model: "" },
   );
 });
 

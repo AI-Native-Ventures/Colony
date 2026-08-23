@@ -676,10 +676,37 @@ test.describe("global agent config screenshots", () => {
           const createPayload = log?.find(
             (entry) => entry.command === "create_persona",
           )?.payload.input;
-          return createPayload?.runtime;
+          return {
+            runtime: createPayload?.runtime,
+            model: createPayload?.model,
+            provider: createPayload?.provider,
+          };
         }),
       )
-      .toBe("claude");
+      .toEqual({
+        runtime: undefined,
+        model: undefined,
+        provider: undefined,
+      });
+
+    // The pins are absent AND the agent still resolves to the saved default:
+    // the bridge's create mirrors the backend inheritance chain, so the stored
+    // persona must carry the global preferred harness. Asserting only the
+    // omitted fields above would pass even if inheritance were broken.
+    const personas = (await page.evaluate(async () =>
+      (
+        window as typeof window & {
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload: unknown,
+          ) => Promise<unknown>;
+        }
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("list_personas", null),
+    )) as Array<{ display_name: string; runtime: string | null }>;
+    expect(
+      personas.find((persona) => persona.display_name === "Test Agent")
+        ?.runtime,
+    ).toBe("claude");
   });
 
   test("missing global credentials show the unset defaults notice", async ({

@@ -161,6 +161,19 @@ pub fn resolve_effective_harness_command(
     }
 }
 
+/// [`resolve_effective_harness_command`] with the legacy infallible fallback:
+/// a dangling pin degrades to the old record→definition→default resolution
+/// instead of erroring. For classify/setup-check scans that must produce a
+/// command shape; paths that REFUSE spawns use the fallible resolver.
+pub fn resolve_effective_harness_command_or_legacy(
+    record: &ManagedAgentRecord,
+    definitions: &[AgentDefinition],
+    global: &GlobalAgentConfig,
+) -> String {
+    resolve_effective_harness_command(record, definitions, global)
+        .unwrap_or_else(|_| super::record_agent_command(record, definitions))
+}
+
 fn resolve_linked(
     definition: &AgentDefinition,
     global: &GlobalAgentConfig,

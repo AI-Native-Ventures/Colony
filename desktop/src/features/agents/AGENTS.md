@@ -168,9 +168,13 @@ with a TypeScript lookup table or an id comparison in a component.
     agent store lock as the final record push and save — an earlier recovery
     read alone is not a concurrency boundary.
 13. **The AI configuration toggle owns harness + provider + model + effort
-    together.** "Use agent defaults" clears all four (submitting no pins, so
-    the agent follows the global defaults); "Customize for this agent" pins
-    all four. There is exactly one label for the defaults tab — the old
+    together.** "Use agent defaults" submits no pins at all — runtime,
+    provider, and model are omitted so the definition follows the global
+    defaults, and every catalog-declared thinking-effort env key is stripped
+    from the draft; "Customize for this agent" pins all four. (The in-dialog
+    harness DRAFT survives a switch to defaults on purpose: the picker is
+    hidden there and the credential/readiness gates must evaluate what
+    inheritance would actually run.) There is exactly one label for the defaults tab — the old
     per-harness "Use harness defaults" spelling is deleted — and the
     inheritance chain itself has one resolver:
     `effective_config::resolve_effective_runtime_id`

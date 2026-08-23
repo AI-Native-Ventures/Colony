@@ -150,6 +150,7 @@ export default defineConfig({
         "**/deep-link-invite.spec.ts",
         "**/invite-link-copy.spec.ts",
         "**/global-agent-config-screenshots.spec.ts",
+        "**/s1-probe.spec.ts",
         "**/provisioned-credits-recovery.spec.ts",
         "**/doctor-states.spec.ts",
         "**/onboarding-avatar-skip.spec.ts",

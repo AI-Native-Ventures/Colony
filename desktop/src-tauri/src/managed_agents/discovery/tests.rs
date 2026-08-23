@@ -402,64 +402,8 @@ fn record_agent_command_bare_record_defaults() {
     assert_eq!(record_agent_command(&record, &[]), default_agent_command());
 }
 
-// ── resolve_effective_harness_command ─────────────────────────────────────────────────
-
-/// When the record carries a dangling (unknown) runtime id, `resolve_effective_harness_command`
-/// must return `Err` containing "DANGLING_HARNESS_ID" — NEVER the buzz-agent default.
-/// This test would fail if the function silently fell back to `default_agent_command()`.
-#[test]
-fn resolve_effective_harness_command_dangling_runtime_id_returns_err() {
-    let record = record_with(Some("my-deleted-harness"), None, None);
-    let result = resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default());
-    assert!(
-        result.is_err(),
-        "dangling runtime id must produce Err, got Ok({:?})",
-        result.ok()
-    );
-    assert!(
-        result.unwrap_err().contains("DANGLING_HARNESS_ID"),
-        "error must name the dangling id"
-    );
-}
-
-/// When the persona carries a dangling runtime id, `resolve_effective_harness_command`
-/// must also error — the error must not silently resolve to the default.
-#[test]
-fn resolve_effective_harness_command_dangling_persona_runtime_returns_err() {
-    let personas = vec![persona_with_runtime("p1", Some("ghost-harness"))];
-    let record = record_with(None, Some("p1"), None);
-    let result =
-        resolve_effective_harness_command(&record, &personas, &GlobalAgentConfig::default());
-    assert!(
-        result.is_err(),
-        "dangling persona runtime id must produce Err"
-    );
-}
-
-/// When neither the record nor persona has any runtime id, `resolve_effective_harness_command`
-/// falls back to `default_agent_command()` — this is the legacy-agent path.
-#[test]
-fn resolve_effective_harness_command_no_runtime_id_defaults_to_buzz_agent() {
-    let record = record_with(None, None, None);
-    let result = resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default());
-    assert_eq!(
-        result,
-        Ok(default_agent_command()),
-        "no runtime id must fall back to the safe default"
-    );
-}
-
-/// An explicit agent_command_override always wins, even for a dangling runtime id.
-#[test]
-fn resolve_effective_harness_command_override_beats_dangling_id() {
-    let record = record_with(Some("gone-harness"), None, Some("cursor-agent"));
-    let result = resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default());
-    assert_eq!(
-        result,
-        Ok("cursor-agent".to_string()),
-        "explicit override must beat a dangling runtime id"
-    );
-}
+// The resolve_effective_harness_command dangling/default/override tests moved
+// to managed_agents/effective_config/tests.rs, next to the resolver itself.
 
 #[test]
 fn effective_agent_command_inherits_persona_runtime() {
