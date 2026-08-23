@@ -179,6 +179,7 @@ export default defineConfig({
         "**/discovery-pipeline.spec.ts",
         "**/huddle-transcription.spec.ts",
         "**/ask-card.spec.ts",
+        "**/delegation-grant-screenshots.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

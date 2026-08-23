@@ -11040,6 +11040,19 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (event.kind === KIND_DELEGATION_GRANT) {
+      // NIP-33 heads are replaceable per (author, kind, d), but the relay
+      // keeps every published head and its newest-first owner scan picks the
+      // winner, so the mock stores each publish too.
+      mockDelegationGrantEvents.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      emitMockGlobalEvent(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     if (isMockProjectScopedEvent(event)) {
       if (event.pubkey !== DEFAULT_MOCK_IDENTITY.pubkey) {
         sendWsText(socket.handler, [
