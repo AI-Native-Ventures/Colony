@@ -1,0 +1,150 @@
+/**
+ * Colony's own brand kit, the first row of the kind 30198 table.
+ *
+ * Every other customer gets one of these derived from their website (ticket
+ * 4) and corrected by hand. The renderer knows nothing about this file except
+ * through the {@link BrandKit} shape and the {@link ContentMarkAssets}
+ * interface, so nothing here may be reached around: hue values flow to the
+ * templates through the kit parameter, never as literals in composition code.
+ *
+ * The ramps are solved, not picked: each stop below is the lightness at which
+ * white (or ink) provably clears its stated ratio against the hue, ported
+ * from the launch build's `brand/atmosphere.mjs` bisection. Picking swatches
+ * by eye produced cards measuring 2.7:1 and 1.16:1 that the gate caught; the
+ * solved ramp is what keeps the contrast gate from being a coin toss.
+ */
+
+import {
+  hexToHsl,
+  hexToRgb,
+  luminanceHsl,
+  solveInkOn,
+  solveWhiteOn,
+} from "./color.ts";
+import type { BrandKit } from "./kit.ts";
+
+/** Colony's ink. The value every dawn-family solve bottoms out against. */
+export const INK = "#171717";
+
+/** Relative luminance of #171717, kept next to its colour. */
+export const INK_LUMINANCE = luminanceHsl(hexToHsl(INK));
+
+/**
+ * Named positions in the Colony kit's per-hue ramp.
+ *
+ * The wire record stores an ordered stop list; this map is the Colony-side
+ * reading of what each position means. `safe` stops may sit anywhere on a
+ * card including directly under type; `free` stops may sit only outside the
+ * type band, which is where the light source lives.
+ */
+export const COLONY_RAMP = {
+  /** White-type safe, darkest (clears 11:1). */
+  nightSafe0: 0,
+  /** White-type safe, mass tone (7.5:1). */
+  nightSafe1: 1,
+  /** White-type safe, lightest (5.8:1). */
+  nightSafe2: 2,
+  /** Ink-type safe floor: darkest lightness where ink still clears 5.5:1. */
+  dawnSafe0: 3,
+  /** Ink-type safe mid tone (ink clears 7.5:1). */
+  dawnSafe1: 4,
+  /** Ink-type safe lightest tone (ink clears 11:1). */
+  dawnSafe2: 5,
+  /** The palest canvas tint, free layer. */
+  canvasLight: 6,
+  /** The full-bleed canvas tint, free layer. */
+  canvas: 7,
+} as const;
+
+function solvedRamp(baseHex: string): string[] {
+  return [
+    solveWhiteOn(baseHex, 11),
+    solveWhiteOn(baseHex, 7.5),
+    solveWhiteOn(baseHex, 5.8),
+    solveInkOn(baseHex, 5.5, INK),
+    solveInkOn(baseHex, 7.5, INK),
+    solveInkOn(baseHex, 11, INK),
+    // The two canvas tints come verbatim from the site's committed hue.ts
+    // (copied into the launch kit's geometry.mjs); they are data, not solves.
+    canvasLightTint(baseHex),
+    canvasTint(baseHex),
+  ];
+}
+
+/** Site canvas tints per hue base, copied verbatim from
+ * `site/src/brand/hue.ts` by way of the launch kit's geometry.mjs. Lightness
+ * there was raised until #171717 ink clears 7:1, which is why cards ground on
+ * these rather than on the raw accent.
+ */
+const CANVAS_LIGHT: Record<string, string> = {
+  "#895af6": "#F3EFFA",
+  "#3c83f6": "#EFF3FA",
+  "#ec4699": "#FBF4F7",
+  "#f59f0a": "#FBF7EE",
+  "#2eb88a": "#F1F9F6",
+};
+
+const CANVAS: Record<string, string> = {
+  "#895af6": "#B394F9",
+  "#3c83f6": "#72A5F8",
+  "#ec4699": "#F17EB8",
+  "#f59f0a": "#F59F0A",
+  "#2eb88a": "#33CC99",
+};
+
+function hue(
+  name: string,
+  base: string,
+): {
+  name: string;
+  base: string;
+  ramp: string[];
+} {
+  return { base, name, ramp: [...solvedRamp(base), CANVAS[base]] };
+}
+
+/**
+ * Colony's kit. Hue bases are the five committed palette hues converted from
+ * their hsl form; ramps carry the eight solved stops named in
+ * {@link COLONY_RAMP}.
+ */
+export const COLONY_KIT: BrandKit = {
+  canvases: [{ h: 1350, name: "instagram-portrait-4-5", w: 1080 }],
+  hues: [
+    hue("violet", "#895af6"),
+    hue("blue", "#3c83f6"),
+    hue("pink", "#ec4699"),
+    hue("amber", "#f59f0a"),
+    hue("green", "#2eb88a"),
+  ],
+  id: "colony",
+  marks: [],
+  rules: {
+    claim_strictness: "strict",
+    contrast_floor: 4.5,
+    // Measured quiet-region RMS on the launch build's ten cards, tuned to sit
+    // just above the openai.com reference range (0.14-1.17) while keeping a
+    // trace of texture. The gate reads this range out of the kit.
+    raw: {
+      grain: { max: 2.6, min: 1.0 },
+    },
+  },
+  source: { type: "manual" },
+  templates: ["statement", "poster", "wordmark", "float"],
+  type: { families: ["Inter"], scale: {} },
+  version: "colony-launch/1",
+};
+
+/** Resolved tint lookups the dawn family needs beyond the ramp stops. */
+export function canvasLightTint(baseHex: string): string {
+  return CANVAS_LIGHT[baseHex.toLowerCase()] ?? baseHex;
+}
+
+export function canvasTint(baseHex: string): string {
+  return CANVAS[baseHex.toLowerCase()] ?? baseHex;
+}
+
+/** Ink as an sRGB triple, for gates that composite against it. */
+export function inkRgb(): [number, number, number] {
+  return hexToRgb(INK).rgb;
+}
