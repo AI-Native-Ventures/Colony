@@ -4,6 +4,7 @@
 //! assets and explicit gaps. Inferring what a business sells is the Chief of
 //! Staff's job, and it must be able to show its sources.
 
+pub mod brand_kit;
 pub mod extract;
 pub mod fetch;
 pub mod sitemap;

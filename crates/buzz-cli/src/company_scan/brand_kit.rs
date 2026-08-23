@@ -1,0 +1,890 @@
+//! Brand kit derivation from company-scan evidence.
+//!
+//! The scan (`super::extract`) already collects brand evidence: hex colours
+//! ranked by how often a site uses them, declared font families, and candidate
+//! logo and favicon URLs. This module turns that evidence into a brand kit
+//! proposal (kind 30198) — the record every content gate measures against.
+//!
+//! **Ramps, not swatches.** Picking colours by eye shipped cards measuring
+//! 2.7:1 and 1.16:1 that the contrast gate caught. Every ramp stop here that
+//! type can sit on is *solved*, not sampled: lightness is found by bisection
+//! against the WCAG 2.1 contrast formula, the same measurement the post-render
+//! gate takes against rendered pixels. Two solves matter:
+//!
+//! - `white_text_lightness` — the lightest a hue may go while white type still
+//!   clears [`WHITE_TEXT_RATIO`] against it. Darker always stays legible for
+//!   white, so this bounds the dark end of a ramp.
+//! - `ink_canvas_lightness` — the palest full-strength tint on which near-black
+//!   ink still clears [`INK_CANVAS_RATIO`]. Colony's own canvas values were
+//!   derived exactly this way ("lightness raised until #171717 clears 7:1"),
+//!   and this module reproduces those numbers from the same math rather than
+//!   copying the table.
+//!
+//! Both solves exist for every hue: relative luminance rises monotonically
+//! with HSL lightness at fixed hue and saturation, so the contrast ratio
+//! against a fixed foreground is monotone too and bisection cannot miss.
+//!
+//! A derivation only proposes. It never publishes: `buzz content kit derive`
+//! prints the proposed body, and acceptance is an explicit `buzz content kit
+//! set`. A hand-edited kit therefore cannot be clobbered by a re-scan — the
+//! re-scan produces a proposal the owner diffs and accepts or drops.
+
+use std::collections::BTreeMap;
+
+use super::extract::{Confidence, Evidence};
+use super::fetch::CompanyScanResult;
+
+/// WCAG 2.1 relative luminance of 8-bit sRGB.
+pub fn relative_luminance(rgb: [u8; 3]) -> f64 {
+    let lin: Vec<f64> = rgb
+        .iter()
+        .map(|c| {
+            let s = f64::from(*c) / 255.0;
+            if s <= 0.03928 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        })
+        .collect();
+    0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+}
+
+/// WCAG 2.1 contrast ratio between two sRGB triples.
+pub fn contrast_ratio(fg: [u8; 3], bg: [u8; 3]) -> f64 {
+    let (hi, lo) = (relative_luminance(fg), relative_luminance(bg));
+    let (hi, lo) = if hi > lo { (hi, lo) } else { (lo, hi) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Parse `#rgb`, `#rrggbb`, or `#rrggbbaa` to an RGB triple (alpha dropped).
+pub fn hex_to_rgb(hex: &str) -> Option<[u8; 3]> {
+    let body = hex.strip_prefix('#').unwrap_or(hex);
+    let expanded: String = match body.len() {
+        3 => body.chars().flat_map(|c| [c, c]).collect(),
+        6 | 8 => body[..6].to_owned(),
+        _ => return None,
+    };
+    if !expanded.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some([
+        u8::from_str_radix(&expanded[0..2], 16).ok()?,
+        u8::from_str_radix(&expanded[2..4], 16).ok()?,
+        u8::from_str_radix(&expanded[4..6], 16).ok()?,
+    ])
+}
+
+/// Lowercase `#rrggbb`.
+pub fn rgb_to_hex(rgb: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+}
+
+/// Hue in `[0, 360)`, saturation and lightness in `[0, 1]`.
+fn rgb_to_hsl(rgb: [u8; 3]) -> (f64, f64, f64) {
+    let r = f64::from(rgb[0]) / 255.0;
+    let g = f64::from(rgb[1]) / 255.0;
+    let b = f64::from(rgb[2]) / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    if max == min {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if max == r {
+        ((g - b) / d + if g < b { 6.0 } else { 0.0 }) * 60.0
+    } else if max == g {
+        ((b - r) / d + 2.0) * 60.0
+    } else {
+        ((r - g) / d + 4.0) * 60.0
+    };
+    (h, s, l)
+}
+
+fn hue_to_rgb(p: f64, q: f64, t: f64) -> f64 {
+    let mut t = t;
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * t
+    } else if t < 0.5 {
+        q
+    } else if t < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    } else {
+        p
+    }
+}
+
+/// HSL to 8-bit sRGB.
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> [u8; 3] {
+    if s == 0.0 {
+        let v = (l * 255.0).round() as u8;
+        return [v, v, v];
+    }
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let channel = |t: f64| (hue_to_rgb(p, q, t) * 255.0).round() as u8;
+    [
+        channel(h / 360.0 + 1.0 / 3.0),
+        channel(h / 360.0),
+        channel(h / 360.0 - 1.0 / 3.0),
+    ]
+}
+
+/// Contrast target white type must clear against a ramp stop that carries it.
+///
+/// WCAG AA for body text, and the same floor the kit's rules declare by
+/// default, so a solved stop and the gate agree without translation.
+pub const WHITE_TEXT_RATIO: f64 = 4.5;
+
+/// Contrast target near-black ink must clear against a canvas tint.
+///
+/// Colony's own canvases were raised until `#171717` cleared 7:1; this module
+/// solves new hues to the same bar rather than borrowing the table.
+pub const INK_CANVAS_RATIO: f64 = 7.0;
+
+/// The near-black ink every card sets text in.
+const INK: [u8; 3] = [0x17, 0x17, 0x17];
+
+const WHITE: [u8; 3] = [255, 255, 255];
+
+/// Bisection precision in lightness percentage points; finer than any display
+/// can distinguish and far coarser than float noise.
+const SOLVE_EPSILON: f64 = 0.01;
+
+/// The lightest HSL lightness (percent) of hue `h`, saturation `s` at which
+/// white type still clears [`WHITE_TEXT_RATIO`] against it.
+///
+/// Monotone in lightness, so bisection finds the boundary exactly; darker than
+/// this, white type only gets safer.
+pub fn white_text_lightness(h: f64, s: f64) -> f64 {
+    let clears = |l: f64| contrast_ratio(WHITE, hsl_to_rgb(h, s, l / 100.0)) >= WHITE_TEXT_RATIO;
+    // At L=0 every hue renders black (21:1); at L=100 it renders white (1:1).
+    let mut lo = 0.0f64;
+    let mut hi = 100.0f64;
+    while hi - lo > SOLVE_EPSILON {
+        let mid = (lo + hi) / 2.0;
+        if clears(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// The darkest HSL lightness (percent) of hue `h`, saturation `s` on which
+/// near-black ink still clears [`INK_CANVAS_RATIO`] against it.
+///
+/// Lighter than this, ink only gets safer; this is the palest full-strength
+/// tint usable as a text ground.
+pub fn ink_canvas_lightness(h: f64, s: f64) -> f64 {
+    let clears = |l: f64| contrast_ratio(INK, hsl_to_rgb(h, s, l / 100.0)) >= INK_CANVAS_RATIO;
+    let mut lo = 0.0f64;
+    let mut hi = 100.0f64;
+    while hi - lo > SOLVE_EPSILON {
+        let mid = (lo + hi) / 2.0;
+        if clears(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+// ── the solved ramp ───────────────────────────────────────────────────────
+
+/// The wash tones that complete a ramp, as (saturation factor, lightness
+/// percent). These mirror Colony's canvas-mid and canvas-light treatment:
+/// same hue pushed paler for grounds that carry no body text of their own.
+/// They are derived deterministically from the hue rather than solved against
+/// type because nothing is set in them; the two stops that carry text are
+/// both bisection solves.
+const WASH_TONES: [(f64, f64); 2] = [(0.70, 90.0), (0.55, 96.0)];
+
+/// Build one hue's ramp from its base colour.
+///
+/// Stops, before ordering: the base itself; the white-type solve (lightest
+/// lightness still carrying white type — the dark end); the ink solve
+/// (darkest full-strength tint carrying ink); then the two wash tones. The
+/// result is ordered dark to light and deduplicated by exact hex, so a base
+/// that already sits on a solve boundary appears once.
+pub fn solved_ramp(base_hex: &str) -> Option<Vec<String>> {
+    let rgb = hex_to_rgb(base_hex)?;
+    let (h, s, l) = rgb_to_hsl(rgb);
+    // Near-greys carry no hue to solve; a ramp of them would be noise.
+    if s < 0.08 {
+        return None;
+    }
+
+    let mut stops: Vec<(f64, String)> = Vec::with_capacity(5);
+    stops.push((l, rgb_to_hex(rgb)));
+    let white_solve = white_text_lightness(h, s);
+    stops.push((
+        white_solve / 100.0,
+        rgb_to_hex(hsl_to_rgb(h, s, white_solve / 100.0)),
+    ));
+    let ink_solve = ink_canvas_lightness(h, s);
+    stops.push((
+        ink_solve / 100.0,
+        rgb_to_hex(hsl_to_rgb(h, s, ink_solve / 100.0)),
+    ));
+    for (sat_factor, lightness) in WASH_TONES {
+        stops.push((
+            lightness / 100.0,
+            rgb_to_hex(hsl_to_rgb(h, s * sat_factor, lightness / 100.0)),
+        ));
+    }
+
+    stops.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let mut ramp: Vec<String> = Vec::with_capacity(stops.len());
+    for (_, hex) in stops {
+        if ramp.last() != Some(&hex) {
+            ramp.push(hex);
+        }
+    }
+    Some(ramp)
+}
+
+// ── clustering observed colours into hues ─────────────────────────────────
+
+/// Most hues one derivation will propose. A customer edits from there; five
+/// covers every palette the launch build used without drowning the editor.
+pub const MAX_DERIVED_HUES: usize = 5;
+
+/// One observed colour and how much the site leaned on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorCandidate {
+    /// Lowercase `#rrggbb`.
+    pub hex: String,
+    /// Times this colour was observed across all scanned pages.
+    pub occurrences: usize,
+    /// True when the site declared it outright (`theme-color`), which outranks
+    /// any number of stylistic accidents.
+    pub declared: bool,
+}
+
+impl ColorCandidate {
+    fn weight(&self) -> usize {
+        if self.declared {
+            self.occurrences + 1_000
+        } else {
+            self.occurrences
+        }
+    }
+
+    fn saturation(&self) -> f64 {
+        rgb_to_hsl(hex_to_rgb(&self.hex).unwrap_or([0, 0, 0])).1
+    }
+}
+
+/// Shortest distance between two hue angles, in degrees.
+fn hue_distance(a: f64, b: f64) -> f64 {
+    let d = (a - b).abs() % 360.0;
+    if d > 180.0 {
+        360.0 - d
+    } else {
+        d
+    }
+}
+
+/// Two colours within this hue angle belong to one family. Wide enough to
+/// merge the shades a site uses of one brand colour, narrow enough to keep
+/// violet and blue apart.
+const HUE_FAMILY_TOLERANCE_DEG: f64 = 24.0;
+
+struct HueCluster {
+    hue: f64,
+    members: Vec<ColorCandidate>,
+}
+
+fn cluster_hues(candidates: &[ColorCandidate]) -> Vec<HueCluster> {
+    let mut ranked: Vec<&ColorCandidate> = candidates.iter().collect();
+    ranked.sort_by(|left, right| {
+        right
+            .weight()
+            .cmp(&left.weight())
+            .then_with(|| left.hex.cmp(&right.hex))
+    });
+
+    let mut clusters: Vec<HueCluster> = Vec::new();
+    for candidate in ranked {
+        let Some(rgb) = hex_to_rgb(&candidate.hex) else {
+            continue;
+        };
+        if candidate.saturation() < 0.08 {
+            continue;
+        }
+        let (h, _, _) = rgb_to_hsl(rgb);
+        if let Some(cluster) = clusters
+            .iter_mut()
+            .find(|cluster| hue_distance(cluster.hue, h) <= HUE_FAMILY_TOLERANCE_DEG)
+        {
+            cluster.members.push(candidate.clone());
+        } else {
+            clusters.push(HueCluster {
+                hue: h,
+                members: vec![candidate.clone()],
+            });
+        }
+    }
+    clusters
+}
+
+/// The conventional colour name for a hue angle, so a derived kit reads like
+/// Colony's (`violet`, `amber`) instead of `hue-3`. Colony calls hsl(258)
+/// violet, so the violet band is centred there rather than on the 270-290
+/// convention; fuchsia-family accents (#c026d3) read as magenta.
+fn hue_name(hue: f64) -> &'static str {
+    match hue as u32 {
+        0..=14 => "red",
+        15..=44 => "orange",
+        45..=64 => "amber",
+        65..=84 => "yellow",
+        85..=104 => "lime",
+        105..=149 => "green",
+        150..=179 => "teal",
+        180..=199 => "cyan",
+        200..=249 => "blue",
+        250..=289 => "violet",
+        290..=324 => "magenta",
+        325..=349 => "pink",
+        _ => "red",
+    }
+}
+
+/// One proposed hue: slug name, identity colour, solved ramp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedHue {
+    pub name: String,
+    pub base: String,
+    pub ramp: Vec<String>,
+}
+
+/// Cluster the observed colours and solve a ramp per hue family.
+///
+/// Families are ranked by evidence weight (declared first, then frequency);
+/// at most [`MAX_DERIVED_HUES`] come back. Names are conventional colour
+/// words, suffixed `-2`, `-3` when one site leans on two families with the
+/// same name.
+pub fn derive_hues(colors: &[ColorCandidate]) -> Vec<DerivedHue> {
+    let mut hues: Vec<DerivedHue> = Vec::new();
+    for cluster in cluster_hues(colors) {
+        if hues.len() >= MAX_DERIVED_HUES {
+            break;
+        }
+        // The heaviest member is the family's face: it keeps the exact bytes
+        // the site actually uses rather than an average nobody chose.
+        let base = &cluster.members[0].hex;
+        let Some(ramp) = solved_ramp(base) else {
+            continue;
+        };
+        let name = hue_name(cluster.hue);
+        let ordinal = hues.iter().filter(|hue| hue.name.starts_with(name)).count();
+        hues.push(DerivedHue {
+            name: if ordinal == 0 {
+                name.to_owned()
+            } else {
+                format!("{name}-{}", ordinal + 1)
+            },
+            base: base.clone(),
+            ramp,
+        });
+    }
+    hues
+}
+
+// ── from a scan to a proposal ─────────────────────────────────────────────
+
+/// Brand evidence aggregated across every page of one scan.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScanBranding {
+    /// Observed colours with occurrence counts and declared flags.
+    pub colors: Vec<ColorCandidate>,
+    /// Font families, best first.
+    pub fonts: Vec<String>,
+    /// Candidate logo URLs, most deliberate first.
+    pub logo_urls: Vec<String>,
+    /// Candidate favicon / touch-icon URLs, most deliberate first.
+    pub icon_urls: Vec<String>,
+}
+
+fn push_font(fonts: &mut Vec<String>, raw: &str) {
+    let cleaned: String = raw.trim().trim_matches('"').trim_matches('\'').to_owned();
+    if cleaned.is_empty() || fonts.iter().any(|held| held == &cleaned) {
+        return;
+    }
+    fonts.push(cleaned);
+}
+
+/// Aggregate per-page brand evidence into [`ScanBranding`].
+///
+/// Colours keep their exact observed spelling and gain counts; `theme-color`
+/// declarations outrank stylistic inference regardless of how often an
+/// accident repeats. Logo candidates are ordered by confidence (declared
+/// OpenGraph images first), icons follow their link order.
+pub fn summarize_scan(scan: &CompanyScanResult) -> ScanBranding {
+    let mut colors: BTreeMap<String, ColorCandidate> = BTreeMap::new();
+    let mut fonts: Vec<String> = Vec::new();
+    let mut logo_urls: Vec<String> = Vec::new();
+    let mut icon_urls: Vec<String> = Vec::new();
+
+    let mut push_logo = |evidence: &Evidence<String>, out: &mut Vec<String>| {
+        if !out.contains(&evidence.value) {
+            out.push(evidence.value.clone());
+        }
+    };
+
+    // Two passes so every Declared logo precedes every Inferred one across
+    // pages, not merely within a page.
+    for pass in [Confidence::Declared, Confidence::Inferred] {
+        for page in &scan.pages {
+            for evidence in &page.brand.logo_candidates {
+                if evidence.confidence == pass {
+                    push_logo(evidence, &mut logo_urls);
+                }
+            }
+        }
+    }
+
+    for page in &scan.pages {
+        for evidence in &page.brand.colors {
+            let entry = colors
+                .entry(evidence.value.clone())
+                .or_insert_with(|| ColorCandidate {
+                    hex: evidence.value.clone(),
+                    occurrences: 0,
+                    declared: false,
+                });
+            entry.occurrences += 1;
+            entry.declared |= evidence.confidence == Confidence::Declared;
+        }
+        for font in &page.brand.fonts {
+            push_font(&mut fonts, font);
+        }
+        for url in &page.brand.icon_candidates {
+            if !icon_urls.contains(&url.value) {
+                icon_urls.push(url.value.clone());
+            }
+        }
+    }
+
+    let mut ordered: Vec<ColorCandidate> = colors.into_values().collect();
+    ordered.sort_by(|left, right| {
+        right
+            .weight()
+            .cmp(&left.weight())
+            .then_with(|| left.hex.cmp(&right.hex))
+    });
+
+    ScanBranding {
+        colors: ordered,
+        fonts,
+        logo_urls,
+        icon_urls,
+    }
+}
+
+/// A mark whose bytes have been fetched and hashed by the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposedMark {
+    pub role: &'static str,
+    /// Bare lowercase SHA-256 of the mark's bytes.
+    pub media_hash: String,
+    /// Public URL the bytes were uploaded to.
+    pub media_url: String,
+}
+
+/// The default canvases a derived kit declares.
+///
+/// The two formats the launch build actually rendered, plus the square both
+/// platforms accept.
+const DEFAULT_CANVASES: [(&str, u64, u64); 3] = [
+    ("ig-portrait", 1080, 1350),
+    ("ig-square", 1080, 1080),
+    ("li-landscape", 1200, 627),
+];
+
+/// The fixed composition pack a derived kit allows.
+///
+/// The running order the launch build corrected everything around; templates
+/// are kit-referenced ids today, so derivation lists the ids that exist.
+const DEFAULT_TEMPLATES: [&str; 5] = ["who", "what", "why", "proof", "when"];
+
+/// Derive a brand kit proposal body from aggregated scan branding.
+///
+/// Returns the full kind-30198 JSON document — schema, scan source, hues with
+/// solved ramps, typography, canvases, templates, rules — without marks. The
+/// caller attaches fetched-and-hashed marks separately because those need
+/// network work this pure function must not do. A site that offered no fonts
+/// omits `type` entirely rather than inheriting a font it never chose; a site
+/// that offered no colours yields an empty `hues`, which parses but should be
+/// treated as "the site needs JavaScript" and warned about upstream.
+pub fn derive_kit_body(url: &str, scanned_at: u64, branding: &ScanBranding) -> serde_json::Value {
+    let hues = derive_hues(&branding.colors);
+
+    let mut body = serde_json::json!({
+        "schema": buzz_core::content_brand_kit::SCHEMA_CONTENT_BRAND_KIT,
+        "source": { "type": "scan", "url": url, "scanned_at": scanned_at },
+        "hues": hues
+            .iter()
+            .map(|hue| serde_json::json!({
+                "name": hue.name,
+                "base": hue.base,
+                "ramp": hue.ramp,
+            }))
+            .collect::<Vec<serde_json::Value>>(),
+        "canvases": DEFAULT_CANVASES
+            .iter()
+            .map(|(name, w, h)| serde_json::json!({ "name": name, "w": w, "h": h }))
+            .collect::<Vec<serde_json::Value>>(),
+        "templates": DEFAULT_TEMPLATES,
+        "rules": {
+            "claim_strictness": "strict",
+            "contrast_floor": WHITE_TEXT_RATIO,
+        },
+        "version": "1",
+    });
+
+    if !branding.fonts.is_empty() {
+        let families: Vec<String> = branding
+            .fonts
+            .iter()
+            .take(buzz_core::content_brand_kit::MAX_TYPE_FAMILIES)
+            .cloned()
+            .collect();
+        body["type"] = serde_json::json!({
+            "families": families,
+            "scale": { "ratio": 1.25, "steps": [14, 18, 22, 28] },
+        });
+    }
+    body
+}
+
+/// Attach fetched marks to a proposal body.
+pub fn attach_marks(body: &mut serde_json::Value, marks: &[ProposedMark]) {
+    if marks.is_empty() {
+        return;
+    }
+    body["marks"] = serde_json::json!(marks
+        .iter()
+        .map(|mark| serde_json::json!({
+            "role": mark.role,
+            "media_hash": mark.media_hash,
+            "media_url": mark.media_url,
+        }))
+        .collect::<Vec<serde_json::Value>>());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contrast_formula_matches_published_wcag_values() {
+        // #767676 on #fff is the canonical AA boundary pair (4.54:1).
+        assert!(
+            (contrast_ratio([0x76, 0x76, 0x76], WHITE) - 4.54).abs() < 0.01,
+            "got {}",
+            contrast_ratio([0x76, 0x76, 0x76], WHITE)
+        );
+        assert!((contrast_ratio(WHITE, [0, 0, 0]) - 21.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hex_round_trips_through_hsl() {
+        for hex in ["#c026d3", "#b394f9", "#f59f0a", "#171717", "#ffffff"] {
+            let rgb = hex_to_rgb(hex).expect("parse");
+            let (h, s, l) = rgb_to_hsl(rgb);
+            assert_eq!(rgb_to_hex(hsl_to_rgb(h, s, l)), hex, "{hex} drifted");
+        }
+    }
+
+    /// Colony's violet canvas was measured at hsl(258 90% 78%) after raising
+    /// lightness until #171717 cleared 7:1. The solver must land there.
+    #[test]
+    fn violet_ink_canvas_solve_lands_on_the_measured_colony_value() {
+        let solved = ink_canvas_lightness(258.0, 0.90);
+        assert!(
+            (solved - 78.0).abs() < 1.0,
+            "solved {solved}, colony measured 78"
+        );
+        let rgb = hsl_to_rgb(258.0, 0.90, solved / 100.0);
+        assert!(contrast_ratio(INK, rgb) >= INK_CANVAS_RATIO);
+    }
+
+    /// Colony's amber canvas is the raw accent itself (hsl(38 92% 50%)),
+    /// kept because it already clears 7:1. The solver returns the darkest
+    /// such lightness, which sits below the accent's own 50%; what must hold
+    /// is that the solve clears the bar and Colony's kept value clears it
+    /// too.
+    #[test]
+    fn amber_ink_canvas_solve_stays_at_the_raw_accent_lightness() {
+        let solved = ink_canvas_lightness(38.0, 0.92);
+        assert!(
+            solved <= 50.0,
+            "solved {solved} must not exceed colony's 50"
+        );
+        assert!(contrast_ratio(INK, hsl_to_rgb(38.0, 0.92, solved / 100.0)) >= INK_CANVAS_RATIO);
+        assert!(
+            contrast_ratio(INK, hsl_to_rgb(38.0, 0.92, 0.50)) >= INK_CANVAS_RATIO,
+            "colony's kept 50% must clear the same bar"
+        );
+    }
+
+    #[test]
+    fn white_type_solve_clears_the_floor_and_nothing_lighter_does() {
+        // Colony violet hsl(258 90% 66%): solve the boundary, then confirm
+        // one step lighter breaks it and the solved value itself clears it.
+        let solved = white_text_lightness(258.0, 0.90) / 100.0;
+        let at = contrast_ratio(WHITE, hsl_to_rgb(258.0, 0.90, solved));
+        let lighter = contrast_ratio(
+            WHITE,
+            hsl_to_rgb(258.0, 0.90, (solved + 6.0 / 100.0).min(1.0)),
+        );
+        assert!(at >= WHITE_TEXT_RATIO);
+        assert!(lighter < WHITE_TEXT_RATIO);
+    }
+
+    #[test]
+    fn ramps_are_ordered_dark_to_light_without_duplicate_neighbours() {
+        for base in ["#c026d3", "#f59f0a", "#72a5f8", "#33cc99", "#1d9bf0"] {
+            let ramp = solved_ramp(base).expect("saturated hue");
+            assert!(ramp.len() >= 3, "{base} produced {ramp:?}");
+            let lightnesses: Vec<f64> = ramp
+                .iter()
+                .map(|hex| rgb_to_hsl(hex_to_rgb(hex).expect("parse")).2)
+                .collect();
+            for pair in lightnesses.windows(2) {
+                assert!(
+                    pair[0] <= pair[1],
+                    "{base} ramp not dark-to-light: {ramp:?}"
+                );
+            }
+            for hex in &ramp {
+                assert_eq!(*hex, hex.to_ascii_lowercase());
+            }
+            // The base colour survives verbatim: it is what the site uses.
+            assert!(ramp.contains(&base.to_owned()), "{ramp:?} lost {base}");
+        }
+    }
+
+    #[test]
+    fn near_grey_bases_produce_no_ramp() {
+        assert_eq!(solved_ramp("#171717"), None);
+        assert_eq!(solved_ramp("#ffffff"), None);
+    }
+
+    #[test]
+    fn same_family_colours_cluster_and_keep_the_heaviest_base() {
+        let colors = vec![
+            ColorCandidate {
+                hex: "#c026d3".to_owned(),
+                occurrences: 9,
+                declared: false,
+            },
+            ColorCandidate {
+                hex: "#86198f".to_owned(),
+                occurrences: 4,
+                declared: false,
+            },
+            ColorCandidate {
+                hex: "#1d9bf0".to_owned(),
+                occurrences: 7,
+                declared: false,
+            },
+        ];
+        let hues = derive_hues(&colors);
+        assert_eq!(hues.len(), 2);
+        assert_eq!(hues[0].name, "magenta");
+        assert_eq!(hues[0].base, "#c026d3");
+        assert_eq!(hues[1].name, "blue");
+    }
+
+    #[test]
+    fn a_declared_colour_outranks_a_frequent_inferred_one() {
+        let colors = vec![
+            ColorCandidate {
+                hex: "#00ff88".to_owned(),
+                occurrences: 30,
+                declared: false,
+            },
+            ColorCandidate {
+                hex: "#c026d3".to_owned(),
+                occurrences: 1,
+                declared: true,
+            },
+        ];
+        let hues = derive_hues(&colors);
+        assert_eq!(hues[0].base, "#c026d3", "declared must lead");
+        assert_eq!(hues.len(), 2);
+    }
+
+    #[test]
+    fn repeated_family_names_get_ordinals() {
+        let colors = vec![
+            ColorCandidate {
+                hex: "#c026d3".to_owned(),
+                occurrences: 5,
+                declared: false,
+            },
+            ColorCandidate {
+                hex: "#e879f9".to_owned(),
+                occurrences: 5,
+                declared: false,
+            },
+            ColorCandidate {
+                hex: "#1d9bf0".to_owned(),
+                occurrences: 5,
+                declared: false,
+            },
+        ];
+        let hues = derive_hues(&colors);
+        // #c026d3 and #e879f9 are both magenta-family but far enough apart in
+        // hue angle that they may split; either way names never collide.
+        let mut seen = std::collections::BTreeSet::new();
+        for hue in &hues {
+            assert!(seen.insert(hue.name.clone()), "duplicate name {}", hue.name);
+        }
+    }
+
+    fn evidence(value: &str, confidence: Confidence) -> Evidence<String> {
+        Evidence {
+            value: value.to_owned(),
+            confidence,
+            source_url: "https://acme.test/".to_owned(),
+        }
+    }
+
+    fn scan_fixture() -> CompanyScanResult {
+        use super::super::extract::{BrandEvidence, PageEvidence};
+        CompanyScanResult {
+            requested_url: "https://acme.test".to_owned(),
+            canonical_url: "https://acme.test/".to_owned(),
+            pages: vec![PageEvidence {
+                url: "https://acme.test/".to_owned(),
+                brand: BrandEvidence {
+                    logo_candidates: vec![evidence(
+                        "https://acme.test/logo.png",
+                        Confidence::Declared,
+                    )],
+                    icon_candidates: vec![evidence(
+                        "https://acme.test/favicon.ico",
+                        Confidence::Declared,
+                    )],
+                    colors: vec![
+                        evidence("#c026d3", Confidence::Declared),
+                        evidence("#c026d3", Confidence::Inferred),
+                        evidence("#1d9bf0", Confidence::Inferred),
+                        evidence("#1d9bf0", Confidence::Inferred),
+                    ],
+                    fonts: vec!["\"Inter\"".to_owned(), "Inter".to_owned()],
+                },
+                ..PageEvidence::default()
+            }],
+            ..CompanyScanResult::default()
+        }
+    }
+
+    #[test]
+    fn summarize_aggregates_counts_and_orders_marks_by_confidence() {
+        let branding = summarize_scan(&scan_fixture());
+        // Same hex from two observations collapses to one candidate.
+        assert_eq!(branding.colors.len(), 2);
+        assert_eq!(branding.colors[0].hex, "#c026d3");
+        assert!(branding.colors[0].declared);
+        assert_eq!(branding.colors[0].occurrences, 2);
+        assert_eq!(branding.colors[1].occurrences, 2);
+        // Quoted font spellings collapse; one entry remains.
+        assert_eq!(branding.fonts, vec!["Inter".to_owned()]);
+        assert_eq!(branding.logo_urls, vec!["https://acme.test/logo.png"]);
+        assert_eq!(branding.icon_urls, vec!["https://acme.test/favicon.ico"]);
+    }
+
+    /// The whole point: a derived body must pass the same parser the relay
+    /// runs at ingest, so acceptance is never blocked on derivation output.
+    #[test]
+    fn a_derived_body_round_trips_through_the_record_parser() {
+        use buzz_core::content_brand_kit::{parse_content_brand_kit, BrandKitSource, MarkRole};
+        use nostr::{EventBuilder, Keys, Kind, Tag};
+
+        let branding = summarize_scan(&scan_fixture());
+        let body = derive_kit_body("https://acme.test/", 1_755_000_000, &branding);
+        attach_marks(
+            &mut body.clone(),
+            &[ProposedMark {
+                role: "logo",
+                media_hash: "a".repeat(64),
+                media_url: "https://media.test/logo.png".to_owned(),
+            }],
+        );
+        let mut marked = body;
+        attach_marks(
+            &mut marked,
+            &[ProposedMark {
+                role: "icon",
+                media_hash: "b".repeat(64),
+                media_url: "https://media.test/icon.ico".to_owned(),
+            }],
+        );
+
+        let event = EventBuilder::new(Kind::Custom(30198), marked.to_string())
+            .tags(vec![Tag::parse(["d", "acme"].iter().copied()).expect("tag")])
+            .sign_with_keys(&Keys::generate())
+            .expect("sign");
+        let parsed = parse_content_brand_kit(&event).expect("derived kit must parse");
+
+        assert_eq!(parsed.id, "acme");
+        assert_eq!(
+            parsed.source,
+            BrandKitSource::Scan {
+                url: "https://acme.test/".to_owned(),
+                scanned_at: 1_755_000_000,
+            }
+        );
+        assert!(
+            parsed.rules.claim_strictness == buzz_core::content_brand_kit::ClaimStrictness::Strict
+        );
+        assert_eq!(parsed.rules.contrast_floor, Some(WHITE_TEXT_RATIO));
+        assert_eq!(parsed.canvases.len(), DEFAULT_CANVASES.len());
+        assert_eq!(parsed.templates, DEFAULT_TEMPLATES);
+        let kit_type = parsed.kit_type.as_ref().expect("fonts were found");
+        assert_eq!(kit_type.families, vec!["Inter".to_owned()]);
+        assert_eq!(parsed.marks.len(), 1);
+        assert_eq!(parsed.marks[0].role, MarkRole::Icon);
+        // Every ramp stop is a solved or observed colour by construction, but
+        // verify the property downstream relies on: dark to light, unique.
+        for hue in &parsed.hues {
+            let mut lightnesses = hue
+                .ramp
+                .iter()
+                .map(|hex| rgb_to_hsl(hex_to_rgb(hex).expect("valid colour")).2);
+            let mut previous = lightnesses.next().expect("non-empty ramp");
+            for l in lightnesses {
+                assert!(
+                    l >= previous,
+                    "{} ramp not ordered: {:?}",
+                    hue.name,
+                    hue.ramp
+                );
+                previous = l;
+            }
+        }
+    }
+}
