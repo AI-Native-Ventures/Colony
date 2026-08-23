@@ -13,7 +13,7 @@
   /* Asymmetric layout: type on the left at scale, controls under it on the
      right, nothing centred. A centred stack reads as a form. This reads as a
      statement with a form attached, which is what the brand does. */
-  .onb-canvas .onb-screen {
+  :where(.onb-canvas) .onb-screen {
     display: grid;
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
     align-content: center;
@@ -26,22 +26,25 @@
     text-align: left;
   }
 
-  .onb-canvas .onb-screen[data-wide="true"] {
+  :where(.onb-canvas) .onb-screen[data-wide="true"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .onb-canvas .onb-screen[data-solo="true"] {
+  :where(.onb-canvas) .onb-screen[data-solo="true"] {
     grid-template-columns: minmax(0, 1fr);
     align-items: center;
   }
 
   /* Column placement. The headline column spans both rows on the left;
      controls and their action row stack in the right column. */
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) {
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"]) {
     grid-template-rows: auto auto auto;
   }
 
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-col-head {
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-col-head {
     grid-column: 1;
     grid-row: 1 / -1;
     align-self: center;
@@ -49,15 +52,21 @@
 
   /* Three stacked slots in the right column, so a screen that has both a
      chooser and a form (credits) never lands them in the same cell. */
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-amounts {
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-amounts {
     grid-column: 2;
     grid-row: 1;
     margin-top: 0;
     justify-content: flex-start;
   }
 
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-panel,
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-options {
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-panel,
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-options {
     grid-column: 2;
     grid-row: 2;
     align-self: start;
@@ -65,58 +74,62 @@
     max-width: none !important;
   }
 
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-actions {
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-actions {
     grid-column: 2;
     grid-row: 3;
     margin-top: 0;
   }
 
   /* Right-column stack for screens with more than one control group. */
-  .onb-canvas .onb-stack {
+  :where(.onb-canvas) .onb-stack {
     display: flex;
     flex-direction: column;
     gap: 1.75rem;
     width: 100%;
   }
 
-  .onb-canvas .onb-screen:not([data-wide="true"]):not([data-solo="true"]) .onb-stack {
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-stack {
     grid-column: 2;
     grid-row: 2;
     align-self: start;
   }
 
-  .onb-canvas .onb-stack .onb-options {
+  :where(.onb-canvas) .onb-stack .onb-options {
     margin-top: 0 !important;
   }
 
   /* BusinessScreen groups its questions in fieldsets, which arrive with a
      browser border, padding and margin. */
-  .onb-canvas fieldset.onb-options {
+  :where(.onb-canvas) fieldset.onb-options {
     border: 0;
     padding: 0;
     margin: 0;
   }
 
   @media (max-width: 900px) {
-    .onb-canvas .onb-screen {
+    :where(.onb-canvas) .onb-screen {
       grid-template-columns: minmax(0, 1fr);
     }
 
-    .onb-canvas .onb-screen .onb-col-head,
-    .onb-canvas .onb-screen .onb-panel,
-    .onb-canvas .onb-screen .onb-options,
-    .onb-canvas .onb-screen .onb-actions {
+    :where(.onb-canvas) .onb-screen .onb-col-head,
+    :where(.onb-canvas) .onb-screen .onb-panel,
+    :where(.onb-canvas) .onb-screen .onb-options,
+    :where(.onb-canvas) .onb-screen .onb-actions {
       grid-column: 1 !important;
       grid-row: auto !important;
     }
   }
 
   /* Enter and exit. Opacity plus transform only, never layout properties. */
-  .onb-canvas .onb-screen[data-phase="in"] {
+  :where(.onb-canvas) .onb-screen[data-phase="in"] {
     animation: onb-enter 460ms var(--onb-ease) both;
   }
 
-  .onb-canvas .onb-screen[data-phase="out"] {
+  :where(.onb-canvas) .onb-screen[data-phase="out"] {
     animation: onb-exit 240ms var(--onb-ease) both;
   }
 
@@ -144,7 +157,7 @@
 
   /* Type. The headline is the design, matching the social posts: tight
      tracking, sentence case, always terminated with a period. */
-  .onb-canvas .onb-headline {
+  :where(.onb-canvas) .onb-headline {
     font-size: clamp(3rem, 7.4vw, 7rem);
     line-height: 0.92;
     letter-spacing: -0.055em;
@@ -158,14 +171,14 @@
      headline, so it takes the headline's slot and optical size rather than a
      width of its own. The mark is ink-coloured artwork, so it inherits the
      canvas ink like the type around it. */
-  .onb-canvas .onb-wordmark {
+  :where(.onb-canvas) .onb-wordmark {
     display: block;
     width: min(38rem, 72vw);
     height: auto;
     margin: 0 auto;
   }
 
-  .onb-canvas .onb-sub {
+  :where(.onb-canvas) .onb-sub {
     margin: 1.5rem 0 0;
     font-size: clamp(1rem, 1.25vw, 1.25rem);
     line-height: 1.5;
@@ -174,14 +187,14 @@
     text-wrap: pretty;
   }
 
-  .onb-canvas .onb-stage,
-  .onb-canvas .onb-headline,
-  .onb-canvas .onb-sub {
+  :where(.onb-canvas) .onb-stage,
+  :where(.onb-canvas) .onb-headline,
+  :where(.onb-canvas) .onb-sub {
     color: var(--onb-ink);
   }
 
   /* Form shell. */
-  .onb-canvas .onb-panel {
+  :where(.onb-canvas) .onb-panel {
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -189,13 +202,13 @@
     text-align: left;
   }
 
-  .onb-canvas .onb-field {
+  :where(.onb-canvas) .onb-field {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
   }
 
-  .onb-canvas .onb-label {
+  :where(.onb-canvas) .onb-label {
     font-family: "JetBrains Mono", monospace;
     font-size: 0.6875rem;
     letter-spacing: 0.18em;
@@ -209,8 +222,8 @@
      the call-site restyle needs !important to win without touching the
      component. Swapping the boxes for rules is the single biggest reason the
      flow stops reading as a generic form. */
-  .onb-canvas .onb-panel input,
-  .onb-canvas .onb-panel textarea {
+  :where(.onb-canvas) .onb-panel input,
+  :where(.onb-canvas) .onb-panel textarea {
     background: transparent !important;
     border: 0 !important;
     border-bottom: 2px solid var(--onb-rule) !important;
@@ -226,20 +239,20 @@
       transform 320ms var(--onb-ease);
   }
 
-  .onb-canvas .onb-panel input::placeholder,
-  .onb-canvas .onb-panel textarea::placeholder {
+  :where(.onb-canvas) .onb-panel input::placeholder,
+  :where(.onb-canvas) .onb-panel textarea::placeholder {
     color: var(--onb-ink);
     opacity: 0.26;
     font-weight: 400;
   }
 
-  .onb-canvas .onb-panel input:focus,
-  .onb-canvas .onb-panel textarea:focus {
+  :where(.onb-canvas) .onb-panel input:focus,
+  :where(.onb-canvas) .onb-panel textarea:focus {
     outline: none !important;
     border-bottom-color: var(--onb-accent) !important;
   }
 
-  .onb-canvas .onb-panel textarea {
+  :where(.onb-canvas) .onb-panel textarea {
     font-size: 1.0625rem !important;
     line-height: 1.6;
     border-bottom-width: 2px !important;
@@ -247,7 +260,7 @@
 
   /* A fieldset is a grouping element, not a visual one: it carries the
      disabled state for a whole step while the panel below owns the look. */
-  .onb-canvas .onb-fieldset {
+  :where(.onb-canvas) .onb-fieldset {
     width: 100%;
     border: 0;
     margin: 0;
@@ -258,7 +271,7 @@
     text-align: left;
   }
 
-  .onb-canvas .onb-fieldset:disabled {
+  :where(.onb-canvas) .onb-fieldset:disabled {
     pointer-events: none;
     opacity: 0.7;
   }
@@ -269,8 +282,8 @@
      The specificity ladder matches the input rules above, and for the same
      reason: the shared component's own classes ship inside Tailwind's
      layers. */
-  .onb-canvas .onb-fieldset .onb-select,
-  .onb-canvas .onb-panel .onb-select {
+  :where(.onb-canvas) .onb-fieldset .onb-select,
+  :where(.onb-canvas) .onb-panel .onb-select {
     background: var(--onb-shell) !important;
     border: 1px solid var(--onb-shell-line) !important;
     border-radius: 0.75rem !important;
@@ -282,37 +295,37 @@
     transition: border-color 320ms var(--onb-ease);
   }
 
-  .onb-canvas .onb-fieldset .onb-select:hover,
-  .onb-canvas .onb-panel .onb-select:hover {
+  :where(.onb-canvas) .onb-fieldset .onb-select:hover,
+  :where(.onb-canvas) .onb-panel .onb-select:hover {
     border-color: var(--onb-rule) !important;
   }
 
-  .onb-canvas .onb-fieldset .onb-select:focus-visible,
-  .onb-canvas .onb-panel .onb-select:focus-visible {
+  :where(.onb-canvas) .onb-fieldset .onb-select:focus-visible,
+  :where(.onb-canvas) .onb-panel .onb-select:focus-visible {
     outline: none !important;
     border-color: var(--onb-accent) !important;
   }
 
   /* Strength meter is a hairline under the rule, not a second bar competing
      with it. */
-  .onb-canvas .onb-panel [role="progressbar"],
-  .onb-canvas .onb-panel [data-slot="progress"] {
+  :where(.onb-canvas) .onb-panel [role="progressbar"],
+  :where(.onb-canvas) .onb-panel [data-slot="progress"] {
     height: 3px !important;
     margin-top: 0.4rem;
     background: transparent !important;
   }
 
-  .onb-canvas .onb-row {
+  :where(.onb-canvas) .onb-row {
     display: flex;
     gap: 0.875rem;
   }
 
-  .onb-canvas .onb-row > * {
+  :where(.onb-canvas) .onb-row > * {
     flex: 1;
     min-width: 0;
   }
 
-  .onb-canvas .onb-actions {
+  :where(.onb-canvas) .onb-actions {
     margin-top: 2.25rem;
     display: flex;
     align-items: center;
@@ -327,17 +340,19 @@
      (site/src/brand/hue.ts), so a violet button sits wrong on the amber and
      green screens. Ink works on all five and keeps the control reading as the
      one thing to press. */
-  .onb-canvas .onb-actions button[class*="inline-flex"]:not(:disabled) {
+  :where(.onb-canvas) .onb-actions button[class*="inline-flex"]:not(:disabled) {
     background: var(--onb-ink) !important;
     color: #ffffff !important;
     box-shadow: 0 0.75rem 2rem rgba(23, 23, 23, 0.24) !important;
   }
 
-  .onb-canvas .onb-actions button[class*="inline-flex"]:not(:disabled):hover {
+  :where(.onb-canvas)
+    .onb-actions
+    button[class*="inline-flex"]:not(:disabled):hover {
     background: #000000 !important;
   }
 
-  .onb-canvas .onb-actions button[class*="inline-flex"] {
+  :where(.onb-canvas) .onb-actions button[class*="inline-flex"] {
     height: auto !important;
     border-radius: 999px !important;
     padding: 1.05rem 2.4rem !important;
@@ -349,18 +364,20 @@
       opacity 280ms var(--onb-ease) !important;
   }
 
-  .onb-canvas .onb-actions button[class*="inline-flex"]:not(:disabled):hover {
+  :where(.onb-canvas)
+    .onb-actions
+    button[class*="inline-flex"]:not(:disabled):hover {
     transform: translate3d(0, -2px, 0);
   }
 
-  .onb-canvas .onb-screen[data-solo="true"] .onb-actions {
+  :where(.onb-canvas) .onb-screen[data-solo="true"] .onb-actions {
     justify-content: center;
   }
 
   /* The landing screen's own column: the slide transition wraps it, so the
      hero needs a width and a centre of its own rather than inheriting the
      grid cell's alignment. */
-  .onb-canvas .onb-hero {
+  :where(.onb-canvas) .onb-hero {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -373,7 +390,7 @@
      bottom-docked action bar. Against a full-height redesign screen that
      absolute placement lands the card underneath the headline. Inside the
      canvas it returns to flow, and the screen's own grid spaces it. */
-  .onb-canvas .buzz-onboarding-key-import-position {
+  :where(.onb-canvas) .buzz-onboarding-key-import-position {
     position: static;
     transform: none;
     margin-top: 2.5rem;
@@ -381,7 +398,7 @@
 
   /* Back is a quiet control on the canvas, not a grey chip from the old
      neutral shell: on a saturated field that chip read as a foreign element. */
-  .onb-canvas .onb-back {
+  :where(.onb-canvas) .onb-back {
     background: transparent !important;
     color: var(--onb-ink-soft) !important;
     text-decoration: underline;
@@ -389,7 +406,7 @@
     text-underline-offset: 0.32em;
   }
 
-  .onb-canvas .onb-back:hover:not(:disabled) {
+  :where(.onb-canvas) .onb-back:hover:not(:disabled) {
     background: transparent !important;
     color: var(--onb-ink) !important;
     text-decoration-color: var(--onb-ink);
@@ -398,7 +415,7 @@
   /* Fields inside a step bring their own labels from the shared agent config
      components. They are the same kind of thing as .onb-label, so they get the
      same treatment rather than two label styles on one screen. */
-  .onb-canvas .onb-fieldset label {
+  :where(.onb-canvas) .onb-fieldset label {
     font-family: "JetBrains Mono", monospace;
     font-size: 0.6875rem;
     letter-spacing: 0.18em;
@@ -413,7 +430,7 @@
      rule like every other one, which is the treatment the redesign uses
      everywhere else. The card element stays: it still owns the layout and the
      reveal toggle, and it still must never regenerate a runtime SVG filter. */
-  .onb-canvas [data-testid="nostr-import-card"] {
+  :where(.onb-canvas) [data-testid="nostr-import-card"] {
     /* Longhand, not the `border-image` shorthand: the minifier compresses
        `border-image: none` to an empty value, which is invalid and gets
        dropped, so the texture survives in a production build while looking
@@ -426,22 +443,22 @@
 
   /* A solo screen is a hero: everything centres on the axis, and the sub
      is measured against the whole column rather than a left rail. */
-  .onb-canvas .onb-screen[data-solo="true"] .onb-col-head {
+  :where(.onb-canvas) .onb-screen[data-solo="true"] .onb-col-head {
     text-align: center;
   }
 
-  .onb-canvas .onb-screen[data-solo="true"] .onb-sub {
+  :where(.onb-canvas) .onb-screen[data-solo="true"] .onb-sub {
     margin-left: auto;
     margin-right: auto;
     max-width: 34rem;
     font-size: clamp(1.125rem, 1.6vw, 1.5rem);
   }
 
-  .onb-canvas .onb-screen[data-solo="true"] .onb-actions {
+  :where(.onb-canvas) .onb-screen[data-solo="true"] .onb-actions {
     margin-top: 3rem;
   }
 
-  .onb-canvas .onb-quiet-action {
+  :where(.onb-canvas) .onb-quiet-action {
     background: none;
     border: 0;
     padding: 0.5rem 0.25rem;
@@ -453,11 +470,11 @@
     text-underline-offset: 3px;
   }
 
-  .onb-canvas .onb-quiet-action:hover {
+  :where(.onb-canvas) .onb-quiet-action:hover {
     color: var(--onb-ink);
   }
 
-  .onb-canvas .onb-note {
+  :where(.onb-canvas) .onb-note {
     margin-top: 0.75rem;
     font-size: 0.8125rem;
     color: var(--onb-ink-soft);
@@ -465,7 +482,7 @@
 
   /* Inline validation message. Warm, not alarming: it is a typo, not an
      error. */
-  .onb-canvas .onb-note-warn {
+  :where(.onb-canvas) .onb-note-warn {
     color: #b91c1c;
     opacity: 0.95;
   }
@@ -475,7 +492,7 @@
   }
 
   /* Frosted card for anything that needs to sit above the mesh. */
-  .onb-canvas .onb-card {
+  :where(.onb-canvas) .onb-card {
     background: var(--onb-shell);
     border: 1px solid var(--onb-shell-line);
     border-radius: 1.125rem;
@@ -485,7 +502,7 @@
 
   /* The recovery code. The prototype presented it as a frosted card with
      mono type; the merged screen gives that combination its own class. */
-  .onb-canvas .onb-code {
+  :where(.onb-canvas) .onb-code {
     margin: 0;
     background: var(--onb-shell);
     border: 1px solid var(--onb-shell-line);
@@ -502,7 +519,7 @@
 
   /* Saved-code acknowledgement. The prototype laid this out as a field row:
      control and label side by side rather than stacked. */
-  .onb-canvas .onb-check {
+  :where(.onb-canvas) .onb-check {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -511,14 +528,14 @@
 
   /* Screen 4: the search. Ants run outward, hold, and return. Each carries
      its own delay so they never move as a block. */
-  .onb-canvas .onb-search {
+  :where(.onb-canvas) .onb-search {
     position: relative;
     height: 220px;
     width: 100%;
     margin-top: 1rem;
   }
 
-  .onb-canvas .onb-search-ant {
+  :where(.onb-canvas) .onb-search-ant {
     position: absolute;
     top: 50%;
     left: 50%;
@@ -552,7 +569,7 @@
     }
   }
 
-  .onb-canvas .onb-status {
+  :where(.onb-canvas) .onb-status {
     /* The screens render this as a paragraph; drop the user-agent margins so
        the spacing matches the reviewed prototype's block. */
     margin: 0;
@@ -562,7 +579,7 @@
   }
 
   /* Screen 5: found brains. */
-  .onb-canvas .onb-options {
+  :where(.onb-canvas) .onb-options {
     display: grid;
     gap: 0.75rem;
     width: 100%;
@@ -570,7 +587,7 @@
     text-align: left;
   }
 
-  .onb-canvas .onb-option {
+  :where(.onb-canvas) .onb-option {
     display: flex;
     align-items: center;
     gap: 0.875rem;
@@ -590,50 +607,50 @@
       box-shadow 260ms var(--onb-ease);
   }
 
-  .onb-canvas .onb-option:hover:not(:disabled) {
+  :where(.onb-canvas) .onb-option:hover:not(:disabled) {
     transform: translate3d(0, -2px, 0);
   }
 
   /* A brain that cannot think yet is still listed, so the set reads as a
      choice, but it must not look pickable. Dimmed rather than hidden: knowing
      Colony supports it is the point. */
-  .onb-canvas .onb-option:disabled {
+  :where(.onb-canvas) .onb-option:disabled {
     cursor: default;
     opacity: 0.45;
   }
 
-  .onb-canvas .onb-option[data-status="ready"] .onb-pulse {
+  :where(.onb-canvas) .onb-option[data-status="ready"] .onb-pulse {
     background: hsl(160 60% 45%);
     box-shadow: 0 0 0 0.2rem hsl(160 60% 45% / 0.18);
   }
 
-  .onb-canvas .onb-option[data-status="needs-login"] .onb-pulse {
+  :where(.onb-canvas) .onb-option[data-status="needs-login"] .onb-pulse {
     background: hsl(38 92% 50%);
   }
 
-  .onb-canvas .onb-option[data-status="not-installed"] .onb-pulse {
+  :where(.onb-canvas) .onb-option[data-status="not-installed"] .onb-pulse {
     background: var(--onb-rule);
   }
 
   /* Selection is ink too, for the same reason the action is. */
-  .onb-canvas .onb-option[data-selected="true"] {
+  :where(.onb-canvas) .onb-option[data-selected="true"] {
     border-color: var(--onb-ink);
     box-shadow: 0 0 0 3px rgba(23, 23, 23, 0.14);
   }
 
   /* Title and status were both inline in one span and ran together as
      "Oh My PiReady". They stack now. */
-  .onb-canvas .onb-option > span:last-child {
+  :where(.onb-canvas) .onb-option > span:last-child {
     display: grid;
     gap: 0.15rem;
   }
 
-  .onb-canvas .onb-option__title {
+  :where(.onb-canvas) .onb-option__title {
     font-weight: 600;
     font-size: 1rem;
   }
 
-  .onb-canvas .onb-option__meta {
+  :where(.onb-canvas) .onb-option__meta {
     font-size: 0.8125rem;
     color: var(--onb-ink-soft);
     margin-top: 0.125rem;
@@ -641,7 +658,7 @@
 
   /* Liveness pulse. The dot is an HTML element, so the transform stays off
      the SVG tree entirely. */
-  .onb-canvas .onb-pulse {
+  :where(.onb-canvas) .onb-pulse {
     position: relative;
     width: 9px;
     height: 9px;
@@ -650,7 +667,7 @@
     flex: none;
   }
 
-  .onb-canvas .onb-pulse::after {
+  :where(.onb-canvas) .onb-pulse::after {
     content: "";
     position: absolute;
     inset: -6px;
@@ -671,7 +688,7 @@
   }
 
   /* Screen 7: site reading. */
-  .onb-canvas .onb-window {
+  :where(.onb-canvas) .onb-window {
     width: 100%;
     border-radius: 0.875rem;
     overflow: hidden;
@@ -681,7 +698,7 @@
     text-align: left;
   }
 
-  .onb-canvas .onb-window__bar {
+  :where(.onb-canvas) .onb-window__bar {
     display: flex;
     gap: 0.4rem;
     padding: 0.6rem 0.8rem;
@@ -689,20 +706,20 @@
     border-bottom: 1px solid rgba(16, 16, 20, 0.07);
   }
 
-  .onb-canvas .onb-window__dot {
+  :where(.onb-canvas) .onb-window__dot {
     width: 10px;
     height: 10px;
     border-radius: 50%;
   }
 
-  .onb-canvas .onb-pages {
+  :where(.onb-canvas) .onb-pages {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 0.75rem;
     padding: 1rem;
   }
 
-  .onb-canvas .onb-page {
+  :where(.onb-canvas) .onb-page {
     border-radius: 0.625rem;
     border: 1px solid rgba(16, 16, 20, 0.08);
     padding: 0.75rem;
@@ -714,20 +731,20 @@
       box-shadow 420ms var(--onb-ease);
   }
 
-  .onb-canvas .onb-page[data-read="true"] {
+  :where(.onb-canvas) .onb-page[data-read="true"] {
     opacity: 1;
     transform: translate3d(0, -4px, 0);
     box-shadow: 0 12px 24px -12px hsl(160 60% 42% / 0.55);
   }
 
-  .onb-canvas .onb-page__name {
+  :where(.onb-canvas) .onb-page__name {
     font-size: 0.75rem;
     font-weight: 600;
     color: rgba(16, 16, 20, 0.75);
     margin-bottom: 0.5rem;
   }
 
-  .onb-canvas .onb-skel {
+  :where(.onb-canvas) .onb-skel {
     height: 6px;
     border-radius: 3px;
     background: rgba(16, 16, 20, 0.1);
@@ -735,7 +752,7 @@
   }
 
   /* Screen 9: credits. */
-  .onb-canvas .onb-amounts {
+  :where(.onb-canvas) .onb-amounts {
     display: flex;
     gap: 0.625rem;
     margin-top: 2rem;
@@ -743,7 +760,7 @@
     justify-content: center;
   }
 
-  .onb-canvas .onb-amount {
+  :where(.onb-canvas) .onb-amount {
     min-width: 5.25rem;
     padding: 0.85rem 1rem;
     border-radius: 0.875rem;
@@ -760,11 +777,11 @@
       border-color 240ms var(--onb-ease);
   }
 
-  .onb-canvas .onb-amount:hover {
+  :where(.onb-canvas) .onb-amount:hover {
     transform: translate3d(0, -2px, 0);
   }
 
-  .onb-canvas .onb-amount[data-selected="true"] {
+  :where(.onb-canvas) .onb-amount[data-selected="true"] {
     border-color: currentColor;
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
   }
@@ -773,7 +790,7 @@
      modifier; the merged credits screen renders the inline field inside the
      plain amount chip, so the same treatment is scoped to any input there.
      It sits outside .onb-panel, so the underline rules do not reach it. */
-  .onb-canvas .onb-amount input {
+  :where(.onb-canvas) .onb-amount input {
     min-width: 2ch;
     background: transparent;
     border: 0;
@@ -784,14 +801,14 @@
     padding: 0;
   }
 
-  .onb-canvas .onb-amount input::placeholder {
+  :where(.onb-canvas) .onb-amount input::placeholder {
     color: currentColor;
     opacity: 0.4;
   }
 
   /* Payment handoff panel. Reads as a statement about what happens next, not
      as a form field. */
-  .onb-canvas .onb-handoff {
+  :where(.onb-canvas) .onb-handoff {
     border: 1px solid var(--onb-shell-line);
     background: var(--onb-shell);
     border-radius: 1.125rem;
@@ -799,28 +816,28 @@
     backdrop-filter: blur(12px);
   }
 
-  .onb-canvas .onb-handoff-title {
+  :where(.onb-canvas) .onb-handoff-title {
     margin: 0;
     font-size: 1.0625rem;
     font-weight: 550;
     line-height: 1.4;
   }
 
-  .onb-canvas .onb-handoff-methods {
+  :where(.onb-canvas) .onb-handoff-methods {
     margin: 0.4rem 0 0;
     font-size: 0.875rem;
     color: var(--onb-ink-soft);
   }
 
   /* Screen 10: invite pills. */
-  .onb-canvas .onb-pills {
+  :where(.onb-canvas) .onb-pills {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
     margin-bottom: 0.75rem;
   }
 
-  .onb-canvas .onb-pill {
+  :where(.onb-canvas) .onb-pill {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
@@ -832,13 +849,13 @@
     animation: onb-pill-in 320ms var(--onb-ease) both;
   }
 
-  .onb-canvas .onb-pill[data-leaving="true"] {
+  :where(.onb-canvas) .onb-pill[data-leaving="true"] {
     animation: onb-pill-out 700ms var(--onb-ease) both;
   }
 
   /* Remove button inside a pill. The prototype named it pill__x; the invite
      screen renders a bare button, so the treatment is scoped by descent. */
-  .onb-canvas .onb-pill button {
+  :where(.onb-canvas) .onb-pill button {
     border: 0;
     background: none;
     color: inherit;
@@ -869,12 +886,12 @@
 
   /* Screen 5b: agent install. The prototype sized this block inline; the
      merged install screen gives it classes instead. */
-  .onb-canvas .onb-install {
+  :where(.onb-canvas) .onb-install {
     margin-top: 2.5rem;
     width: 13rem;
   }
 
-  .onb-canvas .onb-install-ant {
+  :where(.onb-canvas) .onb-install-ant {
     width: 84px;
     margin: 0 auto 1.5rem;
   }
@@ -883,20 +900,20 @@
      off here. Timer-driven motion is gated separately in JS by the screens,
      since CSS cannot reach it. */
   @media (prefers-reduced-motion: reduce) {
-    .onb-canvas .onb-screen[data-phase],
-    .onb-canvas .onb-search-ant,
-    .onb-canvas .onb-pulse::after,
-    .onb-canvas .onb-pill {
+    :where(.onb-canvas) .onb-screen[data-phase],
+    :where(.onb-canvas) .onb-search-ant,
+    :where(.onb-canvas) .onb-pulse::after,
+    :where(.onb-canvas) .onb-pill {
       animation: none !important;
     }
 
-    .onb-canvas .onb-option,
-    .onb-canvas .onb-page,
-    .onb-canvas .onb-amount {
+    :where(.onb-canvas) .onb-option,
+    :where(.onb-canvas) .onb-page,
+    :where(.onb-canvas) .onb-amount {
       transition: none !important;
     }
 
-    .onb-canvas .onb-search-ant {
+    :where(.onb-canvas) .onb-search-ant {
       opacity: 0.8;
       transform: translate3d(var(--dx), var(--dy), 0);
     }
