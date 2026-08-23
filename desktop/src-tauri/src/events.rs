@@ -701,11 +701,21 @@ pub fn build_remove_reaction(reaction_event_id: EventId) -> Result<EventBuilder,
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 
-/// Kind 40100 — set canvas.
-pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder, String> {
+/// Kind 40100 — set canvas, channel-scoped or thread-scoped.
+///
+/// Tag construction is delegated to `buzz_sdk_pkg::build_set_canvas` so the
+/// scoping rules live in one place: `h` alone is the channel canvas, `h` plus
+/// `e` is the canvas for that level-1 thread root. `check_content` is kept here
+/// because it is this crate's client-side guard, shared with the other builders
+/// in this file, and gives the user a local error before a round trip. The relay
+/// enforces the real per-scope caps and remains the authority.
+pub fn build_set_canvas(
+    channel_id: Uuid,
+    content: &str,
+    thread_root: Option<EventId>,
+) -> Result<EventBuilder, String> {
     check_content(content)?;
-    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
+    buzz_sdk_pkg::build_set_canvas(channel_id, content, thread_root).map_err(|e| e.to_string())
 }
 
 // ── Profile ──────────────────────────────────────────────────────────────────
