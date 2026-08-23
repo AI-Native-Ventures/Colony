@@ -42,6 +42,16 @@ pub enum WsClientError {
     /// No NIP-42 AUTH challenge was received from the relay.
     #[error("No AUTH challenge received from relay")]
     NoAuthChallenge,
+
+    /// An operation targeted a relay other than the pinned one. The identity
+    /// boundary is fail-closed: the operation never reaches the wire.
+    #[error("refusing relay {requested}: identity is pinned to {pinned}")]
+    ForeignRelay {
+        /// The canonical URL of the pinned relay.
+        pinned: String,
+        /// The canonical URL of the refused relay.
+        requested: String,
+    },
 }
 
 impl From<nostr::event::builder::Error> for WsClientError {
