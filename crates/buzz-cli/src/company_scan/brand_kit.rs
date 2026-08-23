@@ -445,7 +445,7 @@ pub fn summarize_scan(scan: &CompanyScanResult) -> ScanBranding {
     let mut logo_urls: Vec<String> = Vec::new();
     let mut icon_urls: Vec<String> = Vec::new();
 
-    let mut push_logo = |evidence: &Evidence<String>, out: &mut Vec<String>| {
+    let push_logo = |evidence: &Evidence<String>, out: &mut Vec<String>| {
         if !out.contains(&evidence.value) {
             out.push(evidence.value.clone());
         }
@@ -590,6 +590,160 @@ pub fn attach_marks(body: &mut serde_json::Value, marks: &[ProposedMark]) {
             "media_url": mark.media_url,
         }))
         .collect::<Vec<serde_json::Value>>());
+}
+
+// ── fetching mark bytes ───────────────────────────────────────────────────
+
+/// Why a candidate mark could not be turned into bytes.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct MarkFetchError(pub String);
+
+/// Longest wait on one mark request.
+const MARK_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Most redirect hops a mark may follow.
+const MAX_MARK_REDIRECTS: usize = 3;
+
+/// Largest mark accepted, in bytes.
+const MAX_MARK_BYTES: usize = 5 * 1024 * 1024;
+
+const MARK_USER_AGENT: &str = "ColonyBrandKitDeriver/1 (+https://colony.ainative.ventures)";
+
+/// Fetch one candidate mark image from the scanned origin.
+///
+/// The same discipline as the page fetcher, narrowed to images: every URL is
+/// re-validated against the scan origin (a logo must live where the site
+/// lives), redirects are followed manually through the same guard, the host
+/// is resolved once and pinned so DNS cannot answer twice, and the body cap
+/// is enforced chunk by chunk while streaming.
+pub async fn fetch_mark_bytes(
+    origin: &super::url_guard::CheckedUrl,
+    raw_url: &str,
+) -> Result<(Vec<u8>, String), MarkFetchError> {
+    let mut current = super::url_guard::check_redirect(raw_url, origin)
+        .map_err(|error| MarkFetchError(error.to_string()))?;
+    if current.origin_key() != origin.origin_key() {
+        return Err(MarkFetchError(format!(
+            "{raw_url} is not same-origin with the scanned site"
+        )));
+    }
+
+    for _hop in 0..=MAX_MARK_REDIRECTS {
+        let addresses = super::url_guard::resolve_public(&current)
+            .await
+            .map_err(|error| {
+                MarkFetchError(format!("could not resolve {}: {error}", current.host))
+            })?;
+
+        let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(MARK_REQUEST_TIMEOUT)
+            .user_agent(MARK_USER_AGENT);
+        for address in &addresses {
+            builder = builder.resolve(&current.host, *address);
+        }
+        let client = builder
+            .build()
+            .map_err(|error| MarkFetchError(format!("http client: {error}")))?;
+
+        let mut response = client
+            .get(current.url.clone())
+            .send()
+            .await
+            .map_err(|error| MarkFetchError(format!("fetch {raw_url}: {error}")))?;
+
+        let status = response.status();
+        if status.is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| MarkFetchError("redirect without a location".to_owned()))?
+                .to_owned();
+            current = super::url_guard::check_redirect(&location, &current)
+                .map_err(|error| MarkFetchError(error.to_string()))?;
+            if current.origin_key() != origin.origin_key() {
+                return Err(MarkFetchError(format!(
+                    "{raw_url} redirected off the scanned origin"
+                )));
+            }
+            continue;
+        }
+        if !status.is_success() {
+            return Err(MarkFetchError(format!(
+                "fetch {raw_url}: HTTP {}",
+                status.as_u16()
+            )));
+        }
+
+        let declared_mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+
+        let mut buffer: Vec<u8> = Vec::new();
+        loop {
+            let chunk = response
+                .chunk()
+                .await
+                .map_err(|error| MarkFetchError(format!("read {raw_url}: {error}")))?;
+            let Some(chunk) = chunk else { break };
+            let room = MAX_MARK_BYTES.saturating_sub(buffer.len());
+            if room == 0 {
+                break;
+            }
+            let take = room.min(chunk.len());
+            buffer.extend_from_slice(&chunk[..take]);
+            if buffer.len() >= MAX_MARK_BYTES {
+                break;
+            }
+        }
+
+        // Content-Type is a hint; the bytes decide. A server that labels a
+        // PNG `image/svg+xml` still gets its real type back here.
+        let mime = sniff_mime(&buffer).unwrap_or(declared_mime);
+        return Ok((buffer, mime));
+    }
+
+    Err(MarkFetchError(format!(
+        "more than {MAX_MARK_REDIRECTS} redirects fetching {raw_url}"
+    )))
+}
+
+/// Detect an image MIME from magic bytes, preferring certainty over the
+/// declared header.
+fn sniff_mime(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png".to_owned());
+    }
+    if bytes.starts_with(b"\xff\xd8\xff") {
+        return Some("image/jpeg".to_owned());
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif".to_owned());
+    }
+    if bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp".to_owned());
+    }
+    None
+}
+
+/// File extension for an uploadable image MIME.
+pub fn extension_for_mime(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/png" => Some("png"),
+        "image/jpeg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

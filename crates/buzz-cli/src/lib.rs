@@ -384,6 +384,30 @@ pub enum ContentCmd {
     },
     /// List brand kits, newest head per id
     KitList {},
+    /// Derive a brand kit proposal from a website scan (kind 30198)
+    ///
+    /// Runs a bounded scan of `--url`, aggregates the brand evidence the scan
+    /// already collects, solves every text-bearing ramp stop against WCAG
+    /// contrast by bisection, fetches and uploads the site's logo and favicon
+    /// as marks, and prints the proposed kit body. Nothing is published:
+    /// derivation proposes and the owner accepts with `content kit set`,
+    /// editing first if they want to. A re-scan therefore never clobbers a
+    /// hand-edited kit.
+    KitDerive {
+        /// Site to scan for brand evidence
+        #[arg(long)]
+        url: String,
+        /// Most pages to read. Fewer than a company brief needs; style
+        /// evidence saturates early.
+        #[arg(long)]
+        max_pages: Option<usize>,
+        /// Skip mark upload and emit hues/type/canvases/rules only
+        #[arg(long)]
+        skip_marks: bool,
+        /// Write the proposal here instead of stdout (`@` not needed)
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Create or replace an asset library head (kind 30199)
     ///
     /// The library is an index over media that already lives in Blossom,
