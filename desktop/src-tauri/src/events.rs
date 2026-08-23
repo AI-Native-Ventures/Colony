@@ -701,10 +701,14 @@ pub fn build_remove_reaction(reaction_event_id: EventId) -> Result<EventBuilder,
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 
-// Canvas writes (kind 40100) delegate to `buzz_sdk_pkg::build_set_canvas` so
-// channel and thread canvases share one tag-building path with the CLI.
+/// Kind 40100 — set canvas.
+pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder, String> {
+    check_content(content)?;
+    let tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
+}
 
-// ── Profile ──────────────────────────────────────────────────────────────
+// ── Profile ──────────────────────────────────────────────────────────────────
 
 /// Kind 0 — NIP-01 profile metadata (full snapshot).
 pub fn build_profile(
