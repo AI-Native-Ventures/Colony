@@ -85,8 +85,14 @@ Do not assume the Paystack shape. Four differences:
    choice, not ours; it is why the other two checks below are not optional.
 3. **Source must be validated.** The existing implementation in `nocode-hive`
    checks a hostname string from the request, which is trivially spoofable.
-   Colony must validate the source address against PayFast's published ranges,
-   resolved by reverse DNS, not a header.
+   Colony validates the **peer address** against PayFast's published ITN
+   hostnames, forward-resolved, failing closed on any lookup error.
+
+   An earlier draft of this spec said "reverse DNS". Forward resolution is the
+   better primitive: a reverse lookup answers with whatever PTR record the
+   address owner published, so on its own it is a claim by the party being
+   checked. Resolving PayFast's own hostnames and testing membership asks DNS a
+   question only PayFast's operator can answer.
 4. **A server-to-server postback is required.** PayFast expects the ITN payload
    posted back to `/eng/query/validate` for confirmation. The existing
    implementation omits this. Skipping it means a forged ITN that happens to
