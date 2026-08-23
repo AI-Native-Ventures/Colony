@@ -375,7 +375,7 @@ mod tests {
     }
 
     fn hash(seed: char) -> String {
-        std::iter::repeat(seed).take(64).collect()
+        std::iter::repeat_n(seed, 64).collect()
     }
 
     /// A Colony-shaped library: screenshots, renders, and a stock photo.
@@ -614,13 +614,14 @@ mod tests {
 
     #[test]
     fn too_many_items_are_refused() {
+        // The cap check runs before any item is parsed, so the hashes need
+        // not be unique here; they only need to be well-formed enough that
+        // the failure is unambiguously the cap.
         let items: Vec<serde_json::Value> = (0..=MAX_ITEMS)
             .map(|i| {
                 let seed = char::from_u32(97 + (i % 26) as u32).expect("ascii");
                 serde_json::json!({
-                    "media_hash": format!("{}{}", hash(seed), format!("{i:0<64}"))
-                        [..64]
-                        .to_string(),
+                    "media_hash": hash(seed),
                     "media_url": format!("https://example.test/{i}.png"),
                     "alt": format!("item {i}"),
                     "rights": "owned"
