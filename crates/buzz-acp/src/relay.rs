@@ -621,8 +621,6 @@ pub struct HarnessRelay {
     cmd_tx: mpsc::Sender<RelayCommand>,
     /// HTTP client for HTTP bridge calls.
     http: reqwest::Client,
-    /// WebSocket URL of the relay.
-    relay_url: String,
     /// The identity boundary: the one relay this agent may ever contact.
     /// Built from the record-resolved `relay_url` at connect time; every
     /// reconnect dials through it, so a future code path cannot silently
@@ -737,7 +735,6 @@ impl HarnessRelay {
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
-            relay_url: relay_pin.url().to_string(),
             relay_pin,
             keys: keys.clone(),
             auth_tag,
@@ -816,7 +813,7 @@ impl HarnessRelay {
     pub fn rest_client(&self) -> RestClient {
         RestClient {
             http: self.http.clone(),
-            base_url: relay_ws_to_http(&self.relay_url),
+            base_url: relay_ws_to_http(self.relay_pin.url()),
             keys: self.keys.clone(),
             auth_tag_json: self
                 .auth_tag

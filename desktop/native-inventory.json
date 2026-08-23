@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 408,
-    "rust_lines": 163600,
-    "tauri_coupled": 162,
+    "rust_total": 410,
+    "rust_lines": 163643,
+    "tauri_coupled": 164,
     "portable": 246,
-    "portable_lines": 92405,
+    "portable_lines": 92120,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -15,6 +15,7 @@
       "src-tauri/src/commands/agent_config.rs",
       "src-tauri/src/commands/agent_creation.rs",
       "src-tauri/src/commands/agent_discovery.rs",
+      "src-tauri/src/commands/agent_discovery/install_capture.rs",
       "src-tauri/src/commands/agent_discovery/install_report.rs",
       "src-tauri/src/commands/agent_logs.rs",
       "src-tauri/src/commands/agent_metric_archive.rs",
@@ -151,6 +152,7 @@
       "src-tauri/src/migration/detach.rs",
       "src-tauri/src/migration/fold.rs",
       "src-tauri/src/migration/materialize.rs",
+      "src-tauri/src/migration/persona_provider_rename.rs",
       "src-tauri/src/migration/runtime_inherit.rs",
       "src-tauri/src/migration/team_suffix.rs",
       "src-tauri/src/migration_avatar_refresh.rs",
@@ -186,7 +188,6 @@
       "src-tauri/src/archive/store_migrations.rs",
       "src-tauri/src/archive/store_tests.rs",
       "src-tauri/src/commands/agent_config_tests.rs",
-      "src-tauri/src/commands/agent_discovery/install_capture.rs",
       "src-tauri/src/commands/agent_discovery/install_capture_tests.rs",
       "src-tauri/src/commands/agent_discovery/install_exec.rs",
       "src-tauri/src/commands/agent_discovery/install_report_redaction_tests.rs",
@@ -347,6 +348,7 @@
       "src-tauri/src/managed_agents/readiness/cli_login.rs",
       "src-tauri/src/managed_agents/readiness/cli_probe.rs",
       "src-tauri/src/managed_agents/readiness_goose_file_config_tests.rs",
+      "src-tauri/src/managed_agents/readiness_runtime_inherit_tests.rs",
       "src-tauri/src/managed_agents/reconcile/tests.rs",
       "src-tauri/src/managed_agents/relay_mesh.rs",
       "src-tauri/src/managed_agents/repos.rs",
@@ -435,7 +437,7 @@
     ]
   },
   "params": {
-    "AppHandle": 351,
+    "AppHandle": 352,
     "State": 252,
     "Window": 7,
     "ipc::Request": 1,
@@ -443,7 +445,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 348,
+      "AppHandle": 349,
       "State": 252,
       "Window": 7,
       "ipc::Request": 1,
