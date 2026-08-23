@@ -73,7 +73,11 @@ async fn submit_event_http(client: &Client, keys: &Keys, event: &nostr::Event) -
 }
 
 /// Query events via the HTTP bridge. Returns the JSON array of events.
-async fn query_events_http(client: &Client, pubkey_hex: &str, filters: Vec<Filter>) -> Vec<serde_json::Value> {
+async fn query_events_http(
+    client: &Client,
+    pubkey_hex: &str,
+    filters: Vec<Filter>,
+) -> Vec<serde_json::Value> {
     let resp = client
         .post(format!("{}/query", relay_http_url()))
         .header("X-Pubkey", pubkey_hex)
@@ -115,7 +119,12 @@ async fn create_channel(client: &Client, keys: &Keys) -> String {
 }
 
 /// Post a level-1 message (thread root) into `channel_id`.
-async fn post_thread_root(client: &Client, keys: &Keys, channel_id: &str, content: &str) -> nostr::EventId {
+async fn post_thread_root(
+    client: &Client,
+    keys: &Keys,
+    channel_id: &str,
+    content: &str,
+) -> nostr::EventId {
     let event = EventBuilder::new(Kind::Custom(9), content)
         .tags([Tag::parse(["h", channel_id]).unwrap()])
         .sign_with_keys(keys)
@@ -166,7 +175,10 @@ async fn test_channel_canvas_without_e_tag_accepted() {
 
     let event = canvas_event(&keys, &channel, "# Channel canvas\nlearnings", None);
     let (accepted, msg) = submit_event_http(&client, &keys, &event).await;
-    assert!(accepted, "positive control failed: plain channel canvas rejected: {msg}");
+    assert!(
+        accepted,
+        "positive control failed: plain channel canvas rejected: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -177,15 +189,31 @@ async fn test_thread_canvas_with_valid_root_accepted() {
     let channel = create_channel(&client, &keys).await;
     let root = post_thread_root(&client, &keys, &channel, "thread start").await;
 
-    let event = canvas_event(&keys, &channel, "thread working memory", Some(&root.to_hex()));
+    let event = canvas_event(
+        &keys,
+        &channel,
+        "thread working memory",
+        Some(&root.to_hex()),
+    );
     let (accepted, msg) = submit_event_http(&client, &keys, &event).await;
-    assert!(accepted, "positive control failed: thread canvas over a fresh root rejected: {msg}");
+    assert!(
+        accepted,
+        "positive control failed: thread canvas over a fresh root rejected: {msg}"
+    );
 
     // A root that already has a reply is still a root — also accepted.
     post_reply(&client, &keys, &channel, root, "a reply").await;
-    let event = canvas_event(&keys, &channel, "updated thread memory", Some(&root.to_hex()));
+    let event = canvas_event(
+        &keys,
+        &channel,
+        "updated thread memory",
+        Some(&root.to_hex()),
+    );
     let (accepted, msg) = submit_event_http(&client, &keys, &event).await;
-    assert!(accepted, "thread canvas over a replied-to root rejected: {msg}");
+    assert!(
+        accepted,
+        "thread canvas over a replied-to root rejected: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -300,13 +328,19 @@ async fn test_thread_canvas_cap_rejected_channel_cap_boundary() {
     let at_cap = "x".repeat(THREAD_CANVAS_MAX_CONTENT_BYTES);
     let ok_event = canvas_event(&keys, &channel, &at_cap, Some(&root.to_hex()));
     let (accepted, msg) = submit_event_http(&client, &keys, &ok_event).await;
-    assert!(accepted, "canvas exactly at the 4 KB cap must be accepted: {msg}");
+    assert!(
+        accepted,
+        "canvas exactly at the 4 KB cap must be accepted: {msg}"
+    );
 
     // One byte over is rejected, naming cap and actual size.
     let over = "x".repeat(THREAD_CANVAS_MAX_CONTENT_BYTES + 1);
     let bad = canvas_event(&keys, &channel, &over, Some(&root.to_hex()));
     let (accepted, msg) = submit_event_http(&client, &keys, &bad).await;
-    assert!(!accepted, "thread canvas 1 byte over the 4 KB cap must be rejected");
+    assert!(
+        !accepted,
+        "thread canvas 1 byte over the 4 KB cap must be rejected"
+    );
     assert!(
         msg.contains("4096") && msg.contains(&over.len().to_string()),
         "rejection must name the cap (4096) and the actual size, got: {msg}"
@@ -332,12 +366,18 @@ async fn test_channel_canvas_cap_rejected() {
     let under = "y".repeat(CHANNEL_CANVAS_MAX_CONTENT_BYTES - 1);
     let ok_event = canvas_event(&keys, &channel, &under, None);
     let (accepted, msg) = submit_event_http(&client, &keys, &ok_event).await;
-    assert!(accepted, "channel canvas just under the 16 KB cap rejected: {msg}");
+    assert!(
+        accepted,
+        "channel canvas just under the 16 KB cap rejected: {msg}"
+    );
 
     let over = "y".repeat(CHANNEL_CANVAS_MAX_CONTENT_BYTES + 1);
     let bad = canvas_event(&keys, &channel, &over, None);
     let (accepted, msg) = submit_event_http(&client, &keys, &bad).await;
-    assert!(!accepted, "channel canvas 1 byte over the 16 KB cap must be rejected");
+    assert!(
+        !accepted,
+        "channel canvas 1 byte over the 16 KB cap must be rejected"
+    );
     assert!(
         msg.contains("16384") && msg.contains(&over.len().to_string()),
         "rejection must name the cap (16384) and the actual size, got: {msg}"
@@ -368,9 +408,10 @@ async fn test_h_only_query_returns_channel_canvas_not_thread_canvas() {
     let results = query_events_http(
         &client,
         &pubkey_hex,
-        vec![Filter::new()
-            .kind(Kind::Custom(KIND_CANVAS))
-            .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), [&channel])],
+        vec![Filter::new().kind(Kind::Custom(KIND_CANVAS)).custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            [&channel],
+        )],
     )
     .await;
     let contents: Vec<&str> = results
@@ -392,7 +433,10 @@ async fn test_h_only_query_returns_channel_canvas_not_thread_canvas() {
         &pubkey_hex,
         vec![Filter::new()
             .kind(Kind::Custom(KIND_CANVAS))
-            .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), [&channel])
+            .custom_tag(
+                nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+                [&channel],
+            )
             .event(root)],
     )
     .await;
@@ -431,13 +475,17 @@ async fn test_websocket_req_path_honors_canvas_scope() {
     let sub = format!("canvas-scope-{}", uuid::Uuid::new_v4());
     ws.subscribe(
         &sub,
-        Filter::new()
-            .kind(Kind::Custom(KIND_CANVAS))
-            .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::H), [&channel]),
+        Filter::new().kind(Kind::Custom(KIND_CANVAS)).custom_tag(
+            nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+            [&channel],
+        ),
     )
     .await
     .expect("subscribe");
-    let events = ws.collect_until_eose(&sub, Duration::from_secs(10)).await.expect("collect");
+    let events = ws
+        .collect_until_eose(&sub, Duration::from_secs(10))
+        .await
+        .expect("collect");
 
     let contents: Vec<String> = events.iter().map(|e| e.content.clone()).collect();
     assert!(
