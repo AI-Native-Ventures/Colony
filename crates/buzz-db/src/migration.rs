@@ -1326,13 +1326,45 @@ mod tests {
             recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
         );
 
-        // 0065 drops the dead channels.canvas column. The live canvas path is
-        // event-sourced (kind 40100); the column had no writers and its only
-        // accessors (buzz_db get_canvas/set_canvas) had zero callers.
-        assert_eq!(migrations[64].version, 65);
-        let canvas_drop = migrations[64].sql.as_str();
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let canvas_drop = migrations
+            .iter()
+            .find(|migration| migration.version == 65)
+            .expect("drop channels.canvas migration")
+            .sql
+            .as_str();
         assert!(canvas_drop.contains("ALTER TABLE channels"));
         assert!(canvas_drop.contains("DROP COLUMN IF EXISTS canvas"));
+        // Looked up by version rather than by index. Two branches both claimed
+        // 61 while in flight, and this migration was renumbered to 62 on merge;
+        // an index-based assertion silently points at whichever migration
+        // happens to sit in that slot afterwards.
+        let email_accounts = migrations
+            .iter()
+            .find(|migration| migration.version == 62)
+            .expect("email accounts migration")
+            .sql
+            .as_str();
+        assert!(email_accounts.contains("CREATE TABLE email_accounts"));
+        assert!(email_accounts.contains("CREATE TABLE account_reset_tokens"));
+        assert!(email_accounts.contains("PRIMARY KEY (community_id, id)"));
+        assert!(email_accounts.contains("PRIMARY KEY (community_id, token_hash)"));
+        assert!(email_accounts.contains("attach_community_write_fence('email_accounts')"));
+        assert!(email_accounts.contains("attach_community_write_fence('account_reset_tokens')"));
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let payment_intents = migrations
+            .iter()
+            .find(|migration| migration.version == 63)
+            .expect("payment intents migration")
+            .sql
+            .as_str();
+        assert!(payment_intents.contains("CREATE TABLE payment_intents"));
+        assert!(payment_intents.contains("PRIMARY KEY (community_id, reference)"));
+        assert!(payment_intents.contains("octet_length(pubkey) = 32"));
+        assert!(payment_intents.contains("usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500)"));
+        assert!(payment_intents.contains("attach_community_write_fence('payment_intents')"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {

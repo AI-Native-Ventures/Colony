@@ -196,7 +196,13 @@ function WorkingAgentRows({
   profiles?: UserProfileLookup;
 }) {
   const now = useNow(1000);
-  const elapsed = formatElapsed(now - activeWorking.anchorAt);
+  // Per-row anchors come index-aligned from the store. Mirror the
+  // alignedAgentNames guard: fall back to the channel anchor when the array is
+  // missing or has drifted (typing-fallback merges can extend agentPubkeys).
+  const alignedAgentAnchorsAt =
+    activeWorking.agentAnchorsAt?.length === activeWorking.agentPubkeys.length
+      ? activeWorking.agentAnchorsAt
+      : null;
   const alignedAgentNames =
     activeWorking.agentNames?.length === activeWorking.agentPubkeys.length
       ? activeWorking.agentNames
@@ -208,6 +214,9 @@ function WorkingAgentRows({
       profile?.displayName?.trim() ||
       alignedAgentNames?.[index] ||
       `Agent ${truncatePubkey(pubkey)}`;
+    const elapsed = formatElapsed(
+      now - (alignedAgentAnchorsAt?.[index] ?? activeWorking.anchorAt),
+    );
     return (
       <WorkingAgentRow
         avatarUrl={profile?.avatarUrl ?? null}

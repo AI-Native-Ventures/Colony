@@ -88,3 +88,61 @@ test("the open list is newest first", () => {
     ["new", "old"],
   );
 });
+
+const AUDIENCE = "a".repeat(64);
+const PRIOR = "b".repeat(64);
+const ORIGINAL_FILER = "c".repeat(64);
+
+test("an ask names its audience through its p tag", () => {
+  const ask = readAsk({
+    ...askEvent("ask-audience", { headline: "Need a decision" }),
+    tags: [["p", AUDIENCE]],
+  });
+  assert.equal(ask.audiencePubkey, AUDIENCE);
+});
+
+test("a plain ask has no routing provenance", () => {
+  const ask = readAsk(askEvent("ask-plain", { headline: "Need a decision" }));
+  assert.equal(ask.audiencePubkey, null);
+  assert.equal(ask.priorAskId, null);
+  assert.equal(ask.originalFilerPubkey, null);
+});
+
+test("a relay-promoted successor carries prior and original-filer provenance", () => {
+  const ask = readAsk({
+    ...askEvent("ask-successor", { headline: "Still blocked" }),
+    tags: [
+      ["p", AUDIENCE],
+      ["prior", PRIOR],
+      ["filer", ORIGINAL_FILER],
+    ],
+  });
+  assert.equal(ask.audiencePubkey, AUDIENCE);
+  assert.equal(ask.priorAskId, PRIOR);
+  assert.equal(ask.originalFilerPubkey, ORIGINAL_FILER);
+});
+
+test("an ambiguous audience reads as no audience, exactly as the relay parses it", () => {
+  const ask = readAsk({
+    ...askEvent("ask-ambiguous", { headline: "Need a decision" }),
+    tags: [
+      ["p", AUDIENCE],
+      ["p", ORIGINAL_FILER],
+    ],
+  });
+  assert.equal(ask.audiencePubkey, null);
+});
+
+test("malformed routing tags degrade to null rather than throwing", () => {
+  const ask = readAsk({
+    ...askEvent("ask-malformed-tags", { headline: "Need a decision" }),
+    tags: [
+      ["p", "not-hex"],
+      ["prior", "also-not-hex"],
+      ["filer", ""],
+    ],
+  });
+  assert.equal(ask.audiencePubkey, null);
+  assert.equal(ask.priorAskId, null);
+  assert.equal(ask.originalFilerPubkey, null);
+});

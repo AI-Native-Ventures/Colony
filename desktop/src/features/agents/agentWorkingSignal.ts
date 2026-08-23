@@ -222,10 +222,23 @@ export function getWorkingChannels(): WorkingChannelSummary[] {
       const known = new Set(
         existing.agentPubkeys.map((pubkey) => normalizePubkey(pubkey)),
       );
+      // Typing entries carry their own first-seen "since" (desktop clock) —
+      // that is the appended agent's real start. Extend agentAnchorsAt in
+      // the same pass as agentPubkeys so the arrays stay index-aligned and
+      // every row keeps its own elapsed time. The popover's alignment guard
+      // is whole-list: one drift would collapse the ENTIRE channel back to
+      // the channel anchor, reintroducing the lockstep bug for agents that
+      // do have observer turns.
+      const baseAnchors =
+        existing.agentAnchorsAt?.length === existing.agentPubkeys.length
+          ? existing.agentAnchorsAt
+          : existing.agentPubkeys.map(() => existing.anchorAt);
       const merged = [...existing.agentPubkeys];
-      for (const pubkey of entries.keys()) {
+      const mergedAnchorsAt = [...baseAnchors];
+      for (const [pubkey, since] of entries) {
         if (!known.has(pubkey)) {
           merged.push(pubkey);
+          mergedAnchorsAt.push(since);
         }
       }
       if (merged.length !== existing.agentPubkeys.length) {
@@ -233,6 +246,7 @@ export function getWorkingChannels(): WorkingChannelSummary[] {
           ...existing,
           agentPubkeys: merged,
           agentCount: merged.length,
+          agentAnchorsAt: mergedAnchorsAt,
         });
       }
       continue;
@@ -244,11 +258,20 @@ export function getWorkingChannels(): WorkingChannelSummary[] {
         anchorAt = since;
       }
     }
+    // One pass derives both arrays — alignment is structural, mirroring
+    // getActiveTurnsByChannel.
+    const pubkeys: string[] = [];
+    const anchorsAt: number[] = [];
+    for (const [pubkey, since] of entries) {
+      pubkeys.push(pubkey);
+      anchorsAt.push(since);
+    }
     byChannel.set(channelId, {
       channelId,
       anchorAt,
       agentCount: entries.size,
-      agentPubkeys: [...entries.keys()],
+      agentPubkeys: pubkeys,
+      agentAnchorsAt: anchorsAt,
       source: "typing",
     });
   }

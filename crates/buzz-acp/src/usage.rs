@@ -139,6 +139,21 @@ pub(crate) struct UsageUpdatePayload {
     pub pricing_identity: Option<buzz_core::agent_turn_metric::PricingIdentity>,
 }
 
+/// Session-cumulative token counts carried by a guarded Codex ACP response.
+///
+/// Buzz patches only a source-validated adapter sibling to expose the complete
+/// session total. The ordinary adapter response is not consumed because it can
+/// contain only the final model request from a multi-request tool loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PromptResponseUsage {
+    pub input_uncached_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: Option<u64>,
+    pub model: Option<String>,
+}
+
 /// Per-session normalization state: the last cumulative snapshot we saw.
 #[derive(Debug, Clone)]
 struct SessionState {
@@ -673,6 +688,37 @@ impl UsageTracker {
         }
     }
 
+    /// Record cumulative usage returned by a guarded ACP adapter sibling.
+    ///
+    /// This path is used when a runtime cannot traverse the wire checkpoint,
+    /// notably Codex authenticated by a ChatGPT subscription. The counters are
+    /// adapter estimates, so downstream records must retain that provenance.
+    pub(crate) fn record_cumulative_prompt_response(
+        &mut self,
+        session_id: &str,
+        usage: PromptResponseUsage,
+    ) {
+        if self.in_flight_session.as_deref() != Some(session_id) {
+            return;
+        }
+        let accumulated_input_tokens = usage
+            .input_uncached_tokens
+            .checked_add(usage.cache_read_tokens);
+        let payload = UsageUpdatePayload {
+            used: usage.total_tokens,
+            context_limit: 0,
+            accumulated_input_tokens,
+            accumulated_output_tokens: Some(usage.output_tokens),
+            accumulated_cached_input_tokens: Some(usage.cache_read_tokens),
+            accumulated_cache_write_tokens: usage.cache_write_tokens,
+            accumulated_cost: None,
+            accumulated_total_tokens: Some(usage.total_tokens),
+            model: usage.model,
+            pricing_identity: None,
+        };
+        self.record(session_id, &payload);
+    }
+
     /// Seed a zero baseline for a session that buzz-acp just spawned.
     ///
     /// When buzz-acp creates a session itself via `session/new`, the session's
@@ -715,9 +761,9 @@ impl UsageTracker {
     /// Consume and return the most recently computed turn usage record, then
     /// clear the in-flight marker and advance the committed baseline.
     ///
-    /// Returns `None` if no `usage_update` arrived during the current in-flight
-    /// turn (the agent did not emit usage, or no `begin_turn` was called). The
-    /// caller (`TurnCompletionGuard`) must handle `None`.
+    /// Returns `None` if neither a usage notification nor a prompt response
+    /// supplied usage during the current in-flight turn, or if no `begin_turn`
+    /// was called. The caller must handle `None`.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn take(&mut self) -> Option<TurnUsage> {
         self.in_flight_session = None;
@@ -895,6 +941,57 @@ mod tests {
         assert_eq!(usage.turn_output_tokens, Some(200)); // 300 - 100
         let dc = usage.turn_cost_usd.expect("cost delta present");
         assert!((dc - 0.007).abs() < 1e-9, "cost delta: {dc}");
+    }
+
+    fn prompt_usage(input: u64, cache_read: u64, output: u64) -> PromptResponseUsage {
+        PromptResponseUsage {
+            input_uncached_tokens: input,
+            output_tokens: output,
+            total_tokens: input + cache_read + output,
+            cache_read_tokens: cache_read,
+            cache_write_tokens: None,
+            model: Some("gpt-test".to_string()),
+        }
+    }
+
+    #[test]
+    fn prompt_response_usage_is_scoped_to_the_in_flight_session() {
+        let mut tracker = UsageTracker::default();
+        tracker.begin_turn("expected");
+        tracker.record_cumulative_prompt_response("other", prompt_usage(100, 20, 10));
+        assert!(tracker.take().is_none());
+
+        tracker.record_cumulative_prompt_response("expected", prompt_usage(100, 20, 10));
+        assert!(
+            tracker.take().is_none(),
+            "take closes the in-flight turn even when no matching usage arrived"
+        );
+    }
+
+    #[test]
+    fn prompt_response_usage_replaces_pending_notification_and_advances_cumulative_state() {
+        let mut tracker = UsageTracker::default();
+        tracker.seed_zero_baseline("codex");
+        tracker.begin_turn("codex");
+        tracker.record("codex", &payload(50, 10, None));
+        tracker.record_cumulative_prompt_response("codex", prompt_usage(100, 20, 10));
+        let first = tracker.take().expect("first prompt response");
+        assert_eq!(first.turn_seq, 1);
+        assert_eq!(first.turn_input_tokens, Some(120));
+        assert_eq!(first.cumulative_input_tokens, Some(120));
+        assert_eq!(first.turn_output_tokens, Some(10));
+        assert_eq!(first.cumulative_total_tokens, Some(130));
+
+        tracker.begin_turn("codex");
+        tracker.record_cumulative_prompt_response("codex", prompt_usage(200, 50, 30));
+        let second = tracker.take().expect("second prompt response");
+        assert_eq!(second.turn_seq, 2);
+        assert_eq!(second.turn_input_tokens, Some(130));
+        assert_eq!(second.cumulative_input_tokens, Some(250));
+        assert_eq!(second.turn_output_tokens, Some(20));
+        assert_eq!(second.cumulative_output_tokens, Some(30));
+        assert_eq!(second.cumulative_total_tokens, Some(280));
+        assert_eq!(second.cumulative_cache_read_tokens, Some(50));
     }
 
     #[test]

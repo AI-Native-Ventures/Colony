@@ -16,6 +16,7 @@ import {
   Receipt,
   Settings,
   User,
+  Users,
   type LucideIcon,
   Zap,
 } from "lucide-react";
@@ -41,6 +42,7 @@ export type SearchCommandId =
   | "open-content"
   | "open-discovery"
   | "open-home"
+  | "open-people"
   | "open-projects"
   | "open-pulse"
   | "open-settings"
@@ -108,6 +110,8 @@ export function resultIcon(
         return ListChecks;
       case "open-agents":
         return Bot;
+      case "open-people":
+        return Users;
       case "create-channel":
         return Plus;
       case "new-message":

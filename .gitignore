@@ -82,3 +82,10 @@ desktop/src-tauri/tauri.release.conf.json
 
 # Superpowers SDD scratch workspaces
 .superpowers/
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+prototypes/onboarding/ds/
+prototypes/onboarding/app.js

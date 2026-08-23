@@ -1,6 +1,12 @@
 import * as React from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
+import { useReportingLineLookup } from "@/features/agents/reportingLine";
+import {
+  askRoutingSummary,
+  classifyAskRouting,
+  effectiveFilerPubkey,
+} from "@/features/asks/lib/askRouting";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
 import { useActiveCompany, useCompanyTasks } from "@/features/company/hooks";
 import { useChannelsQuery } from "@/features/channels/hooks";
@@ -188,10 +194,24 @@ export function useActionCenterItems({
 
   const feed = homeFeedQuery.data?.feed;
   const reminders = remindersQuery.data ?? [];
+  const { lookup: reportingLineLookup } = useReportingLineLookup(communityId);
+  const askRoutingNotesByAskId = React.useMemo(() => {
+    const notes = new Map<string, string>();
+    for (const ask of openAsks.asks) {
+      const routing = classifyAskRouting(
+        ask,
+        reportingLineLookup(effectiveFilerPubkey(ask)).managerPubkey,
+      );
+      const note = askRoutingSummary(routing);
+      if (note) notes.set(ask.id, note);
+    }
+    return notes;
+  }, [openAsks.asks, reportingLineLookup]);
   const allItems = React.useMemo(
     () =>
       buildActionCenterItems({
         asks: openAsks.asks,
+        askRoutingNotesByAskId,
         doneIds: localDoneIds,
         feed: feed
           ? {
@@ -206,6 +226,7 @@ export function useActionCenterItems({
         workflows: workflowSources,
       }),
     [
+      askRoutingNotesByAskId,
       feed,
       localDoneIds,
       openAsks.asks,

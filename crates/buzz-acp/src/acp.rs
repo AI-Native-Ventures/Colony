@@ -20,6 +20,14 @@ use crate::usage::{TurnUsage, UsageTracker};
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 
+/// Ceiling on prose kept by [`AcpClient::begin_agent_text_capture`].
+///
+/// The captured answer is one small JSON object. This bound exists for the
+/// agent that narrates instead of answering: the parse fails either way, and
+/// failing on 64 KiB costs nothing, where an unbounded buffer would grow with
+/// the agent's enthusiasm.
+const MAX_CAPTURED_AGENT_TEXT: usize = 64 * 1024;
+
 /// An MCP server configuration passed to `session/new`.
 ///
 /// Corresponds to the `McpServerStdio` variant in the ACP schema.
@@ -217,6 +225,18 @@ pub struct AcpClient {
     /// deltas. Both goose and buzz-agent emit this notification; goose gates
     /// on client capability advertisement, buzz-agent emits unconditionally.
     goose_usage: UsageTracker,
+    /// True only when Buzz launched a source-validated Codex adapter sibling
+    /// that projects session-cumulative usage in each prompt response.
+    cumulative_prompt_usage: bool,
+    /// Buffer for the agent's own prose during a turn whose answer the harness
+    /// needs to read, rather than only relay to the human.
+    ///
+    /// Ordinary turns discard this text: the agent talks to the channel through
+    /// its own tools, so `agent_message_chunk` is a log line and nothing more.
+    /// The completion check is the exception — the harness asks the question and
+    /// must read the answer itself. `None` outside such a turn, so the common
+    /// path allocates nothing.
+    captured_agent_text: Option<String>,
 }
 
 /// Recursively merge `overlay` into `base`, with `overlay` winning on scalar/shape
@@ -479,7 +499,24 @@ impl AcpClient {
     ) -> Result<Self, AcpError> {
         use std::process::Stdio;
 
-        let mut cmd = tokio::process::Command::new(command);
+        let prepared_codex_usage = if meter.is_none() {
+            match crate::codex_usage_adapter::prepare(command) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    tracing::error!(target: "acp::usage", %error);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let spawn_command = prepared_codex_usage
+            .as_ref()
+            .map_or(command, |prepared| prepared.command.as_str());
+        let mut cmd = tokio::process::Command::new(spawn_command);
+        if let Some(prepared) = &prepared_codex_usage {
+            cmd.args(&prepared.args_prefix);
+        }
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -606,6 +643,8 @@ impl AcpClient {
             providers_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
+            cumulative_prompt_usage: prepared_codex_usage.is_some(),
+            captured_agent_text: None,
         })
     }
 
@@ -959,6 +998,10 @@ impl AcpClient {
             )
             .await;
 
+        if let Ok(result) = &result {
+            self.record_prompt_response_usage(session_id, result);
+        }
+
         // On timeout errors, leave current_hard_deadline set so cancel_with_cleanup
         // can inherit the remaining budget. Clear it on all other outcomes.
         match &result {
@@ -1033,6 +1076,26 @@ impl AcpClient {
     /// publish a kind 44200 NIP-AM event.
     pub fn take_turn_usage(&mut self) -> Option<TurnUsage> {
         self.goose_usage.take()
+    }
+
+    /// Start keeping the agent's own prose, for a turn whose answer the harness
+    /// reads rather than relays.
+    ///
+    /// Discards anything left from a previous capture: an answer must never be
+    /// read against text the last question produced.
+    pub fn begin_agent_text_capture(&mut self) {
+        self.captured_agent_text = Some(String::new());
+    }
+
+    /// Stop capturing and return what the agent said, trimmed.
+    ///
+    /// `None` when capture was never started; `Some("")` when it was started
+    /// and the agent said nothing, which is a real answer to distinguish — an
+    /// agent that streamed no prose has not answered the question.
+    pub fn take_agent_text_capture(&mut self) -> Option<String> {
+        self.captured_agent_text
+            .take()
+            .map(|text| text.trim().to_string())
     }
 
     /// Notify the usage tracker that buzz-acp just spawned a new session.
@@ -1202,6 +1265,7 @@ impl AcpClient {
                 remaining,
             )
             .await?;
+        self.record_prompt_response_usage(session_id, &result);
         self.parse_stop_reason(&result)
     }
 
@@ -1900,6 +1964,15 @@ impl AcpClient {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
                     tracing::info!(target: "acp::stream", "{text}");
+                    if let Some(buffer) = self.captured_agent_text.as_mut() {
+                        // Bounded: the answer this captures is a small JSON
+                        // object, and an agent that ignores the instruction and
+                        // narrates instead must not be able to grow the harness's
+                        // memory without limit.
+                        if buffer.len() < MAX_CAPTURED_AGENT_TEXT {
+                            buffer.push_str(text);
+                        }
+                    }
                 }
                 false
             }
@@ -2036,6 +2109,57 @@ impl AcpClient {
                 );
             }
         }
+    }
+
+    /// Capture cumulative usage from a guarded Codex ACP prompt response.
+    ///
+    /// Buzz only reads this field when it launched the exact source-validated
+    /// adapter sibling. An ordinary ACP response can expose only the final
+    /// model request in a tool loop, which is not reliable turn evidence.
+    fn record_prompt_response_usage(&mut self, session_id: &str, result: &serde_json::Value) {
+        if !self.cumulative_prompt_usage {
+            return;
+        }
+        let usage = &result["usage"];
+        let Some(input_tokens) = usage.get("inputTokens").and_then(serde_json::Value::as_u64)
+        else {
+            return;
+        };
+        let Some(output_tokens) = usage
+            .get("outputTokens")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return;
+        };
+        let Some(total_tokens) = usage.get("totalTokens").and_then(serde_json::Value::as_u64)
+        else {
+            return;
+        };
+        let Some(cache_read_tokens) = usage
+            .get("cachedReadTokens")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return;
+        };
+        let model = result
+            .pointer("/_meta/quota/model_usage/0/model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let cache_write_tokens = usage
+            .get("cachedWriteTokens")
+            .and_then(serde_json::Value::as_u64);
+
+        self.goose_usage.record_cumulative_prompt_response(
+            session_id,
+            crate::usage::PromptResponseUsage {
+                input_uncached_tokens: input_tokens,
+                output_tokens,
+                total_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                model,
+            },
+        );
     }
 
     /// Auto-approve a `session/request_permission` request from the agent.
@@ -3999,6 +4123,48 @@ mod tests {
         handle.shutdown();
     }
 
+    /// Live proof for the fallback this module uses in production: a real
+    /// ChatGPT-authenticated Codex turn reports nonzero cumulative counters in
+    /// the guarded ACP prompt result. This intentionally uses the operator's
+    /// existing Codex login and is therefore ignored by default.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires an authenticated local Codex installation"]
+    async fn live_codex_subscription_turn_reports_usage() {
+        let adapter_js = std::env::var("BUZZ_CODEX_ACP_JS")
+            .expect("set BUZZ_CODEX_ACP_JS to the codex-acp adapter's dist/index.js");
+        let cwd = std::env::current_dir().expect("current directory");
+        let mut client = AcpClient::spawn(&adapter_js, &[], &[], false, None)
+            .await
+            .expect("spawn codex-acp");
+        client.initialize().await.expect("initialize");
+        let session = client
+            .session_new_full(cwd.to_str().expect("cwd utf8"), Vec::new(), None, None)
+            .await
+            .expect("session/new");
+        client.notify_session_spawned(&session.session_id);
+
+        client
+            .session_prompt_with_idle_timeout(
+                &session.session_id,
+                "Reply with the single word OK and do nothing else.",
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(120),
+            )
+            .await
+            .expect("session/prompt");
+        let usage = client
+            .take_turn_usage()
+            .expect("Codex subscription prompt must report cumulative usage");
+        assert!(usage.delta_reliable);
+        assert!(usage.turn_input_tokens.is_some_and(|tokens| tokens > 0));
+        assert!(usage.turn_output_tokens.is_some_and(|tokens| tokens > 0));
+        assert!(usage.turn_total_tokens.is_some_and(|tokens| tokens > 0));
+        assert!(usage.model.as_ref().is_some_and(|model| !model.is_empty()));
+
+        client.shutdown().await;
+    }
+
     #[tokio::test]
     async fn keepalive_resets_idle_past_deadline() {
         // Keepalive session/update lines every 50ms against a 300ms idle
@@ -5089,6 +5255,136 @@ mod tests {
             client.take_turn_usage().is_none(),
             "take after drain is None"
         );
+    }
+
+    #[tokio::test]
+    async fn codex_prompt_response_usage_is_captured_for_spend() {
+        let mut client = spawn_inert_client().await;
+        client.cumulative_prompt_usage = true;
+        client.goose_usage.seed_zero_baseline("codex-session");
+        client.goose_usage.begin_turn("codex-session");
+        client.record_prompt_response_usage(
+            "codex-session",
+            &serde_json::json!({
+                "stopReason": "end_turn",
+                "usage": {
+                    "totalTokens": 1_420,
+                    "inputTokens": 1_000,
+                    "cachedReadTokens": 300,
+                    "outputTokens": 120,
+                    "thoughtTokens": 80
+                },
+                "_meta": {
+                    "quota": {
+                        "model_usage": [{
+                            "model": "gpt-5.6-sol",
+                            "token_count": {"totalTokens": 1_420}
+                        }]
+                    }
+                }
+            }),
+        );
+
+        let usage = client
+            .take_turn_usage()
+            .expect("Codex prompt usage must become a turn record");
+        assert!(usage.delta_reliable);
+        assert_eq!(usage.turn_input_tokens, Some(1_300));
+        assert_eq!(usage.turn_cache_read_tokens, Some(300));
+        assert_eq!(usage.turn_output_tokens, Some(120));
+        assert_eq!(usage.turn_total_tokens, Some(1_420));
+        assert_eq!(usage.model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[tokio::test]
+    async fn incomplete_codex_prompt_usage_is_not_recorded_as_zero_cost() {
+        let invalid_usage = [
+            serde_json::json!({
+                "inputTokens": 1_000,
+                "outputTokens": 120,
+                "cachedReadTokens": 300
+            }),
+            serde_json::json!({
+                "inputTokens": 1_000,
+                "totalTokens": 1_420,
+                "cachedReadTokens": 300
+            }),
+            serde_json::json!({
+                "inputTokens": 1_000,
+                "outputTokens": 120,
+                "totalTokens": 1_420
+            }),
+            serde_json::json!({
+                "inputTokens": "1000",
+                "outputTokens": 120,
+                "totalTokens": 1_420,
+                "cachedReadTokens": 300
+            }),
+            serde_json::json!({
+                "inputTokens": -1,
+                "outputTokens": 120,
+                "totalTokens": 1_420,
+                "cachedReadTokens": 300
+            }),
+        ];
+
+        for usage in invalid_usage {
+            let mut client = spawn_inert_client().await;
+            client.cumulative_prompt_usage = true;
+            client.goose_usage.begin_turn("codex-session");
+            client.record_prompt_response_usage(
+                "codex-session",
+                &serde_json::json!({"usage": usage}),
+            );
+            assert!(
+                client.take_turn_usage().is_none(),
+                "incomplete or malformed token buckets must fail closed"
+            );
+            client.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn codex_prompt_usage_without_model_keeps_exact_tokens() {
+        let mut client = spawn_inert_client().await;
+        client.cumulative_prompt_usage = true;
+        client.goose_usage.seed_zero_baseline("codex-session");
+        client.goose_usage.begin_turn("codex-session");
+        client.record_prompt_response_usage(
+            "codex-session",
+            &serde_json::json!({
+                "usage": {
+                    "inputTokens": 1_000,
+                    "outputTokens": 120,
+                    "totalTokens": 1_420,
+                    "cachedReadTokens": 300
+                }
+            }),
+        );
+
+        let usage = client.take_turn_usage().expect("exact token buckets");
+        assert_eq!(usage.turn_input_tokens, Some(1_300));
+        assert_eq!(usage.model, None);
+    }
+
+    #[tokio::test]
+    async fn ordinary_adapter_prompt_usage_is_not_treated_as_a_turn_total() {
+        let mut client = spawn_inert_client().await;
+        client.goose_usage.seed_zero_baseline("codex-session");
+        client.goose_usage.begin_turn("codex-session");
+        client.record_prompt_response_usage(
+            "codex-session",
+            &serde_json::json!({
+                "usage": {
+                    "inputTokens": 1_000,
+                    "outputTokens": 120,
+                    "totalTokens": 1_420,
+                    "cachedReadTokens": 300
+                }
+            }),
+        );
+
+        assert!(client.take_turn_usage().is_none());
     }
 
     #[tokio::test]
