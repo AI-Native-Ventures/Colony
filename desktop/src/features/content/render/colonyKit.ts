@@ -22,6 +22,7 @@ import {
   solveWhiteOn,
 } from "./color.ts";
 import type { BrandKit } from "./kit.ts";
+import type { GroundFamily, ResolvedGroundHue } from "./atmosphere.ts";
 
 /** Colony's ink. The value every dawn-family solve bottoms out against. */
 export const INK = "#171717";
@@ -147,4 +148,58 @@ export function canvasTint(baseHex: string): string {
 /** Ink as an sRGB triple, for gates that composite against it. */
 export function inkRgb(): [number, number, number] {
   return hexToRgb(INK).rgb;
+}
+
+/**
+ * Resolve the hue names an authored card cites into the colour slices the
+ * ground renderer draws with.
+ *
+ * This is the one place Colony's ramp positions are interpreted: the kit
+ * stores solved stops in the order {@link COLONY_RAMP} names, and this maps
+ * them onto night (white-type safe) or dawn (ink-type safe) slices. The two
+ * bright `free` stops a night card needs are not stored on the kit because
+ * nothing may sit under type there; they are solved from the base on demand
+ * by the same bisection.
+ */
+export function resolveGroundHues(
+  family: GroundFamily,
+  hues: string[],
+): ResolvedGroundHue[] {
+  return hues.map((name) => {
+    const entry = COLONY_KIT.hues.find((hue) => hue.name === name);
+    if (!entry) {
+      throw new Error(`colony kit: no hue named ${name}`);
+    }
+    const stop = (index: number): string => {
+      const value = entry.ramp[index];
+      if (!value) {
+        throw new Error(`colony kit: hue ${name} has no ramp stop ${index}`);
+      }
+      return value;
+    };
+    if (family === "night") {
+      return {
+        base: entry.base,
+        free: [solveWhiteOn(entry.base, 4.2), solveWhiteOn(entry.base, 3.4)],
+        lift: "rgba(255,255,255,.26)",
+        name,
+        safe: [
+          stop(COLONY_RAMP.nightSafe0),
+          stop(COLONY_RAMP.nightSafe1),
+          stop(COLONY_RAMP.nightSafe2),
+        ],
+      };
+    }
+    return {
+      base: entry.base,
+      free: ["#ffffff", canvasLightTint(entry.base)],
+      lift: "rgba(255,255,255,.92)",
+      name,
+      safe: [
+        stop(COLONY_RAMP.dawnSafe0),
+        stop(COLONY_RAMP.dawnSafe1),
+        stop(COLONY_RAMP.dawnSafe2),
+      ],
+    };
+  });
 }
