@@ -4704,16 +4704,33 @@ async fn drive_to_completion(
     };
     let outcome = crate::completion_check::run_completion_loop(&mut responder, request).await;
 
-    if let crate::completion_check::CompletionOutcome::Exhausted { remaining } = &outcome {
-        tracing::warn!(
-            target: "pool::completion",
-            %channel_id,
-            ?remaining,
-            "agent stopped short {} times running — handing back",
-            crate::completion_check::MAX_CONSECUTIVE_INCOMPLETE
-        );
-        let notice = crate::completion_check::build_exhausted_notice(remaining);
-        post_failure_notice(&ctx.rest_client, channel_id, thread_tags, &notice).await;
+    // Both stopping outcomes are posted by the harness, not asked of the agent.
+    // An agent writes to a channel by running a tool, and a tool call that fails
+    // or is skipped would leave the human staring at silence — which is the
+    // failure this whole path exists to remove.
+    match &outcome {
+        crate::completion_check::CompletionOutcome::Exhausted { remaining } => {
+            tracing::warn!(
+                target: "pool::completion",
+                %channel_id,
+                ?remaining,
+                "agent stopped short {} times running — handing back",
+                crate::completion_check::MAX_CONSECUTIVE_INCOMPLETE
+            );
+            let notice = crate::completion_check::build_exhausted_notice(remaining);
+            post_failure_notice(&ctx.rest_client, channel_id, thread_tags, &notice).await;
+        }
+        crate::completion_check::CompletionOutcome::BlockedOnHuman { needs } => {
+            tracing::info!(
+                target: "pool::completion",
+                %channel_id,
+                ?needs,
+                "agent is blocked on the human — posting the ask"
+            );
+            let notice = crate::completion_check::build_blocked_notice(needs);
+            post_failure_notice(&ctx.rest_client, channel_id, thread_tags, &notice).await;
+        }
+        _ => {}
     }
 
     outcome

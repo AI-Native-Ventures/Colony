@@ -111,23 +111,24 @@ pub fn build_continuation_prompt(remaining: &[String]) -> String {
     )
 }
 
-/// The instruction that turns a blocked verdict into something the human sees.
+/// The message the human reads when an agent stops needing something from them.
 ///
-/// Stopping because a human is needed is correct. Stopping without saying so is
-/// the failure this whole module exists to remove, and a verdict the harness
-/// read is not a message anyone else can see.
-pub fn build_blocked_prompt(needs: &[String]) -> String {
+/// Written by the harness rather than asked of the agent, and deliberately so.
+/// The agent's own words would read better, but agents post to a channel by
+/// running a tool, and a tool call can fail, be skipped, or be quietly declined.
+/// Betting the "you are waiting on me" signal on that is how the silent stall
+/// comes back: the harness knows the turn ended blocked, so the harness is what
+/// says it.
+pub fn build_blocked_notice(needs: &[String]) -> String {
     let list = needs
         .iter()
         .map(|item| format!("- {item}"))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You cannot finish without the human. Post one short message to the \
-         channel now, saying what you have done so far and exactly what you \
-         need:\n{list}\n\n\
-         Ask for it plainly. Do not start other work, and do not promise a \
-         follow-up at a particular time: nothing will wake you until they reply."
+        "⏸ I have stopped because I need something from you before I can \
+         finish.\n\nWaiting on:\n{list}\n\n\
+         Reply here with it and I will carry on. Nothing wakes me until you do."
     )
 }
 
@@ -324,7 +325,11 @@ pub enum CompletionOutcome {
     /// The agent said the request was finished.
     Complete,
     /// The agent stopped needing something only the human can supply.
-    BlockedOnHuman,
+    /// Carries what it is waiting on, for the notice the human reads.
+    BlockedOnHuman {
+        /// What the agent needs before it can continue.
+        needs: Vec<String>,
+    },
     /// The agent stopped short [`MAX_CONSECUTIVE_INCOMPLETE`] times running.
     /// Carries what was still outstanding, for the notice the human reads.
     Exhausted {
@@ -377,14 +382,9 @@ pub async fn run_completion_loop<R: CompletionResponder>(
             Verdict::Complete => return CompletionOutcome::Complete,
             Verdict::BlockedOnHuman { needs } => {
                 // Stopping is right here; stopping silently is the bug. The
-                // agent posts the ask itself, in its own words.
-                if let Err(error) = responder.instruct(&build_blocked_prompt(&needs)).await {
-                    tracing::warn!(
-                        target: "pool::completion",
-                        "agent failed to post its blocked-on-human ask ({error})"
-                    );
-                }
-                return CompletionOutcome::BlockedOnHuman;
+                // caller posts the ask, because the harness knows the turn
+                // ended blocked and does not have to trust a tool call to say so.
+                return CompletionOutcome::BlockedOnHuman { needs };
             }
             Verdict::Incomplete { remaining } => {
                 if !counter.record_incomplete() {
@@ -653,19 +653,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_blocked_agent_is_told_to_post_its_ask_and_then_stops() {
+    async fn a_blocked_agent_stops_and_reports_what_it_needs() {
         let mut responder = ScriptedResponder::new(&[
             r#"{"complete": false, "blocked_on_human": ["street address"]}"#,
         ]);
         let outcome = run_completion_loop(&mut responder, "build the site").await;
-        assert_eq!(outcome, CompletionOutcome::BlockedOnHuman);
-        assert_eq!(responder.instructed.len(), 1);
-        assert!(responder.instructed[0].contains("street address"));
+        assert_eq!(
+            outcome,
+            CompletionOutcome::BlockedOnHuman {
+                needs: vec!["street address".to_string()],
+            }
+        );
         assert!(
-            responder.instructed[0].contains("do not promise a follow-up")
-                || responder.instructed[0].contains("nothing will wake you"),
-            "a blocked agent must not promise a follow-up it cannot keep: {}",
-            responder.instructed[0]
+            responder.instructed.is_empty(),
+            "the ask is posted by the caller, not asked of the agent: a tool \
+             call that fails would restore the silent stall"
+        );
+    }
+
+    #[test]
+    fn the_blocked_notice_names_what_is_needed_and_that_nothing_will_wake_it() {
+        let notice = build_blocked_notice(&["street address in Edenvale".to_string()]);
+        assert!(notice.contains("street address in Edenvale"));
+        assert!(
+            notice.contains("Nothing wakes me until you do"),
+            "the human must know the agent is not on a timer: {notice}"
         );
     }
 
