@@ -382,6 +382,19 @@ fn path_depth(url: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
+/// Fetch one page and return its raw body.
+///
+/// The claim verifier's transport: a single guarded GET with the same
+/// properties as a scan — the URL shape check, redirects re-validated hop by
+/// hop, resolved addresses pinned against DNS rebinding, and the body capped
+/// while streaming. No crawl, no extraction; the caller gets the bytes and
+/// isolates what it needs.
+pub async fn fetch_page(raw_url: &str, limits: ScanLimits) -> Result<String, ScanError> {
+    let seed = check_url_shape(raw_url)?;
+    let fetched = fetch_once(&seed, &limits, limits.max_page_bytes).await?;
+    Ok(fetched.body)
+}
+
 /// Scan a company website and return the evidence collected.
 pub async fn scan_site(raw_url: &str, limits: ScanLimits) -> Result<CompanyScanResult, ScanError> {
     let started = Instant::now();

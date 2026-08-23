@@ -734,7 +734,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 62);
+        assert_eq!(migrations.len(), 64);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1341,6 +1341,19 @@ mod tests {
         assert!(email_accounts.contains("PRIMARY KEY (community_id, token_hash)"));
         assert!(email_accounts.contains("attach_community_write_fence('email_accounts')"));
         assert!(email_accounts.contains("attach_community_write_fence('account_reset_tokens')"));
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let payment_intents = migrations
+            .iter()
+            .find(|migration| migration.version == 63)
+            .expect("payment intents migration")
+            .sql
+            .as_str();
+        assert!(payment_intents.contains("CREATE TABLE payment_intents"));
+        assert!(payment_intents.contains("PRIMARY KEY (community_id, reference)"));
+        assert!(payment_intents.contains("octet_length(pubkey) = 32"));
+        assert!(payment_intents.contains("usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500)"));
+        assert!(payment_intents.contains("attach_community_write_fence('payment_intents')"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
