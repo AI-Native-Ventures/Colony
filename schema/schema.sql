@@ -2827,6 +2827,8 @@ CREATE TABLE payment_intents (
     usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500),
     status        TEXT NOT NULL DEFAULT 'pending'
                   CHECK (status IN ('pending', 'paid', 'failed', 'abandoned')),
+    provider      TEXT NOT NULL DEFAULT 'paystack'
+                  CHECK (provider IN ('paystack', 'payfast')),
     paid_cents    BIGINT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     settled_at    TIMESTAMPTZ,

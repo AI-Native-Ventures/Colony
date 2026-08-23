@@ -1,19 +1,27 @@
-//! Paystack card top-ups: the routes a client calls around hosted checkout,
-//! plus the signature-verified provider webhook that is the only thing
-//! allowed to move money.
+//! Card top-ups: the routes a client calls around hosted checkout, plus the
+//! verified provider webhooks that are the only thing allowed to move money.
 //!
 //! Four routes live here:
 //!
 //! - `POST /api/payments/initialize`: NIP-98 signed. Writes a pending intent,
-//!   asks Paystack to open checkout, returns the URL and the reference.
+//!   asks the configured provider to open checkout, returns the URL and the
+//!   reference.
 //! - `POST /api/payments/verify`: NIP-98 signed. Reads our own intent row and
 //!   nothing else. It never credits the ledger: a client-callable route that
 //!   moves money is exactly the failure this design exists to prevent.
 //! - `POST /api/payments/balance`: NIP-98 signed. Converts the ledger's
 //!   nanoUSD balance into contract cents so the conversion stays server side.
-//! - `POST /api/payments/webhook`: unauthenticated by design, verified by the
-//!   HMAC-SHA512 signature over the raw body bytes. This is the only path
-//!   that credits the ledger.
+//! - `POST /api/payments/webhook/paystack` and
+//!   `POST /api/payments/webhook/payfast`: unauthenticated by design, one
+//!   path per provider. The gateway is authenticated by whatever
+//!   verification its provider implementation performs (for Paystack, the
+//!   HMAC-SHA512 signature over the raw body; for PayFast, signature plus
+//!   source address plus a server-to-server postback). This is the only
+//!   path that credits the ledger.
+//!
+//! The handler never learns which gateway it is talking to: both client and
+//! webhook paths go through [`crate::payments_provider::PaymentProvider`],
+//! and each provider owns every gateway-specific verification step.
 //!
 //! On all three client routes the pubkey comes from the NIP-98 signature,
 //! never from a body field. Every error carries a typed string from the set
@@ -34,7 +42,7 @@
 //! 2. Settle second. It is a conditional UPDATE only a still-pending row
 //!    survives, so concurrent deliveries cannot both act.
 //!
-//! A crash between the two leaves our 200 unsent, so Paystack re-delivers.
+//! A crash between the two leaves our 200 unsent, so the gateway re-delivers.
 //! The replayed credit lands on the ledger's uniqueness and changes nothing,
 //! and the settle then completes. Settling first would lose money
 //! permanently, because the retry would see a settled intent and stop. Any
@@ -45,7 +53,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
 use serde::Deserialize;
@@ -58,17 +66,18 @@ use buzz_db::credits;
 use buzz_db::payment_intents::{self, PaymentIntent};
 use buzz_db::DbError;
 
-use crate::paystack::{
-    nano_usd_from_cents, verify_signature, LivePaystack, PaystackApi, NANO_USD_PER_CENT,
+use crate::payments_provider::{
+    nano_usd_from_cents, PaymentProvider, ProviderEvent, NANO_USD_PER_CENT,
 };
+use crate::paystack::LivePaystack;
 use crate::state::AppState;
 
 use super::{api_error, internal_error};
 
-/// Thread-safe shared client handle. `PaystackApi` carries no supertraits of
-/// its own, so the bounds are named here where the object is stored and sent
-/// across await points.
-type SharedPaystack = Arc<dyn PaystackApi + Send + Sync>;
+/// Shared provider handle. [`PaymentProvider`] declares `Send + Sync` as
+/// supertraits, so the plain trait object is stored and sent across await
+/// points without spelling bounds at every use site.
+type SharedProvider = Arc<dyn PaymentProvider>;
 
 /// The smallest top-up accepted, in USD cents ($5.00).
 pub(crate) const MIN_TOPUP_CENTS: i64 = 500;
@@ -79,9 +88,6 @@ const MAX_EMAIL_LEN: usize = 254;
 /// Longest reference accepted on a verify lookup. Minted references are far
 /// shorter; the cap keeps a caller from probing arbitrary-length strings.
 const MAX_REFERENCE_LEN: usize = 200;
-
-/// How long Paystack names its signature header.
-const SIGNATURE_HEADER: &str = "x-paystack-signature";
 
 /// Body for `POST /api/payments/initialize`.
 #[derive(Debug, Deserialize)]
@@ -139,6 +145,7 @@ pub(crate) trait PaymentStore: Send + Sync {
         reference: &str,
         pubkey: &[u8],
         usd_cents: i64,
+        provider: &str,
     ) -> Result<(), DbError>;
 
     /// Look up one intent by reference inside one tenant.
@@ -187,8 +194,12 @@ impl PaymentStore for RealStore {
         reference: &str,
         pubkey: &[u8],
         usd_cents: i64,
+        provider: &str,
     ) -> Result<(), DbError> {
-        payment_intents::create_intent(&self.pool, community, reference, pubkey, usd_cents).await
+        payment_intents::create_intent(
+            &self.pool, community, reference, pubkey, usd_cents, provider,
+        )
+        .await
     }
 
     async fn find_intent(
@@ -331,46 +342,94 @@ async fn authenticate(
     Ok((tenant, pubkey))
 }
 
-/// The live Paystack client, built once from the deployment environment.
+/// The live provider, selected once from the deployment environment.
 ///
-/// Absent `PAYSTACK_SECRET_KEY` means the initialize route refuses rather
-/// than half-working; there is deliberately no default secret.
-fn shared_paystack() -> Option<SharedPaystack> {
-    static CLIENT: OnceLock<Option<SharedPaystack>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            let secret = std::env::var("PAYSTACK_SECRET_KEY")
-                .ok()
-                .filter(|secret| !secret.is_empty())?;
+/// `COLONY_PAYMENT_PROVIDER` names the gateway; selection is a startup
+/// decision, not a per-request one. Anything other than a known name with a
+/// complete set of credentials yields `None`, and every caller treats that
+/// as fail closed: initialize answers 503 and every webhook is refused. A
+/// relay that cannot attribute money must never accept it.
+fn selected_provider() -> Option<SharedProvider> {
+    static SELECTED: OnceLock<Option<SharedProvider>> = OnceLock::new();
+    SELECTED.get_or_init(build_selected_provider).clone()
+}
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn build_selected_provider() -> Option<SharedProvider> {
+    let choice = env_nonempty("COLONY_PAYMENT_PROVIDER")?;
+    match choice.to_ascii_lowercase().as_str() {
+        "paystack" => {
+            let Some(secret) = env_nonempty("PAYSTACK_SECRET_KEY") else {
+                tracing::error!("COLONY_PAYMENT_PROVIDER=paystack but PAYSTACK_SECRET_KEY unset; payments disabled");
+                return None;
+            };
             // LivePaystack's Debug impl is redacted, so the secret cannot
             // reach a log line through the cached Arc either.
             LivePaystack::new(secret)
                 .ok()
-                .map(|client| Arc::new(client) as SharedPaystack)
-        })
-        .clone()
-}
-
-/// The webhook signing secret from the deployment environment.
-///
-/// Never logged. Absent means fail closed: every delivery is refused until
-/// the operator configures the key, because without it nothing can be
-/// verified.
-fn webhook_secret() -> Option<String> {
-    std::env::var("PAYSTACK_SECRET_KEY")
-        .ok()
-        .filter(|secret| !secret.is_empty())
+                .map(|client| Arc::new(client) as SharedProvider)
+        }
+        "payfast" => {
+            let (Some(merchant_id), Some(merchant_key), Some(notify_url)) = (
+                env_nonempty("PAYFAST_MERCHANT_ID"),
+                env_nonempty("PAYFAST_MERCHANT_KEY"),
+                env_nonempty("PAYFAST_NOTIFY_URL"),
+            ) else {
+                tracing::error!(
+                    "COLONY_PAYMENT_PROVIDER=payfast but PAYFAST_MERCHANT_ID, \
+                     PAYFAST_MERCHANT_KEY or PAYFAST_NOTIFY_URL unset; payments disabled"
+                );
+                return None;
+            };
+            // Sandbox accounts commonly run without a passphrase; production
+            // accounts must not: the passphrase is what binds the MD5
+            // signature to our account, and MD5 alone proves nothing.
+            let sandbox = std::env::var("PAYFAST_MODE")
+                .map(|mode| mode.eq_ignore_ascii_case("sandbox"))
+                .unwrap_or(false);
+            let configured_passphrase = if sandbox {
+                Some(std::env::var("PAYFAST_PASSPHRASE").unwrap_or_default())
+            } else {
+                env_nonempty("PAYFAST_PASSPHRASE")
+            };
+            let Some(passphrase) = configured_passphrase else {
+                tracing::error!(
+                    "COLONY_PAYMENT_PROVIDER=payfast in live mode requires PAYFAST_PASSPHRASE"
+                );
+                return None;
+            };
+            crate::payfast::PayFast::new(crate::payfast::PayFastCredentials {
+                merchant_id,
+                merchant_key,
+                passphrase,
+                notify_url,
+                sandbox,
+            })
+            .ok()
+            .map(|provider| Arc::new(provider) as SharedProvider)
+        }
+        _ => {
+            tracing::error!(
+                provider = %choice,
+                "unknown COLONY_PAYMENT_PROVIDER; payments stay disabled"
+            );
+            None
+        }
+    }
 }
 
 /// `initialize` core: validate, write the pending intent, then open checkout.
 ///
-/// The intent is written before Paystack is called so a crash mid-call still
-/// leaves the reference resolvable. A Paystack failure leaves the intent
-/// pending; it is dead weight, never money, and the next attempt mints a
-/// fresh reference.
+/// The intent is written before the provider is called so a crash mid-call
+/// still leaves the reference resolvable. A provider failure leaves the
+/// intent pending; it is dead weight, never money, and the next attempt mints
+/// a fresh reference.
 pub(crate) async fn initialize_payment(
     store: &dyn PaymentStore,
-    paystack: &(dyn PaystackApi + Send + Sync),
+    provider: &dyn PaymentProvider,
     tenant: &TenantContext,
     signer_pubkey: [u8; 32],
     request: &InitializeRequest,
@@ -386,12 +445,13 @@ pub(crate) async fn initialize_payment(
             &reference,
             &signer_pubkey,
             request.usd_cents,
+            provider.name(),
         )
         .await
         .map_err(|error| internal_error(&format!("create payment intent: {error}")))?;
 
     let email = normalise_email(&request.email);
-    match paystack
+    match provider
         .initialize(request.usd_cents, &email, &reference)
         .await
     {
@@ -400,7 +460,12 @@ pub(crate) async fn initialize_payment(
             "reference": reference,
         }))),
         Err(error) => {
-            tracing::error!(reference = %reference, error = %error, "paystack initialize failed");
+            tracing::error!(
+                provider = provider.name(),
+                reference = %reference,
+                error = %error,
+                "payment initialize failed"
+            );
             Err(api_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "payment_unavailable",
@@ -484,13 +549,13 @@ pub async fn initialize(
     let request: InitializeRequest = serde_json::from_slice(&body)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
 
-    let paystack = shared_paystack()
+    let provider = selected_provider()
         .ok_or_else(|| api_error(StatusCode::SERVICE_UNAVAILABLE, "payment_unavailable"))?;
 
     let store = RealStore::new(state.db.pool().clone());
     initialize_payment(
         &store,
-        paystack.as_ref(),
+        provider.as_ref(),
         &tenant,
         pubkey.to_bytes(),
         &request,
@@ -539,103 +604,89 @@ pub async fn balance(
     balance_payment(&store, pubkey.to_bytes()).await
 }
 
-/// `webhook` core: verify, then credit and settle exactly once.
+/// `webhook` core: verify through the provider, then credit and settle
+/// exactly once.
 ///
-/// The signature is checked over the raw bytes before anything parses them:
-/// Paystack signs the bytes it sent, and re-serialised JSON differs for the
-/// same object, so verifying after parsing would reject every real delivery
-/// while passing any struct round-trip test.
+/// The handler does not know which gateway delivered: verification is wholly
+/// the provider implementation's job, and it runs over the raw bytes and
+/// headers before anything parses them, because every gateway signs the
+/// bytes it sent. A rejected callback answers 401 and credits nothing.
 ///
-/// Every event this understands is acknowledged with 200, including events
-/// that are ignored (other event types) and references we do not recognise
-/// (they may belong to another environment sharing the key). A non-200 makes
-/// Paystack retry forever. Only a store failure answers 5xx so that a retry
+/// Every verified event is acknowledged with 200, including events the
+/// provider understood but ignored and references we do not recognise (they
+/// may belong to another environment sharing the key). A non-200 makes the
+/// gateway retry forever. Only a store failure answers 5xx so that a retry
 /// can converge; see the module docs for why credit precedes settle.
 pub(crate) async fn webhook_payment(
     store: &dyn PaymentStore,
-    webhook_secret: &str,
+    provider: &dyn PaymentProvider,
     community: CommunityId,
-    signature_header: &str,
+    headers: &HeaderMap,
     body: &[u8],
+    source_ip: Option<std::net::IpAddr>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    // Signature over the raw bytes, before anything parses them.
-    if !verify_signature(body, signature_header, webhook_secret) {
-        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_signature"));
-    }
-
-    let event: Value = match serde_json::from_slice(body) {
+    let event = match provider.verify_callback(body, headers, source_ip).await {
         Ok(event) => event,
-        Err(_) => {
-            // Signed but unparseable can only be a key shared with something
-            // that is not Paystack. Nothing is understood, so nothing moves;
-            // acknowledging stops a retry loop over a body we will never read
-            // differently.
-            tracing::warn!("paystack webhook: signed body was not JSON");
-            return Ok(StatusCode::OK);
-        }
-    };
-
-    match event.get("event").and_then(Value::as_str) {
-        Some("charge.success") => {}
-        // Understood envelope, ignored event type (charge.failed and friends).
-        // Acknowledged so Paystack does not retry an event we will never act
-        // on; the intent stays pending, which is the truthful state.
-        _ => return Ok(StatusCode::OK),
-    }
-
-    let data = event.get("data");
-    let Some(reference) = data
-        .and_then(|data| data.get("reference"))
-        .and_then(Value::as_str)
-    else {
-        tracing::warn!("paystack webhook: charge.success without a reference");
-        return Ok(StatusCode::OK);
-    };
-
-    // The contract is USD end to end. A different currency means the amount
-    // is a different unit, so crediting it as cents would misprice it; out of
-    // contract, so refused loudly and acknowledged rather than retried.
-    if let Some(currency) = data
-        .and_then(|data| data.get("currency"))
-        .and_then(Value::as_str)
-    {
-        if !currency.eq_ignore_ascii_case("USD") {
-            tracing::error!(
-                reference = %reference,
-                currency = %currency,
-                "paystack webhook: refusing a non-USD charge"
+        Err(error) => {
+            // Verification failed: bad signature, wrong source, failed
+            // postback, whatever this gateway demands. Nothing about the
+            // delivery is trusted, so nothing is read and nothing moves.
+            tracing::warn!(
+                provider = provider.name(),
+                error = %error,
+                "payment webhook rejected"
             );
-            return Ok(StatusCode::OK);
+            return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_signature"));
         }
-    }
-
-    let Some(paid_cents) = data
-        .and_then(|data| data.get("amount"))
-        .and_then(Value::as_i64)
-    else {
-        tracing::warn!(reference = %reference, "paystack webhook: charge.success without an amount");
-        return Ok(StatusCode::OK);
     };
 
-    let intent = match store.find_intent(community, reference).await {
+    let (reference, paid_cents) = match event {
+        ProviderEvent::Ignored => return Ok(StatusCode::OK),
+        ProviderEvent::Paid {
+            reference,
+            usd_cents,
+        } => (reference, usd_cents),
+    };
+
+    let intent = match store.find_intent(community, &reference).await {
         Ok(Some(intent)) => intent,
         Ok(None) => {
             // May belong to another environment sharing the key. Not ours,
             // not an error, nothing to credit.
             tracing::warn!(
+                provider = provider.name(),
                 reference = %reference,
-                "paystack webhook: unknown reference"
+                "payment webhook: unknown reference"
             );
             return Ok(StatusCode::OK);
         }
         Err(error) => return Err(internal_error(&format!("find payment intent: {error}"))),
     };
 
-    // Paystack retries deliveries, so a settled intent meeting this event
+    // The intent names the gateway that issued its reference at initialize
+    // time. A verified delivery from a different gateway is either a
+    // leftover from before a switch or a forgery probing the new one; this
+    // column is what makes the two tellable from legitimate traffic, and
+    // neither kind may move money.
+    if intent.provider != provider.name() {
+        tracing::error!(
+            delivered_by = provider.name(),
+            issued_by = %intent.provider,
+            reference = %reference,
+            "payment webhook: reference was issued by a different provider"
+        );
+        return Ok(StatusCode::OK);
+    }
+
+    // Providers retry deliveries, so a settled intent meeting this event
     // again is the common replay path, not an anomaly. The ledger's UNIQUE
     // (pubkey, ref) is the second idempotency layer behind this early return.
     if intent.status == "paid" {
-        tracing::info!(reference = %reference, "paystack webhook: replay for a settled payment");
+        tracing::info!(
+            provider = provider.name(),
+            reference = %reference,
+            "payment webhook: replay for a settled payment"
+        );
         return Ok(StatusCode::OK);
     }
 
@@ -645,10 +696,11 @@ pub(crate) async fn webhook_payment(
     // either direction.
     if paid_cents != intent.usd_cents {
         tracing::warn!(
+            provider = provider.name(),
             reference = %reference,
             asked_cents = intent.usd_cents,
             paid_cents,
-            "paystack webhook: paid amount differed from the requested amount"
+            "payment webhook: paid amount differed from the requested amount"
         );
     }
 
@@ -656,38 +708,66 @@ pub(crate) async fn webhook_payment(
         Ok(nanousd) => nanousd,
         Err(error) => {
             tracing::error!(
+                provider = provider.name(),
                 reference = %reference,
                 error = %error,
-                "paystack webhook: refusing to credit an unconvertible amount"
+                "payment webhook: refusing to credit an unconvertible amount"
             );
             return Ok(StatusCode::OK);
         }
     };
 
     store
-        .credit(&intent.pubkey, nanousd, reference)
+        .credit(&intent.pubkey, nanousd, &reference)
         .await
         .map_err(|error| internal_error(&format!("credit payment: {error}")))?;
 
     store
-        .settle_intent(community, reference, paid_cents)
+        .settle_intent(community, &reference, paid_cents)
         .await
         .map(|_| StatusCode::OK)
         .map_err(|error| internal_error(&format!("settle payment intent: {error}")))
 }
 
-/// `POST /api/payments/webhook`.
+/// Upper bound on a webhook body read directly off the request. The router's
+/// global body limit already caps this at 1 MB; the constant names the same
+/// ceiling for the manual read.
+const WEBHOOK_BODY_LIMIT: usize = 1024 * 1024;
+
+/// The delivery's network source, when the serving stack recorded one.
 ///
-/// Unauthenticated by design: identity comes from the HMAC signature over
-/// the raw body, verified against the deployment secret. The tenant still
+/// Read from request extensions rather than an extractor so a UDS-served
+/// relay (which has no connect info) degrades to `None` instead of erroring.
+/// Providers that authenticate the source treat `None` as untrusted, which
+/// is exactly the fail-closed default.
+fn source_ip_of(req: &axum::extract::Request) -> Option<std::net::IpAddr> {
+    req.extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|connect_info| connect_info.0.ip())
+}
+
+/// Shared webhook core for both routes.
+///
+/// Unauthenticated by design: identity comes from whatever verification the
+/// configured provider performs over the raw delivery. The tenant still
 /// binds from the request host like every HTTP path here, so an intent in
 /// community A can only be settled through A's host.
-pub async fn webhook(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
+///
+/// Two gates sit ahead of verification, both fail closed:
+///
+/// - No configured provider means nothing can be verified, so every
+///   delivery is refused.
+/// - A delivery aimed at gateway X is only processed when X is the one that
+///   is live; a relay switched to PayFast must not let a stray Paystack
+///   delivery (or anything posting to the wrong URL) reach verification at
+///   all.
+async fn webhook_for_route(
+    state: &Arc<AppState>,
+    req: axum::extract::Request,
+    expected_provider: &'static str,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let raw_host = headers
+    let raw_host = req
+        .headers()
         .get(axum::http::header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -695,24 +775,66 @@ pub async fn webhook(
         .await
         .map_err(|_| api_error(StatusCode::NOT_FOUND, "unknown_community"))?;
 
-    // Without the secret nothing can be verified, so every delivery fails
-    // closed. The header value itself is never logged.
-    let Some(secret) = webhook_secret() else {
-        tracing::error!("paystack webhook secret unset; refusing every delivery");
+    let Some(provider) = selected_provider() else {
+        tracing::error!("payment webhook with no provider configured; refusing the delivery");
         return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_signature"));
     };
-    let signature = headers
-        .get(SIGNATURE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+    if provider.name() != expected_provider {
+        tracing::error!(
+            route_for = expected_provider,
+            live_provider = provider.name(),
+            "payment webhook delivered to the wrong provider's route"
+        );
+        return Err(api_error(StatusCode::UNAUTHORIZED, "invalid_signature"));
+    }
+
+    let source_ip = source_ip_of(&req);
+    let headers = req.headers().clone();
+    let body = axum::body::to_bytes(req.into_body(), WEBHOOK_BODY_LIMIT)
+        .await
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?
+        .to_vec();
 
     let store = RealStore::new(state.db.pool().clone());
-    webhook_payment(&store, &secret, tenant.community(), signature, &body).await
+    webhook_payment(
+        &store,
+        provider.as_ref(),
+        tenant.community(),
+        &headers,
+        &body,
+        source_ip,
+    )
+    .await
+}
+
+/// `POST /api/payments/webhook/paystack`.
+///
+/// The path Paystack is configured to call back on. One path per provider,
+/// never sniffed: each gateway posts a different shape and is configured
+/// with its own callback URL.
+pub async fn webhook_paystack(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    webhook_for_route(&state, req, "paystack").await
+}
+
+/// `POST /api/payments/webhook/payfast`.
+///
+/// The path PayFast is configured to call back on (its ITN `notify_url`).
+pub async fn webhook_payfast(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    webhook_for_route(&state, req, "payfast").await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::payments_provider::ProviderError;
+    use crate::paystack::verify_and_parse_delivery;
 
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
@@ -758,41 +880,88 @@ mod tests {
         result.expect("expected a success response").0
     }
 
-    #[derive(Default)]
-    struct FakePaystack {
+    /// A provider fake standing in for whichever gateway is under test.
+    ///
+    /// Callback verification delegates to the real shared helper with a
+    /// test secret, so deliveries are signed and verified exactly as the
+    /// live client does it. `always_reject` exercises the trait-level
+    /// rejection path (what a failed PayFast postback or wrong source
+    /// address looks like to this handler) without tying it to any
+    /// gateway's mechanics.
+    struct FakeProvider {
+        name: &'static str,
+        secret: String,
         calls: Mutex<Vec<(i64, String, String)>>,
         fail: bool,
+        always_reject: bool,
     }
 
-    impl FakePaystack {
+    impl FakeProvider {
+        fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                secret: TEST_WEBHOOK_SECRET.to_string(),
+                calls: Mutex::new(Vec::new()),
+                fail: false,
+                always_reject: false,
+            }
+        }
+
         fn failing() -> Self {
             Self {
-                calls: Mutex::new(Vec::new()),
                 fail: true,
+                ..Self::new("paystack")
+            }
+        }
+
+        fn rejecting() -> Self {
+            Self {
+                always_reject: true,
+                ..Self::new("paystack")
             }
         }
 
         fn url_for(&self, reference: &str) -> String {
-            format!("https://checkout.paystack.com/{reference}")
+            format!("https://checkout.example/{reference}")
         }
     }
 
     #[async_trait::async_trait]
-    impl PaystackApi for FakePaystack {
+    impl PaymentProvider for FakeProvider {
         async fn initialize(
             &self,
             usd_cents: i64,
             email: &str,
             reference: &str,
-        ) -> Result<String, crate::paystack::PaystackError> {
+        ) -> Result<String, ProviderError> {
             self.calls
                 .lock()
                 .unwrap()
                 .push((usd_cents, email.to_string(), reference.to_string()));
             if self.fail {
-                return Err(crate::paystack::PaystackError::Status { status: 500 });
+                return Err(ProviderError::Status { status: 500 });
             }
             Ok(self.url_for(reference))
+        }
+
+        async fn verify_callback(
+            &self,
+            raw_body: &[u8],
+            headers: &HeaderMap,
+            _source_ip: Option<std::net::IpAddr>,
+        ) -> Result<ProviderEvent, ProviderError> {
+            if self.always_reject {
+                return Err(ProviderError::RejectedCallback("injected rejection"));
+            }
+            let signature = headers
+                .get("x-paystack-signature")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("");
+            verify_and_parse_delivery(raw_body, signature, &self.secret)
+        }
+
+        fn name(&self) -> &'static str {
+            self.name
         }
     }
 
@@ -830,6 +999,16 @@ mod tests {
         }
 
         fn insert_pending(&self, reference: &str, pubkey: [u8; 32], usd_cents: i64) {
+            self.insert_pending_via(reference, pubkey, usd_cents, "paystack");
+        }
+
+        fn insert_pending_via(
+            &self,
+            reference: &str,
+            pubkey: [u8; 32],
+            usd_cents: i64,
+            provider: &str,
+        ) {
             self.intents.lock().unwrap().insert(
                 reference.to_string(),
                 PaymentIntent {
@@ -837,6 +1016,7 @@ mod tests {
                     pubkey: pubkey.to_vec(),
                     usd_cents,
                     status: "pending".into(),
+                    provider: provider.to_string(),
                     paid_cents: None,
                 },
             );
@@ -856,6 +1036,7 @@ mod tests {
                     pubkey: intent.pubkey.clone(),
                     usd_cents: intent.usd_cents,
                     status: intent.status.clone(),
+                    provider: intent.provider.clone(),
                     paid_cents: intent.paid_cents,
                 })
         }
@@ -872,11 +1053,13 @@ mod tests {
             reference: &str,
             pubkey: &[u8],
             usd_cents: i64,
+            provider: &str,
         ) -> Result<(), DbError> {
-            self.insert_pending(
+            self.insert_pending_via(
                 reference,
                 pubkey.try_into().expect("32-byte pubkey"),
                 usd_cents,
+                provider,
             );
             Ok(())
         }
@@ -976,14 +1159,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_writes_the_intent_before_asking_paystack() {
+    async fn initialize_writes_the_intent_before_asking_the_provider() {
         let store = FakeStore::new(community());
-        let paystack = FakePaystack::default();
+        let provider = FakeProvider::new("paystack");
         let tenant = tenant_of(store.community);
         let key = signer();
 
         let response =
-            ok_value(initialize_payment(&store, &paystack, &tenant, key, &init_request(500)).await);
+            ok_value(initialize_payment(&store, &provider, &tenant, key, &init_request(500)).await);
 
         let reference = response
             .get("reference")
@@ -992,26 +1175,26 @@ mod tests {
             .to_string();
         assert_eq!(
             response.get("authorizationUrl").and_then(Value::as_str),
-            Some(paystack.url_for(&reference).as_str())
+            Some(provider.url_for(&reference).as_str())
         );
 
         let stored = store.get(&reference).expect("intent stored");
         assert_eq!(stored.pubkey, key.to_vec());
         assert_eq!(stored.usd_cents, 500);
         assert_eq!(stored.status, "pending");
-        assert_eq!(paystack.calls.lock().unwrap().len(), 1, "one checkout call");
+        assert_eq!(provider.calls.lock().unwrap().len(), 1, "one checkout call");
     }
 
     #[tokio::test]
-    async fn initialize_sends_the_normalised_email_and_amount_to_paystack() {
+    async fn initialize_sends_the_normalised_email_and_amount_to_the_provider() {
         let store = FakeStore::new(community());
-        let paystack = FakePaystack::default();
+        let provider = FakeProvider::new("paystack");
         let mut request = init_request(1200);
         request.email = "Founder@Example.COM".into();
 
         let _response = initialize_payment(
             &store,
-            &paystack,
+            &provider,
             &tenant_of(store.community),
             signer(),
             &request,
@@ -1019,18 +1202,18 @@ mod tests {
         .await
         .expect("initialize succeeds");
 
-        let calls = paystack.calls.lock().unwrap();
+        let calls = provider.calls.lock().unwrap();
         assert_eq!(calls[0].0, 1200, "cents pass through unchanged");
         assert_eq!(calls[0].1, "founder@example.com");
     }
 
     #[tokio::test]
-    async fn a_paystack_failure_is_typed_not_prose() {
+    async fn a_provider_failure_is_typed_not_prose() {
         let store = FakeStore::new(community());
 
         let result = initialize_payment(
             &store,
-            &FakePaystack::failing(),
+            &FakeProvider::failing(),
             &tenant_of(store.community),
             signer(),
             &init_request(500),
@@ -1079,6 +1262,7 @@ mod tests {
                 pubkey: key.to_vec(),
                 usd_cents: 500,
                 status: "paid".into(),
+                provider: "paystack".into(),
                 paid_cents: Some(700),
             },
         );
@@ -1203,7 +1387,8 @@ mod tests {
     //
     // The webhook is the only path allowed to move money, so its tests pin
     // behaviour at the handler level against a faked store: who got credited,
-    // how much, and how many times.
+    // how much, and how many times. Verification runs through the trait, so
+    // the same handler tests run against any provider fake.
 
     const TEST_WEBHOOK_SECRET: &str = "whsec_test_example";
 
@@ -1230,12 +1415,46 @@ mod tests {
         .into_bytes()
     }
 
+    fn signature_headers(signature: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-paystack-signature", signature.parse().unwrap());
+        headers
+    }
+
     async fn deliver(
         store: &FakeStore,
         signature: &str,
         body: &[u8],
     ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-        webhook_payment(store, TEST_WEBHOOK_SECRET, store.community, signature, body).await
+        let provider = FakeProvider::new("paystack");
+        webhook_payment(
+            store,
+            &provider,
+            store.community,
+            &signature_headers(signature),
+            body,
+            None,
+        )
+        .await
+    }
+
+    /// Same delivery through a caller-supplied provider fake, for tests that
+    /// pin behaviour against a second gateway or an injected rejection.
+    async fn deliver_via(
+        provider: &FakeProvider,
+        store: &FakeStore,
+        signature: &str,
+        body: &[u8],
+    ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+        webhook_payment(
+            store,
+            provider,
+            store.community,
+            &signature_headers(signature),
+            body,
+            None,
+        )
+        .await
     }
 
     /// Lifts the webhook's result into the shape `assert_typed_error` reads;
@@ -1390,7 +1609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_settle_answers_500_so_paystack_retries() {
+    async fn a_failed_settle_answers_500_so_the_gateway_retries() {
         let store = FakeStore::new(community()).failing_settle();
         let key = signer();
         store.insert_pending("ref-1", key, 500);
@@ -1424,5 +1643,121 @@ mod tests {
             "invalid_signature",
         );
         assert!(store.credit_calls().is_empty());
+    }
+
+    // The handler must treat every provider's rejection alike: whatever the
+    // gateway-specific reason (a failed PayFast postback, a wrong source
+    // address), the delivery is refused and nothing moves. This pins the
+    // trait boundary without any gateway's mechanics.
+    #[tokio::test]
+    async fn a_provider_rejection_answers_401_and_credits_nothing() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-1", key, 500);
+        let body = success_body("ref-1", 500);
+        let provider = FakeProvider::rejecting();
+
+        let result = deliver_via(&provider, &store, &sign(TEST_WEBHOOK_SECRET, &body), &body).await;
+
+        assert_typed_error(
+            &as_handler_result(&result),
+            StatusCode::UNAUTHORIZED,
+            "invalid_signature",
+        );
+        assert!(
+            store.credit_calls().is_empty(),
+            "a rejected delivery must never credit"
+        );
+        assert_eq!(store.settle_calls.load(Ordering::SeqCst), 0);
+    }
+
+    // Provider-agnostic by construction: the same handler body must credit
+    // exactly once whichever fake gateway stands behind the trait. The
+    // intent is issued by the same gateway that delivers, because the
+    // attribution gate above refuses any other combination.
+    #[tokio::test]
+    async fn the_same_handler_credits_once_through_a_second_provider() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending_via("ref-1", key, 500, "payfast");
+        let body = success_body("ref-1", 500);
+        let payfast = FakeProvider::new("payfast");
+
+        let status = deliver_via(&payfast, &store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("delivery acknowledged");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_credits(&store, &[(key.to_vec(), 5_000_000_000, "ref-1")]);
+        assert_eq!(store.settle_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn initialize_records_the_delivering_provider_on_the_intent() {
+        let store = FakeStore::new(community());
+        let provider = FakeProvider::new("payfast");
+
+        let response = ok_value(
+            initialize_payment(
+                &store,
+                &provider,
+                &tenant_of(store.community),
+                signer(),
+                &init_request(500),
+            )
+            .await,
+        );
+
+        let reference = response
+            .get("reference")
+            .and_then(Value::as_str)
+            .expect("reference in response");
+        let stored = store.get(reference).expect("intent stored");
+        assert_eq!(
+            stored.provider, "payfast",
+            "the intent must name the gateway that issued the reference"
+        );
+    }
+
+    // The attribution gate this whole column exists for: a verified delivery
+    // from gateway B for a reference gateway A issued moves nothing. After a
+    // provider switch this is the difference between a leftover retry and a
+    // forgery, and neither may credit.
+    #[tokio::test]
+    async fn a_delivery_from_a_provider_that_did_not_issue_the_reference_credits_nothing() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending_via("ref-1", key, 500, "paystack");
+        let body = success_body("ref-1", 500);
+        let impostor = FakeProvider::new("payfast");
+
+        let status = deliver_via(&impostor, &store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("acknowledged so the foreign gateway stops retrying");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            store.credit_calls().is_empty(),
+            "a cross-provider delivery must never credit"
+        );
+        assert_eq!(store.settle_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.get("ref-1").expect("intent exists").status, "pending");
+    }
+
+    // And the mirror image: the issuing provider still settles its own
+    // reference normally.
+    #[tokio::test]
+    async fn the_issuing_provider_still_settles_its_own_reference() {
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending_via("ref-1", key, 500, "payfast");
+        let body = success_body("ref-1", 500);
+        let payfast = FakeProvider::new("payfast");
+
+        deliver_via(&payfast, &store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("delivery acknowledged");
+
+        assert_credits(&store, &[(key.to_vec(), 5_000_000_000, "ref-1")]);
     }
 }
