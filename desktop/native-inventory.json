@@ -3184,6 +3184,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/onboarding/lib/wiredScrapeService.ts:11",
         "src/shared/api/tauriCompanyScan.ts:67"
       ]
     },
