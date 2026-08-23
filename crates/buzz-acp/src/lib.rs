@@ -3,6 +3,7 @@
 mod acp;
 pub mod ask_context;
 mod codex_usage_adapter;
+pub mod completion_check;
 mod config;
 mod engram_fetch;
 mod filter;
@@ -1865,7 +1866,16 @@ async fn tokio_main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("buzz_acp=info")),
+            // `pool::prompt` and `pool::completion` are custom targets, so a
+            // `buzz_acp=info` filter drops them: turn start, turn end, and every
+            // completion check become invisible. Without them a stalled agent and
+            // a working one produce identical logs, which is the diagnosis
+            // problem this harness exists to remove. Named explicitly here so the
+            // default install can answer "did the check run?" without anyone
+            // having to know to set RUST_LOG first.
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("buzz_acp=info,pool::prompt=info,pool::completion=info")
+            }),
         )
         .compact()
         .init();
@@ -2359,7 +2369,15 @@ async fn tokio_main() -> Result<()> {
     }
 
     let base_prompt_content = config.base_prompt_content.take();
+    // Completion-check continuations grant a turn a fresh budget from inside
+    // the prompt task, which does not own the queue. Unbounded and never
+    // awaited by the sender for the same reason the steer-ack channel is: a
+    // send that blocked here would stall the turn it is trying to protect.
+    let (deadline_extend_tx, mut deadline_extend_rx) = mpsc::unbounded_channel::<Uuid>();
+
     let ctx = Arc::new(PromptContext {
+        completion_check: config.completion_check,
+        deadline_extend_tx: Some(deadline_extend_tx.clone()),
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
         idle_timeout: Duration::from_secs(config.idle_timeout_secs),
@@ -2576,6 +2594,9 @@ async fn tokio_main() -> Result<()> {
         Panic(tokio::task::JoinError),
         SteerAck(SteerAckEvent),
         Wake(u32, Result<AgentPool, String>),
+        /// A completion-check continuation granted this channel's turn a fresh
+        /// budget; its in-flight deadline must move with it.
+        ExtendDeadline(Uuid),
     }
 
     loop {
@@ -2738,6 +2759,9 @@ async fn tokio_main() -> Result<()> {
                 // locked semantics (Eva + Max + Perci).
                 Some(ack_event) = steer_ack_rx.recv() => {
                     Some(PoolEvent::SteerAck(ack_event))
+                }
+                Some(channel_id) = deadline_extend_rx.recv() => {
+                    Some(PoolEvent::ExtendDeadline(channel_id))
                 }
                 Some((attempt, result)) = wake_rx.recv(), if config.lazy_pool && !pool_ready => {
                     Some(PoolEvent::Wake(attempt, result))
@@ -3442,6 +3466,11 @@ async fn tokio_main() -> Result<()> {
                 {
                     typing_channels.insert(channel_id, thread_tags);
                 }
+            }
+            Some(PoolEvent::ExtendDeadline(channel_id)) => {
+                // Same grant a successful steer makes: the turn is still the
+                // same turn, and it has just been given more work to do.
+                queue.extend_in_flight_deadline(channel_id, config.max_turn_duration_secs);
             }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
@@ -7561,6 +7590,7 @@ mod build_mcp_servers_tests {
 
     fn test_config() -> Config {
         Config {
+            completion_check: false,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
@@ -7791,6 +7821,7 @@ mod error_outcome_emission_tests {
 
     fn test_config() -> Config {
         Config {
+            completion_check: false,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             // `true` exits cleanly, so the async respawn fails fast and

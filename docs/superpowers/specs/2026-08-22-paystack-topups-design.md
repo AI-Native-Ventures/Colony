@@ -140,6 +140,28 @@ spinner, and it deliberately does **not** credit anything: a client-triggered
 route must never move money. If the webhook has not arrived yet this returns
 `{ "paid": false }` and the screen keeps waiting.
 
+### `POST /api/payments/balance`
+
+```jsonc
+// request
+{}
+// 200
+{ "usdCents": 500 }
+```
+
+The pubkey comes from the NIP-98 signature, so the body is empty.
+
+**This route exists so the conversion stays on one side of the wire.** The
+ledger stores nanoUSD and `GET /api/gateway/account` returns nanoUSD as a
+string; consuming that from the client would drag a nanoUSD-to-cents conversion
+into TypeScript and break the rule that the multiplication lives in exactly one
+place. This route converts and answers in cents.
+
+It is also screen 9's recovery path. If a user pays and the confirmation is
+slow, or the callback never arrives, the balance still answers with what the
+workspace actually holds, so nobody is stranded staring at a spinner over money
+they have already spent.
+
 ### `POST /api/payments/webhook`
 
 Unauthenticated by design, verified by signature. Returns `200` for every
@@ -155,10 +177,25 @@ event it understands and ignores, so Paystack stops retrying. On
    The ledger's `UNIQUE (pubkey, ref)` is the second idempotency layer.
 5. Mark the intent `paid`, recording `paid_cents` and `settled_at`.
 
-Steps 4 and 5 run in one transaction. A crash between them would otherwise
-leave money credited with an intent that still reads pending, and the next
-retry would try to credit again. The ledger's uniqueness would refuse the
-double credit, but the intent would stay wrong forever.
+**Order matters more than atomicity here, and one transaction is not
+available.** `credits::apply_entry_inner` deliberately owns its own
+transaction, documented as "no caller-supplied transaction can widen the
+window", and `settle_intent` takes a pool. Sharing one would mean adding
+transaction-taking variants to `buzz-db`.
+
+It is not worth it, because the ordering already converges:
+
+1. **Credit first.** It is idempotent on `UNIQUE (pubkey, ref)`.
+2. **Settle second**, with the pending-only conditional update.
+3. **Any store error answers 5xx**, so Paystack redelivers.
+
+On redelivery the credit is a no-op and the settle completes. The window where
+money is credited while the intent still reads pending closes on the next
+delivery, and the balance, which is what the user sees, is correct throughout.
+
+Settle-first would be the dangerous order: a retry would see `paid`, stop, and
+the credit would never happen. That loses real money permanently, which is
+strictly worse than a briefly stale intent row.
 
 ## Desktop integration
 
