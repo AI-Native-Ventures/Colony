@@ -437,8 +437,13 @@
  */
 :root[data-buzz-sidebar] [data-testid="app-sidebar"],
 :root[data-buzz-sidebar] [data-testid="settings-sidebar"] {
-  --sidebar-active: var(--buzz-active-fill);
-  --sidebar-active-foreground: var(--buzz-active-foreground);
+  /* The accent, not --buzz-active-fill. That token is a flat black meant to be
+     painted at 7%, and this element-local override is what kept the selected
+     row black no matter which accent was chosen: it wins over the inline
+     value :root carries. Neutral keeps the old wash below, since a solid
+     near-black pill is exactly what it was avoiding. */
+  --sidebar-active: var(--sidebar-primary);
+  --sidebar-active-foreground: var(--sidebar-primary-foreground);
 }
 
 /*
@@ -447,8 +452,8 @@
  */
 :root[data-buzz-sidebar].dark [data-testid="app-sidebar"],
 :root[data-buzz-sidebar].dark [data-testid="settings-sidebar"] {
-  --sidebar-active: var(--buzz-active-fill);
-  --sidebar-active-foreground: var(--buzz-active-foreground);
+  --sidebar-active: var(--sidebar-primary);
+  --sidebar-active-foreground: var(--sidebar-primary-foreground);
 }
 
 /*
@@ -466,6 +471,33 @@
   background-color: hsl(var(--sidebar-active));
   color: hsl(var(--sidebar-active-foreground));
   box-shadow: none;
+}
+
+/*
+ * Neutral is the exception, and deliberately so. It resolves to the theme
+ * foreground, so the rule above would paint a solid near-black pill: the very
+ * thing the 7% wash existed to avoid. Neutral keeps the wash and its resting
+ * label colour; every chromatic accent gets the saturated row.
+ */
+:root[data-buzz-sidebar][data-accent-neutral]
+  [data-testid="app-sidebar"]
+  [data-active="true"],
+:root[data-buzz-sidebar][data-accent-neutral]
+  [data-testid="settings-sidebar"]
+  [data-active="true"] {
+  background-color: var(--sidebar-row-subtle-active-surface);
+  color: hsl(var(--sidebar-foreground));
+}
+
+:root[data-buzz-sidebar][data-accent-neutral]
+  [data-testid="app-sidebar"]
+  [data-active="true"]
+  svg,
+:root[data-buzz-sidebar][data-accent-neutral]
+  [data-testid="settings-sidebar"]
+  [data-active="true"]
+  svg {
+  color: inherit;
 }
 
 /* The icon follows the label rather than keeping its resting tint. */

@@ -258,6 +258,11 @@ function applyAccentColor(value: string) {
     root.style.setProperty("--sidebar-primary-foreground", background);
     root.style.setProperty("--sidebar-active", foreground);
     root.style.setProperty("--sidebar-active-foreground", background);
+    // Neutral resolves to the theme foreground, so painting a selected row
+    // with it solid produces a near-black pill. The flag lets the sidebar keep
+    // the subtle wash for this accent alone, without special-casing every
+    // other one.
+    root.dataset.accentNeutral = "true";
     return;
   }
 
@@ -276,6 +281,7 @@ function applyAccentColor(value: string) {
   root.style.setProperty("--sidebar-primary-foreground", fgHsl);
   root.style.setProperty("--sidebar-active", accentHsl);
   root.style.setProperty("--sidebar-active-foreground", fgHsl);
+  delete root.dataset.accentNeutral;
 }
 
 /**
@@ -311,9 +317,11 @@ const NEUTRAL_MIGRATION_KEY = "buzz-accent-neutral-migrated.v1";
 export function migrateImposedNeutralAccent(): void {
   if (getStorageItem(NEUTRAL_MIGRATION_KEY) === "done") return;
   setStorageItem(NEUTRAL_MIGRATION_KEY, "done");
-  if (getStorageItem(ACCENT_STORAGE_KEY) === NEUTRAL_ACCENT) {
-    removeStorageItem(ACCENT_STORAGE_KEY);
-  }
+  if (getStorageItem(ACCENT_STORAGE_KEY) !== NEUTRAL_ACCENT) return;
+  // Only a Colony theme ever imposed it. On any other theme the picker was
+  // right there, so a stored neutral is a choice and stays one.
+  if (!isBuzzTheme(getStorageItem(THEME_STORAGE_KEY) ?? "")) return;
+  removeStorageItem(ACCENT_STORAGE_KEY);
 }
 
 /**
