@@ -70,6 +70,7 @@ const REPORT = {
       originalClassification: "cogs",
       paymentMode: "metered",
       provider: "anthropic",
+      source: "wire",
     },
     {
       attributedBy: { kind: "needsReview" },
@@ -82,6 +83,7 @@ const REPORT = {
       originalClassification: "needsReview",
       paymentMode: "metered",
       provider: "openai",
+      source: "wire",
     },
     {
       attributedBy: { kind: "explicit" },
@@ -97,10 +99,11 @@ const REPORT = {
       },
       effectiveClassification: "opex",
       eventId: "c".repeat(64),
-      model: "claude-opus-5",
+      model: "gpt-5.6-sol",
       originalClassification: "opex",
       paymentMode: "imputed",
-      provider: "anthropic",
+      provider: "openai",
+      source: "adapter_estimate",
     },
   ],
   exceptions: [
@@ -149,6 +152,10 @@ test.describe("Spend", () => {
     // claim the call was free.
     const activity = page.getByTestId("ledger-activity");
     await expect(activity).toContainText("not priced");
+    await expect(activity).toContainText("adapter estimate");
+    await expect(
+      page.getByTestId("ledger-adapter-estimate-cccccccc"),
+    ).toBeVisible();
 
     await waitForAnimations(page);
     await page.screenshot({

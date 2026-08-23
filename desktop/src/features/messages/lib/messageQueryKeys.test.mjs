@@ -138,6 +138,11 @@ test("sortMessages tiebreaks same-second events on id, order-independent", () =>
   // The (created_at, id) sort must produce the same sequence both ways, so a
   // history-then-live merge and a live-then-history merge can't shuffle a
   // same-second message to a different visible position.
+  //
+  // The id tiebreak runs DESC: the relay's canonical order is
+  // (created_at DESC, id ASC), so within a second the smaller id is the newer
+  // event and sorts last in this ascending timeline. See
+  // relayOrderTiebreak.test.mjs for the invariant this follows.
   const a = event({ id: id("aaa", 1), createdAt: 5_000 });
   const b = event({ id: id("bbb", 1), createdAt: 5_000 });
   const c = event({ id: id("ccc", 1), createdAt: 5_000 });
@@ -146,5 +151,5 @@ test("sortMessages tiebreaks same-second events on id, order-independent", () =>
   const reverse = normalizeTimelineMessages([c, b, a]).map((m) => m.id);
 
   assert.deepEqual(forward, reverse);
-  assert.deepEqual(forward, [a.id, b.id, c.id]);
+  assert.deepEqual(forward, [c.id, b.id, a.id]);
 });

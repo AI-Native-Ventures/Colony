@@ -19,7 +19,6 @@ import {
   getAgentTranscript,
   subscribeAgentObserverStore,
   resetAgentObserverStore,
-  _testProcessLiveObserverEvents,
 } from "./observerRelayStore.ts";
 import { formatElapsed } from "./ui/agentSessionUtils.ts";
 
@@ -320,6 +319,229 @@ describe("activeAgentTurnsStore", () => {
       ]);
 
       assert.deepEqual(getActiveTurnsByChannel(), []);
+    });
+  });
+
+  describe("per-agent channel anchors", () => {
+    // Cross-agent anchor separation needs each agent's clock offset calibrated
+    // BEFORE its turn starts: a lone event self-calibrates its offset so the
+    // anchor lands on Date.now() (the lockstep the bug reports). Fake the
+    // desktop clock and warm each agent with a null-turnId/channelId liveness
+    // frame, which refines only the offset estimate and touches no turn state.
+    const AGENT_3 =
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const EPOCH = Date.parse("2024-06-01T00:00:00Z");
+    const at = (ms) => new Date(EPOCH + ms).toISOString();
+    /** Anchors are absolute desktop-clock ms; expectations follow. */
+    const absAt = (ms) => EPOCH + ms;
+
+    /** Offset-only warm-up: refines the agent's clock estimate, nothing else. */
+    function warmClockOffset(pubkey, timestampMs) {
+      syncAgentTurnsFromEvents(pubkey, [
+        makeEvent({
+          seq: 1,
+          kind: "turn_liveness",
+          turnId: null,
+          channelId: null,
+          timestamp: at(timestampMs),
+        }),
+      ]);
+    }
+
+    /** Start one live turn for `pubkey` in the shared channel. */
+    function startSharedTurn(pubkey, turnId, startMs) {
+      syncAgentTurnsFromEvents(pubkey, [
+        makeEvent({
+          seq: 2,
+          turnId,
+          channelId: "shared",
+          timestamp: at(startMs),
+        }),
+      ]);
+    }
+
+    function sharedChannelSummary() {
+      return getActiveTurnsByChannel().find((s) => s.channelId === "shared");
+    }
+
+    function anchorsByAgent(summary) {
+      return new Map(
+        summary.agentPubkeys.map((pubkey, index) => [
+          pubkey,
+          summary.agentAnchorsAt[index],
+        ]),
+      );
+    }
+
+    beforeEach(() => {
+      mock.timers.enable({ apis: ["Date"], now: EPOCH });
+    });
+
+    afterEach(() => {
+      mock.timers.reset();
+    });
+
+    /**
+     * Both offsets calibrate to 0; starts land at +30s and +70s on "shared".
+     * The fake desktop clock must reach each start timestamp BEFORE its event
+     * is processed: sampleClockOffset refines on every fresh event, so a start
+     * stamped ahead of the clock yields a negative sample that tightens the
+     * offset and re-collapses both anchors onto Date.now() — the lockstep
+     * under test. In production events arrive after their timestamp, so this
+     * ordering is the realistic one.
+     */
+    function arrangeTwoAgents40sApart() {
+      warmClockOffset(AGENT, 0);
+      warmClockOffset(AGENT_2, 0);
+      mock.timers.tick(30_000);
+      startSharedTurn(AGENT, "t-a", 30_000);
+      mock.timers.tick(40_000);
+      startSharedTurn(AGENT_2, "t-b", 70_000);
+    }
+
+    it("returns two distinct per-agent anchors 40s apart in one channel", () => {
+      arrangeTwoAgents40sApart();
+
+      const summary = sharedChannelSummary();
+      assert.ok(summary, "the shared channel must be summarized");
+      assert.ok(
+        Array.isArray(summary.agentAnchorsAt),
+        "channel summaries must carry per-agent anchors",
+      );
+      const anchors = anchorsByAgent(summary);
+      assert.equal(anchors.size, 2, "one anchor per working agent");
+      assert.equal(
+        anchors.get(AGENT),
+        absAt(30_000),
+        "the earlier agent anchors to its own start",
+      );
+      assert.equal(
+        anchors.get(AGENT_2),
+        absAt(70_000),
+        "the later agent anchors to its own start",
+      );
+      assert.equal(
+        anchors.get(AGENT_2) - anchors.get(AGENT),
+        40_000,
+        "per-agent anchor spacing must equal the start spacing",
+      );
+    });
+
+    it("keeps anchorAt as the minimum of the per-agent anchors", () => {
+      // Same arrangement as above: the collapsed sidebar badge reads anchorAt
+      // and must keep counting from the channel's oldest live turn.
+      arrangeTwoAgents40sApart();
+
+      const summary = sharedChannelSummary();
+      assert.ok(
+        Array.isArray(summary.agentAnchorsAt),
+        "channel summaries must carry per-agent anchors",
+      );
+      assert.equal(
+        summary.anchorAt,
+        Math.min(...summary.agentAnchorsAt),
+        "channel anchor stays the oldest per-agent anchor",
+      );
+      assert.equal(
+        summary.anchorAt,
+        absAt(30_000),
+        "collapsed badge behaviour must not change",
+      );
+    });
+
+    it("anchors one agent's two live turns in a channel to its own earliest", () => {
+      warmClockOffset(AGENT, 0);
+      mock.timers.tick(30_000);
+      startSharedTurn(AGENT, "t-early", 30_000);
+      mock.timers.tick(40_000);
+      startSharedTurn(AGENT, "t-later", 70_000);
+
+      const summary = sharedChannelSummary();
+      assert.ok(
+        Array.isArray(summary.agentAnchorsAt),
+        "channel summaries must carry per-agent anchors",
+      );
+      assert.equal(summary.agentCount, 1);
+      assert.deepEqual(summary.agentPubkeys, [AGENT]);
+      assert.deepEqual(
+        summary.agentAnchorsAt,
+        [absAt(30_000)],
+        "the agent's own earliest turn wins inside its channel",
+      );
+    });
+
+    it("keeps agentAnchorsAt index-aligned with the sorted agentPubkeys", () => {
+      const startMsByAgent = new Map([
+        [AGENT_3, 10_000],
+        [AGENT, 50_000],
+        [AGENT_2, 90_000],
+      ]);
+      for (const pubkey of startMsByAgent.keys()) {
+        warmClockOffset(pubkey, 0);
+      }
+      // Starts processed in ascending start order, clock reaching each start
+      // first (see arrangeTwoAgents40sApart) — deliberately NOT in the
+      // lexical pubkey order the summary sorts by.
+      for (const [pubkey, startMs] of [...startMsByAgent].sort(
+        ([, a], [, b]) => a - b,
+      )) {
+        mock.timers.tick(startMs - Date.now() + EPOCH);
+        startSharedTurn(pubkey, `t-${pubkey}`, startMs);
+      }
+
+      const summary = sharedChannelSummary();
+      assert.ok(
+        Array.isArray(summary.agentAnchorsAt),
+        "channel summaries must carry per-agent anchors",
+      );
+      assert.deepEqual(
+        summary.agentPubkeys,
+        [AGENT_3, AGENT, AGENT_2],
+        "pubkeys stay lexically sorted, not insertion-ordered",
+      );
+      assert.equal(
+        summary.agentAnchorsAt.length,
+        summary.agentPubkeys.length,
+        "anchor array must not drift from the pubkey array",
+      );
+      for (const [index, pubkey] of summary.agentPubkeys.entries()) {
+        assert.equal(
+          summary.agentAnchorsAt[index],
+          absAt(startMsByAgent.get(pubkey)),
+          `anchor at index ${index} must belong to ${pubkey}`,
+        );
+      }
+    });
+
+    it("applies each agent's own clock offset to identical raw starts", () => {
+      warmClockOffset(AGENT, 0); // clocks synced → offset 0
+      warmClockOffset(AGENT_2, -60_000); // host 60s behind → offset +60s
+      mock.timers.tick(30_000);
+      startSharedTurn(AGENT, "t-a", 30_000);
+      // Process AGENT_2's start only once the desktop clock has reached
+      // start + its 60s skew, so the event's own sample (now - ts = 60s)
+      // does not tighten the calibrated +60s offset back toward 0.
+      mock.timers.tick(60_000);
+      startSharedTurn(AGENT_2, "t-b", 30_000);
+
+      const summary = sharedChannelSummary();
+      assert.ok(
+        Array.isArray(summary.agentAnchorsAt),
+        "channel summaries must carry per-agent anchors",
+      );
+      const anchors = anchorsByAgent(summary);
+      assert.notEqual(
+        anchors.get(AGENT),
+        anchors.get(AGENT_2),
+        "identical raw starts under different skews must yield different anchors",
+      );
+      assert.equal(anchors.get(AGENT), absAt(30_000));
+      assert.equal(anchors.get(AGENT_2), absAt(90_000));
+      assert.equal(
+        summary.anchorAt,
+        absAt(30_000),
+        "channel badge still counts from the oldest desktop-clock start",
+      );
     });
   });
 

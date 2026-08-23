@@ -196,7 +196,7 @@ pub enum AskParseError {
         /// The maximum allowed value ([`MAX_ASK_WINDOW_SECS`]).
         max: u64,
     },
-    /// A delegation grant named a category on [`HARD_LIST_CATEGORIES`]
+    /// A validated delegation grant named a category on [`HARD_LIST_CATEGORIES`]
     /// (spec: the hard list is absolute -- no grant may delegate it).
     #[error("category `{0}` is on the hard list and can never be delegated")]
     GrantOnHardList(String),
@@ -214,6 +214,20 @@ pub enum AskParseError {
     /// present but not a non-negative JSON integer.
     #[error("{0} must be a non-negative integer")]
     InvalidAmount(String),
+    /// An ask-state head named a status, expiry action, or promotion target
+    /// outside the pinned vocabulary.
+    #[error("unknown ask-state {field}: {value}")]
+    UnknownAskStateField {
+        /// Which content field carried the unknown value.
+        field: String,
+        /// The offending value.
+        value: String,
+    },
+    /// An ask-state head's content fields contradict its status or each
+    /// other (an open head with no deadline, a default-execution head with
+    /// no option named, ...).
+    #[error("invalid ask-state head: {0}")]
+    InvalidAskState(String),
 }
 
 /// A validated Ask event (kind [`crate::kind::KIND_ASK`]), ready for broker processing.
@@ -592,6 +606,286 @@ pub fn parse_withdrawal(event: &nostr::Event) -> Result<ParsedWithdrawal, AskPar
     Ok(ParsedWithdrawal {
         ask_event_hex,
         reason,
+    })
+}
+
+/// Lifecycle status a relay-signed ask-state head (kind
+/// [`crate::kind::KIND_ASK_STATE`]) reports for one Ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskStateStatus {
+    /// The Ask is open and its `deadline_at` is live.
+    Open,
+    /// A resolution closed the Ask.
+    Resolved,
+    /// A withdrawal closed the Ask without an answer.
+    Withdrawn,
+    /// The interrupt sweep promoted the Ask to the next altitude rung; the
+    /// live countdown now belongs to the successor's own head.
+    Promoted,
+}
+
+impl AskStateStatus {
+    /// Canonical content value.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+            Self::Withdrawn => "withdrawn",
+            Self::Promoted => "promoted",
+        }
+    }
+    /// Parse a content value; `None` for anything outside the vocabulary.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "open" => Some(Self::Open),
+            "resolved" => Some(Self::Resolved),
+            "withdrawn" => Some(Self::Withdrawn),
+            "promoted" => Some(Self::Promoted),
+            _ => None,
+        }
+    }
+}
+
+/// What the relay says will happen when an open Ask's deadline passes,
+/// mirroring `buzz-relay::interrupt_runtime`'s three real outcomes exactly:
+/// default execution, auto-promotion, or re-arm. A client renders expiry
+/// copy from this name rather than guessing from tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskExpiryAction {
+    /// The stated default option applies automatically (`default_option`
+    /// names it).
+    DefaultExecutes,
+    /// The Ask auto-promotes one rung up the altitude ladder
+    /// (`promotes_to` names the rung).
+    Promotes,
+    /// Nowhere to go: the relay re-arms the Ask with a fresh deadline
+    /// instead of answering or promoting it.
+    Rearms,
+}
+
+impl AskExpiryAction {
+    /// Canonical content value.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DefaultExecutes => "default_executes",
+            Self::Promotes => "promotes",
+            Self::Rearms => "rearms",
+        }
+    }
+    /// Parse a content value; `None` for anything outside the vocabulary.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "default_executes" => Some(Self::DefaultExecutes),
+            "promotes" => Some(Self::Promotes),
+            "rearms" => Some(Self::Rearms),
+            _ => None,
+        }
+    }
+}
+
+/// The altitude rung an open Ask will be promoted to on expiry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskPromotionTarget {
+    /// Leader-audience asks climb to the community's unique executive.
+    Executive,
+    /// Executive-audience asks climb to the community's unique human owner:
+    /// the last hop, and the only relay-driven path that reaches a person.
+    Owner,
+}
+
+impl AskPromotionTarget {
+    /// Canonical content value.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Executive => "executive",
+            Self::Owner => "owner",
+        }
+    }
+    /// Parse a content value; `None` for anything outside the vocabulary.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "executive" => Some(Self::Executive),
+            "owner" => Some(Self::Owner),
+            _ => None,
+        }
+    }
+}
+
+/// A validated ask-state head event (kind [`crate::kind::KIND_ASK_STATE`]):
+/// the relay-signed projection clients count down against.
+///
+/// `d` tag = the Ask event id this head describes, so NIP-33 latest-wins
+/// per `(relay pubkey, kind, d)` always resolves to the head the relay wrote
+/// most recently for that ask. Unknown extra content fields are ignored so
+/// newer relays can add fields without breaking older parsers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedAskState {
+    /// Hex event id of the `d` tag: the Ask this head describes.
+    pub ask_event_id: String,
+    /// Lifecycle status of the described Ask.
+    pub status: AskStateStatus,
+    /// Unix timestamp (seconds) of the deadline, exactly as the relay stored
+    /// it in the `asks` projection. Always present on an open head; never
+    /// recomputed client-side.
+    pub deadline_at: Option<i64>,
+    /// What happens when the deadline passes (open heads only).
+    pub on_expiry: Option<AskExpiryAction>,
+    /// The option that will apply on expiry
+    /// ([`AskExpiryAction::DefaultExecutes`] heads).
+    pub default_option: Option<String>,
+    /// The rung the Ask will climb to on expiry
+    /// ([`AskExpiryAction::Promotes`] heads).
+    pub promotes_to: Option<AskPromotionTarget>,
+    /// Unix timestamp (seconds) when the relay last re-armed this ask.
+    /// Present means the timer was actively extended by the sweep -- how a
+    /// client tells a freshly re-armed timer from a stale one.
+    pub rearmed_at: Option<i64>,
+    /// Unix timestamp (seconds) when the Ask closed (closed heads only).
+    pub closed_at: Option<i64>,
+    /// Whether the closing resolution executed the stated default
+    /// (resolved heads only).
+    pub default_executed: bool,
+    /// Hex event id of the successor ask this one was promoted into
+    /// (promoted heads only), so a client can follow the live countdown.
+    pub successor_event_id: Option<String>,
+}
+
+/// Read an optional non-negative integer field from ask-state content JSON.
+fn ask_state_int_field(
+    content: &serde_json::Value,
+    field: &str,
+) -> Result<Option<i64>, AskParseError> {
+    match content.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => match value.as_i64() {
+            Some(secs) if secs >= 0 => Ok(Some(secs)),
+            _ => Err(AskParseError::InvalidAskState(format!(
+                "{field} must be a non-negative integer"
+            ))),
+        },
+    }
+}
+
+/// Parse and validate a Colony interrupt ask-state head event (kind
+/// [`crate::kind::KIND_ASK_STATE`]).
+///
+/// The `d` tag (exactly one, hex64) is the Ask event id the head describes.
+/// Content JSON carries `status` (required, pinned vocabulary). An `open`
+/// head must carry `deadline_at` and `on_expiry`, with `default_option`
+/// required for [`AskExpiryAction::DefaultExecutes`] and `promotes_to`
+/// required for [`AskExpiryAction::Promotes`]. Closed heads may carry
+/// `closed_at`, `default_executed`, and (when promoted) the
+/// `successor_event_id`. Schema only: that the signer really is the relay,
+/// and that the values match the `asks` row, are relay-side facts a pure
+/// parser cannot check.
+pub fn parse_ask_state(event: &nostr::Event) -> Result<ParsedAskState, AskParseError> {
+    let ask_event_id = single_tag_value(event, "d")?;
+    validate_hex64_field("d", &ask_event_id)?;
+
+    let content = parse_content(event)?;
+
+    let status_raw = content
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| AskParseError::InvalidAskState("status is required".to_string()))?;
+    let status =
+        AskStateStatus::parse(status_raw).ok_or_else(|| AskParseError::UnknownAskStateField {
+            field: "status".to_string(),
+            value: status_raw.to_string(),
+        })?;
+
+    let deadline_at = ask_state_int_field(&content, "deadline_at")?;
+    let rearmed_at = ask_state_int_field(&content, "rearmed_at")?;
+    let closed_at = ask_state_int_field(&content, "closed_at")?;
+
+    let on_expiry = match content.get("on_expiry").and_then(serde_json::Value::as_str) {
+        None | Some("") => None,
+        Some(raw) => Some(AskExpiryAction::parse(raw).ok_or(
+            AskParseError::UnknownAskStateField {
+                field: "on_expiry".to_string(),
+                value: raw.to_string(),
+            },
+        )?),
+    };
+
+    let default_option = content
+        .get("default_option")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+
+    let promotes_to = match content
+        .get("promotes_to")
+        .and_then(serde_json::Value::as_str)
+    {
+        None | Some("") => None,
+        Some(raw) => Some(AskPromotionTarget::parse(raw).ok_or(
+            AskParseError::UnknownAskStateField {
+                field: "promotes_to".to_string(),
+                value: raw.to_string(),
+            },
+        )?),
+    };
+
+    let default_executed = content
+        .get("default_executed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let successor_event_id = match content
+        .get("successor_event_id")
+        .and_then(serde_json::Value::as_str)
+    {
+        None | Some("") => None,
+        Some(raw) => {
+            validate_hex64_field("successor_event_id", raw)?;
+            Some(raw.to_owned())
+        }
+    };
+
+    // Cross-field rules for OPEN heads -- the shape a countdown is built on.
+    // A head missing any of these cannot be rendered honestly and must be
+    // rejected rather than half-interpreted.
+    if status == AskStateStatus::Open {
+        if deadline_at.is_none() {
+            return Err(AskParseError::InvalidAskState(
+                "an open head must carry deadline_at".to_string(),
+            ));
+        }
+        match on_expiry {
+            None => {
+                return Err(AskParseError::InvalidAskState(
+                    "an open head must name on_expiry".to_string(),
+                ))
+            }
+            Some(AskExpiryAction::DefaultExecutes) => {
+                if default_option.is_none() {
+                    return Err(AskParseError::InvalidAskState(
+                        "a default-execution head must name default_option".to_string(),
+                    ));
+                }
+            }
+            Some(AskExpiryAction::Promotes) => {
+                if promotes_to.is_none() {
+                    return Err(AskParseError::InvalidAskState(
+                        "a promotion head must name promotes_to".to_string(),
+                    ));
+                }
+            }
+            Some(AskExpiryAction::Rearms) => {}
+        }
+    }
+
+    Ok(ParsedAskState {
+        ask_event_id,
+        status,
+        deadline_at,
+        on_expiry,
+        default_option,
+        promotes_to,
+        rearmed_at,
+        closed_at,
+        default_executed,
+        successor_event_id,
     })
 }
 
@@ -1072,6 +1366,200 @@ mod tests {
             parse_withdrawal(&event),
             Err(AskParseError::EmptyField(field)) if field == "reason"
         ));
+    }
+
+    // ── Ask-state head parsing ─────────────────────────────────────────
+
+    fn sign_ask_state(d_tag: &str, content: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Kind};
+        let keys = Keys::generate();
+        EventBuilder::new(Kind::Custom(crate::kind::KIND_ASK_STATE as u16), content)
+            .tags(vec![t(&["d", d_tag])])
+            .sign_with_keys(&keys)
+            .expect("sign")
+    }
+
+    const ASK_HEX: &str = "9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc9abc";
+
+    #[test]
+    fn parse_ask_state_open_default_execution_round_trips() {
+        let event = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":1724419200,"on_expiry":"default_executes","default_option":"A"}"#,
+        );
+        let parsed = parse_ask_state(&event).expect("parse");
+        assert_eq!(parsed.ask_event_id, ASK_HEX);
+        assert_eq!(parsed.status, AskStateStatus::Open);
+        assert_eq!(parsed.deadline_at, Some(1724419200));
+        assert_eq!(parsed.on_expiry, Some(AskExpiryAction::DefaultExecutes));
+        assert_eq!(parsed.default_option.as_deref(), Some("A"));
+        assert!(!parsed.default_executed);
+    }
+
+    #[test]
+    fn parse_ask_state_open_promotion_round_trips() {
+        for (raw, target) in [
+            ("executive", AskPromotionTarget::Executive),
+            ("owner", AskPromotionTarget::Owner),
+        ] {
+            let content = format!(
+                r#"{{"status":"open","deadline_at":100,"on_expiry":"promotes","promotes_to":"{raw}"}}"#
+            );
+            let parsed = parse_ask_state(&sign_ask_state(ASK_HEX, &content)).expect("parse");
+            assert_eq!(parsed.on_expiry, Some(AskExpiryAction::Promotes));
+            assert_eq!(parsed.promotes_to, Some(target));
+        }
+    }
+
+    /// A re-armed head is distinguishable from a stale one by its marker.
+    #[test]
+    fn parse_ask_state_open_rearm_round_trips_with_marker() {
+        let event = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":200,"on_expiry":"rearms","rearmed_at":150}"#,
+        );
+        let parsed = parse_ask_state(&event).expect("parse");
+        assert_eq!(parsed.on_expiry, Some(AskExpiryAction::Rearms));
+        assert_eq!(parsed.deadline_at, Some(200));
+        assert_eq!(parsed.rearmed_at, Some(150));
+        assert_eq!(parsed.default_option, None);
+        assert_eq!(parsed.promotes_to, None);
+    }
+
+    #[test]
+    fn parse_ask_state_closed_heads_round_trip() {
+        let resolved = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"resolved","closed_at":300,"default_executed":true}"#,
+        );
+        let parsed = parse_ask_state(&resolved).expect("parse");
+        assert_eq!(parsed.status, AskStateStatus::Resolved);
+        assert_eq!(parsed.closed_at, Some(300));
+        assert!(parsed.default_executed);
+
+        let withdrawn = parse_ask_state(&sign_ask_state(ASK_HEX, r#"{"status":"withdrawn"}"#))
+            .expect("a bare withdrawn head is well-formed");
+        assert_eq!(withdrawn.status, AskStateStatus::Withdrawn);
+        assert!(!withdrawn.default_executed);
+
+        let successor_hex = "f".repeat(64);
+        let content = format!(
+            r#"{{"status":"promoted","closed_at":400,"successor_event_id":"{successor_hex}"}}"#
+        );
+        let promoted = parse_ask_state(&sign_ask_state(ASK_HEX, &content)).expect("parse");
+        assert_eq!(promoted.status, AskStateStatus::Promoted);
+        assert_eq!(
+            promoted.successor_event_id.as_deref(),
+            Some(successor_hex.as_str())
+        );
+    }
+
+    /// An open head without a deadline cannot be counted down against;
+    /// rejecting it beats half-interpreting it.
+    #[test]
+    fn parse_ask_state_rejects_open_head_without_deadline() {
+        let event = sign_ask_state(ASK_HEX, r#"{"status":"open","on_expiry":"rearms"}"#);
+        assert!(matches!(
+            parse_ask_state(&event),
+            Err(AskParseError::InvalidAskState(message)) if message.contains("deadline_at")
+        ));
+    }
+
+    #[test]
+    fn parse_ask_state_rejects_open_head_without_on_expiry() {
+        let event = sign_ask_state(ASK_HEX, r#"{"status":"open","deadline_at":100}"#);
+        assert!(matches!(
+            parse_ask_state(&event),
+            Err(AskParseError::InvalidAskState(message)) if message.contains("on_expiry")
+        ));
+    }
+
+    #[test]
+    fn parse_ask_state_rejects_mismatched_expiry_details() {
+        let missing_option = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":100,"on_expiry":"default_executes"}"#,
+        );
+        assert!(matches!(
+            parse_ask_state(&missing_option),
+            Err(AskParseError::InvalidAskState(message)) if message.contains("default_option")
+        ));
+
+        let missing_rung = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":100,"on_expiry":"promotes"}"#,
+        );
+        assert!(matches!(
+            parse_ask_state(&missing_rung),
+            Err(AskParseError::InvalidAskState(message)) if message.contains("promotes_to")
+        ));
+    }
+
+    #[test]
+    fn parse_ask_state_rejects_unknown_vocabulary() {
+        let bad_status = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"expired","deadline_at":100,"on_expiry":"rearms"}"#,
+        );
+        assert!(matches!(
+            parse_ask_state(&bad_status),
+            Err(AskParseError::UnknownAskStateField { field, value })
+                if field == "status" && value == "expired"
+        ));
+
+        let bad_action = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":100,"on_expiry":"explodes"}"#,
+        );
+        assert!(matches!(
+            parse_ask_state(&bad_action),
+            Err(AskParseError::UnknownAskStateField { field, value })
+                if field == "on_expiry" && value == "explodes"
+        ));
+    }
+
+    #[test]
+    fn parse_ask_state_rejects_bad_d_tag_and_bad_timestamp() {
+        // Zero d tags: the head does not name an ask at all.
+        use nostr::{EventBuilder, Keys, Kind};
+        let orphan = EventBuilder::new(Kind::Custom(crate::kind::KIND_ASK_STATE as u16), "{}")
+            .sign_with_keys(&Keys::generate())
+            .expect("sign");
+        assert!(matches!(
+            parse_ask_state(&orphan),
+            Err(AskParseError::TagCardinality(field)) if field == "d"
+        ));
+
+        let short_hex = "ab".repeat(31);
+        let event = sign_ask_state(
+            &short_hex,
+            r#"{"status":"open","deadline_at":100,"on_expiry":"rearms"}"#,
+        );
+        assert!(matches!(
+            parse_ask_state(&event),
+            Err(AskParseError::InvalidHex { field, .. }) if field == "d"
+        ));
+
+        let negative = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":-5,"on_expiry":"rearms"}"#,
+        );
+        assert!(matches!(
+            parse_ask_state(&negative),
+            Err(AskParseError::InvalidAskState(message)) if message.contains("deadline_at")
+        ));
+    }
+
+    /// Forward compatibility: unknown extra fields must not break older
+    /// parsers, or a newer relay would blind every old client.
+    #[test]
+    fn parse_ask_state_ignores_unknown_fields() {
+        let event = sign_ask_state(
+            ASK_HEX,
+            r#"{"status":"open","deadline_at":100,"on_expiry":"rearms","future_field":{"nested":true}}"#,
+        );
+        let parsed = parse_ask_state(&event).expect("unknown fields are ignored");
+        assert_eq!(parsed.deadline_at, Some(100));
     }
 
     // ── Delegation grant parsing ───────────────────────────────────────

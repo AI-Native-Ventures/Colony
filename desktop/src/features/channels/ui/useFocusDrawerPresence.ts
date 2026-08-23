@@ -3,12 +3,20 @@ import * as React from "react";
 import { subscribeToFocusedThreadCloseRequest } from "@/features/channels/focusedThreadCloseRequest";
 
 /** Keeps the covered channel inert and owns external dismissal while open. */
-export function useFocusDrawerPresence(open: boolean, onClose: () => void) {
+export function useFocusDrawerPresence(
+  open: boolean,
+  onClose: () => void,
+  settleExit = false,
+) {
   const [present, setPresent] = React.useState(false);
 
   React.useEffect(() => {
     if (open) setPresent(true);
   }, [open]);
+
+  React.useEffect(() => {
+    if (settleExit) setPresent(false);
+  }, [settleExit]);
 
   React.useEffect(() => {
     if (!open) return;

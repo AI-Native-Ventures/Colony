@@ -32,6 +32,20 @@ pub(crate) use provisioned::{
     configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
 };
 
+/// Apply the final Spend-related environment policy to a managed child.
+///
+/// `env_remove` is intentional even when the Desktop inherited the variable:
+/// it records an explicit removal in `Command` and prevents the child from
+/// bypassing metering after all user-controlled layers have been resolved.
+fn apply_spend_env_policy(command: &mut std::process::Command, provisioned: bool) {
+    command.env_remove("BUZZ_ACP_NO_METER");
+    if provisioned {
+        command.env("BUZZ_ACP_PROVISIONED", "true");
+    } else {
+        command.env_remove("BUZZ_ACP_PROVISIONED");
+    }
+}
+
 /// Verify that a provisioned lease is still owned by the current signing
 /// identity. Callers run this at the transition-lock commit point, after
 /// potentially blocking spawn work, so an identity switch cannot register a
@@ -858,15 +872,6 @@ fn spawn_agent_child_inner(
         .as_ref()
         .map(|(_, env)| env)
         .unwrap_or(&descriptor.env);
-    if provisioned_lease.is_some() {
-        // Never inherit the ambient ACP no-meter opt-out for a provisioned
-        // launch. The raw gateway token remains only in ACP's meter config;
-        // AcpClient scrubs it before spawning the underlying harness.
-        command.env_remove("BUZZ_ACP_NO_METER");
-        command.env("BUZZ_ACP_PROVISIONED", "true");
-    } else {
-        command.env_remove("BUZZ_ACP_PROVISIONED");
-    }
     for (key, value) in spawn_env {
         command.env(key, value);
     }
@@ -885,6 +890,10 @@ fn spawn_agent_child_inner(
             command.env(key, value);
         }
     }
+
+    // Apply this after every inherited and resolved environment layer. A saved
+    // or ambient opt-out must never disable Spend for Desktop-managed agents.
+    apply_spend_env_policy(&mut command, provisioned_lease.is_some());
 
     // Stamp desktop ownership and an unpredictable harness-generation identity.
     let start_nonce = uuid::Uuid::new_v4().simple().to_string();
@@ -977,6 +986,10 @@ fn spawn_agent_child_inner(
 
 #[cfg(test)]
 mod test_fixtures;
+
+#[cfg(test)]
+#[path = "runtime/spend_tests.rs"]
+mod spend_tests;
 
 #[cfg(test)]
 mod tests;

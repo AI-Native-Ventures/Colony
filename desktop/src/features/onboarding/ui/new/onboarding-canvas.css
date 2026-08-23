@@ -1,0 +1,219 @@
+/* Canvas chrome for the redesigned onboarding flow.
+   Ported from prototypes/onboarding/app.css with the ob- prefix renamed to
+   onb-. Wrapped in @layer components per docs/BRAND.md: unlayered CSS beats
+   Tailwind utilities regardless of specificity and would silently defeat
+   call-site overrides. Motion rules follow docs/BRAND.md: transforms stay on
+   HTML wrappers, never SVG children, and each mechanism gets its own
+   prefers-reduced-motion fallback. */
+@layer components {
+  .onb-canvas {
+    /* Colony ink and surface tokens for the flow. The light-ink override
+       below rewrites them for the one dark screen. */
+    --onb-ease: cubic-bezier(0.16, 1, 0.3, 1); /* ease-out-expo */
+    --onb-ink: #0d0d11;
+    --onb-ink-soft: rgba(13, 13, 17, 0.58);
+    --onb-shell: rgba(255, 255, 255, 0.62);
+    --onb-shell-line: rgba(13, 13, 17, 0.1);
+    --onb-rule: rgba(13, 13, 17, 0.22);
+    --onb-accent: #5b21b6;
+
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    transition: background-color 900ms var(--onb-ease);
+  }
+
+  .onb-canvas[data-ink="light"] {
+    --onb-ink: #fbf8ff;
+    --onb-ink-soft: rgba(251, 248, 255, 0.66);
+    --onb-shell: rgba(12, 8, 20, 0.36);
+    --onb-shell-line: rgba(255, 255, 255, 0.16);
+    --onb-rule: rgba(255, 255, 255, 0.34);
+    --onb-accent: #f5d0fe;
+  }
+
+  /* Gradient mesh drawn as stacked radial gradients over a base fill. Static
+     by design: an animated mesh at this blur radius costs real GPU time on
+     the machines this flow is for, and the motion budget is better spent on
+     the ants. Saturated and close to the surface rather than blurred to a
+     pastel wash. */
+  .onb-mesh {
+    position: absolute;
+    inset: -18%;
+    filter: blur(38px) saturate(1.25);
+    transition: opacity 900ms var(--onb-ease);
+    will-change: opacity;
+  }
+
+  .onb-streak {
+    position: absolute;
+    inset: -40%;
+    opacity: 0.55;
+    transform: rotate(-22deg);
+    background: linear-gradient(
+      100deg,
+      transparent 24%,
+      rgba(255, 255, 255, 0.82) 44%,
+      rgba(255, 255, 255, 0.5) 56%,
+      transparent 74%
+    );
+    filter: blur(48px);
+    transition: opacity 900ms var(--onb-ease);
+  }
+
+  .onb-canvas[data-ink="light"] .onb-streak {
+    background: linear-gradient(
+      100deg,
+      transparent 26%,
+      rgba(255, 255, 255, 0.16) 46%,
+      transparent 72%
+    );
+    opacity: 0.7;
+  }
+
+  .onb-grain {
+    position: absolute;
+    inset: 0;
+    opacity: 0.4;
+    mix-blend-mode: soft-light;
+    pointer-events: none;
+  }
+
+  /* The stage hosts screen content above the mesh layers. Without it the
+     positioned mesh, streak and grain would paint over static children. */
+  .onb-stage {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    padding: clamp(2rem, 5vh, 4rem) clamp(2rem, 7vw, 8rem)
+      clamp(1.5rem, 4vh, 2.5rem);
+  }
+
+  /* Step marker. Mono, letterspaced, high on the page: the only numeric thing
+     in the flow, and it reads as a chapter mark rather than a progress bar. */
+  .onb-step {
+    position: absolute;
+    top: clamp(1.5rem, 4vh, 3rem);
+    left: clamp(2rem, 7vw, 8rem);
+    z-index: 3;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.28em;
+    color: var(--onb-ink);
+    opacity: 0.45;
+  }
+
+  /* Foot: trail + mark. Provisioned here so screens can drop an ant trail in
+     without new chrome CSS. */
+  .onb-foot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1rem;
+  }
+
+  .onb-trail {
+    width: min(34rem, 80vw);
+    height: 26px;
+    display: block;
+    overflow: visible;
+  }
+
+  .onb-trail__path {
+    animation: onb-pheromone 2.4s linear infinite;
+  }
+
+  @keyframes onb-pheromone {
+    to {
+      stroke-dashoffset: -60;
+    }
+  }
+
+  .onb-trail__node {
+    transition:
+      r 420ms var(--onb-ease),
+      opacity 420ms var(--onb-ease);
+  }
+
+  /* Ant sprite gait, copied verbatim from site-animations.css. Leg tripods
+     are HTML-level layers: transforms stay on the wrappers so they run on the
+     compositor even while the main thread is busy. */
+  .ant-sprite .ant-leg-layer {
+    will-change: transform;
+    transform-origin: 50% 72%;
+    animation-duration: 0.42s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+  }
+
+  .ant-sprite .ant-leg-layer-a {
+    animation-name: ant-step-a;
+  }
+
+  .ant-sprite .ant-leg-layer-b {
+    animation-name: ant-step-b;
+  }
+
+  .ant-sprite .ant-body-layer {
+    will-change: transform;
+    animation: ant-body-bob 0.42s ease-in-out infinite;
+  }
+
+  @keyframes ant-step-a {
+    0%,
+    100% {
+      transform: rotate(0deg) translateY(0);
+    }
+    50% {
+      transform: rotate(-5deg) translateY(-1.6%);
+    }
+  }
+
+  @keyframes ant-step-b {
+    0%,
+    100% {
+      transform: rotate(-5deg) translateY(-1.6%);
+    }
+    50% {
+      transform: rotate(0deg) translateY(0);
+    }
+  }
+
+  @keyframes ant-body-bob {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    25%,
+    75% {
+      transform: translateY(-1%);
+    }
+  }
+
+  /* Reduced motion: one gate per mechanism. CSS-driven animation is switched
+     off here. Timer-driven motion is gated separately in JS by the screens. */
+  @media (prefers-reduced-motion: reduce) {
+    .ant-sprite .ant-leg-layer,
+    .ant-sprite .ant-body-layer,
+    .onb-trail__path {
+      animation: none !important;
+    }
+  }
+
+  /* Narrow windows: the step marker overlapped content when absolutely
+     positioned, so it becomes a normal line above the stage. */
+  @media (max-width: 900px) {
+    .onb-step {
+      position: static;
+      padding: 1.25rem 1.5rem 0;
+    }
+
+    .onb-stage {
+      grid-template-rows: 1fr auto;
+      padding-top: 0.5rem;
+    }
+  }
+}

@@ -10,6 +10,10 @@ import {
   useRelayAgentsQuery,
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
+import { useAgentRank } from "@/features/agents/employeeHeads";
+import { useAgentReportingLine } from "@/features/agents/reportingLine";
+import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { ReportingLineText } from "@/features/agents/ui/ReportingLineText";
 import { useIsManagedAgent } from "@/features/agent-memory/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
@@ -24,6 +28,7 @@ import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import { ProfileAvatarWithStatus } from "@/features/profile/ui/ProfileAvatarWithStatus";
 import { useOpenAgentActivity } from "@/features/agents/useOpenAgentActivity";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { useProfileInteractionActions } from "@/features/profile/ui/useProfileInteractionActions";
@@ -153,6 +158,14 @@ export function UserProfilePopover({
   const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
   const managedAgent = managedAgentsQuery.data?.find(
     (a) => a.pubkey === pubkey,
+  );
+  // Rank comes from the employee heads the relay publishes; an agent with no
+  // employee head (personal agent) has none and shows no badge.
+  const { activeCommunity } = useCommunities();
+  const rank = useAgentRank(activeCommunity?.id ?? "", open ? pubkey : null);
+  const reportingLine = useAgentReportingLine(
+    activeCommunity?.id ?? "",
+    open && rank ? pubkey : null,
   );
   const profile = profileQuery.data;
   const ownerPubkey = profile?.ownerPubkey ?? null;
@@ -407,8 +420,9 @@ export function UserProfilePopover({
             </div>
           )}
 
-          {isBotProfile && (managedAgent || relayAgent) ? (
+          {isBotProfile && (rank || managedAgent || relayAgent) ? (
             <div className="flex flex-wrap gap-1.5">
+              {rank ? <AgentRankBadge rank={rank} /> : null}
               {managedAgent?.agentCommand ? (
                 <InfoBadge>{runtimeLabel(managedAgent.agentCommand)}</InfoBadge>
               ) : relayAgent?.agentType ? (
@@ -421,6 +435,21 @@ export function UserProfilePopover({
                 <InfoBadge>ACP: {managedAgent.acpCommand}</InfoBadge>
               ) : null}
             </div>
+          ) : null}
+
+          {isBotProfile && rank ? (
+            <ReportingLineText
+              line={reportingLine}
+              onOpenManager={
+                canOpenProfilePanel
+                  ? (managerPubkey) => {
+                      setOpen(false);
+                      openProfilePanel?.(managerPubkey);
+                    }
+                  : null
+              }
+              testId={`user-profile-popover-reporting-${pubkey}`}
+            />
           ) : null}
 
           {activeTurns.length > 0 ? (

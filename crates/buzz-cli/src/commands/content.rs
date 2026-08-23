@@ -1,10 +1,10 @@
 //! `buzz content`: the content calendar's agent-facing surface.
 //!
-//! Campaigns (30195), posts (30196), and house style (30197) are written by
-//! the content agent; decisions (40025) are written by the owner. Every write
-//! here self-validates against the same `buzz_core::content` parser the relay
-//! runs at ingest, so a rejection arrives without a network round trip and
-//! names the field that caused it.
+//! Campaigns (30195), posts (30196), house style (30197), the brand kit
+//! (30198), and asset libraries (30199) are written by the content agent;
+//! decisions (40025) are written by the owner. Every write here self-validates
+//! against the same parser the relay runs at ingest, so a rejection arrives
+//! without a network round trip and names the field that caused it.
 //!
 //! The agent renders and measures on its own machine. This command stores what
 //! it produced; it never produces anything itself.
@@ -15,11 +15,14 @@ use nostr::{EventBuilder, Kind, Tag};
 
 use buzz_core::content::{
     parse_content_campaign, parse_content_decision, parse_content_post, parse_content_style,
-    post_address, GateVerdict, ParsedContentPost, SCHEMA_CONTENT_CAMPAIGN, SCHEMA_CONTENT_DECISION,
-    SCHEMA_CONTENT_POST, SCHEMA_CONTENT_STYLE,
+    post_address, slides_digest, GateVerdict, ParsedContentPost, SCHEMA_CONTENT_CAMPAIGN,
+    SCHEMA_CONTENT_DECISION, SCHEMA_CONTENT_POST, SCHEMA_CONTENT_STYLE,
 };
+use buzz_core::content_brand_kit::{parse_content_brand_kit, SCHEMA_CONTENT_BRAND_KIT};
+use buzz_core::content_library::{parse_content_library, SCHEMA_CONTENT_LIBRARY};
 use buzz_core::kind::{
-    KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION, KIND_CONTENT_POST, KIND_CONTENT_STYLE,
+    KIND_CONTENT_BRAND_KIT, KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION, KIND_CONTENT_LIBRARY,
+    KIND_CONTENT_POST, KIND_CONTENT_STYLE,
 };
 
 use crate::client::{head_is_newer, normalize_write_response, write_conflict_reason, BuzzClient};
@@ -207,6 +210,267 @@ async fn cmd_style_get(client: &BuzzClient, scope: &str) -> Result<(), CliError>
     Ok(())
 }
 
+// ── brand kit ─────────────────────────────────────────────────────────────
+
+async fn cmd_kit_set(client: &BuzzClient, id: &str, data: &str) -> Result<(), CliError> {
+    let body = apply_schema(read_json_arg(data)?, SCHEMA_CONTENT_BRAND_KIT)?;
+    let builder = EventBuilder::new(
+        Kind::Custom(KIND_CONTENT_BRAND_KIT as u16),
+        body.to_string(),
+    )
+    .tags(vec![tag(&["d", id])?]);
+    submit(client, builder, |event| {
+        parse_content_brand_kit(event)
+            .map(|_| ())
+            .map_err(validation_error)
+    })
+    .await
+}
+
+async fn cmd_kit_get(client: &BuzzClient, id: &str) -> Result<(), CliError> {
+    let events = client
+        .query_all(serde_json::json!({
+            "kinds": [KIND_CONTENT_BRAND_KIT],
+            "#d": [id],
+        }))
+        .await?;
+    let head = newest_heads(events).into_iter().next();
+    println!(
+        "{}",
+        serde_json::to_string(&head).unwrap_or_else(|_| "null".to_string())
+    );
+    Ok(())
+}
+
+async fn cmd_kit_list(client: &BuzzClient) -> Result<(), CliError> {
+    let events = client
+        .query_all(serde_json::json!({ "kinds": [KIND_CONTENT_BRAND_KIT] }))
+        .await?;
+    println!(
+        "{}",
+        serde_json::to_string(&newest_heads(events)).unwrap_or_else(|_| "[]".to_string())
+    );
+    Ok(())
+}
+
+/// A slug from a site host, for the suggested kit id.
+///
+/// `www.acme.test` becomes `acme-test`; anything already conforming passes
+/// through untouched.
+fn suggested_kit_id(url: &str) -> String {
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let slug: String = host
+        .trim_start_matches("www.")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_ascii_lowercase();
+    let trimmed: String = slug.chars().take(64).collect();
+    let trimmed = trimmed.trim_matches('-').to_owned();
+    if trimmed.is_empty() {
+        "kit".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+/// One mark carried from fetch through hash to upload.
+async fn derive_mark(
+    client: &BuzzClient,
+    origin: &crate::company_scan::url_guard::CheckedUrl,
+    candidates: &[String],
+    role: &'static str,
+) -> Option<buzz_core::content_brand_kit::BrandMark> {
+    use crate::company_scan::brand_kit::{extension_for_mime, fetch_mark_bytes};
+    use sha2::Digest;
+
+    for candidate in candidates {
+        let Ok((bytes, mime)) = fetch_mark_bytes(origin, candidate).await else {
+            continue;
+        };
+        let Some(extension) = extension_for_mime(&mime) else {
+            // SVG logos are common and deliberately skipped: the media
+            // allowlist takes raster images only.
+            eprintln!("warning: skipping {role} candidate {candidate} ({mime} is not uploadable)");
+            continue;
+        };
+
+        let hash = hex::encode(sha2::Sha256::digest(&bytes));
+        let path = std::env::temp_dir().join(format!(
+            "buzz-kit-mark-{role}-{}.{extension}",
+            &hash[..12.min(hash.len())]
+        ));
+        if fs::write(&path, &bytes).is_err() {
+            continue;
+        }
+        let uploaded = match client.upload_file(&path.to_string_lossy()).await {
+            Ok(descriptor) => descriptor,
+            Err(error) => {
+                eprintln!("warning: could not upload the {role} ({error}); proposing without it");
+                std::fs::remove_file(&path).ok();
+                continue;
+            }
+        };
+        std::fs::remove_file(&path).ok();
+
+        return Some(buzz_core::content_brand_kit::BrandMark {
+            role: buzz_core::content_brand_kit::MarkRole::parse(role)
+                .unwrap_or(buzz_core::content_brand_kit::MarkRole::Logo),
+            media_hash: hash,
+            media_url: uploaded.url,
+        });
+    }
+    None
+}
+
+/// Derive a brand kit proposal from a fresh scan of the customer's site.
+///
+/// Prints the proposed kind-30198 body exactly as `content kit set --data`
+/// consumes it. The proposal is never published here: derivation seeds a
+/// document, the owner reviews, edits, and accepts it, so a re-scan can never
+/// clobber a hand-tuned kit.
+async fn cmd_kit_derive(
+    client: &BuzzClient,
+    url: &str,
+    max_pages: Option<usize>,
+    skip_marks: bool,
+    out: Option<&str>,
+) -> Result<(), CliError> {
+    use crate::company_scan::brand_kit::{
+        attach_marks, derive_kit_body, summarize_scan, ProposedMark,
+    };
+    use crate::company_scan::fetch::{scan_site, ScanLimits};
+
+    let mut limits = ScanLimits::default();
+    if let Some(pages) = max_pages {
+        limits = limits.with_max_pages(pages);
+    }
+    let scan = match scan_site(url, limits).await {
+        Ok(scan) => scan,
+        Err(crate::company_scan::fetch::ScanError::Rejected(rejection)) => {
+            return Err(CliError::Usage(rejection.to_string()))
+        }
+        Err(error) => return Err(CliError::Other(error.to_string())),
+    };
+
+    let branding = summarize_scan(&scan);
+    let scanned_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut body = derive_kit_body(&scan.canonical_url, scanned_at, &branding);
+    if body["hues"].as_array().is_some_and(|hues| hues.is_empty()) {
+        eprintln!(
+            "warning: no usable colours were found on any scanned page or stylesheet; the site \
+             may render its styling with JavaScript. The proposal will carry no hues."
+        );
+    }
+
+    let mut marks: Vec<ProposedMark> = Vec::new();
+    if !skip_marks {
+        if let Ok(origin) = crate::company_scan::url_guard::check_url_shape(&scan.canonical_url) {
+            for (candidates, role) in [(&branding.logo_urls, "logo"), (&branding.icon_urls, "icon")]
+            {
+                if let Some(mark) = derive_mark(client, &origin, candidates, role).await {
+                    marks.push(ProposedMark {
+                        role,
+                        media_hash: mark.media_hash,
+                        media_url: mark.media_url,
+                    });
+                }
+            }
+        } else {
+            eprintln!("warning: canonical URL was malformed; marks were not fetched");
+        }
+    }
+    attach_marks(
+        &mut body,
+        &marks
+            .iter()
+            .map(|mark| ProposedMark {
+                role: mark.role,
+                media_hash: mark.media_hash.clone(),
+                media_url: mark.media_url.clone(),
+            })
+            .collect::<Vec<ProposedMark>>(),
+    );
+
+    // Acceptance is `content kit set`, which self-validates; validating here
+    // too means derivation output can never be the thing that bounces.
+    let id = suggested_kit_id(&scan.canonical_url);
+    let builder = EventBuilder::new(
+        Kind::Custom(KIND_CONTENT_BRAND_KIT as u16),
+        body.to_string(),
+    )
+    .tags(vec![tag(&["d", &id])?]);
+    let signed = client.sign_event(builder)?;
+    parse_content_brand_kit(&signed)
+        .map(|_| ())
+        .map_err(validation_error)?;
+
+    let serialized = serde_json::to_string_pretty(&body)
+        .map_err(|error| CliError::Other(format!("cannot serialize proposal: {error}")))?;
+    match out {
+        Some(path) => {
+            fs::write(path, &serialized)
+                .map_err(|error| CliError::Other(format!("could not write {path}: {error}")))?;
+            eprintln!(
+                "proposal written to {path}; review it, edit freely, accept with:\n  \
+                 buzz content kit set --id {id} --data @{path}"
+            );
+        }
+        None => {
+            println!("{serialized}");
+            eprintln!("# accept with: buzz content kit set --id {id} --data @proposal.json");
+        }
+    }
+    Ok(())
+}
+
+// ── asset library ─────────────────────────────────────────────────────────
+
+async fn cmd_library_set(client: &BuzzClient, id: &str, data: &str) -> Result<(), CliError> {
+    let body = apply_schema(read_json_arg(data)?, SCHEMA_CONTENT_LIBRARY)?;
+    let builder = EventBuilder::new(Kind::Custom(KIND_CONTENT_LIBRARY as u16), body.to_string())
+        .tags(vec![tag(&["d", id])?]);
+    submit(client, builder, |event| {
+        parse_content_library(event)
+            .map(|_| ())
+            .map_err(validation_error)
+    })
+    .await
+}
+
+async fn cmd_library_get(client: &BuzzClient, id: &str) -> Result<(), CliError> {
+    let events = client
+        .query_all(serde_json::json!({
+            "kinds": [KIND_CONTENT_LIBRARY],
+            "#d": [id],
+        }))
+        .await?;
+    let head = newest_heads(events).into_iter().next();
+    println!(
+        "{}",
+        serde_json::to_string(&head).unwrap_or_else(|_| "null".to_string())
+    );
+    Ok(())
+}
+
+async fn cmd_library_list(client: &BuzzClient) -> Result<(), CliError> {
+    let events = client
+        .query_all(serde_json::json!({ "kinds": [KIND_CONTENT_LIBRARY] }))
+        .await?;
+    println!(
+        "{}",
+        serde_json::to_string(&newest_heads(events)).unwrap_or_else(|_| "[]".to_string())
+    );
+    Ok(())
+}
+
 // ── decisions ─────────────────────────────────────────────────────────────
 
 /// Approve a post, or send it back with a note.
@@ -243,8 +507,8 @@ async fn cmd_decide(
     // unrendered card be approved as though its gates had run.
     let verdict = parsed.verdict().unwrap_or(GateVerdict::Incomplete);
     let mut target = serde_json::json!({ "verdict": verdict.as_str() });
-    if let Some(image) = &parsed.image {
-        target["image_sha256"] = serde_json::json!(image.sha256);
+    if !parsed.images.is_empty() {
+        target["image_sha256"] = serde_json::json!(slides_digest(&parsed.images));
     }
 
     let mut body = serde_json::json!({
@@ -383,6 +647,18 @@ pub async fn dispatch(cmd: crate::ContentCmd, client: &BuzzClient) -> Result<(),
         ContentCmd::StyleGet { scope } => {
             cmd_style_get(client, scope.as_deref().unwrap_or(DEFAULT_STYLE_SCOPE)).await
         }
+        ContentCmd::KitSet { id, data } => cmd_kit_set(client, &id, &data).await,
+        ContentCmd::KitGet { id } => cmd_kit_get(client, &id).await,
+        ContentCmd::KitList {} => cmd_kit_list(client).await,
+        ContentCmd::KitDerive {
+            url,
+            max_pages,
+            skip_marks,
+            out,
+        } => cmd_kit_derive(client, &url, max_pages, skip_marks, out.as_deref()).await,
+        ContentCmd::LibrarySet { id, data } => cmd_library_set(client, &id, &data).await,
+        ContentCmd::LibraryGet { id } => cmd_library_get(client, &id).await,
+        ContentCmd::LibraryList {} => cmd_library_list(client).await,
         ContentCmd::Decide {
             campaign,
             slug,

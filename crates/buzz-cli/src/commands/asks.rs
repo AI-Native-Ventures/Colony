@@ -14,7 +14,10 @@ use std::collections::HashSet;
 use nostr::{EventBuilder, Kind, PublicKey, Tag};
 
 use buzz_core::interrupt::{parse_ask, parse_resolution, parse_withdrawal, AskType, NO_INITIATIVE};
-use buzz_core::kind::{KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL};
+use buzz_core::kind::{
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_STATE, KIND_ASK_WITHDRAWAL, KIND_EMPLOYEE,
+    KIND_MANAGED_AGENT,
+};
 
 use crate::client::{
     extract_tag_value, normalize_write_response, write_conflict_reason, BuzzClient,
@@ -182,6 +185,86 @@ fn ask_type_str(raw: &str) -> Result<&'static str, CliError> {
     }
 }
 
+/// Upper bound on how many of the most recent managed-agent heads at the
+/// filer's `d` tag [`resolve_default_audience`] scans for one naming a
+/// manager. Mirrors the relay's own bounded head walks.
+const MAX_MANAGER_HEAD_CANDIDATES: usize = 20;
+
+/// Resolve the filer's manager from the relay's reporting-line records: the
+/// audience `asks raise` defaults to when `--to` is omitted.
+///
+/// Two sources, in the order authority sits:
+///
+/// 1. an employee head (kind 30190) at the filer's pubkey -- relay-signed,
+///    so trustworthy as published;
+/// 2. else managed-agent heads (kind 30177) at the same coordinate,
+///    newest first, skipping any head the filer authored itself and taking
+///    the first that names a manager. A client cannot verify owner-
+///    authorship (it does not know the membership table), so this is a
+///    best-effort mirror of the relay's read-time rule; the relay's altitude
+///    check remains the real gate on whatever audience is chosen, so a
+///    forged line can misroute an ask to an agent it should not reach but
+///    can never make an invalid ask land.
+fn extract_manager_tag(event: &serde_json::Value) -> Option<String> {
+    event
+        .get("tags")?
+        .as_array()?
+        .iter()
+        .filter_map(|tag| tag.as_array())
+        .find(|parts| parts.first().and_then(|v| v.as_str()) == Some("manager"))
+        .and_then(|parts| parts.get(1))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+async fn resolve_default_audience(client: &BuzzClient) -> Result<String, CliError> {
+    let my_pubkey = client.keys().public_key().to_hex();
+
+    // 1. Employee heads are relay-signed; NIP-33 latest-wins means only the
+    //    newest head at this coordinate counts. Its verdict is final -- this
+    //    mirrors `agent_manager`, which reads the employees row INSTEAD of
+    //    any head for employed pubkeys.
+    let filter = serde_json::json!({ "kinds": [KIND_EMPLOYEE], "#d": [my_pubkey] });
+    let events = client.query_all(filter).await?;
+    if let Some(newest) = events.first() {
+        return match extract_manager_tag(newest) {
+            Some(manager) => Ok(manager),
+            None => Err(CliError::Usage(format!(
+                "no manager is recorded for {my_pubkey}, so no default audience exists: pass \
+                 --to explicitly. Asks must go to an agent exactly one tier up (worker -> its \
+                 leader, leader -> the executive, executive -> a community owner); without a \
+                 reporting line the filer must name the recipient itself"
+            ))),
+        };
+    }
+
+    // 2. Managed-agent heads, newest first, ignoring self-published ones.
+    let filter = serde_json::json!({
+        "kinds": [KIND_MANAGED_AGENT],
+        "#d": [my_pubkey],
+    });
+    let events = client.query_all(filter).await?;
+    for event in events.iter().take(MAX_MANAGER_HEAD_CANDIDATES) {
+        let author = event
+            .get("pubkey")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if author.eq_ignore_ascii_case(&my_pubkey) {
+            continue;
+        }
+        if let Some(manager) = extract_manager_tag(event) {
+            return Ok(manager);
+        }
+    }
+
+    Err(CliError::Usage(format!(
+        "no manager is recorded for {my_pubkey}, so no default audience exists: pass --to \
+         explicitly. Asks must go to an agent exactly one tier up (worker -> its leader, \
+         leader -> the executive, executive -> a community owner); without a reporting line \
+         the filer must name the recipient itself"
+    )))
+}
+
 /// Parse `--option label=consequence` flags into `(label, consequence)` pairs.
 fn parse_options(raw: &[String]) -> Result<Vec<(String, String)>, CliError> {
     raw.iter()
@@ -204,13 +287,30 @@ fn parse_options(raw: &[String]) -> Result<Vec<(String, String)>, CliError> {
 /// File a new Ask (`raise`) or re-file one upward (`escalate`, when
 /// `prior` is `Some`). Both share this construction path: escalate is
 /// exactly a raise plus a `prior` tag and a new audience.
+///
+/// The audience is `fields.to`, or -- on a plain raise with no `--to` --
+/// the filer's manager, resolved from the relay. Escalation has no default:
+/// it exists to move a need ABOVE the audience that already has it, so
+/// naming the recipient explicitly is the point.
 async fn cmd_raise_ask(
     client: &BuzzClient,
     fields: &AskFileArgs,
     prior: Option<&str>,
 ) -> Result<(), CliError> {
     let ask_type = ask_type_str(&fields.ask_type)?;
-    validate_hex64(&fields.to)?;
+    if prior.is_some() && fields.to.is_none() {
+        return Err(CliError::Usage(
+            "escalate requires an explicit --to: an escalation moves the ask to whoever is \
+             one tier above its current audience, and only the filer knows who that is"
+                .into(),
+        ));
+    }
+    let to = match &fields.to {
+        Some(to) => to.clone(),
+        None => resolve_default_audience(client).await?,
+    };
+
+    validate_hex64(&to)?;
     if let Some(prior_hex) = prior {
         validate_hex64(prior_hex)?;
     }
@@ -227,7 +327,7 @@ async fn cmd_raise_ask(
     // appear exactly once" parse error. Catch it explicitly so the agent
     // is told exactly what to change.
     let my_pubkey = client.keys().public_key().to_hex();
-    if fields.to.eq_ignore_ascii_case(&my_pubkey) {
+    if to.eq_ignore_ascii_case(&my_pubkey) {
         return Err(CliError::Usage(format!(
             "--to must not be the filer's own pubkey ({my_pubkey}); an ask can only go to a \
              different agent one tier up (worker -> its leader, leader -> the executive, \
@@ -241,7 +341,7 @@ async fn cmd_raise_ask(
 
     let builder = build_ask_event(&AskEventFields {
         ask_type,
-        audience_hex: &fields.to,
+        audience_hex: &to,
         initiative_id: fields.initiative.as_deref(),
         task_ids: &fields.task,
         need_key: &fields.need,
@@ -276,6 +376,12 @@ async fn cmd_raise_ask(
 /// `--status open` is computed here from the public event stream: an ask
 /// is open unless a resolution or withdrawal (kind 44301/44302) names it
 /// via `e`.
+///
+/// Each listed ask also carries its ask-state head (kind 30200) under an
+/// `ask_state` key when one exists: the relay-signed `deadline_at` and the
+/// named expiry outcome, exactly as a subscribing app sees them. The value
+/// is never recomputed here -- the CLI and the app read the same head, so
+/// they cannot disagree.
 async fn cmd_list_asks(
     client: &BuzzClient,
     audience: Option<&str>,
@@ -296,11 +402,76 @@ async fn cmd_list_asks(
         asks = filter_open_asks(client, asks).await?;
     }
 
+    let head_ids: Vec<String> = asks
+        .iter()
+        .filter_map(|event| event.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    if !head_ids.is_empty() {
+        let heads_filter = serde_json::json!({
+            "kinds": [KIND_ASK_STATE],
+            "#d": head_ids,
+        });
+        let heads = client.query_all(heads_filter).await?;
+        asks = attach_ask_states(asks, &heads);
+    }
+
     println!(
         "{}",
         serde_json::to_string(&asks).unwrap_or_else(|_| "[]".to_string())
     );
     Ok(())
+}
+
+/// Attach each ask's ask-state head content under an `ask_state` key,
+/// keyed by the head's `d` tag matching the ask's event id. When several
+/// revisions of one head come back (an older relay that did not replace),
+/// the newest `created_at` wins, mirroring NIP-33 latest-wins. An ask with
+/// no head is left untouched.
+fn attach_ask_states(
+    mut asks: Vec<serde_json::Value>,
+    heads: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let mut by_d: std::collections::HashMap<String, (i64, serde_json::Value)> =
+        std::collections::HashMap::new();
+    for head in heads {
+        let d_tag = extract_tag_value(head, "d");
+        if d_tag.is_empty() {
+            continue;
+        }
+        let created_at = match head.get("created_at").and_then(serde_json::Value::as_i64) {
+            Some(created_at) => created_at,
+            None => continue,
+        };
+        // Event content arrives as raw JSON text; attach it parsed so
+        // consumers read `ask_state.deadline_at` directly. A head whose
+        // content does not parse is skipped rather than attached as a
+        // string an agent would have to re-parse.
+        let content = match head.get("content").and_then(serde_json::Value::as_str) {
+            Some(raw) => match serde_json::from_str::<serde_json::Value>(raw) {
+                Ok(content) => content,
+                Err(_) => continue,
+            },
+            None => continue,
+        };
+        match by_d.get(&d_tag) {
+            // Keep the newest revision per coordinate.
+            Some((existing_at, _)) if *existing_at >= created_at => {}
+            _ => {
+                by_d.insert(d_tag, (created_at, content));
+            }
+        }
+    }
+    for ask in asks.iter_mut() {
+        let id = match ask.get("id").and_then(serde_json::Value::as_str) {
+            Some(id) => id.to_owned(),
+            None => continue,
+        };
+        if let Some((_, content)) = by_d.get(&id) {
+            ask["ask_state"] = content.clone();
+        }
+    }
+    asks
 }
 
 /// Drop any ask event that already has a resolution or withdrawal
@@ -676,7 +847,50 @@ mod tests {
         );
     }
 
-    fn sample_file_args(to: String) -> AskFileArgs {
+    /// `buzz asks list` must surface the same deadline value the app reads:
+    /// the ask-state head content attached verbatim under `ask_state`,
+    /// newest revision winning, asks without a head left untouched.
+    #[test]
+    fn attach_ask_states_merges_the_newest_head_per_ask() {
+        let ask_id = "1".repeat(64);
+        let other_id = "2".repeat(64);
+        let asks = vec![
+            serde_json::json!({ "id": ask_id, "content": "ask" }),
+            serde_json::json!({ "id": other_id, "content": "other" }),
+        ];
+        let heads = vec![
+            // Older revision of the first ask's head: superseded below.
+            serde_json::json!({
+                "id": "a".repeat(64),
+                "created_at": 100,
+                "tags": [["d", ask_id]],
+                "content": r#"{"status":"open","deadline_at":900}"#,
+            }),
+            serde_json::json!({
+                "id": "b".repeat(64),
+                "created_at": 200,
+                "tags": [["d", ask_id]],
+                "content": r#"{"status":"resolved","closed_at":250}"#,
+            }),
+        ];
+
+        let merged = attach_ask_states(asks, &heads);
+        let first_state = merged[0].get("ask_state").expect("head attached");
+        assert_eq!(
+            first_state
+                .get("status")
+                .and_then(serde_json::Value::as_str),
+            Some("resolved"),
+            "the newest head revision must win"
+        );
+        assert_eq!(first_state.get("deadline_at"), None);
+        assert!(
+            merged[1].get("ask_state").is_none(),
+            "an ask with no head must be left untouched"
+        );
+    }
+
+    fn sample_file_args(to: Option<String>) -> AskFileArgs {
         AskFileArgs {
             ask_type: "decision".to_string(),
             to,
@@ -706,7 +920,7 @@ mod tests {
         let client = BuzzClient::new("http://127.0.0.1:1".to_string(), keys, None, None)
             .expect("client construction is offline and infallible here");
 
-        let fields = sample_file_args(my_pubkey.clone());
+        let fields = sample_file_args(Some(my_pubkey.clone()));
         let error = cmd_raise_ask(&client, &fields, None)
             .await
             .expect_err("a self-addressed ask must be rejected");
@@ -728,12 +942,38 @@ mod tests {
         let client = BuzzClient::new("http://127.0.0.1:1".to_string(), keys, None, None)
             .expect("client construction is offline and infallible here");
 
-        let fields = sample_file_args(my_pubkey.clone());
+        let fields = sample_file_args(Some(my_pubkey.clone()));
         let prior = "e".repeat(64);
         let error = cmd_raise_ask(&client, &fields, Some(&prior))
             .await
             .expect_err("a self-addressed escalation must be rejected");
 
         assert!(matches!(error, CliError::Usage(_)));
+    }
+
+    /// An escalation has no default audience: it exists to move a need above
+    /// the party that already has it, so omitting `--to` is refused before
+    /// any network call rather than guessed at.
+    #[tokio::test]
+    async fn escalate_requires_an_explicit_audience() {
+        let keys = Keys::generate();
+        let client = BuzzClient::new("http://127.0.0.1:1".to_string(), keys, None, None)
+            .expect("client construction is offline and infallible here");
+
+        let fields = sample_file_args(None);
+        let prior = "f".repeat(64);
+        let error = cmd_raise_ask(&client, &fields, Some(&prior))
+            .await
+            .expect_err("an audience-less escalation must be rejected");
+
+        match error {
+            CliError::Usage(message) => {
+                assert!(
+                    message.contains("--to"),
+                    "error must say what to do: {message}"
+                )
+            }
+            other => panic!("expected CliError::Usage, got {other:?}"),
+        }
     }
 }

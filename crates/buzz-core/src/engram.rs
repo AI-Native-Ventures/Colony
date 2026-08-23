@@ -25,7 +25,13 @@ pub const D_TAG_DOMAIN: &[u8] = b"agent-memory/v1/d-tag";
 
 /// NIP-44 plaintext limit (bytes). Bodies whose serialized JSON exceeds this
 /// MUST NOT be encrypted (spec: *Encryption*).
-pub const NIP44_PLAINTEXT_MAX: usize = 65_535;
+///
+/// Must stay at or below nostr's NIP-44 v2 hard limit, the private constant
+/// `nostr::nips::nip44::v2::MAX_SUPPORTED_PLAINTEXT_SIZE`: 65_536 - 128 =
+/// 65_408. (The constant cannot be imported; the boundary test in this module
+/// pins us to the encryptor's real behaviour instead.) Above it,
+/// `nip44::encrypt` fails with `Error::MessageTooLong`.
+pub const NIP44_PLAINTEXT_MAX: usize = 65_408;
 
 /// Maximum slug length in bytes (spec: *Slugs*).
 pub const SLUG_MAX_LEN: usize = 255;
@@ -431,7 +437,7 @@ pub fn extract_refs(body: &str) -> Vec<String> {
 ///
 /// * `created_at` is the timestamp to sign — callers MUST supply a value
 ///   respecting the *Writing* monotonic rule (`max(now, T_head + 1)`).
-/// * Returns `BodyTooLarge` if the serialized body exceeds 65,535 bytes.
+/// * Returns `BodyTooLarge` if the serialized body exceeds `NIP44_PLAINTEXT_MAX` bytes.
 pub fn build_event(
     agent_keys: &Keys,
     owner_pubkey: &PublicKey,
@@ -885,6 +891,45 @@ mod tests {
         };
         let err = build_event(&agent, &owner.public_key(), &body, 1).unwrap_err();
         assert!(matches!(err, EngramError::BodyTooLarge(_)));
+    }
+
+    /// A body whose serialized JSON is exactly `NIP44_PLAINTEXT_MAX` bytes must
+    /// encrypt successfully. This pins the cap to the encryptor's real limit:
+    /// nostr's NIP-44 v2 rejects anything above its private
+    /// `MAX_SUPPORTED_PLAINTEXT_SIZE` (65_536 - 128 = 65_408), so if the
+    /// constant drifts above the encryptor's limit again, this test fails
+    /// with `EngramError::Encrypt("…message too long")`.
+    #[test]
+    fn body_at_exact_plaintext_cap_encrypts() {
+        let agent = keys_from_hex(SECKEY_A);
+        let owner = keys_from_hex(SECKEY_O);
+        let empty = Body::Memory {
+            slug: "mem/example".into(),
+            value: Some(String::new()),
+        };
+        let floor = empty.to_json_bytes().len();
+        let value = "x".repeat(NIP44_PLAINTEXT_MAX - floor);
+        let body = Body::Memory {
+            slug: "mem/example".into(),
+            value: Some(value.clone()),
+        };
+        assert_eq!(
+            body.to_json_bytes().len(),
+            NIP44_PLAINTEXT_MAX,
+            "body must serialize to exactly the cap"
+        );
+
+        let event = build_event(&agent, &owner.public_key(), &body, 1)
+            .expect("a body at exactly the plaintext cap must encrypt");
+        let decoded = validate_and_decrypt(
+            &event,
+            &agent.public_key(),
+            &owner.public_key(),
+            agent.secret_key(),
+            &owner.public_key(),
+        )
+        .expect("round-trip must decrypt");
+        assert_eq!(decoded, body, "value must survive the round trip");
     }
 
     #[test]
