@@ -62,15 +62,9 @@ import {
 import { resolveManagedAgentAvatarUrl } from "./managedAgentAvatar";
 import {
   buildInstanceInputForDefinition,
+  resolveCreateRuntime,
   type BackendIntent,
 } from "../lib/instanceInputForDefinition";
-
-/**
- * The harness a create falls back to when neither the agent nor the global
- * config names one. Mirrors `default_agent_command()` in
- * `managed_agents/discovery.rs`, which resolves the bundled `buzz-agent`.
- */
-const BUNDLED_DEFAULT_RUNTIME_ID = "buzz-agent";
 
 type PersonaFeedbackSurface = "catalog" | "library";
 
@@ -222,10 +216,10 @@ export function usePersonaActions() {
         // "Add agent" button that silently did nothing. Resolve the same
         // record -> global chain the backend uses before deciding it is
         // missing.
-        const resolvedRuntimeId =
-          input.runtime?.trim() || globalConfig.preferred_runtime?.trim() || "";
-        const runtime = availableRuntimes.find(
-          (candidate) => candidate.id === resolvedRuntimeId,
+        const { named: resolvedRuntimeId, runtime } = resolveCreateRuntime(
+          availableRuntimes,
+          input.runtime,
+          globalConfig.preferred_runtime,
         );
         // Only an id that was actually named and is unavailable is an error.
         // Naming nothing is legal: `resolve_effective_runtime_id` returns None
@@ -267,11 +261,7 @@ export function usePersonaActions() {
         // `default_agent_command()` and take the bundled buzz-agent. The
         // definition-only create above already returned, so a definition is
         // never blocked on this.
-        const runtimeForInstance =
-          runtime ??
-          availableRuntimes.find(
-            (candidate) => candidate.id === BUNDLED_DEFAULT_RUNTIME_ID,
-          );
+        const runtimeForInstance = runtime;
         if (!runtimeForInstance) {
           setPersonaErrorMessage(
             "No harness is available to run this agent. Open Settings > Agents to set one up.",
