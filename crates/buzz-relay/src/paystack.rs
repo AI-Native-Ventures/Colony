@@ -1,26 +1,21 @@
-//! Paystack card top-ups: the hosted-checkout client and webhook signature
-//! verification.
+//! Paystack: the hosted-checkout client and webhook signature verification.
 //!
 //! The signature over the raw webhook bytes is the only authority for
 //! crediting money, and it must be checked before anything is parsed.
 //! Re-serialising parsed JSON produces different bytes for the same object,
 //! so a handler that verifies after parsing rejects every real webhook while
-//! passing any test that round-trips through a struct. [`PaystackApi`] exists
-//! so tests fake the client at this boundary instead of ever touching the
-//! live Paystack API.
+//! passing any test that round-trips through a struct. The gateway speaks
+//! only through [`crate::payments_provider::PaymentProvider`]; tests fake
+//! that boundary instead of ever touching the live Paystack API.
 
 use std::time::Duration;
 
+use axum::http::HeaderMap;
 use hmac::{Hmac, KeyInit, Mac};
+use serde_json::Value;
 use subtle::ConstantTimeEq;
 
-/// NanoUSD in one US cent.
-///
-/// The ledger stores nanoUSD while both the onboarding contract and Paystack
-/// speak cents. [`nano_usd_from_cents`] is the only place the two unit
-/// systems meet, so a mistake here misprices every payment by seven orders
-/// of magnitude rather than somewhere quietly.
-pub const NANO_USD_PER_CENT: i64 = 10_000_000;
+use crate::payments_provider::{PaymentProvider, ProviderError, ProviderEvent};
 
 /// Where hosted checkout sessions are opened.
 const INITIALIZE_URL: &str = "https://api.paystack.co/transaction/initialize";
@@ -28,54 +23,8 @@ const INITIALIZE_URL: &str = "https://api.paystack.co/transaction/initialize";
 /// How long one initialize call may take before it is abandoned.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Failures on the Paystack surface.
-#[derive(Debug, thiserror::Error)]
-pub enum PaystackError {
-    /// A negative amount was requested. Money only moves inward through
-    /// this module, so a negative number is always a caller bug.
-    #[error("amount must not be negative")]
-    NegativeAmount,
-
-    /// Converting cents to nanoUSD would overflow an i64.
-    #[error("amount too large")]
-    AmountOverflow,
-
-    /// The HTTP call failed, or its response could not be read.
-    #[error("paystack request failed: {0}")]
-    Request(#[from] reqwest::Error),
-
-    /// Paystack answered with a non-success status.
-    #[error("paystack returned status {status}")]
-    Status {
-        /// HTTP status code Paystack returned.
-        status: u16,
-    },
-
-    /// A success response arrived but was not JSON where JSON was required.
-    #[error("paystack returned an unparseable response")]
-    MalformedResponse,
-
-    /// The success response carried no checkout URL.
-    #[error("paystack response missing authorization_url")]
-    MissingAuthorizationUrl,
-}
-
-/// Convert USD cents into ledger nanoUSD.
-///
-/// The ledger stores nanoUSD, the onboarding contract speaks USD cents, and
-/// Paystack speaks the currency's minor unit, which for USD is also cents.
-/// So the contract amount and the Paystack amount are the same number, and
-/// this multiplication is the single conversion between them and the ledger.
-/// Negative amounts are refused because money only moves inward through this
-/// path, and overflow is refused rather than wrapped.
-pub fn nano_usd_from_cents(cents: i64) -> Result<i64, PaystackError> {
-    if cents < 0 {
-        return Err(PaystackError::NegativeAmount);
-    }
-    cents
-        .checked_mul(NANO_USD_PER_CENT)
-        .ok_or(PaystackError::AmountOverflow)
-}
+/// How Paystack names its signature header.
+pub(crate) const SIGNATURE_HEADER: &str = "x-paystack-signature";
 
 /// Verify a Paystack webhook signature against the raw body bytes.
 ///
@@ -104,20 +53,82 @@ pub fn verify_signature(raw_body: &[u8], signature_header: &str, secret: &str) -
     expected.as_slice().ct_eq(candidate.as_slice()).into()
 }
 
-/// Opening a hosted checkout session, behind a trait so tests fake this at
-/// the boundary instead of ever speaking to the live API.
-#[async_trait::async_trait]
-pub trait PaystackApi {
-    /// Ask Paystack to open a checkout for this charge and return the URL
-    /// the user pays at. `usd_cents` is posted unchanged: Paystack's USD
-    /// amount is the currency's minor unit, which is the same cents the
-    /// contract speaks.
-    async fn initialize(
-        &self,
-        usd_cents: i64,
-        email: &str,
-        reference: &str,
-    ) -> Result<String, PaystackError>;
+/// Verify a signed delivery and map it onto a [`ProviderEvent`].
+///
+/// This is the whole of what the handler used to know about Paystack, kept
+/// as one function so the live client and the test fake share identical
+/// semantics. A bad signature rejects. A correctly signed body that carries
+/// nothing actionable (another event type, no reference, no amount, a
+/// non-USD currency, or bytes that are not JSON at all) is deliberately
+/// [`ProviderEvent::Ignored`]: it is understood, it moves nothing, and
+/// answering 200 stops Paystack retrying it forever.
+pub(crate) fn verify_and_parse_delivery(
+    raw_body: &[u8],
+    signature_header: &str,
+    secret: &str,
+) -> Result<ProviderEvent, ProviderError> {
+    // Signature over the raw bytes, before anything parses them.
+    if !verify_signature(raw_body, signature_header, secret) {
+        return Err(ProviderError::RejectedCallback("invalid signature"));
+    }
+
+    // Signed but unparseable can only be a key shared with something that is
+    // not Paystack. Nothing is understood, so nothing moves; acknowledging
+    // stops a retry loop over a body we will never read differently.
+    let event: Value = match serde_json::from_slice(raw_body) {
+        Ok(event) => event,
+        Err(_) => {
+            tracing::warn!("paystack webhook: signed body was not JSON");
+            return Ok(ProviderEvent::Ignored);
+        }
+    };
+
+    match event.get("event").and_then(Value::as_str) {
+        Some("charge.success") => {}
+        // Understood envelope, ignored event type (charge.failed and friends).
+        // Acknowledged so Paystack does not retry an event we will never act
+        // on; the intent stays pending, which is the truthful state.
+        _ => return Ok(ProviderEvent::Ignored),
+    }
+
+    let data = event.get("data");
+    let Some(reference) = data
+        .and_then(|data| data.get("reference"))
+        .and_then(Value::as_str)
+    else {
+        tracing::warn!("paystack webhook: charge.success without a reference");
+        return Ok(ProviderEvent::Ignored);
+    };
+
+    // The contract is USD end to end. A different currency means the amount
+    // is a different unit, so crediting it as cents would misprice it; out of
+    // contract, so refused loudly and acknowledged rather than retried.
+    if let Some(currency) = data
+        .and_then(|data| data.get("currency"))
+        .and_then(Value::as_str)
+    {
+        if !currency.eq_ignore_ascii_case("USD") {
+            tracing::error!(
+                reference = %reference,
+                currency = %currency,
+                "paystack webhook: refusing a non-USD charge"
+            );
+            return Ok(ProviderEvent::Ignored);
+        }
+    }
+
+    let Some(usd_cents) = data
+        .and_then(|data| data.get("amount"))
+        .and_then(Value::as_i64)
+    else {
+        tracing::warn!(reference = %reference, "paystack webhook: charge.success without an amount");
+        return Ok(ProviderEvent::Ignored);
+    };
+
+    Ok(ProviderEvent::Paid {
+        reference: reference.to_string(),
+        usd_cents,
+    })
 }
 
 /// The live Paystack client.
@@ -139,7 +150,7 @@ impl LivePaystack {
     ///
     /// Fails only when the process-local HTTP stack cannot be initialised,
     /// which is worth reporting at startup rather than on the first payment.
-    pub fn new(secret: impl Into<String>) -> Result<Self, PaystackError> {
+    pub fn new(secret: impl Into<String>) -> Result<Self, ProviderError> {
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()?;
@@ -151,13 +162,13 @@ impl LivePaystack {
 }
 
 #[async_trait::async_trait]
-impl PaystackApi for LivePaystack {
+impl PaymentProvider for LivePaystack {
     async fn initialize(
         &self,
         usd_cents: i64,
         email: &str,
         reference: &str,
-    ) -> Result<String, PaystackError> {
+    ) -> Result<String, ProviderError> {
         let body = serde_json::json!({
             "amount": usd_cents,
             "email": email,
@@ -174,43 +185,43 @@ impl PaystackApi for LivePaystack {
         let status = response.status();
         let text = response.text().await?;
         if !status.is_success() {
-            return Err(PaystackError::Status {
+            return Err(ProviderError::Status {
                 status: status.as_u16(),
             });
         }
         let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|_| PaystackError::MalformedResponse)?;
+            serde_json::from_str(&text).map_err(|_| ProviderError::MalformedResponse)?;
         value
             .get("data")
             .and_then(|data| data.get("authorization_url"))
             .and_then(|url| url.as_str())
             .map(str::to_string)
-            .ok_or(PaystackError::MissingAuthorizationUrl)
+            .ok_or(ProviderError::MissingAuthorizationUrl)
+    }
+
+    async fn verify_callback(
+        &self,
+        raw_body: &[u8],
+        headers: &HeaderMap,
+        _source_ip: Option<std::net::IpAddr>,
+    ) -> Result<ProviderEvent, ProviderError> {
+        // Paystack authenticates the signature over the bytes, not the
+        // network source; the peer address is deliberately unused here.
+        let signature = headers
+            .get(SIGNATURE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        verify_and_parse_delivery(raw_body, signature, &self.secret)
+    }
+
+    fn name(&self) -> &'static str {
+        "paystack"
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // A cent is ten million nanoUSD. The ledger stores nanoUSD, the contract
-    // and Paystack both speak cents, and mixing them silently misprices
-    // everything by seven orders of magnitude.
-    #[test]
-    fn converts_cents_to_nano_usd() {
-        assert_eq!(nano_usd_from_cents(500).unwrap(), 5_000_000_000);
-        assert_eq!(nano_usd_from_cents(1).unwrap(), 10_000_000);
-    }
-
-    #[test]
-    fn rejects_a_negative_amount() {
-        assert!(nano_usd_from_cents(-1).is_err());
-    }
-
-    #[test]
-    fn rejects_an_amount_that_would_overflow() {
-        assert!(nano_usd_from_cents(i64::MAX).is_err());
-    }
 
     #[test]
     fn accepts_a_correct_signature() {
@@ -259,6 +270,38 @@ mod tests {
             serde_json::to_vec(&serde_json::from_slice::<serde_json::Value>(raw).unwrap()).unwrap();
         assert_ne!(raw.to_vec(), reserialised, "fixture must actually differ");
         assert!(!verify_signature(&reserialised, &signature, secret));
+    }
+
+    #[test]
+    fn a_signed_charge_success_parses_into_a_paid_event() {
+        let secret = "sk_test_example";
+        let body = br#"{"event":"charge.success","data":{"reference":"ref-1","amount":500,"currency":"USD"}}"#;
+        let signature = hex_hmac_sha512(secret, body);
+        assert_eq!(
+            verify_and_parse_delivery(body, &signature, secret).unwrap(),
+            ProviderEvent::Paid {
+                reference: "ref-1".into(),
+                usd_cents: 500,
+            }
+        );
+    }
+
+    #[test]
+    fn a_tampered_delivery_rejects_instead_of_ignoring() {
+        let secret = "sk_test_example";
+        let signature = hex_hmac_sha512(
+            secret,
+            br#"{"event":"charge.success","data":{"reference":"ref-1","amount":500}}"#,
+        );
+        // Honest signature, doctored body: rejection, never an ignored event.
+        assert!(matches!(
+            verify_and_parse_delivery(
+                br#"{"event":"charge.success","data":{"reference":"ref-1","amount":9999}}"#,
+                &signature,
+                secret
+            ),
+            Err(ProviderError::RejectedCallback(_))
+        ));
     }
 
     /// Test-only helper mirroring what Paystack does when it signs a request.

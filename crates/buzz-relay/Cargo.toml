@@ -79,6 +79,7 @@ zeroize         = { workspace = true }
 
 hmac            = { workspace = true }
 subtle          = { workspace = true }
+md-5            = { workspace = true }
 rand            = { workspace = true }
 hex             = { workspace = true }
 url             = { workspace = true }

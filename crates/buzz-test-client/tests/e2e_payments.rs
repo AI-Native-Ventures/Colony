@@ -11,13 +11,15 @@
 //! test secret and posted straight to the relay, which is the whole point of
 //! verifying signatures rather than trusting a caller.
 //!
-//! The relay must carry `PAYSTACK_SECRET_KEY` set to [`TEST_WEBHOOK_SECRET`]:
-//! the webhook fails closed when the secret is unset, refusing every delivery.
+//! The relay must carry `COLONY_PAYMENT_PROVIDER=paystack` and
+//! `PAYSTACK_SECRET_KEY` set to [`TEST_WEBHOOK_SECRET`]: with no provider
+//! configured the webhook route fails closed, refusing every delivery.
 //!
 //! # Running
 //!
-//! Start the isolated relay, then restart it carrying the webhook secret (the
-//! launcher script does not forward that variable into its tmux session):
+//! Start the isolated relay, then restart it carrying the provider config
+//! (the launcher script does not forward those variables into its tmux
+//! session):
 //!
 //! ```text
 //! . ./bin/activate-hermit && ./scripts/start-isolated-test-relay.sh
@@ -30,6 +32,7 @@
 //!    BUZZ_S3_ENDPOINT=http://localhost:9471 BUZZ_S3_ACCESS_KEY=buzz_dev \
 //!    BUZZ_S3_SECRET_KEY=buzz_dev_secret BUZZ_S3_BUCKET=buzz-media \
 //!    BUZZ_REQUIRE_AUTH_TOKEN=false BUZZ_RECONCILE_CHANNELS=true \
+//!    COLONY_PAYMENT_PROVIDER=paystack \
 //!    PAYSTACK_SECRET_KEY=whsec_e2e_paystack_test \
 //!    ./target/ci/buzz-relay > /tmp/pay-e2e-relay.log 2>&1"
 //! ```
@@ -98,13 +101,13 @@ async fn ensure_test_community(host: &str) -> Uuid {
 const TEST_WEBHOOK_SECRET: &str = "whsec_e2e_paystack_test";
 
 /// References beginning with this prefix are the ones the settle-blocker
-/// constraint in the settlement-failure test targets, so that test cannot
+/// trigger in the settlement-failure test targets, so that test cannot
 /// interfere with any other row in the table, even when tests run in
 /// parallel.
 ///
-/// Must match the prefix hard-coded into that test's constraint SQL. A drift
-/// between the two fails the test loudly rather than passing silently: the
-/// settle would succeed where a 5xx is asserted.
+/// Must match the prefix hard-coded into that test's trigger WHEN clause. A
+/// drift between the two fails the test loudly rather than passing silently:
+/// the settle would succeed where a 5xx is asserted.
 const SETTLE_FAIL_REF_PREFIX: &str = "paysf-";
 
 fn unique_host() -> String {
@@ -186,9 +189,16 @@ async fn payments_post_signed(
 }
 
 /// Deliver a webhook body to one community's host with a given signature.
+///
+/// Paystack deliveries go to the paystack route; each gateway posts to its
+/// own path and the route refuses anything addressed to a provider that is
+/// not the live one.
 async fn deliver_webhook(host: &str, signature: &str, body: &[u8]) -> reqwest::Response {
     reqwest::Client::new()
-        .post(format!("{}/api/payments/webhook", relay_http_url()))
+        .post(format!(
+            "{}/api/payments/webhook/paystack",
+            relay_http_url()
+        ))
         .header(reqwest::header::HOST, host)
         .header("x-paystack-signature", signature)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -219,12 +229,14 @@ fn charge_success_body(reference: &str, amount_cents: i64) -> Vec<u8> {
 ///
 /// The initialize route itself is deliberately not exercised: it forwards to
 /// the live Paystack API, and no test may call that API. The insert mirrors
-/// the store's `create_intent` SQL.
+/// the store's `create_intent` SQL, provider included: a reference must
+/// resolve back to the gateway that issued it, and these tests drive the
+/// paystack route.
 async fn seed_intent(community_id: Uuid, reference: &str, pubkey: &[u8], usd_cents: i64) {
     let pool = e2e_db_pool().await;
     sqlx::query(
-        "INSERT INTO payment_intents (community_id, reference, pubkey, usd_cents) \
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO payment_intents (community_id, reference, pubkey, usd_cents, provider) \
+         VALUES ($1, $2, $3, $4, 'paystack')",
     )
     .bind(community_id)
     .bind(reference)
@@ -495,13 +507,30 @@ async fn intent_in_community_a_is_invisible_from_community_b() {
 ///    first (idempotent on the ledger reference), settle second, any store
 ///    error answering 5xx so the provider redelivers.
 ///
-/// The settle failure is produced deterministically by a temporary CHECK
-/// constraint scoped to this test's reference prefix: the UPDATE violates it,
-/// the handler answers 5xx, and dropping the constraint lets the redelivery
-/// converge. No handler or store code is touched.
+/// The settle failure is produced deterministically by a temporary
+/// BEFORE UPDATE trigger scoped to this test's reference prefix: the settle
+/// UPDATE touches the row, the trigger raises, and the handler answers 5xx;
+/// dropping the trigger lets the redelivery converge. No handler or store
+/// code is touched. A trigger rather than a CHECK constraint because a
+/// added constraint validates every existing row, and rows left settled by
+/// an earlier run against an accumulated database would fail that scan.
 #[tokio::test]
 #[ignore]
 async fn settle_failure_keeps_the_credit_and_redelivery_converges() {
+    let pool = e2e_db_pool().await;
+
+    // Defensive cleanup first: a previous run panicking between create and
+    // drop would otherwise leave the blocker armed and poison every later
+    // run on the same database.
+    sqlx::query("DROP TRIGGER IF EXISTS pay_e2e_settle_blocker ON payment_intents")
+        .execute(&pool)
+        .await
+        .expect("drop stale settle-blocker trigger");
+    sqlx::query("DROP FUNCTION IF EXISTS pay_e2e_settle_blocker_fn()")
+        .execute(&pool)
+        .await
+        .expect("drop stale settle-blocker function");
+
     let host = unique_host();
     let community_id = ensure_test_community(&host).await;
     let keys = nostr::Keys::generate();
@@ -509,16 +538,26 @@ async fn settle_failure_keeps_the_credit_and_redelivery_converges() {
     let reference = format!("{SETTLE_FAIL_REF_PREFIX}{}", Uuid::new_v4().simple());
     seed_intent(community_id, &reference, &pubkey, 500).await;
 
-    let pool = e2e_db_pool().await;
-    // The prefix in the SQL must match SETTLE_FAIL_REF_PREFIX; the const
-    // assertion above pins the two together.
     sqlx::query(
-        "ALTER TABLE payment_intents ADD CONSTRAINT pay_e2e_settle_blocker \
-         CHECK (reference NOT LIKE 'paysf-%' OR paid_cents <> 500)",
+        "CREATE FUNCTION pay_e2e_settle_blocker_fn() RETURNS trigger \
+         LANGUAGE plpgsql AS $blocker$ \
+         BEGIN RAISE EXCEPTION 'pay e2e: settle deliberately blocked'; END \
+         $blocker$",
     )
     .execute(&pool)
     .await
-    .expect("add settle-blocker constraint");
+    .expect("create settle-blocker function");
+    // Fires only for this test's reference prefix, so no other row's
+    // settlement is ever touched, even under parallel execution.
+    sqlx::query(
+        "CREATE TRIGGER pay_e2e_settle_blocker \
+         BEFORE UPDATE ON payment_intents \
+         FOR EACH ROW WHEN (NEW.reference LIKE 'paysf-%') \
+         EXECUTE FUNCTION pay_e2e_settle_blocker_fn()",
+    )
+    .execute(&pool)
+    .await
+    .expect("create settle-blocker trigger");
 
     let body_bytes = charge_success_body(&reference, 500);
     let signature = webhook_signature(&body_bytes);
@@ -552,10 +591,14 @@ async fn settle_failure_keeps_the_credit_and_redelivery_converges() {
 
     // Remove the blocker and redeliver: the replayed credit is a no-op and
     // the settle completes. Convergence.
-    sqlx::query("ALTER TABLE payment_intents DROP CONSTRAINT pay_e2e_settle_blocker")
+    sqlx::query("DROP TRIGGER pay_e2e_settle_blocker ON payment_intents")
         .execute(&pool)
         .await
-        .expect("drop settle-blocker constraint");
+        .expect("drop settle-blocker trigger");
+    sqlx::query("DROP FUNCTION pay_e2e_settle_blocker_fn()")
+        .execute(&pool)
+        .await
+        .expect("drop settle-blocker function");
 
     let resp = deliver_webhook(&host, &signature, &body_bytes).await;
     assert_eq!(resp.status(), reqwest::StatusCode::OK, "redelivery settles");
