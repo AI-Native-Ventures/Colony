@@ -2229,7 +2229,7 @@ async fn handle_ws_message(
     observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
-    relay_url: &str,
+    relay_pin: &RelayPin,
     agent_pubkey_hex: &str,
     auth_tag: Option<&nostr::Tag>,
 ) -> bool {
@@ -2586,7 +2586,7 @@ async fn handle_ws_message(
                     // AUTH send failure must trigger reconnect.
                     debug!("received mid-session AUTH challenge — re-authenticating");
                     if let Err(e) =
-                        send_auth_response(ws, &challenge, relay_url, keys, auth_tag).await
+                        send_auth_response(ws, &challenge, relay_pin.url(), keys, auth_tag).await
                     {
                         warn!("failed to respond to mid-session AUTH challenge: {e} — triggering reconnect");
                         return false;
@@ -2639,7 +2639,7 @@ async fn process_handshake_buffer(
     observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
-    relay_url: &str,
+    relay_pin: &RelayPin,
     agent_pubkey_hex: &str,
     auth_tag: Option<&nostr::Tag>,
 ) -> bool {
@@ -2683,7 +2683,7 @@ async fn process_handshake_buffer(
                 observer_control_tx,
                 state,
                 keys,
-                relay_url,
+                relay_pin,
                 agent_pubkey_hex,
                 auth_tag,
             )
@@ -3185,9 +3185,10 @@ async fn try_autonomous_reconnect(
     let mut attempt = 0usize;
     while attempt < backoffs.len() {
         info!(
-            "autonomous reconnect attempt {}/{} to {relay_url}…",
+            "autonomous reconnect attempt {}/{} to {}…",
             attempt + 1,
-            backoffs.len()
+            backoffs.len(),
+            relay_pin.url()
         );
         match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
@@ -3201,7 +3202,7 @@ async fn try_autonomous_reconnect(
                     observer_control_tx,
                     state,
                     keys,
-                    relay_pin.url(),
+                    relay_pin,
                     agent_pubkey_hex,
                     auth_tag,
                 )
@@ -3328,11 +3329,11 @@ async fn wait_for_reconnect(
     ];
     let mut attempt = state.backoff_step;
     loop {
-        info!("attempting relay reconnect to {relay_pin.url()}…");
+        info!("attempting relay reconnect to {}…", relay_pin.url());
         match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
-                info!("relay reconnected to {relay_pin.url()}");
+                info!("relay reconnected to {}", relay_pin.url());
                 let handshake_ok = process_handshake_buffer(
                     ws,
                     handshake_buffer,
@@ -3341,7 +3342,7 @@ async fn wait_for_reconnect(
                     observer_control_tx,
                     state,
                     keys,
-                    relay_pin.url(),
+                    relay_pin,
                     agent_pubkey_hex,
                     auth_tag,
                 )
@@ -4337,15 +4338,26 @@ mod tests {
     #[test]
     fn every_dial_goes_through_the_pinned_relay() {
         let src = include_str!("relay.rs");
+        // Count only the production half. This test names the very call shapes
+        // it counts, so searching the whole file matches its own assertions and
+        // makes both numbers permanently wrong.
+        let production = src
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("relay.rs always has a non-test section");
+        assert!(
+            production.len() < src.len(),
+            "test-module marker not found, so this guard would search itself"
+        );
         // The initial connect and both reconnect loops dial through the pin.
         assert_eq!(
-            src.matches("do_connect(relay_pin.url()").count(),
+            production.matches("do_connect(relay_pin.url()").count(),
             3,
             "initial connect plus try_autonomous_reconnect and wait_for_reconnect must all pin"
         );
         // No dial site may take a bare URL again.
         assert_eq!(
-            src.matches("do_connect(relay_url").count(),
+            production.matches("do_connect(relay_url").count(),
             0,
             "a dial site bypasses the identity boundary"
         );
@@ -4484,7 +4496,7 @@ mod tests {
                 &observer_control_tx,
                 &mut state,
                 &keys,
-                "ws://relay.test",
+                &RelayPin::new("ws://relay.test").expect("pinnable test relay"),
                 "agent-pubkey",
                 None,
             )
