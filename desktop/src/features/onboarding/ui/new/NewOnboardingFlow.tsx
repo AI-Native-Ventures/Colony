@@ -9,6 +9,8 @@ import {
 } from "@/shared/lib/safeStorage";
 import type { AuthFailure } from "../../authService";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
+import { createWiredScrapeService } from "../../lib/wiredScrapeService";
+import { createWiredPaymentsService } from "../../lib/wiredPaymentsService";
 import { stashFounderBrief } from "../../flow/stashFounderBrief";
 import type { OnboardingServices, ScrapeResult } from "../../contracts";
 import {
@@ -110,15 +112,29 @@ function readE2eAuthFailure(
  * turns the real service on, and the e2e build mode keeps fakes so existing
  * specs stay hermetic.
  */
-function resolveAuthServices(
+export function resolveAuthServices(
   env: Record<string, string | undefined>,
   passed: OnboardingServices,
 ): OnboardingServices {
-  const real =
-    env.VITE_NEW_ONBOARDING === "1" && env.MODE !== "e2e"
-      ? createWiredAuthService()
-      : null;
-  const base = real === null ? passed : { ...passed, auth: real };
+  // Anything that is not the e2e build gets the real services.
+  //
+  // This used to also require VITE_NEW_ONBOARDING === "1", from when the flow
+  // was opt-in. Making the flow the default silently stopped that flag being
+  // set, so the condition stopped matching and a production build quietly fell
+  // back to `contracts.fake.ts`: an account that was never created, and a
+  // hand-written paragraph about a Johannesburg workshop presented as what
+  // Colony found on the user's own website. Nothing failed, which is what made
+  // it dangerous. The e2e mode is the only build that keeps fakes, so its
+  // specs stay hermetic.
+  const useReal = env.MODE !== "e2e";
+  const base = useReal
+    ? {
+        ...passed,
+        auth: createWiredAuthService(),
+        scrape: createWiredScrapeService(),
+        payments: createWiredPaymentsService(),
+      }
+    : passed;
   const forced = readE2eAuthFailure(env);
   if (forced === null) return base;
   return {
