@@ -31,6 +31,12 @@
  * worst pixel is reported alongside it rather than thrown away.
  */
 
+import type { Rgb } from "./color";
+import { contrastRatio, relativeLuminance } from "./color";
+
+export { contrastRatio, relativeLuminance };
+export type { Rgb };
+
 /** The bar for body text. */
 export const AA_BODY = 4.5;
 
@@ -39,9 +45,6 @@ export const AA_BODY = 4.5;
  * to score raw pixels.
  */
 export const GRAIN_BLUR = 2;
-
-/** An 8-bit sRGB triple. */
-export type Rgb = [number, number, number];
 
 /** One text run to be measured, as read off the live card DOM. */
 export type ContrastRun = {
@@ -71,23 +74,6 @@ export type ContrastMeasurement = {
   /** The background pixel that produced `ratio`, as `rgb(r, g, b)`. */
   worstBackground: string;
 };
-
-/** WCAG 2.1 relative luminance from an 8-bit sRGB triple. */
-export function relativeLuminance([r, g, b]: Rgb): number {
-  const lin = [r, g, b].map((c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
-}
-
-/** WCAG 2.1 contrast ratio between two 8-bit sRGB triples. */
-export function contrastRatio(fg: Rgb, bg: Rgb): number {
-  const a = relativeLuminance(fg);
-  const b = relativeLuminance(bg);
-  const [hi, lo] = a > b ? [a, b] : [b, a];
-  return (hi + 0.05) / (lo + 0.05);
-}
 
 /** Pull the leading three channel numbers out of an `rgb()`/`rgba()` string. */
 export function parseRgb(color: string): Rgb {
