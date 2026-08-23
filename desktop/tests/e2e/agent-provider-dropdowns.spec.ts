@@ -248,19 +248,18 @@ test.describe("agent provider dropdown screenshots", () => {
     await expect(
       dialog.getByRole("tab", { name: "Customize for this agent" }),
     ).toBeVisible();
-    // The provider-capable notice, not the harness-only one. Asserting the
-    // testid rather than the copy pins which of the two branches rendered:
-    // "Harness default" appears only when a harness cannot be given a
-    // provider, and codex no longer qualifies.
-    await expect(dialog.getByTestId("agent-ai-defaults-notice")).toBeVisible();
+    // This definition pins codex explicitly, so the dialog opens already on
+    // Customize -- a bare harness pin is a customisation. Neither defaults
+    // notice renders in that mode, which is why this asserts the tab state
+    // rather than a notice.
     await expect(
-      dialog.getByTestId("agent-harness-defaults-notice"),
-    ).toHaveCount(0);
-    // Inheritance is shown, not hidden: this agent really will run the global
-    // model, so the dialog says so.
-    await expect(dialog.getByText(/global-databricks-model/)).toBeVisible();
+      dialog.getByRole("tab", { name: "Customize for this agent" }),
+    ).toHaveAttribute("aria-selected", "true");
+    // A pinned agent does not inherit: the global databricks pair belongs to
+    // agents on defaults, and must not leak into this one's fields.
+    await expect(dialog.getByText(/global-databricks-model/)).toHaveCount(0);
+    await expect(dialog.getByText(/Databricks/i)).toHaveCount(0);
 
-    await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
     await expect(
       dialog.getByRole("combobox", { name: /model/i }),
     ).toBeVisible();

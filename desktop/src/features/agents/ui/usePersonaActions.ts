@@ -220,11 +220,16 @@ export function usePersonaActions() {
         const runtime = availableRuntimes.find(
           (candidate) => candidate.id === resolvedRuntimeId,
         );
-        if (!runtime) {
+        // Only an id that was actually named and is unavailable is an error.
+        // Naming nothing is legal: `resolve_effective_runtime_id` returns None
+        // for it and the backend spawns the bundled default harness. Refusing
+        // here meant anyone who had not set a global default harness — every
+        // new account — could not create an agent at all, including from an
+        // agent proposal. `runtime` is used only for the avatar fallback,
+        // which is already optional.
+        if (resolvedRuntimeId && !runtime) {
           setPersonaErrorMessage(
-            resolvedRuntimeId
-              ? `The default harness (${resolvedRuntimeId}) is not available. Choose one for this agent, or change your global defaults.`
-              : "Choose an available harness for this agent, or set a global default harness.",
+            `The default harness (${resolvedRuntimeId}) is not available. Choose one for this agent, or change your global defaults.`,
           );
           return false;
         }
