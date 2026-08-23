@@ -70,10 +70,18 @@ async function captureInPage(page, cardHtml, css) {
   return page.evaluate(
     async ({ cardHtml, css, W, H }) => {
       const r = await globalThis.__captureCard(cardHtml, css, W, H);
-      let b64 = "";
+      // btoa, not just String.fromCharCode: the chunks below build a latin1
+      // binary string, and the node side decodes with Buffer.from(..., "base64").
+      // Returning the binary string under a name that says base64 decodes to
+      // garbage whose first byte is 0x3C, which reads as "not a PNG".
+      let binary = "";
       for (let i = 0; i < r.png.length; i += 0x8000) {
-        b64 += String.fromCharCode.apply(null, r.png.subarray(i, i + 0x8000));
+        binary += String.fromCharCode.apply(
+          null,
+          r.png.subarray(i, i + 0x8000),
+        );
       }
+      const b64 = btoa(binary);
       return {
         b64,
         height: r.height,
@@ -101,12 +109,34 @@ test("sha256Hex matches node:crypto on known vectors", async () => {
   assert.equal(sha256Hex(big), createHash("sha256").update(big).digest("hex"));
 });
 
+test("extractFontFaces reads src past the semicolon inside a base64 data URI", async () => {
+  const { extractFontFaces } = await import(CAPTURE_TS);
+  const css =
+    '@font-face{font-family:"Inter Kit";src:url(data:font/woff2;base64,d09GMgABAAA/B+C=) format("woff2");font-weight:100 900;font-display:block}';
+  const [face] = extractFontFaces(css);
+  assert.ok(face, "no @font-face parsed");
+  assert.equal(face.family, "Inter Kit");
+  assert.equal(
+    face.src,
+    'url(data:font/woff2;base64,d09GMgABAAA/B+C=) format("woff2")',
+  );
+  assert.equal(face.weight, "100 900");
+  assert.equal(face.display, "block");
+});
+
 test("the inlined woff2 face parses and renders in WebKit before the capture relies on it", async () => {
   await withCapture(async (page) => {
     const probe = await page.evaluate(async (fontFace) => {
       const style = document.createElement("style");
       style.textContent = fontFace;
       document.head.appendChild(style);
+      // WebKit lazy-loads @font-face: a declared face is not fetched until
+      // something requests it, and neither fonts.ready nor appending a using
+      // element forces the fetch. An explicit load() does.
+      await document.fonts.load(
+        "96px Inter Kit",
+        "Run your company with AI agents.",
+      );
       await document.fonts.ready;
       const mk = (family) => {
         const s = document.createElement("span");
