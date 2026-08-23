@@ -29,6 +29,7 @@ pub mod discovery_export;
 mod dms;
 mod engrams;
 mod export_util;
+mod foreign_dm_filter;
 mod global_agent_config;
 mod identity;
 mod identity_archive;

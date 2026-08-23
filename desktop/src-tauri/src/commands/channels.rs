@@ -156,7 +156,10 @@ fn compute_channels_hash(channels: &[ChannelInfo]) -> String {
 ///   (kind:39000 all-open), and hidden-DM snapshot (kind:30622).
 /// - Phase 2 (parallel): member counts (kind:39002 batch) and last-message
 ///   timestamps (per-channel kind:9/40002).
-async fn fetch_channels(state: &AppState) -> Result<Vec<ChannelInfo>, String> {
+async fn fetch_channels(
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<Vec<ChannelInfo>, String> {
     #[cfg(debug_assertions)]
     let _profile_start = std::time::Instant::now();
 
@@ -385,6 +388,23 @@ async fn fetch_channels(state: &AppState) -> Result<Vec<ChannelInfo>, String> {
         channels.retain(|c| c.channel_type != "dm" || !hidden_dms.contains(&c.id));
     }
 
+    // Launch repair pass (F5): hide leaked agent identities. A managed agent
+    // belongs to exactly one community, so a DM peer that is one of this
+    // account's agents pinned to a DIFFERENT relay is a stale profile the old
+    // reconcile published here — drop it from DM rows, and drop rows it left
+    // empty.
+    {
+        let records = crate::managed_agents::load_managed_agents(app).unwrap_or_default();
+        let workspace_relay = crate::relay::relay_ws_url_with_override(state);
+        let my_pubkey_hex = my_pubkey.clone();
+        channels = super::foreign_dm_filter::filter_foreign_agent_dms(
+            channels,
+            &my_pubkey_hex,
+            &workspace_relay,
+            &records,
+        );
+    }
+
     Ok(channels)
 }
 
@@ -401,8 +421,9 @@ async fn fetch_channels(state: &AppState) -> Result<Vec<ChannelInfo>, String> {
 pub async fn get_channels(
     known_hash: Option<String>,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<GetChannelsPayload, String> {
-    let channels = fetch_channels(&state).await?;
+    let channels = fetch_channels(&state, &app).await?;
 
     let last_messages: std::collections::HashMap<String, String> = channels
         .iter()
@@ -710,8 +731,9 @@ pub async fn create_channel(
 #[tauri::command]
 pub async fn ensure_starter_channels(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<ChannelInfo>, String> {
-    let mut existing_channels = fetch_channels(&state).await?;
+    let mut existing_channels = fetch_channels(&state, &app).await?;
     let relay_scope = relay_api_base_url_with_override(&state);
     let creator_keys = state.signing_keys()?;
     let creator_pubkey = creator_keys.public_key().to_hex();
@@ -770,7 +792,7 @@ pub async fn ensure_starter_channels(
     }
 
     if !has_all_starter_channels(&existing_channels) {
-        existing_channels = fetch_channels(&state).await?;
+        existing_channels = fetch_channels(&state, &app).await?;
     }
 
     if !has_all_starter_channels(&existing_channels) {

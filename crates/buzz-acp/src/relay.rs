@@ -751,7 +751,9 @@ impl HarnessRelay {
     /// the agent pubkey to find channel memberships, then queries kind:39000
     /// (group metadata) for channel names and types.
     /// The identity boundary this harness was pinned to at connect time:
-    /// the one relay every dial of this process is allowed to reach.
+    /// the one relay every dial of this process is allowed to reach. Read
+    /// by `reconnect()`; the background task holds its own clone.
+    #[allow(dead_code)]
     pub fn relay_pin(&self) -> &RelayPin {
         &self.relay_pin
     }
@@ -1000,8 +1002,15 @@ impl HarnessRelay {
 
     /// Reconnect after connection loss. Instructs the background task to
     /// re-authenticate and resubscribe to all previously active channels.
+    ///
+    /// The dial target is the pinned relay, never a caller-supplied URL: the
+    /// reconnect command carries no URL, and the background task dials only
+    /// `relay_pin.url()`.
     pub async fn reconnect(&mut self) -> Result<(), RelayError> {
-        warn!("relay connection lost — reconnecting…");
+        warn!(
+            "relay connection lost — reconnecting to {}…",
+            self.relay_pin.url()
+        );
         self.cmd_tx
             .send(RelayCommand::Reconnect)
             .await
