@@ -16,6 +16,7 @@ import { OverviewPage } from "./analytics/OverviewPage";
 import { PeoplePage } from "./analytics/PeoplePage";
 import { PersonDetailPage } from "./analytics/PersonDetailPage";
 import { SessionsPage } from "./analytics/SessionsPage";
+import { pubkeyToNpub } from "./npub";
 import type {
   FeedbackDetail,
   FeedbackSummary,
@@ -460,6 +461,10 @@ function FeedbackDetailView({ id }: { id: string }) {
                   <h2>{feedback.communityHost}</h2>
                 </div>
               </div>
+              <ReplyPathNote
+                communityHost={feedback.communityHost}
+                submitterPubkey={feedback.submitterPubkey}
+              />
               <dl>
                 <dt>Feedback</dt>
                 <dd className="sensitive feedback-body">{body}</dd>
@@ -498,6 +503,58 @@ function FeedbackDetailView({ id }: { id: string }) {
 }
 
 type FeedbackStatuses = Record<string, boolean>;
+
+function ReplyPathNote({
+  communityHost,
+  submitterPubkey,
+}: {
+  communityHost: string;
+  submitterPubkey: string;
+}) {
+  const npub = useMemo(() => pubkeyToNpub(submitterPubkey), [submitterPubkey]);
+  return (
+    <aside className="reply-path">
+      <h3>Replying to this person</h3>
+      <p>
+        In-app replies only reach people who belong to the same community as
+        you. This person belongs to <strong>{communityHost}</strong>. If that is
+        your community, message them from the app as usual. If it is not, open
+        that community first, then start a new message and paste their key.
+      </p>
+      {npub ? (
+        <CopyField label="Their key" value={npub} />
+      ) : (
+        <code>{submitterPubkey}</code>
+      )}
+    </aside>
+  );
+}
+
+function CopyField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+    } catch {
+      // Clipboard access can be blocked; the value stays selectable on screen.
+    }
+  };
+  return (
+    <div className="copy-field">
+      <span className="visually-hidden">{label}</span>
+      <code>{value}</code>
+      <button type="button" onClick={copy}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
 
 interface FeedbackAttachment {
   url: string;
