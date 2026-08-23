@@ -442,7 +442,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
         }
         return (
           <BrainScreen
-            installed={trackResult.installed}
+            brains={trackResult.brains}
             selected={selectedBrain ?? trackResult.installed[0]}
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}

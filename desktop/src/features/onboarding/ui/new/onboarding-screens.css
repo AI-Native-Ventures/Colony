@@ -262,7 +262,22 @@
     flex-wrap: wrap;
   }
 
-  /* Oversized pill, call-site restyle of the real Button. */
+  /* Oversized pill, call-site restyle of the real Button.
+
+     The action is ink, not a hue. Only the canvas changes between screens
+     (site/src/brand/hue.ts), so a violet button sits wrong on the amber and
+     green screens. Ink works on all five and keeps the control reading as the
+     one thing to press. */
+  .onb-actions button[class*="inline-flex"]:not(:disabled) {
+    background: var(--onb-ink) !important;
+    color: #ffffff !important;
+    box-shadow: 0 0.75rem 2rem rgba(23, 23, 23, 0.24) !important;
+  }
+
+  .onb-actions button[class*="inline-flex"]:not(:disabled):hover {
+    background: #000000 !important;
+  }
+
   .onb-actions button[class*="inline-flex"] {
     height: auto !important;
     border-radius: 999px !important;
@@ -432,13 +447,42 @@
       box-shadow 260ms var(--onb-ease);
   }
 
-  .onb-option:hover {
+  .onb-option:hover:not(:disabled) {
     transform: translate3d(0, -2px, 0);
   }
 
+  /* A brain that cannot think yet is still listed, so the set reads as a
+     choice, but it must not look pickable. Dimmed rather than hidden: knowing
+     Colony supports it is the point. */
+  .onb-option:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  .onb-option[data-status="ready"] .onb-pulse {
+    background: hsl(160 60% 45%);
+    box-shadow: 0 0 0 0.2rem hsl(160 60% 45% / 0.18);
+  }
+
+  .onb-option[data-status="needs-login"] .onb-pulse {
+    background: hsl(38 92% 50%);
+  }
+
+  .onb-option[data-status="not-installed"] .onb-pulse {
+    background: var(--onb-rule);
+  }
+
+  /* Selection is ink too, for the same reason the action is. */
   .onb-option[data-selected="true"] {
-    border-color: hsl(266 85% 58% / 0.85);
-    box-shadow: 0 0 0 3px hsl(266 85% 58% / 0.18);
+    border-color: var(--onb-ink);
+    box-shadow: 0 0 0 3px rgba(23, 23, 23, 0.14);
+  }
+
+  /* Title and status were both inline in one span and ran together as
+     "Oh My PiReady". They stack now. */
+  .onb-option > span:last-child {
+    display: grid;
+    gap: 0.15rem;
   }
 
   .onb-option__title {

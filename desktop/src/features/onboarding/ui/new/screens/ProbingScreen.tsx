@@ -54,7 +54,7 @@ export function ProbingScreen({
     // The whole screen is capped. A binary that never answers is treated as
     // absent rather than being allowed to end onboarding.
     const budget = setTimeout(
-      () => settle({ track: "colony", installed: [] }),
+      () => settle({ track: "colony", installed: [], brains: [] }),
       PROBE_BUDGET_MS,
     );
 

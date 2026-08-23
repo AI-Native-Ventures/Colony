@@ -1,3 +1,18 @@
+/* Declare cascade layer order before anything emits a layer.
+ *
+ * Without this statement, layers rank by first appearance in the built
+ * stylesheet, and that order depends on Vite's chunking rather than on
+ * intent. Feature CSS that opens `@layer components` inside a lazily loaded
+ * chunk was landing ahead of Tailwind's own `@layer base`, which made
+ * preflight outrank it: every `.onb-headline` font-size, padding and spacing
+ * rule in the onboarding flow lost to `h1 { font-size: inherit }` and the
+ * screens rendered as unstyled 16px text against the page edge.
+ *
+ * Nothing about the feature stylesheets was wrong. The order was simply never
+ * stated, so it was decided by build output.
+ */
+@layer theme, base, components, utilities;
+
 @import "tailwindcss";
 @import "tw-animate-css";
 

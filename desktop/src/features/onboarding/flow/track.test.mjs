@@ -54,3 +54,49 @@ test("track_ignores_a_runtime_that_is_present_but_not_logged_in", () => {
 test("probe_budget_is_eight_seconds", () => {
   assert.equal(PROBE_BUDGET_MS, 8000);
 });
+
+test("track_lists_every_brain_not_only_the_ready_ones", () => {
+  // Screen 5a shows the whole set. Listing only what was found turns a picker
+  // into a single row, or into nothing on a clean computer, and neither reads
+  // as a choice.
+  const result = resolveTrack(
+    [
+      {
+        id: "pi",
+        label: "Oh My Pi",
+        availability: "available",
+        authStatus: { status: "not_applicable" },
+      },
+      {
+        id: "claude",
+        label: "Claude Code",
+        availability: "available",
+        authStatus: { status: "logged_out" },
+      },
+      {
+        id: "codex",
+        label: "Codex",
+        availability: "unavailable",
+        authStatus: { status: "not_applicable" },
+      },
+      {
+        id: "buzz-agent",
+        label: "Colony agent",
+        availability: "available",
+        authStatus: { status: "not_applicable" },
+      },
+    ],
+    {},
+  );
+
+  assert.deepEqual(
+    result.brains,
+    [
+      { label: "Oh My Pi", status: "ready" },
+      { label: "Claude Code", status: "needs-login" },
+      { label: "Codex", status: "not-installed" },
+    ],
+    "every brain except Colony's own agent should be listed with its state",
+  );
+  assert.deepEqual(result.installed, ["Oh My Pi"]);
+});

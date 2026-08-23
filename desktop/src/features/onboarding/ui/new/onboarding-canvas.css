@@ -10,12 +10,13 @@
     /* Colony ink and surface tokens for the flow. The light-ink override
        below rewrites them for the one dark screen. */
     --onb-ease: cubic-bezier(0.16, 1, 0.3, 1); /* ease-out-expo */
-    --onb-ink: #0d0d11;
-    --onb-ink-soft: rgba(13, 13, 17, 0.58);
-    --onb-shell: rgba(255, 255, 255, 0.62);
-    --onb-shell-line: rgba(13, 13, 17, 0.1);
-    --onb-rule: rgba(13, 13, 17, 0.22);
-    --onb-accent: #5b21b6;
+    /* Ink is constant across every hue, from site/src/brand/hue.ts. */
+    --onb-ink: #171717;
+    --onb-ink-soft: rgba(23, 23, 23, 0.66);
+    --onb-shell: rgba(255, 255, 255, 0.5);
+    --onb-shell-line: rgba(23, 23, 23, 0.14);
+    --onb-rule: rgba(23, 23, 23, 0.28);
+    --onb-accent: #171717;
 
     position: fixed;
     inset: 0;
@@ -32,11 +33,9 @@
     --onb-shell: rgba(255, 255, 255, 0.045);
     --onb-shell-line: rgba(255, 255, 255, 0.1);
     --onb-rule: rgba(255, 255, 255, 0.14);
-    /* Violet, not the old pale pink. It is the only strong colour on a dark
-       field, so it has to carry brand rather than decorate. */
-    --onb-accent: #a97bf5;
-    --onb-accent-ring: rgba(169, 123, 245, 0.16);
-    --onb-accent-glow: rgba(169, 123, 245, 0.28);
+    /* Accent is ink-on-light inverted, never a hue: the canvas already
+       carries the colour and a second one competes with it. */
+    --onb-accent: #ffffff;
   }
 
   /* Gradient mesh drawn as stacked radial gradients over a base fill. Static
@@ -47,7 +46,7 @@
   .onb-mesh {
     position: absolute;
     inset: -18%;
-    filter: blur(38px) saturate(1.25);
+    filter: blur(52px) saturate(0.95);
     transition: opacity 900ms var(--onb-ease);
     will-change: opacity;
   }
@@ -71,11 +70,11 @@
   .onb-canvas[data-ink="light"] .onb-streak {
     background: linear-gradient(
       100deg,
-      transparent 26%,
-      rgba(255, 255, 255, 0.16) 46%,
-      transparent 72%
+      transparent 30%,
+      rgba(255, 255, 255, 0.05) 48%,
+      transparent 70%
     );
-    opacity: 0.7;
+    opacity: 0.5;
   }
 
   /* Dotted grain over the mesh. Large soft radials band visibly on cheap
@@ -88,7 +87,7 @@
     opacity: 0.5;
     pointer-events: none;
     background-image: radial-gradient(
-      rgba(255, 255, 255, 0.045) 0.5px,
+      rgba(23, 23, 23, 0.05) 0.5px,
       transparent 0.5px
     );
     background-size: 0.5rem 0.5rem;
@@ -290,10 +289,13 @@
      used in eleven places. The mask is the body-and-head silhouette from
      docs/BRAND.md. It does not step, and at 0.9rem crossing in just over a
      second no one could see legs anyway. */
+  /* No container-type here. inline-size containment makes an element size
+     from its parent instead of its content, which collapsed this button to
+     its own padding and hid the label. The walker travels in percentages
+     instead, which needs no container. */
   .onb-actions button[class*="inline-flex"] {
     position: relative;
     overflow: hidden;
-    container-type: inline-size;
   }
 
   .onb-actions button[class*="inline-flex"]::after {
@@ -320,7 +322,7 @@
 
   @keyframes onb-cross {
     0% {
-      transform: translateX(0);
+      left: -1.6rem;
       opacity: 0;
     }
     12% {
@@ -330,7 +332,7 @@
       opacity: 0.55;
     }
     100% {
-      transform: translateX(calc(100cqw + 2.6rem));
+      left: calc(100% + 1rem);
       opacity: 0;
     }
   }

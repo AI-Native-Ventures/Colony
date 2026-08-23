@@ -1,10 +1,8 @@
 // desktop/src/features/onboarding/ui/new/AntScatter.tsx
 import { useMemo } from "react";
 
+import { HUE_SCATTER_TONES, type HueName } from "./canvasTheme";
 import { WalkingAnt } from "./WalkingAnt";
-
-/** The five brand accent hues, verified against docs/BRAND.md. */
-const HUES = ["#8b5cf6", "#3b82f6", "#ec4899", "#f59e0b", "#10b981"] as const;
 
 export type ScatterAnt = {
   /** Stable identity, so React never reuses a wrapper mid-drift. */
@@ -13,7 +11,8 @@ export type ScatterAnt = {
   top: number;
   size: number;
   opacity: number;
-  hue: string;
+  /** Index into the screen hue's tonal scatter palette. */
+  tone: number;
   driftDelay: number;
   driftDuration: number;
   gaitDelay: number;
@@ -35,9 +34,9 @@ export function layOutScatter(
     id: `ant-${index}`,
     left: random() * 100,
     top: random() * 100,
-    size: 0.75 + random() * 0.65,
-    opacity: 0.1 + random() * 0.16,
-    hue: HUES[index % HUES.length],
+    size: 1.5 + random() * 1.5,
+    opacity: 0.22 + random() * 0.26,
+    tone: index % 4,
     // Negative delays start each ant mid-cycle, so the field is already in
     // motion on the first frame instead of visibly starting together.
     driftDelay: -random() * 26,
@@ -58,7 +57,14 @@ export function layOutScatter(
  * back to a static stance rather than being removed. A still colony is still
  * a colony.
  */
-export function AntScatter({ count = 26 }: { count?: number }) {
+export function AntScatter({
+  hue,
+  count = 26,
+}: {
+  hue: HueName;
+  count?: number;
+}) {
+  const tones = HUE_SCATTER_TONES[hue];
   const ants = useMemo(() => layOutScatter(count), [count]);
 
   return (
@@ -72,7 +78,7 @@ export function AntScatter({ count = 26 }: { count?: number }) {
             top: `${ant.top}%`,
             width: `${ant.size}rem`,
             opacity: ant.opacity,
-            color: ant.hue,
+            color: tones[ant.tone],
             animationDelay: `${ant.driftDelay}s`,
             animationDuration: `${ant.driftDuration}s`,
             // Consumed by the gait rules in onboarding-canvas.css so each
