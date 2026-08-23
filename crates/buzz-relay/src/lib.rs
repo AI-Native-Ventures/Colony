@@ -60,7 +60,8 @@ pub mod metrics;
 pub mod nip11;
 /// Deployment-wide operator analytics rollup worker.
 pub mod operator_analytics;
-/// Paystack top-ups: hosted-checkout client and webhook signature verification.
+/// PayFast: hosted-checkout URL construction and ITN verification.
+pub mod payfast;
 /// The one payment-provider interface both gateways implement, plus the
 /// money-unit conversions every provider shares.
 pub mod payments_provider;
