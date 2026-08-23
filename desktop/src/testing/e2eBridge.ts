@@ -56,6 +56,7 @@ import {
   KIND_HUDDLE_STARTED,
   KIND_EMPLOYEE,
   KIND_DELEGATION_GRANT,
+  KIND_DECISION_LOG,
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
@@ -235,6 +236,11 @@ type E2eConfig = {
      * relay, keyed by their `d` tag; drives the promotion confirmation.
      */
     delegationGrantEvents?: RelayEvent[];
+    /**
+     * Agent-authored decision logs (kind 44303) served by the mock relay;
+     * drives the decision log view.
+     */
+    decisionLogEvents?: RelayEvent[];
     /** Signed Block timeline events seeded before the app subscribes. */
     blockTimelineEvents?: Array<{
       channelName: string;
@@ -1125,6 +1131,7 @@ type MockFilter = {
   "#a"?: string[];
   "#d"?: string[];
   "#e"?: string[];
+  "#grant"?: string[];
   "#h"?: string[];
   "#p"?: string[];
   authors?: string[];
@@ -3251,6 +3258,7 @@ export type CompanyWorkContextConfig = {
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
 const mockDelegationGrantEvents: RelayEvent[] = [];
+const mockDecisionLogEvents: RelayEvent[] = [];
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
@@ -3541,6 +3549,16 @@ function resetMockDelegationGrantEvents(config: E2eConfig | undefined) {
   }
 }
 
+function resetMockDecisionLogEvents(config: E2eConfig | undefined) {
+  mockDecisionLogEvents.length = 0;
+  for (const event of config?.mock?.decisionLogEvents ?? []) {
+    mockDecisionLogEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
 /** Serve delegation grant heads (kind 30189) for one REQ filter. */
 function filterMockDelegationGrantEvents(filter: MockFilter): RelayEvent[] {
   return mockDelegationGrantEvents.filter((event) => {
@@ -3554,6 +3572,26 @@ function filterMockDelegationGrantEvents(filter: MockFilter): RelayEvent[] {
         .filter((tag) => tag[0] === "d")
         .map((tag) => tag[1]?.toLowerCase());
       if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/** Serve decision logs (kind 44303) for one REQ filter. */
+function filterMockDecisionLogEvents(filter: MockFilter): RelayEvent[] {
+  return mockDecisionLogEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const grantValues = filter["#grant"];
+    if (grantValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "grant")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => grantValues.includes(value as string))) {
         return false;
       }
     }
@@ -10770,6 +10808,13 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
+    if (filter.kinds?.includes(KIND_DECISION_LOG)) {
+      for (const event of filterMockDecisionLogEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (
       filter.kinds?.some((kind) =>
         mockBlockEvents.some((event) => event.kind === kind),
@@ -11228,6 +11273,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
   resetMockDelegationGrantEvents(config);
+  resetMockDecisionLogEvents(config);
   resetMockEmployeeHeadEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);

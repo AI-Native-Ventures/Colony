@@ -7,12 +7,14 @@ import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 
 import type { ContentDecision, ContentPost, CorrectionBin } from "../contracts";
+import { evaluateClaimGate } from "../claimVerifier";
 import { buildDecisionEvent } from "../contentDecisions";
 import {
   decisionsForPost,
   postChip,
   unverifiedSummary,
 } from "../contentStatus";
+import { useClaimVerification, useContentClaimStrictness } from "../hooks";
 import { ContentChecksPanel } from "./ContentChecksPanel";
 import { ContentClaimsList } from "./ContentClaimsList";
 
@@ -46,6 +48,7 @@ const BIN_LABELS: Record<CorrectionBin, string> = {
 const BIN_ORDER: CorrectionBin[] = ["card", "setting", "rule"];
 
 type Props = {
+  communityId: string;
   post: ContentPost;
   decisions: ContentDecision[];
   submitting: boolean;
@@ -58,6 +61,7 @@ type Props = {
 };
 
 export function ContentDayDetail({
+  communityId,
   decisions,
   onSubmit,
   post,
@@ -67,6 +71,19 @@ export function ContentDayDetail({
   const [bin, setBin] = React.useState<CorrectionBin>("card");
   const [error, setError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
+
+  const verification = useClaimVerification(communityId, post);
+  const strictnessQuery = useContentClaimStrictness(communityId);
+  const verdicts = verification.data ?? {};
+  const gate = React.useMemo(
+    () =>
+      evaluateClaimGate(
+        post.claims,
+        verdicts,
+        strictnessQuery.data ?? "strict",
+      ),
+    [post.claims, strictnessQuery.data, verdicts],
+  );
 
   const own = React.useMemo(
     () => decisionsForPost(post, decisions, KIND_CONTENT_POST),
@@ -162,7 +179,25 @@ export function ContentDayDetail({
       ) : null}
 
       <ContentChecksPanel reports={post.gateReports} />
-      <ContentClaimsList claims={post.claims} />
+      <ContentClaimsList claims={post.claims} verdicts={verdicts} />
+
+      {strictnessQuery.data === "advisory" && gate.warnings.length > 0 ? (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2">
+          <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+            Advisory mode: this card renders, but these claims are not backed.
+          </p>
+          <ul className="mt-1 list-inside list-disc">
+            {gate.warnings.map((warning) => (
+              <li
+                className="text-xs text-amber-700 dark:text-amber-300"
+                key={warning}
+              >
+                {warning}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {post.caption ? (
         <div className="rounded-lg border border-border/60 bg-muted/10 p-3">

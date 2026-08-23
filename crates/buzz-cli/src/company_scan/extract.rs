@@ -275,7 +275,7 @@ fn extract_structured_data(document: &Html) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn extract_brand(document: &Html, base: &Url, url: &str) -> BrandEvidence {
+fn extract_brand(document: &Html, base: &Url, url: &str, extra_css: &str) -> BrandEvidence {
     let mut brand = BrandEvidence::default();
     let mut seen_logos = BTreeSet::new();
 
@@ -351,7 +351,7 @@ fn extract_brand(document: &Html, base: &Url, url: &str) -> BrandEvidence {
     // Colours from inline styles and CSS custom properties, ranked by how often
     // they appear — a brand colour is used repeatedly, an accident once.
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut style_text = String::new();
+    let mut style_text = String::from(extra_css);
     for element in document.select(&selector("style")) {
         style_text.push_str(&element.text().collect::<String>());
     }
@@ -801,6 +801,40 @@ fn extract_text(document: &Html) -> String {
 
 /// Extract every piece of evidence from one page of HTML.
 pub fn extract_page(html: &str, page_url: &str) -> PageEvidence {
+    extract_page_with_styles(html, page_url, "")
+}
+
+/// Absolute URLs of the stylesheets a page links, in document order.
+///
+/// Most modern sites keep their palette and fonts out of the HTML entirely,
+/// so brand evidence has to reach the sheets to see it. Bounded by the
+/// caller; this returns what the document declares.
+pub fn stylesheet_hrefs(html: &str, page_url: &str) -> Vec<String> {
+    let document = Html::parse_document(html);
+    let base = Url::parse(page_url).ok();
+    let mut hrefs: Vec<String> = Vec::new();
+    for element in document.select(&selector(
+        r#"link[rel="stylesheet"], link[rel~="stylesheet"]"#,
+    )) {
+        let Some(href) = element.value().attr("href") else {
+            continue;
+        };
+        let Some(absolute) = base.as_ref().and_then(|base| absolutize(base, href)) else {
+            continue;
+        };
+        if !hrefs.contains(&absolute) {
+            hrefs.push(absolute);
+        }
+    }
+    hrefs
+}
+
+/// [`extract_page`] with stylesheet text folded into brand extraction.
+///
+/// `extra_css` is treated exactly like an inline `<style>` block: colours and
+/// font families found in it rank alongside everything else the page
+/// declares. It carries no weight of its own.
+pub fn extract_page_with_styles(html: &str, page_url: &str, extra_css: &str) -> PageEvidence {
     let document = Html::parse_document(html);
     let base = Url::parse(page_url).ok();
     let origin_host = base
@@ -826,7 +860,7 @@ pub fn extract_page(html: &str, page_url: &str) -> PageEvidence {
     };
 
     if let Some(base) = base.as_ref() {
-        evidence.brand = extract_brand(&document, base, page_url);
+        evidence.brand = extract_brand(&document, base, page_url, extra_css);
         let (contact, links) = extract_contact_and_links(&document, base, &origin_host);
         evidence.contact = contact;
         evidence.links = links;
@@ -1289,5 +1323,41 @@ mod tests {
         })];
         assert_eq!(structured_strings(&blocks, "telephone"), ["+27110000000"]);
         assert!(structured_strings(&blocks, "email").is_empty());
+    }
+
+    #[test]
+    fn stylesheet_hrefs_are_absolute_and_deduplicated() {
+        let html = r#"<html><head>
+            <link rel="stylesheet" href="/assets/site.css">
+            <link rel="stylesheet" href="https://cdn.example.test/theme.css">
+            <link rel="stylesheet" href="/assets/site.css">
+            <link rel="icon" href="/favicon.ico">
+        </head></html>"#;
+        assert_eq!(
+            stylesheet_hrefs(html, "https://acme.test/home"),
+            vec![
+                "https://acme.test/assets/site.css".to_owned(),
+                "https://cdn.example.test/theme.css".to_owned(),
+            ]
+        );
+    }
+
+    /// Brand evidence must reach colours that live only in a linked sheet.
+    #[test]
+    fn extra_css_feeds_brand_extraction() {
+        let evidence = extract_page_with_styles(
+            "<html><body>hi</body></html>",
+            "https://acme.test/",
+            ":root { --brand: #c026d3; font-family: \"Sohne\", sans-serif; }",
+        );
+        assert_eq!(
+            evidence
+                .brand
+                .colors
+                .first()
+                .map(|colour| colour.value.clone()),
+            Some("#c026d3".to_owned())
+        );
+        assert_eq!(evidence.brand.fonts, ["Sohne"]);
     }
 }

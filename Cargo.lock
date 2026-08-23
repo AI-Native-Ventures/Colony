@@ -1371,6 +1371,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "infer",
+ "md-5",
  "mesh-llm-host-runtime",
  "mesh-llm-sdk",
  "metrics",

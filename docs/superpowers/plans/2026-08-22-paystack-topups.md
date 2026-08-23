@@ -131,7 +131,10 @@ mod tests {
 
     /// Test-only helper mirroring what Paystack does when it signs a request.
     fn hex_hmac_sha512(secret: &str, body: &[u8]) -> String {
-        use hmac::{Hmac, Mac};
+        // KeyInit must be in scope for new_from_slice on the pinned hmac 0.13.
+        // Importing only Hmac and Mac fails with E0599 suggesting this import.
+        // House pattern: invite_token.rs:43, api/git/policy.rs:37.
+        use hmac::{Hmac, KeyInit, Mac};
         let mut mac = <Hmac<sha2::Sha512>>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
         hex::encode(mac.finalize().into_bytes())
@@ -218,7 +221,7 @@ The `--include-ignored` is required. Without it the command reports success whil
 
 ---
 
-### Task 3: Initialize and verify routes
+### Task 3: Initialize, verify and balance routes
 
 **Files:**
 - Create: `crates/buzz-relay/src/api/payments.rs`
@@ -226,7 +229,15 @@ The `--include-ignored` is required. Without it the command reports success whil
 
 **Interfaces:**
 - Consumes: Task 1 (`PaystackApi`, `nano_usd_from_cents`), Task 2 (the store).
-- Produces: `pub async fn initialize(...)`, `pub async fn verify(...)`.
+- Produces: `pub async fn initialize(...)`, `pub async fn verify(...)`, `pub async fn balance(...)`.
+
+**`balance` was missing from the first draft of this plan.** The desktop
+contract requires it, screen 9 uses it as its recovery path when a payment
+confirmation is slow, and no route existed. Task 5's implementer found the gap
+and posts to `/api/payments/balance`, so that path must exist. It reads
+`credits::balance`, converts nanoUSD to cents, and answers `{ "usdCents": n }`.
+Doing the conversion here rather than in the client is what keeps the
+multiplication in one place.
 
 Read `crates/buzz-relay/src/api/accounts.rs` first for the house style: typed error strings, community from the request host, rate limiting.
 
