@@ -453,6 +453,13 @@ type MockBridgeOptions = {
    */
   relayRole?: "owner" | "admin" | "member" | null;
   /**
+   * Serve `list_relay_members` from the mock member table. Opt-in because
+   * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+   * (community owners, delegation-grant authorship), and every existing
+   * spec was built against the command being unsupported.
+   */
+  relayMembers?: boolean;
+  /**
    * Descriptors returned by the mocked `pick_and_upload_media` /
    * `upload_media_bytes` commands. When omitted, the bridge returns a single
    * generic PDF so the file-attachment flow can be exercised by default. An
