@@ -59,7 +59,7 @@ import {
   summarizeThreadRoot,
 } from "./MessageThreadPanel.helpers";
 import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
-import { ThreadCanvasPanel } from "./ThreadCanvasPanel";
+import { ThreadCanvasSlot } from "./ThreadCanvasSlot";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -537,18 +537,11 @@ export function MessageThreadPanel({
           hasConstrainedColumn ? { maxWidth: columnMaxWidthPx } : undefined
         }
       >
-        {!isHuddleTranscript && channel?.channelType !== "dm" ? (
-          <div className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS, "pb-2 pt-3")}>
-            <ThreadCanvasPanel
-              canEdit={
-                !disabled && channelId !== null && channel?.archivedAt == null
-              }
-              channelId={channelId}
-              threadRootId={threadHead.rootId ?? threadHead.id}
-            />
-          </div>
-        ) : null}
-
+        <ThreadCanvasSlot
+          canEdit={!disabled && !!channelId && channel?.archivedAt == null}
+          hidden={isHuddleTranscript || channel?.channelType === "dm"}
+          thread={{ channelId, rootId: threadHead.rootId ?? threadHead.id }}
+        />
         {isHuddleTranscript ? (
           <div className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS, "pb-2 pt-4")}>
             <HuddleTranscriptIntro />
