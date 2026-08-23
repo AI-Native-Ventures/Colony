@@ -18,13 +18,16 @@ const PAGE_HTML = `<html><body>
 
 const PROOF_TEXT = "Fully insured since 2019";
 
+const OWNER_PUBKEY = "f".repeat(64);
+const IMPOSTOR_PUBKEY = "b".repeat(64);
+
 function relayEvent(id) {
   return {
     content: "the owner said so",
     created_at: 1_700_000_000,
     id,
     kind: KIND_STREAM_MESSAGE,
-    pubkey: "f".repeat(64),
+    pubkey: OWNER_PUBKEY,
     sig: "0".repeat(128),
     tags: [],
   };
@@ -61,6 +64,7 @@ function deps(overrides = {}) {
   return {
     fetchEventById: async (eventId) => relayEvent(eventId),
     fetchPageHtml: async () => PAGE_HTML,
+    isOwnerPubkey: (pubkey) => pubkey === OWNER_PUBKEY,
     now: () => 1_755_000_000_000,
     parser: makeParser(),
     ...overrides,
@@ -139,6 +143,49 @@ test("an owner source verifies by signature against the named event", async () =
   if (verdict.state === "owner-signed") {
     assert.equal(verdict.event, "a".repeat(64));
   }
+});
+
+test("an owner claim citing an event signed by a NON-owner is not owner-signed", async () => {
+  const verdict = await verifyClaim(
+    claim({ source: { event: "a".repeat(64), saidAt: null, type: "owner" } }),
+    deps({
+      fetchEventById: async (eventId) => ({
+        ...relayEvent(eventId),
+        pubkey: IMPOSTOR_PUBKEY,
+      }),
+    }),
+  );
+  assert.notEqual(verdict.state, "owner-signed");
+});
+
+test("a forged attribution reads differently from a missing source", async () => {
+  const forged = await verifyClaim(
+    claim({ source: { event: "a".repeat(64), saidAt: null, type: "owner" } }),
+    deps({
+      fetchEventById: async (eventId) => ({
+        ...relayEvent(eventId),
+        pubkey: IMPOSTOR_PUBKEY,
+      }),
+    }),
+  );
+  const missing = await verifyClaim(
+    claim({ source: { event: "c".repeat(64), saidAt: null, type: "owner" } }),
+    deps({ fetchEventById: async () => null }),
+  );
+  assert.equal(forged.state, "unverified");
+  assert.equal(missing.state, "unverified");
+  if (forged.state === "unverified" && missing.state === "unverified") {
+    assert.notEqual(forged.reason, missing.reason);
+    assert.match(forged.reason, /not a workspace owner/);
+  }
+});
+
+test("no known owner pubkeys trusts nothing: the owner claim stays unverified", async () => {
+  const verdict = await verifyClaim(
+    claim({ source: { event: "a".repeat(64), saidAt: null, type: "owner" } }),
+    deps({ isOwnerPubkey: () => false }),
+  );
+  assert.equal(verdict.state, "unverified");
 });
 
 test("an owner source whose event cannot be read is unverified", async () => {

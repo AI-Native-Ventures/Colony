@@ -11,10 +11,13 @@
  *   cost to Colony or the customer.
  * - `repo` sources are fetch-verifiable in principle and **manual at launch**:
  *   the typed source is recorded, nothing fetches it yet.
- * - `owner` sources verify by signature against the named event, never by
- *   fetch. The relay stores only signature-valid events, so reading the named
- *   event back *is* the signature check. This is the arm that lets a business
- *   with no URL behind a claim ("fully insured") still source it.
+ * - `owner` sources verify by signature AND authorship against the named
+ *   event, never by fetch. Reading the named event back proves the signature
+ *   (the relay stores only signature-valid events); checking its signer
+ *   against the workspace's owner pubkeys proves it was the owner who said
+ *   so, not an agent signing its own sign-off. The same line
+ *   `content.rs` draws between post and decision: the author of a card must
+ *   not be able to write its own approval.
  * - `derived` claims never auto-pass, honouring `ClaimKind`'s contract in
  *   `buzz-core`. A derived claim needs a person, whatever its source says.
  *
@@ -71,10 +74,17 @@ export type VerifierDependencies = {
   fetchPageHtml: (url: string) => Promise<string>;
   /**
    * Read one event back from the relay by id, or null when it cannot be
-   * found. The relay only stores signature-valid events, so a hit is the
-   * signature check.
+   * found. The relay only stores signature-valid events, so a hit proves the
+   * event is signed; authorship is checked separately against `isOwnerPubkey`.
    */
   fetchEventById: (eventId: string) => Promise<RelayEvent | null>;
+  /**
+   * Whether a pubkey is a workspace owner. Sourced from the community's
+   * membership snapshot (`communityOwners.ts`), never from anything on the
+   * claim. An empty or still-loading set must answer false for everyone:
+   * fail closed.
+   */
+  isOwnerPubkey: (pubkey: string) => boolean;
   /** Now, in milliseconds. Injectable so tests pin time. */
   now?: () => number;
   /**
@@ -159,12 +169,20 @@ export async function verifyClaim(
 
   if (source.type === "owner") {
     const event = await dependencies.fetchEventById(source.event);
-    return event
-      ? { event: source.event, state: "owner-signed" }
-      : {
-          reason: `The signed event backing this claim could not be read (${source.event.slice(0, 12)}…).`,
-          state: "unverified",
-        };
+    if (!event) {
+      return {
+        reason: `The signed event backing this claim could not be read (${source.event.slice(0, 12)}…).`,
+        state: "unverified",
+      };
+    }
+    if (!dependencies.isOwnerPubkey(event.pubkey)) {
+      return {
+        reason:
+          "This claim points at a signed event, but its signer is not a workspace owner. An agent signed its own sign-off; that is a forged attribution, not a source.",
+        state: "unverified",
+      };
+    }
+    return { event: source.event, state: "owner-signed" };
   }
 
   if (source.type === "repo") {
