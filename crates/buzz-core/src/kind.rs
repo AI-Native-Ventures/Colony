@@ -425,6 +425,21 @@ pub const KIND_CONTENT_BRAND_KIT: u32 = 30198;
 /// somewhere a gate can stand. See [`crate::content_library`].
 pub const KIND_CONTENT_LIBRARY: u32 = 30199;
 
+/// Colony interrupt ask-state head (parameterized replaceable, relay-signed,
+/// `d` = the ask event id it describes).
+///
+/// The relay's own account of one Colony Ask's deadline and of what will
+/// happen when that deadline passes: an open head carries the relay-computed
+/// `deadline_at` plus a named expiry outcome (default execution with its
+/// option, auto-promotion naming the next rung, or re-arm), and each closed
+/// head carries the terminal status. Published on filing, on every re-arm,
+/// and whenever the ask's outcome changes, so a client can count down to the
+/// real deadline without reimplementing the window arithmetic -- a countdown
+/// that disagrees with the relay's is worse than none. Signed by the relay
+/// for the same reason as the employee head: the value is a relay decision,
+/// not the filer's. See `buzz-relay::ask_state_head`.
+pub const KIND_ASK_STATE: u32 = 30200;
+
 /// Colony content calendar: the owner approving a post or sending it back.
 ///
 /// Separate from the post on purpose. The post belongs to the agent that made
@@ -1016,6 +1031,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_CONTENT_STYLE,
     KIND_CONTENT_BRAND_KIT,
     KIND_CONTENT_LIBRARY,
+    KIND_ASK_STATE,
     KIND_CONTENT_DECISION,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
@@ -1230,6 +1246,7 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_DISCOVERY_WORKSPACE_RECEIPT
             | KIND_WORKSPACE_TAB_RECEIPT
             | KIND_WORKSPACE_TAB_HEAD
+            | KIND_ASK_STATE
     )
 }
 
@@ -1266,6 +1283,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_POST)); // 30196
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_STYLE)); // 30197 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_BRAND_KIT)); // 30198 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_LIBRARY)); // 30199 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_ASK_STATE)); // 30200 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
@@ -1580,6 +1598,26 @@ mod tests {
             assert!(!P_GATED_KINDS.contains(&kind));
             assert!(!AUTHOR_ONLY_KINDS.contains(&kind));
         }
+    }
+
+    #[test]
+    fn ask_state_head_kind_has_exact_classification() {
+        assert_eq!(KIND_ASK_STATE, 30200);
+        assert!(
+            ALL_KINDS.contains(&KIND_ASK_STATE),
+            "kind {KIND_ASK_STATE} missing from registry"
+        );
+        assert!(is_parameterized_replaceable(KIND_ASK_STATE));
+        assert!(!is_ephemeral(KIND_ASK_STATE));
+        assert!(!is_replaceable(KIND_ASK_STATE));
+        // The deadline is a relay decision, not the filer's, so a
+        // client-signed head must never be storable.
+        assert!(is_relay_only_kind(KIND_ASK_STATE));
+        assert!(!is_command_kind(KIND_ASK_STATE));
+        // Community-readable like the other projection heads (employee,
+        // workspace tab): every member watching an ask counts down to it.
+        assert!(!P_GATED_KINDS.contains(&KIND_ASK_STATE));
+        assert!(!AUTHOR_ONLY_KINDS.contains(&KIND_ASK_STATE));
     }
 
     #[test]
