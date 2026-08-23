@@ -2,7 +2,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { invitesEnabled, isNewOnboardingEnabled } from "./newOnboardingFlag.ts";
+import {
+  invitesEnabled,
+  isNewOnboardingEnabled,
+  resetNewOnboardingFlagCache,
+} from "./newOnboardingFlag.ts";
 
 test("flag_defaults_to_the_redesigned_flow", () => {
   assert.equal(isNewOnboardingEnabled({}), true);
@@ -61,4 +65,18 @@ test("invites_honour_the_e2e_opt_out_too", () => {
     invitesEnabled({ MODE: "e2e", VITE_ONBOARDING_INVITES: "1" }, storage),
     false,
   );
+});
+
+test("the ambient decision is made once and survives a storage wipe", () => {
+  // Onboarding is where storage gets cleared: an identity reset and a sign-out
+  // both wipe it. Re-reading would swap the flow underneath someone mid-run.
+  resetNewOnboardingFlagCache();
+  globalThis.localStorage = { getItem: () => "0" };
+  assert.equal(isNewOnboardingEnabled({ MODE: "e2e" }), false);
+  globalThis.localStorage = { getItem: () => null };
+  assert.equal(isNewOnboardingEnabled({ MODE: "e2e" }), false);
+  resetNewOnboardingFlagCache();
+  assert.equal(isNewOnboardingEnabled({ MODE: "e2e" }), true);
+  delete globalThis.localStorage;
+  resetNewOnboardingFlagCache();
 });
