@@ -536,9 +536,22 @@ pub fn build_custom_emoji_set(emojis: &[CustomEmoji]) -> Result<EventBuilder, Sd
     Ok(EventBuilder::new(Kind::Custom(KIND_EMOJI_SET as u16), "").tags(tags))
 }
 
-/// Build a canvas update event (kind 40100).
-pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder, SdkError> {
-    let tags = vec![tag(&["h", &channel_id.to_string()])?];
+/// Build a canvas update event (kind 40100) for a channel.
+///
+/// Omitting `thread_root` writes the channel canvas (`h` tag only). Passing a
+/// level-1 thread root event id scopes the canvas to that thread (`h` + `e`
+/// tags); the relay rejects `e` tags that point at replies or cross-channel
+/// events, and enforces per-scope content caps (4 KB thread, 16 KB channel).
+/// Both scopes share this single tag-building path so they cannot drift.
+pub fn build_set_canvas(
+    channel_id: Uuid,
+    content: &str,
+    thread_root: Option<nostr::EventId>,
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
+    if let Some(root) = thread_root {
+        tags.push(tag(&["e", &root.to_hex()])?);
+    }
     Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
 }
 
@@ -2761,10 +2774,21 @@ mod tests {
     #[test]
     fn set_canvas_happy_path() {
         let cid = uuid();
-        let ev = sign(build_set_canvas(cid, "# Canvas\nHello").unwrap());
+        let ev = sign(build_set_canvas(cid, "# Canvas\nHello", None).unwrap());
         assert_eq!(ev.kind.as_u16(), 40100);
         assert!(has_tag(&ev, "h", &cid.to_string()));
+        assert!(!ev.tags.iter().any(|t| t.kind().to_string() == "e"));
         assert_eq!(ev.content, "# Canvas\nHello");
+    }
+
+    #[test]
+    fn set_canvas_thread_root_adds_e_tag() {
+        let cid = uuid();
+        let root = event_id();
+        let ev = sign(build_set_canvas(cid, "thread memory", Some(root)).unwrap());
+        assert_eq!(ev.kind.as_u16(), 40100);
+        assert!(has_tag(&ev, "h", &cid.to_string()));
+        assert!(has_tag(&ev, "e", &root.to_hex()));
     }
 
     #[test]

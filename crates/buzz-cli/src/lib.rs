@@ -1674,12 +1674,18 @@ pub enum CanvasCmd {
         /// Channel UUID
         #[arg(long)]
         channel: String,
+        /// Thread root event ID (64-char hex). Omit to read the channel canvas.
+        #[arg(long)]
+        thread: Option<String>,
     },
     /// Set (replace) the canvas document for a channel
     Set {
         /// Channel UUID
         #[arg(long)]
         channel: String,
+        /// Thread root event ID (64-char hex). Omit to write the channel canvas.
+        #[arg(long)]
+        thread: Option<String>,
         /// Canvas content (markdown; use '-' to read from stdin)
         #[arg(long)]
         content: String,
