@@ -398,62 +398,11 @@ pub(crate) fn dangling_harness_display(id: &str) -> String {
     format!("harness (deleted): {id}")
 }
 
-/// Spawn-time variant of `record_agent_command` that returns a typed error when
-/// a record's `runtime` id or its persona's `runtime` id is set but cannot be
-/// resolved (i.e. the definition was deleted after the agent was created).
-///
-/// Returns `Err("DANGLING_HARNESS_ID:<id>")` so callers can surface the error
-/// without falling through to `buzz-agent`.  When there is no runtime id at all
-/// the fallback to `default_agent_command()` is intentional (legacy agents
-/// pre-date the unified harness model).
-pub fn try_record_agent_command(
-    record: &crate::managed_agents::types::ManagedAgentRecord,
-    personas: &[crate::managed_agents::types::AgentDefinition],
-) -> Result<String, String> {
-    // Explicit pin always wins — if the user set a raw override, honour it.
-    if let Some(pin) = record
-        .agent_command_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        return Ok(pin.to_string());
-    }
-
-    // Record-level runtime id: if set but unresolvable → typed error.
-    if let Some(id) = record.runtime.as_deref() {
-        if let Some(cmd) = known_acp_runtime_exact(id).and_then(|r| r.commands.first().copied()) {
-            return Ok(cmd.to_string());
-        }
-        if let Some(def) = crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(id)
-        {
-            return Ok(def.command.clone());
-        }
-        return Err(format!("DANGLING_HARNESS_ID:{id}"));
-    }
-
-    // Persona-level runtime id.
-    if let Some(persona_id) = record.persona_id.as_deref() {
-        if let Some(persona) = personas.iter().find(|p| p.id == persona_id) {
-            if let Some(id) = persona.runtime.as_deref() {
-                if let Some(cmd) =
-                    known_acp_runtime_exact(id).and_then(|r| r.commands.first().copied())
-                {
-                    return Ok(cmd.to_string());
-                }
-                if let Some(def) =
-                    crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(id)
-                {
-                    return Ok(def.command.clone());
-                }
-                return Err(format!("DANGLING_HARNESS_ID:{id}"));
-            }
-        }
-    }
-
-    // No runtime id set — legacy agent; use the safe default.
-    Ok(default_agent_command())
-}
+// Spawn-time harness resolution lives in the single resolver
+// `effective_config::resolve_effective_harness_command` (override pin →
+// record runtime → definition runtime → global preferred runtime → bundled
+// default, with the typed `DANGLING_HARNESS_ID` sentinel). This module keeps
+// only the display helpers for that error.
 
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {

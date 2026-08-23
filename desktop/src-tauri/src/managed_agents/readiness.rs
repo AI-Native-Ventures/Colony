@@ -111,7 +111,8 @@ pub(crate) struct EffectiveHarnessDescriptor {
 ///
 /// Returns `Err("DANGLING_HARNESS_ID:<id>")` when the record (or its linked
 /// persona) references a runtime id that no longer exists in the registry —
-/// the same typed error produced by `try_record_agent_command`.  Callers that
+/// the same typed error produced by
+/// `effective_config::resolve_effective_harness_command`.  Callers that
 /// cannot meaningfully continue with a dangling id (e.g. `spawn_agent_child`)
 /// propagate the error; callers that degrade gracefully may use
 /// `.unwrap_or_else(|_| …)`.
