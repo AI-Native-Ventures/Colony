@@ -1,10 +1,10 @@
 //! `buzz content`: the content calendar's agent-facing surface.
 //!
-//! Campaigns (30195), posts (30196), house style (30197), and the brand kit
-//! (30198) are written by the content agent; decisions (40025) are written
-//! by the owner. Every write here self-validates against the same parser the
-//! relay runs at ingest, so a rejection arrives without a network round trip
-//! and names the field that caused it.
+//! Campaigns (30195), posts (30196), house style (30197), the brand kit
+//! (30198), and asset libraries (30199) are written by the content agent;
+//! decisions (40025) are written by the owner. Every write here self-validates
+//! against the same parser the relay runs at ingest, so a rejection arrives
+//! without a network round trip and names the field that caused it.
 //!
 //! The agent renders and measures on its own machine. This command stores what
 //! it produced; it never produces anything itself.
@@ -19,9 +19,10 @@ use buzz_core::content::{
     SCHEMA_CONTENT_DECISION, SCHEMA_CONTENT_POST, SCHEMA_CONTENT_STYLE,
 };
 use buzz_core::content_brand_kit::{parse_content_brand_kit, SCHEMA_CONTENT_BRAND_KIT};
+use buzz_core::content_library::{parse_content_library, SCHEMA_CONTENT_LIBRARY};
 use buzz_core::kind::{
-    KIND_CONTENT_BRAND_KIT, KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION, KIND_CONTENT_POST,
-    KIND_CONTENT_STYLE,
+    KIND_CONTENT_BRAND_KIT, KIND_CONTENT_CAMPAIGN, KIND_CONTENT_DECISION, KIND_CONTENT_LIBRARY,
+    KIND_CONTENT_POST, KIND_CONTENT_STYLE,
 };
 
 use crate::client::{head_is_newer, normalize_write_response, write_conflict_reason, BuzzClient};
@@ -252,6 +253,46 @@ async fn cmd_kit_list(client: &BuzzClient) -> Result<(), CliError> {
     Ok(())
 }
 
+// ── asset library ─────────────────────────────────────────────────────────
+
+async fn cmd_library_set(client: &BuzzClient, id: &str, data: &str) -> Result<(), CliError> {
+    let body = apply_schema(read_json_arg(data)?, SCHEMA_CONTENT_LIBRARY)?;
+    let builder = EventBuilder::new(Kind::Custom(KIND_CONTENT_LIBRARY as u16), body.to_string())
+        .tags(vec![tag(&["d", id])?]);
+    submit(client, builder, |event| {
+        parse_content_library(event)
+            .map(|_| ())
+            .map_err(validation_error)
+    })
+    .await
+}
+
+async fn cmd_library_get(client: &BuzzClient, id: &str) -> Result<(), CliError> {
+    let events = client
+        .query_all(serde_json::json!({
+            "kinds": [KIND_CONTENT_LIBRARY],
+            "#d": [id],
+        }))
+        .await?;
+    let head = newest_heads(events).into_iter().next();
+    println!(
+        "{}",
+        serde_json::to_string(&head).unwrap_or_else(|_| "null".to_string())
+    );
+    Ok(())
+}
+
+async fn cmd_library_list(client: &BuzzClient) -> Result<(), CliError> {
+    let events = client
+        .query_all(serde_json::json!({ "kinds": [KIND_CONTENT_LIBRARY] }))
+        .await?;
+    println!(
+        "{}",
+        serde_json::to_string(&newest_heads(events)).unwrap_or_else(|_| "[]".to_string())
+    );
+    Ok(())
+}
+
 // ── decisions ─────────────────────────────────────────────────────────────
 
 /// Approve a post, or send it back with a note.
@@ -431,6 +472,9 @@ pub async fn dispatch(cmd: crate::ContentCmd, client: &BuzzClient) -> Result<(),
         ContentCmd::KitSet { id, data } => cmd_kit_set(client, &id, &data).await,
         ContentCmd::KitGet { id } => cmd_kit_get(client, &id).await,
         ContentCmd::KitList {} => cmd_kit_list(client).await,
+        ContentCmd::LibrarySet { id, data } => cmd_library_set(client, &id, &data).await,
+        ContentCmd::LibraryGet { id } => cmd_library_get(client, &id).await,
+        ContentCmd::LibraryList {} => cmd_library_list(client).await,
         ContentCmd::Decide {
             campaign,
             slug,

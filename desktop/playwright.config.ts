@@ -91,6 +91,7 @@ export default defineConfig({
         "**/pubkey-display-screenshots.spec.ts",
         "**/agent-rank-screenshots.spec.ts",
         "**/context-surfaces-screenshots.spec.ts",
+        "**/org-chart-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
         "**/image-attachment-gallery.spec.ts",
         "**/composer-image-draw.spec.ts",

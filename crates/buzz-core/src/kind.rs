@@ -415,6 +415,16 @@ pub const KIND_CONTENT_STYLE: u32 = 30197;
 /// the kit, not to the relay. See [`crate::content_brand_kit`].
 pub const KIND_CONTENT_BRAND_KIT: u32 = 30198;
 
+/// Colony content calendar: an asset library (NIP-33 head, `d={library id}`).
+///
+/// An index over media that already lives in Blossom, not a second store:
+/// each item names a sha256 the relay can find in [`crate::media`] plus the
+/// tags, alt text, rights note, source, and whether the depicted subject is
+/// fictional. The `fictional` flag mirrors `PostAsset.fictional`: a product
+/// shot never exposes a real customer, and a boolean an author must set is
+/// somewhere a gate can stand. See [`crate::content_library`].
+pub const KIND_CONTENT_LIBRARY: u32 = 30199;
+
 /// Colony content calendar: the owner approving a post or sending it back.
 ///
 /// Separate from the post on purpose. The post belongs to the agent that made
@@ -1005,6 +1015,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_CONTENT_POST,
     KIND_CONTENT_STYLE,
     KIND_CONTENT_BRAND_KIT,
+    KIND_CONTENT_LIBRARY,
     KIND_CONTENT_DECISION,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
@@ -1254,6 +1265,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_CAMPAIGN)); // 3
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_POST)); // 30196 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_STYLE)); // 30197 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_BRAND_KIT)); // 30198 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_CONTENT_LIBRARY)); // 30199 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKSPACE_TAB_HEAD)); // 30192 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
@@ -1509,6 +1521,7 @@ mod tests {
         assert_eq!(KIND_CONTENT_POST, 30196);
         assert_eq!(KIND_CONTENT_STYLE, 30197);
         assert_eq!(KIND_CONTENT_BRAND_KIT, 30198);
+        assert_eq!(KIND_CONTENT_LIBRARY, 30199);
         assert_eq!(KIND_CONTENT_DECISION, 40025);
 
         for kind in [
@@ -1516,6 +1529,7 @@ mod tests {
             KIND_CONTENT_POST,
             KIND_CONTENT_STYLE,
             KIND_CONTENT_BRAND_KIT,
+            KIND_CONTENT_LIBRARY,
             KIND_CONTENT_DECISION,
         ] {
             assert!(
@@ -1541,6 +1555,7 @@ mod tests {
             KIND_CONTENT_POST,
             KIND_CONTENT_STYLE,
             KIND_CONTENT_BRAND_KIT,
+            KIND_CONTENT_LIBRARY,
         ] {
             assert!(is_parameterized_replaceable(head));
         }
@@ -1559,6 +1574,7 @@ mod tests {
             KIND_CONTENT_POST,
             KIND_CONTENT_STYLE,
             KIND_CONTENT_BRAND_KIT,
+            KIND_CONTENT_LIBRARY,
             KIND_CONTENT_DECISION,
         ] {
             assert!(!P_GATED_KINDS.contains(&kind));
