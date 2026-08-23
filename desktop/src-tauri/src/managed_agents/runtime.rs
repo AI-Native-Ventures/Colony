@@ -66,6 +66,7 @@ pub(crate) fn provisioned_process_matches_current_identity(
 
 mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
+pub(crate) use stop::stop_managed_agents_pinned_to;
 pub use stop::{stop_managed_agent_process, stop_managed_agent_workspace_pair};
 
 mod sweep;

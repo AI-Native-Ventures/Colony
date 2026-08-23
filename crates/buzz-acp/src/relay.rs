@@ -750,6 +750,12 @@ impl HarnessRelay {
     /// Queries kind:39002 (NIP-29 group members) events where `#p` includes
     /// the agent pubkey to find channel memberships, then queries kind:39000
     /// (group metadata) for channel names and types.
+    /// The identity boundary this harness was pinned to at connect time:
+    /// the one relay every dial of this process is allowed to reach.
+    pub fn relay_pin(&self) -> &RelayPin {
+        &self.relay_pin
+    }
+
     pub async fn discover_channels(&self) -> Result<HashMap<Uuid, ChannelInfo>, RelayError> {
         use nostr::{Alphabet, SingleLetterTag};
 
@@ -1715,7 +1721,7 @@ async fn run_background_task(
         &observer_control_tx,
         &mut state,
         &keys,
-        &relay_pin,
+        relay_pin.url(),
         &agent_pubkey_hex,
         auth_tag.as_ref(),
     )
@@ -1978,7 +1984,7 @@ async fn run_background_task(
                                        &observer_control_tx,
                                        &mut state,
                                        &keys,
-                                       &relay_pin,
+                                       relay_pin.url(),
                                        &agent_pubkey_hex,
                                        auth_tag.as_ref(),
                                    )
@@ -3185,9 +3191,10 @@ async fn try_autonomous_reconnect(
     let mut attempt = 0usize;
     while attempt < backoffs.len() {
         info!(
-            "autonomous reconnect attempt {}/{} to {relay_url}…",
+            "autonomous reconnect attempt {}/{} to {}…",
             attempt + 1,
-            backoffs.len()
+            backoffs.len(),
+            relay_pin.url()
         );
         match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
@@ -3328,11 +3335,11 @@ async fn wait_for_reconnect(
     ];
     let mut attempt = state.backoff_step;
     loop {
-        info!("attempting relay reconnect to {relay_pin.url()}…");
+        info!("attempting relay reconnect to {}…", relay_pin.url());
         match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
-                info!("relay reconnected to {relay_pin.url()}");
+                info!("relay reconnected to {}", relay_pin.url());
                 let handshake_ok = process_handshake_buffer(
                     ws,
                     handshake_buffer,
@@ -4337,15 +4344,21 @@ mod tests {
     #[test]
     fn every_dial_goes_through_the_pinned_relay() {
         let src = include_str!("relay.rs");
+        // Count only production code — this test's own assertions live in the
+        // same file and would otherwise match themselves.
+        let production = src
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("module always present");
         // The initial connect and both reconnect loops dial through the pin.
         assert_eq!(
-            src.matches("do_connect(relay_pin.url()").count(),
+            production.matches("do_connect(relay_pin.url()").count(),
             3,
             "initial connect plus try_autonomous_reconnect and wait_for_reconnect must all pin"
         );
         // No dial site may take a bare URL again.
         assert_eq!(
-            src.matches("do_connect(relay_url").count(),
+            production.matches("do_connect(relay_url").count(),
             0,
             "a dial site bypasses the identity boundary"
         );

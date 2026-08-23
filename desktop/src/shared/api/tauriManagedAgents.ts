@@ -90,6 +90,25 @@ export async function stopManagedAgentRuntime(
   return invokeTauri("stop_managed_agent_runtime", { pubkey, relayUrl });
 }
 
+/** What {@link stopManagedAgentsForCommunity} tore down. */
+export interface CommunityAgentsStopped {
+  relayUrl: string;
+  stoppedPubkeys: string[];
+}
+
+/**
+ * Stop every managed agent pinned to the given community's relay.
+ *
+ * The teardown half of "an agent belongs to exactly one community": leaving a
+ * community stops that community's agents instead of letting their processes
+ * run on against a relay nobody is viewing.
+ */
+export async function stopManagedAgentsForCommunity(
+  relayUrl: string,
+): Promise<CommunityAgentsStopped> {
+  return invokeTauri("stop_managed_agents_for_community", { relayUrl });
+}
+
 export async function restartManagedAgentRuntime(
   pubkey: string,
   relayUrl: string,

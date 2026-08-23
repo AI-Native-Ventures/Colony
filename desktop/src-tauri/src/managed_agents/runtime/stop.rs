@@ -150,6 +150,60 @@ pub fn stop_managed_agent_workspace_pair(
     Ok(())
 }
 
+/// The tracked pairs whose key relay canonicalizes equal to the given
+/// community relay — the selection core of [`stop_managed_agents_pinned_to`],
+/// kept pure so the boundary decision is unit-testable.
+fn keys_pinned_to<'a, T: 'a>(
+    runtimes: impl IntoIterator<Item = (&'a ManagedAgentRuntimeKey, &'a T)>,
+    relay_url: &str,
+) -> Vec<ManagedAgentRuntimeKey> {
+    let target = buzz_core_pkg::relay::normalize_relay_url(relay_url).ok();
+    runtimes
+        .into_iter()
+        .filter(|(key, _)| Some(&key.relay_url) == target.as_ref())
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
+/// Stop every tracked runtime pair pinned to `relay_url` — the teardown half
+/// of "an agent belongs to exactly one community".
+///
+/// A community switch must not leave the community's agents running against a
+/// relay nobody is viewing: leaving stops them. Only pairs whose key relay
+/// canonicalizes equal to the given relay are touched; pairs in other
+/// communities and legacy scalar-PID children are left alone. Record-level
+/// stop bookkeeping mirrors [`stop_managed_agent_workspace_pair`]'s pair arm.
+///
+/// Caller owns the records/runtimes maps and the surrounding locks; returns
+/// the pubkeys whose pairs were stopped (in map order).
+pub(crate) fn stop_managed_agents_pinned_to(
+    app: &AppHandle,
+    relay_url: &str,
+    records: &mut [ManagedAgentRecord],
+    runtimes: &mut HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>,
+) -> Result<Vec<String>, String> {
+    use tauri::Manager;
+    let state = app.state::<crate::app_state::AppState>();
+
+    let mut stopped = Vec::new();
+    for key in keys_pinned_to(runtimes.iter(), relay_url) {
+        let Some(record) = records
+            .iter_mut()
+            .find(|record| record.pubkey.eq_ignore_ascii_case(&key.pubkey))
+        else {
+            continue;
+        };
+        stop_managed_agent_pair(app, record, runtimes, &key)?;
+        state.clear_agent_session_cache(&key);
+        let now = now_iso();
+        record.runtime_pid = None;
+        record.updated_at = now.clone();
+        record.last_stopped_at = Some(now);
+        stopped.push(key.pubkey);
+    }
+    Ok(stopped)
+}
+
 pub fn stop_managed_agent_process(
     app: &AppHandle,
     record: &mut ManagedAgentRecord,
@@ -188,6 +242,43 @@ pub fn stop_managed_agent_process(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Community-switch teardown must stop ONLY the outgoing community's
+    /// pairs. An agent pinned elsewhere (or an unrelated agent on the same
+    /// relay) keeps running; equivalent spellings of the outgoing relay are
+    /// the same community and must match.
+    #[test]
+    fn community_stop_selects_only_pairs_of_the_outgoing_relay() {
+        let horizon_luke = ManagedAgentRuntimeKey::new(
+            "3e5e1624266baf36c5c8e0c89c159914e894b51d1f7fdcba00b4afea68d709a3",
+            "wss://horizon.example.com",
+        )
+        .unwrap();
+        let colony_luke = ManagedAgentRuntimeKey::new(
+            "6846a5551f47c4dc78ab3caaef5fe9a95e2bda3eb475a5469e8874712a793810",
+            "wss://colony.example.com",
+        )
+        .unwrap();
+        let colony_spelled_differently = ManagedAgentRuntimeKey::new(
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "WSS://Colony.Example.com:443/",
+        )
+        .unwrap();
+
+        let runtimes = HashMap::from([
+            (horizon_luke.clone(), ()),
+            (colony_luke.clone(), ()),
+            (colony_spelled_differently, ()),
+        ]);
+
+        let mut selected = keys_pinned_to(runtimes.iter(), "wss://colony.example.com");
+        selected.sort_by(|left, right| left.pubkey.cmp(&right.pubkey));
+
+        assert_eq!(selected.len(), 2, "both Colony pairs stop");
+        assert!(selected.contains(&colony_luke));
+        // Horizon's pair is a different community and survives.
+        assert!(!selected.contains(&horizon_luke));
+    }
 
     #[test]
     fn pair_preserving_restart_targets_exact_original_relays() {

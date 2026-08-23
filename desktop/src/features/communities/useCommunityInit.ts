@@ -8,6 +8,7 @@ import {
   getDefaultRelayUrl,
 } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
+import { stopManagedAgentsForCommunity } from "@/shared/api/tauriManagedAgents";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { resetLeadUpdateListeners } from "@/features/discovery/data/leadUpdates";
@@ -58,12 +59,28 @@ import type { Community } from "./types";
  * (e.g. ChannelMuteSyncManager, ChannelSectionSyncManager) are
  * destroyed via effect cleanup and do not need entries here.
  * See AGENTS.md "Community Switching" for the full contract.
+ *
+ * `outgoingRelayUrl` is the community being LEFT. An agent belongs to
+ * exactly one community, so switching away stops that community's managed
+ * agents instead of letting their processes run on against a relay nobody
+ * is viewing. Best-effort: a failed teardown logs and never blocks the
+ * switch.
  */
 function resetCommunityState({
   resetAvatarState,
+  outgoingRelayUrl,
 }: {
   resetAvatarState: boolean;
+  outgoingRelayUrl: string | null;
 }): Promise<void> {
+  if (outgoingRelayUrl) {
+    stopManagedAgentsForCommunity(outgoingRelayUrl).catch((error) => {
+      console.error(
+        `[useCommunityInit] Failed to stop agents of the outgoing community (${outgoingRelayUrl}):`,
+        error,
+      );
+    });
+  }
   relayClient.disconnect();
   resetRateLimitGate();
   clearAllDrafts();
@@ -227,6 +244,9 @@ export function useCommunityInit(
           await resetCommunityState({
             resetAvatarState:
               appliedRelayUrlRef.current !== activeCommunity.relayUrl,
+            // Stop the OUTGOING community's managed agents before the new
+            // relay is applied. Null on first mount (no community to leave).
+            outgoingRelayUrl: appliedRelayUrlRef.current,
           });
         } catch (error) {
           console.error("Failed to close terminal sessions:", error);

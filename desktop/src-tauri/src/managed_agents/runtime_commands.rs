@@ -120,12 +120,12 @@ fn status_for(
 
 /// Preloaded per-call-site inputs for [`status_for_with`], so multi-row
 /// callers (list, reconcile) hit disk once instead of once per row.
-struct StatusInputs<'a> {
-    personas: &'a [super::AgentDefinition],
-    global: &'a super::GlobalAgentConfig,
+pub(crate) struct StatusInputs<'a> {
+    pub(crate) personas: &'a [super::AgentDefinition],
+    pub(crate) global: &'a super::GlobalAgentConfig,
 }
 
-fn status_for_with(
+pub(crate) fn status_for_with(
     app: &AppHandle,
     record: &super::ManagedAgentRecord,
     key: &ManagedAgentRuntimeKey,
