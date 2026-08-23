@@ -734,7 +734,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 60);
+        assert_eq!(migrations.len(), 65);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1325,6 +1325,14 @@ mod tests {
         assert!(
             recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
         );
+
+        // 0065 drops the dead channels.canvas column. The live canvas path is
+        // event-sourced (kind 40100); the column had no writers and its only
+        // accessors (buzz_db get_canvas/set_canvas) had zero callers.
+        assert_eq!(migrations[64].version, 65);
+        let canvas_drop = migrations[64].sql.as_str();
+        assert!(canvas_drop.contains("ALTER TABLE channels"));
+        assert!(canvas_drop.contains("DROP COLUMN IF EXISTS canvas"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
