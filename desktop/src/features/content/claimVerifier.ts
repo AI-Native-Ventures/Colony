@@ -39,11 +39,11 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import type { RelayEvent } from "@/shared/api/types";
 
-import type { ClaimSource, ContentClaim } from "./contracts";
+import type { ClaimSource, ClaimStrictness, ContentClaim } from "./contracts";
 import { bareSha256 } from "./contracts";
 
-/** How harshly the claim gate treats a claim it cannot confirm. */
-export type ClaimStrictness = "strict" | "advisory";
+/** How the claim gate treats a claim it cannot confirm. Re-exported for callers. */
+export type { ClaimStrictness } from "./contracts";
 
 /**
  * The five states a claim can be in, checked against its source right now.

@@ -29,6 +29,10 @@ export function styleQueryKey(communityId: string, scope: string) {
   return [CONTENT_ROOT, communityId, "style", scope] as const;
 }
 
+export function claimStrictnessQueryKey(communityId: string) {
+  return [CONTENT_ROOT, communityId, "claim-strictness"] as const;
+}
+
 export function decisionsQueryKey(communityId: string) {
   return [CONTENT_ROOT, communityId, "decisions"] as const;
 }
@@ -70,6 +74,21 @@ export function useContentDecisions(communityId: string, enabled = true) {
     enabled: enabled && communityId.length > 0,
     queryFn: () => contentRepository.listDecisions(),
     queryKey: decisionsQueryKey(communityId),
+  });
+}
+
+/**
+ * The brand kit's claim strictness for the workspace.
+ *
+ * Cached a minute: the gate reads this on every render pass and the kit
+ * changes rarely. Absent or unreadable kit resolves to strict.
+ */
+export function useContentClaimStrictness(communityId: string, enabled = true) {
+  return useQuery({
+    enabled: enabled && communityId.length > 0,
+    queryFn: () => contentRepository.getClaimStrictness(),
+    queryKey: claimStrictnessQueryKey(communityId),
+    staleTime: 60_000,
   });
 }
 
