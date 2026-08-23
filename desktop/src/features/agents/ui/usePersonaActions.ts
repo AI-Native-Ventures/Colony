@@ -65,6 +65,13 @@ import {
   type BackendIntent,
 } from "../lib/instanceInputForDefinition";
 
+/**
+ * The harness a create falls back to when neither the agent nor the global
+ * config names one. Mirrors `default_agent_command()` in
+ * `managed_agents/discovery.rs`, which resolves the bundled `buzz-agent`.
+ */
+const BUNDLED_DEFAULT_RUNTIME_ID = "buzz-agent";
+
 type PersonaFeedbackSurface = "catalog" | "library";
 
 export function usePersonaActions() {
@@ -243,7 +250,7 @@ export function usePersonaActions() {
         const avatarUrl = await resolveManagedAgentAvatarUrl(
           input.avatarUrl,
           undefined,
-          runtime.avatarUrl,
+          runtime?.avatarUrl,
         );
         const persona = await createPersonaMutation.mutateAsync({
           ...input,
@@ -255,9 +262,25 @@ export function usePersonaActions() {
           setPersonaDialogState(null);
           return true;
         }
+        // Only the instance path needs a concrete runtime: it has to name the
+        // harness the agent will actually run. Nothing was named, so mirror
+        // `default_agent_command()` and take the bundled buzz-agent. The
+        // definition-only create above already returned, so a definition is
+        // never blocked on this.
+        const runtimeForInstance =
+          runtime ??
+          availableRuntimes.find(
+            (candidate) => candidate.id === BUNDLED_DEFAULT_RUNTIME_ID,
+          );
+        if (!runtimeForInstance) {
+          setPersonaErrorMessage(
+            "No harness is available to run this agent. Open Settings > Agents to set one up.",
+          );
+          return false;
+        }
         const agentInput = await buildInstanceInputForDefinition(
           persona,
-          runtime,
+          runtimeForInstance,
           undefined,
           startIntent ?? undefined,
         );
