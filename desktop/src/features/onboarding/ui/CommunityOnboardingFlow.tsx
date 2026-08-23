@@ -44,7 +44,6 @@ import {
   OnboardingChrome,
 } from "./OnboardingChrome";
 import { OnboardingFooter, OnboardingFooterProvider } from "./OnboardingFooter";
-import { OnboardingV2Flow } from "./OnboardingV2Flow";
 import {
   buildOnboardingFirstTaskMessage,
   onboardingFirstTaskMarker,
@@ -513,27 +512,12 @@ export function CommunityOnboardingFlow({
     }
   };
 
-  if (
-    transaction.onboardingV2 &&
-    transaction.stage !== "claiming" &&
-    transaction.stage !== "connecting"
-  ) {
-    return (
-      <OnboardingV2Flow
-        draft={transaction.onboardingV2}
-        externalError={transaction.error}
-        isFinalizing={isPending}
-        journey={
-          transaction.source === "create-community"
-            ? "additional-community"
-            : "first-community"
-        }
-        onChange={(onboardingV2) => update({ onboardingV2, error: undefined })}
-        onReadyToFinalize={finalize}
-        onSkip={() => void finish()}
-      />
-    );
-  }
+  // OnboardingV2Flow used to render here, asking for the founder's name,
+  // country, city and gender and for the company website. The redesigned flow
+  // asks all of it, so showing both meant answering the same questions twice
+  // in one sitting. The draft it produced is still the brief's payload and is
+  // filled by that flow now (see flow/stashFounderBrief.ts); only the screens
+  // are gone, and the delivery below is untouched.
 
   return (
     <div

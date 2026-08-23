@@ -259,12 +259,30 @@ pub async fn cmd_list_channel_members(
     Ok(())
 }
 
-pub async fn cmd_get_canvas(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
+/// Validate a thread root event ID argument (64-char hex).
+fn validate_event_id_hex(event_id: &str) -> Result<(), CliError> {
+    validate_hex64(event_id).map_err(|_| {
+        CliError::Usage(format!(
+            "--thread must be a 64-char hex event ID (got: {event_id})"
+        ))
+    })
+}
+
+pub async fn cmd_get_canvas(
+    client: &BuzzClient,
+    channel_id: &str,
+    thread: Option<&str>,
+) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let filter = serde_json::json!({
+    let mut filter = serde_json::json!({
         "kinds": [40100],
-        "#h": [channel_id]
+        "#h": [channel_id],
+        "limit": 1
     });
+    if let Some(root) = thread {
+        validate_event_id_hex(root)?;
+        filter["#e"] = serde_json::json!([root]);
+    }
     let resp = client.query(&filter).await?;
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
     if let Some(content) = events
@@ -726,7 +744,7 @@ pub async fn cmd_create_channel_from_template(
             .replace("{channel.name}", name)
             .replace("{template.name}", &template.name);
         let canvas_result: Result<(), CliError> = async {
-            let builder = buzz_sdk::build_set_canvas(channel_uuid, &content)
+            let builder = buzz_sdk::build_set_canvas(channel_uuid, &content, None)
                 .map_err(|e| CliError::Other(format!("build_set_canvas failed: {e}")))?;
             let event = client.sign_event(builder)?;
             client.submit_event(event).await?;
@@ -1062,12 +1080,23 @@ pub async fn cmd_set_add_policy(client: &BuzzClient, policy: &str) -> Result<(),
 pub async fn cmd_set_canvas(
     client: &BuzzClient,
     channel_id: &str,
+    thread: Option<&str>,
     content: &str,
 ) -> Result<(), CliError> {
     let content = read_or_stdin(content)?;
     let channel_uuid = parse_uuid(channel_id)?;
+    let thread_root = match thread {
+        Some(root) => {
+            validate_event_id_hex(root)?;
+            Some(
+                nostr::EventId::from_hex(root)
+                    .map_err(|e| CliError::Usage(format!("invalid --thread event ID: {e}")))?,
+            )
+        }
+        None => None,
+    };
 
-    let builder = buzz_sdk::build_set_canvas(channel_uuid, &content)
+    let builder = buzz_sdk::build_set_canvas(channel_uuid, &content, thread_root)
         .map_err(|e| CliError::Other(format!("build_set_canvas failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -1184,8 +1213,14 @@ pub async fn dispatch(
 pub async fn dispatch_canvas(cmd: crate::CanvasCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::CanvasCmd;
     match cmd {
-        CanvasCmd::Get { channel } => cmd_get_canvas(client, &channel).await,
-        CanvasCmd::Set { channel, content } => cmd_set_canvas(client, &channel, &content).await,
+        CanvasCmd::Get { channel, thread } => {
+            cmd_get_canvas(client, &channel, thread.as_deref()).await
+        }
+        CanvasCmd::Set {
+            channel,
+            thread,
+            content,
+        } => cmd_set_canvas(client, &channel, thread.as_deref(), &content).await,
     }
 }
 

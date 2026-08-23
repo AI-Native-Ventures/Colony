@@ -43,6 +43,7 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
+        "**/onboarding-tour.spec.ts",
         "**/blocks.spec.ts",
         "**/ledger.spec.ts",
         "**/blocks-faults.spec.ts",
@@ -90,7 +91,10 @@ export default defineConfig({
         "**/doctor-cta-screenshots.spec.ts",
         "**/pubkey-display-screenshots.spec.ts",
         "**/agent-rank-screenshots.spec.ts",
+        "**/org-delegation-authority-screenshots.spec.ts",
+        "**/decision-log-screenshots.spec.ts",
         "**/context-surfaces-screenshots.spec.ts",
+        "**/org-chart-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
         "**/image-attachment-gallery.spec.ts",
         "**/composer-image-draw.spec.ts",
@@ -179,6 +183,8 @@ export default defineConfig({
         "**/discovery-pipeline.spec.ts",
         "**/huddle-transcription.spec.ts",
         "**/ask-card.spec.ts",
+        "**/ask-resolution-screenshots.spec.ts",
+        "**/delegation-grant-screenshots.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

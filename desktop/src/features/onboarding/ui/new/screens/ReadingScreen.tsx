@@ -74,7 +74,9 @@ export function ReadingScreen({ url, services, reducedMotion, onDone }: Props) {
   return (
     <div className="onb-screen" data-wide="true" data-solo="true">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Reading your website.</h1>
+        <h1 className="onb-headline">
+          Reading your <em>website</em>.
+        </h1>
         <p className="onb-sub">
           Give us a moment. We are working out what your business does.
         </p>

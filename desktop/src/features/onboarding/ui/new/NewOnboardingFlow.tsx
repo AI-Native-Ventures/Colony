@@ -9,6 +9,7 @@ import {
 } from "@/shared/lib/safeStorage";
 import type { AuthFailure } from "../../authService";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
+import { stashFounderBrief } from "../../flow/stashFounderBrief";
 import type { OnboardingServices, ScrapeResult } from "../../contracts";
 import {
   clearAnswers,
@@ -159,6 +160,9 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     email: "",
     password: "",
     city: "",
+    country: "",
+    gender: null,
+    selfDescribedGender: "",
   });
   const [isSigningUp, setIsSigningUp] = useState(false);
   const [accountFailure, setAccountFailure] = useState<AuthFailure | null>(
@@ -195,9 +199,16 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
    *  hand control back to the app. Idempotent, because completion can be
    *  reached from several paths at once. */
   const finishedRef = useRef(false);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
   const finish = useCallback(() => {
     if (finishedRef.current) return;
     finishedRef.current = true;
+    // Hand the founder and company answers to the community-onboarding
+    // transaction before clearing them. That draft is what Scout's opening
+    // brief is built from, and it used to be filled by the flow this one
+    // replaced; without this the brief would go out empty.
+    stashFounderBrief(answersRef.current);
     clearAnswers(answerStorage);
     onCompleteRef.current();
   }, []);
@@ -278,6 +289,13 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
       const updated: OnboardingAnswers = {
         ...answers,
         account: { email },
+        founder: {
+          fullName: accountValues.name.trim(),
+          city: accountValues.city.trim(),
+          country: accountValues.country.trim(),
+          gender: accountValues.gender,
+          selfDescribedGender: accountValues.selfDescribedGender.trim(),
+        },
       };
       setAnswers(updated);
       goTo(nextStep("account", updated));
@@ -442,7 +460,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
         }
         return (
           <BrainScreen
-            installed={trackResult.installed}
+            brains={trackResult.brains}
             selected={selectedBrain ?? trackResult.installed[0]}
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}

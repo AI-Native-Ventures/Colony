@@ -56,6 +56,7 @@ import {
   KIND_HUDDLE_STARTED,
   KIND_EMPLOYEE,
   KIND_DELEGATION_GRANT,
+  KIND_DECISION_LOG,
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
@@ -235,6 +236,11 @@ type E2eConfig = {
      * relay, keyed by their `d` tag; drives the promotion confirmation.
      */
     delegationGrantEvents?: RelayEvent[];
+    /**
+     * Agent-authored decision logs (kind 44303) served by the mock relay;
+     * drives the decision log view.
+     */
+    decisionLogEvents?: RelayEvent[];
     /** Signed Block timeline events seeded before the app subscribes. */
     blockTimelineEvents?: Array<{
       channelName: string;
@@ -497,6 +503,13 @@ type E2eConfig = {
     /** Delay EOSE for membership snapshots after delivering the event. */
     relayMembershipEoseDelayMs?: number;
     relayRole?: "owner" | "admin" | "member" | null;
+    /**
+     * Serve `list_relay_members` from the mock member table. Opt-in because
+     * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+     * (community owners, delegation-grant authorship), and every existing
+     * spec was built against the command being unsupported.
+     */
+    relayMembers?: boolean;
     // Descriptors returned by the mocked `pick_and_upload_media` /
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
     // (e.g. a generic PDF) without a real upload pipeline. See
@@ -1112,6 +1125,7 @@ type MockFilter = {
   "#a"?: string[];
   "#d"?: string[];
   "#e"?: string[];
+  "#grant"?: string[];
   "#h"?: string[];
   "#p"?: string[];
   authors?: string[];
@@ -3238,6 +3252,7 @@ export type CompanyWorkContextConfig = {
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
 const mockDelegationGrantEvents: RelayEvent[] = [];
+const mockDecisionLogEvents: RelayEvent[] = [];
 const mockUserStatuses: RelayEvent[] = [];
 const mockReminderEvents: RelayEvent[] = [];
 const mockPersonaEvents: RelayEvent[] = [];
@@ -3528,6 +3543,16 @@ function resetMockDelegationGrantEvents(config: E2eConfig | undefined) {
   }
 }
 
+function resetMockDecisionLogEvents(config: E2eConfig | undefined) {
+  mockDecisionLogEvents.length = 0;
+  for (const event of config?.mock?.decisionLogEvents ?? []) {
+    mockDecisionLogEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
+}
+
 /** Serve delegation grant heads (kind 30189) for one REQ filter. */
 function filterMockDelegationGrantEvents(filter: MockFilter): RelayEvent[] {
   return mockDelegationGrantEvents.filter((event) => {
@@ -3541,6 +3566,26 @@ function filterMockDelegationGrantEvents(filter: MockFilter): RelayEvent[] {
         .filter((tag) => tag[0] === "d")
         .map((tag) => tag[1]?.toLowerCase());
       if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/** Serve decision logs (kind 44303) for one REQ filter. */
+function filterMockDecisionLogEvents(filter: MockFilter): RelayEvent[] {
+  return mockDecisionLogEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const grantValues = filter["#grant"];
+    if (grantValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "grant")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => grantValues.includes(value as string))) {
         return false;
       }
     }
@@ -8496,7 +8541,7 @@ async function handleDiscoverAcpRuntimes(
       id: "claude",
       label: "Claude Code",
       avatar_url: "",
-      availability: "adapter_missing",
+      availability: "available",
       command: null,
       binary_path: null,
       default_args: [],
@@ -8508,7 +8553,7 @@ async function handleDiscoverAcpRuntimes(
       requires_external_cli: true,
       underlying_cli_path: "/usr/local/bin/claude",
       node_required: false,
-      auth_status: { status: "unknown" },
+      auth_status: { status: "logged_in" },
       source: "builtin",
       login_hint: undefined,
     },
@@ -8516,7 +8561,7 @@ async function handleDiscoverAcpRuntimes(
       id: "codex",
       label: "Codex",
       avatar_url: "",
-      availability: "not_installed",
+      availability: "available",
       command: null,
       binary_path: null,
       default_args: [],
@@ -10765,6 +10810,13 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
+    if (filter.kinds?.includes(KIND_DECISION_LOG)) {
+      for (const event of filterMockDecisionLogEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (
       filter.kinds?.some((kind) =>
         mockBlockEvents.some((event) => event.kind === kind),
@@ -11042,6 +11094,19 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (event.kind === KIND_DELEGATION_GRANT) {
+      // NIP-33 heads are replaceable per (author, kind, d), but the relay
+      // keeps every published head and its newest-first owner scan picks the
+      // winner, so the mock stores each publish too.
+      mockDelegationGrantEvents.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      emitMockGlobalEvent(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     if (isMockProjectScopedEvent(event)) {
       if (event.pubkey !== DEFAULT_MOCK_IDENTITY.pubkey) {
         sendWsText(socket.handler, [
@@ -11218,6 +11283,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
   resetMockDelegationGrantEvents(config);
+  resetMockDecisionLogEvents(config);
   resetMockEmployeeHeadEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);
@@ -13183,6 +13249,17 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
+      case "list_relay_members": {
+        // Opt-in via mock.relayMembers: returning the member table makes the
+        // viewer the community owner, which changes what owner-gated reads
+        // (grant authorship, shared heads) may trust.
+        if (!activeConfig?.mock?.relayMembers) {
+          throw new Error(
+            "Unsupported mocked Tauri command: list_relay_members",
+          );
+        }
+        return { members: mockRelayMembers };
+      }
       case "list_personas":
         return handleListPersonas();
       case "create_persona":

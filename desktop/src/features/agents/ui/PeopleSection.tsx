@@ -13,6 +13,13 @@ import {
   fetchDelegationGrantEvents,
   type DelegationGrant,
 } from "@/features/agents/delegationGrants";
+import {
+  delegationAuthorityGap,
+  DELEGATION_AUTHORITY_WARNING_BODY,
+  DELEGATION_AUTHORITY_WARNING_TITLE,
+  describeActiveDelegations,
+  rankDelegationLabel,
+} from "@/features/agents/delegationAuthority";
 import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import {
   buildOrgTree,
@@ -28,9 +35,11 @@ import {
   usePendingHires,
 } from "@/features/agents/pendingHires";
 import type { RoleDialogMember } from "@/features/agents/ui/EmployeeRoleDialog";
+import { DelegatedAuthoritySection } from "@/features/agents/ui/DelegatedAuthoritySection";
 import { EmployeeRoleDialog } from "@/features/agents/ui/EmployeeRoleDialog";
 import { HireEmployeeDialog } from "@/features/agents/ui/HireEmployeeDialog";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
+import { AgentDecisionLogEntry } from "@/features/asks/ui/AgentDecisionLogEntry";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -103,6 +112,16 @@ export function PeopleSection() {
   );
 
   const tree = React.useMemo(() => buildOrgTree(members), [members]);
+
+  // Grant statements may only render once both inputs settled: an owners
+  // query still in flight would understate the count and could announce an
+  // authority gap that does not exist.
+  const showGrantSignals =
+    grantEventsQuery.isSuccess && ownersQuery.isSuccess && members.length > 0;
+  const hasAuthorityGap = React.useMemo(
+    () => delegationAuthorityGap({ members, grants: activeGrants }),
+    [members, activeGrants],
+  );
 
   // The tree builder types its nodes as plain OrgMember, but every member it
   // was given is an OrgChartMember carrying the payroll flag; restore it so
@@ -188,6 +207,29 @@ export function PeopleSection() {
         </div>
       ) : (
         <div className="space-y-4">
+          {showGrantSignals ? (
+            <p
+              className="text-sm text-muted-foreground"
+              data-testid="org-active-delegations"
+            >
+              {describeActiveDelegations(activeGrants)}
+            </p>
+          ) : null}
+
+          {showGrantSignals && hasAuthorityGap ? (
+            <div
+              className="space-y-1 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3"
+              data-testid="org-authority-warning"
+            >
+              <p className="text-sm font-medium text-warning">
+                {DELEGATION_AUTHORITY_WARNING_TITLE}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {DELEGATION_AUTHORITY_WARNING_BODY}
+              </p>
+            </div>
+          ) : null}
+
           {tree.roots.length > 0 ? (
             <div
               className="flex flex-wrap items-start gap-x-8 gap-y-4 rounded-2xl border border-border/60 bg-muted/20 p-4"
@@ -311,6 +353,10 @@ export function PeopleSection() {
         </div>
       )}
 
+      {/* Community-level record: delegated authority renders whether or not
+          the org chart has anyone on it yet. */}
+      <DelegatedAuthoritySection communityId={communityId} />
+
       <HireEmployeeDialog
         communityId={communityId}
         members={members}
@@ -431,12 +477,25 @@ function OrgNodeCard({
             <OrgNodeLiveness pubkey={node.member.pubkey} />
             <OrgNodeLoad node={node} />
           </div>
-          {node.member.role ? (
-            <p className="truncate font-mono text-3xs text-muted-foreground">
-              {node.member.role}
-            </p>
-          ) : null}
+          {/* Rank capability rides the metadata line instead of the signal
+              row above: that row is already three signals deep, and a
+              capability statement is annotation, not status. */}
+          <p className="truncate text-3xs text-muted-foreground">
+            {node.member.role ? (
+              <>
+                <span className="font-mono">{node.member.role}</span>
+                {" · "}
+              </>
+            ) : null}
+            <span data-testid={`org-node-authority-${node.member.pubkey}`}>
+              {rankDelegationLabel(node.member.rank)}
+            </span>
+          </p>
         </div>
+        <AgentDecisionLogEntry
+          agentName={node.member.name}
+          pubkey={node.member.pubkey}
+        />
         <Button
           aria-label={`Edit role for ${node.member.name}`}
           className="ml-auto shrink-0"

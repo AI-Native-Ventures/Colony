@@ -10,6 +10,7 @@ export type AnswerStorage = {
 
 export const EMPTY_ANSWERS: OnboardingAnswers = {
   account: null,
+  founder: null,
   recoveryAcknowledged: false,
   company: null,
   track: null,
@@ -31,6 +32,17 @@ function coerce(raw: unknown): OnboardingAnswers {
   const value = raw as Partial<OnboardingAnswers>;
   return {
     account: value.account ?? null,
+    // Rebuilt field by field for the same reason as the rest: a resumed draft
+    // from an older build has no founder at all.
+    founder: value.founder
+      ? {
+          fullName: value.founder.fullName ?? "",
+          city: value.founder.city ?? "",
+          country: value.founder.country ?? "",
+          gender: value.founder.gender ?? null,
+          selfDescribedGender: value.founder.selfDescribedGender ?? "",
+        }
+      : null,
     recoveryAcknowledged: value.recoveryAcknowledged === true,
     company: value.company ?? null,
     track: value.track ?? null,

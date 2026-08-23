@@ -14,6 +14,7 @@ import { relayClient } from "@/shared/api/relayClient";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
 import {
+  KIND_CONTENT_BRAND_KIT,
   KIND_CONTENT_CAMPAIGN,
   KIND_CONTENT_DECISION,
   KIND_CONTENT_POST,
@@ -21,6 +22,7 @@ import {
 } from "@/shared/constants/kinds";
 
 import type {
+  ClaimStrictness,
   ContentCampaign,
   ContentDecision,
   ContentPost,
@@ -28,6 +30,7 @@ import type {
 } from "./contracts";
 import {
   parseCampaign,
+  parseClaimStrictness,
   parseDecision,
   parsePost,
   parseStyle,
@@ -161,6 +164,23 @@ export function createContentRepository(
             .filter((style): style is ContentStyle => style !== null),
       );
       return styles?.at(0) ?? null;
+    },
+
+    /**
+     * The claim gate's strictness from the workspace's brand kit.
+     *
+     * One kit per workspace at launch, so the newest kind-30198 head is the
+     * kit. A missing or unreadable kit defaults to strict: strict is the
+     * product's promise, and an absent setting is not permission to publish
+     * unchecked claims.
+     */
+    async getClaimStrictness(): Promise<ClaimStrictness> {
+      const heads = await read(
+        { kinds: [KIND_CONTENT_BRAND_KIT], limit: MAX_RECORDS },
+        (events) => newestHeads(events),
+      );
+      const head = heads?.at(0);
+      return (head && parseClaimStrictness(head)) ?? "strict";
     },
 
     /**

@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 410,
-    "rust_lines": 163729,
+    "rust_lines": 163770,
     "tauri_coupled": 161,
     "portable": 249,
     "portable_lines": 92692,
@@ -424,10 +424,10 @@
     ]
   },
   "commands": {
-    "registered": 339,
-    "defined": 339,
+    "registered": 340,
+    "defined": 340,
     "by_reach": {
-      "frontend": 333,
+      "frontend": 334,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -576,6 +576,7 @@
     "src-tauri/src/commands/project_git_branches.rs": 2,
     "src-tauri/src/commands/agent_providers.rs": 2,
     "src-tauri/src/commands/personas/snapshot.rs": 2,
+    "src-tauri/src/commands/company_scan.rs": 2,
     "src-tauri/src/commands/canvas.rs": 2,
     "src-tauri/src/commands/provisioned_credits.rs": 2,
     "src-tauri/src/commands/messages/forum.rs": 2,
@@ -612,7 +613,6 @@
     "src-tauri/src/huddle/reconnect.rs": 1,
     "src-tauri/src/commands/discovery_export.rs": 1,
     "src-tauri/src/commands/qr_download.rs": 1,
-    "src-tauri/src/commands/company_scan.rs": 1,
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
@@ -1485,6 +1485,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1033",
         "src/shared/api/blockData.ts:22"
+      ]
+    },
+    "fetch_claim_source_page": {
+      "defining_file": "src-tauri/src/commands/company_scan.rs",
+      "module": "company_scan",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/content/claimVerifierRuntime.ts:32"
       ]
     },
     "fetch_join_policy": {
@@ -3408,7 +3417,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1546",
         "src/parity/session/script.ts:1547",
-        "src/shared/theme/ThemeProvider.tsx:385"
+        "src/shared/theme/ThemeProvider.tsx:457"
       ]
     },
     "show_native_notification": {

@@ -46,10 +46,12 @@ export function RecoveryScreen({
   return (
     <div className="onb-screen">
       <div className="onb-col-head">
-        <h1 className="onb-headline">Keep this code somewhere safe.</h1>
+        <h1 className="onb-headline">
+          Your way back <em>in</em>.
+        </h1>
         <p className="onb-sub">
-          If you ever forget your password, this code is the only way back into
-          your account. We cannot reset it for you.
+          If you ever forget your password, this is the only way back into your
+          workspace. We cannot recover it for you.
         </p>
       </div>
       <div className="onb-panel">

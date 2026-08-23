@@ -6,6 +6,9 @@ mod admission;
 /// Colony interrupt-core: the Ask broker (filing, altitude rules, dedupe,
 /// resolution/withdrawal receipts).
 pub mod ask_broker;
+/// Colony interrupt-core: relay-signed ask-state heads (kind 30200), the
+/// read path for an ask's deadline and expiry outcome.
+pub(crate) mod ask_state_head;
 mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
@@ -62,6 +65,13 @@ pub mod metrics;
 pub mod nip11;
 /// Deployment-wide operator analytics rollup worker.
 pub mod operator_analytics;
+/// PayFast: hosted-checkout URL construction and ITN verification.
+pub mod payfast;
+/// The one payment-provider interface both gateways implement, plus the
+/// money-unit conversions every provider shares.
+pub mod payments_provider;
+/// Paystack: hosted-checkout client and webhook signature verification.
+pub mod paystack;
 pub mod price_catalog;
 /// Colony's signed remote price feed.
 pub mod price_feed;

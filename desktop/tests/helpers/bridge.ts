@@ -453,6 +453,13 @@ type MockBridgeOptions = {
    */
   relayRole?: "owner" | "admin" | "member" | null;
   /**
+   * Serve `list_relay_members` from the mock member table. Opt-in because
+   * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+   * (community owners, delegation-grant authorship), and every existing
+   * spec was built against the command being unsupported.
+   */
+  relayMembers?: boolean;
+  /**
    * Descriptors returned by the mocked `pick_and_upload_media` /
    * `upload_media_bytes` commands. When omitted, the bridge returns a single
    * generic PDF so the file-attachment flow can be exercised by default. An
@@ -891,6 +898,18 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
+  } else {
+    // The redesigned flow is the product default now, so a first-run spec
+    // that says nothing would suddenly be driving different screens. Specs
+    // opt into the redesign by setting this key to "1" themselves, which
+    // runs first and this leaves alone; everything else stays on the flow it
+    // was written against.
+    await page.addInitScript(() => {
+      const key = "colony.e2e.newOnboarding";
+      if (window.localStorage.getItem(key) === null) {
+        window.localStorage.setItem(key, "0");
+      }
+    });
   }
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.

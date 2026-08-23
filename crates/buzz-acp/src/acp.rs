@@ -20,6 +20,14 @@ use crate::usage::{TurnUsage, UsageTracker};
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 
+/// Ceiling on prose kept by [`AcpClient::begin_agent_text_capture`].
+///
+/// The captured answer is one small JSON object. This bound exists for the
+/// agent that narrates instead of answering: the parse fails either way, and
+/// failing on 64 KiB costs nothing, where an unbounded buffer would grow with
+/// the agent's enthusiasm.
+const MAX_CAPTURED_AGENT_TEXT: usize = 64 * 1024;
+
 /// An MCP server configuration passed to `session/new`.
 ///
 /// Corresponds to the `McpServerStdio` variant in the ACP schema.
@@ -220,6 +228,15 @@ pub struct AcpClient {
     /// True only when Buzz launched a source-validated Codex adapter sibling
     /// that projects session-cumulative usage in each prompt response.
     cumulative_prompt_usage: bool,
+    /// Buffer for the agent's own prose during a turn whose answer the harness
+    /// needs to read, rather than only relay to the human.
+    ///
+    /// Ordinary turns discard this text: the agent talks to the channel through
+    /// its own tools, so `agent_message_chunk` is a log line and nothing more.
+    /// The completion check is the exception — the harness asks the question and
+    /// must read the answer itself. `None` outside such a turn, so the common
+    /// path allocates nothing.
+    captured_agent_text: Option<String>,
 }
 
 /// Recursively merge `overlay` into `base`, with `overlay` winning on scalar/shape
@@ -627,6 +644,7 @@ impl AcpClient {
             steer_rx: None,
             goose_usage: UsageTracker::default(),
             cumulative_prompt_usage: prepared_codex_usage.is_some(),
+            captured_agent_text: None,
         })
     }
 
@@ -1058,6 +1076,26 @@ impl AcpClient {
     /// publish a kind 44200 NIP-AM event.
     pub fn take_turn_usage(&mut self) -> Option<TurnUsage> {
         self.goose_usage.take()
+    }
+
+    /// Start keeping the agent's own prose, for a turn whose answer the harness
+    /// reads rather than relays.
+    ///
+    /// Discards anything left from a previous capture: an answer must never be
+    /// read against text the last question produced.
+    pub fn begin_agent_text_capture(&mut self) {
+        self.captured_agent_text = Some(String::new());
+    }
+
+    /// Stop capturing and return what the agent said, trimmed.
+    ///
+    /// `None` when capture was never started; `Some("")` when it was started
+    /// and the agent said nothing, which is a real answer to distinguish — an
+    /// agent that streamed no prose has not answered the question.
+    pub fn take_agent_text_capture(&mut self) -> Option<String> {
+        self.captured_agent_text
+            .take()
+            .map(|text| text.trim().to_string())
     }
 
     /// Notify the usage tracker that buzz-acp just spawned a new session.
@@ -1926,6 +1964,15 @@ impl AcpClient {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
                     tracing::info!(target: "acp::stream", "{text}");
+                    if let Some(buffer) = self.captured_agent_text.as_mut() {
+                        // Bounded: the answer this captures is a small JSON
+                        // object, and an agent that ignores the instruction and
+                        // narrates instead must not be able to grow the harness's
+                        // memory without limit.
+                        if buffer.len() < MAX_CAPTURED_AGENT_TEXT {
+                            buffer.push_str(text);
+                        }
+                    }
                 }
                 false
             }

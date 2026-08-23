@@ -23,7 +23,11 @@ import {
 } from "@/shared/constants/kinds";
 
 import type { ContentPost, CorrectionBin, GateVerdict } from "./contracts";
-import { deriveVerdict, postCoordinate } from "./contracts";
+import {
+  postVerdict as contractPostVerdict,
+  postCoordinate,
+  slidesDigest,
+} from "./contracts";
 
 /** Pinned schema for the decision record; mirrors `buzz-core`. */
 export const SCHEMA_CONTENT_DECISION = "colony/content-decision/v1";
@@ -60,7 +64,7 @@ export type DecisionDraft = {
  * approved as though its gates had run.
  */
 export function postVerdict(post: ContentPost): GateVerdict {
-  return post.gateReport ? deriveVerdict(post.gateReport.gates) : "incomplete";
+  return contractPostVerdict(post.gateReports) ?? "incomplete";
 }
 
 /**
@@ -85,7 +89,7 @@ export function buildDecisionEvent(
           "This card failed a check. Approving it is refused until the check passes or the card is re-rendered.",
       };
     }
-    if (!input.post.image) {
+    if (input.post.images.length === 0) {
       return {
         ok: false,
         reason:
@@ -103,8 +107,8 @@ export function buildDecisionEvent(
   }
 
   const target: Record<string, unknown> = { verdict };
-  if (input.post.image) {
-    target.image_sha256 = input.post.image.sha256;
+  if (input.post.images.length > 0) {
+    target.image_sha256 = slidesDigest(input.post.images);
   }
 
   const content: Record<string, unknown> = {

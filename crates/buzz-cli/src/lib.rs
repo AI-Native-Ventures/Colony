@@ -384,6 +384,52 @@ pub enum ContentCmd {
     },
     /// List brand kits, newest head per id
     KitList {},
+    /// Derive a brand kit proposal from a website scan (kind 30198)
+    ///
+    /// Runs a bounded scan of `--url`, aggregates the brand evidence the scan
+    /// already collects, solves every text-bearing ramp stop against WCAG
+    /// contrast by bisection, fetches and uploads the site's logo and favicon
+    /// as marks, and prints the proposed kit body. Nothing is published:
+    /// derivation proposes and the owner accepts with `content kit set`,
+    /// editing first if they want to. A re-scan therefore never clobbers a
+    /// hand-edited kit.
+    KitDerive {
+        /// Site to scan for brand evidence
+        #[arg(long)]
+        url: String,
+        /// Most pages to read. Fewer than a company brief needs; style
+        /// evidence saturates early.
+        #[arg(long)]
+        max_pages: Option<usize>,
+        /// Skip mark upload and emit hues/type/canvases/rules only
+        #[arg(long)]
+        skip_marks: bool,
+        /// Write the proposal here instead of stdout (`@` not needed)
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Create or replace an asset library head (kind 30199)
+    ///
+    /// The library is an index over media that already lives in Blossom,
+    /// not a second store: each item names a sha256 plus its tags, alt
+    /// text, rights note, provenance, and whether the depicted subject is
+    /// fictional. This command stores the index; it never uploads anything.
+    LibrarySet {
+        /// Library id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the library JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one asset library head
+    LibraryGet {
+        /// Library id
+        #[arg(long)]
+        id: String,
+    },
+    /// List asset libraries, newest head per id
+    LibraryList {},
     /// Approve a post or send it back (kind 40025)
     ///
     /// Built from the post as it currently stands on the relay: the decision
@@ -1622,12 +1668,18 @@ pub enum CanvasCmd {
         /// Channel UUID
         #[arg(long)]
         channel: String,
+        /// Thread root event ID (64-char hex). Omit to read the channel canvas.
+        #[arg(long)]
+        thread: Option<String>,
     },
     /// Set (replace) the canvas document for a channel
     Set {
         /// Channel UUID
         #[arg(long)]
         channel: String,
+        /// Thread root event ID (64-char hex). Omit to write the channel canvas.
+        #[arg(long)]
+        thread: Option<String>,
         /// Canvas content (markdown; use '-' to read from stdin)
         #[arg(long)]
         content: String,
@@ -4054,9 +4106,13 @@ mod tests {
                 "campaign-set",
                 "decide",
                 "decisions",
+                "kit-derive",
                 "kit-get",
                 "kit-list",
                 "kit-set",
+                "library-get",
+                "library-list",
+                "library-set",
                 "post-get",
                 "post-list",
                 "post-set",

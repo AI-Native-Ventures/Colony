@@ -77,10 +77,13 @@ export function parseGrantEvent(event: RelayEvent): DelegationGrant | null {
 }
 
 /**
- * Every currently-active grant authored by a current owner. One grant per
- * `d` tag: the first owner-authored candidate walking newest-first.
+ * Resolve the head this community trusts at each grant id: the first
+ * owner-authored candidate walking newest-first, parsed when it survives the
+ * schema. Malformed trusted heads are dropped -- the relay treats them as no
+ * grant at all (`active_grant` returns the failed parse as `Ok(None)`), so
+ * showing invented fields would be worse than omitting the row.
  */
-export function activeGrantsFromEvents(
+function trustedGrantHeads(
   events: RelayEvent[],
   ownerPubkeys: ReadonlySet<string>,
 ): DelegationGrant[] {
@@ -106,9 +109,36 @@ export function activeGrantsFromEvents(
       .find((candidate) => ownerPubkeys.has(normalizePubkey(candidate.pubkey)));
     if (!trusted) continue;
     const parsed = parseGrantEvent(trusted);
-    if (parsed?.active) grants.push(parsed);
+    if (parsed) grants.push(parsed);
   }
   return grants.sort((a, b) => a.grantId.localeCompare(b.grantId));
+}
+
+/**
+ * Every currently-active grant authored by a current owner. One grant per
+ * `d` tag: the first owner-authored candidate walking newest-first.
+ */
+export function activeGrantsFromEvents(
+  events: RelayEvent[],
+  ownerPubkeys: ReadonlySet<string>,
+): DelegationGrant[] {
+  return trustedGrantHeads(events, ownerPubkeys).filter(
+    (grant) => grant.active,
+  );
+}
+
+/**
+ * Every grant a current owner ever authored at its d tag, revoked ones
+ * included. A revocation is a republished head with `active: false`, not a
+ * deletion, and the record stays on the relay: hiding it would tell the owner
+ * a grant history exists that does not. Same owner-authorship scan as
+ * `activeGrantsFromEvents`; only the active filter differs.
+ */
+export function allGrantsFromEvents(
+  events: RelayEvent[],
+  ownerPubkeys: ReadonlySet<string>,
+): DelegationGrant[] {
+  return trustedGrantHeads(events, ownerPubkeys);
 }
 
 async function fetchDelegationGrantEvents(): Promise<RelayEvent[]> {

@@ -735,7 +735,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 63);
+        assert_eq!(migrations.len(), 66);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1326,6 +1326,17 @@ mod tests {
         assert!(
             recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
         );
+
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let canvas_drop = migrations
+            .iter()
+            .find(|migration| migration.version == 65)
+            .expect("drop channels.canvas migration")
+            .sql
+            .as_str();
+        assert!(canvas_drop.contains("ALTER TABLE channels"));
+        assert!(canvas_drop.contains("DROP COLUMN IF EXISTS canvas"));
         // Looked up by version rather than by index. Two branches both claimed
         // 61 while in flight, and this migration was renumbered to 62 on merge;
         // an index-based assertion silently points at whichever migration
@@ -1344,7 +1355,7 @@ mod tests {
         assert!(email_accounts.contains("attach_community_write_fence('account_reset_tokens')"));
         let discovery_credits = migrations
             .iter()
-            .find(|migration| migration.version == 63)
+            .find(|migration| migration.version == 66)
             .expect("Discovery Credits migration")
             .sql
             .as_str();
@@ -1413,6 +1424,19 @@ mod tests {
                 "desired-state schema must mirror paid Discovery contract: {required}"
             );
         }
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let payment_intents = migrations
+            .iter()
+            .find(|migration| migration.version == 63)
+            .expect("payment intents migration")
+            .sql
+            .as_str();
+        assert!(payment_intents.contains("CREATE TABLE payment_intents"));
+        assert!(payment_intents.contains("PRIMARY KEY (community_id, reference)"));
+        assert!(payment_intents.contains("octet_length(pubkey) = 32"));
+        assert!(payment_intents.contains("usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500)"));
+        assert!(payment_intents.contains("attach_community_write_fence('payment_intents')"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {

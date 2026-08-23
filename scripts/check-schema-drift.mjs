@@ -46,9 +46,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * day a CI job exercises its code path, that job goes red with an error that
  * does not mention the table.
  */
-export const KNOWN_DRIFT = new Map([
-  ["product_feedback", "unowned"],
-]);
+export const KNOWN_DRIFT = new Map([]);
 
 /** Table names created by `text`, excluding partition children. */
 export function createdTables(text) {
@@ -63,6 +61,85 @@ export function createdTables(text) {
   return found;
 }
 
+/**
+ * Columns declared directly in CREATE TABLE bodies, keyed by table.
+ *
+ * Only the FIRST token of each paren-depth-1 line counts, minus the
+ * table-constraint keywords, so `CHECK (...)`, `PRIMARY KEY (...)` and friends
+ * are never mistaken for columns. This is deliberately conservative: the goal
+ * is zero false positives on today's files, not full SQL parsing.
+ */
+function columnsFromCreateBodies(text, into) {
+  // The closing paren of every CREATE TABLE in this repo sits at column 0
+  // (" );" / ");;" / ") PARTITION BY"), so anchor on that instead of the first
+  // semicolon: comments inside a table body can contain semicolons, which
+  // would otherwise truncate the body and silently drop the table.
+  const re = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z_0-9]*)\s*\((.*?)^\)(?:\s*;;|;|\s+PARTITION\s+BY)/gims;
+  const CONSTRAINT_KEYWORDS = new Set([
+    "PRIMARY", "UNIQUE", "CHECK", "FOREIGN", "CONSTRAINT", "EXCLUDE",
+    "LIKE", "INHERITS",
+  ]);
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const [, name, body] = m;
+    if (!into.has(name)) into.set(name, new Set());
+    const cols = into.get(name);
+    let depth = 1;
+    for (const rawLine of body.split("\n")) {
+      const line = rawLine.trim();
+      if (line.startsWith("--") || line.length === 0) continue;
+      const openDelta = (line.match(/\(/g) ?? []).length - (line.match(/\)/g) ?? []).length;
+      if (depth === 1 && !line.startsWith(")")) {
+        const tok = /^([a-zA-Z_][a-zA-Z_0-9]*)/.exec(line);
+        if (tok && !CONSTRAINT_KEYWORDS.has(tok[1].toUpperCase())) cols.add(tok[1]);
+      }
+      depth += openDelta;
+      if (depth <= 0) break;
+    }
+  }
+  return into;
+}
+
+/**
+ * Columns added or dropped by `ALTER TABLE ... ADD/DROP COLUMN`, applied in
+ * file order so a drop/re-add sequence lands on the final state. Only the
+ * explicit `ADD COLUMN` / `DROP COLUMN` spellings count; anything else in an
+ * ALTER clause changes no column names.
+ */
+function applyAlterColumns(text, into) {
+  const alterRe = /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z_0-9]*)\s+([^;]*?);/gi;
+  let m;
+  while ((m = alterRe.exec(text)) !== null) {
+    const [, name, clauses] = m;
+    if (!/\b(ADD|DROP)\s+COLUMN\b/i.test(clauses)) continue;
+    // Split the clause list on commas at paren depth 0.
+    const parts = [];
+    let depth = 0, cur = "";
+    for (const ch of clauses) {
+      if (ch === "(") depth++;
+      if (ch === ")") depth--;
+      if (ch === "," && depth === 0) { parts.push(cur); cur = ""; continue; }
+      cur += ch;
+    }
+    parts.push(cur);
+    if (!into.has(name)) into.set(name, new Set());
+    const cols = into.get(name);
+    for (const clauseRaw of parts) {
+      const clause = clauseRaw.replace(/--[^\n]*/g, "").trim();
+      let cm = /^ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z_0-9]*)/i.exec(clause);
+      if (cm) { cols.add(cm[1]); continue; }
+      cm = /^DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?([a-zA-Z_][a-zA-Z_0-9]*)/i.exec(clause);
+      if (cm) cols.delete(cm[1]);
+    }
+  }
+  return into;
+}
+
+/** table -> Set<column> across a whole SQL text, in source order. */
+export function createdColumns(text) {
+  return applyAlterColumns(text, columnsFromCreateBodies(text, new Map()));
+}
+
 /** Tables in `migrations/` that `schema/schema.sql` does not create. */
 export function findDrift(migrationsSql, schemaSql) {
   const inSchema = createdTables(schemaSql);
@@ -71,6 +148,34 @@ export function findDrift(migrationsSql, schemaSql) {
     if (!inSchema.has(name)) missing.push(name);
   }
   return missing;
+}
+
+/**
+ * Columns each side's shared tables are missing, as
+ * `{ inMigrationsOnly: [[table, column], ...], inSchemaOnly: [...] }`.
+ * Only tables that exist on both sides are compared here; a wholly missing
+ * table is already reported by findDrift.
+ */
+export function findColumnDrift(migrationsSql, schemaSql) {
+  const migCols = createdColumns(migrationsSql);
+  const schCols = createdColumns(schemaSql);
+  const inMigrationsOnly = [];
+  const inSchemaOnly = [];
+  for (const table of [...migCols.keys()].sort()) {
+    const sch = schCols.get(table);
+    if (!sch) continue;
+    for (const col of migCols.get(table)) {
+      if (!sch.has(col)) inMigrationsOnly.push([table, col]);
+    }
+  }
+  for (const table of [...schCols.keys()].sort()) {
+    const mig = migCols.get(table);
+    if (!mig) continue;
+    for (const col of schCols.get(table)) {
+      if (!mig.has(col)) inSchemaOnly.push([table, col]);
+    }
+  }
+  return { inMigrationsOnly, inSchemaOnly };
 }
 
 function readMigrations(root = REPO_ROOT) {
@@ -83,12 +188,13 @@ function readMigrations(root = REPO_ROOT) {
 }
 
 function main() {
-  const missing = findDrift(
-    readMigrations(),
-    readFileSync(join(REPO_ROOT, "schema/schema.sql"), "utf8"),
-  );
+  const migrationsSql = readMigrations();
+  const schemaSql = readFileSync(join(REPO_ROOT, "schema/schema.sql"), "utf8");
 
-  const unexpected = missing.filter((t) => !KNOWN_DRIFT.has(t));
+  const missing = findDrift(migrationsSql, schemaSql);
+  const { inMigrationsOnly, inSchemaOnly } = findColumnDrift(migrationsSql, schemaSql);
+
+  const unexpectedTables = missing.filter((t) => !KNOWN_DRIFT.has(t));
   const fixed = [...KNOWN_DRIFT.keys()].filter((t) => !missing.includes(t));
 
   // Warn, never fail. A listed table that has since been added to schema.sql
@@ -106,21 +212,45 @@ function main() {
     );
   }
 
-  if (unexpected.length > 0) {
+  if (unexpectedTables.length > 0) {
     console.error(
       `These tables exist in migrations/ but not in schema/schema.sql, so a\n` +
         `CI database will not have them and any suite touching them will fail\n` +
         `with an error that does not mention the table:\n` +
-        unexpected.map((t) => `  ${t}`).join("\n") +
+        unexpectedTables.map((t) => `  ${t}`).join("\n") +
         `\n\nAdd each CREATE TABLE (and its indexes) to schema/schema.sql.`,
     );
     process.exit(1);
   }
 
+  if (inMigrationsOnly.length > 0) {
+    console.error(
+      `These columns exist in migrations/ but not in schema/schema.sql, so a\n` +
+        `CI database will lack them and any query touching them fails with\n` +
+        `ColumnNotFound. This is the 0060/pre_quiesce_archived_at failure class:\n` +
+        inMigrationsOnly.map(([t, c]) => `  ${t}.${c}`).join("\n") +
+        `\n\nMirror each column's definition into schema/schema.sql.`,
+    );
+    process.exit(1);
+  }
+
+  // Reverse-direction drift (a column only in schema.sql) is reported but does
+  // not fail: it usually means the mirror got ahead of a pending migration, or
+  // the parser missed a migration spelling. Failing on it would punish whoever
+  // just fixed the forward direction, which is what made the original
+  // table-level guard break repo-wide when entries went stale (#170, #181).
+  if (inSchemaOnly.length > 0) {
+    console.warn(
+      `These columns are in schema/schema.sql but no migration creates them\n` +
+        `(not a failure; check whether a migration is still pending):\n` +
+        inSchemaOnly.map(([t, c]) => `  ${t}.${c}`).join("\n"),
+    );
+  }
+
   const n = KNOWN_DRIFT.size;
   console.log(
-    `schema.sql covers every table in migrations/, except ${n} known and ` +
-      `listed in KNOWN_DRIFT.`,
+    `schema.sql covers every table and column in migrations/, except ${n} ` +
+      `table(s) known and listed in KNOWN_DRIFT.`,
   );
 }
 

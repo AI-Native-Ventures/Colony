@@ -95,6 +95,15 @@ export const KIND_ASK = 44300;
 export const KIND_ASK_RESOLUTION = 44301;
 /** Withdrawal of an open ask by its filer. */
 export const KIND_ASK_WITHDRAWAL = 44302;
+/**
+ * A leader or executive recording a decision it made on its own authority
+ * under a delegation grant. Authored by the DECIDING AGENT, never by an
+ * owner: authority is rank plus the active community-wide grant cited by the
+ * `grant` tag, checked at ingest (`enforce_decision_log_authority`), so every
+ * stored log already passed tier, grant-active, category-match, and cap
+ * checks. Mirror of buzz-core's KIND_DECISION_LOG.
+ */
+export const KIND_DECISION_LOG = 44303;
 export const KIND_COMPANY_ACTION = 40013;
 export const KIND_COMPANY_RECEIPT = 40014;
 // Canonical external parties and the company's Lead/Client views over them.
@@ -134,6 +143,10 @@ export const KIND_DISCOVERY_WORKSPACE_RECEIPT = 40022;
 export const KIND_CONTENT_CAMPAIGN = 30195;
 export const KIND_CONTENT_POST = 30196;
 export const KIND_CONTENT_STYLE = 30197;
+// The brand kit: hues, type, marks, canvases, templates, and the rules the
+// gates read (rules.claim_strictness). Relay validates it structurally and
+// never interprets style meaning. Mirror of buzz-core's KIND_CONTENT_BRAND_KIT.
+export const KIND_CONTENT_BRAND_KIT = 30198;
 export const KIND_CONTENT_DECISION = 40025;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;

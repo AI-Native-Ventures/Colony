@@ -10,10 +10,7 @@ import { Button } from "@/shared/ui/button";
 import { FuzzyMark } from "@/shared/ui/colony-logo/FuzzyMark";
 import { Card } from "@/shared/ui/card";
 import { Spinner } from "@/shared/ui/spinner";
-import {
-  ONBOARDING_PRIMARY_CTA_CLASS,
-  ONBOARDING_SECONDARY_CTA_CLASS,
-} from "./OnboardingChrome";
+import { ONBOARDING_SECONDARY_CTA_CLASS } from "./OnboardingChrome";
 import { OnboardingFooter } from "./OnboardingFooter";
 import {
   type OnboardingTransitionDirection,
@@ -187,19 +184,18 @@ export function BackupStep({
   if (optionsExpanded) {
     return (
       <OnboardingSlideTransition
-        className="flex min-h-0 w-full flex-col items-center"
+        className="onb-screen"
         data-testid="onboarding-page-backup-options"
+        data-wide="true"
         direction={direction}
         transitionKey={`backup-options-${direction}`}
       >
-        <div className="flex w-full max-w-140 shrink-0 flex-col text-center">
-          <h1 className="text-title font-normal text-foreground">
-            Backup options
-          </h1>
-          <p className="mt-5 text-sm leading-6 text-foreground/75">
-            Your identity key works like a password for your Colony account.
-            Keep a copy somewhere safe. You can create a backup file and lock it
-            with a password you can remember.
+        <div className="onb-col-head">
+          <h1 className="onb-headline">Keep a copy somewhere safe.</h1>
+          <p className="onb-sub">
+            Your key is how you get back in, like a password no one can reset
+            for you. Save a copy, or make a backup file locked with a password
+            you will remember.
           </p>
         </div>
 
@@ -298,29 +294,26 @@ export function BackupStep({
 
   return (
     <OnboardingSlideTransition
-      className="flex min-h-0 w-full flex-col items-center"
+      className="onb-screen"
       data-testid="onboarding-page-backup"
       direction={direction}
       transitionKey={`backup-${direction}-${returningFromSecurity ? "security" : "line"}`}
     >
-      <div className="flex w-full max-w-[500px] shrink-0 flex-col text-center">
-        {/* Plain string concat: cn()'s tailwind-merge misreads the custom
-            text-title size token as conflicting with text-foreground. */}
+      <div className="onb-col-head">
         <h1
-          className={`text-title font-normal text-foreground ${REVEAL_ANIMATION_CLASS}`}
+          className={`onb-headline ${REVEAL_ANIMATION_CLASS}`}
           key={created ? "created" : "creating"}
         >
-          {created
-            ? "Your unique identity key has been created"
-            : "Creating your identity key"}
+          {created ? (
+            <>
+              Your key is <em>yours</em>.
+            </>
+          ) : (
+            "Making your key."
+          )}
         </h1>
         {created ? (
-          <p
-            className={cn(
-              "mt-5 text-sm leading-6 text-foreground/80",
-              REVEAL_ANIMATION_CLASS,
-            )}
-          >
+          <p className={cn("onb-sub", REVEAL_ANIMATION_CLASS)}>
             {introStorageDescription} You can continue now, or{" "}
             <button
               className="rounded-sm font-medium underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -415,8 +408,8 @@ export function BackupStep({
 
       <OnboardingFooter className={REVEAL_ANIMATION_CLASS}>
         <Button
-          className={ONBOARDING_PRIMARY_CTA_CLASS}
           data-testid="onboarding-next"
+          size="lg"
           disabled={!created || backupNextDisabled()}
           onClick={onNext}
           type="button"

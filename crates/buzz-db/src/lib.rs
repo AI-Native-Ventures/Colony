@@ -53,6 +53,8 @@ pub mod moderation;
 pub mod operator_analytics;
 /// Monthly table partition management.
 pub mod partition;
+/// Payment top-up intents: pending checkout records keyed by reference.
+pub mod payment_intents;
 /// Buzz product-feedback sidecar persistence.
 pub mod product_feedback;
 /// Community-scoped push lease and durable wake-outbox persistence.
@@ -3816,25 +3818,6 @@ impl Db {
         channel_id: Uuid,
     ) -> Result<channel::ChannelRecord> {
         channel::get_channel(&self.pool, community_id, channel_id).await
-    }
-
-    /// Returns the canvas content for a channel, if any.
-    pub async fn get_canvas(
-        &self,
-        community_id: CommunityId,
-        channel_id: Uuid,
-    ) -> Result<Option<String>> {
-        channel::get_canvas(&self.pool, community_id, channel_id).await
-    }
-
-    /// Sets or clears the canvas content for a channel.
-    pub async fn set_canvas(
-        &self,
-        community_id: CommunityId,
-        channel_id: Uuid,
-        canvas: Option<&str>,
-    ) -> Result<()> {
-        channel::set_canvas(&self.pool, community_id, channel_id, canvas).await
     }
 
     /// Adds a member to a channel.
