@@ -211,7 +211,14 @@ test.describe("agent provider dropdown screenshots", () => {
     });
   });
 
-  test("04-codex-definition-exposes-model-without-global-provider-defaults", async ({
+  // Codex used to be a harness that could not be told a provider or a model,
+  // so this test asserted the dialog hid the global provider and printed the
+  // bare "Harness default". A live spike proved codex-acp honours a model over
+  // ACP (`session/set_config_option`), and it now ships with provider and
+  // model pickers, so a codex definition on defaults inherits the global pair
+  // like every other harness. Hiding them would restate the old lie: the
+  // agent would run the global model while the dialog denied one was set.
+  test("04-codex-definition-inherits-the-global-provider-and-model", async ({
     page,
   }) => {
     await installMockBridge(page, {
@@ -241,10 +248,17 @@ test.describe("agent provider dropdown screenshots", () => {
     await expect(
       dialog.getByRole("tab", { name: "Customize for this agent" }),
     ).toBeVisible();
+    // The provider-capable notice, not the harness-only one. Asserting the
+    // testid rather than the copy pins which of the two branches rendered:
+    // "Harness default" appears only when a harness cannot be given a
+    // provider, and codex no longer qualifies.
+    await expect(dialog.getByTestId("agent-ai-defaults-notice")).toBeVisible();
     await expect(
-      dialog.getByText("Harness default", { exact: true }),
-    ).toBeVisible();
-    await expect(dialog.getByText(/Databricks/i)).toHaveCount(0);
+      dialog.getByTestId("agent-harness-defaults-notice"),
+    ).toHaveCount(0);
+    // Inheritance is shown, not hidden: this agent really will run the global
+    // model, so the dialog says so.
+    await expect(dialog.getByText(/global-databricks-model/)).toBeVisible();
 
     await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
     await expect(

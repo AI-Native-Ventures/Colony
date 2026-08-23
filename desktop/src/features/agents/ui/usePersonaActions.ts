@@ -35,6 +35,7 @@ import {
 } from "@/features/agents/lib/usePersonaCatalogRelay";
 import { personaSaveNotice } from "@/features/agents/lib/personaSaveNotice";
 import { useCreatedAgentChannelAttachment } from "@/features/agents/useCreatedAgentChannelAttachment";
+import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type {
@@ -138,6 +139,7 @@ export function usePersonaActions() {
         .map((publication) => publication.sourcePersonaId),
     );
   }, [identityQuery.data?.pubkey, publications]);
+  const { globalConfig } = useGlobalAgentConfig();
   const availableRuntimes = React.useMemo(
     () =>
       (acpRuntimesQuery.data ?? []).filter(
@@ -206,12 +208,23 @@ export function usePersonaActions() {
           setPersonaNoticeMessage(personaSaveNotice(input.displayName, null));
         }
       } else {
+        // "Use agent defaults" submits no runtime pin on purpose: the harness
+        // is resolved from the global config at spawn, readiness and deploy.
+        // Looking up `input.runtime` alone therefore found nothing for every
+        // defaults-mode create, and this returned false — leaving an enabled
+        // "Add agent" button that silently did nothing. Resolve the same
+        // record -> global chain the backend uses before deciding it is
+        // missing.
+        const resolvedRuntimeId =
+          input.runtime?.trim() || globalConfig.preferred_runtime?.trim() || "";
         const runtime = availableRuntimes.find(
-          (candidate) => candidate.id === input.runtime,
+          (candidate) => candidate.id === resolvedRuntimeId,
         );
         if (!runtime) {
           setPersonaErrorMessage(
-            "Choose an available provider for this agent.",
+            resolvedRuntimeId
+              ? `The default harness (${resolvedRuntimeId}) is not available. Choose one for this agent, or change your global defaults.`
+              : "Choose an available harness for this agent, or set a global default harness.",
           );
           return false;
         }

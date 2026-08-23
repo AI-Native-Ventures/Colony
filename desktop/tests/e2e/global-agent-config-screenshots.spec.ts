@@ -662,6 +662,12 @@ test.describe("global agent config screenshots", () => {
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled();
     await page.getByTestId("persona-dialog-submit").click();
 
+    // `called` is asserted alongside the three omitted pins deliberately. The
+    // pins are read with `?.`, so a run where `create_persona` was never
+    // issued at all yields undefined for each and satisfies an assertion that
+    // only lists them -- the check passes hardest exactly when the submit
+    // button does nothing. Requiring `called: true` makes "no create" a
+    // failure instead of the strongest possible pass.
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -673,10 +679,12 @@ test.describe("global agent config screenshots", () => {
               }>;
             }
           ).__BUZZ_E2E_COMMAND_LOG__;
-          const createPayload = log?.find(
+          const createEntry = log?.find(
             (entry) => entry.command === "create_persona",
-          )?.payload.input;
+          );
+          const createPayload = createEntry?.payload.input;
           return {
+            called: createEntry !== undefined,
             runtime: createPayload?.runtime,
             model: createPayload?.model,
             provider: createPayload?.provider,
@@ -684,10 +692,19 @@ test.describe("global agent config screenshots", () => {
         }),
       )
       .toEqual({
+        called: true,
         runtime: undefined,
         model: undefined,
         provider: undefined,
       });
+
+    // Submitting closes the dialog. Asserted before reading the stored
+    // persona so a create that silently no-ops is reported here, against the
+    // dialog that stayed open, rather than later as a confusing "no persona
+    // named Test Agent" lookup miss.
+    await expect(page.getByRole("dialog", { name: "Add agent" })).toHaveCount(
+      0,
+    );
 
     // The pins are absent AND the agent still resolves to the saved default:
     // the bridge's create mirrors the backend inheritance chain, so the stored
