@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 408,
-    "rust_lines": 163470,
+    "rust_lines": 163539,
     "tauri_coupled": 162,
     "portable": 246,
-    "portable_lines": 92001,
+    "portable_lines": 92008,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -422,10 +422,10 @@
     ]
   },
   "commands": {
-    "registered": 343,
-    "defined": 343,
+    "registered": 345,
+    "defined": 345,
     "by_reach": {
-      "frontend": 337,
+      "frontend": 339,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -438,7 +438,7 @@
   },
   "params": {
     "AppHandle": 351,
-    "State": 254,
+    "State": 256,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
@@ -446,7 +446,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 348,
-      "State": 254,
+      "State": 256,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -552,6 +552,7 @@
     "src-tauri/src/commands/team_snapshot.rs": 4,
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
+    "src-tauri/src/commands/canvas.rs": 4,
     "src-tauri/src/commands/media_raw.rs": 3,
     "src-tauri/src/discovery_credentials.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
@@ -576,7 +577,6 @@
     "src-tauri/src/commands/agent_providers.rs": 2,
     "src-tauri/src/commands/personas/snapshot.rs": 2,
     "src-tauri/src/commands/company_scan.rs": 2,
-    "src-tauri/src/commands/canvas.rs": 2,
     "src-tauri/src/commands/provisioned_credits.rs": 2,
     "src-tauri/src/commands/messages/forum.rs": 2,
     "src-tauri/src/commands/global_agent_config.rs": 2,
@@ -2138,6 +2138,15 @@
         "src/features/workspace/lib/taskArtifactEvent.ts:8"
       ]
     },
+    "get_thread_canvas": {
+      "defining_file": "src-tauri/src/commands/canvas.rs",
+      "module": "canvas",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/threadCanvas.ts:24"
+      ]
+    },
     "get_thread_replies": {
       "defining_file": "src-tauri/src/commands/messages.rs",
       "module": "messages",
@@ -2146,7 +2155,7 @@
       "example_sites": [
         "src/parity/session/script.ts:570",
         "src/shared/api/tauri.ts:510",
-        "src/shared/api/types.ts:885"
+        "src/shared/api/types.ts:892"
       ]
     },
     "get_tts_settings": {
@@ -3414,6 +3423,15 @@
         "src/parity/session/script.ts:754",
         "src/parity/session/script.ts:755",
         "src/parity/session/script.ts:757"
+      ]
+    },
+    "set_thread_canvas": {
+      "defining_file": "src-tauri/src/commands/canvas.rs",
+      "module": "canvas",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/threadCanvas.ts:38"
       ]
     },
     "set_tts_enabled": {
