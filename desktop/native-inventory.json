@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 405,
-    "rust_lines": 162767,
+    "rust_total": 407,
+    "rust_lines": 163064,
     "tauri_coupled": 161,
-    "portable": 244,
-    "portable_lines": 91886,
+    "portable": 246,
+    "portable_lines": 92171,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -315,6 +315,8 @@
       "src-tauri/src/managed_agents/config_bridge/types.rs",
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/discovery.rs",
+      "src-tauri/src/managed_agents/discovery/codex_probe.rs",
+      "src-tauri/src/managed_agents/discovery/npm_prefix.rs",
       "src-tauri/src/managed_agents/discovery/nvm.rs",
       "src-tauri/src/managed_agents/discovery/overrides.rs",
       "src-tauri/src/managed_agents/discovery/presets.rs",
