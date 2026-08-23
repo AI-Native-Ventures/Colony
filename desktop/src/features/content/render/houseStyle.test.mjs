@@ -6,15 +6,9 @@
 // technicality.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const SRC = fileURLToPath(
-  new URL("../../src/features/content/render/houseStyle.ts", import.meta.url),
-);
-const {
+import {
   allText,
   bannedWordsGate,
   canvasGate,
@@ -22,9 +16,7 @@ const {
   houseStyleGate,
   mayRender,
   preRenderTextGates,
-} = await import(
-  `data:text/javascript,${encodeURIComponent(stripTypeScriptTypes(readFileSync(SRC, "utf8")))}`
-);
+} from "./houseStyle.ts";
 
 const KIT = {
   bannedWords: ["synergy", "leverage", "AI-powered"],

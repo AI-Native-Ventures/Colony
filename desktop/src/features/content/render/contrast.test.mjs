@@ -7,15 +7,9 @@
 // passes cards that should fail.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const SRC = fileURLToPath(
-  new URL("../../src/features/content/render/contrast.ts", import.meta.url),
-);
-const {
+import {
   AA_BODY,
   contrastRatio,
   measureRuns,
@@ -23,9 +17,7 @@ const {
   relativeLuminance,
   worstInBox,
   worstRatio,
-} = await import(
-  `data:text/javascript,${encodeURIComponent(stripTypeScriptTypes(readFileSync(SRC, "utf8")))}`
-);
+} from "./contrast.ts";
 
 const WHITE = [255, 255, 255];
 const BLACK = [0, 0, 0];

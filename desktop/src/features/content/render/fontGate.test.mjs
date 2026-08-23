@@ -8,26 +8,14 @@
 // arithmetic plus the stylesheet surgery that produces the control frame.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const DIR = new URL("../../src/features/content/render/", import.meta.url);
-
-/** Load a render module, inlining its one repo-local import. */
-async function load(name) {
-  const grain = stripTypeScriptTypes(
-    readFileSync(fileURLToPath(new URL("grain.ts", DIR)), "utf8"),
-  );
-  const src = stripTypeScriptTypes(
-    readFileSync(fileURLToPath(new URL(name, DIR)), "utf8"),
-  ).replace(/^import\s*\{[^}]*\}\s*from\s*"\.\/grain";?$/m, grain);
-  return import(`data:text/javascript,${encodeURIComponent(src)}`);
-}
-
-const { FALLBACK_FLOOR, fontReachedRaster, meanAbsoluteDelta, stripFontFaces } =
-  await load("fontGate.ts");
+import {
+  FALLBACK_FLOOR,
+  fontReachedRaster,
+  meanAbsoluteDelta,
+  stripFontFaces,
+} from "./fontGate.ts";
 
 const W = 40;
 const H = 40;

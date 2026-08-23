@@ -10,30 +10,9 @@
 //      ready, and a report naming the wrong hash is refused at ingest.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const DIR = new URL("../../src/features/content/render/", import.meta.url);
-
-/** Load pipeline.ts with its repo-local imports inlined. */
-async function loadPipeline() {
-  const read = (name) =>
-    stripTypeScriptTypes(
-      readFileSync(fileURLToPath(new URL(name, DIR)), "utf8"),
-    );
-  const deps = ["grain.ts", "contrast.ts", "fontGate.ts", "houseStyle.ts"]
-    .map(read)
-    .map((s) => s.replace(/^import[^;]*;$/gm, ""))
-    .join("\n");
-  const src = read("pipeline.ts").replace(/^import[^;]*;$/gm, "");
-  return import(
-    `data:text/javascript,${encodeURIComponent(`${deps}\n${src}`)}`
-  );
-}
-
-const {
+import {
   contrastGateEntry,
   fontGateEntry,
   grainGateEntry,
@@ -41,7 +20,7 @@ const {
   renderCard,
   reportPasses,
   slideReport,
-} = await loadPipeline();
+} from "./pipeline.ts";
 
 const REQUIRED = [
   "canvas",

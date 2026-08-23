@@ -8,18 +8,14 @@
 // high despite varying no more overall.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const SRC = fileURLToPath(
-  new URL("../../src/features/content/render/grain.ts", import.meta.url),
-);
-const { flattestTile, grainWithin, luminancePlane, measureGrain } =
-  await import(
-    `data:text/javascript,${encodeURIComponent(stripTypeScriptTypes(readFileSync(SRC, "utf8")))}`
-  );
+import {
+  flattestTile,
+  grainWithin,
+  luminancePlane,
+  measureGrain,
+} from "./grain.ts";
 
 const W = 64;
 const H = 64;
