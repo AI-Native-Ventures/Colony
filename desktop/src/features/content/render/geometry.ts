@@ -57,10 +57,12 @@ export function antSvg({
     BODY.map((c) => `<circle cx="${c.cx}" cy="${c.cy}" r="${c.r}"/>`).join("") +
     `</g>`;
   const wings = winged
-    ? [
-        [HIND_WING, 0.3],
-        [FORE_WING, 0.45],
-      ]
+    ? (
+        [
+          [HIND_WING, 0.3],
+          [FORE_WING, 0.45],
+        ] as const
+      )
         .map(
           ([w, o]) =>
             `<ellipse cx="${w.cx}" cy="${w.cy}" rx="${w.rx}" ry="${w.ry}" transform="rotate(${w.rotate} ${w.cx} ${w.cy})" fill="${color}" fill-opacity="${o}"/>`,
