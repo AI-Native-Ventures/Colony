@@ -125,8 +125,10 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+use buzz_ws_client::RelayPin;
 
 use crate::config::ChannelFilter;
 
@@ -621,6 +623,11 @@ pub struct HarnessRelay {
     http: reqwest::Client,
     /// WebSocket URL of the relay.
     relay_url: String,
+    /// The identity boundary: the one relay this agent may ever contact.
+    /// Built from the record-resolved `relay_url` at connect time; every
+    /// reconnect dials through it, so a future code path cannot silently
+    /// carry the process to another community's relay.
+    relay_pin: RelayPin,
     /// Keys used for NIP-42 signing and NIP-98 HTTP auth.
     keys: Keys,
     /// Optional NIP-OA auth tag for relay membership delegation.
@@ -678,13 +685,18 @@ impl HarnessRelay {
         agent_pubkey_hex: &str,
         auth_tag: Option<nostr::Tag>,
     ) -> Result<Self, RelayError> {
+        // Pin the identity boundary BEFORE any dial. A record whose relay_url
+        // cannot be pinned stops here rather than falling back to a default.
+        let relay_pin = RelayPin::new(relay_url)
+            .map_err(|e| RelayError::Http(format!("cannot pin relay identity: {e}")))?;
+
         // Perform the initial connection and auth handshake, retrying
         // transient failures (dropped handshake, timeout) with bounded
         // jittered backoff. A terminal error (bad URL, bad auth tag,
         // rejected/invalid signing key) fails immediately — see
         // `is_terminal_connect_error`.
         let (ws, handshake_buffer) =
-            retry_initial_connect(|| do_connect(relay_url, keys, auth_tag.as_ref())).await?;
+            retry_initial_connect(|| do_connect(relay_pin.url(), keys, auth_tag.as_ref())).await?;
 
         let (event_tx, event_rx) = mpsc::channel::<Option<BuzzEvent>>(event_channel_capacity());
         let (ask_tx, ask_rx) = mpsc::channel::<Event>(event_channel_capacity());
@@ -693,7 +705,8 @@ impl HarnessRelay {
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
 
         let bg_keys = keys.clone();
-        let bg_relay_url = relay_url.to_string();
+        let bg_relay_url = relay_pin.url().to_string();
+        let bg_relay_pin = relay_pin.clone();
         let bg_agent_pubkey_hex = agent_pubkey_hex.to_string();
         let bg_auth_tag = auth_tag.clone();
 
@@ -707,6 +720,7 @@ impl HarnessRelay {
                 cmd_rx,
                 bg_keys,
                 bg_relay_url,
+                bg_relay_pin,
                 bg_agent_pubkey_hex,
                 bg_auth_tag,
             )
@@ -723,7 +737,8 @@ impl HarnessRelay {
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
-            relay_url: relay_url.to_string(),
+            relay_url: relay_pin.url().to_string(),
+            relay_pin,
             keys: keys.clone(),
             auth_tag,
             bg_handle: Some(bg_handle),
@@ -1678,9 +1693,18 @@ async fn run_background_task(
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
     relay_url: String,
+    relay_pin: RelayPin,
     agent_pubkey_hex: String,
     auth_tag: Option<nostr::Tag>,
 ) {
+    // Identity boundary guard: the URL this task dials must be the pinned one.
+    // Both are derived from the same `HarnessRelay::connect` argument, so a
+    // mismatch is an internal invariant break — refuse to run rather than
+    // carry the process toward another community's relay.
+    if let Err(error) = relay_pin.ensure_allows(&relay_url) {
+        error!("{error}; refusing to run the relay background task off its pinned identity");
+        return;
+    }
     let mut state = BgState::new();
 
     let handshake_ok = process_handshake_buffer(
@@ -1691,7 +1715,7 @@ async fn run_background_task(
         &observer_control_tx,
         &mut state,
         &keys,
-        &relay_url,
+        &relay_pin,
         &agent_pubkey_hex,
         auth_tag.as_ref(),
     )
@@ -1706,7 +1730,7 @@ async fn run_background_task(
             &mut cmd_rx,
             &mut state,
             &keys,
-            &relay_url,
+            &relay_pin,
             &agent_pubkey_hex,
             &event_tx,
             &ask_tx,
@@ -1731,7 +1755,7 @@ async fn run_background_task(
                         &mut cmd_rx,
                         &mut state,
                         &keys,
-                        &relay_url,
+                        &relay_pin,
                         &agent_pubkey_hex,
                         &event_tx,
                         &ask_tx,
@@ -1791,7 +1815,7 @@ async fn run_background_task(
                         &mut cmd_rx,
                         &mut state,
                         &keys,
-                        &relay_url,
+                        &relay_pin,
                         &agent_pubkey_hex,
                         &event_tx,
                         &ask_tx,
@@ -1822,7 +1846,7 @@ async fn run_background_task(
                                     &mut cmd_rx,
                                     &mut state,
                                     &keys,
-                                    &relay_url,
+                                    &relay_pin,
                                     &agent_pubkey_hex,
                                     &event_tx,
                                     &ask_tx,
@@ -1954,7 +1978,7 @@ async fn run_background_task(
                                        &observer_control_tx,
                                        &mut state,
                                        &keys,
-                                       &relay_url,
+                                       &relay_pin,
                                        &agent_pubkey_hex,
                                        auth_tag.as_ref(),
                                    )
@@ -1981,7 +2005,7 @@ async fn run_background_task(
                                &mut cmd_rx,
                                &mut state,
                                &keys,
-                               &relay_url,
+                               &relay_pin,
                                &agent_pubkey_hex,
                                &event_tx,
                                &ask_tx,
@@ -2005,7 +2029,7 @@ async fn run_background_task(
                            ReconnectOutcome::Failed => {
                                if matches!(
                                    wait_for_reconnect(
-                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
@@ -2025,7 +2049,7 @@ async fn run_background_task(
                            Some(RelayCommand::Reconnect) => {
                                if matches!(
                                    wait_for_reconnect(
-                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                    ).await,
@@ -2059,7 +2083,7 @@ async fn run_background_task(
                                    warn!("command send failed — triggering reconnect");
                                    let _ = event_tx.try_send(None);
                                    match try_autonomous_reconnect(
-                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx,
                                    &observer_control_tx,
             auth_tag.as_ref(),
@@ -2074,7 +2098,7 @@ async fn run_background_task(
                                        ReconnectOutcome::Failed => {
                                            if matches!(
                                                wait_for_reconnect(
-                                                   &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                                   &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                                ).await,
@@ -2098,7 +2122,7 @@ async fn run_background_task(
                            // Use try_send to avoid blocking on backpressure during recovery.
                            let _ = event_tx.try_send(None);
                            match try_autonomous_reconnect(
-                               &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                               &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx,
                            &observer_control_tx,
             auth_tag.as_ref(),
@@ -2113,7 +2137,7 @@ async fn run_background_task(
                                ReconnectOutcome::Failed => {
                                    if matches!(
                                        wait_for_reconnect(
-                                           &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                           &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                        ).await,
@@ -2131,7 +2155,7 @@ async fn run_background_task(
                                // Use try_send to avoid blocking on backpressure during recovery.
                                let _ = event_tx.try_send(None);
                                match try_autonomous_reconnect(
-                                   &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                   &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx,
                                &observer_control_tx,
             auth_tag.as_ref(),
@@ -2146,7 +2170,7 @@ async fn run_background_task(
                                    ReconnectOutcome::Failed => {
                                        if matches!(
                                            wait_for_reconnect(
-                                               &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+                                               &mut ws, &mut cmd_rx, &mut state, &keys, &relay_pin,
         &agent_pubkey_hex, &event_tx, &ask_tx, &observer_control_tx, true,
                         auth_tag.as_ref(),
                                            ).await,
@@ -3138,7 +3162,7 @@ async fn try_autonomous_reconnect(
     cmd_rx: &mut mpsc::Receiver<RelayCommand>,
     state: &mut BgState,
     keys: &Keys,
-    relay_url: &str,
+    relay_pin: &RelayPin,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     ask_tx: &mpsc::Sender<Event>,
@@ -3165,7 +3189,7 @@ async fn try_autonomous_reconnect(
             attempt + 1,
             backoffs.len()
         );
-        match do_connect(relay_url, keys, auth_tag).await {
+        match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
                 info!("autonomous reconnect succeeded (attempt {})", attempt + 1);
@@ -3177,7 +3201,7 @@ async fn try_autonomous_reconnect(
                     observer_control_tx,
                     state,
                     keys,
-                    relay_url,
+                    relay_pin.url(),
                     agent_pubkey_hex,
                     auth_tag,
                 )
@@ -3269,7 +3293,7 @@ async fn wait_for_reconnect(
     cmd_rx: &mut mpsc::Receiver<RelayCommand>,
     state: &mut BgState,
     keys: &Keys,
-    relay_url: &str,
+    relay_pin: &RelayPin,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     ask_tx: &mpsc::Sender<Event>,
@@ -3304,11 +3328,11 @@ async fn wait_for_reconnect(
     ];
     let mut attempt = state.backoff_step;
     loop {
-        info!("attempting relay reconnect to {relay_url}…");
-        match do_connect(relay_url, keys, auth_tag).await {
+        info!("attempting relay reconnect to {relay_pin.url()}…");
+        match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
-                info!("relay reconnected to {relay_url}");
+                info!("relay reconnected to {relay_pin.url()}");
                 let handshake_ok = process_handshake_buffer(
                     ws,
                     handshake_buffer,
@@ -3317,7 +3341,7 @@ async fn wait_for_reconnect(
                     observer_control_tx,
                     state,
                     keys,
-                    relay_url,
+                    relay_pin.url(),
                     agent_pubkey_hex,
                     auth_tag,
                 )
@@ -4303,6 +4327,29 @@ async fn wait_for_any_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Identity boundary: an agent process dials only its pinned relay.
+    ///
+    /// Regression guard for the community-leak class (F5): every WebSocket
+    /// dial in this module must go through the `RelayPin` captured from the
+    /// record-resolved `relay_url`, so no future code path can reconnect the
+    /// harness toward another community's relay.
+    #[test]
+    fn every_dial_goes_through_the_pinned_relay() {
+        let src = include_str!("relay.rs");
+        // The initial connect and both reconnect loops dial through the pin.
+        assert_eq!(
+            src.matches("do_connect(relay_pin.url()").count(),
+            3,
+            "initial connect plus try_autonomous_reconnect and wait_for_reconnect must all pin"
+        );
+        // No dial site may take a bare URL again.
+        assert_eq!(
+            src.matches("do_connect(relay_url").count(),
+            0,
+            "a dial site bypasses the identity boundary"
+        );
+    }
 
     #[test]
     fn relay_ws_to_http_plain() {
