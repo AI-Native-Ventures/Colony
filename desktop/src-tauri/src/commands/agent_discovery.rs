@@ -452,7 +452,11 @@ async fn restart_setup_mode_agents_after_install(
             .iter()
             .filter(|record| {
                 let is_local = record.backend == BackendKind::Local;
-                let effective_cmd = record_agent_command(record, &personas);
+                let effective_cmd =
+                    crate::managed_agents::effective_config::resolve_effective_harness_command(
+                        record, &personas, &global,
+                    )
+                    .unwrap_or_else(|_| record_agent_command(record, &personas));
                 let runtime_matches =
                     known_acp_runtime(&effective_cmd).is_some_and(|r| r.id == runtime_id_owned);
                 let setup_mode = runtimes
@@ -573,7 +577,11 @@ async fn restart_single_agent_after_install(
         let personas = load_personas(&app_for_stop).unwrap_or_default();
         let global = load_global_agent_config(&app_for_stop).unwrap_or_default();
 
-        let effective_cmd = record_agent_command(record, &personas);
+        let effective_cmd =
+            crate::managed_agents::effective_config::resolve_effective_harness_command(
+                record, &personas, &global,
+            )
+            .unwrap_or_else(|_| record_agent_command(record, &personas));
         let runtime_matches =
             known_acp_runtime(&effective_cmd).is_some_and(|r| r.id == runtime_id_owned);
         if !runtime_matches {
