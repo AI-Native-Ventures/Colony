@@ -152,23 +152,107 @@ const FONT_DISPLAYS = [
   "optional",
 ] as const;
 
+/**
+ * The bodies of every `@font-face` rule, read by balancing braces rather than
+ * with a `[^}]*` class: a base64 payload happens never to contain a closing
+ * brace, but the parser has no business assuming that.
+ */
+function fontFaceBodies(css: string): string[] {
+  const bodies: string[] = [];
+  let from = 0;
+  for (;;) {
+    const at = css.indexOf("@font-face", from);
+    if (at < 0) {
+      break;
+    }
+    const open = css.indexOf("{", at);
+    if (open < 0) {
+      break;
+    }
+    let depth = 1;
+    let quote: string | null = null;
+    let i = open + 1;
+    for (; i < css.length && depth > 0; i++) {
+      const ch = css[i];
+      if (quote) {
+        if (ch === "\\") {
+          i++;
+        } else if (ch === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+      }
+    }
+    if (depth === 0) {
+      bodies.push(css.slice(open + 1, i - 1));
+    }
+    from = i;
+  }
+  return bodies;
+}
+
+/**
+ * One descriptor's value, read to the end of its declaration: a semicolon
+ * inside url(...) or a quoted string does not end it. A base64 data URI
+ * always contains one (";base64,"), so a `[^;}]+` character class truncates
+ * mid-URI and the FontFace API then throws NetworkError on the malformed
+ * source.
+ */
+function readDescriptor(body: string, name: string): string | null {
+  const head = body.match(new RegExp(`${name}\\s*:\\s*`));
+  if (!head || head.index === undefined) {
+    return null;
+  }
+  const start = head.index + head[0].length;
+  let depth = 0;
+  let quote: string | null = null;
+  let i = start;
+  for (; i < body.length; i++) {
+    const ch = body[i];
+    if (quote) {
+      if (ch === "\\") {
+        i++;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "(") {
+      depth++;
+    } else if (ch === ")") {
+      depth = Math.max(0, depth - 1);
+    } else if (ch === ";" && depth === 0) {
+      break;
+    }
+  }
+  return body.slice(start, i).trim() || null;
+}
+
 /** Pull the `@font-face` rules out of a stylesheet as FontFace specs. */
 export function extractFontFaces(css: string): FontFaceSpec[] {
   const specs: FontFaceSpec[] = [];
-  const blocks = css.matchAll(/@font-face\s*\{([^}]*)\}/g);
-  for (const [, body] of blocks) {
-    const family = body.match(/font-family\s*:\s*([^;}]+)[;}]/)?.[1];
-    const src = body.match(/src\s*:\s*([^;}]+)/)?.[1];
+  for (const body of fontFaceBodies(css)) {
+    const family = readDescriptor(body, "font-family");
+    const src = readDescriptor(body, "src");
     if (!family || !src) {
       continue;
     }
-    const weight = body.match(/font-weight\s*:\s*([^;}]+)[;}]/)?.[1]?.trim();
-    const display = body.match(/font-display\s*:\s*([^;}]+)[;}]/)?.[1]?.trim();
     specs.push({
-      display: FONT_DISPLAYS.find((valid) => valid === display),
-      family: family.trim().replace(/^["']|["']$/g, ""),
-      src: src.trim(),
-      weight,
+      display: FONT_DISPLAYS.find(
+        (valid) => valid === readDescriptor(body, "font-display"),
+      ),
+      family: family.replace(/^["']|["']$/g, ""),
+      src,
+      weight: readDescriptor(body, "font-weight"),
     });
   }
   return specs;
