@@ -624,6 +624,21 @@ impl ChannelInfoResolver {
 }
 
 pub struct PromptContext {
+    /// Whether a channel turn that stops is asked whether the request is
+    /// actually finished, and driven on if it is not.
+    ///
+    /// See [`crate::completion_check`]. Off leaves the old behaviour exactly as
+    /// it was: the model's first stop ends the turn, whatever remains undone.
+    pub completion_check: bool,
+    /// Signal to the main loop that a channel's turn has been granted a fresh
+    /// budget and its in-flight deadline must be extended.
+    ///
+    /// The queue frees a channel whose turn overruns its deadline, so a
+    /// continuation running past it would let a second turn dispatch onto the
+    /// same session. Only the main loop owns the queue, hence the channel.
+    /// `None` disables the extension, which is correct only where nothing
+    /// continues a turn (tests, heartbeat-only harnesses).
+    pub deadline_extend_tx: Option<mpsc::UnboundedSender<Uuid>>,
     pub mcp_servers: Vec<McpServer>,
     pub initial_message: Option<String>,
     pub idle_timeout: Duration,
@@ -2611,6 +2626,41 @@ pub async fn run_prompt_task(
                 agent.state.heartbeat_standing_context_sent = true;
             }
 
+            // The model stopping is not the work being finished. Ask, before
+            // the turn is handed back and while the session is still live.
+            //
+            // Deliberately ahead of the rotation decision below: rotation
+            // invalidates the session a continuation would run on. Only ordinary
+            // end-of-turn stops qualify — a turn that hit a token or request
+            // ceiling has a different problem, and driving it on would walk
+            // straight back into the same wall.
+            if ctx.completion_check && matches!(stop_reason, StopReason::EndTurn) {
+                if let PromptSource::Channel(cid) = &source {
+                    if let Some(request) = triggering_request_text(batch.as_ref()) {
+                        let thread_tags = batch
+                            .as_ref()
+                            .and_then(|b| b.events.last())
+                            .map(|be| crate::queue::parse_thread_tags(&be.event))
+                            .unwrap_or_default();
+                        let outcome = drive_to_completion(
+                            &mut agent,
+                            &session_id,
+                            &ctx,
+                            *cid,
+                            &thread_tags,
+                            &request,
+                        )
+                        .await;
+                        tracing::info!(
+                            target: "pool::completion",
+                            channel_id = %cid,
+                            ?outcome,
+                            "completion check finished"
+                        );
+                    }
+                }
+            }
+
             let should_rotate = matches!(
                 stop_reason,
                 StopReason::MaxTokens | StopReason::MaxTurnRequests
@@ -4534,6 +4584,141 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
 /// batch is dead-lettered. Replies into the thread of `thread_tags` when the
 /// triggering event was threaded. Errors are logged and swallowed — the
 /// notice must never take down the main loop.
+/// Longest request text carried into a completion check.
+///
+/// The check is charged like any other prompt, and a request long enough to
+/// exceed this is one whose opening lines carry the intent anyway.
+const MAX_COMPLETION_CHECK_REQUEST_CHARS: usize = 4_000;
+
+/// The human's own words that started this turn.
+///
+/// Joined in arrival order across the batch, because a request split over two
+/// quick messages is one request. Returns `None` when there is nothing to quote
+/// back — a turn with no triggering text (a heartbeat, an empty batch) has no
+/// request to check against, and asking about one would invite the agent to
+/// invent it.
+fn triggering_request_text(batch: Option<&FlushBatch>) -> Option<String> {
+    let batch = batch?;
+    let joined = batch
+        .events
+        .iter()
+        .map(|be| be.event.content.trim())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if joined.is_empty() {
+        return None;
+    }
+    let truncated = match joined
+        .char_indices()
+        .nth(MAX_COMPLETION_CHECK_REQUEST_CHARS)
+    {
+        Some((cut, _)) => format!("{}…", &joined[..cut]),
+        None => joined,
+    };
+    Some(truncated)
+}
+
+/// Longest a single completion check may run.
+///
+/// The check is one question, but answering it honestly means looking at the
+/// work, which costs tool calls. Bounded well under a full turn so a check that
+/// turns into work of its own cannot consume the budget the work needs.
+const COMPLETION_CHECK_MAX_DURATION: Duration = Duration::from_secs(600);
+
+/// Drives one agent's completion check over its live ACP session.
+///
+/// Holds the session and the budgets; the loop itself lives in
+/// [`crate::completion_check::run_completion_loop`], where it is tested against
+/// a scripted responder rather than a live model.
+struct SessionResponder<'a> {
+    agent: &'a mut OwnedAgent,
+    session_id: &'a str,
+    ctx: &'a PromptContext,
+    channel_id: Uuid,
+    /// Set once a continuation has been sent, so the turn's in-flight deadline
+    /// is extended before the agent starts spending the budget it was granted.
+    check_budget: Duration,
+}
+
+impl crate::completion_check::CompletionResponder for SessionResponder<'_> {
+    type Error = AcpError;
+
+    async fn ask(&mut self, prompt: &str) -> Result<String, Self::Error> {
+        self.agent.acp.begin_agent_text_capture();
+        let result = self
+            .agent
+            .acp
+            .session_prompt_blocks_with_idle_timeout(
+                self.session_id,
+                &[prompt],
+                self.ctx.idle_timeout,
+                self.check_budget,
+            )
+            .await;
+        let answer = self.agent.acp.take_agent_text_capture().unwrap_or_default();
+        result.map(|_| answer)
+    }
+
+    async fn instruct(&mut self, prompt: &str) -> Result<(), Self::Error> {
+        // A continuation is a fresh turn's worth of work. Without this the
+        // queue frees the channel mid-continuation and a second turn can
+        // dispatch onto the same session.
+        if let Some(tx) = &self.ctx.deadline_extend_tx {
+            let _ = tx.send(self.channel_id);
+        }
+        self.agent
+            .acp
+            .session_prompt_blocks_with_idle_timeout(
+                self.session_id,
+                &[prompt],
+                self.ctx.idle_timeout,
+                self.ctx.max_turn_duration,
+            )
+            .await
+            .map(|_| ())
+    }
+}
+
+/// Ask a stopped agent whether the request is actually done, and drive it on
+/// while it is not.
+///
+/// Runs after the model has stopped but before the turn is handed back, so
+/// continuations happen inside the same turn and on the same session. That is
+/// what makes the "three consecutive" rule free of stored state: a new human
+/// message starts a new turn, which starts a new counter.
+async fn drive_to_completion(
+    agent: &mut OwnedAgent,
+    session_id: &str,
+    ctx: &PromptContext,
+    channel_id: Uuid,
+    thread_tags: &ThreadTags,
+    request: &str,
+) -> crate::completion_check::CompletionOutcome {
+    let mut responder = SessionResponder {
+        agent,
+        session_id,
+        ctx,
+        channel_id,
+        check_budget: ctx.max_turn_duration.min(COMPLETION_CHECK_MAX_DURATION),
+    };
+    let outcome = crate::completion_check::run_completion_loop(&mut responder, request).await;
+
+    if let crate::completion_check::CompletionOutcome::Exhausted { remaining } = &outcome {
+        tracing::warn!(
+            target: "pool::completion",
+            %channel_id,
+            ?remaining,
+            "agent stopped short {} times running — handing back",
+            crate::completion_check::MAX_CONSECUTIVE_INCOMPLETE
+        );
+        let notice = crate::completion_check::build_exhausted_notice(remaining);
+        post_failure_notice(&ctx.rest_client, channel_id, thread_tags, &notice).await;
+    }
+
+    outcome
+}
+
 pub(crate) async fn post_failure_notice(
     rest: &crate::relay::RestClient,
     channel_id: Uuid,
@@ -8018,6 +8203,10 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
     ) -> PromptContext {
         use crate::relay::RestClient;
         PromptContext {
+            // Off in unit tests: these construct a context to exercise other
+            // paths, and a completion check would need a live agent to answer.
+            completion_check: false,
+            deadline_extend_tx: None,
             mcp_servers: vec![],
             initial_message: None,
             idle_timeout: Duration::from_secs(60),
