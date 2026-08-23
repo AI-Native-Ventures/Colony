@@ -4081,6 +4081,7 @@ mod tests {
                 "campaign-set",
                 "decide",
                 "decisions",
+                "kit-derive",
                 "kit-get",
                 "kit-list",
                 "kit-set",
