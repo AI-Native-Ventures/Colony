@@ -11,6 +11,23 @@ export type OpenAsk = {
   rawContent: string;
   channelId: string | null;
   threadId: string | null;
+  /**
+   * Who the ask is addressed to (the `p` tag), or null when the event
+   * carries no readable audience.
+   */
+  audiencePubkey: string | null;
+  /**
+   * The `prior` tag: set only on relay-signed promotions, naming the earlier
+   * ask this one supersedes. An agent-authored ask never carries it -- the
+   * relay refuses the tag on anything it did not sign itself.
+   */
+  priorAskId: string | null;
+  /**
+   * The `filer` tag on a relay-signed promotion: the ORIGINAL filer carried
+   * forward, since this event's own pubkey is the relay, not the blocked
+   * agent. Null on ordinary asks.
+   */
+  originalFilerPubkey: string | null;
 };
 
 type AskEventShape = {
@@ -21,6 +38,24 @@ type AskEventShape = {
   content: string;
   tags?: string[][];
 };
+
+/** A lowercase hex string of exactly 64 characters (a pubkey or event id). */
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * Read a single-valued routing tag, mirroring the relay's ask parser
+ * (`buzz_core::interrupt::parse_ask` via `single_tag_value`): the FIRST
+ * occurrence supplies the value, and a duplicate means the tag is
+ * UNREADABLE -- fail closed to null, never first-wins.
+ */
+function singleRoutingTag(tags: string[][], name: string): string | null {
+  const matches = tags.filter(
+    (tag) =>
+      tag[0] === name && typeof tag[1] === "string" && tag[1].trim() !== "",
+  );
+  if (matches.length !== 1) return null;
+  return matches[0][1]?.trim().toLowerCase() ?? null;
+}
 
 /**
  * Read an ask off a relay event, or null when it is not an ask or cannot be
@@ -47,6 +82,11 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
           tag[0] === name && typeof tag[1] === "string" && tag[1].trim() !== "",
       )?.[1]
       ?.trim() ?? null;
+  // Routing provenance is hex64 or nothing, exactly as the relay validates
+  // it at ingest (`validate_hex64_field`).
+  const audienceTag = singleRoutingTag(tags, "p");
+  const priorTag = singleRoutingTag(tags, "prior");
+  const filerTag = singleRoutingTag(tags, "filer");
   const channelId = sourceTag("h");
   const threadId = sourceTag("e");
   return {
@@ -60,6 +100,11 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
     rawContent: event.content,
     channelId: channelId?.trim() || null,
     threadId: threadId?.trim() || null,
+    audiencePubkey:
+      audienceTag !== null && HEX64.test(audienceTag) ? audienceTag : null,
+    priorAskId: priorTag !== null && HEX64.test(priorTag) ? priorTag : null,
+    originalFilerPubkey:
+      filerTag !== null && HEX64.test(filerTag) ? filerTag : null,
   };
 }
 

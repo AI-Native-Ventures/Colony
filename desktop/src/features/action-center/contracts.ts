@@ -115,6 +115,11 @@ export type ActionMessageItem = Omit<ActionItem, "kind" | "source"> & {
 
 export type ActionCenterProjectionInput = {
   asks: readonly OpenAsk[];
+  /**
+   * Short routing phrases by ask id ("Auto-routed to the filer's
+   * manager", ...). Absent means the summary stays as it was.
+   */
+  askRoutingNotesByAskId?: ReadonlyMap<string, string>;
   feed?: {
     mentions: readonly FeedItem[];
     needsAction: readonly FeedItem[];

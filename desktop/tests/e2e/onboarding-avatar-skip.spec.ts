@@ -75,7 +75,7 @@ test("avatar step shares the profile emoji picker controls", async ({
   expect(controlHeights).toEqual({ input: 48, tone: 48 });
 });
 
-test("avatar step skip button completes community profile setup", async ({
+test("avatar step skip button advances to the key-backup step", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -87,6 +87,13 @@ test("avatar step skip button completes community profile setup", async ({
 
   await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
   await page.getByTestId("onboarding-skip").click();
+
+  // The avatar skip lands on the backup step; onboarding is not done until
+  // the user saves a recovery artifact or acknowledges going without one.
+  await expect(page.getByTestId("onboarding-page-backup")).toBeVisible();
+  await page.getByTestId("onboarding-next").click();
+  await expect(page.getByTestId("onboarding-backup-ack-dialog")).toBeVisible();
+  await page.getByTestId("onboarding-backup-ack-confirm").click();
 
   await expect(page.getByTestId("onboarding-gate")).not.toBeVisible();
 });

@@ -28,3 +28,9 @@ e2e-real-shell/results
 *.njsproj
 *.sln
 *.sw?
+
+# /design-sync artifacts. ds-styles.css is a copy of the compiled Tailwind
+# output and dist-ds/ is the build that produces it; both are regenerated,
+# never edited, and must stay out of lint and format runs.
+ds-styles.css
+dist-ds

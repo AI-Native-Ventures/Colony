@@ -91,6 +91,17 @@ DISCOVERY_EXTERNAL_WORKER_ENABLED="${BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED:-fal
 DISCOVERY_FAKE_EXECUTOR_ENABLED="${BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED:-false}"
 DISCOVERY_LEASE_SECONDS="${BUZZ_DISCOVERY_LEASE_SECONDS:-30}"
 RELAY_PRIVATE_KEY="${BUZZ_RELAY_PRIVATE_KEY:-}"
+# Only pass the key through when one is actually set. The relay reads it with
+# env::var().ok(), which yields Some("") for an empty variable rather than
+# None, and Keys::parse("") then fails with "Invalid secret key". Passing it
+# unconditionally therefore killed the relay on startup for every run that did
+# not already export a key, and the failure named the key rather than the
+# script that fabricated it.
+if [ -n "${RELAY_PRIVATE_KEY}" ]; then
+  RELAY_KEY_ENV="BUZZ_RELAY_PRIVATE_KEY='${RELAY_PRIVATE_KEY}'"
+else
+  RELAY_KEY_ENV=""
+fi
 
 BLUE='\033[0;34m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
 log() { echo -e "${BLUE}[isolated-relay]${NC} $*"; }
@@ -328,7 +339,7 @@ tmux new-session -d -s "${TMUX_SESSION}" "cd '${REPO_ROOT}' && env \
   BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED='${DISCOVERY_EXTERNAL_WORKER_ENABLED}' \
   BUZZ_DISCOVERY_FAKE_EXECUTOR_ENABLED='${DISCOVERY_FAKE_EXECUTOR_ENABLED}' \
   BUZZ_DISCOVERY_LEASE_SECONDS='${DISCOVERY_LEASE_SECONDS}' \
-  BUZZ_RELAY_PRIVATE_KEY='${RELAY_PRIVATE_KEY}' \
+  ${RELAY_KEY_ENV} \
   './target/${CARGO_TARGET_PROFILE}/buzz-relay' > '${RELAY_LOG}' 2>&1"
 
 # Wait for the main port to accept connections.

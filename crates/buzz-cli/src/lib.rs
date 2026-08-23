@@ -292,7 +292,7 @@ enum Cmd {
     /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
-    /// Plan, render, and approve social content (kinds 30195-30197, 40025)
+    /// Plan, render, and approve social content (kinds 30195-30198, 40025)
     #[command(subcommand)]
     Content(ContentCmd),
 }
@@ -362,6 +362,74 @@ pub enum ContentCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Create or replace a brand kit head (kind 30198)
+    ///
+    /// The kit is the source of truth every content gate measures against.
+    /// The relay validates the structure (shapes, hex colours, hashes, enum
+    /// arms, caps) and does not interpret it, so this command stores what a
+    /// scan produced or a human edited; it never derives anything itself.
+    KitSet {
+        /// Kit id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the kit JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one brand kit head
+    KitGet {
+        /// Kit id
+        #[arg(long)]
+        id: String,
+    },
+    /// List brand kits, newest head per id
+    KitList {},
+    /// Derive a brand kit proposal from a website scan (kind 30198)
+    ///
+    /// Runs a bounded scan of `--url`, aggregates the brand evidence the scan
+    /// already collects, solves every text-bearing ramp stop against WCAG
+    /// contrast by bisection, fetches and uploads the site's logo and favicon
+    /// as marks, and prints the proposed kit body. Nothing is published:
+    /// derivation proposes and the owner accepts with `content kit set`,
+    /// editing first if they want to. A re-scan therefore never clobbers a
+    /// hand-edited kit.
+    KitDerive {
+        /// Site to scan for brand evidence
+        #[arg(long)]
+        url: String,
+        /// Most pages to read. Fewer than a company brief needs; style
+        /// evidence saturates early.
+        #[arg(long)]
+        max_pages: Option<usize>,
+        /// Skip mark upload and emit hues/type/canvases/rules only
+        #[arg(long)]
+        skip_marks: bool,
+        /// Write the proposal here instead of stdout (`@` not needed)
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Create or replace an asset library head (kind 30199)
+    ///
+    /// The library is an index over media that already lives in Blossom,
+    /// not a second store: each item names a sha256 plus its tags, alt
+    /// text, rights note, provenance, and whether the depicted subject is
+    /// fictional. This command stores the index; it never uploads anything.
+    LibrarySet {
+        /// Library id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the library JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one asset library head
+    LibraryGet {
+        /// Library id
+        #[arg(long)]
+        id: String,
+    },
+    /// List asset libraries, newest head per id
+    LibraryList {},
     /// Approve a post or send it back (kind 40025)
     ///
     /// Built from the post as it currently stands on the relay: the decision
@@ -2820,9 +2888,11 @@ pub struct AskFileArgs {
     pub ask_type: String,
     /// Audience pubkey (64-char hex): must be exactly one tier above the
     /// filer (worker -> leader, leader -> executive, executive -> a
-    /// community owner)
+    /// community owner). Optional: when omitted, `asks raise` addresses the
+    /// filer's manager, resolved from the relay's reporting-line records.
+    /// An explicit value always wins.
     #[arg(long)]
-    pub to: String,
+    pub to: Option<String>,
     /// Initiative id this ask belongs to. Copy it from the
     /// `<colony-work-context>` block's `Initiative id` line. Omit it when
     /// that line reads `none`: work with no initiative (any task created
@@ -2885,6 +2955,42 @@ pub enum EmployeesCmd {
         /// Where the employee sits on the interrupt ladder
         #[arg(long, default_value = "worker")]
         rank: String,
+        /// Manager pubkey (64 hex): an agent one rank up. Executives take
+        /// none; workers point at a leader, leaders at the executive.
+        #[arg(long)]
+        manager: Option<String>,
+    },
+    /// Change an employee's rank (kind 9046). Identity, role slug and hire
+    /// event are untouched; the row and head update together. A demotion is
+    /// refused while any report would be stranded below its escalation
+    /// target -- reassign them first.
+    Promote {
+        /// The employee's pubkey (64 hex characters)
+        pubkey: String,
+        /// New rank on the interrupt ladder
+        #[arg(long)]
+        rank: String,
+        /// New manager pubkey (64 hex), when the change should also move the
+        /// reporting line. Required when the new rank needs a manager the
+        /// employee does not yet have.
+        #[arg(long)]
+        manager: Option<String>,
+    },
+    /// Move an employee's reporting line to a new manager (kind 9046),
+    /// without changing rank.
+    Reassign {
+        /// The employee's pubkey (64 hex characters)
+        pubkey: String,
+        /// New manager pubkey (64 hex): must sit exactly one rank up.
+        #[arg(long)]
+        manager: String,
+    },
+    /// Retire an employee (kind 9046), freeing its role for a future hire.
+    /// Refused while anyone still reports to them -- reassign those first;
+    /// the refusal names them.
+    Retire {
+        /// The employee's pubkey (64 hex characters)
+        pubkey: String,
     },
     /// List the workspace's employees
     List,
@@ -3981,6 +4087,13 @@ mod tests {
                 "campaign-set",
                 "decide",
                 "decisions",
+                "kit-derive",
+                "kit-get",
+                "kit-list",
+                "kit-set",
+                "library-get",
+                "library-list",
+                "library-set",
                 "post-get",
                 "post-list",
                 "post-set",

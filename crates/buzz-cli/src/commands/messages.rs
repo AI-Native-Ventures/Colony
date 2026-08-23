@@ -275,6 +275,24 @@ fn missing_members(mentions: &[String], members: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn escape_markdown_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+}
+
+fn format_attachment_markdown(desc: &crate::client::BlobDescriptor) -> String {
+    if desc.mime_type.starts_with("video/") {
+        return format!("![video]({})", desc.url);
+    }
+    if desc.mime_type.starts_with("image/") {
+        return format!("![image]({})", desc.url);
+    }
+    let filename = desc.filename.as_deref().unwrap_or("attachment");
+    format!("[{}]({})", escape_markdown_label(filename), desc.url)
+}
+
 fn event_mention_pubkeys(event: &nostr::Event) -> Vec<String> {
     event
         .tags
@@ -693,14 +711,9 @@ pub async fn cmd_send_message(
             .upload_file(file_path)
             .await
             .map_err(|e| CliError::Other(format!("upload failed for {file_path}: {e}")))?;
+        media_content.push('\n');
+        media_content.push_str(&format_attachment_markdown(&desc));
         media_tags.push(crate::client::build_imeta_tag(&desc));
-        if desc.mime_type.starts_with("video/") {
-            media_content.push_str("\n![video](");
-        } else {
-            media_content.push_str("\n![image](");
-        }
-        media_content.push_str(&desc.url);
-        media_content.push(')');
     }
     let final_content = if media_content.is_empty() {
         p.content.clone()
@@ -1075,9 +1088,9 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        event_mention_pubkeys, find_root_from_tags, match_profiles_by_name, merge_message_mentions,
-        missing_members, normalize_explicit_mentions, parse_member_pubkeys,
-        resolve_names_to_pubkeys,
+        event_mention_pubkeys, find_root_from_tags, format_attachment_markdown,
+        match_profiles_by_name, merge_message_mentions, missing_members,
+        normalize_explicit_mentions, parse_member_pubkeys, resolve_names_to_pubkeys,
     };
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
@@ -1093,6 +1106,46 @@ mod tests {
     const PK_VALID_A: &str = "35c18ae273fccfaf80d629e20e7f8721b90499379addff533054acc2504c12b4";
     const PK_VALID_B: &str = "c6237ef84fa537c78dcee78efd2d4e59f728859c7f194da42ac51ededfa0be05";
     const PK_VALID_C: &str = "f4a42a97e594b77bdbd8ee35191c8b28a94a4cb871d96f32921558275421fb68";
+
+    fn generic_descriptor() -> crate::client::BlobDescriptor {
+        crate::client::BlobDescriptor {
+            url: "https://relay.example/media/report.pdf".into(),
+            sha256: "a".repeat(64),
+            size: 42,
+            mime_type: "application/pdf".into(),
+            uploaded: 1,
+            dim: None,
+            blurhash: None,
+            thumb: None,
+            duration: None,
+            filename: Some("Q3 [final].pdf".into()),
+        }
+    }
+
+    #[test]
+    fn generic_attachment_is_a_named_link() {
+        assert_eq!(
+            format_attachment_markdown(&generic_descriptor()),
+            "[Q3 \\[final\\].pdf](https://relay.example/media/report.pdf)"
+        );
+    }
+
+    #[test]
+    fn image_and_video_keep_media_markdown() {
+        let mut image = generic_descriptor();
+        image.mime_type = "image/png".into();
+        image.filename = Some("chart.png".into());
+        assert_eq!(
+            format_attachment_markdown(&image),
+            "![image](https://relay.example/media/report.pdf)"
+        );
+
+        image.mime_type = "video/mp4".into();
+        assert_eq!(
+            format_attachment_markdown(&image),
+            "![video](https://relay.example/media/report.pdf)"
+        );
+    }
 
     #[test]
     fn root_marker_wins_over_reply_marker() {

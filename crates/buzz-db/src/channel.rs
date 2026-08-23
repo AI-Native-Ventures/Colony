@@ -29,8 +29,6 @@ pub struct ChannelRecord {
     pub visibility: String,
     /// Optional channel description.
     pub description: Option<String>,
-    /// Optional canvas (rich document) content.
-    pub canvas: Option<String>,
     /// Compressed public key bytes of the channel creator.
     pub created_by: Vec<u8>,
     /// When the channel was created.
@@ -148,7 +146,7 @@ pub async fn create_channel(
     let row = sqlx::query(
         r#"
         SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description, canvas,
+               description,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -248,7 +246,7 @@ pub async fn create_channel_with_id(
     let row = sqlx::query(
         r#"
         SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description, canvas,
+               description,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -276,7 +274,7 @@ pub async fn get_channel(
     let row = sqlx::query(
         r#"
         SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description, canvas,
+               description,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -292,44 +290,6 @@ pub async fn get_channel(
     .ok_or(DbError::ChannelNotFound(channel_id))?;
 
     row_to_channel_record(row)
-}
-
-/// Returns the canvas content for a channel, if any.
-pub async fn get_canvas(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-) -> Result<Option<String>> {
-    let row = sqlx::query(
-        "SELECT canvas FROM channels WHERE community_id = $1 AND id = $2 AND deleted_at IS NULL",
-    )
-    .bind(community_id.as_uuid())
-    .bind(channel_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(DbError::ChannelNotFound(channel_id))?;
-    Ok(row.try_get("canvas")?)
-}
-
-/// Sets or clears the canvas content for a channel.
-pub async fn set_canvas(
-    pool: &PgPool,
-    community_id: CommunityId,
-    channel_id: Uuid,
-    canvas: Option<&str>,
-) -> Result<()> {
-    let rows = sqlx::query(
-        "UPDATE channels SET canvas = $1 WHERE community_id = $2 AND id = $3 AND deleted_at IS NULL",
-    )
-        .bind(canvas)
-        .bind(community_id.as_uuid())
-        .bind(channel_id)
-        .execute(pool)
-        .await?;
-    if rows.rows_affected() == 0 {
-        return Err(DbError::ChannelNotFound(channel_id));
-    }
-    Ok(())
 }
 
 /// Namespace for the per-channel membership advisory lock. Serializes the
@@ -787,7 +747,7 @@ pub async fn list_channels(
         sqlx::query(
             r#"
             SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-                   description, canvas,
+                   description,
                    created_by, created_at, updated_at, archived_at, deleted_at,
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
@@ -807,7 +767,7 @@ pub async fn list_channels(
         sqlx::query(
             r#"
             SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-                   description, canvas,
+                   description,
                    created_by, created_at, updated_at, archived_at, deleted_at,
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
@@ -855,7 +815,7 @@ async fn get_channel_tx(
     let row = sqlx::query(
         r#"
         SELECT id, name, channel_type::text AS channel_type, visibility::text AS visibility,
-               description, canvas,
+               description,
                created_by, created_at, updated_at, archived_at, deleted_at,
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
@@ -957,7 +917,7 @@ pub async fn get_accessible_channels(
     let base = format!(
         r#"
         SELECT c.id, c.name, c.channel_type::text AS channel_type,
-               c.visibility::text AS visibility, c.description, c.canvas,
+               c.visibility::text AS visibility, c.description,
                c.created_by, c.created_at, c.updated_at, c.archived_at, c.deleted_at,
                c.nip29_group_id, c.topic_required, c.max_members,
                c.topic, c.topic_set_by, c.topic_set_at,
@@ -1106,7 +1066,6 @@ fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
         channel_type: row.try_get("channel_type")?,
         visibility: row.try_get("visibility")?,
         description: row.try_get("description")?,
-        canvas: row.try_get("canvas")?,
         created_by: row.try_get("created_by")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,

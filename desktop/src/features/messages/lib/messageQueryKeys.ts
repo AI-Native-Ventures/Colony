@@ -39,7 +39,13 @@ export function sortMessages(messages: RelayEvent[]) {
     // Without this, two events sharing a created_at can land in a different
     // position depending on which REQ (history vs live-sub) delivered them
     // first — reading as a "missing"/shuffled message at a fixed scroll offset.
-    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+    //
+    // The tiebreak is DESCENDING on purpose. The relay's canonical order is
+    // (created_at DESC, id ASC), so within a second the SMALLER id is the newer
+    // event, and this ascending-time sort has to put it last. An ascending id
+    // tiebreak here disagreed with compareRelayOrder in channelWindowStore, and
+    // that disagreement is what let a row reorder under the frozen tail buffer.
+    return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
   });
 }
 

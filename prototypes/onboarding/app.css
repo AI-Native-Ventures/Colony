@@ -1,0 +1,1110 @@
+/*
+ * Colony onboarding prototype styles.
+ *
+ * Deliberately plain CSS, not Tailwind utilities. The DS stylesheet shipped
+ * with the bundle is compiled Tailwind output, so it only contains utilities
+ * desktop/src already uses. Inventing utility classes here would silently
+ * no-op. Colony components keep their own baked-in classes; everything the
+ * prototype adds lives under .ob-*.
+ *
+ * Motion rules follow docs/BRAND.md: transforms on HTML wrappers, never on
+ * SVG children, and a prefers-reduced-motion fallback per mechanism.
+ */
+
+:root {
+  --ob-ease: cubic-bezier(0.16, 1, 0.3, 1); /* ease-out-expo */
+  --ob-ink: #0d0d11;
+  --ob-ink-soft: rgba(13, 13, 17, 0.58);
+  --ob-shell: rgba(255, 255, 255, 0.62);
+  --ob-shell-line: rgba(13, 13, 17, 0.1);
+  --ob-rule: rgba(13, 13, 17, 0.22);
+  --ob-accent: #5b21b6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Inter Variable", Inter, "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--ob-ink);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Canvas ──────────────────────────────────────────────────────────────
+   Gradient mesh, drawn as stacked radial gradients over a base fill plus one
+   diagonal light streak and a grain overlay. Static by design: an animated
+   mesh at this blur radius costs real GPU time on the machines this flow is
+   for, and the motion budget is better spent on the ants. */
+.ob-canvas {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  transition: background-color 900ms var(--ob-ease);
+}
+
+/* Saturated and closer to the surface. The first pass blurred these to a
+   pastel wash, which is the opposite of the posts: those hold real colour
+   density and let the white streak cut through it. */
+.ob-mesh {
+  position: absolute;
+  inset: -18%;
+  filter: blur(38px) saturate(1.25);
+  transition: opacity 900ms var(--ob-ease);
+  will-change: opacity;
+}
+
+.ob-streak {
+  position: absolute;
+  inset: -40%;
+  opacity: 0.55;
+  transform: rotate(-22deg);
+  background: linear-gradient(
+    100deg,
+    transparent 24%,
+    rgba(255, 255, 255, 0.82) 44%,
+    rgba(255, 255, 255, 0.5) 56%,
+    transparent 74%
+  );
+  filter: blur(48px);
+  transition: opacity 900ms var(--ob-ease);
+}
+
+.ob-canvas[data-ink="light"] .ob-streak {
+  background: linear-gradient(
+    100deg,
+    transparent 26%,
+    rgba(255, 255, 255, 0.16) 46%,
+    transparent 72%
+  );
+  opacity: 0.7;
+}
+
+.ob-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+}
+
+/* ── Stage ───────────────────────────────────────────────────────────── */
+.ob-stage {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  padding: clamp(2rem, 5vh, 4rem) clamp(2rem, 7vw, 8rem) clamp(1.5rem, 4vh, 2.5rem);
+}
+
+/* Asymmetric: type on the left at scale, controls under it, nothing centred.
+   A centred stack reads as a form. This reads as a statement with a form
+   attached, which is what the brand does. */
+.ob-screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  align-content: center;
+  align-items: end;
+  column-gap: clamp(2rem, 6vw, 6rem);
+  row-gap: 2.5rem;
+  width: 100%;
+  max-width: 92rem;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.ob-screen[data-wide="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ob-screen[data-solo="true"] {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .ob-screen {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Column placement. The headline column spans both rows on the left; controls
+   and their action row stack in the right column. */
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) {
+  grid-template-rows: auto auto auto;
+}
+
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) .ob-col-head {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  align-self: center;
+}
+
+/* Three stacked slots in the right column, so a screen that has both a chooser
+   and a form (credits) never lands them in the same cell. */
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) .ob-amounts {
+  grid-column: 2;
+  grid-row: 1;
+  margin-top: 0;
+  justify-content: flex-start;
+}
+
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) .ob-panel,
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) .ob-options {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: start;
+  margin: 0 !important;
+  max-width: none !important;
+}
+
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) .ob-actions {
+  grid-column: 2;
+  grid-row: 3;
+  margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .ob-screen .ob-col-head,
+  .ob-screen .ob-panel,
+  .ob-screen .ob-options,
+  .ob-screen .ob-actions {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
+}
+
+/* Step marker. Mono, letterspaced, high on the page: the only numeric thing
+   in the flow, and it reads as a chapter mark rather than a progress bar. */
+.ob-step {
+  position: absolute;
+  top: clamp(1.5rem, 4vh, 3rem);
+  left: clamp(2rem, 7vw, 8rem);
+  z-index: 3;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.28em;
+  color: var(--ob-ink);
+  opacity: 0.45;
+}
+
+/* Enter and exit. Opacity plus transform only, never layout properties. */
+.ob-screen[data-phase="in"] {
+  animation: ob-enter 460ms var(--ob-ease) both;
+}
+
+.ob-screen[data-phase="out"] {
+  animation: ob-exit 240ms var(--ob-ease) both;
+}
+
+@keyframes ob-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes ob-exit {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, -14px, 0);
+  }
+}
+
+/* ── Type ────────────────────────────────────────────────────────────────
+   The headline is the design, matching the social posts: tight tracking,
+   sentence case, always terminated with a period. */
+.ob-headline {
+  font-size: clamp(3rem, 7.4vw, 7rem);
+  line-height: 0.92;
+  letter-spacing: -0.055em;
+  font-weight: 800;
+  margin: 0;
+  text-wrap: balance;
+  font-feature-settings: "ss01", "cv05";
+}
+
+.ob-sub {
+  margin: 1.5rem 0 0;
+  font-size: clamp(1rem, 1.25vw, 1.25rem);
+  line-height: 1.5;
+  max-width: 30rem;
+  color: var(--ob-ink-soft);
+  text-wrap: pretty;
+}
+
+.ob-canvas[data-ink="light"] {
+  --ob-ink: #fbf8ff;
+  --ob-ink-soft: rgba(251, 248, 255, 0.66);
+  --ob-shell: rgba(12, 8, 20, 0.36);
+  --ob-shell-line: rgba(255, 255, 255, 0.16);
+  --ob-rule: rgba(255, 255, 255, 0.34);
+  --ob-accent: #f5d0fe;
+}
+
+.ob-stage,
+.ob-headline,
+.ob-sub {
+  color: var(--ob-ink);
+}
+
+.ob-eyebrow {
+  font-size: 0.6875rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ob-ink-soft);
+  margin: 0 0 1.25rem;
+}
+
+/* ── Form shell ──────────────────────────────────────────────────────── */
+.ob-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  text-align: left;
+}
+
+.ob-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ob-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--ob-ink-soft);
+}
+
+/* Fields are rules, not boxes.
+   These are still the real Colony Input and Textarea components: the DS
+   stylesheet ships inside @layer, and this file is unlayered, so a call-site
+   restyle wins without touching the component. Swapping the boxes for rules is
+   the single biggest reason the flow stops reading as a generic form. */
+.ob-panel input,
+.ob-panel textarea {
+  background: transparent !important;
+  border: 0 !important;
+  border-bottom: 2px solid var(--ob-rule) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0.5rem 0 0.6rem !important;
+  height: auto !important;
+  font-size: clamp(1.25rem, 1.9vw, 1.75rem) !important;
+  font-weight: 500;
+  color: var(--ob-ink) !important;
+  transition:
+    border-color 320ms var(--ob-ease),
+    transform 320ms var(--ob-ease);
+}
+
+.ob-panel input::placeholder,
+.ob-panel textarea::placeholder {
+  color: var(--ob-ink);
+  opacity: 0.26;
+  font-weight: 400;
+}
+
+.ob-panel input:focus,
+.ob-panel textarea:focus {
+  outline: none !important;
+  border-bottom-color: var(--ob-accent) !important;
+}
+
+.ob-panel textarea {
+  font-size: 1.0625rem !important;
+  line-height: 1.6;
+  border-bottom-width: 2px !important;
+}
+
+/* Strength meter is a hairline under the rule, not a second bar competing
+   with it. */
+.ob-panel [role="progressbar"],
+.ob-panel [data-slot="progress"] {
+  height: 3px !important;
+  margin-top: 0.4rem;
+  background: transparent !important;
+}
+
+.ob-row {
+  display: flex;
+  gap: 0.875rem;
+}
+
+.ob-row > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.ob-actions {
+  margin-top: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+/* Oversized pill, call-site restyle of the real Button. */
+.ob-actions button[class*="inline-flex"] {
+  height: auto !important;
+  border-radius: 999px !important;
+  padding: 1.05rem 2.4rem !important;
+  font-size: 1.0625rem !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+  transition:
+    transform 280ms var(--ob-ease),
+    opacity 280ms var(--ob-ease) !important;
+}
+
+.ob-actions button[class*="inline-flex"]:not(:disabled):hover {
+  transform: translate3d(0, -2px, 0);
+}
+
+.ob-screen[data-solo="true"] .ob-actions {
+  justify-content: center;
+}
+
+.ob-quiet-action {
+  background: none;
+  border: 0;
+  padding: 0.5rem 0.25rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--ob-ink-soft);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ob-quiet-action:hover {
+  color: var(--ob-ink);
+}
+
+.ob-note {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--ob-ink-soft);
+}
+
+/* Frosted card for anything that needs to sit above the mesh. */
+.ob-card {
+  background: var(--ob-shell);
+  border: 1px solid var(--ob-shell-line);
+  border-radius: 1.125rem;
+  padding: 1.25rem;
+  backdrop-filter: blur(12px);
+}
+
+/* ── Foot: trail + mark ──────────────────────────────────────────────── */
+.ob-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 1rem;
+}
+
+.ob-trail {
+  width: min(34rem, 80vw);
+  height: 26px;
+  display: block;
+  overflow: visible;
+}
+
+.ob-trail__path {
+  animation: ob-pheromone 2.4s linear infinite;
+}
+
+@keyframes ob-pheromone {
+  to {
+    stroke-dashoffset: -60;
+  }
+}
+
+.ob-trail__node {
+  transition:
+    r 420ms var(--ob-ease),
+    opacity 420ms var(--ob-ease);
+}
+
+.ob-mark {
+  width: 34px;
+  color: var(--ob-ink);
+  opacity: 0.9;
+}
+
+/* ── Ant sprite: gait, copied verbatim from site-animations.css ──────────
+   Leg tripods are HTML-level layers. Transforms stay on the wrappers so they
+   run on the compositor even while the main thread is busy. */
+.ant-sprite .ant-leg-layer {
+  will-change: transform;
+  transform-origin: 50% 72%;
+  animation-duration: 0.42s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+.ant-sprite .ant-leg-layer-a {
+  animation-name: ant-step-a;
+}
+
+.ant-sprite .ant-leg-layer-b {
+  animation-name: ant-step-b;
+}
+
+.ant-sprite .ant-body-layer {
+  will-change: transform;
+  animation: ant-body-bob 0.42s ease-in-out infinite;
+}
+
+@keyframes ant-step-a {
+  0%,
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+  50% {
+    transform: rotate(-5deg) translateY(-1.6%);
+  }
+}
+
+@keyframes ant-step-b {
+  0%,
+  100% {
+    transform: rotate(-5deg) translateY(-1.6%);
+  }
+  50% {
+    transform: rotate(0deg) translateY(0);
+  }
+}
+
+@keyframes ant-body-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  25%,
+  75% {
+    transform: translateY(-1%);
+  }
+}
+
+.ob-sprite-wrap {
+  position: relative;
+  aspect-ratio: 466 / 309;
+}
+
+.ob-sprite-wrap .ant-leg-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.ob-sprite-wrap svg {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.ob-sprite-wrap .ant-body-layer {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+/* ── Screen 1: scatter field ─────────────────────────────────────────────
+   Ants drift loose, then orient toward the centre as the form fills. The
+   orientation is the point: the colony assembling around the person. */
+.ob-scatter {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.ob-scatter__ant {
+  position: absolute;
+  width: 38px;
+  color: rgba(13, 13, 17, 0.16);
+  transition:
+    transform 1400ms var(--ob-ease),
+    opacity 900ms var(--ob-ease);
+  will-change: transform;
+}
+
+/* ── Screen 4: the search ────────────────────────────────────────────────
+   Ants run outward, hold, and return. Each carries its own delay so they
+   never move as a block. */
+.ob-search {
+  position: relative;
+  height: 220px;
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.ob-search__ant {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  margin: -9px 0 0 -13px;
+  color: var(--ob-ink);
+  opacity: 0.75;
+  animation: ob-forage 3.1s var(--ob-ease) infinite;
+  will-change: transform;
+}
+
+@keyframes ob-forage {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.7);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.85;
+  }
+  46% {
+    transform: translate3d(var(--dx), var(--dy), 0) scale(1);
+    opacity: 0.85;
+  }
+  62% {
+    transform: translate3d(var(--dx), var(--dy), 0) scale(1);
+    opacity: 0.85;
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.7);
+    opacity: 0;
+  }
+}
+
+.ob-status {
+  min-height: 1.5rem;
+  font-size: 0.9375rem;
+  color: var(--ob-ink-soft);
+}
+
+.ob-status__line {
+  animation: ob-status-in 420ms var(--ob-ease) both;
+}
+
+@keyframes ob-status-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* ── Screen 5a: found brains ─────────────────────────────────────────── */
+.ob-options {
+  display: grid;
+  gap: 0.75rem;
+  width: 100%;
+  margin-top: 2rem;
+  text-align: left;
+}
+
+.ob-option {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1rem 1.125rem;
+  border-radius: 1rem;
+  border: 1px solid var(--ob-shell-line);
+  background: var(--ob-shell);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+  transition:
+    transform 260ms var(--ob-ease),
+    border-color 260ms var(--ob-ease),
+    box-shadow 260ms var(--ob-ease);
+}
+
+.ob-option:hover {
+  transform: translate3d(0, -2px, 0);
+}
+
+.ob-option[data-selected="true"] {
+  border-color: hsl(266 85% 58% / 0.85);
+  box-shadow: 0 0 0 3px hsl(266 85% 58% / 0.18);
+}
+
+.ob-option__title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.ob-option__meta {
+  font-size: 0.8125rem;
+  color: var(--ob-ink-soft);
+  margin-top: 0.125rem;
+}
+
+/* Liveness pulse. The dot is an HTML element, so the transform stays off the
+   SVG tree entirely. */
+.ob-pulse {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: hsl(160 60% 42%);
+  flex: none;
+}
+
+.ob-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1px solid hsl(160 60% 42% / 0.5);
+  animation: ob-pulse 1.9s var(--ob-ease) infinite;
+}
+
+@keyframes ob-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* ── Screen 7: site reading ──────────────────────────────────────────── */
+.ob-window {
+  width: 100%;
+  border-radius: 0.875rem;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 32px 60px -24px rgba(16, 16, 20, 0.35);
+  margin-top: 2rem;
+  text-align: left;
+}
+
+.ob-window__bar {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  background: rgba(244, 243, 248, 0.95);
+  border-bottom: 1px solid rgba(16, 16, 20, 0.07);
+}
+
+.ob-window__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.ob-pages {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.ob-page {
+  border-radius: 0.625rem;
+  border: 1px solid rgba(16, 16, 20, 0.08);
+  padding: 0.75rem;
+  background: #fff;
+  opacity: 0.45;
+  transition:
+    opacity 420ms var(--ob-ease),
+    transform 420ms var(--ob-ease),
+    box-shadow 420ms var(--ob-ease);
+}
+
+.ob-page[data-read="true"] {
+  opacity: 1;
+  transform: translate3d(0, -4px, 0);
+  box-shadow: 0 12px 24px -12px hsl(160 60% 42% / 0.55);
+}
+
+.ob-page__name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(16, 16, 20, 0.75);
+  margin-bottom: 0.5rem;
+}
+
+.ob-skel {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(16, 16, 20, 0.1);
+  margin-bottom: 5px;
+}
+
+/* ── Screen 8: the description writes itself ─────────────────────────── */
+.ob-caret::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  background: currentColor;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  animation: ob-blink 1s steps(2, start) infinite;
+}
+
+@keyframes ob-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* ── Screen 9: credits ───────────────────────────────────────────────── */
+.ob-amounts {
+  display: flex;
+  gap: 0.625rem;
+  margin-top: 2rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.ob-amount {
+  min-width: 5.25rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.875rem;
+  border: 1px solid var(--ob-shell-line);
+  background: var(--ob-shell);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  font-size: 1.0625rem;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  transition:
+    transform 240ms var(--ob-ease),
+    border-color 240ms var(--ob-ease);
+}
+
+.ob-amount:hover {
+  transform: translate3d(0, -2px, 0);
+}
+
+.ob-amount[data-selected="true"] {
+  border-color: currentColor;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
+}
+
+/* ── Screen 10: invite pills ─────────────────────────────────────────── */
+.ob-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.ob-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  background: var(--ob-shell);
+  border: 1px solid var(--ob-shell-line);
+  font-size: 0.875rem;
+  animation: ob-pill-in 320ms var(--ob-ease) both;
+}
+
+.ob-pill[data-leaving="true"] {
+  animation: ob-pill-out 700ms var(--ob-ease) both;
+}
+
+@keyframes ob-pill-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ob-pill-out {
+  to {
+    opacity: 0;
+    transform: translate3d(24px, -34px, 0) rotate(6deg);
+  }
+}
+
+.ob-pill__x {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.55;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+}
+
+/* ── Arrival ─────────────────────────────────────────────────────────── */
+.ob-arrival {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  background: hsl(220 23% 95%);
+  animation: ob-arrive 900ms var(--ob-ease) both;
+}
+
+@keyframes ob-arrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── Dev toolbar ─────────────────────────────────────────────────────── */
+.ob-dev {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  font-size: 0.75rem;
+  background: rgba(16, 16, 20, 0.86);
+  color: #fff;
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  backdrop-filter: blur(10px);
+  max-width: 15rem;
+}
+
+.ob-dev summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.625rem;
+  opacity: 0.75;
+}
+
+.ob-dev label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.ob-dev select,
+.ob-dev button {
+  font: inherit;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 0;
+  border-radius: 0.4rem;
+  padding: 0.25rem 0.4rem;
+  cursor: pointer;
+}
+
+/* ── Reduced motion: one gate per mechanism ──────────────────────────────
+   CSS animations are switched off here. Anything driven by a timer in JS is
+   gated separately in app.jsx, since CSS cannot reach it. */
+@media (prefers-reduced-motion: reduce) {
+  .ob-screen[data-phase],
+  .ant-sprite .ant-leg-layer,
+  .ant-sprite .ant-body-layer,
+  .ob-trail__path,
+  .ob-search__ant,
+  .ob-status__line,
+  .ob-pulse::after,
+  .ob-pill,
+  .ob-arrival,
+  .ob-caret::after {
+    animation: none !important;
+  }
+
+  .ob-scatter__ant,
+  .ob-option,
+  .ob-page,
+  .ob-amount {
+    transition: none !important;
+  }
+
+  .ob-search__ant {
+    opacity: 0.8;
+    transform: translate3d(var(--dx), var(--dy), 0);
+  }
+}
+
+/* Right-column stack for screens with more than one control group. */
+.ob-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  width: 100%;
+}
+
+.ob-screen:not([data-wide="true"]):not([data-solo="true"]) .ob-stack {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: start;
+}
+
+.ob-stack .ob-options {
+  margin-top: 0 !important;
+}
+
+/* Custom amount chip: same shape as the presets, with an inline field. */
+.ob-amount--custom {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.15rem;
+}
+
+.ob-amount--custom input {
+  min-width: 2ch;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 0;
+}
+
+.ob-amount--custom input::placeholder {
+  color: currentColor;
+  opacity: 0.4;
+}
+
+.ob-amount__currency {
+  opacity: 0.7;
+}
+
+/* Inline validation message. Warm, not alarming: it is a typo, not an error. */
+.ob-note--warn {
+  color: #b91c1c;
+  opacity: 0.95;
+}
+
+.ob-canvas[data-ink="light"] .ob-note--warn {
+  color: #fecdd3;
+}
+
+/* Payment handoff panel. Reads as a statement about what happens next, not as
+   a form field. */
+.ob-handoff {
+  border: 1px solid var(--ob-shell-line);
+  background: var(--ob-shell);
+  border-radius: 1.125rem;
+  padding: 1.15rem 1.25rem;
+  backdrop-filter: blur(12px);
+}
+
+.ob-handoff__title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.ob-handoff__methods {
+  margin: 0.4rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ob-ink-soft);
+}
+
+/* Arrival stands alone. It previously reused .ob-screen, inheriting the
+   two-column grid and pushing its own button below the fold. */
+.ob-arrival__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.25rem;
+  padding: 2rem;
+  max-width: 44rem;
+}
+
+.ob-arrival__inner .ob-actions {
+  justify-content: center;
+}
+
+/* The flow headline scale is too tall for a screen that also carries a mark
+   and a button, so arrival gets its own step down. */
+.ob-arrival {
+  overflow: auto;
+  padding: 2rem;
+}
+
+.ob-arrival__inner .ob-headline {
+  font-size: clamp(2.25rem, 5vw, 4.25rem);
+}
+
+/* Narrow screens: the step marker overlapped the headline when absolutely
+   positioned, so it becomes a normal line above the stage. */
+@media (max-width: 900px) {
+  .ob-step {
+    position: static;
+    padding: 1.25rem 1.5rem 0;
+  }
+
+  .ob-stage {
+    grid-template-rows: 1fr auto;
+    padding-top: 0.5rem;
+  }
+}
+
+/* Credit packs: price leads, credits sit underneath as the unit you spend. */
+.ob-pack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  min-width: 7.5rem;
+  padding: 0.85rem 1.1rem;
+}
+
+.ob-pack__price {
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.ob-pack__credits {
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  opacity: 0.66;
+}

@@ -87,7 +87,7 @@ export function LedgerScreen({
     >
       <div className="mx-auto w-full max-w-6xl">
         <PageHeader
-          description="What this company has spent on agent work, measured at the wire rather than reported by the agents themselves."
+          description="What this company has spent on agent work, using provider billing records and clearly labeled runtime estimates."
           title="Spend"
         />
 

@@ -213,20 +213,23 @@ function workflowItem(source: ActionWorkflowSource): ActionItem {
 /** Build the global queue from source records without creating new records. */
 export function buildActionCenterItems({
   asks,
+  askRoutingNotesByAskId,
   feed,
   reminders,
   tasks = [],
   workflows = [],
-  doneIds = new Set<string>(),
+  doneIds = new Set(),
 }: ActionCenterProjectionInput): ActionItem[] {
   const items: ActionItem[] = asks.map((ask) => {
     const source: ActionSource = { kind: "ask", ask };
+    const baseSummary = ask.costOfDelay ?? `Answer requested · ${ask.askType}`;
+    const routingNote = askRoutingNotesByAskId?.get(ask.id) ?? null;
     return {
       id: actionItemId("ask", ask.id),
       kind: "ask",
       state: "needs-action",
       title: ask.headline,
-      summary: ask.costOfDelay ?? `Answer requested · ${ask.askType}`,
+      summary: routingNote ? `${baseSummary} · ${routingNote}` : baseSummary,
       createdAt: ask.createdAt,
       updatedAt: ask.createdAt,
       source,

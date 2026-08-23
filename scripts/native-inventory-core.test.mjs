@@ -99,6 +99,22 @@ pub fn disconnect_all(on_message: Channel<serde_json::Value>) {
 pub fn qux() {}
 `;
 
+// An inline plugin file: its commands are defined here and registered here,
+// through the plugin Builder's invoke_handler, never in lib.rs.
+const PLUGIN_RS = `pub const PLUGIN_ID: &str = "signer";
+
+#[tauri::command]
+pub fn sign_thing(event: String) -> Result<String, String> {
+    Ok(event)
+}
+
+pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new(PLUGIN_ID)
+        .invoke_handler(tauri::generate_handler![sign_thing])
+        .build()
+}
+`;
+
 async function makeFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-inventory-"));
   const desktop = path.join(root, "desktop");
@@ -110,6 +126,7 @@ async function makeFixture() {
   await fs.writeFile(path.join(rust, "lib.rs"), LIB_RS);
   await fs.writeFile(path.join(rust, "commands", "archive.rs"), ARCHIVE_RS);
   await fs.writeFile(path.join(rust, "native_websocket.rs"), WS_RS);
+  await fs.writeFile(path.join(rust, "signer.rs"), PLUGIN_RS);
   await fs.writeFile(path.join(src, "frontend.ts"), FRONTEND_TS);
   return desktop;
 }
@@ -137,7 +154,51 @@ test("module path splitting: generate_handler! entries yield leaf names", async 
     assert.ok(!names.includes("archive"), "module path not split into archive");
     assert.ok(!names.includes("tauri"), "module path not split into tauri");
     assert.equal(data.commands.registered, data.commands.defined);
-    assert.equal(data.commands.registered, 5);
+    assert.equal(data.commands.registered, 6);
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("inline plugin commands count as registered via their own builder", async () => {
+  const desktop = await makeFixture();
+  try {
+    const data = await buildInventory(desktop);
+    // sign_thing is defined in signer.rs and registered ONLY through the
+    // plugin Builder's invoke_handler there; lib.rs never lists it. The
+    // scanner must treat that as a registration site, or the file reads as
+    // defined-but-never-registered and the counts drift apart.
+    assert.equal(data.commands.registered, data.commands.defined);
+    assert.ok(data.detail.sign_thing, "plugin command appears in the inventory");
+    assert.equal(
+      data.detail.sign_thing.registered_in,
+      "src-tauri/src/signer.rs",
+    );
+  } finally {
+    await fs.rm(desktop, { recursive: true, force: true });
+  }
+});
+
+test("generate_handler without a plugin builder is not a registration site", async () => {
+  const desktop = await makeFixture();
+  try {
+    // A bare generate_handler mention in ordinary code (not a comment, which
+    // stripping removes, and not inside a plugin::Builder file) must NOT
+    // register anything, or test fixtures would count as egress. The drift
+    // shows up as defined outrunning registered by exactly one.
+    const strayPath = path.join(
+      desktop,
+      "src-tauri",
+      "src",
+      "commands",
+      "stray.rs",
+    );
+    await fs.writeFile(
+      strayPath,
+      `#[tauri::command]\npub fn stray_cmd() {}\n\nfn docs_fixture() -> &'static str {\n    "generate_handler![stray_cmd]"\n}\n`,
+    );
+    const data = await buildInventory(desktop);
+    assert.equal(data.commands.defined, data.commands.registered + 1);
   } finally {
     await fs.rm(desktop, { recursive: true, force: true });
   }
@@ -174,7 +235,7 @@ test("self-matching: definition line and generate_handler! are not callers", asy
         // bar is registered and defined but never called: still NO CALLER FOUND
     // even though its definition line contains `fn bar(`.
     assert.equal(data.detail.bar.reached_by, "NO CALLER FOUND");
-    assert.deepEqual(data.commands.no_caller, ["bar", "orphan"]);
+    assert.deepEqual(data.commands.no_caller, ["bar", "orphan", "sign_thing"]);
     // foo is called from the frontend; the definition line in archive.rs must
     // not count as an internal caller.
     assert.equal(data.detail.foo.reached_by, "frontend");
