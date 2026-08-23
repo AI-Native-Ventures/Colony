@@ -23,13 +23,20 @@
     transition: background-color 900ms var(--onb-ease);
   }
 
+  /* Every onboarding screen uses this now. The pale-field variant above is
+     kept because the tokens still describe a valid pairing, but nothing
+     selects it: see canvasTheme.ts for why the whole flow went dark. */
   .onb-canvas[data-ink="light"] {
-    --onb-ink: #fbf8ff;
-    --onb-ink-soft: rgba(251, 248, 255, 0.66);
-    --onb-shell: rgba(12, 8, 20, 0.36);
-    --onb-shell-line: rgba(255, 255, 255, 0.16);
-    --onb-rule: rgba(255, 255, 255, 0.34);
-    --onb-accent: #f5d0fe;
+    --onb-ink: #f6f4f8;
+    --onb-ink-soft: rgba(246, 244, 248, 0.62);
+    --onb-shell: rgba(255, 255, 255, 0.045);
+    --onb-shell-line: rgba(255, 255, 255, 0.1);
+    --onb-rule: rgba(255, 255, 255, 0.14);
+    /* Violet, not the old pale pink. It is the only strong colour on a dark
+       field, so it has to carry brand rather than decorate. */
+    --onb-accent: #a97bf5;
+    --onb-accent-ring: rgba(169, 123, 245, 0.16);
+    --onb-accent-glow: rgba(169, 123, 245, 0.28);
   }
 
   /* Gradient mesh drawn as stacked radial gradients over a base fill. Static
@@ -71,12 +78,20 @@
     opacity: 0.7;
   }
 
+  /* Dotted grain over the mesh. Large soft radials band visibly on cheap
+     panels, and a half-rem dot grid at this opacity breaks the banding
+     without reading as texture. soft-light did nothing useful against a dark
+     field, so this draws the dots directly. */
   .onb-grain {
     position: absolute;
     inset: 0;
-    opacity: 0.4;
-    mix-blend-mode: soft-light;
+    opacity: 0.5;
     pointer-events: none;
+    background-image: radial-gradient(
+      rgba(255, 255, 255, 0.045) 0.5px,
+      transparent 0.5px
+    );
+    background-size: 0.5rem 0.5rem;
   }
 
   /* The stage hosts screen content above the mesh layers. Without it the
@@ -214,6 +229,123 @@
     .onb-stage {
       grid-template-rows: 1fr auto;
       padding-top: 0.5rem;
+    }
+  }
+}
+
+@layer components {
+  /* The scatter field: a colony living behind the flow. Sits above the mesh
+     and below the stage, so it reads as depth rather than decoration. */
+  .onb-scatter {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* The wrapper drifts; the mark inside never moves. Transforming an HTML
+     wrapper runs on the compositor, while transforming SVG children paints on
+     the main thread and stutters exactly when onboarding is busiest. */
+  .onb-scatter__ant {
+    position: absolute;
+    will-change: transform;
+    animation-name: onb-drift;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* Each ant gets its own negative delay from AntScatter, so no two share a
+     gait phase. Without this the colony steps in lockstep and the field reads
+     as repeating texture rather than as life. */
+  .onb-scatter__ant .ant-leg-layer,
+  .onb-scatter__ant .ant-body-layer {
+    animation-delay: var(--onb-gait-delay, 0s);
+  }
+
+  @keyframes onb-drift {
+    0% {
+      transform: translate3d(0, 0, 0) rotate(0deg);
+    }
+    25% {
+      transform: translate3d(2.2rem, -1.4rem, 0) rotate(9deg);
+    }
+    50% {
+      transform: translate3d(0.6rem, 2.1rem, 0) rotate(-6deg);
+    }
+    75% {
+      transform: translate3d(-1.9rem, 0.7rem, 0) rotate(4deg);
+    }
+    100% {
+      transform: translate3d(0, 0, 0) rotate(0deg);
+    }
+  }
+
+  /* An ant walks the primary action on hover. It carries the click forward,
+     which is the one place in this flow where motion is a hint rather than a
+     status report.
+
+     Drawn as a masked pseudo-element rather than a real WalkingAnt so no
+     screen has to change: the primary action is the shared Button component,
+     used in eleven places. The mask is the body-and-head silhouette from
+     docs/BRAND.md. It does not step, and at 0.9rem crossing in just over a
+     second no one could see legs anyway. */
+  .onb-actions button[class*="inline-flex"] {
+    position: relative;
+    overflow: hidden;
+    container-type: inline-size;
+  }
+
+  .onb-actions button[class*="inline-flex"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -1.6rem;
+    width: 0.9rem;
+    height: 0.58rem;
+    margin-top: -0.29rem;
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+    background: currentColor;
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 20'%3E%3Cellipse cx='8' cy='10' rx='6.4' ry='5.4' fill='%23000'/%3E%3Cellipse cx='17' cy='10' rx='3.6' ry='3.2' fill='%23000'/%3E%3Ccircle cx='23.5' cy='9.4' r='3.1' fill='%23000'/%3E%3C/svg%3E");
+    mask-size: contain;
+    mask-repeat: no-repeat;
+  }
+
+  .onb-actions button[class*="inline-flex"]:hover::after,
+  .onb-actions button[class*="inline-flex"]:focus-visible::after {
+    animation: onb-cross 1.15s linear;
+  }
+
+  @keyframes onb-cross {
+    0% {
+      transform: translateX(0);
+      opacity: 0;
+    }
+    12% {
+      opacity: 0.55;
+    }
+    88% {
+      opacity: 0.55;
+    }
+    100% {
+      transform: translateX(calc(100cqw + 2.6rem));
+      opacity: 0;
+    }
+  }
+
+  /* Reduced motion: the colony stays, it simply stops. Removing the ants
+     would remove the brand, which is not what someone asking for less motion
+     is asking for. */
+  @media (prefers-reduced-motion: reduce) {
+    .onb-scatter__ant {
+      animation: none !important;
+    }
+
+    .onb-actions button[class*="inline-flex"]:hover::after,
+    .onb-actions button[class*="inline-flex"]:focus-visible::after {
+      animation: none !important;
     }
   }
 }

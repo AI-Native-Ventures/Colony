@@ -42,107 +42,115 @@ const blob = (
 /**
  * One gradient per screen. The canvas shifting as the flow advances is the
  * progress indicator, which is why no step counter appears in the flow.
- * Credits is the only dark screen: it is the ask, and the dark field is what
- * makes it land.
+ *
+ * Every screen is dark. The scene this is designed for is a founder at a
+ * kitchen table at 9pm, laptop open, not yet sure this software is for them,
+ * and on a dark field the colony glows rather than sitting on a pale card. It
+ * is also a threshold: onboarding is deliberately not the app, and stepping
+ * from here into the light workspace should feel like arriving somewhere.
+ *
+ * The base barely moves between screens. Character comes from which accent hue
+ * leads the mesh, so the field drifts rather than jumping, and no screen reads
+ * as a different product.
  */
 const THEMES: Record<string, CanvasTheme> = {
   account: {
-    base: "#e9d9fb",
-    ink: "dark",
+    base: "#191325",
+    ink: "light",
     mesh: [
-      blob(HUE.violet, "18%", "22%", "58%"),
-      blob(HUE.pinkSoft, "78%", "72%", "62%"),
-      blob(HUE.white, "50%", "45%", "40%"),
+      blob(HUE.violet, "14%", "86%", "64%"),
+      blob(HUE.blue, "88%", "12%", "56%"),
+      blob(HUE.violetDeep, "52%", "48%", "34%"),
     ],
   },
   recovery: {
-    base: "#c4b0f5",
-    ink: "dark",
+    base: "#181226",
+    ink: "light",
     mesh: [
-      blob(HUE.violet, "30%", "70%", "66%"),
-      blob(HUE.violetDeep, "82%", "24%", "48%"),
-      blob(HUE.white, "44%", "40%", "30%"),
+      blob(HUE.violetDeep, "14%", "86%", "64%"),
+      blob(HUE.violet, "88%", "12%", "56%"),
+      blob(HUE.plum, "52%", "48%", "34%"),
     ],
   },
   company: {
-    base: "#f7d9c4",
-    ink: "dark",
+    base: "#1a1424",
+    ink: "light",
     mesh: [
-      blob(HUE.pink, "22%", "18%", "56%"),
-      blob(HUE.amber, "76%", "76%", "64%"),
-      blob(HUE.white, "52%", "42%", "36%"),
+      blob(HUE.amber, "14%", "86%", "64%"),
+      blob(HUE.violet, "88%", "12%", "56%"),
+      blob(HUE.blue, "52%", "48%", "34%"),
     ],
   },
   probing: {
-    base: "#cfe4f7",
-    ink: "dark",
+    base: "#161327",
+    ink: "light",
     mesh: [
-      blob(HUE.blue, "24%", "26%", "62%"),
-      blob(HUE.green, "80%", "74%", "58%"),
-      blob(HUE.white, "48%", "46%", "38%"),
+      blob(HUE.blue, "14%", "86%", "64%"),
+      blob(HUE.violet, "88%", "12%", "56%"),
+      blob(HUE.green, "52%", "48%", "34%"),
     ],
   },
   "brain:byo": {
-    base: "#c9edda",
-    ink: "dark",
+    base: "#151527",
+    ink: "light",
     mesh: [
-      blob(HUE.green, "26%", "30%", "62%"),
-      blob(HUE.blue, "82%", "80%", "46%"),
-      blob(HUE.white, "52%", "44%", "40%"),
+      blob(HUE.green, "14%", "86%", "64%"),
+      blob(HUE.blue, "88%", "12%", "56%"),
+      blob(HUE.violet, "52%", "48%", "34%"),
     ],
   },
   "brain:colony": {
-    base: "#cbdcfa",
-    ink: "dark",
+    base: "#141426",
+    ink: "light",
     mesh: [
-      blob(HUE.blue, "20%", "24%", "60%"),
-      blob(HUE.violet, "80%", "76%", "58%"),
-      blob(HUE.white, "50%", "46%", "36%"),
+      blob(HUE.blue, "14%", "86%", "64%"),
+      blob(HUE.violetDeep, "88%", "12%", "56%"),
+      blob(HUE.violet, "52%", "48%", "34%"),
     ],
   },
   business: {
-    base: "#f8dfb4",
-    ink: "dark",
+    base: "#1a1523",
+    ink: "light",
     mesh: [
-      blob(HUE.amber, "24%", "72%", "62%"),
-      blob(HUE.pinkSoft, "78%", "22%", "54%"),
-      blob(HUE.white, "48%", "44%", "38%"),
+      blob(HUE.amber, "14%", "86%", "64%"),
+      blob(HUE.pink, "88%", "12%", "56%"),
+      blob(HUE.violet, "52%", "48%", "34%"),
     ],
   },
   reading: {
-    base: "#c7e9e2",
-    ink: "dark",
+    base: "#151628",
+    ink: "light",
     mesh: [
-      blob(HUE.green, "22%", "24%", "60%"),
-      blob(HUE.blue, "78%", "72%", "60%"),
-      blob(HUE.white, "50%", "48%", "36%"),
+      blob(HUE.green, "14%", "86%", "64%"),
+      blob(HUE.blue, "88%", "12%", "56%"),
+      blob(HUE.violetDeep, "52%", "48%", "34%"),
     ],
   },
   description: {
-    base: "#f6e2ee",
-    ink: "dark",
+    base: "#1a1327",
+    ink: "light",
     mesh: [
-      blob(HUE.white, "40%", "34%", "52%"),
-      blob(HUE.pink, "80%", "76%", "56%"),
-      blob(HUE.violet, "16%", "78%", "44%"),
+      blob(HUE.pink, "14%", "86%", "64%"),
+      blob(HUE.violet, "88%", "12%", "56%"),
+      blob(HUE.blue, "52%", "48%", "34%"),
     ],
   },
   credits: {
-    base: "#3d0a2a",
+    base: "#1b1129",
     ink: "light",
     mesh: [
-      blob(HUE.plum, "28%", "30%", "66%"),
-      blob(HUE.violetDeep, "78%", "74%", "62%"),
-      blob(HUE.pink, "62%", "18%", "34%"),
+      blob(HUE.violet, "14%", "86%", "64%"),
+      blob(HUE.plum, "88%", "12%", "56%"),
+      blob(HUE.pink, "52%", "48%", "34%"),
     ],
   },
   invite: {
-    base: "#e6dafb",
-    ink: "dark",
+    base: "#181329",
+    ink: "light",
     mesh: [
-      blob(HUE.violet, "22%", "26%", "58%"),
-      blob(HUE.pink, "80%", "74%", "56%"),
-      blob(HUE.white, "50%", "50%", "40%"),
+      blob(HUE.violet, "14%", "86%", "64%"),
+      blob(HUE.pink, "88%", "12%", "56%"),
+      blob(HUE.blue, "52%", "48%", "34%"),
     ],
   },
 };

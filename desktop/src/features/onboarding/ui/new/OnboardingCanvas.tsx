@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { OnboardingStep, OnboardingTrack } from "../../flow/steps";
 import { ONBOARDING_STEPS } from "../../flow/steps";
+import { AntScatter } from "./AntScatter";
 import { canvasFor } from "./canvasTheme";
 import "./onboarding-canvas.css";
 import "./onboarding-screens.css";
@@ -30,6 +31,7 @@ export function OnboardingCanvas({ step, track, children }: Props) {
       <div className="onb-mesh" style={{ background: mesh }} />
       <div className="onb-streak" />
       <div className="onb-grain" />
+      <AntScatter />
       <p className="onb-step">
         {String(index + 1).padStart(2, "0")} / {ONBOARDING_STEPS.length}
       </p>
