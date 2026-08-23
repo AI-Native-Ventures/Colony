@@ -10,7 +10,11 @@ import {
 import { isTauri, onWindowThemeChanged } from "@/shared/api/nativeBridge";
 import { invokeTauri } from "@/shared/api/tauri";
 import { isMacPlatform } from "@/shared/lib/platform";
-import { getStorageItem } from "@/shared/lib/safeStorage";
+import {
+  getStorageItem,
+  removeStorageItem,
+  setStorageItem,
+} from "@/shared/lib/safeStorage";
 import { createThemeVars, hexToHsl } from "./adaptive-theme";
 import {
   SYNTAX_THEMES,
@@ -35,16 +39,17 @@ export const THEME_STORAGE_KEY = "buzz-theme";
  */
 const CACHE_KEY = "buzz-theme-cache.v2";
 /**
- * Bumped when a previously stored value can no longer be trusted as a choice.
+ * The key never moves: an accent is someone's choice, and a new key would
+ * discard every choice ever made rather than the one imposed value it was
+ * meant to retire.
  *
- * Colony themes used to force the accent to neutral and persist it, so every
- * existing install holds "neutral" whether or not anyone picked it. Reading
- * that back now would keep the workspace greyscale forever and make the
- * selected sidebar row resolve to the near-black foreground. A new key drops
- * those imposed values so the brand default applies, and a genuine choice
- * made from here on is stored under the new key and honoured.
+ * What has to go is narrower than that. Colony themes used to force the accent
+ * to neutral and persist it, so an install can hold "neutral" nobody picked,
+ * which keeps the workspace greyscale and resolves the selected sidebar row to
+ * near-black. `migrateImposedNeutralAccent` drops exactly that value, once, and
+ * leaves every other stored accent alone.
  */
-export const ACCENT_STORAGE_KEY = "buzz-accent-color.v2";
+export const ACCENT_STORAGE_KEY = "buzz-accent-color";
 export const GLASS_BACKGROUND_STORAGE_KEY = "buzz-glass-background";
 export const GLASS_OPACITY_STORAGE_KEY = "buzz-glass-opacity";
 export const PROMINENT_ACTIVE_TAB_STORAGE_KEY = "buzz-prominent-active-tab";
@@ -289,6 +294,28 @@ export function isBuzzTheme(themeName: string): boolean {
   return themeName === "buzz" || themeName === "buzz-dark";
 }
 
+/** Marks the imposed-neutral sweep as done, so a later choice of neutral stays. */
+const NEUTRAL_MIGRATION_KEY = "buzz-accent-neutral-migrated.v1";
+
+/**
+ * Drop a neutral accent nobody chose, exactly once.
+ *
+ * Colony themes forced the accent to neutral and persisted it while hiding the
+ * picker, so an install can hold a value its owner never selected and had no
+ * way to change. Clearing it lets the brand default apply. The marker is what
+ * keeps this a migration rather than a rule: pick neutral yourself afterwards
+ * and it stays picked.
+ *
+ * Exported for tests, and safe to call repeatedly.
+ */
+export function migrateImposedNeutralAccent(): void {
+  if (getStorageItem(NEUTRAL_MIGRATION_KEY) === "done") return;
+  setStorageItem(NEUTRAL_MIGRATION_KEY, "done");
+  if (getStorageItem(ACCENT_STORAGE_KEY) === NEUTRAL_ACCENT) {
+    removeStorageItem(ACCENT_STORAGE_KEY);
+  }
+}
+
 /**
  * Resolve the accent to actually apply.
  *
@@ -440,6 +467,9 @@ async function applyWindowGlass(enabled: boolean) {
 /** Apply cached CSS vars synchronously to prevent FOUC. */
 function applyCachedVars(): string | null {
   try {
+    // Runs before the first paint reads an accent, so an imposed neutral never
+    // reaches the cache path and flashes a greyscale sidebar on the way out.
+    migrateImposedNeutralAccent();
     const cached = window.localStorage.getItem(CACHE_KEY);
     if (!cached) return null;
     const { themeName, vars, isDark } = JSON.parse(cached);
