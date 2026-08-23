@@ -26,17 +26,13 @@ import {
 } from "./EncryptedBackupCreator";
 import { IdentityKeyHelpDialog } from "./IdentityKeyHelpDialog";
 import { IdentityRecoveryPairing } from "./IdentityRecoveryPairing";
-import { LandingAnts } from "./LandingAnts";
+import { MachineCanvas } from "./new/MachineCanvas";
+import type { MachineStep } from "./new/machineSteps";
 import {
   NostrKeyImportForm,
   type NostrKeyImportStage,
 } from "./NostrKeyImportForm";
-import {
-  ONBOARDING_INK_ICON_CLASS,
-  ONBOARDING_LANDING_CTA_CLASS,
-  ONBOARDING_SECONDARY_CTA_CLASS,
-  OnboardingChrome,
-} from "./OnboardingChrome";
+import { ONBOARDING_INK_ICON_CLASS } from "./OnboardingChrome";
 import { OnboardingFooterProvider } from "./OnboardingFooter";
 import {
   type OnboardingTransitionDirection,
@@ -53,6 +49,19 @@ export type MachineOnboardingPage =
   | "config";
 
 type BackupSubview = "created" | "options" | "password";
+
+/**
+ * Which canvas each page wears. Key import is a detour off the landing
+ * screen rather than a step of its own, so it keeps the landing hue: the
+ * colour would otherwise announce progress the person has not made.
+ */
+const MACHINE_PAGE_STEP: Record<MachineOnboardingPage, MachineStep> = {
+  identity: "identity",
+  "key-import": "identity",
+  backup: "backup",
+  setup: "setup",
+  config: "config",
+};
 
 /** A pending navigation the parent should execute after RouterProvider mounts. */
 export type PostOnboardingNavigation = {
@@ -259,53 +268,44 @@ export function MachineOnboardingFlow({
               : undefined;
 
   return (
-    <div
-      className={`buzz-onboarding-neutral-theme buzz-startup-shell flex max-h-dvh items-start justify-center overflow-x-hidden overflow-y-auto px-4 text-foreground ${
-        isSecuritySubview ? "buzz-onboarding-security-theme" : ""
-      } ${
-        page === "identity"
-          ? "buzz-onboarding-welcome py-8"
-          : "pb-28 pt-[106px]"
-      }`}
-      data-testid="machine-onboarding-gate"
+    <MachineCanvas
+      // The security subview is its own dark ceremony; it keeps the canvas
+      // but not the step marker, because it is a detour rather than a step.
+      showStep={page !== "identity" && !isSecuritySubview}
+      step={MACHINE_PAGE_STEP[page]}
     >
       <StartupWindowDragRegion />
-      {page === "identity" ? <LandingAnts /> : null}
-      {page !== "identity" && !isSecuritySubview ? (
-        <OnboardingChrome
-          current={page === "config" ? 4 : page === "setup" ? 3 : 2}
-        />
-      ) : null}
       <OnboardingFooterProvider backAction={chromeBackAction}>
+        {/* The landing screen is a hero, not a step: one centred column with
+            nothing in a second one. Every other page fills the width, because
+            the steps inside them bring their own grids. */}
         <div
-          className={`relative flex w-full max-w-[1040px] flex-col items-center text-center ${
-            page === "identity" ? "my-auto" : "buzz-onboarding-step-frame"
-          }`}
+          className="onb-screen"
+          data-solo={page === "identity"}
+          data-wide={page !== "identity"}
         >
           {page === "identity" ? (
             <OnboardingSlideTransition
-              className="flex w-full max-w-[720px] flex-col items-center text-center"
+              className="onb-hero"
               direction={transitionDirection}
               transitionKey={`machine-identity-${transitionDirection}`}
             >
-              <img
-                alt="Colony"
-                className="w-full max-w-[600px]"
-                src="/landing/colony-wordmark.svg"
-              />
-              <p className="mt-2 max-w-[560px] text-center text-2xl font-normal leading-none text-foreground">
-                Your people, your agents, your projects,
-                <br />
-                all in one place.
-              </p>
-              {error ? (
-                <p className="mt-4 text-sm text-destructive">{error}</p>
-              ) : null}
-              <div className="mt-10 flex flex-col items-center gap-3">
+              <div className="onb-col-head">
+                <img
+                  alt="Colony"
+                  className="onb-wordmark"
+                  src="/landing/colony-wordmark.svg"
+                />
+                <p className="onb-sub">
+                  Your people, your agents, your projects, all in one place.
+                </p>
+              </div>
+              {error ? <p className="onb-note-warn">{error}</p> : null}
+              <div className="onb-actions">
                 <Button
-                  className={ONBOARDING_LANDING_CTA_CLASS}
                   disabled={isPending}
                   onClick={() => void loadFreshIdentity()}
+                  size="lg"
                   type="button"
                 >
                   {isPending
@@ -314,8 +314,8 @@ export function MachineOnboardingFlow({
                       ? "Continue"
                       : "Start with Colony"}
                 </Button>
-                <Button
-                  className={`${ONBOARDING_SECONDARY_CTA_CLASS} px-5`}
+                <button
+                  className="onb-quiet-action"
                   disabled={isPending}
                   onClick={() => {
                     setKeyImportDialog(null);
@@ -324,24 +324,24 @@ export function MachineOnboardingFlow({
                     setPage("key-import");
                   }}
                   type="button"
-                  variant="ghost"
                 >
                   {selectedPubkey
                     ? "Use a different account"
                     : "Sign in to an existing account"}
-                </Button>
+                </button>
               </div>
               <IdentityKeyHelpDialog />
             </OnboardingSlideTransition>
           ) : page === "key-import" ? (
             <OnboardingSlideTransition
-              className="flex min-h-[calc(100dvh-13.25rem)] w-full max-w-[837px] flex-col items-center text-center"
+              className="onb-screen"
+              data-solo="true"
               direction={transitionDirection}
               transitionKey={`machine-key-import-${transitionDirection}`}
             >
               <motion.div
                 animate={{ opacity: 1, y: 0 }}
-                className="relative z-10 shrink-0"
+                className="onb-col-head relative z-10 shrink-0"
                 initial={reduceMotion ? false : { opacity: 0, y: 10 }}
                 key={keyImportStage}
                 transition={{
@@ -349,12 +349,12 @@ export function MachineOnboardingFlow({
                   ease: "easeOut",
                 }}
               >
-                <h1 className="text-title font-normal text-foreground">
+                <h1 className="onb-headline">
                   {keyImportStage === "backup-password"
                     ? "Unlock your account"
                     : "Enter your private key"}
                 </h1>
-                <div className="mt-5 max-w-[440px] text-sm leading-6 text-foreground/80">
+                <div className="onb-sub">
                   {keyImportStage === "backup-password" ? (
                     "Enter your backup password to restore your identity."
                   ) : (
@@ -385,7 +385,7 @@ export function MachineOnboardingFlow({
                   )}
                 </div>
               </motion.div>
-              <div className="buzz-onboarding-key-import-position w-full">
+              <div className="onb-panel buzz-onboarding-key-import-position w-full">
                 <div className="flex flex-col items-center">
                   <NostrKeyImportForm
                     key={keyImportFormKey}
@@ -398,15 +398,14 @@ export function MachineOnboardingFlow({
                     variant="spotlight"
                   />
                   {identityLost && keyImportStage === "key-entry" ? (
-                    <Button
-                      className={`${ONBOARDING_SECONDARY_CTA_CLASS} mt-2 px-5`}
+                    <button
+                      className="onb-quiet-action mt-2"
                       disabled={isPending || isKeyImporting}
                       onClick={() => void replaceLostIdentity()}
                       type="button"
-                      variant="ghost"
                     >
                       Start new identity
-                    </Button>
+                    </button>
                   ) : null}
                 </div>
               </div>
@@ -560,6 +559,6 @@ export function MachineOnboardingFlow({
           )}
         </div>
       </OnboardingFooterProvider>
-    </div>
+    </MachineCanvas>
   );
 }

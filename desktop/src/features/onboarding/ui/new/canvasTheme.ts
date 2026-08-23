@@ -29,7 +29,7 @@ export const COLONY_INK = "#171717";
  * value until #171717 ink clears 7:1 against it, so these are contrast
  * measurements rather than taste. From site/src/brand/hue.ts.
  */
-const HUE_CANVAS: Record<HueName, string> = {
+export const HUE_CANVAS: Record<HueName, string> = {
   violet: "#B394F9",
   blue: "#72A5F8",
   pink: "#F17EB8",

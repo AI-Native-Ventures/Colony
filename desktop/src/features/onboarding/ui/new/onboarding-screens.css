@@ -154,6 +154,17 @@
     font-feature-settings: "ss01", "cv05";
   }
 
+  /* The landing screen wears the wordmark where every other screen wears a
+     headline, so it takes the headline's slot and optical size rather than a
+     width of its own. The mark is ink-coloured artwork, so it inherits the
+     canvas ink like the type around it. */
+  .onb-wordmark {
+    display: block;
+    width: min(38rem, 72vw);
+    height: auto;
+    margin: 0 auto;
+  }
+
   .onb-sub {
     margin: 1.5rem 0 0;
     font-size: clamp(1rem, 1.25vw, 1.25rem);
@@ -234,6 +245,54 @@
     border-bottom-width: 2px !important;
   }
 
+  /* A fieldset is a grouping element, not a visual one: it carries the
+     disabled state for a whole step while the panel below owns the look. */
+  .onb-fieldset {
+    width: 100%;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+    text-align: left;
+  }
+
+  .onb-fieldset:disabled {
+    pointer-events: none;
+    opacity: 0.7;
+  }
+
+  /* Selects can't be rules the way inputs can: a native trigger needs a hit
+     target with edges. They stay the quietest box the canvas allows, so a
+     screen of them still reads as the flow rather than as a settings pane.
+     The specificity ladder matches the input rules above, and for the same
+     reason: the shared component's own classes ship inside Tailwind's
+     layers. */
+  .onb-fieldset .onb-select,
+  .onb-panel .onb-select {
+    background: var(--onb-shell) !important;
+    border: 1px solid var(--onb-shell-line) !important;
+    border-radius: 0.75rem !important;
+    box-shadow: none !important;
+    height: 3rem !important;
+    padding: 0 0.9rem !important;
+    font-size: 1rem !important;
+    color: var(--onb-ink) !important;
+    transition: border-color 320ms var(--onb-ease);
+  }
+
+  .onb-fieldset .onb-select:hover,
+  .onb-panel .onb-select:hover {
+    border-color: var(--onb-rule) !important;
+  }
+
+  .onb-fieldset .onb-select:focus-visible,
+  .onb-panel .onb-select:focus-visible {
+    outline: none !important;
+    border-color: var(--onb-accent) !important;
+  }
+
   /* Strength meter is a hairline under the rule, not a second bar competing
      with it. */
   .onb-panel [role="progressbar"],
@@ -296,6 +355,90 @@
 
   .onb-screen[data-solo="true"] .onb-actions {
     justify-content: center;
+  }
+
+  /* The landing screen's own column: the slide transition wraps it, so the
+     hero needs a width and a centre of its own rather than inheriting the
+     grid cell's alignment. */
+  .onb-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    text-align: center;
+  }
+
+  /* The key-import card centres itself against the viewport, which predates
+     this canvas: it was positioned independently of a small heading and a
+     bottom-docked action bar. Against a full-height redesign screen that
+     absolute placement lands the card underneath the headline. Inside the
+     canvas it returns to flow, and the screen's own grid spaces it. */
+  .onb-canvas .buzz-onboarding-key-import-position {
+    position: static;
+    transform: none;
+    margin-top: 2.5rem;
+  }
+
+  /* Back is a quiet control on the canvas, not a grey chip from the old
+     neutral shell: on a saturated field that chip read as a foreign element. */
+  .onb-canvas .onb-back {
+    background: transparent !important;
+    color: var(--onb-ink-soft) !important;
+    text-decoration: underline;
+    text-decoration-color: var(--onb-rule);
+    text-underline-offset: 0.32em;
+  }
+
+  .onb-canvas .onb-back:hover:not(:disabled) {
+    background: transparent !important;
+    color: var(--onb-ink) !important;
+    text-decoration-color: var(--onb-ink);
+  }
+
+  /* Fields inside a step bring their own labels from the shared agent config
+     components. They are the same kind of thing as .onb-label, so they get the
+     same treatment rather than two label styles on one screen. */
+  .onb-fieldset label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--onb-ink-soft);
+  }
+
+  /* The key-import card is a nine-slice texture built for a neutral shell.
+     Over a saturated canvas it reads as a white smear rather than paper, and
+     its fixed padding clips the key text. Inside the flow the field becomes a
+     rule like every other one, which is the treatment the redesign uses
+     everywhere else. The card element stays: it still owns the layout and the
+     reveal toggle, and it still must never regenerate a runtime SVG filter. */
+  .onb-canvas [data-testid="nostr-import-card"] {
+    /* Longhand, not the `border-image` shorthand: the minifier compresses
+       `border-image: none` to an empty value, which is invalid and gets
+       dropped, so the texture survives in a production build while looking
+       correct in dev. */
+    border-image-source: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+
+  /* A solo screen is a hero: everything centres on the axis, and the sub
+     is measured against the whole column rather than a left rail. */
+  .onb-screen[data-solo="true"] .onb-col-head {
+    text-align: center;
+  }
+
+  .onb-screen[data-solo="true"] .onb-sub {
+    margin-left: auto;
+    margin-right: auto;
+    max-width: 34rem;
+    font-size: clamp(1.125rem, 1.6vw, 1.5rem);
+  }
+
+  .onb-screen[data-solo="true"] .onb-actions {
+    margin-top: 3rem;
   }
 
   .onb-quiet-action {

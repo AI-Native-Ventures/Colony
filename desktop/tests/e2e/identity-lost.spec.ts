@@ -269,7 +269,7 @@ test("phone recovery returns to the app without creating or restarting", async (
   await expect(page.getByTestId("relaunch-required")).toHaveCount(0);
   await expect(
     page.getByRole("heading", {
-      name: "Your unique identity key has been created",
+      name: "Your key is yours.",
     }),
   ).toHaveCount(0);
 });

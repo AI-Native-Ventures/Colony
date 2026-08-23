@@ -2,10 +2,7 @@ import { motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 
 import { Button } from "@/shared/ui/button";
-import {
-  ONBOARDING_SECURITY_PRIMARY_CTA_CLASS,
-  ONBOARDING_SECONDARY_CTA_CLASS,
-} from "./OnboardingChrome";
+import { ONBOARDING_SECURITY_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
 import { OnboardingFooter } from "./OnboardingFooter";
 import {
   type OnboardingTransitionDirection,
@@ -44,14 +41,14 @@ export function DownloadKeyStep({
 
   return (
     <OnboardingSlideTransition
-      className="flex min-h-0 w-full flex-col items-center"
+      className="onb-screen"
       data-testid="onboarding-page-download"
       direction={direction}
       transitionKey={`download-${direction}`}
     >
       <motion.div
         animate={{ opacity: 1, y: 0 }}
-        className="flex w-full max-w-[500px] shrink-0 flex-col text-center"
+        className="onb-col-head"
         initial={reduceMotion ? false : { opacity: 0, y: 10 }}
         key={
           hasVerifiedBackup
@@ -62,9 +59,7 @@ export function DownloadKeyStep({
         }
         transition={{ duration: reduceMotion ? 0 : 0.3, ease: "easeOut" }}
       >
-        {/* Plain string concat: cn()'s tailwind-merge misreads the custom
-            text-title size token as conflicting with text-foreground. */}
-        <h1 className="text-title font-normal text-foreground">
+        <h1 className="onb-headline">
           {hasVerifiedBackup
             ? "Your backup is verified"
             : hasSelectedBackup
@@ -73,7 +68,7 @@ export function DownloadKeyStep({
                 ? "Optionally, test your backup"
                 : "Backup your key with a password"}
         </h1>
-        <p className="mt-5 text-sm leading-6 text-foreground/80">
+        <p className="onb-sub">
           {hasVerifiedBackup
             ? "Your file and password can restore your identity."
             : hasSelectedBackup
@@ -121,21 +116,25 @@ export function DownloadKeyStep({
           ref={setPrimaryActionSlot}
         />
         {hasCreated ? (
-          <Button
-            className={
-              hasVerifiedBackup
-                ? ONBOARDING_SECURITY_PRIMARY_CTA_CLASS
-                : ONBOARDING_SECONDARY_CTA_CLASS
-            }
-            data-testid={
-              hasVerifiedBackup ? "onboarding-finish" : "onboarding-skip"
-            }
-            onClick={onBack}
-            type="button"
-            variant="ghost"
-          >
-            {hasVerifiedBackup ? "Finish" : "Skip for now"}
-          </Button>
+          hasVerifiedBackup ? (
+            <Button
+              data-testid="onboarding-finish"
+              onClick={onBack}
+              size="lg"
+              type="button"
+            >
+              Finish
+            </Button>
+          ) : (
+            <button
+              className="onb-quiet-action"
+              data-testid="onboarding-skip"
+              onClick={onBack}
+              type="button"
+            >
+              Skip for now
+            </button>
+          )
         ) : null}
       </OnboardingFooter>
     </OnboardingSlideTransition>
