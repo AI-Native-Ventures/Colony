@@ -34,9 +34,12 @@ pub(crate) struct KnownAcpRuntime {
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
     /// Whether this runtime handles model switching via ACP protocol natively.
-    /// Currently unused — env var injection runs unconditionally regardless of
-    /// this value. Retained as scaffolding for when ACP model switching matures.
-    #[allow(dead_code)]
+    ///
+    /// Consumed by the config bridge (`config_bridge::reader`) to decide how a
+    /// model change reaches the harness when no session configOptions cache is
+    /// available. Values for claude, codex and opencode were proven live on
+    /// 2026-08-23 by spawning each adapter, switching models over ACP and
+    /// confirming the turn ran on the switched model.
     pub supports_acp_model_switching: bool,
     pub model_env_var: Option<&'static str>,
     pub provider_env_var: Option<&'static str>,

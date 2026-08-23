@@ -9,7 +9,7 @@ use super::{
     probe_codex_acp_version, record_agent_command, try_record_agent_command, BUZZ_AGENT_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[test]
 fn resolves_known_avatar_for_bare_command() {
     let avatar_url = managed_agent_avatar_url("codex-acp").expect("codex avatar should resolve");
@@ -1760,4 +1760,133 @@ fn discovery_publish_path_drops_mid_flight_delete() {
         lookup_loaded_harness_by_id("mid-flight-delete").is_none(),
         "discovery's publish must not resurrect a harness deleted mid-discovery"
     );
+}
+
+// ── S2 harness stream: proven model channels + binary visibility ────────────
+
+/// OpenCode must be a compiled-in runtime, not a bare preset: its model
+/// selection rides ACP `session/set_config_option` (proven live 2026-08-23)
+/// and its provider rides the universal `BUZZ_ACP_PROVIDER` env var, both of
+/// which are only surfaced to the config surfaces through `KnownAcpRuntime`.
+#[test]
+fn opencode_is_a_first_class_runtime_with_proven_acp_model_channel() {
+    use super::presets::PRESET_HARNESSES;
+
+    let rt = super::known_acp_runtime_exact("opencode")
+        .expect("opencode must be promoted out of presets into KNOWN_ACP_RUNTIMES");
+
+    assert_eq!(rt.commands, &["opencode"], "primary command stays stable");
+    assert_eq!(rt.label, "OpenCode");
+    assert!(
+        rt.supports_acp_model_switching,
+        "opencode honors session/set_config_option(configId=\"model\") — proven live"
+    );
+    assert_eq!(
+        rt.provider_env_var,
+        Some("BUZZ_ACP_PROVIDER"),
+        "provider picker is driven by the universal provider env var"
+    );
+    // Honest metadata: there is no per-harness model env var. The selected
+    // model reaches the harness via BUZZ_ACP_MODEL + the ACP config option,
+    // never via an OPENCODE_* variable.
+    assert!(rt.model_env_var.is_none());
+
+    // Promotion must not leave a shadowing duplicate in the preset list.
+    assert!(
+        !PRESET_HARNESSES.iter().any(|p| p.id == "opencode"),
+        "opencode must not exist as both builtin and preset"
+    );
+
+    // The spawn-arg normalizer keeps launching `opencode acp`.
+    assert_eq!(
+        normalize_agent_args("opencode", Vec::new()),
+        vec!["acp".to_string()]
+    );
+}
+
+/// Claude Code and Codex adapters were proven live (2026-08-23) to honor a
+/// chosen model through ACP switching: claude-agent-acp via the stable
+/// `session/set_config_option(configId="model")`, codex-acp via both that and
+/// the unstable `session/set_model`. Their runtime rows must say so — a false
+/// flag makes the config bridge report their model field as read-only.
+#[test]
+fn claude_and_codex_declare_proven_acp_model_switching() {
+    for id in ["claude", "codex"] {
+        let rt = super::known_acp_runtime_exact(id)
+            .unwrap_or_else(|| panic!("{id} must be a known runtime"));
+        assert!(
+            rt.supports_acp_model_switching,
+            "{id} was proven to switch models over ACP; supports_acp_model_switching must be true"
+        );
+    }
+}
+
+/// Regression for the F4 visibility gap: Colony only scanned ITS OWN npm
+/// prefix (`<data-dir>/Buzz/node-tools/bin`), so user-global npm installs
+/// like `prime-agent` / `claude-agent-acp` in `~/.npm-global/bin` were
+/// invisible to discovery. The user's npm prefix bin dir and the conventional
+/// `~/.npm-global/bin` must be scanned.
+#[test]
+fn common_binary_paths_include_the_user_npm_global_bin() {
+    let home = dirs::home_dir().expect("test host has a home dir");
+    let paths = super::common_binary_paths();
+
+    assert!(
+        paths.contains(&home.join(".npm-global").join("bin")),
+        "~/.npm-global/bin must be scanned; missing from {paths:?}"
+    );
+}
+
+/// The npmrc parser behind the prefix lookup: reads `prefix=` with tilde
+/// expansion and ignores unrelated keys.
+#[test]
+fn npm_prefix_from_npmrc_parses_prefix_and_expands_tilde() {
+    let home = Path::new("/Users/tester");
+
+    let parsed = super::npm_prefix_from_npmrc_contents(
+        "registry=https://registry.npmjs.org/\n\nprefix=~/.npm-global\nsave-exact=true\n",
+        home,
+    )
+    .expect("prefix= line must parse");
+    assert_eq!(
+        parsed,
+        home.join(".npm-global"),
+        "tilde must expand against the home dir, not stay literal"
+    );
+
+    // Absolute prefix values pass through untouched.
+    assert_eq!(
+        super::npm_prefix_from_npmrc_contents("prefix=/opt/npm-prefix\n", home),
+        Some(PathBuf::from("/opt/npm-prefix"))
+    );
+
+    // No prefix key → None, not an error.
+    assert_eq!(
+        super::npm_prefix_from_npmrc_contents("save-exact=true\n", home),
+        None
+    );
+}
+
+/// The composed lookup: when ~/.npmrc declares a prefix, its bin dir joins
+/// the scan list alongside the conventional ~/.npm-global/bin.
+#[cfg(unix)]
+#[test]
+fn user_npm_global_bin_dirs_compose_npmrc_and_conventional_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+
+    std::fs::write(home.join(".npmrc"), "prefix=/opt/custom-npm\n").unwrap();
+    let dirs = super::user_npm_global_bin_dirs(home);
+    assert!(
+        dirs.contains(&Path::new("/opt/custom-npm").join("bin")),
+        "npmrc prefix bin dir must be scanned: {dirs:?}"
+    );
+    assert!(
+        dirs.contains(&home.join(".npm-global").join("bin")),
+        "~/.npm-global/bin must always be scanned: {dirs:?}"
+    );
+
+    // Without any npmrc prefix, the conventional default still appears.
+    let dirs = super::user_npm_global_bin_dirs(home);
+    assert!(dirs.contains(&home.join(".npm-global").join("bin")));
 }

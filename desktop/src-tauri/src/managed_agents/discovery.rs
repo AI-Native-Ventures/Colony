@@ -31,6 +31,68 @@ const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const BUZZ_AGENT_AVATAR_URL: &str =
     "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
+
+/// Parse a `prefix = <path>` entry from an npmrc file, expanding a leading
+/// `~/` against the user's home directory. This reports what
+/// `npm config get prefix` returns when the user relocated their npm global
+/// prefix via userconfig — read directly instead of spawned because
+/// [`common_binary_paths`] initializes from a `OnceLock` where a login-shell
+/// spawn has no timeout and could stall every command resolution.
+fn npm_prefix_from_npmrc(npmrc: &Path) -> Option<PathBuf> {
+    let contents = std::fs::read_to_string(npmrc).ok()?;
+    let home = dirs::home_dir()?;
+    npm_prefix_from_npmrc_contents(&contents, &home)
+}
+
+/// Pure core of [`npm_prefix_from_npmrc`]: tilde expansion runs against the
+/// supplied home so the parse is unit-testable without touching the real one.
+fn npm_prefix_from_npmrc_contents(contents: &str, home: &Path) -> Option<PathBuf> {
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("prefix") {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        if value.is_empty() {
+            continue;
+        }
+        let expanded = match value.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(value),
+        };
+        return Some(expanded);
+    }
+    None
+}
+
+/// Binaries from the USER's npm global installs.
+///
+/// Colony scans its own app-private npm prefix (`buzz_managed_npm_bin_dir`),
+/// but tools the user installed themselves (`npm install -g prime-agent`,
+/// `claude-agent-acp`, ...) land in the user's prefix and were invisible to
+/// discovery. Two sources, both pure file/path work:
+///
+/// 1. `~/.npmrc`'s `prefix=` key — what `npm config get prefix` reports once
+///    the user has relocated it (the documented fix for npm's default EACCES).
+/// 2. `~/.npm-global/bin` — the conventional target of npm's own
+///    prefix-relocation instructions, added unconditionally so a relocated
+///    prefix without an npmrc entry is still found.
+fn user_npm_global_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(prefix) = npm_prefix_from_npmrc(&home.join(".npmrc")) {
+        dirs.push(prefix.join("bin"));
+    }
+    dirs.push(home.join(".npm-global").join("bin"));
+    dirs.dedup();
+    dirs
+}
+
 fn common_binary_paths() -> &'static [PathBuf] {
     static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
     PATHS.get_or_init(|| {
@@ -54,6 +116,8 @@ fn common_binary_paths() -> &'static [PathBuf] {
                 home.join(".asdf/shims"),
                 home.join(".bun/bin"),
             ]);
+            // User npm global installs (prime-agent, claude-agent-acp, ...).
+            paths.extend(user_npm_global_bin_dirs(&home));
         }
         // Windows well-known dirs for npm global shims and standalone installer targets.
         #[cfg(windows)]
@@ -128,7 +192,11 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         cli_install_hint: "Colony talks to Claude Code through the Claude Code CLI.",
         adapter_install_hint: "Colony talks to the Claude Code CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/claude-agent-acp.",
         skill_dir: Some(".claude/skills"),
-        supports_acp_model_switching: false,
+        // Proven live (2026-08-23): the adapter exposes its model catalog as a
+        // stable `configOptions` entry (id "model") and honors
+        // `session/set_config_option(configId: "model", value)` — a turn ran
+        // on the switched model. It has no unstable `session/set_model`.
+        supports_acp_model_switching: true,
         model_env_var: None,
         provider_env_var: None,
         provider_locked: true,
@@ -161,7 +229,12 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         cli_install_hint: "Colony talks to Codex through the Codex CLI.",
         adapter_install_hint: "Colony talks to the Codex CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/codex-acp.",
         skill_dir: Some(".codex/skills"),
-        supports_acp_model_switching: false,
+        // Proven live (2026-08-23): the adapter exposes its model catalog via
+        // the unstable `models.availableModels` (ids like `gpt-5.4-mini[low]`)
+        // and honors `session/set_model` — the turn's model_usage reported the
+        // switched model. It also accepts the stable
+        // `session/set_config_option(configId: "model")`.
+        supports_acp_model_switching: true,
         model_env_var: None,
         provider_env_var: None,
         provider_locked: false,
@@ -177,6 +250,49 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         login_hint: Some("Run `codex login` to authenticate."),
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
         auth_probe_args: Some(&["codex", "login", "status"]),
+    },
+    KnownAcpRuntime {
+        id: "opencode",
+        label: "OpenCode",
+        commands: &["opencode"],
+        aliases: &[],
+        // No remote icon: the frontend serves a bundled asset keyed by id.
+        avatar_url: "",
+        mcp_command: None,
+        mcp_hooks: false,
+        underlying_cli: None,
+        cli_install_commands: &[],
+        cli_install_commands_windows: &[],
+        adapter_install_commands: &[],
+        cli_install_instructions_url: "https://opencode.ai/docs",
+        adapter_install_instructions_url: "",
+        cli_install_hint: "Colony talks to OpenCode through its CLI's ACP mode (opencode acp).",
+        adapter_install_hint: "",
+        skill_dir: None,
+        // Proven live (2026-08-23): `opencode acp` exposes its model catalog
+        // (463 provider-qualified ids, incl. OpenCode's free models) as a
+        // stable `configOptions` entry (id "model") and honors
+        // `session/set_config_option(configId: "model", value)` — a turn ran
+        // end-to-end on the switched free model.
+        supports_acp_model_switching: true,
+        // Model selection rides BUZZ_ACP_MODEL + the ACP config option above;
+        // there is no OPENCODE_* model env var. Provider selection rides the
+        // universal BUZZ_ACP_PROVIDER (same convention as prime-agent), and
+        // opencode's own model ids are provider-qualified (`provider/model`).
+        model_env_var: None,
+        provider_env_var: Some("BUZZ_ACP_PROVIDER"),
+        provider_locked: false,
+        default_env: &[],
+        config_file_path: Some("~/.config/opencode/opencode.json"),
+        config_file_format: Some("json"),
+        supports_acp_native_config: false,
+        thinking_env_var: None,
+        max_tokens_env_var: None,
+        context_limit_env_var: None,
+        max_rounds_env_var: None,
+        required_normalized_fields: &[],
+        login_hint: None,
+        auth_probe_args: None,
     },
     KnownAcpRuntime {
         id: "buzz-agent",
@@ -1606,7 +1722,10 @@ pub(crate) mod pre_publish_test_hook {
 
 pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
     let runtime = known_acp_runtime(command)?;
-    Some(runtime.avatar_url.to_string())
+    // Runtimes whose icon ships as a bundled frontend asset (opencode) carry
+    // no remote URL — publishing an empty `picture` tag would overwrite a
+    // profile avatar with nothing.
+    (!runtime.avatar_url.is_empty()).then(|| runtime.avatar_url.to_string())
 }
 
 #[cfg(test)]
