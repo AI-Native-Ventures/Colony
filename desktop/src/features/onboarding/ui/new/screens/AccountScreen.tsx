@@ -3,6 +3,7 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Progress } from "@/shared/ui/progress";
 import type { AuthFailure } from "../../../authService";
+import { FOUNDER_GENDERS, type FounderGender } from "../../../onboardingV2";
 import {
   PASSWORD_MIN,
   isEmail,
@@ -14,9 +15,31 @@ export type AccountValues = {
   email: string;
   password: string;
   city: string;
+  /** Carried over from the previous first-run flow: Scout's brief uses it. */
+  country: string;
+  gender: FounderGender | null;
+  selfDescribedGender: string;
+};
+
+/** What each gender option says on the chip. */
+const GENDER_LABEL: Record<FounderGender, string> = {
+  woman: "Woman",
+  man: "Man",
+  "non-binary": "Non-binary",
+  "self-describe": "Self-describe",
+  "prefer-not-to-say": "Prefer not to say",
 };
 
 export function accountReady(values: AccountValues): boolean {
+  // Gender stays optional, exactly as it was before, but choosing
+  // self-describe and leaving it blank is an unfinished answer rather than a
+  // declined one.
+  if (
+    values.gender === "self-describe" &&
+    values.selfDescribedGender.trim().length === 0
+  ) {
+    return false;
+  }
   return (
     values.name.trim().length > 0 &&
     isEmail(values.email) &&
@@ -136,18 +159,66 @@ export function AccountScreen({
               : `${shortfall} more characters`}
           </p>
         </label>
-        <label className="onb-field" htmlFor="onb-account-city">
-          <span className="onb-label">City</span>
-          <Input
-            id="onb-account-city"
-            value={values.city}
-            onChange={(e) => onChange({ city: e.target.value })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
-            }}
-          />
-          <p className="onb-note">Change it if we got it wrong.</p>
-        </label>
+        <div className="onb-row">
+          <label className="onb-field" htmlFor="onb-account-city">
+            <span className="onb-label">City</span>
+            <Input
+              id="onb-account-city"
+              value={values.city}
+              onChange={(e) => onChange({ city: e.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
+              }}
+            />
+          </label>
+          <label className="onb-field" htmlFor="onb-account-country">
+            <span className="onb-label">Country</span>
+            <Input
+              id="onb-account-country"
+              value={values.country}
+              onChange={(e) => onChange({ country: e.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
+              }}
+            />
+          </label>
+        </div>
+        <p className="onb-note">Change these if we got them wrong.</p>
+        <fieldset className="onb-field">
+          <legend className="onb-label">Gender (optional)</legend>
+          <div className="onb-chips">
+            {FOUNDER_GENDERS.map((option) => (
+              <button
+                type="button"
+                key={option}
+                className="onb-chip"
+                data-selected={values.gender === option}
+                aria-pressed={values.gender === option}
+                data-testid={`onb-gender-${option}`}
+                onClick={() =>
+                  onChange({
+                    gender: values.gender === option ? null : option,
+                    ...(option === "self-describe"
+                      ? {}
+                      : { selfDescribedGender: "" }),
+                  })
+                }
+              >
+                {GENDER_LABEL[option]}
+              </button>
+            ))}
+          </div>
+          {values.gender === "self-describe" ? (
+            <Input
+              aria-label="Describe your gender"
+              data-testid="onb-gender-self-described"
+              value={values.selfDescribedGender}
+              onChange={(e) =>
+                onChange({ selfDescribedGender: e.target.value })
+              }
+            />
+          ) : null}
+        </fieldset>
       </div>
       {failure !== null && failure.kind !== "email-taken" ? (
         <p className="onb-note onb-note-warn" role="alert">

@@ -1,4 +1,5 @@
 // desktop/src/features/onboarding/flow/steps.ts
+import type { FounderGender } from "../onboardingV2";
 
 /** The ten screens, in the order the spec defines them. */
 export const ONBOARDING_STEPS = [
@@ -18,8 +19,24 @@ export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
 export type OnboardingTrack = "byo" | "colony";
 
+/**
+ * Who the founder is.
+ *
+ * Carried over from the flow this one replaces: none of it is stored as a
+ * record, it is what Scout's opening brief is built from, so dropping any of
+ * it silently degrades the first thing an agent knows about the company.
+ */
+export type OnboardingFounder = {
+  fullName: string;
+  city: string;
+  country: string;
+  gender: FounderGender | null;
+  selfDescribedGender: string;
+};
+
 export type OnboardingAnswers = {
   account: { email: string } | null;
+  founder: OnboardingFounder | null;
   recoveryAcknowledged: boolean;
   company: string | null;
   track: OnboardingTrack | null;
