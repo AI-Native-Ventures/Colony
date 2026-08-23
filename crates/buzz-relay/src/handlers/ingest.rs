@@ -1780,6 +1780,131 @@ async fn author_type_label(
     }
 }
 
+/// Which surface a kind 40100 canvas event writes to, from its tags alone.
+#[derive(Debug, PartialEq, Eq)]
+enum CanvasScope {
+    /// No `e` tag — the channel canvas (`h` only).
+    Channel,
+    /// One `e` tag — the thread canvas scoped to `(h, e)`. Carries the
+    /// thread root's hex event id.
+    Thread(String),
+}
+
+/// Per-scope content caps for kind 40100 canvas events, enforced at ingest.
+///
+/// A thread canvas is injected into agent prompts by value every turn, so it
+/// gets a tight ceiling; the channel canvas holds promoted learnings and gets
+/// a looser one. Both sit far below the generic
+/// [`MAX_EVENT_CONTENT_BYTES`](crate::handlers::ingest) 256 KB event ceiling.
+const THREAD_CANVAS_MAX_CONTENT_BYTES: usize = 4 * 1024;
+const CHANNEL_CANVAS_MAX_CONTENT_BYTES: usize = 16 * 1024;
+
+/// Parse a canvas event's scope from its tags and enforce that scope's
+/// content cap. Pure tag/size work — the async level-1 and same-channel
+/// checks live in [`validate_canvas_event`].
+fn parse_canvas_scope(event: &Event) -> Result<CanvasScope, String> {
+    let e_hexes: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|t| t.kind().to_string() == "e")
+        .filter_map(|t| t.content())
+        .collect();
+
+    match e_hexes.len() {
+        0 => {
+            check_canvas_content_size(event, CHANNEL_CANVAS_MAX_CONTENT_BYTES, "channel canvas")?;
+            Ok(CanvasScope::Channel)
+        }
+        1 => {
+            check_canvas_content_size(event, THREAD_CANVAS_MAX_CONTENT_BYTES, "thread canvas")?;
+            if hex::decode(e_hexes[0])
+                .ok()
+                .filter(|b| b.len() == 32)
+                .is_none()
+            {
+                return Err("invalid: canvas e tag is not a valid event id".to_string());
+            }
+            Ok(CanvasScope::Thread(e_hexes[0].to_string()))
+        }
+        _ => Err("invalid: canvas accepts at most one e tag".to_string()),
+    }
+}
+
+/// Per-kind validation for kind 40100 canvas events.
+///
+/// A canvas carries an optional `e` tag selecting its scope:
+/// - no `e` tag → channel canvas (`h` only), capped at
+///   [`CHANNEL_CANVAS_MAX_CONTENT_BYTES`];
+/// - exactly one `e` tag → thread canvas scoped to `(h, e)`, capped at
+///   [`THREAD_CANVAS_MAX_CONTENT_BYTES`]. The referenced event must exist,
+///   live in the same channel as the canvas's `h` tag, and be a thread root —
+///   a reply may not carry a thread canvas because nested replies read their
+///   level-1 ancestor's canvas.
+///
+/// More than one `e` tag is ambiguous (which thread?) and rejected outright.
+async fn validate_canvas_event(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    event: &Event,
+    channel_id: Uuid,
+) -> Result<(), String> {
+    match parse_canvas_scope(event)? {
+        CanvasScope::Channel => Ok(()),
+        CanvasScope::Thread(root_hex) => {
+            let root_bytes = hex::decode(&root_hex).unwrap_or_default();
+
+            let root_event = state
+                .db
+                .get_event_by_id(tenant.community(), &root_bytes)
+                .await
+                .map_err(|e| format!("db error looking up canvas thread root: {e}"))?
+                .ok_or_else(|| "invalid: canvas e tag points at an unknown event".to_string())?;
+
+            if root_event.channel_id != Some(channel_id) {
+                return Err(
+                    "invalid: canvas e tag points at an event in a different channel".to_string(),
+                );
+            }
+
+            // Level-1 only. The DB row is authoritative: replies carry
+            // thread_metadata with a parent set; roots either have no row yet
+            // or a depth-0 stub created when someone replied to them.
+            let root_meta = state
+                .db
+                .get_thread_metadata_by_event(tenant.community(), &root_bytes)
+                .await
+                .map_err(|e| format!("db error looking up canvas thread root metadata: {e}"))?;
+            let is_reply = root_meta
+                .as_ref()
+                .is_some_and(|m| m.depth > 0 || m.parent_event_id.is_some());
+            if is_reply {
+                return Err(
+                    "invalid: canvas e tag must point at a thread root, not a reply".to_string(),
+                );
+            }
+
+            Ok(())
+        }
+    }
+}
+
+/// Enforce a canvas scope's content cap with the same message shape as the
+/// generic `MAX_EVENT_CONTENT_BYTES` rejection, so an over-cap write names
+/// the cap and the actual size and the author trims instead of retrying blind.
+fn check_canvas_content_size(
+    event: &Event,
+    cap_bytes: usize,
+    scope_label: &str,
+) -> Result<(), String> {
+    if event.content.len() > cap_bytes {
+        return Err(format!(
+            "invalid: {scope_label} content exceeds maximum size of {cap_bytes} bytes (got {})",
+            event.content.len()
+        ));
+    }
+    Ok(())
+}
+
 /// Ingest a signed Nostr event through the full validation pipeline.
 ///
 /// Shared by WebSocket and HTTP transports. The caller constructs [`IngestAuth`]
@@ -2784,6 +2909,17 @@ async fn ingest_event_inner(
     if kind_u32 == KIND_PERSONA {
         validate_persona_envelope(&event)
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    if kind_u32 == KIND_CANVAS {
+        // `requires_h_channel_scope` already guarantees an h tag, so
+        // channel_id is Some for every canvas that reaches this line.
+        let ch_id = channel_id.ok_or_else(|| {
+            IngestError::Rejected("invalid: canvas events must include an h tag".into())
+        })?;
+        validate_canvas_event(tenant, state, &event, ch_id)
+            .await
+            .map_err(IngestError::Rejected)?;
     }
 
     // Colony content calendar: the gates are the product, so they are enforced
@@ -4541,6 +4677,129 @@ mod tests {
     fn count_e_tags_single_valid() {
         let event = make_event_with_tags(5, "", &[&["e", "a".repeat(64).as_str()]]);
         assert_eq!(count_e_tags(&event), 1);
+    }
+
+    // --- canvas scope parsing + per-scope size caps (kind 40100) ---
+
+    fn make_canvas(content: &str, tags: &[&[&str]]) -> Event {
+        make_event_with_tags(KIND_CANVAS, content, tags)
+    }
+
+    fn root_hex() -> String {
+        "a".repeat(64)
+    }
+
+    #[test]
+    fn canvas_no_e_tag_is_channel_scope() {
+        let event = make_canvas(
+            "channel learnings",
+            &[&["h", "0d3f6d1e-0000-4000-8000-000000000000"]],
+        );
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Ok(CanvasScope::Channel),
+            "positive control: a channel canvas without an e tag parses as Channel"
+        );
+    }
+
+    #[test]
+    fn canvas_one_valid_root_is_thread_scope() {
+        let event = make_canvas(
+            "thread memory",
+            &[
+                &["h", "0d3f6d1e-0000-4000-8000-000000000000"],
+                &["e", root_hex().as_str()],
+            ],
+        );
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Ok(CanvasScope::Thread(root_hex()))
+        );
+    }
+
+    #[test]
+    fn canvas_two_e_tags_rejected() {
+        let event = make_canvas(
+            "x",
+            &[
+                &["h", "0d3f6d1e-0000-4000-8000-000000000000"],
+                &["e", root_hex().as_str()],
+                &["e", &"b".repeat(64)],
+            ],
+        );
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Err("invalid: canvas accepts at most one e tag".to_string())
+        );
+    }
+
+    #[test]
+    fn canvas_malformed_root_rejected() {
+        let event = make_canvas(
+            "x",
+            &[
+                &["h", "0d3f6d1e-0000-4000-8000-000000000000"],
+                &["e", "not-hex"],
+            ],
+        );
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Err("invalid: canvas e tag is not a valid event id".to_string())
+        );
+    }
+
+    #[test]
+    fn canvas_thread_cap_is_4kb() {
+        // Exactly at the cap is accepted; one byte over is rejected with a
+        // message naming the cap and the actual size.
+        let at_cap = "x".repeat(THREAD_CANVAS_MAX_CONTENT_BYTES);
+        let event = make_canvas(
+            &at_cap,
+            &[
+                &["h", "0d3f6d1e-0000-4000-8000-000000000000"],
+                &["e", root_hex().as_str()],
+            ],
+        );
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Ok(CanvasScope::Thread(root_hex()))
+        );
+
+        let over = "x".repeat(THREAD_CANVAS_MAX_CONTENT_BYTES + 1);
+        let event = make_canvas(
+            &over,
+            &[
+                &["h", "0d3f6d1e-0000-4000-8000-000000000000"],
+                &["e", root_hex().as_str()],
+            ],
+        );
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Err(format!(
+                "invalid: thread canvas content exceeds maximum size of {} bytes (got {})",
+                THREAD_CANVAS_MAX_CONTENT_BYTES,
+                over.len()
+            ))
+        );
+
+        // Positive control for the cap itself: the same content written as a
+        // channel canvas is under the 16 KB channel cap and must be accepted.
+        let channel_event = make_canvas(&over, &[&["h", "0d3f6d1e-0000-4000-8000-000000000000"]]);
+        assert_eq!(parse_canvas_scope(&channel_event), Ok(CanvasScope::Channel));
+    }
+
+    #[test]
+    fn canvas_channel_cap_is_16kb() {
+        let over = "x".repeat(CHANNEL_CANVAS_MAX_CONTENT_BYTES + 1);
+        let event = make_canvas(&over, &[&["h", "0d3f6d1e-0000-4000-8000-000000000000"]]);
+        assert_eq!(
+            parse_canvas_scope(&event),
+            Err(format!(
+                "invalid: channel canvas content exceeds maximum size of {} bytes (got {})",
+                CHANNEL_CANVAS_MAX_CONTENT_BYTES,
+                over.len()
+            ))
+        );
     }
 
     fn make_engram(tags: &[&[&str]], content: &str) -> Event {

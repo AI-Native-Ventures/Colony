@@ -95,6 +95,13 @@ pub struct EventQuery {
     /// SQL pushdown is sound.  Keeping `event_visible_to_reader` as post-filter
     /// defense-in-depth catches any residual mismatch.
     pub shared_gated_reader: Option<Vec<u8>>,
+    /// Exclude thread-scoped canvases (kind 40100 events carrying an `e` tag)
+    /// from the candidate page. Set for canvas queries that do not constrain
+    /// `#e`: a channel-canvas read must not have thread canvases crowd the
+    /// page out from under its SQL LIMIT. Applied as
+    /// `AND NOT (kind = 40100 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) t WHERE t->>0 = 'e'))`
+    /// so mixed-kind lists are unaffected.
+    pub exclude_thread_canvas: bool,
 }
 
 impl EventQuery {
@@ -124,6 +131,7 @@ impl EventQuery {
             channel_ids: None,
             max_limit: None,
             shared_gated_reader: None,
+            exclude_thread_canvas: false,
         }
     }
 }
@@ -703,11 +711,24 @@ pub(crate) async fn query_events_on(
         }
     }
 
-    // e-tag pushdown via JSONB containment: tags @> '[["e","<hex>"]]'.
+    // e-tag pushdown via JSONB containment: tags @> '[["e","<hex>"]].
     // Multiple e-tags use OR (any match). Served by idx_events_tags_gin
     // (GIN, jsonb_path_ops — migrations/0004): the channel-window aux closure
     // fans this out once per retained row, which made unindexed containment
     // the dominant scroll-back cost (~1.7s/page on staging).
+
+    // Thread-canvas exclusion pushdown (kind 40100, no #e constraint): a
+    // channel-canvas read must not have thread canvases crowd the page out
+    // from under its SQL LIMIT. Kind-guarded so mixed-kind lists keep their
+    // reply rows.
+    if q.exclude_thread_canvas {
+        qb.push(format!(
+            " AND NOT ({col_prefix}kind = 40100 AND EXISTS (\
+             SELECT 1 FROM jsonb_array_elements({col_prefix}tags) AS t \
+             WHERE t->>0 = 'e'))"
+        ));
+    }
+
     if let Some(ref e_tags) = q.e_tags {
         if !e_tags.is_empty() {
             qb.push(" AND (");
@@ -1010,6 +1031,16 @@ pub(crate) async fn count_events_on(conn: &mut sqlx::PgConnection, q: &EventQuer
             }
             qb.push(")");
         }
+    }
+
+    // Thread-canvas exclusion pushdown — mirrors query_events_on so COUNT
+    // stays exact for canvas filters without an #e constraint.
+    if q.exclude_thread_canvas {
+        qb.push(format!(
+            " AND NOT ({col_prefix}kind = 40100 AND EXISTS (\
+             SELECT 1 FROM jsonb_array_elements({col_prefix}tags) AS t \
+             WHERE t->>0 = 'e'))"
+        ));
     }
 
     if let Some(ref e_tags) = q.e_tags {

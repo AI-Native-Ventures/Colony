@@ -5,7 +5,7 @@
 use nostr::Filter;
 
 use crate::event::StoredEvent;
-use crate::kind::KIND_USAGE_RECORD;
+use crate::kind::{KIND_CANVAS, KIND_USAGE_RECORD};
 
 /// Returns `true` if the event matches any of the provided NIP-01 filters.
 pub fn filters_match(filters: &[Filter], event: &StoredEvent) -> bool {
@@ -41,6 +41,29 @@ pub fn reader_authorized_for_event(event: &nostr::Event, reader_pubkey_hex: &str
 fn filter_match_one(f: &Filter, ev: &StoredEvent) -> bool {
     if let Some(kinds) = &f.kinds {
         if !kinds.contains(&ev.event.kind) {
+            return false;
+        }
+    }
+
+    // Thread-scoped canvases (kind 40100 carrying an `e` tag) are scoped
+    // memory for one thread. They may only be selected by a filter that
+    // names their thread root via `#e` — a channel-level query
+    // (`kinds:[40100], #h` with no `#e`) must return the channel canvas,
+    // never a thread's private board. Scoped to filters that actually target
+    // kind 40100 so general NIP-01 semantics (id lookups, kindless
+    // subscriptions) are untouched. The reverse direction needs no rule: a
+    // filter with `#e` already requires a matching e-tag value on the event,
+    // which a channel canvas (no `e` tag) cannot satisfy.
+    if ev.event.kind == nostr::Kind::Custom(KIND_CANVAS as u16)
+        && f.kinds
+            .as_ref()
+            .is_some_and(|ks| ks.contains(&nostr::Kind::Custom(KIND_CANVAS as u16)))
+        && !f
+            .generic_tags
+            .contains_key(&nostr::SingleLetterTag::lowercase(nostr::Alphabet::E))
+    {
+        let has_e_tag = ev.event.tags.iter().any(|t| t.kind().to_string() == "e");
+        if has_e_tag {
             return false;
         }
     }
@@ -187,6 +210,92 @@ mod tests {
         assert!(!filters_match(
             &[Filter::new().event(nostr::EventId::from_byte_array([1u8; 32]))],
             &ev
+        ));
+    }
+
+    // --- thread-scoped canvas query semantics (kind 40100) ---
+
+    fn canvas_stored(e_tag: Option<nostr::EventId>) -> StoredEvent {
+        let keys = Keys::generate();
+        let kind = Kind::Custom(crate::kind::KIND_CANVAS as u16);
+        let mut tags: Vec<Tag> =
+            vec![Tag::parse(["h", "0d3f6d1e-0000-4000-8000-000000000000"]).expect("h tag")];
+        if let Some(root) = e_tag {
+            tags.push(Tag::event(root));
+        }
+        let event = EventBuilder::new(kind, "canvas")
+            .tags(tags)
+            .sign_with_keys(&keys)
+            .expect("sign");
+        StoredEvent::with_received_at(event, Utc::now(), None, true)
+    }
+
+    #[test]
+    fn h_only_canvas_query_excludes_thread_canvas() {
+        let thread_canvas = canvas_stored(Some(nostr::EventId::all_zeros()));
+        let channel_query = Filter::new()
+            .kind(Kind::Custom(crate::kind::KIND_CANVAS as u16))
+            .custom_tags(
+                nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+                ["0d3f6d1e-0000-4000-8000-000000000000"],
+            );
+        assert!(
+            !filters_match(std::slice::from_ref(&channel_query), &thread_canvas),
+            "a #h-only 40100 query must not return a thread canvas"
+        );
+    }
+
+    #[test]
+    fn e_scoped_canvas_query_matches_thread_canvas() {
+        let root = nostr::EventId::all_zeros();
+        let thread_canvas = canvas_stored(Some(root));
+        let thread_query = Filter::new()
+            .kind(Kind::Custom(crate::kind::KIND_CANVAS as u16))
+            .custom_tags(
+                nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+                ["0d3f6d1e-0000-4000-8000-000000000000"],
+            )
+            .event(root);
+        assert!(filters_match(&[thread_query], &thread_canvas));
+    }
+
+    #[test]
+    fn h_only_canvas_query_matches_channel_canvas() {
+        let channel_canvas = canvas_stored(None);
+        let channel_query = Filter::new()
+            .kind(Kind::Custom(crate::kind::KIND_CANVAS as u16))
+            .custom_tags(
+                nostr::SingleLetterTag::lowercase(nostr::Alphabet::H),
+                ["0d3f6d1e-0000-4000-8000-000000000000"],
+            );
+        assert!(
+            filters_match(&[channel_query], &channel_canvas),
+            "positive control: the same query must still return a channel canvas"
+        );
+    }
+
+    #[test]
+    fn canvas_rule_does_not_leak_into_other_kinds_or_id_lookups() {
+        // A reply (kind 9 with an e tag) must keep matching an #h-only query.
+        let keys = Keys::generate();
+        let reply = EventBuilder::new(Kind::Custom(9), "reply")
+            .tags([
+                Tag::parse(["h", "ch"]).expect("h"),
+                Tag::event(nostr::EventId::all_zeros()),
+            ])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        let stored_reply = StoredEvent::with_received_at(reply, Utc::now(), None, true);
+        assert!(filters_match(
+            &[Filter::new().kind(Kind::Custom(9))],
+            &stored_reply
+        ));
+
+        // A plain id lookup (no kinds constraint) still finds a thread canvas.
+        let thread_canvas = canvas_stored(Some(nostr::EventId::all_zeros()));
+        assert!(filters_match(
+            &[Filter::new().id(thread_canvas.event.id)],
+            &thread_canvas
         ));
     }
 

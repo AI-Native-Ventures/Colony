@@ -50,7 +50,8 @@ pub async fn set_canvas(
 ) -> Result<serde_json::Value, String> {
     let uuid = uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
-    let builder = events::build_set_canvas(uuid, &content)?;
+    let builder =
+        buzz_sdk_pkg::build_set_canvas(uuid, &content, None).map_err(|e| e.to_string())?;
     let result = submit_event(builder, &state).await?;
 
     Ok(serde_json::json!({
