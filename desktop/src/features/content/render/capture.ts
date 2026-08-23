@@ -137,13 +137,6 @@ export function sha256Hex(bytes: Uint8Array): string {
 // Font warming
 // ---------------------------------------------------------------------------
 
-type FontFaceSpec = {
-  display?: string;
-  family: string;
-  src: string;
-  weight?: string;
-};
-
 const FONT_DISPLAYS = [
   "auto",
   "block",
@@ -151,6 +144,15 @@ const FONT_DISPLAYS = [
   "fallback",
   "optional",
 ] as const;
+
+type FontDisplay = (typeof FONT_DISPLAYS)[number];
+
+type FontFaceSpec = {
+  display?: FontDisplay;
+  family: string;
+  src: string;
+  weight?: string;
+};
 
 /**
  * The bodies of every `@font-face` rule, read by balancing braces rather than
@@ -252,7 +254,7 @@ export function extractFontFaces(css: string): FontFaceSpec[] {
       ),
       family: family.replace(/^["']|["']$/g, ""),
       src,
-      weight: readDescriptor(body, "font-weight"),
+      weight: readDescriptor(body, "font-weight") ?? undefined,
     });
   }
   return specs;

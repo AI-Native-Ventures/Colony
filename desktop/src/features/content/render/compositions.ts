@@ -21,7 +21,6 @@ import {
   type ResolvedGroundHue,
 } from "./atmosphere.ts";
 import { INK, resolveGroundHues } from "./colonyKit.ts";
-import { antSvg } from "./geometry.ts";
 
 /** Canvas size of the kit's launch canvas. */
 export const CANVAS_W = 1080;

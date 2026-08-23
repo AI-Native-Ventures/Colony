@@ -192,6 +192,9 @@ test("captureCard rasterises a card to non-blank PNG bytes in WebKit", async () 
       out.pixelVariance > 100,
       `pixelVariance ${out.pixelVariance.toFixed(2)} is too low: blank or near-blank canvas`,
     );
+    console.log(
+      `captureCard: ${png.length} bytes, pixelVariance ${out.pixelVariance.toFixed(2)}, sha256 ${out.sha256}`,
+    );
   });
 });
 
