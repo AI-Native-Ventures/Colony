@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 408,
-    "rust_lines": 163429,
+    "rust_lines": 163470,
     "tauri_coupled": 162,
     "portable": 246,
     "portable_lines": 92001,
@@ -422,10 +422,10 @@
     ]
   },
   "commands": {
-    "registered": 342,
-    "defined": 342,
+    "registered": 343,
+    "defined": 343,
     "by_reach": {
-      "frontend": 336,
+      "frontend": 337,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -575,6 +575,7 @@
     "src-tauri/src/commands/project_git_branches.rs": 2,
     "src-tauri/src/commands/agent_providers.rs": 2,
     "src-tauri/src/commands/personas/snapshot.rs": 2,
+    "src-tauri/src/commands/company_scan.rs": 2,
     "src-tauri/src/commands/canvas.rs": 2,
     "src-tauri/src/commands/provisioned_credits.rs": 2,
     "src-tauri/src/commands/messages/forum.rs": 2,
@@ -611,7 +612,6 @@
     "src-tauri/src/huddle/reconnect.rs": 1,
     "src-tauri/src/commands/discovery_export.rs": 1,
     "src-tauri/src/commands/qr_download.rs": 1,
-    "src-tauri/src/commands/company_scan.rs": 1,
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
@@ -1494,6 +1494,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1038",
         "src/shared/api/blockData.ts:22"
+      ]
+    },
+    "fetch_claim_source_page": {
+      "defining_file": "src-tauri/src/commands/company_scan.rs",
+      "module": "company_scan",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/content/claimVerifierRuntime.ts:32"
       ]
     },
     "fetch_join_policy": {

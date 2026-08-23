@@ -87,6 +87,15 @@ export type ContentClaim = {
   verifiedBy: string | null;
 };
 
+/**
+ * How harshly the claim gate treats a claim it cannot confirm.
+ *
+ * This is the customer's setting, not ours: it lives on the brand kit
+ * (kind 30198, `rules.claim_strictness`) and defaults to strict when the kit
+ * says nothing, because strict is the product's promise.
+ */
+export type ClaimStrictness = "strict" | "advisory";
+
 export type PostImage = {
   url: string;
   sha256: string;
@@ -597,6 +606,24 @@ export function parseStyle(event: RelayEvent): ContentStyle | null {
     updatedAt: event.created_at,
     version: str(content, "version"),
   };
+}
+
+/**
+ * Read one brand kit head (kind 30198) far enough to get the claim gate's
+ * strictness. The kit's hues, type and marks are opaque here; this is the one
+ * rule field a gate consumes. Returns null when the kit is unreadable or says
+ * nothing, and the caller applies the default (strict).
+ */
+export function parseClaimStrictness(
+  event: RelayEvent,
+): ClaimStrictness | null {
+  const content = readJson(event);
+  if (!content) {
+    return null;
+  }
+  const rules = record(content, "rules");
+  const value = rules ? str(rules, "claim_strictness") : null;
+  return value === "strict" || value === "advisory" ? value : null;
 }
 
 /** Parse an owner decision (kind 40025). Returns null when unreadable. */
