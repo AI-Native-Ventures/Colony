@@ -28,6 +28,7 @@ import {
   usePendingHires,
 } from "@/features/agents/pendingHires";
 import type { RoleDialogMember } from "@/features/agents/ui/EmployeeRoleDialog";
+import { DelegatedAuthoritySection } from "@/features/agents/ui/DelegatedAuthoritySection";
 import { EmployeeRoleDialog } from "@/features/agents/ui/EmployeeRoleDialog";
 import { HireEmployeeDialog } from "@/features/agents/ui/HireEmployeeDialog";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
@@ -310,6 +311,10 @@ export function PeopleSection() {
           ))}
         </div>
       )}
+
+      {/* Community-level record: delegated authority renders whether or not
+          the org chart has anyone on it yet. */}
+      <DelegatedAuthoritySection communityId={communityId} />
 
       <HireEmployeeDialog
         communityId={communityId}
