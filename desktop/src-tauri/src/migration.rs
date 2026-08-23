@@ -190,6 +190,11 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
     reconcile_provider_mcp_commands(app);
     reconcile_databricks_v1_to_v2(app);
     materialize_agent_runtimes(app);
+    // S1 one-shot: clear the create-time `runtime` stamps on every record and
+    // definition so agents follow global.preferred_runtime. Runs AFTER
+    // materialize so the mirror it inserts is cleared in the same boot; the
+    // marker gate keeps later user-set pins intact.
+    clear_agent_runtime_pins(app);
 }
 
 /// Copy one-time app state from the legacy app identifier directory to
@@ -1139,6 +1144,8 @@ pub fn migrate_persona_provider_to_runtime(app: &tauri::AppHandle) {
 }
 mod materialize;
 pub use materialize::materialize_agent_runtimes;
+mod runtime_inherit;
+pub use runtime_inherit::clear_agent_runtime_pins;
 mod fold;
 pub use fold::fold_personas_into_agent_store;
 use fold::load_persona_runtimes;
