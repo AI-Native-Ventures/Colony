@@ -300,6 +300,28 @@ pub fn build_exhausted_notice(remaining: &[String]) -> String {
     )
 }
 
+/// The message left in the channel when a turn ends on a token or request
+/// ceiling rather than on the agent deciding it was finished.
+///
+/// A ceiling stop is not a completion, and the completion check cannot rescue
+/// it: the session is discarded straight afterwards because its context is what
+/// filled up, so there is nothing left to drive on. What the harness can do is
+/// refuse to let it pass for a finished turn. Without this the run simply goes
+/// quiet, which is indistinguishable from success until a human counts the
+/// hours.
+///
+/// `reason` is a short human phrase for the ceiling that was hit, not the enum
+/// name.
+pub fn build_ceiling_notice(reason: &str) -> String {
+    format!(
+        "⚠️ I had to stop mid-way: {reason}. The work is not finished, and I \
+         have started a fresh session, so I no longer remember what I had \
+         already done.\n\n\
+         Reply here to pick it up. Telling me what is already done, or asking \
+         me to check first, saves me repeating it."
+    )
+}
+
 /// The two things the completion loop needs a model for.
 ///
 /// Split out so the loop's sequencing — when it asks again, when it drives on,
@@ -678,6 +700,20 @@ mod tests {
         assert!(
             notice.contains("Nothing wakes me until you do"),
             "the human must know the agent is not on a timer: {notice}"
+        );
+    }
+
+    #[test]
+    fn the_ceiling_notice_says_the_work_is_unfinished_and_the_memory_is_gone() {
+        let notice = build_ceiling_notice("I ran out of context for this session");
+        assert!(notice.contains("ran out of context"));
+        assert!(
+            notice.contains("not finished"),
+            "a ceiling stop must not read as a completed turn: {notice}"
+        );
+        assert!(
+            notice.contains("no longer remember"),
+            "the human has to know the next reply starts from nothing: {notice}"
         );
     }
 
