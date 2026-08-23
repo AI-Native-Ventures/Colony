@@ -134,6 +134,10 @@ export const KIND_DISCOVERY_WORKSPACE_RECEIPT = 40022;
 export const KIND_CONTENT_CAMPAIGN = 30195;
 export const KIND_CONTENT_POST = 30196;
 export const KIND_CONTENT_STYLE = 30197;
+// The brand kit: hues, type, marks, canvases, templates, and the rules the
+// gates read (rules.claim_strictness). Relay validates it structurally and
+// never interprets style meaning. Mirror of buzz-core's KIND_CONTENT_BRAND_KIT.
+export const KIND_CONTENT_BRAND_KIT = 30198;
 export const KIND_CONTENT_DECISION = 40025;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;

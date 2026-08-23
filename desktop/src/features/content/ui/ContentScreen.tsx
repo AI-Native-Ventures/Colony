@@ -282,6 +282,7 @@ export function ContentScreen() {
           {selectedPost ? (
             <aside className="flex w-[26rem] shrink-0 flex-col border-l border-border/60">
               <ContentDayDetail
+                communityId={communityId}
                 decisions={decisions}
                 key={selectedPost.address}
                 onSubmit={handleSubmit}
