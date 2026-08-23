@@ -51,7 +51,7 @@ pub async fn set_canvas(
 ) -> Result<serde_json::Value, String> {
     let uuid = uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
-    let builder = events::build_set_canvas(uuid, &content)?;
+    let builder = events::build_set_canvas(uuid, &content, None)?;
     let result = submit_event(builder, &state).await?;
 
     Ok(serde_json::json!({
@@ -110,7 +110,7 @@ pub async fn set_thread_canvas(
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
     let root_id = EventId::from_hex(&thread_root_id)
         .map_err(|e| format!("invalid thread root event ID: {e}"))?;
-    let builder = events::build_set_thread_canvas(uuid, root_id, &content)?;
+    let builder = events::build_set_canvas(uuid, &content, Some(root_id))?;
     let result = submit_event(builder, &state).await?;
 
     Ok(serde_json::json!({
