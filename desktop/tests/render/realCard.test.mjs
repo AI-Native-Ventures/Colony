@@ -112,9 +112,16 @@ globalThis.__render = { cardHtml, cardCss, captureCard, collectRuns, measureRuns
         };
         const platePixels = await pixelsOf(plate.png);
 
-        const measurements = R.measureRuns(runs, platePixels, platePixels, W, H, {
-          step: 2,
-        });
+        const measurements = R.measureRuns(
+          runs,
+          platePixels,
+          platePixels,
+          W,
+          H,
+          {
+            step: 2,
+          },
+        );
         const grain = R.measureGrain(await pixelsOf(painted.png), W, H);
 
         return {
@@ -138,19 +145,31 @@ globalThis.__render = { cardHtml, cardCss, captureCard, collectRuns, measureRuns
 test("a real launch card renders and measures inside the band the launch build shipped", async () => {
   const out = await renderAndMeasure(CARD);
 
-  console.log(`\n  card            ${CARD.slug} (${CARD.layout}, ${CARD.family}, ${CARD.hues.join("+")})`);
+  console.log(
+    `\n  card            ${CARD.slug} (${CARD.layout}, ${CARD.family}, ${CARD.hues.join("+")})`,
+  );
   console.log(`  canvas          ${out.size}`);
   console.log(`  sha256          ${out.sha256}`);
   console.log(`  pixel variance  ${out.pixelVariance}`);
   console.log(`  contrast runs   ${out.runs}`);
   for (const m of out.measurements) {
-    console.log(`    ${m.label.padEnd(16)} ${m.ratio}:1 on ${m.worstBackground}`);
+    console.log(
+      `    ${m.label.padEnd(16)} ${m.ratio}:1 on ${m.worstBackground}`,
+    );
   }
   console.log(`  worst run       ${out.worst}:1 against a ${out.bar}:1 floor`);
-  console.log(`  grain           ${out.grain.grain} whole, ${out.grain.quietGrain} quiet\n`);
+  console.log(
+    `  grain           ${out.grain.grain} whole, ${out.grain.quietGrain} quiet\n`,
+  );
 
-  assert.ok(out.runs > 0, "the card must carry measurable [data-contrast] runs");
-  assert.ok(out.pixelVariance > 100, `canvas looks blank: variance ${out.pixelVariance}`);
+  assert.ok(
+    out.runs > 0,
+    "the card must carry measurable [data-contrast] runs",
+  );
+  assert.ok(
+    out.pixelVariance > 100,
+    `canvas looks blank: variance ${out.pixelVariance}`,
+  );
   assert.ok(
     out.worst >= out.bar,
     `worst run ${out.worst}:1 is under the ${out.bar}:1 floor`,
