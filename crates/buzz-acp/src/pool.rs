@@ -2666,6 +2666,30 @@ pub async fn run_prompt_task(
                 StopReason::MaxTokens | StopReason::MaxTurnRequests
             );
 
+            // A ceiling stop is the other way a turn goes quiet. The completion
+            // check above skips it on purpose — the session is about to be
+            // thrown away, so there is nothing to drive on — but it must not
+            // pass for a finished turn either. Say so in the channel, from the
+            // harness, before the session is invalidated.
+            if ctx.completion_check && should_rotate {
+                if let PromptSource::Channel(cid) = &source {
+                    let thread_tags = batch
+                        .as_ref()
+                        .and_then(|b| b.events.last())
+                        .map(|be| crate::queue::parse_thread_tags(&be.event))
+                        .unwrap_or_default();
+                    let reason = ceiling_reason(&stop_reason);
+                    tracing::warn!(
+                        target: "pool::completion",
+                        channel_id = %cid,
+                        ?stop_reason,
+                        "turn ended on a ceiling — posting the stall rather than rotating silently"
+                    );
+                    let notice = crate::completion_check::build_ceiling_notice(reason);
+                    post_failure_notice(&ctx.rest_client, *cid, &thread_tags, &notice).await;
+                }
+            }
+
             let should_rotate = should_rotate || {
                 let limit = ctx.max_turns_per_session;
                 if limit > 0 {
@@ -4617,6 +4641,19 @@ fn triggering_request_text(batch: Option<&FlushBatch>) -> Option<String> {
         None => joined,
     };
     Some(truncated)
+}
+
+/// A human phrase for the ceiling a turn hit, for the channel notice.
+///
+/// Anything that is not a ceiling gets the generic phrase rather than a panic;
+/// the caller already filtered, and a wrong-but-honest sentence beats a crash
+/// on the path whose whole job is to report trouble.
+fn ceiling_reason(stop_reason: &StopReason) -> &'static str {
+    match stop_reason {
+        StopReason::MaxTokens => "I ran out of context for this session",
+        StopReason::MaxTurnRequests => "I hit the limit on requests in one turn",
+        _ => "I hit a limit on this session",
+    }
 }
 
 /// Longest a single completion check may run.
