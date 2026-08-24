@@ -264,6 +264,12 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_MCP_COMMAND", default_value = "")]
     pub mcp_command: String,
 
+    /// Resolved absolute path to the `buzz-browserd` MCP binary, set by
+    /// desktop only when it found the binary. Empty means absent — mirrors
+    /// `mcp_command`'s resolve-then-forward contract, not re-checked here.
+    #[arg(long, env = "BUZZ_ACP_BROWSER_MCP_COMMAND", default_value = "")]
+    pub browser_mcp_command: String,
+
     /// Idle timeout: max seconds of silence before killing a turn.
     /// Resets on any agent stdout activity.
     #[arg(long, env = "BUZZ_ACP_IDLE_TIMEOUT")]
@@ -617,6 +623,9 @@ pub struct Config {
     pub agent_command: String,
     pub agent_args: Vec<String>,
     pub mcp_command: String,
+    /// Resolved absolute path to the `buzz-browserd` MCP binary. Empty when
+    /// desktop did not find it on this machine.
+    pub browser_mcp_command: String,
     pub idle_timeout_secs: u64,
     pub max_turn_duration_secs: u64,
     pub agents: u32,
@@ -1252,6 +1261,7 @@ impl Config {
             agent_command,
             agent_args,
             mcp_command: args.mcp_command,
+            browser_mcp_command: args.browser_mcp_command,
             idle_timeout_secs,
             max_turn_duration_secs,
             agents: args.agents,
@@ -1631,6 +1641,7 @@ mod tests {
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "".into(),
+            browser_mcp_command: "".into(),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
