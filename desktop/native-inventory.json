@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 410,
-    "rust_lines": 163839,
-    "tauri_coupled": 161,
-    "portable": 249,
-    "portable_lines": 92699,
+    "rust_total": 416,
+    "rust_lines": 164739,
+    "tauri_coupled": 165,
+    "portable": 251,
+    "portable_lines": 92933,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -15,6 +15,7 @@
       "src-tauri/src/commands/agent_config.rs",
       "src-tauri/src/commands/agent_creation.rs",
       "src-tauri/src/commands/agent_discovery.rs",
+      "src-tauri/src/commands/agent_discovery/install_capture.rs",
       "src-tauri/src/commands/agent_discovery/install_report.rs",
       "src-tauri/src/commands/agent_logs.rs",
       "src-tauri/src/commands/agent_metric_archive.rs",
@@ -135,6 +136,7 @@
       "src-tauri/src/managed_agents/runtime/orphan_sweep.rs",
       "src-tauri/src/managed_agents/runtime/process.rs",
       "src-tauri/src/managed_agents/runtime/provisioned.rs",
+      "src-tauri/src/managed_agents/runtime/record_state.rs",
       "src-tauri/src/managed_agents/runtime/stop.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
@@ -150,6 +152,8 @@
       "src-tauri/src/migration/detach.rs",
       "src-tauri/src/migration/fold.rs",
       "src-tauri/src/migration/materialize.rs",
+      "src-tauri/src/migration/persona_provider_rename.rs",
+      "src-tauri/src/migration/runtime_inherit.rs",
       "src-tauri/src/migration/team_suffix.rs",
       "src-tauri/src/migration_avatar_refresh.rs",
       "src-tauri/src/mouse_nav.rs",
@@ -185,7 +189,6 @@
       "src-tauri/src/archive/store_migrations.rs",
       "src-tauri/src/archive/store_tests.rs",
       "src-tauri/src/commands/agent_config_tests.rs",
-      "src-tauri/src/commands/agent_discovery/install_capture.rs",
       "src-tauri/src/commands/agent_discovery/install_capture_tests.rs",
       "src-tauri/src/commands/agent_discovery/install_exec.rs",
       "src-tauri/src/commands/agent_discovery/install_report_redaction_tests.rs",
@@ -317,6 +320,8 @@
       "src-tauri/src/managed_agents/config_bridge/types.rs",
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/discovery.rs",
+      "src-tauri/src/managed_agents/discovery/codex_probe.rs",
+      "src-tauri/src/managed_agents/discovery/npm_prefix.rs",
       "src-tauri/src/managed_agents/discovery/nvm.rs",
       "src-tauri/src/managed_agents/discovery/overrides.rs",
       "src-tauri/src/managed_agents/discovery/presets.rs",
@@ -347,6 +352,7 @@
       "src-tauri/src/managed_agents/readiness/cli_login.rs",
       "src-tauri/src/managed_agents/readiness/cli_probe.rs",
       "src-tauri/src/managed_agents/readiness_goose_file_config_tests.rs",
+      "src-tauri/src/managed_agents/readiness_runtime_inherit_tests.rs",
       "src-tauri/src/managed_agents/reconcile/tests.rs",
       "src-tauri/src/managed_agents/relay_mesh.rs",
       "src-tauri/src/managed_agents/repos.rs",
@@ -439,7 +445,7 @@
     ]
   },
   "params": {
-    "AppHandle": 351,
+    "AppHandle": 353,
     "State": 256,
     "Window": 7,
     "ipc::Request": 1,
@@ -447,7 +453,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 348,
+      "AppHandle": 350,
       "State": 256,
       "Window": 7,
       "ipc::Request": 1,
@@ -480,7 +486,7 @@
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 26,
+    ".path()": 27,
     ".exit(": 1
   },
   "events": {

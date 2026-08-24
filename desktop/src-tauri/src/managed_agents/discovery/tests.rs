@@ -6,9 +6,12 @@ use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
     effective_agent_command, find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
-    probe_codex_acp_version, record_agent_command, try_record_agent_command, BUZZ_AGENT_AVATAR_URL,
+    probe_codex_acp_version, record_agent_command, BUZZ_AGENT_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
+use crate::managed_agents::{
+    effective_config::resolve_effective_harness_command, GlobalAgentConfig,
+};
 use std::path::PathBuf;
 #[test]
 fn resolves_known_avatar_for_bare_command() {
@@ -395,63 +398,8 @@ fn record_agent_command_bare_record_defaults() {
     assert_eq!(record_agent_command(&record, &[]), default_agent_command());
 }
 
-// ── try_record_agent_command ─────────────────────────────────────────────────
-
-/// When the record carries a dangling (unknown) runtime id, `try_record_agent_command`
-/// must return `Err` containing "DANGLING_HARNESS_ID" — NEVER the buzz-agent default.
-/// This test would fail if the function silently fell back to `default_agent_command()`.
-#[test]
-fn try_record_agent_command_dangling_runtime_id_returns_err() {
-    let record = record_with(Some("my-deleted-harness"), None, None);
-    let result = try_record_agent_command(&record, &[]);
-    assert!(
-        result.is_err(),
-        "dangling runtime id must produce Err, got Ok({:?})",
-        result.ok()
-    );
-    assert!(
-        result.unwrap_err().contains("DANGLING_HARNESS_ID"),
-        "error must name the dangling id"
-    );
-}
-
-/// When the persona carries a dangling runtime id, `try_record_agent_command`
-/// must also error — the error must not silently resolve to the default.
-#[test]
-fn try_record_agent_command_dangling_persona_runtime_returns_err() {
-    let personas = vec![persona_with_runtime("p1", Some("ghost-harness"))];
-    let record = record_with(None, Some("p1"), None);
-    let result = try_record_agent_command(&record, &personas);
-    assert!(
-        result.is_err(),
-        "dangling persona runtime id must produce Err"
-    );
-}
-
-/// When neither the record nor persona has any runtime id, `try_record_agent_command`
-/// falls back to `default_agent_command()` — this is the legacy-agent path.
-#[test]
-fn try_record_agent_command_no_runtime_id_defaults_to_buzz_agent() {
-    let record = record_with(None, None, None);
-    let result = try_record_agent_command(&record, &[]);
-    assert_eq!(
-        result,
-        Ok(default_agent_command()),
-        "no runtime id must fall back to the safe default"
-    );
-}
-
-/// An explicit agent_command_override always wins, even for a dangling runtime id.
-#[test]
-fn try_record_agent_command_override_beats_dangling_id() {
-    let record = record_with(Some("gone-harness"), None, Some("cursor-agent"));
-    let result = try_record_agent_command(&record, &[]);
-    assert_eq!(
-        result,
-        Ok("cursor-agent".to_string()),
-        "explicit override must beat a dangling runtime id"
-    );
-}
+// The resolve_effective_harness_command dangling/default/override tests moved
+// to managed_agents/effective_config/tests.rs, next to the resolver itself.
 
 #[test]
 fn effective_agent_command_inherits_persona_runtime() {
@@ -1306,13 +1254,13 @@ fn test_install_shell_from_some_returns_path() {
 // These tests verify the "warm → spawn resolves → delete → spawn errors" lifecycle
 // that Paul's C1 ruling requires. They call the production resolution functions
 // directly so they would red if warm_harness_registry_from_dir, save/delete
-// transactional refresh, or try_record_agent_command were reverted.
+// transactional refresh, or resolve_effective_harness_command were reverted.
 
 /// After warm_harness_registry_from_dir, a record with a matching custom runtime
 /// id resolves to the custom command — NOT the buzz-agent default.
 ///
 /// This test would fail if warm_harness_registry_from_dir is not called before
-/// try_record_agent_command, or if try_record_agent_command ignores the registry.
+/// resolve_effective_harness_command, or if resolve_effective_harness_command ignores the registry.
 #[test]
 fn registry_warm_then_try_record_resolves_custom_id() {
     use crate::managed_agents::custom_harnesses::{
@@ -1332,7 +1280,7 @@ fn registry_warm_then_try_record_resolves_custom_id() {
     warm_harness_registry_from_dir(Some(dir.path()));
 
     let record = record_with(Some("my-custom-cli"), None, None);
-    let result = try_record_agent_command(&record, &[]);
+    let result = resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default());
     assert_eq!(
         result,
         Ok("my-custom-bin".to_string()),
@@ -1345,7 +1293,7 @@ fn registry_warm_then_try_record_resolves_custom_id() {
 /// NOT silently fall back to buzz-agent.
 ///
 /// This test would fail if save/delete commands do not call
-/// warm_harness_registry_from_dir transactionally, or if try_record_agent_command
+/// warm_harness_registry_from_dir transactionally, or if resolve_effective_harness_command
 /// silently falls back to default_agent_command() for dangling ids.
 #[test]
 fn registry_delete_then_try_record_returns_dangling_error() {
@@ -1368,7 +1316,7 @@ fn registry_delete_then_try_record_returns_dangling_error() {
     // Verify it resolves before delete.
     let record = record_with(Some("soon-gone"), None, None);
     assert!(
-        try_record_agent_command(&record, &[]).is_ok(),
+        resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default()).is_ok(),
         "must resolve before delete"
     );
 
@@ -1377,7 +1325,7 @@ fn registry_delete_then_try_record_returns_dangling_error() {
     warm_harness_registry_from_dir(Some(dir.path()));
 
     // Now must produce a typed error.
-    let result = try_record_agent_command(&record, &[]);
+    let result = resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default());
     assert!(
         result.is_err(),
         "deleted id must produce Err after re-warm, got Ok({:?})",
@@ -1406,7 +1354,7 @@ fn registry_save_immediate_start_resolves_new_command() {
     warm_harness_registry_from_dir(Some(dir.path()));
     let record = record_with(Some("fast-harness"), None, None);
     assert!(
-        try_record_agent_command(&record, &[]).is_err(),
+        resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default()).is_err(),
         "must not resolve before save"
     );
 
@@ -1418,7 +1366,7 @@ fn registry_save_immediate_start_resolves_new_command() {
     .unwrap();
     warm_harness_registry_from_dir(Some(dir.path()));
 
-    let result = try_record_agent_command(&record, &[]);
+    let result = resolve_effective_harness_command(&record, &[], &GlobalAgentConfig::default());
     assert_eq!(
         result,
         Ok("fast-bin".to_string()),
@@ -1450,7 +1398,7 @@ fn registry_edit_with_id_rename_old_dangling_new_resolved() {
 
     let old_record = record_with(Some("original-id"), None, None);
     assert!(
-        try_record_agent_command(&old_record, &[]).is_ok(),
+        resolve_effective_harness_command(&old_record, &[], &GlobalAgentConfig::default()).is_ok(),
         "original id must resolve"
     );
 
@@ -1465,7 +1413,7 @@ fn registry_edit_with_id_rename_old_dangling_new_resolved() {
     warm_harness_registry_from_dir(Some(dir.path()));
 
     // Old id must now be dangling.
-    let result = try_record_agent_command(&old_record, &[]);
+    let result = resolve_effective_harness_command(&old_record, &[], &GlobalAgentConfig::default());
     assert!(
         result.is_err() && result.unwrap_err().contains("DANGLING_HARNESS_ID"),
         "original id must be dangling after rename"
@@ -1474,7 +1422,7 @@ fn registry_edit_with_id_rename_old_dangling_new_resolved() {
     // New id must resolve.
     let new_record = record_with(Some("renamed-id"), None, None);
     assert_eq!(
-        try_record_agent_command(&new_record, &[]),
+        resolve_effective_harness_command(&new_record, &[], &GlobalAgentConfig::default()),
         Ok("new-bin".to_string()),
         "new id must resolve after rename"
     );

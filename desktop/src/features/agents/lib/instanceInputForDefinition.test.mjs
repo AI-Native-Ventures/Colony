@@ -80,11 +80,22 @@ test("row 2: harnessOverride follows the backend-aligned formula", async () => {
   );
   assert.equal(match.harnessOverride, true, "picked == configured → true");
 
+  // A definition with no runtime is on global defaults. This asserted `true`
+  // until callers began resolving the harness through `global.preferred_runtime`
+  // — at which point the picked command differs from the persona-inherited one,
+  // so `create_time_agent_command_override` stores it as a real pin and the new
+  // agent is born stamped with whatever global said that day, never following
+  // global again. That is the create-time stamping the one-shot migration
+  // exists to clear, so nothing-to-diverge-from must submit false.
   const noPreference = await buildInstanceInputForDefinition(
     persona({ runtime: undefined }),
     gooseRuntime,
   );
-  assert.equal(noPreference.harnessOverride, true, "no preference → true");
+  assert.equal(
+    noPreference.harnessOverride,
+    false,
+    "no preference → false (nothing was deliberately diverged from)",
+  );
 
   const differs = await buildInstanceInputForDefinition(
     persona({ runtime: "claude" }),

@@ -270,6 +270,14 @@ export async function buildWelcomeStarterCreateInput(
   );
   return {
     ...(await buildInstanceInputForDefinition(persona, runtime)),
+    // Onboarding pins deliberately, and says so here rather than relying on
+    // the builder to infer it. The starters carry `runtime: null`, so they
+    // used to be pinned by the builder's "no preference" branch — the same
+    // branch that silently re-stamped every defaults-mode create, which is
+    // why that branch now returns false. The harness the user picked during
+    // onboarding is a real choice, so this states it at the one call site
+    // that means it.
+    harnessOverride: true,
     name: starter.name,
     teamId: WELCOME_TEAM_ID,
     relayUrl: relayUrl ?? undefined,

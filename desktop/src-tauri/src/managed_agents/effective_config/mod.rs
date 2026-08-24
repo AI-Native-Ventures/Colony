@@ -25,6 +25,11 @@ pub struct ResolvedField<T> {
 
 #[derive(Debug, Clone)]
 pub struct EffectiveAgentConfig {
+    /// The resolved harness runtime id (e.g. `"goose"`, `"omp"`), or `None`
+    /// when nothing is pinned anywhere and the caller falls back to the
+    /// bundled default harness. This is the id, not the primary command;
+    /// convert with [`resolve_effective_harness_command`].
+    pub harness: ResolvedField<String>,
     pub model: ResolvedField<String>,
     pub provider: ResolvedField<String>,
     pub system_prompt: ResolvedField<String>,
@@ -71,6 +76,104 @@ fn non_blank(v: Option<&str>) -> Option<&str> {
     v.filter(|s| !s.trim().is_empty())
 }
 
+/// The single harness-inheritance chain (S1): the record's own runtime pin →
+/// the linked definition's runtime pin → `global.preferred_runtime`.
+///
+/// `None` (no id anywhere) means "use the bundled default harness" — the same
+/// fallback the legacy resolution applied when no runtime was set.
+///
+/// Before S1, `preferred_runtime` governed only definitions *without* a
+/// stamped runtime, and 12 of 13 definitions carried one stamped at create
+/// time, so the global default governed almost nothing. After the one-shot
+/// storage migration clears every stamp, this chain is what makes an agent on
+/// defaults follow the global harness — at spawn, readiness, provider deploy,
+/// summaries, and snapshots alike, through [`resolve_effective_harness_command`].
+///
+/// The raw per-instance override pin (`record.agent_command_override`) is
+/// deliberately NOT consulted here: it may hold a command string or path, not
+/// a runtime id. It is applied first inside
+/// [`resolve_effective_harness_command`], which is the only function callers
+/// should use to obtain a runnable command.
+pub fn resolve_effective_runtime_id(
+    record: &ManagedAgentRecord,
+    definitions: &[AgentDefinition],
+    global: &GlobalAgentConfig,
+) -> Option<ResolvedField<String>> {
+    if let Some(id) = non_blank(record.runtime.as_deref()) {
+        // Instance-tier value. For linked instances this field mirrors the
+        // definition (materialize + snapshot apply); after the migration it
+        // diverges from `None` only when the user pins the agent itself.
+        return Some(ResolvedField {
+            value: Some(id.to_owned()),
+            source: ConfigSource::InstanceLegacy,
+        });
+    }
+    if let Some(pid) = record.persona_id.as_deref() {
+        if let Some(definition) = definitions.iter().find(|d| d.id == pid) {
+            if let Some(id) = non_blank(definition.runtime.as_deref()) {
+                return Some(ResolvedField {
+                    value: Some(id.to_owned()),
+                    source: ConfigSource::Definition,
+                });
+            }
+        }
+    }
+    if let Some(id) = non_blank(global.preferred_runtime.as_deref()) {
+        return Some(ResolvedField {
+            value: Some(id.to_owned()),
+            source: ConfigSource::Global,
+        });
+    }
+    None
+}
+
+/// Resolve the harness COMMAND a spawn would run: explicit override pin →
+/// the inherited runtime id ([`resolve_effective_runtime_id`]) converted via
+/// the catalog → the bundled default when nothing is pinned.
+///
+/// This is THE single resolver for spawn, readiness, provider deploy,
+/// summaries, and spawn-config snapshots. A pinned id that no longer resolves
+/// in the catalog returns the typed `DANGLING_HARNESS_ID:<id>` sentinel so
+/// callers refuse (or display) consistently instead of silently substituting
+/// the default harness.
+pub fn resolve_effective_harness_command(
+    record: &ManagedAgentRecord,
+    definitions: &[AgentDefinition],
+    global: &GlobalAgentConfig,
+) -> Result<String, String> {
+    // Explicit raw pin wins over everything, unchanged from the legacy chain:
+    // it names a command/path directly, so there is nothing to inherit.
+    if let Some(pin) = record
+        .agent_command_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(pin.to_string());
+    }
+
+    match resolve_effective_runtime_id(record, definitions, global) {
+        Some(resolved) => {
+            let id = resolved.value.unwrap_or_default();
+            super::command_for_runtime_id(&id).ok_or_else(|| format!("DANGLING_HARNESS_ID:{id}"))
+        }
+        None => Ok(super::default_agent_command()),
+    }
+}
+
+/// [`resolve_effective_harness_command`] with the legacy infallible fallback:
+/// a dangling pin degrades to the old record→definition→default resolution
+/// instead of erroring. For classify/setup-check scans that must produce a
+/// command shape; paths that REFUSE spawns use the fallible resolver.
+pub fn resolve_effective_harness_command_or_legacy(
+    record: &ManagedAgentRecord,
+    definitions: &[AgentDefinition],
+    global: &GlobalAgentConfig,
+) -> String {
+    resolve_effective_harness_command(record, definitions, global)
+        .unwrap_or_else(|_| super::record_agent_command(record, definitions))
+}
+
 fn resolve_linked(
     definition: &AgentDefinition,
     global: &GlobalAgentConfig,
@@ -103,6 +206,10 @@ fn resolve_linked(
     };
 
     EffectiveAgentConfig {
+        harness: ResolvedField {
+            value: None,
+            source: ConfigSource::Global,
+        },
         model,
         provider,
         system_prompt,
@@ -217,6 +324,10 @@ fn resolve_definition_less(
     };
 
     let mut config = EffectiveAgentConfig {
+        harness: ResolvedField {
+            value: None,
+            source: ConfigSource::Global,
+        },
         model,
         provider,
         system_prompt,
@@ -249,15 +360,30 @@ pub fn resolve_effective_config(
     definitions: &[AgentDefinition],
     global: &GlobalAgentConfig,
 ) -> EffectiveConfigResult {
+    // One harness chain for both shapes: instance pin → definition pin →
+    // global preferred runtime (`resolve_effective_runtime_id`).
+    let harness =
+        resolve_effective_runtime_id(record, definitions, global).unwrap_or(ResolvedField {
+            value: None,
+            source: ConfigSource::Global,
+        });
     match &record.persona_id {
         Some(pid) => match definitions.iter().find(|d| d.id == *pid) {
-            Some(def) => EffectiveConfigResult::Resolved(resolve_linked(def, global)),
+            Some(def) => {
+                let mut cfg = resolve_linked(def, global);
+                cfg.harness = harness;
+                EffectiveConfigResult::Resolved(cfg)
+            }
             None => EffectiveConfigResult::OrphanedInstance {
                 record_pubkey: record.pubkey.clone(),
                 missing_persona_id: pid.clone(),
             },
         },
-        None => EffectiveConfigResult::Resolved(resolve_definition_less(record, global)),
+        None => {
+            let mut cfg = resolve_definition_less(record, global);
+            cfg.harness = harness;
+            EffectiveConfigResult::Resolved(cfg)
+        }
     }
 }
 
