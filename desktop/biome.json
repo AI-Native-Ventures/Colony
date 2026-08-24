@@ -9,6 +9,23 @@
       "linter": {
         "enabled": false
       }
+    },
+    {
+      "includes": [
+        "src/features/onboarding/ui/new/**/*.css",
+        "src/shared/styles/globals/buzz-sidebar.css",
+        "src/shared/styles/globals/terminal.css"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noImportantStyles": "off"
+          },
+          "style": {
+            "noDescendingSpecificity": "off"
+          }
+        }
+      }
     }
   ]
 }

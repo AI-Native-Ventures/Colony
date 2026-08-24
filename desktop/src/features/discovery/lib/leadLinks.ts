@@ -41,7 +41,7 @@ export function leadWebUrl(value: string | null | undefined): string | null {
 /** The `mailto:` URL for a lead's email address, or `null`. */
 export function leadMailtoUrl(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
-  if (!trimmed || !trimmed.includes("@") || /\s/.test(trimmed)) return null;
+  if (!trimmed?.includes("@") || /\s/.test(trimmed)) return null;
   return `mailto:${encodeURIComponent(trimmed).replace(/%40/g, "@")}`;
 }
 

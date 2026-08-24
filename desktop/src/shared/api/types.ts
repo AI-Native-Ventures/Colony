@@ -84,6 +84,13 @@ export type SetCanvasInput = {
   content: string;
 };
 
+export type SetThreadCanvasInput = {
+  channelId: string;
+  /** Level-1 thread root event id the canvas is scoped to. */
+  threadRootId: string;
+  content: string;
+};
+
 export type SetCanvasResult = {
   ok: boolean;
   eventId: string;

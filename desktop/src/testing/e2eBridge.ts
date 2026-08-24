@@ -408,6 +408,16 @@ type E2eConfig = {
     deepHistoryMessageCount?: number;
     feedReadError?: string;
     canvasReadError?: string;
+    /** Reject `get_thread_canvas` calls with this message. */
+    threadCanvasReadError?: string;
+    /** Thread canvases seeded for `get_thread_canvas`, per (channel, thread root). */
+    threadCanvases?: Array<{
+      channelId: string;
+      threadRootId: string;
+      content: string;
+    }>;
+    /** Reject successive `set_thread_canvas` calls with these messages, then resume. */
+    threadCanvasSaveErrors?: string[];
     /** Delay (ms) for `apply_workspace` so e2e tests can observe the
      *  community-switch gate. 0/undefined = instant. */
     applyCommunityDelayMs?: number;
@@ -3649,6 +3659,31 @@ type MockSaveSubscriptionRow = {
   kinds: string; // JSON-encoded integer array, e.g. "[9,40002]"
 };
 let mockSaveSubscriptions: MockSaveSubscriptionRow[] = [];
+
+// Thread-canvas mock state — mutable so a `set_thread_canvas` write is
+// returned by the next `get_thread_canvas` read, letting specs prove the
+// edit/save/refresh round-trip without a relay.
+type MockThreadCanvasRow = {
+  content: string;
+  updated_at: number;
+  author: string;
+};
+let mockThreadCanvases = new Map<string, MockThreadCanvasRow>();
+
+function threadCanvasKey(channelId: string, threadRootId: string) {
+  return `${channelId}:${threadRootId}`;
+}
+
+function resetMockThreadCanvases(config: E2eConfig | undefined) {
+  mockThreadCanvases = new Map();
+  for (const seed of config?.mock?.threadCanvases ?? []) {
+    mockThreadCanvases.set(threadCanvasKey(seed.channelId, seed.threadRootId), {
+      content: seed.content,
+      updated_at: Math.floor(Date.now() / 1000),
+      author: DEFAULT_MOCK_IDENTITY.pubkey,
+    });
+  }
+}
 
 // Deterministic gate for `observer_archive_default_enabled`. Tests that assert
 // archive sync has NOT started yet hold the policy here and release it
@@ -11297,6 +11332,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockUserStatuses();
   resetMockPersonaCatalogEvents(config);
   resetMockSaveSubscriptions(config);
+  resetMockThreadCanvases(config);
   resetObserverArchivePolicyGate();
   resetMockPendingCommunityDeepLinks(config);
   initializeMockHuddle(config.mock?.huddle, config);
@@ -14388,6 +14424,40 @@ export function maybeInstallE2eTauriMocks() {
         }
         // Return the no-canvas success shape — content null means no canvas set.
         return { content: null, updated_at: null, author: null };
+      }
+      case "get_thread_canvas": {
+        const threadCanvasReadError = activeConfig?.mock?.threadCanvasReadError;
+        if (threadCanvasReadError) {
+          throw new Error(threadCanvasReadError);
+        }
+        const req = payload as { channelId: string; threadRootId: string };
+        const row = mockThreadCanvases.get(
+          threadCanvasKey(req.channelId, req.threadRootId),
+        );
+        if (!row) {
+          return { content: "", updated_at: null, author: null };
+        }
+        return row;
+      }
+      case "set_thread_canvas": {
+        const saveErrors = activeConfig?.mock?.threadCanvasSaveErrors;
+        if (saveErrors && saveErrors.length > 0) {
+          throw new Error(saveErrors.shift());
+        }
+        const req = payload as {
+          channelId: string;
+          threadRootId: string;
+          content: string;
+        };
+        mockThreadCanvases.set(
+          threadCanvasKey(req.channelId, req.threadRootId),
+          {
+            content: req.content,
+            updated_at: Math.floor(Date.now() / 1000),
+            author: (activeConfig?.identity ?? DEFAULT_MOCK_IDENTITY).pubkey,
+          },
+        );
+        return { ok: true, event_id: mockEventId() };
       }
       // ── Local-save archive ──────────────────────────────────────────────
       // These stubs drive the LocalArchiveSettingsCard in screenshot / UI tests
