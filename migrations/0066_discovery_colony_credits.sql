@@ -85,12 +85,13 @@ CREATE TABLE discovery_budget_approval_claims (
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO _operator_global_tables (table_name, reason)
-VALUES (
-    'discovery_budget_approval_claims',
-    'global single-use claims for human spending approvals'
-)
-ON CONFLICT (table_name) DO NOTHING;
+-- Community-scoped, not global. The claim carries community_id and points at
+-- one community's campaign, and community_write_fence_excluded_table is a
+-- fixed list that _operator_global_tables does not feed, so a row here is
+-- scoped whatever that table says. Registering it as global left it outside
+-- the deletion catalog: the rows would have outlived the community they
+-- belong to, which is the one thing that catalog exists to prevent.
+SELECT attach_community_write_fence('discovery_budget_approval_claims'::REGCLASS);
 
 CREATE INDEX discovery_runs_community_campaign_idx
     ON discovery_runs (community_id, campaign_id, created_at DESC);

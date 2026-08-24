@@ -837,8 +837,7 @@ INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('gateway_tokens',         'provisioned-mode tokens are identity-global, not community-scoped'),
     ('model_catalog',          'model allowlist is deployment-global'),
     ('gateway_reconciliation_outcomes', 'successful gateway calls needing durable attribution/reconciliation'),
-    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement'),
-    ('discovery_budget_approval_claims', 'global single-use claims for human spending approvals');
+    ('gateway_settlement_intents', 'durable identity and provider-export correlation for hosted gateway settlement');
 
 -- Colony Credits gateway tables. Keep the schema snapshot aligned with the
 -- migration path so a fresh isolated harness has the same money/admission
@@ -3629,6 +3628,7 @@ SELECT attach_community_write_fence('discovery_action_claims');
 SELECT attach_community_write_fence('discovery_actor_grants');
 SELECT attach_community_write_fence('discovery_business_observations');
 SELECT attach_community_write_fence('discovery_campaign_leads');
+SELECT attach_community_write_fence('discovery_budget_approval_claims');
 SELECT attach_community_write_fence('discovery_campaigns');
 SELECT attach_community_write_fence('discovery_entitlements');
 SELECT attach_community_write_fence('discovery_gateway_attempts');
