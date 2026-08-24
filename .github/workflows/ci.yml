@@ -48,7 +48,6 @@ jobs:
       raw-mobile: ${{ steps.filter.outputs.mobile }}
       raw-blocks: ${{ steps.filter.outputs.blocks }}
       raw-desktop-integration: ${{ steps.filter.outputs.desktop-integration }}
-      raw-windows: ${{ steps.filter.outputs.windows }}
       raw-security: ${{ steps.filter.outputs.security }}
       raw-cross-compile: ${{ steps.filter.outputs.cross-compile }}
       web: ${{ steps.filter.outputs.web }}
@@ -168,14 +167,6 @@ jobs:
               - '.github/workflows/ci.yml'
               - 'scripts/ci-activate-hermit.sh'
               - 'scripts/ci-pnpm-store-path.sh'
-            windows:
-              - 'crates/**'
-              - 'desktop/src-tauri/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - '.cargo/**'
-              - '.github/workflows/ci.yml'
             security:
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -1611,101 +1602,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  windows-rust:
-    name: Windows Rust (x86_64-pc-windows-msvc)
-    runs-on: windows-latest
-    # Windows runners are slow and this compiles the workspace + Tauri crate
-    # cold across four steps; budget generously.
-    timeout-minutes: 45
-    needs: [changes]
-    # Moved off pull-request runs (2026-08): this type-check's rust-cache entry
-    # (v0-rust-windows-msvc-windows-rust, 2.47 GB) was 26% of the 10 GB Actions
-    # cache budget, and the eviction pressure it added made the cache miss for
-    # desktop-e2e-relay 9 runs in 10 (27-minute cold Rust builds on its
-    # dependents). The same checks now run nightly against develop in
-    # .github/workflows/windows-typecheck-nightly.yml (restore-only cache),
-    # plus manual workflow_dispatch. Move this back onto per-PR runs once the
-    # Windows installer is code-signed and actually installable.
-    if: >
-      needs.changes.outputs.secondary-enabled == 'true' &&
-      needs.changes.outputs.release-push == 'true'
-    permissions:
-      contents: read
-    env:
-      TARGET: x86_64-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      # MSVC needs windows.h (aws-lc-sys et al.), so this runs on a real Windows
-      # runner — hermit, used by the Linux jobs, does not provide MSVC. The
-      # toolchain (1.95.0 + clippy via profile = default) comes from the
-      # repo-root rust-toolchain.toml, which the runner's preinstalled rustup
-      # honors on demand; the host triple already is x86_64-pc-windows-msvc.
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          workspaces: |
-            .
-            desktop/src-tauri
-          key: windows-msvc
-          save-if: ${{ github.event_name != 'pull_request' }}
-      # Tauri validates externalBin at compile time, so the Tauri-crate steps
-      # below fail without these stubs. Mirrors scripts/bundle-sidecars.sh's
-      # Windows naming (binaries/<bin>-<triple>.exe); empty files suffice for a
-      # type-check since nothing executes them.
-      - name: Create sidecar placeholders
-        shell: bash
-        run: |
-          mkdir -p desktop/src-tauri/binaries
-          for bin in buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz; do
-            touch "desktop/src-tauri/binaries/${bin}-${TARGET}.exe"
-          done
-      - name: Clippy (workspace)
-        run: cargo clippy --workspace --all-targets --target $env:TARGET -- -D warnings
-      - name: Check (workspace)
-        run: cargo check --workspace --all-targets --target $env:TARGET
-      - name: Test (buzz-dev-mcp)
-        # The Windows-only bash resolver lives in buzz-dev-mcp; its unit tests
-        # only gate if this crate is tested ON Windows.
-        # Serial: windows_resolver_tests mutate process-global env
-        # (BUZZ_SHELL/GIT_BASH/SystemRoot) that SharedState::new reads.
-        run: cargo test -p buzz-dev-mcp --target $env:TARGET -- --test-threads=1
-      # Smoke-test the new host-prereq contract: Git for Windows (which provides
-      # bash) is available on the runner, a shell command round-trips, and bash
-      # does NOT resolve from System32 (so WSL's launcher is never picked up).
-      # windows-latest runners have Git for Windows pre-installed; the unit tests
-      # above exercise the MCP resolver itself. This step verifies the host env.
-      - name: Smoke-test host Git Bash prereq (host env check)
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Git for Windows ships bash.exe under its bin/ directory; confirm it
-          # resolves from the standard location the runtime resolver probes first.
-          bash_path=$(command -v bash 2>/dev/null || true)
-          [[ -n "$bash_path" ]] || { echo "ERROR: bash not found on PATH — host Git for Windows missing" >&2; exit 1; }
-          echo "Resolved bash: $bash_path"
-          [[ "$bash_path" != *System32* ]] || { echo "ERROR: resolved bash is WSL's System32 launcher" >&2; exit 1; }
-
-          # Run a basic pipeline through the resolved bash (same invocation the
-          # agent uses: bash -c '...').
-          out=$(bash -c 'echo hello | tr a-z A-Z')
-          [[ "$out" == "HELLO" ]] || { echo "bash pipeline failed: got '$out'" >&2; exit 1; }
-
-          # Confirm git itself works — agents run git commands frequently.
-          git --version
-          repo=$(mktemp -d)
-          cd "$repo"
-          git init -q
-          git -c user.name=ci -c user.email=ci@example.com commit -q --allow-empty -m smoke
-          git log -1 --format=%s | grep -qx smoke
-          echo "Host bash resolved and functional; git commit round-trip passed"
-      - name: Check (Tauri crate)
-        run: cargo check --manifest-path desktop/src-tauri/Cargo.toml --target $env:TARGET
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-      - name: Test (Tauri crate)
-        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --target $env:TARGET
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
-
   rust-post-merge:
     # Post-merge re-proof of the Rust core, which a develop push otherwise
     # skips entirely: core-enabled is false for every push that is not on
@@ -1860,7 +1756,6 @@ jobs:
       - desktop
       - relay-suites
       - desktop-e2e-integration
-      - windows-rust
       - security
       - server-cross-compile
       - web
@@ -1877,7 +1772,6 @@ jobs:
       DESKTOP_RESULT: ${{ needs.desktop.result }}
       RELAY_SUITES_RESULT: ${{ needs.relay-suites.result }}
       DESKTOP_INTEGRATION_RESULT: ${{ needs.desktop-e2e-integration.result }}
-      WINDOWS_RESULT: ${{ needs.windows-rust.result }}
       SECURITY_RESULT: ${{ needs.security.result }}
       CROSS_COMPILE_RESULT: ${{ needs.server-cross-compile.result }}
       WEB_RESULT: ${{ needs.web.result }}
@@ -1890,13 +1784,6 @@ jobs:
       RAW_MOBILE: ${{ needs.changes.outputs.raw-mobile }}
       RAW_BLOCKS: ${{ needs.changes.outputs.raw-blocks }}
       RAW_DESKTOP_INTEGRATION: ${{ needs.changes.outputs.raw-desktop-integration }}
-      # Windows relevance mirrors the windows-rust job's own firing condition
-      # (secondary-enabled && release-push) instead of raw-windows: since the
-      # Windows type-check moved to windows-typecheck-nightly.yml, the job can
-      # never run on a pull_request, so a skipped result must pass the gate.
-      # Keep this expression in sync with that job's `if:`; if Windows coverage
-      # returns to per-PR runs, point this back at raw-windows in step.
-      WINDOWS_RELEVANT: ${{ (needs.changes.outputs.secondary-enabled == 'true' && needs.changes.outputs.release-push == 'true') && 'true' || 'false' }}
       RAW_SECURITY: ${{ needs.changes.outputs.raw-security }}
       RAW_CROSS_COMPILE: ${{ needs.changes.outputs.raw-cross-compile }}
     steps:
@@ -1962,10 +1849,6 @@ jobs:
           require_optional "Relay Suites" "$RAW_RUST" "$RELAY_SUITES_RESULT"
 
           require_optional "Desktop Integration" "$RAW_DESKTOP_INTEGRATION" "$DESKTOP_INTEGRATION_RESULT"
-          # Relevance derives from the job's firing condition, not raw-windows
-          # (see WINDOWS_RELEVANT above): on a pull_request into main the
-          # windows-rust job legitimately skips, and "skipped" passes.
-          require_optional "Windows" "$WINDOWS_RELEVANT" "$WINDOWS_RESULT"
           require_optional "Security" "$RAW_SECURITY" "$SECURITY_RESULT"
           require_optional "Server Cross-Compile" "$RAW_CROSS_COMPILE" "$CROSS_COMPILE_RESULT"
           require_optional "Web" "$RAW_WEB" "$WEB_RESULT"

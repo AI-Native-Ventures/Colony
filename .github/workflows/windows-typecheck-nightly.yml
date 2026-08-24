@@ -11,6 +11,10 @@ name: Windows Typecheck (nightly)
 # Scheduled workflows always run against the repository's default branch
 # (develop). workflow_dispatch allows running it by hand against any ref.
 #
+# Since 2026-08 ci.yml carries NO Windows job at all; this workflow is the only
+# place the Windows type-check runs. If you are looking for it in ci.yml, it is
+# here.
+#
 # Move this coverage back onto per-PR runs in ci.yml once the Windows installer
 # is code-signed and actually installable.
 
