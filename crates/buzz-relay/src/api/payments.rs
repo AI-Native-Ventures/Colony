@@ -25,7 +25,7 @@
 //!
 //! On all three client routes the pubkey comes from the NIP-98 signature,
 //! never from a body field. Every error carries a typed string from the set
-//! the desktop client maps to screen states (`amount_too_small`,
+//! the desktop client maps to screen states (`unknown_pack`,
 //! `rate_limited`, `unknown_reference`, `payment_unavailable`); anything
 //! unrecognized falls through to the client's `unreachable` bucket, so no
 //! new string can break a screen.
@@ -78,9 +78,6 @@ use super::{api_error, internal_error};
 /// supertraits, so the plain trait object is stored and sent across await
 /// points without spelling bounds at every use site.
 type SharedProvider = Arc<dyn PaymentProvider>;
-
-/// The smallest top-up accepted, in USD cents ($5.00).
-pub(crate) const MIN_TOPUP_CENTS: i64 = 500;
 
 /// RFC 5321 caps an address at 254 octets.
 const MAX_EMAIL_LEN: usize = 254;
@@ -809,9 +806,60 @@ const WEBHOOK_BODY_LIMIT: usize = 1024 * 1024;
 /// Providers that authenticate the source treat `None` as untrusted, which
 /// is exactly the fail-closed default.
 fn source_ip_of(req: &axum::extract::Request) -> Option<std::net::IpAddr> {
-    req.extensions()
+    let peer = req
+        .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|connect_info| connect_info.0.ip())
+        .map(|connect_info| connect_info.0.ip());
+    source_ip_from(req.headers(), peer)
+}
+
+/// Resolve the true source of a webhook delivery.
+///
+/// PayFast authenticates the *source* of an ITN, so this address is authz,
+/// not telemetry, and that rules out trusting a forwarded header the way
+/// rate limiting does. Behind Fly's proxy the socket peer is the proxy
+/// rather than the gateway, so reading the peer alone would reject every
+/// genuine ITN: the buyer's card is charged, the delivery is refused, and no
+/// Credits are ever granted. Reading the header alone would let anyone who
+/// can reach the relay claim to be PayFast.
+///
+/// So the header is consulted only when the peer is itself a private,
+/// loopback or unspecified address, which is the case exactly when a local
+/// proxy really is in front of us. Fly's proxy connects over the private
+/// 6PN network and overwrites `Fly-Client-IP` itself, so a spoofed value
+/// cannot survive it. A directly exposed relay sees a public peer, ignores
+/// the header entirely, and falls back to the address it can actually see.
+fn source_ip_from(headers: &HeaderMap, peer: Option<std::net::IpAddr>) -> Option<std::net::IpAddr> {
+    let behind_local_proxy = peer.is_none_or(is_private_address);
+    if behind_local_proxy {
+        if let Some(forwarded) = headers
+            .get("fly-client-ip")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<std::net::IpAddr>().ok())
+        {
+            return Some(forwarded);
+        }
+    }
+    peer
+}
+
+/// Whether an address belongs to a private, loopback or unspecified range,
+/// which is what a local reverse proxy connects from.
+fn is_private_address(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
+        }
+        // Fly's private network is fdaa::/16, inside the fc00::/7 unique-local
+        // range; `is_unique_local` is unstable, so the leading bits are
+        // checked directly.
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 /// Shared webhook core for both routes.
@@ -1209,6 +1257,65 @@ mod tests {
             ));
             Ok(())
         }
+    }
+
+    #[test]
+    fn behind_a_proxy_the_gateway_address_comes_from_the_header() {
+        // The failure this prevents: on Fly the socket peer is the proxy, so
+        // reading it alone means PayFast's source check never matches and
+        // every ITN is refused. The buyer is charged and credited nothing,
+        // which is the worst outcome available to this code.
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "197.97.99.1".parse().unwrap());
+        // Fly's proxy reaches the app over its private 6PN network.
+        let fly_proxy: std::net::IpAddr = "fdaa:0:1::3".parse().unwrap();
+        assert_eq!(
+            source_ip_from(&headers, Some(fly_proxy)),
+            Some("197.97.99.1".parse().unwrap())
+        );
+        // Same for an IPv4 private peer, and for no peer at all.
+        assert_eq!(
+            source_ip_from(&headers, Some("172.19.0.4".parse().unwrap())),
+            Some("197.97.99.1".parse().unwrap())
+        );
+        assert_eq!(
+            source_ip_from(&headers, None),
+            Some("197.97.99.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_public_peer_cannot_spoof_the_gateway_address() {
+        // This address is authz, not telemetry: PayFast authenticates the
+        // source of a delivery. A relay reachable directly must therefore
+        // ignore the header entirely, or anyone who can post to it could
+        // claim to be PayFast and settle their own intents.
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "197.97.99.1".parse().unwrap());
+        let attacker: std::net::IpAddr = "203.0.113.9".parse().unwrap();
+        assert_eq!(
+            source_ip_from(&headers, Some(attacker)),
+            Some(attacker),
+            "a public peer's claim about its own identity is worthless"
+        );
+        // A public IPv6 peer is refused the same way.
+        let attacker_v6: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(
+            source_ip_from(&headers, Some(attacker_v6)),
+            Some(attacker_v6)
+        );
+    }
+
+    #[test]
+    fn a_missing_or_malformed_header_falls_back_to_the_peer() {
+        let peer: std::net::IpAddr = "fdaa:0:1::3".parse().unwrap();
+        assert_eq!(source_ip_from(&HeaderMap::new(), Some(peer)), Some(peer));
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "not-an-ip".parse().unwrap());
+        assert_eq!(source_ip_from(&headers, Some(peer)), Some(peer));
+        // Unknown either way stays unknown; PayFast's own check refuses a
+        // delivery whose source cannot be established.
+        assert_eq!(source_ip_from(&HeaderMap::new(), None), None);
     }
 
     #[test]
