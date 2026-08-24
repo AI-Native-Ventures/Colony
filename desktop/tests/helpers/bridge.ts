@@ -567,6 +567,9 @@ type MockBridgeOptions = {
   /** Volatile Colony Credits account returned by the authenticated mock command. */
   colonyCreditsAccount?: {
     balance_nanousd: string;
+    total_balance_nanousd?: string;
+    discovery_reserved_nanousd?: string;
+    available_balance_nanousd?: string;
     currency: "USD";
     status: "active" | "depleted";
   };

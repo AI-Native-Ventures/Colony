@@ -488,16 +488,6 @@ type E2eConfig = {
     websocketConnectErrors?: string[];
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
-    /** Device-local Discovery credential state. No secret value is modeled. */
-    discoveryCredentialStatus?: "configured" | "missing" | "unavailable";
-    discoveryCredentialStatuses?: Partial<
-      Record<
-        "outscraper" | "brave_search" | "exa_search",
-        "configured" | "missing" | "unavailable"
-      >
-    >;
-    /** Delay a credential save so specs can prove duplicate submission fencing. */
-    discoveryCredentialSaveDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
     // tests/e2e/identity-archive.spec.ts; they're plumbed into:
@@ -635,6 +625,10 @@ type E2eConfig = {
     /** Volatile Colony Credits account response used by settings specs. */
     colonyCreditsAccount?: {
       balance_nanousd: string;
+      total_balance_nanousd?: string;
+      discovery_reserved_nanousd?: string;
+      gateway_reserved_nanousd?: string;
+      available_balance_nanousd?: string;
       currency: "USD";
       status: "active" | "depleted";
     };
@@ -8720,10 +8714,18 @@ let mockGlobalAgentConfig: {
 } | null = null;
 let mockColonyCreditsAccount: {
   balance_nanousd: string;
+  total_balance_nanousd?: string;
+  discovery_reserved_nanousd?: string;
+  gateway_reserved_nanousd?: string;
+  available_balance_nanousd?: string;
   currency: "USD";
   status: "active" | "depleted";
 } = {
   balance_nanousd: "0",
+  total_balance_nanousd: "0",
+  discovery_reserved_nanousd: "0",
+  gateway_reserved_nanousd: "0",
+  available_balance_nanousd: "0",
   currency: "USD" as const,
   status: "depleted" as const,
 };
@@ -11316,7 +11318,15 @@ export function maybeInstallE2eTauriMocks() {
     : null;
   mockColonyCreditsAccount = config.mock?.colonyCreditsAccount
     ? { ...config.mock.colonyCreditsAccount }
-    : { balance_nanousd: "0", currency: "USD", status: "depleted" };
+    : {
+        balance_nanousd: "0",
+        total_balance_nanousd: "0",
+        discovery_reserved_nanousd: "0",
+        gateway_reserved_nanousd: "0",
+        available_balance_nanousd: "0",
+        currency: "USD",
+        status: "depleted",
+      };
   resetMockRelayMembers(config);
   resetMockBlockEvents(config);
   resetMockDelegationGrantEvents(config);
@@ -12285,72 +12295,6 @@ export function maybeInstallE2eTauriMocks() {
           settings,
           registry: await handleMockCommand("list_voice_registry", null),
         };
-      }
-      case "get_discovery_credential_status": {
-        const provider = (payload as { provider?: string } | null)?.provider;
-        if (
-          !provider ||
-          !["outscraper", "brave_search", "exa_search"].includes(provider)
-        ) {
-          throw new Error("unknown Discovery credential provider");
-        }
-        const persistedStatus = window.sessionStorage.getItem(
-          `__buzz_e2e_discovery_credential_status_${provider}`,
-        );
-        return (
-          persistedStatus ??
-          activeConfig?.mock?.discoveryCredentialStatuses?.[
-            provider as "outscraper" | "brave_search" | "exa_search"
-          ] ??
-          activeConfig?.mock?.discoveryCredentialStatus ??
-          "missing"
-        );
-      }
-      case "save_discovery_credential": {
-        const provider = (payload as { provider?: string } | null)?.provider;
-        if (
-          !provider ||
-          !["outscraper", "brave_search", "exa_search"].includes(provider)
-        ) {
-          throw new Error("unknown Discovery credential provider");
-        }
-        const value = (payload as { value?: string } | null)?.value?.trim();
-        if (!value) throw new Error("Discovery API key cannot be empty");
-        const delayMs = activeConfig?.mock?.discoveryCredentialSaveDelayMs ?? 0;
-        if (delayMs > 0) {
-          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-        }
-        if (activeConfig?.mock) {
-          activeConfig.mock.discoveryCredentialStatuses ??= {};
-          activeConfig.mock.discoveryCredentialStatuses[
-            provider as "outscraper" | "brave_search" | "exa_search"
-          ] = "configured";
-        }
-        window.sessionStorage.setItem(
-          `__buzz_e2e_discovery_credential_status_${provider}`,
-          "configured",
-        );
-        return "configured";
-      }
-      case "delete_discovery_credential": {
-        const provider = (payload as { provider?: string } | null)?.provider;
-        if (
-          !provider ||
-          !["outscraper", "brave_search", "exa_search"].includes(provider)
-        ) {
-          throw new Error("unknown Discovery credential provider");
-        }
-        if (activeConfig?.mock) {
-          activeConfig.mock.discoveryCredentialStatuses ??= {};
-          activeConfig.mock.discoveryCredentialStatuses[
-            provider as "outscraper" | "brave_search" | "exa_search"
-          ] = "missing";
-        }
-        window.sessionStorage.setItem(
-          `__buzz_e2e_discovery_credential_status_${provider}`,
-          "missing",
-        );
-        return "missing";
       }
       case "colony_provisioning_config":
         return (

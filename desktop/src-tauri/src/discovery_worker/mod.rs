@@ -4,6 +4,7 @@ mod adapter;
 mod brave;
 mod coordinator;
 mod exa;
+mod hosted_gateway;
 mod installation;
 mod normalization;
 mod outbox;

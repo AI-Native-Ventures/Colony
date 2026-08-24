@@ -240,11 +240,6 @@ import {
 import { getOsIdleSeconds } from "@/shared/api/osIdle";
 import { sendManagedAgentChannelMessage } from "@/shared/api/tauriManagedAgentMessages";
 import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
-import {
-  saveDiscoveryCredential,
-  getDiscoveryCredentialStatus,
-  deleteDiscoveryCredential,
-} from "@/shared/api/discoveryCredentials";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { loadLedgerReport } from "@/features/ledger/report";
 import { publishPrice } from "@/features/ledger/prices";
@@ -1556,17 +1551,6 @@ export const SESSION_STEPS: SessionStep[] = [
   ),
   step("relay-reconnect-configured", "relay_reconnect_hook_configured", () =>
     invokeTauri("relay_reconnect_hook_configured"),
-  ),
-  step("discovery-credentials-status", "get_discovery_credential_status", () =>
-    getDiscoveryCredentialStatus("outscraper"),
-  ),
-  step("discovery-credentials-save", "save_discovery_credential", () =>
-    saveDiscoveryCredential("outscraper", "parity-oracle-fixture-key"),
-  ),
-  step(
-    "discovery-credentials-delete-bogus",
-    "delete_discovery_credential",
-    () => deleteDiscoveryCredential("outscraper"),
   ),
   step("discovery-export-leads", "save_leads_csv", () =>
     invokeTauri("save_leads_csv", {

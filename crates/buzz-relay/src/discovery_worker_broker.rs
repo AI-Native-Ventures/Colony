@@ -229,6 +229,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             worker_id: Uuid::new_v4(),
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
             available_providers: vec![DiscoveryProvider::Outscraper],
         };
         let event = build_discovery_worker_claim_action(relay.public_key(), &request)
