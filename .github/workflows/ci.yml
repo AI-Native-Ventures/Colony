@@ -1618,9 +1618,17 @@ jobs:
     # cold across four steps; budget generously.
     timeout-minutes: 45
     needs: [changes]
+    # Moved off pull-request runs (2026-08): this type-check's rust-cache entry
+    # (v0-rust-windows-msvc-windows-rust, 2.47 GB) was 26% of the 10 GB Actions
+    # cache budget, and the eviction pressure it added made the cache miss for
+    # desktop-e2e-relay 9 runs in 10 (27-minute cold Rust builds on its
+    # dependents). The same checks now run nightly against develop in
+    # .github/workflows/windows-typecheck-nightly.yml (restore-only cache),
+    # plus manual workflow_dispatch. Move this back onto per-PR runs once the
+    # Windows installer is code-signed and actually installable.
     if: >
       needs.changes.outputs.secondary-enabled == 'true' &&
-      (needs.changes.outputs.release-push == 'true' || needs.changes.outputs.raw-windows == 'true')
+      needs.changes.outputs.release-push == 'true'
     permissions:
       contents: read
     env:
