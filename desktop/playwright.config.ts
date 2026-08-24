@@ -177,7 +177,6 @@ export default defineConfig({
         "**/inline-custom-harness.spec.ts",
         "**/discovery.spec.ts",
         "**/discovery-scroll.spec.ts",
-        "**/discovery-settings.spec.ts",
         "**/discovery-lead-detail.spec.ts",
         "**/discovery-lead-edit.spec.ts",
         "**/discovery-lead-status.spec.ts",
