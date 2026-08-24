@@ -55,7 +55,11 @@ import {
   starterPersonaName,
 } from "@/shared/constants/starterPersonas";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
-import type { ChannelTemplate, RelayEvent } from "@/shared/api/types";
+import type {
+  ChannelTemplate,
+  FeedItemCategory,
+  RelayEvent,
+} from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
 import { recordTimeoutFromRejection } from "@/features/moderation/lib/timeoutStore";
@@ -931,7 +935,7 @@ type RawFeedItem = {
   // backend always emits the key, as `null` when unknown.
   channel_type?: string | null;
   tags: string[][];
-  category: "mention" | "needs_action" | "activity" | "agent_activity";
+  category: FeedItemCategory;
 };
 
 type RawHomeFeedResponse = {
