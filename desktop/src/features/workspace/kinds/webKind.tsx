@@ -178,12 +178,15 @@ export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
       const bounds = surface.getBoundingClientRect();
       const width = Math.max(240, Math.floor(bounds.width));
       const height = Math.max(240, Math.floor(bounds.height));
-      const size = `${width}x${height}`;
+      // Clamp to 2x: a 3x panel would triple screencast bandwidth for no
+      // visible sharpness gain over 2x.
+      const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const size = `${width}x${height}@${ratio}`;
       if (size === lastSize) return;
       lastSize = size;
       cancelAnimationFrame(animationFrame);
       animationFrame = requestAnimationFrame(() => {
-        void resizeWeb(tab.id, width, height);
+        void resizeWeb(tab.id, width, height, ratio);
       });
     };
     syncViewport();

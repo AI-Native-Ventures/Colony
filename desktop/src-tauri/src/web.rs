@@ -8,7 +8,8 @@
 mod validation;
 
 use self::validation::{
-    normalize_url, validate_key, validate_mouse, validate_text, validate_viewport, validate_wheel,
+    normalize_url, validate_device_scale_factor, validate_key, validate_mouse, validate_text,
+    validate_viewport, validate_wheel,
 };
 use buzz_browser_pkg::{
     cdp::CdpClient,
@@ -141,6 +142,7 @@ enum WebCommand {
     Resize {
         width: u32,
         height: u32,
+        device_scale_factor: f64,
         reply: oneshot::Sender<Result<(), String>>,
     },
 }
@@ -331,11 +333,19 @@ impl WebManager {
             .await
     }
 
-    pub async fn resize(&self, session_id: &str, width: u32, height: u32) -> Result<(), String> {
+    pub async fn resize(
+        &self,
+        session_id: &str,
+        width: u32,
+        height: u32,
+        device_scale_factor: f64,
+    ) -> Result<(), String> {
         validate_viewport(width, height)?;
+        validate_device_scale_factor(device_scale_factor)?;
         self.dispatch(session_id, |reply| WebCommand::Resize {
             width,
             height,
+            device_scale_factor,
             reply,
         })
         .await
@@ -623,9 +633,12 @@ async fn initialize_page(
         "Page.startScreencast",
         json!({
             "format": "jpeg",
-            "quality": 85,
-            "maxWidth": 1600,
-            "maxHeight": 1200,
+            // Static cap sized for a 2x-scaled 1600x1200 CSS viewport (the
+            // largest we clamp devicePixelRatio to) so a retina resize is
+            // never re-shrunk by the screencast itself.
+            "quality": 92,
+            "maxWidth": 3200,
+            "maxHeight": 2400,
             "everyNthFrame": 1
         }),
     )
@@ -839,12 +852,18 @@ async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<
         WebCommand::Resize {
             width,
             height,
+            device_scale_factor,
             reply,
         } => {
             let result = send_command_bounded(
                 client,
                 "Emulation.setDeviceMetricsOverride",
-                json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+                json!({
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": device_scale_factor,
+                    "mobile": false
+                }),
             )
             .await
             .map(|_| ())
@@ -1004,6 +1023,16 @@ mod tests {
         assert!(validate_viewport(1280, 720).is_ok());
         assert!(validate_viewport(120, 720).is_err());
         assert!(validate_viewport(1280, 8_000).is_err());
+    }
+
+    #[test]
+    fn device_scale_factor_validation_rejects_out_of_range_and_non_finite() {
+        assert!(validate_device_scale_factor(1.0).is_ok());
+        assert!(validate_device_scale_factor(2.0).is_ok());
+        assert!(validate_device_scale_factor(1.5).is_ok());
+        assert!(validate_device_scale_factor(0.5).is_err());
+        assert!(validate_device_scale_factor(2.5).is_err());
+        assert!(validate_device_scale_factor(f64::NAN).is_err());
     }
 
     #[tokio::test]
