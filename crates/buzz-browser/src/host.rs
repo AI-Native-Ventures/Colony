@@ -334,6 +334,37 @@ impl BrowserHost {
         self.owned_process.clone()
     }
 
+    /// Open a new blank page target ("tab") on this host via the DevTools
+    /// HTTP API, without launching or attaching to a different browser.
+    ///
+    /// Chrome's `/json/new` endpoint takes the tab's initial URL as the raw
+    /// query string rather than a `key=value` pair, so this only opens
+    /// `about:blank`; callers navigate over CDP afterward the same way a
+    /// freshly launched host's first tab already does.
+    pub async fn new_target(&self) -> Result<TargetInfo, BrowserError> {
+        let resp = reqwest::Client::new()
+            .put(format!("{}/json/new?about:blank", self.base_url))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(BrowserError::Host(format!(
+                "failed to open new tab at {}: HTTP {}",
+                self.base_url,
+                resp.status()
+            )));
+        }
+        let v = resp.json::<serde_json::Value>().await?;
+        Ok(TargetInfo {
+            id: v["id"].as_str().unwrap_or_default().to_string(),
+            url: v["url"].as_str().unwrap_or_default().to_string(),
+            title: v["title"].as_str().unwrap_or_default().to_string(),
+            ws_url: v["webSocketDebuggerUrl"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
     /// `{base_url}/json/list` page targets.
     pub async fn list_targets(&self) -> Result<Vec<TargetInfo>, BrowserError> {
         let resp = reqwest::get(format!("{}/json/list", self.base_url))
@@ -398,6 +429,15 @@ pub(crate) async fn spawn_fake_devtools() -> (String, tokio::task::JoinHandle<()
                 let req = String::from_utf8_lossy(&buf[..n]).into_owned();
                 let body = if req.contains("/json/version") {
                     serde_json::json!({ "Browser": "fake/1.0" }).to_string()
+                } else if req.starts_with("PUT") && req.contains("/json/new") {
+                    serde_json::json!({
+                        "type": "page",
+                        "id": "tab-new",
+                        "url": "about:blank",
+                        "title": "",
+                        "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/tab-new"
+                    })
+                    .to_string()
                 } else {
                     serde_json::json!([
                         {
@@ -477,6 +517,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_target_opens_a_blank_tab_via_the_devtools_http_api() {
+        let (endpoint, server) = spawn_fake_devtools().await;
+        let host = attach(&endpoint).await.unwrap();
+        let target = host.new_target().await.unwrap();
+        assert_eq!(target.id, "tab-new");
+        assert_eq!(target.url, "about:blank");
+        assert!(target.ws_url.starts_with("ws://"));
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn dropping_an_attached_host_leaves_the_endpoint_usable() {
         let (endpoint, server) = spawn_fake_devtools().await;
         {
@@ -514,6 +565,39 @@ mod tests {
         assert_eq!(
             cfg.binary.as_deref(),
             Some(std::path::Path::new("/nonexistent/browser"))
+        );
+    }
+
+    /// T3 measurement: one real Chromium launch, timed against opening a
+    /// second tab on the *same* process via `attach` + `new_target` — the
+    /// exact operations `web.rs`'s shared-host path performs for tab 1 vs
+    /// tab 2+. Prints both deltas; not asserted tightly because launch time
+    /// is machine-dependent, but reuse must be markedly faster or the
+    /// host-reuse fix in this ticket is unjustified.
+    #[tokio::test]
+    #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
+    async fn real_first_tab_vs_reused_tab_startup_cost() {
+        if std::env::var("BUZZ_BROWSER_REAL").is_err() {
+            return;
+        }
+        let launch_start = std::time::Instant::now();
+        let host = launch(&HostConfig::default()).await.unwrap();
+        let first_tab_ms = launch_start.elapsed().as_millis();
+
+        let endpoint = host.base_url().to_string();
+        let reuse_start = std::time::Instant::now();
+        let attached = attach(&endpoint).await.unwrap();
+        let second_target = attached.new_target().await.unwrap();
+        let second_tab_ms = reuse_start.elapsed().as_millis();
+
+        eprintln!(
+            "T3 measurement: first_tab(cold launch)={first_tab_ms}ms second_tab(reuse: attach+new_target)={second_tab_ms}ms target={}",
+            second_target.id
+        );
+        assert!(!second_target.ws_url.is_empty());
+        assert!(
+            second_tab_ms < first_tab_ms,
+            "reusing an already-running host ({second_tab_ms}ms) was not faster than a cold launch ({first_tab_ms}ms)"
         );
     }
 
