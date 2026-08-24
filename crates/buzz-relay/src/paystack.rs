@@ -168,7 +168,10 @@ impl PaymentProvider for LivePaystack {
         minor_units: i64,
         email: &str,
         reference: &str,
-        callback_url: &str,
+        // Paystack delivers webhooks to a URL configured in its dashboard
+        // rather than one named per transaction, so it has nowhere to put
+        // this. PayFast is the gateway that takes it on the request.
+        _callback_url: &str,
     ) -> Result<String, ProviderError> {
         let body = serde_json::json!({
             "amount": minor_units,

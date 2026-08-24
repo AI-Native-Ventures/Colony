@@ -148,10 +148,6 @@ pub(crate) struct PayFastCredentials {
     pub(crate) merchant_key: String,
     /// Optional passphrase bound into every signature. Empty means none.
     pub(crate) passphrase: String,
-    /// Absolute URL of our PayFast webhook route; PayFast posts the ITN
-    /// there. Without it PayFast sends no notifications and no payment can
-    /// ever settle, so a deployment without it stays disabled.
-    pub(crate) notify_url: String,
     /// Sandbox endpoints instead of live ones.
     pub(crate) sandbox: bool,
 }
@@ -491,7 +487,6 @@ mod tests {
             merchant_id: TEST_MERCHANT_ID.into(),
             merchant_key: TEST_MERCHANT_KEY.into(),
             passphrase: TEST_PASSPHRASE.into(),
-            notify_url: "https://relay.example/api/payments/webhook/payfast".into(),
             sandbox: true,
         }
     }

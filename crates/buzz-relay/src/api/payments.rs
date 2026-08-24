@@ -382,14 +382,16 @@ fn build_selected_provider() -> Option<SharedProvider> {
                 .map(|client| Arc::new(client) as SharedProvider)
         }
         "payfast" => {
-            let (Some(merchant_id), Some(merchant_key), Some(notify_url)) = (
+            // No notify URL here: it is built per request from the tenant
+            // host, because the webhook binds its community from the host it
+            // arrives at and this relay serves many.
+            let (Some(merchant_id), Some(merchant_key)) = (
                 env_nonempty("PAYFAST_MERCHANT_ID"),
                 env_nonempty("PAYFAST_MERCHANT_KEY"),
-                env_nonempty("PAYFAST_NOTIFY_URL"),
             ) else {
                 tracing::error!(
-                    "COLONY_PAYMENT_PROVIDER=payfast but PAYFAST_MERCHANT_ID, \
-                     PAYFAST_MERCHANT_KEY or PAYFAST_NOTIFY_URL unset; payments disabled"
+                    "COLONY_PAYMENT_PROVIDER=payfast but PAYFAST_MERCHANT_ID or \
+                     PAYFAST_MERCHANT_KEY unset; payments disabled"
                 );
                 return None;
             };
@@ -414,7 +416,6 @@ fn build_selected_provider() -> Option<SharedProvider> {
                 merchant_id,
                 merchant_key,
                 passphrase,
-                notify_url,
                 sandbox,
             })
             .ok()
