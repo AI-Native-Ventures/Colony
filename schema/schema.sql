@@ -3531,9 +3531,36 @@ CREATE TABLE payment_intents (
     provider      TEXT NOT NULL DEFAULT 'paystack'
                   CHECK (provider IN ('paystack', 'payfast')),
     paid_cents    BIGINT,
+    -- Credit packs. No South African gateway may charge in USD (SARB permits
+    -- ZAR-denominated processing only), so what the gateway collects is often
+    -- in a different currency from what the ledger grants. Both are recorded
+    -- rather than derived: converting between them would put the currency
+    -- risk on Colony, and recomputing the grant at settlement would let a
+    -- price edit change what an in-flight purchase is worth.
+    pack_id             TEXT,
+    charge_minor_units  BIGINT
+                        CHECK (charge_minor_units IS NULL OR charge_minor_units > 0),
+    charge_currency     TEXT
+                        CHECK (charge_currency IS NULL OR charge_currency IN ('ZAR', 'USD')),
+    grant_nanousd       BIGINT
+                        CHECK (grant_nanousd IS NULL OR grant_nanousd > 0),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     settled_at    TIMESTAMPTZ,
-    PRIMARY KEY (community_id, reference)
+    PRIMARY KEY (community_id, reference),
+    -- Nullable for rows predating packs, which were free-amount top-ups
+    -- priced in USD. The four travel together or not at all; a row holding
+    -- some but not others would be a bug in the writer, not a state any
+    -- reader should have to model.
+    CONSTRAINT payment_intents_pack_columns_travel_together CHECK (
+        (pack_id IS NULL
+            AND charge_minor_units IS NULL
+            AND charge_currency IS NULL
+            AND grant_nanousd IS NULL)
+        OR (pack_id IS NOT NULL
+            AND charge_minor_units IS NOT NULL
+            AND charge_currency IS NOT NULL
+            AND grant_nanousd IS NOT NULL)
+    )
 );
 
 CREATE INDEX payment_intents_pubkey_idx ON payment_intents (community_id, pubkey);
