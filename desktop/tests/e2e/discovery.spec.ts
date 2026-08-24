@@ -18,7 +18,6 @@ const SCREENSHOTS = [
   "discovery-progress.png",
   "discovery-campaign-leads.png",
   "discovery-global-leads.png",
-  "discovery-source-config.png",
   "discovery-people-fields.png",
   "discovery-people-roles.png",
   "discovery-people-campaign-list.png",
@@ -198,39 +197,10 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(page.getByText("10 companies found")).toBeVisible();
   await capture(appWorkspace(page), page, "discovery-campaign-leads.png");
 
-  await page.getByRole("tab", { name: "Settings" }).click();
-  await expect(page.getByTestId("discovery-source-list")).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Waterfall" })).toBeVisible();
-  await capture(appWorkspace(page), page, "discovery-source-config.png");
-
-  const sourceList = page.getByTestId("discovery-source-list");
-  const braveHandle = page.getByRole("button", {
-    name: "Reorder Brave Web Search",
-  });
-  await braveHandle.dragTo(
-    page.getByRole("button", { name: "Reorder Outscraper (Google Maps)" }),
-  );
-  await expect(sourceList.locator("[data-source]").first()).toHaveAttribute(
-    "data-source",
-    "brave_search",
-  );
-
-  await page.getByRole("tab", { name: "Concurrent" }).click();
-  await expect(page.getByRole("button", { name: /Reorder / })).toHaveCount(0);
-  await waitForAnimations(page);
-  const exaRow = sourceList.locator('[data-source="exa_search"]');
-  const exaSwitch = exaRow.getByRole("switch");
-  await expect(exaSwitch).toBeEnabled();
-  await exaSwitch.click();
-  await expect(exaRow).toHaveAttribute("data-enabled", "false");
-  await expect(exaSwitch).toHaveAttribute("data-state", "unchecked");
-  await page.getByRole("tab", { name: "Overview" }).click();
-  await page.getByRole("tab", { name: "Settings" }).click();
-  await expect(page.getByRole("tab", { name: "Concurrent" })).toHaveAttribute(
-    "data-state",
-    "active",
-  );
-  await expect(exaRow).toHaveAttribute("data-enabled", "false");
+  // Source ordering, per-source toggles and BYO credentials left with
+  // SourceConfigEditor when Discovery moved onto Colony Credits: Colony runs
+  // the providers itself now, so there is no source list for a campaign to
+  // configure and nothing here to assert on.
 
   await page.goto("/#/discovery?surface=leads");
   const globalLeadsHeading = page.getByRole("heading", { name: "Leads." });
