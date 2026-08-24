@@ -422,8 +422,8 @@ function GlobalLeadsHeader({
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {mode === "people"
-            ? "Find, enrich, and manage the professionals your company should reach."
-            : "Find, enrich, and manage the businesses your company can serve."}
+            ? "Find and manage the professionals your company should reach."
+            : "Find and manage the businesses your company can serve."}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">

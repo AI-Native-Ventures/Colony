@@ -1,10 +1,17 @@
 import * as React from "react";
 
+import { useReportingLineLookup } from "@/features/agents/reportingLine";
+import {
+  askRoutingSummary,
+  classifyAskRouting,
+  effectiveFilerPubkey,
+} from "@/features/asks/lib/askRouting";
 import { askToInboxItem } from "@/features/asks/lib/askInboxItem";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
 import { useHomeDrafts } from "@/features/home/useHomeDrafts";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { useCommunities } from "@/features/communities/useCommunities";
 import {
   countDueReminders,
   useRemindersQuery,
@@ -38,19 +45,30 @@ export function useHomePersonalInbox({
     enabled: askPubkeys.length > 0,
   });
   const askProfiles = askProfilesQuery.data?.profiles;
+  // How each ask reached the owner: the filer's manager as the reporting
+  // lines resolve it decides auto-routed vs explicitly addressed.
+  const { activeCommunity } = useCommunities();
+  const { lookup: reportingLineLookup } = useReportingLineLookup(
+    activeCommunity?.id ?? "",
+  );
   const askItems = React.useMemo(
     () =>
-      openAsks.asks.map((ask) =>
-        askToInboxItem(
+      openAsks.asks.map((ask) => {
+        const routing = classifyAskRouting(
+          ask,
+          reportingLineLookup(effectiveFilerPubkey(ask)).managerPubkey,
+        );
+        return askToInboxItem(
           ask,
           resolveUserLabel({
             currentPubkey,
             profiles: askProfiles,
             pubkey: ask.filerPubkey,
           }),
-        ),
-      ),
-    [askProfiles, currentPubkey, openAsks.asks],
+          askRoutingSummary(routing),
+        );
+      }),
+    [askProfiles, currentPubkey, openAsks.asks, reportingLineLookup],
   );
   const dueReminderCount = countDueReminders(remindersQuery.data ?? []);
   const pendingReminders = React.useMemo(

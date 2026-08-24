@@ -12,7 +12,9 @@ import * as React from "react";
 
 import { answerAsk } from "@/features/asks/answerAsk";
 import { AskDetailCard } from "@/features/asks/ui/AskDetailCard";
+import { AskResolutionNotice } from "@/features/asks/ui/AskResolutionNotice";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
+import { useClosedAskResolution } from "@/features/asks/useAskResolutions";
 import type {
   InboxContextMessage,
   InboxItem,
@@ -22,6 +24,7 @@ import { getProjectInboxReference } from "@/features/home/lib/projectInbox";
 import { ProjectInboxDetail } from "@/features/home/ui/ProjectInboxDetail";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { formatInboxTypeLabel } from "@/features/home/lib/inbox";
 import { hasInboxThreadContext } from "@/features/home/lib/inboxViewHelpers";
 import {
@@ -40,7 +43,7 @@ import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManag
 import { buildEditMentionState } from "@/features/messages/lib/draftMentionRefs";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import { getThreadReference } from "@/features/messages/lib/threading";
-import { normalizePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { useAnchoredScroll } from "@/features/messages/ui/useAnchoredScroll";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
@@ -198,6 +201,37 @@ function InboxMessageDetailPane({
     () => openAsks.asks.find((ask) => ask.id === askId) ?? null,
     [askId, openAsks.asks],
   );
+  // Once an ask drops out of the open list, the pane says WHY instead of
+  // a bare "no longer open": who answered it, or whether the deadline
+  // passed and the relay executed the stated default on the silence.
+  const isClosedAskDetail =
+    askId !== null && !openAsks.isLoading && selectedAsk === null;
+  const closedResolution = useClosedAskResolution(
+    isClosedAskDetail ? askId : null,
+  );
+  const closedResolverPubkey =
+    closedResolution.resolution && !closedResolution.resolution.defaultExecuted
+      ? closedResolution.resolution.resolverPubkey
+      : null;
+  const resolverLabelQuery = useUsersBatchQuery(
+    closedResolverPubkey ? [closedResolverPubkey] : [],
+    { enabled: closedResolverPubkey !== null },
+  );
+  const closedResolverLabel = React.useMemo(() => {
+    if (closedResolverPubkey === null) return null;
+    if (
+      currentPubkey !== undefined &&
+      normalizePubkey(closedResolverPubkey) === normalizePubkey(currentPubkey)
+    ) {
+      return "You";
+    }
+    const profile =
+      resolverLabelQuery.data?.profiles[normalizePubkey(closedResolverPubkey)];
+    return (
+      profile?.displayName?.trim() ||
+      truncatePubkey(normalizePubkey(closedResolverPubkey))
+    );
+  }, [closedResolverPubkey, currentPubkey, resolverLabelQuery.data]);
   const handleAnswerAsk = React.useCallback(
     async (decision: string, rationale: string): Promise<void> => {
       if (!selectedAsk) {
@@ -456,14 +490,27 @@ function InboxMessageDetailPane({
             isSubmitting={isSubmittingAsk}
             onAnswer={handleAnswerAsk}
           />
+        ) : openAsks.isLoading ? (
+          <p
+            className="p-4 text-sm text-muted-foreground"
+            data-testid="ask-detail-loading"
+          >
+            Loading ask…
+          </p>
+        ) : closedResolution.resolution ? (
+          <div className="p-4" data-testid="closed-ask-resolution">
+            <AskResolutionNotice
+              headline={item.subject ?? null}
+              resolution={closedResolution.resolution}
+              resolverLabel={closedResolverLabel}
+            />
+          </div>
         ) : (
           <p
             className="p-4 text-sm text-muted-foreground"
             data-testid="ask-detail-loading"
           >
-            {openAsks.isLoading
-              ? "Loading ask…"
-              : "This ask is no longer open."}
+            This ask is no longer open.
           </p>
         )}
         {askAnswerError ? (

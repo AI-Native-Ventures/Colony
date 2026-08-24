@@ -521,6 +521,7 @@ mod tests {
             "gateway_reconciliation_outcomes",
             "gateway_settlement_intents",
             "operator_access_log",
+            "discovery_budget_approval_claims",
         ] {
             if normalized[insert_pos..].contains(&format!("'{value}'")) {
                 globals.insert(value.to_owned());
@@ -734,7 +735,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 60);
+        assert_eq!(migrations.len(), 67);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1325,6 +1326,137 @@ mod tests {
         assert!(
             recovery.contains("CREATE OR REPLACE FUNCTION community_write_fence_excluded_table")
         );
+
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let canvas_drop = migrations
+            .iter()
+            .find(|migration| migration.version == 65)
+            .expect("drop channels.canvas migration")
+            .sql
+            .as_str();
+        assert!(canvas_drop.contains("ALTER TABLE channels"));
+        assert!(canvas_drop.contains("DROP COLUMN IF EXISTS canvas"));
+        // Looked up by version rather than by index. Two branches both claimed
+        // 61 while in flight, and this migration was renumbered to 62 on merge;
+        // an index-based assertion silently points at whichever migration
+        // happens to sit in that slot afterwards.
+        let email_accounts = migrations
+            .iter()
+            .find(|migration| migration.version == 62)
+            .expect("email accounts migration")
+            .sql
+            .as_str();
+        assert!(email_accounts.contains("CREATE TABLE email_accounts"));
+        assert!(email_accounts.contains("CREATE TABLE account_reset_tokens"));
+        assert!(email_accounts.contains("PRIMARY KEY (community_id, id)"));
+        assert!(email_accounts.contains("PRIMARY KEY (community_id, token_hash)"));
+        assert!(email_accounts.contains("attach_community_write_fence('email_accounts')"));
+        assert!(email_accounts.contains("attach_community_write_fence('account_reset_tokens')"));
+        let discovery_credits = migrations
+            .iter()
+            .find(|migration| migration.version == 66)
+            .expect("Discovery Credits migration")
+            .sql
+            .as_str();
+        for campaign_column in [
+            "budget_payer_pubkey",
+            "budget_approved_nanousd",
+            "budget_spent_nanousd",
+            "budget_reserved_nanousd",
+            "budget_state",
+            "budget_approval_event_id",
+            "budget_approved_at",
+            "budget_fingerprint",
+            "price_per_retained_lead_nanousd",
+        ] {
+            assert!(
+                discovery_credits.contains(campaign_column),
+                "migration 63 must contain Campaign column {campaign_column}"
+            );
+        }
+        for run_column in [
+            "payer_pubkey",
+            "billable_lead_limit",
+            "reserved_nanousd",
+            "settled_nanousd",
+            "released_nanousd",
+            "billed_retained_lead_count",
+            "settlement_ref",
+            "settled_at",
+        ] {
+            assert!(
+                discovery_credits.contains(run_column),
+                "migration 63 must contain run column {run_column}"
+            );
+        }
+        for ledger_column in [
+            "service",
+            "quantity",
+            "unit_price_nanousd",
+            "discovery_community_id",
+            "discovery_campaign_id",
+            "discovery_run_id",
+        ] {
+            assert!(
+                discovery_credits.contains(ledger_column),
+                "migration 63 must contain ledger column {ledger_column}"
+            );
+        }
+        assert!(discovery_credits.contains("spent_and_reserved_within_approved"));
+        assert!(discovery_credits.contains("discovery_ledger_attribution_complete"));
+        assert!(discovery_credits.contains("discovery_protocol_version IN (1, 2, 3)"));
+        assert!(discovery_credits.contains("ON discovery_runs (community_id, settlement_ref)"));
+        assert!(discovery_credits.contains("state IN ('queued', 'running')"));
+        assert!(discovery_credits.contains("state IN ('succeeded', 'cancelled', 'failed')"));
+        assert!(discovery_credits.contains("request_id IS NULL"));
+        assert!(discovery_credits.contains("settle_basis IS NULL"));
+        let desired_schema = include_str!("../../../schema/schema.sql");
+        for required in [
+            "CREATE TABLE discovery_gateway_attempts",
+            "CREATE TABLE discovery_campaign_leads",
+            "budget_reserved_nanousd BIGINT NOT NULL DEFAULT 0",
+            "discovery_protocol_version IN (1, 2, 3)",
+            "service TEXT CHECK (service IN ('model', 'discovery'))",
+        ] {
+            assert!(
+                desired_schema.contains(required),
+                "desired-state schema must mirror paid Discovery contract: {required}"
+            );
+        }
+        // Also looked up by version rather than by index, for the same reason
+        // as migration 62 above.
+        let payment_intents = migrations
+            .iter()
+            .find(|migration| migration.version == 63)
+            .expect("payment intents migration")
+            .sql
+            .as_str();
+        assert!(payment_intents.contains("CREATE TABLE payment_intents"));
+        assert!(payment_intents.contains("PRIMARY KEY (community_id, reference)"));
+        assert!(payment_intents.contains("octet_length(pubkey) = 32"));
+        assert!(payment_intents.contains("usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500)"));
+        assert!(payment_intents.contains("attach_community_write_fence('payment_intents')"));
+
+        // Packs, added once it was clear no South African gateway may charge
+        // in USD (SARB permits ZAR-denominated processing only). The four
+        // columns must travel together: a row with a pack but no grant, or a
+        // grant with no charge currency, would leave settlement guessing what
+        // a purchase was worth, and guessing about money is how a ledger
+        // silently stops matching the bank.
+        let packs = migrations
+            .iter()
+            .find(|migration| migration.version == 67)
+            .expect("payment intent packs migration")
+            .sql
+            .as_str();
+        assert!(packs.contains("ADD COLUMN pack_id TEXT"));
+        assert!(packs.contains("charge_currency TEXT"));
+        assert!(packs.contains("IN ('ZAR', 'USD')"));
+        assert!(packs.contains("payment_intents_pack_columns_travel_together"));
+        // The grant is stored, never recomputed: a price edit mid-flight must
+        // not change what an already-paid purchase is worth.
+        assert!(packs.contains("ADD COLUMN grant_nanousd BIGINT"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {
@@ -1641,7 +1773,7 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(50));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(63));
     }
 
     /// Acceptance 3 (upgrade path): migration 0050 (credit ledger) applies
@@ -1681,7 +1813,8 @@ mod tests {
         .await
         .expect("insert channel");
 
-        run_migrations(&pool)
+        MIGRATOR
+            .run_to(50, &pool)
             .await
             .expect("0050 must apply additively on a populated schema");
         assert_eq!(applied_versions(&pool).await.last().copied(), Some(50));
@@ -1705,6 +1838,320 @@ mod tests {
             .await
             .expect("count users");
         assert_eq!(users, 1, "pre-0050 rows must survive the upgrade");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn migration_0063_preserves_legacy_discovery_and_enforces_paid_run_accounting() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+        MIGRATOR
+            .run_to(62, &pool)
+            .await
+            .expect("apply migrations 1-62");
+
+        let community_id = uuid::Uuid::new_v4();
+        let campaign_id = uuid::Uuid::new_v4();
+        let legacy_run_id = uuid::Uuid::new_v4();
+        let payer = vec![31_u8; 32];
+        sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
+            .bind(community_id)
+            .bind(format!("pre-0063-{}.example", community_id.simple()))
+            .execute(&pool)
+            .await
+            .expect("insert community");
+        sqlx::query(
+            "INSERT INTO discovery_campaigns \
+             (community_id,id,created_by,name,industry_id,industry_name,vertical_id,\
+              vertical_name,query,location,target,language,region) \
+             VALUES ($1,$2,$3,'Legacy dentists','healthcare','Healthcare','dentists',\
+                     'Dentists','dentists','Cape Town',10,'en','ZA')",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("insert legacy campaign");
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,state,\
+              completed_steps,total_steps,discovery_protocol_version) \
+             VALUES ($1,$2,$3,$4,$5,'succeeded',1,1,2)",
+        )
+        .bind(community_id)
+        .bind(legacy_run_id)
+        .bind(campaign_id)
+        .bind(&payer)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("insert legacy Discovery run");
+        sqlx::query(
+            "INSERT INTO credit_ledger \
+             (pubkey,delta,kind,ref,model,observed_cost,request_id,settle_basis) \
+             VALUES ($1,-1000,'debit','legacy-model-debit','deepseek-v4-flash',1000,\
+                     'legacy-request','observed'),\
+                    ($1,5000,'credit','legacy-credit',NULL,NULL,NULL,NULL)",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("insert legacy credit rows");
+        sqlx::query(
+            "INSERT INTO accounts (pubkey,balance) VALUES ($1,1000000000) \
+             ON CONFLICT (pubkey) DO UPDATE SET balance=EXCLUDED.balance",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("seed rolling gateway account");
+        sqlx::query(
+            "INSERT INTO gateway_settlement_intents (pubkey,reference,model) \
+             VALUES ($1,'pre-upgrade-gateway-call','deepseek-v4-flash'), \
+                    ($1,'pre-upgrade-debited-call','deepseek-v4-flash')",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("insert pre-upgrade gateway calls");
+        sqlx::query(
+            "UPDATE gateway_settlement_intents SET state='debited' \
+             WHERE pubkey=$1 AND reference='pre-upgrade-debited-call'",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("mark pre-upgrade gateway call debited");
+
+        run_migrations(&pool)
+            .await
+            .expect("0063 must apply additively on a populated schema");
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(63));
+        let migrated_reservation: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='pre-upgrade-gateway-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read migrated gateway reservation");
+        assert_eq!(migrated_reservation, 50_000_000);
+        let migrated_debited_reservation: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='pre-upgrade-debited-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read migrated debited gateway reservation");
+        assert_eq!(migrated_debited_reservation, 0);
+        sqlx::query(
+            "INSERT INTO gateway_settlement_intents (pubkey,reference,model) \
+             VALUES ($1,'rolling-old-gateway-call','deepseek-v4-flash')",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("released gateway writer remains valid during rolling deployment");
+        let rolling_reservation: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='rolling-old-gateway-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read released gateway writer reservation");
+        assert_eq!(rolling_reservation, 50_000_000);
+        sqlx::query(
+            "UPDATE gateway_settlement_intents SET state='debited',updated_at=now() \
+             WHERE pubkey=$1 AND reference='rolling-old-gateway-call'",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("released gateway writer settles during rolling deployment");
+        let rolling_released: i64 = sqlx::query_scalar(
+            "SELECT reserved_nanousd FROM gateway_settlement_intents \
+             WHERE pubkey=$1 AND reference='rolling-old-gateway-call'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read released gateway writer settlement");
+        assert_eq!(rolling_released, 0);
+
+        let legacy_campaign: (String, i64, i64, i64) = sqlx::query_as(
+            "SELECT budget_state,budget_approved_nanousd,budget_spent_nanousd,\
+                    budget_reserved_nanousd \
+             FROM discovery_campaigns WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read migrated campaign");
+        assert_eq!(legacy_campaign, ("unapproved".to_owned(), 0, 0, 0));
+        let legacy_run_payer: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT payer_pubkey FROM discovery_runs WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(legacy_run_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read migrated run");
+        assert!(legacy_run_payer.is_none());
+        let services: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT service FROM credit_ledger ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .expect("read migrated ledger attribution");
+        assert_eq!(services, vec![Some("model".to_owned()), None]);
+
+        sqlx::query(
+            "INSERT INTO credit_ledger \
+             (pubkey,delta,kind,ref,model,observed_cost,request_id,settle_basis) \
+             VALUES ($1,-2000,'debit','rolling-model-debit','deepseek-v4-flash',2000,\
+                     'rolling-request','observed')",
+        )
+        .bind(&payer)
+        .execute(&pool)
+        .await
+        .expect("released model ledger writer remains compatible after 0063");
+        let rolling_service: Option<String> = sqlx::query_scalar(
+            "SELECT service FROM credit_ledger WHERE pubkey=$1 AND ref='rolling-model-debit'",
+        )
+        .bind(&payer)
+        .fetch_one(&pool)
+        .await
+        .expect("read rolling writer attribution");
+        assert_eq!(rolling_service.as_deref(), Some("model"));
+
+        let observation_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,\
+              observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper','rolling-lead','Rolling Lead',$4)",
+        )
+        .bind(community_id)
+        .bind(observation_id)
+        .bind(legacy_run_id)
+        .bind(vec![34_u8; 32])
+        .execute(&pool)
+        .await
+        .expect("released observation writer remains compatible after 0063");
+        let association: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
+            "SELECT campaign_id,discovered_run_id FROM discovery_campaign_leads \
+             WHERE community_id=$1 AND lead_id=$2",
+        )
+        .bind(community_id)
+        .bind(observation_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("read rolling observation association");
+        assert_eq!(association, Some((campaign_id, legacy_run_id)));
+
+        let approval_event_id = vec![32_u8; 32];
+        let budget_fingerprint = vec![33_u8; 32];
+        sqlx::query(
+            "UPDATE discovery_campaigns SET \
+                 budget_payer_pubkey=$3,budget_approved_nanousd=1000000000,\
+                 budget_state='active',budget_approval_event_id=$4,budget_approved_at=now(),\
+                 budget_fingerprint=$5,price_per_retained_lead_nanousd=50000000 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .bind(&payer)
+        .bind(&approval_event_id)
+        .bind(&budget_fingerprint)
+        .execute(&pool)
+        .await
+        .expect("approve campaign budget");
+
+        let paid_run_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO discovery_runs \
+             (community_id,id,campaign_id,requested_by,start_idempotency_key,total_steps,\
+              discovery_protocol_version,payer_pubkey,price_per_retained_lead_nanousd,\
+              billable_lead_limit,reserved_nanousd) \
+             VALUES ($1,$2,$3,$4,$5,1,3,$4,50000000,10,500000000)",
+        )
+        .bind(community_id)
+        .bind(paid_run_id)
+        .bind(campaign_id)
+        .bind(&payer)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("insert protocol 3 paid run");
+        sqlx::query(
+            "UPDATE discovery_campaigns SET budget_reserved_nanousd=500000000 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .execute(&pool)
+        .await
+        .expect("record campaign reservation");
+
+        let overspend = sqlx::query(
+            "UPDATE discovery_campaigns SET budget_spent_nanousd=600000000 \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .execute(&pool)
+        .await;
+        assert!(
+            overspend.is_err(),
+            "spent plus reserved must stay within approval"
+        );
+
+        sqlx::query(
+            "UPDATE discovery_runs SET state='succeeded',completed_steps=1,\
+                 settled_nanousd=200000000,released_nanousd=300000000,\
+                 billed_retained_lead_count=4,settlement_ref='discovery-run-4',settled_at=now() \
+             WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id)
+        .bind(paid_run_id)
+        .execute(&pool)
+        .await
+        .expect("settle paid run");
+        sqlx::query(
+            "INSERT INTO credit_ledger \
+             (pubkey,delta,kind,ref,service,quantity,unit_price_nanousd,\
+              discovery_community_id,discovery_campaign_id,discovery_run_id) \
+             VALUES ($1,-200000000,'debit','discovery-run-4','discovery',4,50000000,\
+                     $2,$3,$4)",
+        )
+        .bind(&payer)
+        .bind(community_id)
+        .bind(campaign_id)
+        .bind(paid_run_id)
+        .execute(&pool)
+        .await
+        .expect("write attributed Discovery debit");
+
+        let mismatched_debit = sqlx::query(
+            "INSERT INTO credit_ledger \
+             (pubkey,delta,kind,ref,service,quantity,unit_price_nanousd,\
+              discovery_community_id,discovery_campaign_id,discovery_run_id) \
+             VALUES ($1,-1,'debit','bad-discovery-debit','discovery',4,50000000,\
+                     $2,$3,$4)",
+        )
+        .bind(&payer)
+        .bind(community_id)
+        .bind(campaign_id)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await;
+        assert!(
+            mismatched_debit.is_err(),
+            "ledger amount must equal quantity times price"
+        );
     }
 
     #[tokio::test]

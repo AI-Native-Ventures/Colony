@@ -34,7 +34,13 @@ function stubSource(overrides = {}) {
       markConversationRead: record("markConversationRead", {}),
       sendConversationReply: record("sendConversationReply", {}),
       createCampaign: record("createCampaign", { id: "campaign-1" }),
-      updateSourceConfig: record("updateSourceConfig", { id: "campaign-1" }),
+      approveCampaignBudget: record("approveCampaignBudget", {
+        id: "campaign-1",
+      }),
+      pauseCampaignBudget: record("pauseCampaignBudget", { id: "campaign-1" }),
+      revokeCampaignBudget: record("revokeCampaignBudget", {
+        id: "campaign-1",
+      }),
       cancelDiscovery: record("cancelDiscovery", undefined),
       startDiscovery: () => {
         calls.push(["startDiscovery"]);
@@ -81,10 +87,12 @@ test("every mutating method reports one write", async () => {
   await wrapped.markConversationRead("campaign-1", "thread-1");
   await wrapped.sendConversationReply("campaign-1", "thread-1", "hello");
   await wrapped.createCampaign({});
-  await wrapped.updateSourceConfig("campaign-1", { mode: "waterfall" });
+  await wrapped.approveCampaignBudget("campaign-1");
+  await wrapped.pauseCampaignBudget("campaign-1");
+  await wrapped.revokeCampaignBudget("campaign-1");
   await wrapped.cancelDiscovery("campaign-1");
 
-  assert.equal(writes, 8);
+  assert.equal(writes, 10);
 });
 
 test("a failed write still reports, because it may have half landed", async () => {

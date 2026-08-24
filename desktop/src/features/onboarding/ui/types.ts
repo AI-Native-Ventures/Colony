@@ -8,6 +8,7 @@ export type OnboardingPage =
   | "profile"
   | "key-import"
   | "avatar"
+  | "backup"
   | "membership-denied";
 
 export type OnboardingActions = {

@@ -387,14 +387,10 @@ fn record_agent_command_override_beats_runtime() {
     assert_eq!(record_agent_command(&record, &[]), "codex-acp");
 }
 
-#[test]
-fn record_agent_command_legacy_persona_fallback() {
-    // Pre-migration record: persona_id set, no runtime — resolves through
-    // the legacy persona path unchanged.
-    let personas = vec![persona_with_runtime("p1", Some("omp"))];
-    let record = record_with(None, Some("p1"), None);
-    assert_eq!(record_agent_command(&record, &personas), "omp");
-}
+// Registry-dependent resolver tests live in the child module
+// `harness_registry_tests` because this file is pinned by the file-size
+// ratchet and cannot grow.
+mod harness_registry_tests;
 
 #[test]
 fn record_agent_command_bare_record_defaults() {

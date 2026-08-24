@@ -197,6 +197,7 @@ async fn publish_usage_record(
             cache_write_1h_tokens: 0,
             output_tokens: 40,
         }),
+        unknown_token_fields: Vec::new(),
         amount_nanousd: None,
         observed_cost_nanousd: None,
         harness: Some("buzz-worker".to_string()),

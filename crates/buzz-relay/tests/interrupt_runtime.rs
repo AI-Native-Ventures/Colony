@@ -187,6 +187,7 @@ async fn employ_role(db: &Db, community: CommunityId, owner: &Keys, role_id: &st
                 rank,
                 hired_by: &owner.public_key().to_bytes(),
                 hire_event: &identity.public_key().to_bytes(),
+                manager: None,
             },
         )
         .await

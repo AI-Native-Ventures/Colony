@@ -784,7 +784,7 @@ Docker Compose provides the full local development stack. All services include h
 | Table | Purpose |
 |-------|---------|
 | `events` | All stored Nostr events; monthly range-partitioned by `PARTITION BY RANGE` on `created_at`; multi-community mode keys every tenant-visible event by `community_id` |
-| `channels` | Channel records (type, visibility, canvas, topic); `community_id` is immutable after creation in multi-community mode |
+| `channels` | Channel records (type, visibility, topic); `community_id` is immutable after creation in multi-community mode |
 | `channel_members` | Membership with roles; soft-delete via `removed_at` |
 | `workflows` | Workflow definitions (YAML stored as canonical JSON); scoped by community in multi-community mode |
 | `workflow_runs` | Execution records with trigger context and trace |

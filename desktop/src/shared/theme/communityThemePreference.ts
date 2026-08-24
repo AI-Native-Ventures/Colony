@@ -2,7 +2,16 @@ import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
 import { ACCENT_COLORS } from "./ThemeProvider";
 import { SYNTAX_THEMES, type SyntaxThemeName } from "./theme-loader";
 
-const STORAGE_KEY_PREFIX = "buzz-community-theme.v1";
+/**
+ * Bumped alongside the global accent key.
+ *
+ * Per-community preferences also store an accent, and they win over the global
+ * one. Colony themes used to force neutral and persist it here too, so a v1
+ * preference keeps the workspace greyscale even after the global key is
+ * retired. Dropping v1 lets the brand default through; a preference saved from
+ * here on is a real choice.
+ */
+const STORAGE_KEY_PREFIX = "buzz-community-theme.v2";
 const OUTBOX_KEY_PREFIX = "buzz-community-theme-outbox.v1";
 const MIGRATION_KEY_PREFIX = "buzz-community-theme-migrated.v1";
 
@@ -16,7 +25,7 @@ export type CommunityThemePreference = {
 export const DEFAULT_COMMUNITY_THEME: CommunityThemePreference = Object.freeze({
   version: 1,
   theme: "buzz",
-  accent: "#3b82f6",
+  accent: "#895AF6",
   followSystem: true,
 });
 

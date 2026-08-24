@@ -60,6 +60,15 @@ function Row({
               subscription
             </span>
           ) : null}
+          {entry.source === "adapter_estimate" ? (
+            <span
+              className="ml-2 text-2xs font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400"
+              data-testid={`ledger-adapter-estimate-${entry.eventId.slice(0, 8)}`}
+              title="Estimated from cumulative counters reported by the Codex adapter."
+            >
+              adapter estimate
+            </span>
+          ) : null}
         </p>
         <p className="truncate text-xs text-muted-foreground">
           {entry.day}

@@ -7,6 +7,7 @@ import { GUIDE_NAME, STARTER_PERSONA_IDS } from "../helpers/starterTeam";
 import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
+  passThroughBackupStep,
   seedActiveIdentity,
 } from "../helpers/onboarding";
 
@@ -722,6 +723,7 @@ async function completeProfileOnboarding(page: Page) {
     .getByTestId("onboarding-avatar-url")
     .fill("https://example.com/onboarding-avatar.png");
   await page.getByTestId("onboarding-next").click();
+  await passThroughBackupStep(page);
 }
 
 test("completed users skip the loading gate while profile is still settling", async ({
@@ -1116,7 +1118,7 @@ test("first-community owner can connect an existing hosted community", async ({
   await expect(page.getByText("North Star")).toBeVisible();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Let’s start with you" }),
+    page.getByRole("heading", { name: "Build your profile" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1198,8 +1200,11 @@ test("first-community owner can create and connect a hosted community", async ({
     surfaceBox.y + surfaceBox.height,
   );
   await page.getByRole("button", { name: "Next" }).click();
+  // V2's founder screen used to sit in front of this one. It serves the
+  // returning-founder journey now, because asking for the founder's details
+  // here as well as in the redesigned flow meant asking twice in one sitting.
   await expect(
-    page.getByRole("heading", { name: "Let’s start with you" }),
+    page.getByRole("heading", { name: "Build your profile" }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -1394,7 +1399,7 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(page.getByTestId("onboarding-page-config")).toBeVisible();
   await expect(
     page.getByRole("heading", {
-      name: "Configure your default model settings",
+      name: "Choose the brain your helpers think with.",
     }),
   ).toBeVisible();
   await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
@@ -1424,8 +1429,11 @@ test("first-community direct join reaches founder setup", async ({ page }) => {
     .fill("wss://onboarding.communities.buzz.xyz");
   await page.getByTestId("invite-redeem-submit").click();
 
+  // V2's founder screen used to sit in front of this one. It serves the
+  // returning-founder journey now, because asking for the founder's details
+  // here as well as in the redesigned flow meant asking twice in one sitting.
   await expect(
-    page.getByRole("heading", { name: "Let’s start with you" }),
+    page.getByRole("heading", { name: "Build your profile" }),
   ).toBeVisible();
   await expect(page.getByText("Connecting securely…")).toHaveCount(0);
   await expect(page.getByText("Create an identity key")).toHaveCount(0);
@@ -2607,6 +2615,7 @@ test("avatar step accepts an avatar URL before completing onboarding", async ({
   expect(box?.height).toBeCloseTo(192, 0);
 
   await page.getByTestId("onboarding-next").click();
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -2642,6 +2651,7 @@ test("failed avatar saves can continue without saving the avatar", async ({
   ).toBeVisible();
   await page.getByTestId("onboarding-next-without-saving").click();
 
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -3001,8 +3011,12 @@ test("failed first profile saves can be skipped for the current session", async 
   await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
   await page.getByTestId("onboarding-skip").click();
 
+  // The profile error-recovery skip now leads to the key-backup step instead
+  // of exiting onboarding; the explicit acknowledgement is the only exit, and
+  // completing through it lands on the standard first-run Welcome channel.
+  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectHomeView(page);
+  await expectWelcomeView(page);
 });
 
 test("generic relay save failures use the generic reconnect card", async ({

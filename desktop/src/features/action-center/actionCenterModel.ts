@@ -9,6 +9,7 @@ import {
   KIND_JOB_HEAD,
   KIND_APPROVAL_REQUEST,
 } from "@/shared/constants/kinds";
+import { describeAskResolution } from "@/features/asks/lib/askResolution";
 import type {
   ActionCenterFilter,
   ActionCenterProjectionInput,
@@ -213,20 +214,25 @@ function workflowItem(source: ActionWorkflowSource): ActionItem {
 /** Build the global queue from source records without creating new records. */
 export function buildActionCenterItems({
   asks,
+  resolvedAsks = [],
+  resolverLabelsByPubkey,
+  askRoutingNotesByAskId,
   feed,
   reminders,
   tasks = [],
   workflows = [],
-  doneIds = new Set<string>(),
+  doneIds = new Set(),
 }: ActionCenterProjectionInput): ActionItem[] {
   const items: ActionItem[] = asks.map((ask) => {
     const source: ActionSource = { kind: "ask", ask };
+    const baseSummary = ask.costOfDelay ?? `Answer requested · ${ask.askType}`;
+    const routingNote = askRoutingNotesByAskId?.get(ask.id) ?? null;
     return {
       id: actionItemId("ask", ask.id),
       kind: "ask",
       state: "needs-action",
       title: ask.headline,
-      summary: ask.costOfDelay ?? `Answer requested · ${ask.askType}`,
+      summary: routingNote ? `${baseSummary} · ${routingNote}` : baseSummary,
       createdAt: ask.createdAt,
       updatedAt: ask.createdAt,
       source,
@@ -236,6 +242,28 @@ export function buildActionCenterItems({
       ],
     };
   });
+
+  // Closed asks stay visible as completed rows. The summary is an account
+  // of what happened, and the source carries the full resolution so every
+  // surface can render an executed default differently from a human answer.
+  for (const { resolution, ask } of resolvedAsks) {
+    const source: ActionSource = { kind: "ask", ask, resolution };
+    items.push({
+      id: `resolved-ask:${ask.id}`,
+      kind: "ask",
+      state: "completed",
+      title: ask.headline.trim() || "Resolved ask",
+      summary: describeAskResolution(
+        resolution,
+        resolverLabelsByPubkey?.get(resolution.resolverPubkey) ?? null,
+      ),
+      createdAt: ask.createdAt,
+      updatedAt: Math.max(ask.createdAt, resolution.createdAt),
+      source,
+      capabilities:
+        ask.channelId && ask.threadId ? (["open-source"] as const) : [],
+    });
+  }
 
   items.push(...tasks.map(taskItem), ...workflows.map(workflowItem));
 

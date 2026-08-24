@@ -16,8 +16,10 @@ use thiserror::Error;
 
 const ACTION_SCHEMA_V1: &str = "colony.discovery-workspace-action/v1";
 const ACTION_SCHEMA_V2: &str = "colony.discovery-workspace-action/v2";
+const ACTION_SCHEMA_V3: &str = "colony.discovery-workspace-action/v3";
 const RECEIPT_SCHEMA_V1: &str = "colony.discovery-workspace-receipt/v1";
 const RECEIPT_SCHEMA_V2: &str = "colony.discovery-workspace-receipt/v2";
+const RECEIPT_SCHEMA_V3: &str = "colony.discovery-workspace-receipt/v3";
 
 /// Version of the strict Discovery workspace wire envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,8 @@ pub enum DiscoveryWorkspaceWireVersion {
     V1,
     /// Multi-source Campaign and provenance contract.
     V2,
+    /// Colony-funded Campaign budget contract.
+    V3,
 }
 
 impl DiscoveryWorkspaceWireVersion {
@@ -33,6 +37,7 @@ impl DiscoveryWorkspaceWireVersion {
         match self {
             Self::V1 => "1",
             Self::V2 => "2",
+            Self::V3 => "3",
         }
     }
 
@@ -40,6 +45,7 @@ impl DiscoveryWorkspaceWireVersion {
         match self {
             Self::V1 => ACTION_SCHEMA_V1,
             Self::V2 => ACTION_SCHEMA_V2,
+            Self::V3 => ACTION_SCHEMA_V3,
         }
     }
 
@@ -47,6 +53,7 @@ impl DiscoveryWorkspaceWireVersion {
         match self {
             Self::V1 => RECEIPT_SCHEMA_V1,
             Self::V2 => RECEIPT_SCHEMA_V2,
+            Self::V3 => RECEIPT_SCHEMA_V3,
         }
     }
 }
@@ -123,7 +130,7 @@ pub fn build_discovery_workspace_action(
     request: &DiscoveryWorkspaceRequest,
 ) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
     build_discovery_workspace_action_for_version(
-        DiscoveryWorkspaceWireVersion::V2,
+        DiscoveryWorkspaceWireVersion::V3,
         relay_pubkey,
         request,
     )
@@ -137,7 +144,7 @@ fn build_discovery_workspace_action_for_version(
     request
         .validate()
         .map_err(|_| DiscoveryWorkspaceSdkError::InvalidEnvelope("workspace action"))?;
-    if wire_version == DiscoveryWorkspaceWireVersion::V1 && !is_v1_request(request) {
+    if !request_supported_by_wire_version(wire_version, request) {
         return Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
             "workspace action",
         ));
@@ -193,7 +200,7 @@ pub fn parse_discovery_workspace_action(
             "workspace action",
         ));
     }
-    if wire_version == DiscoveryWorkspaceWireVersion::V1 && !is_v1_request(&content.request) {
+    if !request_supported_by_wire_version(wire_version, &content.request) {
         return Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
             "workspace action",
         ));
@@ -212,7 +219,7 @@ pub fn build_discovery_workspace_receipt(
     receipt: &DiscoveryWorkspaceReceipt,
 ) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
     build_discovery_workspace_receipt_for_version(
-        DiscoveryWorkspaceWireVersion::V2,
+        DiscoveryWorkspaceWireVersion::V3,
         actor_pubkey,
         action_event_id,
         receipt,
@@ -227,9 +234,7 @@ pub fn build_discovery_workspace_receipt_for_version(
     receipt: &DiscoveryWorkspaceReceipt,
 ) -> Result<EventBuilder, DiscoveryWorkspaceSdkError> {
     validate_receipt(receipt)?;
-    if wire_version == DiscoveryWorkspaceWireVersion::V1
-        && receipt.operation == DiscoveryWorkspaceOperation::UpdateCampaignSources
-    {
+    if !operation_supported_by_wire_version(wire_version, receipt.operation) {
         return Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(
             "workspace receipt",
         ));
@@ -300,21 +305,82 @@ pub fn parse_discovery_workspace_receipt(
     })
 }
 
-fn is_v1_request(request: &DiscoveryWorkspaceRequest) -> bool {
+fn request_supported_by_wire_version(
+    wire_version: DiscoveryWorkspaceWireVersion,
+    request: &DiscoveryWorkspaceRequest,
+) -> bool {
+    if wire_version == DiscoveryWorkspaceWireVersion::V3 {
+        return !matches!(
+            request.payload,
+            buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
+                ..
+            }
+        );
+    }
     match &request.payload {
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::CreateCampaign {
             campaign,
-        } => campaign.source_config.is_default(),
+            budget_approval,
+        } => {
+            if budget_approval.is_some() {
+                return false;
+            }
+            match campaign.as_ref() {
+            buzz_core::discovery_workspace::DiscoveryCampaignCreateInput::Current(_) => true,
+            buzz_core::discovery_workspace::DiscoveryCampaignCreateInput::Legacy(campaign) => {
+                wire_version == DiscoveryWorkspaceWireVersion::V2
+                    || campaign.source_config.is_default()
+            }
+            }
+        }
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
             ..
+        }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeadCounts
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetLead { .. }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateLead { .. } => {
+            wire_version == DiscoveryWorkspaceWireVersion::V2
+        }
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ApproveCampaignBudget {
+            ..
+        }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::PauseCampaignBudget {
+            ..
+        }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::RevokeCampaignBudget {
+            ..
+        }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetCampaignBudget {
+            ..
         } => false,
-        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeadCounts => false,
-        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetLead { .. }
-        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateLead { .. } => false,
         buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::Access
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetCampaign { .. }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListCampaigns { .. }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeads { .. } => true,
+    }
+}
+
+fn operation_supported_by_wire_version(
+    wire_version: DiscoveryWorkspaceWireVersion,
+    operation: DiscoveryWorkspaceOperation,
+) -> bool {
+    match wire_version {
+        DiscoveryWorkspaceWireVersion::V3 => true,
+        DiscoveryWorkspaceWireVersion::V2 => !matches!(
+            operation,
+            DiscoveryWorkspaceOperation::ApproveCampaignBudget
+                | DiscoveryWorkspaceOperation::PauseCampaignBudget
+                | DiscoveryWorkspaceOperation::RevokeCampaignBudget
+                | DiscoveryWorkspaceOperation::GetCampaignBudget
+        ),
+        DiscoveryWorkspaceWireVersion::V1 => matches!(
+            operation,
+            DiscoveryWorkspaceOperation::Access
+                | DiscoveryWorkspaceOperation::CreateCampaign
+                | DiscoveryWorkspaceOperation::GetCampaign
+                | DiscoveryWorkspaceOperation::ListCampaigns
+                | DiscoveryWorkspaceOperation::ListLeads
+        ),
     }
 }
 
@@ -323,8 +389,24 @@ fn receipt_for_wire_version(
     receipt: &DiscoveryWorkspaceReceipt,
 ) -> DiscoveryWorkspaceReceipt {
     let mut compatible = receipt.clone();
-    if wire_version == DiscoveryWorkspaceWireVersion::V1 {
-        match &mut compatible.result {
+    match wire_version {
+        DiscoveryWorkspaceWireVersion::V3 => {}
+        DiscoveryWorkspaceWireVersion::V2 => match &mut compatible.result {
+            DiscoveryWorkspaceResult::Campaign { campaign } => {
+                make_campaign_v2_compatible(campaign)
+            }
+            DiscoveryWorkspaceResult::Campaigns { page } => {
+                for campaign in &mut page.campaigns {
+                    make_campaign_v2_compatible(campaign);
+                }
+            }
+            DiscoveryWorkspaceResult::Access { .. }
+            | DiscoveryWorkspaceResult::Budget { .. }
+            | DiscoveryWorkspaceResult::Leads { .. }
+            | DiscoveryWorkspaceResult::LeadCounts { .. }
+            | DiscoveryWorkspaceResult::Lead { .. } => {}
+        },
+        DiscoveryWorkspaceWireVersion::V1 => match &mut compatible.result {
             DiscoveryWorkspaceResult::Campaign { campaign } => {
                 make_campaign_v1_compatible(campaign)
             }
@@ -338,10 +420,11 @@ fn receipt_for_wire_version(
                     lead.provider = buzz_core::discovery::DiscoveryProvider::Outscraper;
                 }
             }
-            DiscoveryWorkspaceResult::Access { .. } => {}
-            DiscoveryWorkspaceResult::LeadCounts { .. } => {}
-            DiscoveryWorkspaceResult::Lead { .. } => {}
-        }
+            DiscoveryWorkspaceResult::Access { .. }
+            | DiscoveryWorkspaceResult::Budget { .. }
+            | DiscoveryWorkspaceResult::LeadCounts { .. }
+            | DiscoveryWorkspaceResult::Lead { .. } => {}
+        },
     }
     compatible
 }
@@ -351,6 +434,24 @@ fn make_campaign_v1_compatible(
 ) {
     campaign.source_config = buzz_core::discovery::DiscoverySourceConfig::default();
     campaign.latest_run_sources.clear();
+    campaign.budget = None;
+    if let Some(run) = &mut campaign.latest_run {
+        make_run_released_compatible(run);
+    }
+}
+
+fn make_campaign_v2_compatible(
+    campaign: &mut buzz_core::discovery_workspace::DiscoveryCampaignProjection,
+) {
+    campaign.budget = None;
+    if let Some(run) = &mut campaign.latest_run {
+        make_run_released_compatible(run);
+    }
+}
+
+fn make_run_released_compatible(run: &mut buzz_core::discovery::DiscoveryRunProjection) {
+    run.protocol_version = buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION;
+    run.billing = None;
 }
 
 fn parse_wire_version(
@@ -360,6 +461,7 @@ fn parse_wire_version(
     match value {
         "1" => Ok(DiscoveryWorkspaceWireVersion::V1),
         "2" => Ok(DiscoveryWorkspaceWireVersion::V2),
+        "3" => Ok(DiscoveryWorkspaceWireVersion::V3),
         _ => Err(DiscoveryWorkspaceSdkError::InvalidTag(tag)),
     }
 }
@@ -380,6 +482,12 @@ fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), Discovery
                 | DiscoveryWorkspaceOperation::UpdateCampaignSources
                 | DiscoveryWorkspaceOperation::GetCampaign,
             DiscoveryWorkspaceResult::Campaign { .. }
+        ) | (
+            DiscoveryWorkspaceOperation::ApproveCampaignBudget
+                | DiscoveryWorkspaceOperation::PauseCampaignBudget
+                | DiscoveryWorkspaceOperation::RevokeCampaignBudget
+                | DiscoveryWorkspaceOperation::GetCampaignBudget,
+            DiscoveryWorkspaceResult::Budget { .. }
         ) | (
             DiscoveryWorkspaceOperation::ListCampaigns,
             DiscoveryWorkspaceResult::Campaigns { .. }
@@ -407,6 +515,10 @@ fn operation_tag(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::Access => "access",
         DiscoveryWorkspaceOperation::CreateCampaign => "create_campaign",
         DiscoveryWorkspaceOperation::UpdateCampaignSources => "update_campaign_sources",
+        DiscoveryWorkspaceOperation::ApproveCampaignBudget => "approve_campaign_budget",
+        DiscoveryWorkspaceOperation::PauseCampaignBudget => "pause_campaign_budget",
+        DiscoveryWorkspaceOperation::RevokeCampaignBudget => "revoke_campaign_budget",
+        DiscoveryWorkspaceOperation::GetCampaignBudget => "get_campaign_budget",
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
@@ -421,6 +533,10 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkspaceOperation, Discovery
         "access" => Ok(DiscoveryWorkspaceOperation::Access),
         "create_campaign" => Ok(DiscoveryWorkspaceOperation::CreateCampaign),
         "update_campaign_sources" => Ok(DiscoveryWorkspaceOperation::UpdateCampaignSources),
+        "approve_campaign_budget" => Ok(DiscoveryWorkspaceOperation::ApproveCampaignBudget),
+        "pause_campaign_budget" => Ok(DiscoveryWorkspaceOperation::PauseCampaignBudget),
+        "revoke_campaign_budget" => Ok(DiscoveryWorkspaceOperation::RevokeCampaignBudget),
+        "get_campaign_budget" => Ok(DiscoveryWorkspaceOperation::GetCampaignBudget),
         "get_campaign" => Ok(DiscoveryWorkspaceOperation::GetCampaign),
         "list_campaigns" => Ok(DiscoveryWorkspaceOperation::ListCampaigns),
         "list_leads" => Ok(DiscoveryWorkspaceOperation::ListLeads),
@@ -525,8 +641,8 @@ fn required_tuple_tag<'a>(
 mod tests {
     use super::*;
     use buzz_core::discovery_workspace::{
-        DiscoveryCampaignInput, DiscoveryCampaignListRequest, DiscoveryCampaignProjection,
-        DiscoveryWorkspaceActionPayload,
+        DiscoveryCampaignCreateInput, DiscoveryCampaignInput, DiscoveryCampaignListRequest,
+        DiscoveryCampaignProjection, DiscoveryWorkspaceActionPayload,
     };
     use chrono::{TimeZone, Utc};
     use nostr::Keys;
@@ -537,21 +653,24 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: Box::new(DiscoveryCampaignInput {
-                    campaign_id: Uuid::new_v4(),
-                    name: "Sandton dentists".into(),
-                    industry_id: "healthcare".into(),
-                    industry_name: "Healthcare".into(),
-                    vertical_id: "dentists".into(),
-                    vertical_name: "Dentists".into(),
-                    query: "dentists".into(),
-                    location: "Sandton, Johannesburg, South Africa".into(),
-                    target: 3,
-                    description: None,
-                    language: "en".into(),
-                    region: Some("ZA".into()),
-                    source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
-                }),
+                campaign: Box::new(DiscoveryCampaignCreateInput::Legacy(
+                    DiscoveryCampaignInput {
+                        campaign_id: Uuid::new_v4(),
+                        name: "Sandton dentists".into(),
+                        industry_id: "healthcare".into(),
+                        industry_name: "Healthcare".into(),
+                        vertical_id: "dentists".into(),
+                        vertical_name: "Dentists".into(),
+                        query: "dentists".into(),
+                        location: "Sandton, Johannesburg, South Africa".into(),
+                        target: 3,
+                        description: None,
+                        language: "en".into(),
+                        region: Some("ZA".into()),
+                        source_config: buzz_core::discovery::DiscoverySourceConfig::default(),
+                    },
+                )),
+                budget_approval: None,
             },
         }
     }
@@ -566,9 +685,20 @@ mod tests {
             .sign_with_keys(&actor)
             .expect("sign action");
         let parsed = parse_discovery_workspace_action(&event).expect("parse action");
-        assert_eq!(parsed.wire_version, DiscoveryWorkspaceWireVersion::V2);
+        assert_eq!(parsed.wire_version, DiscoveryWorkspaceWireVersion::V3);
         assert_eq!(parsed.relay_pubkey, relay.public_key());
-        assert_eq!(parsed.request, request);
+        let DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign: parsed_campaign,
+            ..
+        } = &parsed.request.payload
+        else {
+            panic!("parsed campaign fixture");
+        };
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign, .. } = &request.payload
+        else {
+            panic!("campaign fixture");
+        };
+        assert_eq!(parsed_campaign.normalized(), campaign.normalized());
         assert_eq!(event.tags.len(), 2);
     }
 
@@ -588,11 +718,24 @@ mod tests {
         assert!(!action.content.contains("source_config"));
         let parsed = parse_discovery_workspace_action(&action).expect("parse v1 action");
         assert_eq!(parsed.wire_version, DiscoveryWorkspaceWireVersion::V1);
-        assert_eq!(parsed.request, request);
-
-        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } = request.payload else {
+        let DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign: parsed_campaign,
+            ..
+        } = &parsed.request.payload
+        else {
+            panic!("parsed campaign fixture");
+        };
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign, .. } = &request.payload
+        else {
             panic!("campaign fixture");
         };
+        assert_eq!(parsed_campaign.normalized(), campaign.normalized());
+
+        let DiscoveryWorkspaceActionPayload::CreateCampaign { campaign, .. } = request.payload
+        else {
+            panic!("campaign fixture");
+        };
+        let campaign = campaign.normalized();
         let now = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
         let receipt = DiscoveryWorkspaceReceipt {
             operation: DiscoveryWorkspaceOperation::CreateCampaign,
@@ -616,6 +759,7 @@ mod tests {
                     lead_count: 0,
                     latest_run: None,
                     latest_run_sources: Vec::new(),
+                    budget: None,
                     created_at: now,
                     updated_at: now,
                 }),
@@ -659,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn source_update_round_trips_as_a_private_canonical_action() {
+    fn source_update_remains_readable_on_v2_but_cannot_be_built_on_v3() {
         let relay = Keys::generate();
         let actor = Keys::generate();
         let request = DiscoveryWorkspaceRequest {
@@ -676,10 +820,15 @@ mod tests {
                 },
             },
         };
-        let event = build_discovery_workspace_action(relay.public_key(), &request)
-            .expect("build update")
-            .sign_with_keys(&actor)
-            .expect("sign update");
+        assert!(build_discovery_workspace_action(relay.public_key(), &request).is_err());
+        let event = build_discovery_workspace_action_for_version(
+            DiscoveryWorkspaceWireVersion::V2,
+            relay.public_key(),
+            &request,
+        )
+        .expect("build released update")
+        .sign_with_keys(&actor)
+        .expect("sign update");
         let parsed = parse_discovery_workspace_action(&event).expect("parse update");
         assert_eq!(parsed.request, request);
         assert!(event.content.contains("update_campaign_sources"));
@@ -743,5 +892,51 @@ mod tests {
             .expect("sign update lead");
         let parsed = parse_discovery_workspace_action(&event).expect("parse update lead");
         assert_eq!(parsed.request, request);
+    }
+
+    #[test]
+    fn released_v2_receipt_preserves_multi_source_campaign_state() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let source_config = buzz_core::discovery::DiscoverySourceConfig {
+            mode: buzz_core::discovery::DiscoverySourceMode::Concurrent,
+            sources: vec![
+                buzz_core::discovery::DiscoverySource::BraveSearch,
+                buzz_core::discovery::DiscoverySource::ExaSearch,
+            ],
+        };
+        let receipt = DiscoveryWorkspaceReceipt {
+            operation: DiscoveryWorkspaceOperation::GetCampaign,
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            result: DiscoveryWorkspaceResult::Campaign {
+                campaign: Box::new(DiscoveryCampaignProjection {
+                    campaign_id: Uuid::new_v4(),
+                    name: "Sandton dentists".into(),
+                    industry_id: "healthcare".into(),
+                    industry_name: "Healthcare".into(),
+                    vertical_id: "dentists".into(),
+                    vertical_name: "Dentists".into(),
+                    query: "dentists".into(),
+                    location: "Sandton".into(),
+                    target: 3,
+                    description: None,
+                    language: "en".into(),
+                    region: Some("ZA".into()),
+                    source_config: source_config.clone(),
+                    lead_count: 0,
+                    latest_run: None,
+                    latest_run_sources: Vec::new(),
+                    budget: None,
+                    created_at: now,
+                    updated_at: now,
+                }),
+            },
+        };
+
+        let compatible = receipt_for_wire_version(DiscoveryWorkspaceWireVersion::V2, &receipt);
+        let DiscoveryWorkspaceResult::Campaign { campaign } = compatible.result else {
+            panic!("campaign receipt");
+        };
+        assert_eq!(campaign.source_config, source_config);
     }
 }

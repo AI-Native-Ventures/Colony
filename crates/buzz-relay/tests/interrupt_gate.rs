@@ -11,7 +11,7 @@ use buzz_core::CommunityId;
 use buzz_db::event::ThreadMetadataParams;
 use buzz_db::Db;
 use buzz_relay::handlers::ingest::{ingest_event, IngestAuth, IngestError};
-use buzz_relay::interrupt_gate::enforce_owner_contact;
+use buzz_relay::interrupt_gate::{agent_manager, enforce_owner_contact};
 use buzz_relay::state::AppState;
 use chrono::{DateTime, Utc};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
@@ -86,6 +86,11 @@ async fn community(pool: &PgPool) -> CommunityId {
         .await
         .expect("insert community");
     CommunityId::from_uuid(id)
+}
+
+/// The resolved tenant context every gate call in this suite reads through.
+fn tenant_for(community: CommunityId) -> TenantContext {
+    TenantContext::resolved(community, "test-host")
 }
 
 async fn channel(pool: &PgPool, community: CommunityId, name: &str) -> Uuid {
@@ -294,6 +299,8 @@ async fn employ(
                 // employee, so the column is unique and a shared constant
                 // makes the second insert a silent no-op.
                 hire_event: &agent.public_key().to_bytes(),
+                // Reporting lines are set per-test through `set_row_manager`.
+                manager: None,
             },
         )
         .await
@@ -1642,5 +1649,422 @@ async fn gift_wrap_from_an_untiered_sender_to_an_owner_is_still_accepted() {
         result.accepted(),
         "gift wrap must be accepted: {}",
         result.message()
+    );
+}
+
+// ─── Reporting lines (`agent_manager`, phase 2a) ─────────────────────────────
+
+/// Set the `manager` column on an employee row directly, the way the
+/// hire/update paths leave it: the authoritative relay-written record.
+async fn set_row_manager(db: &Db, community: CommunityId, agent: &Keys, manager: Option<&Keys>) {
+    let manager_bytes = manager.map(|keys| keys.public_key().to_bytes());
+    let updated = db
+        .update_employee(
+            community,
+            &agent.public_key().to_bytes(),
+            None,
+            Some(manager_bytes.as_ref().map(|bytes| bytes.as_slice())),
+            None,
+        )
+        .await
+        .expect("set employee manager");
+    assert!(updated.is_some(), "employee row must exist");
+}
+
+/// Publish a kind:30177 head for `agent` authored by `author` carrying a
+/// `manager` tag. The tag is the authoritative event-side reporting line;
+/// `created_at` lets a test pin which head NIP-33 latest-wins would pick.
+async fn set_head_manager_at(
+    db: &Db,
+    community: CommunityId,
+    author: &Keys,
+    agent: &Keys,
+    manager: &Keys,
+    created_at: nostr::Timestamp,
+) {
+    let event = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        r#"{"display_name":"Managed"}"#,
+    )
+    .tags(vec![
+        tag(&["d", &agent.public_key().to_hex()]),
+        tag(&["manager", &manager.public_key().to_hex()]),
+    ])
+    .custom_created_at(created_at)
+    .sign_with_keys(author)
+    .expect("sign managed-agent head with manager tag");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store managed-agent head");
+    assert!(inserted);
+}
+
+/// The realistic owner-authored head: `role_id` in the content (where the
+/// agent's tier comes from) plus the `manager` tag (where its reporting line
+/// lives), in one event.
+async fn set_role_and_head_manager(
+    db: &Db,
+    community: CommunityId,
+    author: &Keys,
+    agent: &Keys,
+    role_id: &str,
+    manager: &Keys,
+    created_at: nostr::Timestamp,
+) {
+    let event = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        format!(r#"{{"display_name":"Managed","role_id":"{role_id}"}}"#),
+    )
+    .tags(vec![
+        tag(&["d", &agent.public_key().to_hex()]),
+        tag(&["manager", &manager.public_key().to_hex()]),
+    ])
+    .custom_created_at(created_at)
+    .sign_with_keys(author)
+    .expect("sign managed-agent head with role and manager");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store managed-agent head");
+    assert!(inserted);
+}
+
+/// A head carrying TWO manager tags resolves to NO manager -- never to
+/// whichever copy came first. `KIND_MANAGED_AGENT` is client-writable, so a
+/// forged head with conflicting lines would otherwise let the relay enforce
+/// one reporting line while a client walking tags naively drew another.
+/// Duplicate-rejection matches `buzz_core::event_tags`' convention for every
+/// single-valued decision tag.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_head_with_two_manager_tags_resolves_to_no_manager() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    let agent = Keys::generate();
+    let leader_a = Keys::generate();
+    let leader_b = Keys::generate();
+    employ(&db, community, &owner, &leader_a, "eng-lead", "leader").await;
+    employ(&db, community, &owner, &leader_b, "ops-lead", "leader").await;
+    // The subject's tier comes from an owner-authored role head, so the only
+    // thing under test is which manager tag -- if any -- wins.
+    set_role(&db, community, &owner, &agent, "engineer-holder").await;
+    employ(
+        &db,
+        community,
+        &owner,
+        &Keys::generate(),
+        "engineer-holder",
+        "worker",
+    )
+    .await;
+
+    // One OWNER-authored head, two manager tags inside it.
+    let event = EventBuilder::new(
+        Kind::Custom(KIND_MANAGED_AGENT as u16),
+        r#"{"display_name":"Ambiguous"}"#,
+    )
+    .tags(vec![
+        tag(&["d", &agent.public_key().to_hex()]),
+        tag(&["manager", &leader_a.public_key().to_hex()]),
+        tag(&["manager", &leader_b.public_key().to_hex()]),
+    ])
+    .custom_created_at(nostr::Timestamp::now())
+    .sign_with_keys(&owner)
+    .expect("sign ambiguous head");
+    let (_, inserted) = db
+        .insert_event(community, &event, None)
+        .await
+        .expect("store ambiguous head");
+    assert!(inserted);
+
+    let state = state(db.clone(), &pool).await;
+    let resolved = agent_manager(&tenant_for(community), &state, &agent.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(
+        resolved, None,
+        "conflicting manager tags must resolve to no manager, not first-wins"
+    );
+}
+
+/// A manager exactly one rung up resolves; two rungs up and the same rung do
+/// not. `agent_manager` must enforce the ladder, not just read the column.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn manager_resolution_enforces_the_one_rung_rule() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    let worker = Keys::generate();
+    let leader = Keys::generate();
+    let other_leader = Keys::generate();
+    let executive = Keys::generate();
+    for (keys, role, rank) in [
+        (&worker, "engineer", "worker"),
+        (&leader, "eng-lead", "leader"),
+        (&other_leader, "ops-lead", "leader"),
+        (&executive, "chief-of-staff", "executive"),
+    ] {
+        employ(&db, community, &owner, keys, role, rank).await;
+    }
+
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community);
+
+    // One rung up: worker -> leader. Resolves.
+    set_row_manager(&db, community, &worker, Some(&leader)).await;
+    let resolved = agent_manager(&tenant, &state, &worker.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(
+        resolved.map(|key| key.to_hex()),
+        Some(leader.public_key().to_hex()),
+        "a worker's manager must resolve when it is one rung up"
+    );
+
+    // Two rungs up: worker -> executive. An invalid edge resolves to NO
+    // manager, never to a different agent.
+    set_row_manager(&db, community, &worker, Some(&executive)).await;
+    let resolved = agent_manager(&tenant, &state, &worker.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(resolved, None, "an edge that skips a rung must not resolve");
+
+    // Same rung: worker -> worker. Not a reporting line.
+    let peer_worker = Keys::generate();
+    employ(&db, community, &owner, &peer_worker, "sales", "worker").await;
+    set_row_manager(&db, community, &worker, Some(&peer_worker)).await;
+    let resolved = agent_manager(&tenant, &state, &worker.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(resolved, None, "a same-rung edge must not resolve");
+}
+
+/// THE SECURITY TEST. `KIND_MANAGED_AGENT` is client-writable: any member can
+/// publish a head about any pubkey. A self-published (or otherwise non-owner)
+/// head naming a manager must be IGNORED at read time, exactly like a
+/// self-published tier -- and an owner-authored head at the same `d` tag must
+/// be honoured even when an impostor head sits above it in latest-wins order.
+///
+/// Written first against a resolution path that trusted the newest head
+/// unconditionally, where it failed; see the plan this test comes from.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn only_an_owner_authored_head_may_name_a_managed_agents_manager() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    // The managed agent itself: no employees row, so the 30177 head walk is
+    // all there is. Its TIER comes from the owner-authored head's role_id,
+    // joined to whoever fills that role -- the shape the desktop actually
+    // publishes (`persona_events.rs`, seeded by `company/seed.rs`).
+    let agent = Keys::generate();
+    let impostor = Keys::generate();
+    let real_lead = Keys::generate();
+    let rogue_lead = Keys::generate();
+    let staff = Keys::generate();
+    employ(&db, community, &owner, &real_lead, "eng-lead", "leader").await;
+    // A different role from the real lead: one active employee per role is a
+    // schema guarantee, and this fixture wants both leads to exist.
+    employ(&db, community, &owner, &rogue_lead, "rogue-lead", "leader").await;
+    // Whoever fills "engineer" gives the owner-authored head below its tier.
+    employ(&db, community, &owner, &staff, "engineer", "worker").await;
+
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community);
+
+    // An impostor publishes the NEWEST head about `agent`, naming the ROGUE
+    // leader -- a genuinely leader-tier agent, so the forgery survives every
+    // tier check. Only authorship can distinguish it from the real thing.
+    let impostor_head_at = nostr::Timestamp::now();
+    set_head_manager_at(
+        &db,
+        community,
+        &impostor,
+        &agent,
+        &rogue_lead,
+        impostor_head_at,
+    )
+    .await;
+
+    let resolved = agent_manager(&tenant, &state, &agent.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(
+        resolved, None,
+        "with only an impostor head present, the agent must resolve to no manager"
+    );
+
+    // The legitimate head sits BELOW the impostor in latest-wins order and
+    // carries the agent's role plus the REAL reporting line.
+    set_role_and_head_manager(
+        &db,
+        community,
+        &owner,
+        &agent,
+        "engineer",
+        &real_lead,
+        nostr::Timestamp::from_secs(impostor_head_at.as_secs() - 10),
+    )
+    .await;
+
+    let resolved = agent_manager(&tenant, &state, &agent.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(
+        resolved.map(|key| key.to_hex()),
+        Some(real_lead.public_key().to_hex()),
+        "the owner-authored head underneath the impostor must decide the line"
+    );
+}
+
+/// Regression pin: a self-published `tier` field stays ignored. Already
+/// correct behaviour (`agent_tier` skips non-owner-authored heads); pinned so
+/// a later change to the head walk cannot quietly re-enable self-promotion.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_self_published_tier_is_ignored() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    let agent = Keys::generate();
+    let state = state(db.clone(), &pool).await;
+    let tenant = tenant_for(community);
+
+    // Only the agent's own head exists: it claims the top of the ladder and
+    // must resolve to NOTHING, because authorship is not authority.
+    set_tier_at(
+        &db,
+        community,
+        &agent,
+        &agent,
+        "executive",
+        nostr::Timestamp::now(),
+    )
+    .await;
+    let tier = buzz_relay::interrupt_gate::agent_tier(&tenant, &state, &agent.public_key())
+        .await
+        .expect("resolve tier");
+    assert_eq!(
+        tier, None,
+        "a self-published tier must not resolve to anything"
+    );
+
+    // The owner's own, OLDER head is the authority despite sitting below the
+    // impostor in latest-wins order.
+    set_tier_at(
+        &db,
+        community,
+        &owner,
+        &agent,
+        "leader",
+        nostr::Timestamp::from_secs(nostr::Timestamp::now().as_secs() - 10),
+    )
+    .await;
+    let tier = buzz_relay::interrupt_gate::agent_tier(&tenant, &state, &agent.public_key())
+        .await
+        .expect("resolve tier");
+    assert_eq!(
+        tier,
+        Some(buzz_core::interrupt::AgentTier::Leader),
+        "the owner-authored head underneath the impostor must be honoured"
+    );
+}
+
+/// An executive carrying a manager -- whatever wrote that corrupt-looking
+/// state -- resolves to no manager. There is no rank above an executive, so
+/// no edge out of one can be valid.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn an_executive_resolves_to_no_manager_even_when_one_is_recorded() {
+    let (db, pool) = setup().await;
+    let community = community(&pool).await;
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+
+    let chief = Keys::generate();
+    let leader = Keys::generate();
+    employ(&db, community, &owner, &leader, "eng-lead", "leader").await;
+    employ(
+        &db,
+        community,
+        &owner,
+        &chief,
+        "chief-of-staff",
+        "executive",
+    )
+    .await;
+    set_row_manager(&db, community, &chief, Some(&leader)).await;
+
+    let state = state(db.clone(), &pool).await;
+    let resolved = buzz_relay::interrupt_gate::agent_manager(
+        &tenant_for(community),
+        &state,
+        &chief.public_key(),
+    )
+    .await
+    .expect("resolve manager");
+    assert_eq!(resolved, None, "an executive has no manager");
+
+    // Same verdict on the head path.
+    set_head_manager_at(
+        &db,
+        community,
+        &owner,
+        &chief,
+        &leader,
+        nostr::Timestamp::now(),
+    )
+    .await;
+    let resolved = buzz_relay::interrupt_gate::agent_manager(
+        &tenant_for(community),
+        &state,
+        &chief.public_key(),
+    )
+    .await
+    .expect("resolve manager");
+    assert_eq!(resolved, None);
+}
+
+/// A manager recorded in ANOTHER community does not resolve here: reporting
+/// lines are community-scoped, and a pubkey with no resolvable place in this
+/// community cannot sit one rung up in it.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn a_manager_in_another_community_does_not_resolve() {
+    let (db, pool) = setup().await;
+    // Both communities are created before the `community` binding below
+    // shadows the fixture helper.
+    let here = community(&pool).await;
+    let elsewhere = community(&pool).await;
+    let community = here;
+    let _ = elsewhere;
+    let owner = Keys::generate();
+    add_owner(&pool, community, &owner.public_key().to_hex()).await;
+    add_owner(&pool, elsewhere, &owner.public_key().to_hex()).await;
+
+    let worker = Keys::generate();
+    let outsider_lead = Keys::generate();
+    employ(&db, elsewhere, &owner, &outsider_lead, "eng-lead", "leader").await;
+    employ(&db, community, &owner, &worker, "engineer", "worker").await;
+    set_row_manager(&db, community, &worker, Some(&outsider_lead)).await;
+
+    let state = state(db.clone(), &pool).await;
+    let resolved = agent_manager(&tenant_for(community), &state, &worker.public_key())
+        .await
+        .expect("resolve manager");
+    assert_eq!(
+        resolved, None,
+        "a cross-community manager must not resolve inside this community"
     );
 }

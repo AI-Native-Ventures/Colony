@@ -850,6 +850,120 @@ async fn stored_action(
     Ok((stored.event, envelope))
 }
 
+/// Verify exact, same-community Approval Block evidence submitted by an owned agent.
+pub(crate) async fn validate_discovery_budget_approval(
+    tenant: &TenantContext,
+    state: &AppState,
+    submitting_actor: &[u8; 32],
+    approval: &buzz_core::discovery_workspace::DiscoveryCampaignBudgetApproval,
+) -> Result<Option<[u8; 32]>, String> {
+    let Some(action_event_id) = approval.approval_action_event_id.as_deref() else {
+        return Ok(None);
+    };
+    let event_id = lowercase_event_id(action_event_id, "Discovery approval action event ID")?;
+    let (action_event, action) = stored_action(tenant, state, &event_id).await?;
+    validate_public_envelope(tenant, state, &action_event).await?;
+    if action.action_id != "approval.approve" {
+        return Err("Discovery budget evidence is not an Approval approval".into());
+    }
+    if action.processor_pubkey.as_slice() != submitting_actor {
+        return Err("Discovery budget approval is pinned to a different agent".into());
+    }
+    let payer = approval.payer_pubkey.to_bytes();
+    if action_event.pubkey.to_bytes() != payer {
+        return Err("Discovery budget approval signer is not the named payer".into());
+    }
+    let owned = state
+        .db
+        .is_agent_owner(tenant.community(), submitting_actor, &payer)
+        .await
+        .map_err(|error| format!("database error checking Discovery agent owner: {error}"))?;
+    if !owned {
+        return Err("Discovery budget approval was not submitted by the payer's agent".into());
+    }
+
+    let stored = state
+        .db
+        .get_event_by_id(tenant.community(), &action.instance_event_id)
+        .await
+        .map_err(|error| format!("database error loading Approval instance: {error}"))?
+        .ok_or_else(|| "Discovery Approval instance was not found".to_string())?;
+    if stored.event.pubkey.to_bytes() != *submitting_actor {
+        return Err("Discovery Approval instance was not created by the submitting agent".into());
+    }
+    let instance = match parse_public_envelope(&stored.event)? {
+        Some(ValidatedBlockEvent::Instance(instance)) => instance,
+        _ => return Err("Discovery approval target is not a valid Block instance".into()),
+    };
+    if instance.handle != "approval"
+        || instance.processor_pubkey.as_deref() != Some(submitting_actor.as_slice())
+        || instance.attention_pubkey.as_deref() != Some(payer.as_slice())
+    {
+        return Err("Discovery budget evidence is not the payer's Approval Block".into());
+    }
+    let manifest = stored_manifest(tenant, state, &instance.manifest_event_id).await?;
+    if manifest.handle != "approval"
+        || !manifest_is_trusted_active(tenant, state, &manifest, &instance.manifest_event_id)
+            .await?
+    {
+        return Err("Discovery budget evidence does not use the active Approval manifest".into());
+    }
+    let InstanceData::Inline(data) = instance.data else {
+        return Err("Discovery budget Approval data must be inline".into());
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ApprovalInstance {
+        action: String,
+        destination: String,
+        content: String,
+        expires_at: u64,
+        status: String,
+    }
+    let instance = serde_json::from_value::<ApprovalInstance>(data)
+        .map_err(|_| "Discovery budget Approval data is malformed".to_string())?;
+    if instance.status != "pending" {
+        return Err("Discovery budget Approval was not pending when presented".into());
+    }
+    let current = buzz_core::block::ApprovalProposal {
+        action: instance.action,
+        destination: instance.destination,
+        content: Value::String(instance.content),
+        expires_at: instance.expires_at,
+    };
+    let expected = approval
+        .approval_proposal()
+        .map_err(|error| error.to_string())?;
+    validate_discovery_budget_approval_values(
+        &current,
+        &expected,
+        &action.content,
+        u64::try_from(chrono::Utc::now().timestamp())
+            .map_err(|_| "current time is invalid".to_string())?,
+    )?;
+    Ok(Some(payer))
+}
+
+fn validate_discovery_budget_approval_values(
+    current: &buzz_core::block::ApprovalProposal,
+    expected: &buzz_core::block::ApprovalProposal,
+    action_content: &Value,
+    now: u64,
+) -> Result<(), String> {
+    if current != expected {
+        return Err("Discovery budget Approval does not match the exact Campaign budget".into());
+    }
+    if current.expires_at <= now {
+        return Err("Discovery budget Approval has expired".into());
+    }
+    let expected_hash = buzz_core::block::compute_approval_hash(current)
+        .map_err(|error| format!("Discovery approval hash failed: {error}"))?;
+    if action_content.get("approval_hash").and_then(Value::as_str) != Some(&expected_hash) {
+        return Err("Discovery budget Approval hash does not match".into());
+    }
+    Ok(())
+}
+
 async fn manifest_is_trusted_active(
     tenant: &TenantContext,
     state: &AppState,
@@ -1469,5 +1583,50 @@ mod tests {
         assert!(parse_public_envelope(&event)
             .expect_err("secret content must fail")
             .contains("secret-bearing"));
+    }
+
+    #[test]
+    fn discovery_budget_approval_values_reject_changes_expiry_and_wrong_hashes() {
+        let proposal = buzz_core::block::ApprovalProposal {
+            action: "Approve Colony Credits for Discovery Campaign".into(),
+            destination: "colony:discovery:campaign:fixture".into(),
+            content: serde_json::json!("{\"approved_nanousd\":\"50000000\"}"),
+            expires_at: 2_000,
+        };
+        let hash = buzz_core::block::compute_approval_hash(&proposal).expect("approval hash");
+        assert!(validate_discovery_budget_approval_values(
+            &proposal,
+            &proposal,
+            &serde_json::json!({"approval_hash": hash}),
+            1_999,
+        )
+        .is_ok());
+
+        let mut changed = proposal.clone();
+        changed.destination.push_str("-changed");
+        assert!(validate_discovery_budget_approval_values(
+            &changed,
+            &proposal,
+            &serde_json::json!({"approval_hash": "00".repeat(32)}),
+            1_999,
+        )
+        .expect_err("changed proposal must fail")
+        .contains("does not match"));
+        assert!(validate_discovery_budget_approval_values(
+            &proposal,
+            &proposal,
+            &serde_json::json!({"approval_hash": "00".repeat(32)}),
+            2_000,
+        )
+        .expect_err("expired proposal must fail")
+        .contains("expired"));
+        assert!(validate_discovery_budget_approval_values(
+            &proposal,
+            &proposal,
+            &serde_json::json!({"approval_hash": "00".repeat(32)}),
+            1_999,
+        )
+        .expect_err("wrong hash must fail")
+        .contains("hash"));
     }
 }

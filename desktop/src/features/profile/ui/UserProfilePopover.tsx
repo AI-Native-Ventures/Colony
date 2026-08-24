@@ -11,7 +11,9 @@ import {
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
 import { useAgentRank } from "@/features/agents/employeeHeads";
+import { useAgentReportingLine } from "@/features/agents/reportingLine";
 import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { ReportingLineText } from "@/features/agents/ui/ReportingLineText";
 import { useIsManagedAgent } from "@/features/agent-memory/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
@@ -161,6 +163,10 @@ export function UserProfilePopover({
   // employee head (personal agent) has none and shows no badge.
   const { activeCommunity } = useCommunities();
   const rank = useAgentRank(activeCommunity?.id ?? "", open ? pubkey : null);
+  const reportingLine = useAgentReportingLine(
+    activeCommunity?.id ?? "",
+    open && rank ? pubkey : null,
+  );
   const profile = profileQuery.data;
   const ownerPubkey = profile?.ownerPubkey ?? null;
   const ownerProfileQuery = useUsersBatchQuery(
@@ -429,6 +435,21 @@ export function UserProfilePopover({
                 <InfoBadge>ACP: {managedAgent.acpCommand}</InfoBadge>
               ) : null}
             </div>
+          ) : null}
+
+          {isBotProfile && rank ? (
+            <ReportingLineText
+              line={reportingLine}
+              onOpenManager={
+                canOpenProfilePanel
+                  ? (managerPubkey) => {
+                      setOpen(false);
+                      openProfilePanel?.(managerPubkey);
+                    }
+                  : null
+              }
+              testId={`user-profile-popover-reporting-${pubkey}`}
+            />
           ) : null}
 
           {activeTurns.length > 0 ? (

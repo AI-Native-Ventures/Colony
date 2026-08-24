@@ -11,6 +11,7 @@ import {
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
+import { pubkeyCandidateFromQuery } from "@/features/messages/lib/pubkeyRecipientCandidate";
 import {
   useFlattenedUserSearchResults,
   useInfiniteUserSearchQuery,
@@ -227,6 +228,22 @@ export function useNewMessageRecipients({
     userSearchResults,
   ]);
 
+  // A complete pasted key (hex or npub) is always messageable even when the
+  // directory has no profile for it: kind:41010 accepts any 32-byte pubkey.
+  // Appended after ranking so real directory rows keep their order and the
+  // raw-key row only surfaces when the key parses cleanly.
+  const searchResultsWithPubkeyCandidate = React.useMemo(() => {
+    const candidate = pubkeyCandidateFromQuery(
+      searchResults,
+      deferredSearchQuery,
+      currentPubkey,
+    );
+    if (!candidate || isArchivedDiscovery(candidate.pubkey)) {
+      return searchResults;
+    }
+    return [...searchResults, candidate];
+  }, [currentPubkey, deferredSearchQuery, isArchivedDiscovery, searchResults]);
+
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
     managedAgentsQuery.isLoading ||
@@ -322,7 +339,7 @@ export function useNewMessageRecipients({
     searchError:
       userSearchQuery.error instanceof Error ? userSearchQuery.error : null,
     searchQuery,
-    searchResults,
+    searchResults: searchResultsWithPubkeyCandidate,
     selectUser,
     selectedUsers,
     setSearchQuery,

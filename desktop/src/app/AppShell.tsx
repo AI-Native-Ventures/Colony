@@ -148,6 +148,7 @@ export function AppShell() {
     goDiscovery,
     goHome,
     goNewMessage,
+    goPeople,
     goProjects,
     goPulse,
     goSettings,
@@ -159,8 +160,8 @@ export function AppShell() {
   const { canGoBack, canGoForward, goBack, goForward } =
     useBackForwardControls();
   const { selectedChannelId, selectedView } = React.useMemo(
-    () => deriveShellRoute(location.pathname),
-    [location.pathname],
+    () => deriveShellRoute(location.pathname, location.search),
+    [location.pathname, location.search],
   );
   const {
     removeCommunity: handleRemoveCommunity,
@@ -643,6 +644,7 @@ export function AppShell() {
     goDiscovery,
     goHome,
     goNewMessage: handleOpenNewDm,
+    goPeople,
     goProjects,
     goPulse,
     goSettings: handleOpenSettings,
@@ -860,6 +862,7 @@ export function AppShell() {
                           }}
                           onSelectActionCenter={() => void goActionCenter()}
                           onSelectAgents={() => void goAgents()}
+                          onSelectPeople={() => void goPeople()}
                           onSelectDiscovery={() =>
                             void goDiscovery({ surface: "leads" })
                           }

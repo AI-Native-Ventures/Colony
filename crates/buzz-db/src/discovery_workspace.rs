@@ -2,11 +2,14 @@
 
 use buzz_core::{
     discovery::{
-        DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoveryRunState, DiscoverySource,
-        DiscoverySourceConfig, DiscoverySourceMode, DiscoveryTerminalReason,
+        DiscoveryBusinessSearchSpec, DiscoveryNanoUsd, DiscoveryRunBillingProjection,
+        DiscoveryRunProjection, DiscoveryRunState, DiscoverySource, DiscoverySourceConfig,
+        DiscoverySourceMode, DiscoveryTerminalReason,
     },
     discovery_workspace::{
-        DiscoveryBusinessLeadProjection, DiscoveryCampaignInput, DiscoveryCampaignListRequest,
+        campaign_budget_fingerprint, DiscoveryBusinessLeadProjection,
+        DiscoveryCampaignBudgetApproval, DiscoveryCampaignBudgetProjection,
+        DiscoveryCampaignBudgetState, DiscoveryCampaignInputV2, DiscoveryCampaignListRequest,
         DiscoveryCampaignPage, DiscoveryCampaignProjection, DiscoveryLeadCountRow,
         DiscoveryLeadCounts, DiscoveryLeadDetail, DiscoveryLeadListRequest, DiscoveryLeadPage,
         DiscoveryLeadStatus, DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload,
@@ -15,7 +18,8 @@ use buzz_core::{
     party::{is_relationship_transition_allowed, RelationshipKind},
     CommunityId, StoredEvent,
 };
-use nostr::Event;
+use chrono::Utc;
+use nostr::{Event, PublicKey};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -34,9 +38,9 @@ macro_rules! lead_status_projection {
 }
 
 const LIST_LEADS_COUNT_SQL: &str = concat!(
-    "SELECT count(*) FROM discovery_business_observations o ",
-    "JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id ",
-    "JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id ",
+    "SELECT count(DISTINCT o.id) FROM discovery_business_observations o ",
+    "JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id ",
+    "JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id ",
     "LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id ",
     "WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) ",
     "AND ($3::text IS NULL OR c.industry_id=$3) ",
@@ -47,14 +51,15 @@ const LIST_LEADS_COUNT_SQL: &str = concat!(
 );
 
 const LIST_LEADS_PAGE_SQL: &str = concat!(
-    "SELECT o.id AS lead_id,c.id AS campaign_id,c.industry_id,c.vertical_id,o.provider,o.name,",
+    "SELECT * FROM (SELECT DISTINCT ON (o.id) o.id AS lead_id,c.id AS campaign_id,",
+    "c.industry_id,c.vertical_id,o.provider,o.name,",
     "o.website,o.phone,o.full_address,o.city,o.state,o.country,o.category,o.subtypes,",
     "o.rating_hundredths,o.reviews_count,o.source_url,o.image_url,o.first_observed_at,",
     lead_status_projection!(),
     " AS status ",
     "FROM discovery_business_observations o ",
-    "JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id ",
-    "JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id ",
+    "JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id ",
+    "JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id ",
     "LEFT JOIN discovery_lead_profiles p ON p.community_id=o.community_id AND p.lead_id=o.id ",
     "WHERE o.community_id=$1 AND ($2::uuid IS NULL OR c.id=$2) ",
     "AND ($3::text IS NULL OR c.industry_id=$3) ",
@@ -62,7 +67,8 @@ const LIST_LEADS_PAGE_SQL: &str = concat!(
     "AND ($5::text IS NULL OR ",
     lead_status_projection!(),
     "=$5) ",
-    "ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $6 OFFSET $7"
+    "ORDER BY o.id,cl.created_at,c.id) page ",
+    "ORDER BY first_observed_at DESC,lead_id DESC LIMIT $6 OFFSET $7"
 );
 
 /// Require a run search to exactly match its persisted immutable campaign.
@@ -205,6 +211,7 @@ impl Db {
         &self,
         community_id: CommunityId,
         actor_pubkey: &[u8; 32],
+        verified_approval_payer: Option<[u8; 32]>,
         request: &DiscoveryWorkspaceRequest,
         action_event: &Event,
         build_receipt: F,
@@ -264,9 +271,15 @@ impl Db {
             });
         }
 
-        let result =
-            apply_workspace_operation_tx(&mut tx, community_id, actor_pubkey, &request.payload)
-                .await?;
+        let result = apply_workspace_operation_tx(
+            &mut tx,
+            community_id,
+            actor_pubkey,
+            verified_approval_payer,
+            action_event.id.as_bytes(),
+            &request.payload,
+        )
+        .await?;
         let receipt_event = build_receipt(&result)?;
         let (stored_action, action_inserted) = crate::event::insert_event_with_thread_metadata_tx(
             &mut tx,
@@ -322,6 +335,8 @@ async fn apply_workspace_operation_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     actor_pubkey: &[u8; 32],
+    verified_approval_payer: Option<[u8; 32]>,
+    action_event_id: &[u8; 32],
     payload: &DiscoveryWorkspaceActionPayload,
 ) -> Result<DiscoveryWorkspaceResult> {
     match payload {
@@ -335,19 +350,74 @@ async fn apply_workspace_operation_tx(
             .await?;
             Ok(DiscoveryWorkspaceResult::Access { active })
         }
-        DiscoveryWorkspaceActionPayload::CreateCampaign { campaign } => {
-            insert_campaign_tx(tx, community_id, actor_pubkey, campaign).await?;
+        DiscoveryWorkspaceActionPayload::CreateCampaign {
+            campaign,
+            budget_approval,
+        } => {
+            let campaign = campaign.normalized();
+            insert_campaign_tx(tx, community_id, actor_pubkey, &campaign).await?;
+            if let Some(approval) = budget_approval {
+                approve_campaign_budget_tx(
+                    tx,
+                    community_id,
+                    actor_pubkey,
+                    None,
+                    action_event_id,
+                    approval,
+                )
+                .await?;
+            }
             Ok(DiscoveryWorkspaceResult::Campaign {
                 campaign: Box::new(load_campaign_tx(tx, community_id, campaign.campaign_id).await?),
             })
         }
-        DiscoveryWorkspaceActionPayload::UpdateCampaignSources {
-            campaign_id,
-            source_config,
-        } => {
-            update_campaign_sources_tx(tx, community_id, *campaign_id, source_config).await?;
-            Ok(DiscoveryWorkspaceResult::Campaign {
-                campaign: Box::new(load_campaign_tx(tx, community_id, *campaign_id).await?),
+        DiscoveryWorkspaceActionPayload::UpdateCampaignSources { .. } => Err(
+            DbError::AccessDenied("Colony manages Discovery provider sources".into()),
+        ),
+        DiscoveryWorkspaceActionPayload::ApproveCampaignBudget { approval } => {
+            approve_campaign_budget_tx(
+                tx,
+                community_id,
+                actor_pubkey,
+                verified_approval_payer,
+                action_event_id,
+                approval,
+            )
+            .await?;
+            Ok(DiscoveryWorkspaceResult::Budget {
+                budget: load_campaign_budget_tx(tx, community_id, approval.campaign_id, false)
+                    .await?,
+            })
+        }
+        DiscoveryWorkspaceActionPayload::PauseCampaignBudget { campaign_id } => {
+            set_campaign_budget_state_tx(
+                tx,
+                community_id,
+                actor_pubkey,
+                *campaign_id,
+                DiscoveryCampaignBudgetState::Paused,
+            )
+            .await?;
+            Ok(DiscoveryWorkspaceResult::Budget {
+                budget: load_campaign_budget_tx(tx, community_id, *campaign_id, false).await?,
+            })
+        }
+        DiscoveryWorkspaceActionPayload::RevokeCampaignBudget { campaign_id } => {
+            set_campaign_budget_state_tx(
+                tx,
+                community_id,
+                actor_pubkey,
+                *campaign_id,
+                DiscoveryCampaignBudgetState::Revoked,
+            )
+            .await?;
+            Ok(DiscoveryWorkspaceResult::Budget {
+                budget: load_campaign_budget_tx(tx, community_id, *campaign_id, false).await?,
+            })
+        }
+        DiscoveryWorkspaceActionPayload::GetCampaignBudget { campaign_id } => {
+            Ok(DiscoveryWorkspaceResult::Budget {
+                budget: load_campaign_budget_tx(tx, community_id, *campaign_id, false).await?,
             })
         }
         DiscoveryWorkspaceActionPayload::GetCampaign { campaign_id } => {
@@ -388,7 +458,7 @@ async fn insert_campaign_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
     actor_pubkey: &[u8; 32],
-    campaign: &DiscoveryCampaignInput,
+    campaign: &DiscoveryCampaignInputV2,
 ) -> Result<()> {
     campaign
         .validate()
@@ -417,16 +487,12 @@ async fn insert_campaign_tx(
         .bind(campaign.description.as_deref())
         .bind(&campaign.language)
         .bind(campaign.region.as_deref())
-        .bind(source_mode_text(campaign.source_config.mode))
-        .bind(
-            campaign
-                .source_config
-                .sources
-                .iter()
-                .copied()
-                .map(source_text)
-                .collect::<Vec<_>>(),
-        )
+        .bind(source_mode_text(DiscoverySourceMode::Waterfall))
+        .bind(vec![
+            source_text(DiscoverySource::GoogleMaps),
+            source_text(DiscoverySource::BraveSearch),
+            source_text(DiscoverySource::ExaSearch),
+        ])
         .fetch_optional(&mut **tx)
         .await?;
     if inserted.is_none() {
@@ -437,35 +503,344 @@ async fn insert_campaign_tx(
     Ok(())
 }
 
-async fn update_campaign_sources_tx(
+async fn approve_campaign_budget_tx(
     tx: &mut Transaction<'_, Postgres>,
     community_id: CommunityId,
-    campaign_id: Uuid,
-    source_config: &DiscoverySourceConfig,
+    actor_pubkey: &[u8; 32],
+    verified_approval_payer: Option<[u8; 32]>,
+    action_event_id: &[u8; 32],
+    approval: &DiscoveryCampaignBudgetApproval,
 ) -> Result<()> {
-    source_config
+    approval
         .validate()
         .map_err(|error| DbError::InvalidData(error.to_string()))?;
-    let source_keys = source_config
-        .sources
-        .iter()
-        .copied()
-        .map(source_text)
-        .collect::<Vec<_>>();
+    let payer = approval.payer_pubkey.to_bytes();
+    let approval_event_id = match (
+        approval.approval_action_event_id.as_deref(),
+        approval.approval_expires_at,
+        verified_approval_payer,
+    ) {
+        (None, None, None) if payer == *actor_pubkey => *action_event_id,
+        (Some(event_id), Some(expires_at), Some(verified))
+            if verified == payer && expires_at > Utc::now() =>
+        {
+            let decoded = hex::decode(event_id).map_err(|_| {
+                DbError::InvalidData("Campaign budget approval event ID is invalid".into())
+            })?;
+            decoded.try_into().map_err(|_| {
+                DbError::InvalidData("Campaign budget approval event ID is invalid".into())
+            })?
+        }
+        _ => {
+            return Err(DbError::AccessDenied(
+                "Campaign budget approval authority is invalid".into(),
+            ))
+        }
+    };
+    let payer_is_human: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM users WHERE community_id=$1 AND pubkey=$2 \
+         AND agent_owner_pubkey IS NULL)",
+    )
+    .bind(community_id.as_uuid())
+    .bind(payer.as_slice())
+    .fetch_one(&mut **tx)
+    .await?;
+    if !payer_is_human {
+        return Err(DbError::AccessDenied(
+            "Agents cannot approve Campaign spending".into(),
+        ));
+    }
+    if actor_pubkey != &payer {
+        let actor_is_owned_agent: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE community_id=$1 AND pubkey=$2 \
+             AND agent_owner_pubkey=$3)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(actor_pubkey.as_slice())
+        .bind(payer.as_slice())
+        .fetch_one(&mut **tx)
+        .await?;
+        if !actor_is_owned_agent {
+            return Err(DbError::AccessDenied(
+                "Campaign budget evidence requires the payer's owned agent".into(),
+            ));
+        }
+    }
+
+    sqlx::query("INSERT INTO accounts (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING")
+        .bind(payer.as_slice())
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("SELECT balance FROM accounts WHERE pubkey=$1 FOR UPDATE")
+        .bind(payer.as_slice())
+        .fetch_one(&mut **tx)
+        .await?;
+
+    let row = sqlx::query(
+        "SELECT id,name,industry_id,industry_name,vertical_id,vertical_name,query,location,target,\
+         description,language,region,budget_payer_pubkey,budget_approved_nanousd,\
+         budget_spent_nanousd,budget_reserved_nanousd,budget_state,budget_fingerprint,\
+         budget_approval_event_id,price_per_retained_lead_nanousd FROM discovery_campaigns \
+         WHERE community_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(community_id.as_uuid())
+    .bind(approval.campaign_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| DbError::NotFound("Discovery campaign".into()))?;
+    let target: i16 = row.try_get("target")?;
+    let campaign = DiscoveryCampaignInputV2 {
+        campaign_id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        industry_id: row.try_get("industry_id")?,
+        industry_name: row.try_get("industry_name")?,
+        vertical_id: row.try_get("vertical_id")?,
+        vertical_name: row.try_get("vertical_name")?,
+        query: row.try_get("query")?,
+        location: row.try_get("location")?,
+        target: u16::try_from(target)
+            .map_err(|_| DbError::InvalidData("Discovery Campaign target is invalid".into()))?,
+        description: row.try_get("description")?,
+        language: row.try_get("language")?,
+        region: row.try_get("region")?,
+    };
+    let expected_fingerprint = campaign_budget_fingerprint(
+        &campaign,
+        &approval.payer_pubkey,
+        approval.price_per_retained_lead_nanousd,
+    )
+    .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    let supplied_fingerprint = hex::decode(&approval.campaign_fingerprint)
+        .map_err(|_| DbError::InvalidData("Campaign budget fingerprint is invalid".into()))?;
+    if supplied_fingerprint != expected_fingerprint {
+        return Err(DbError::AccessDenied(
+            "Campaign budget approval does not match the current Campaign".into(),
+        ));
+    }
+    let campaign_maximum = approval
+        .price_per_retained_lead_nanousd
+        .checked_mul(campaign.target)
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    if approval.approved_nanousd != campaign_maximum {
+        return Err(DbError::InvalidData(
+            "Campaign approval must cover its exact Lead target".into(),
+        ));
+    }
+
+    let claimed = sqlx::query_scalar::<_, Vec<u8>>(
+        "INSERT INTO discovery_budget_approval_claims \
+         (approval_event_id,community_id,campaign_id,payer_pubkey) \
+         VALUES ($1,$2,$3,$4) ON CONFLICT (approval_event_id) DO NOTHING \
+         RETURNING approval_event_id",
+    )
+    .bind(approval_event_id.as_slice())
+    .bind(community_id.as_uuid())
+    .bind(approval.campaign_id)
+    .bind(payer.as_slice())
+    .fetch_optional(&mut **tx)
+    .await?;
+    if claimed.is_none() {
+        return Err(DbError::AccessDenied(
+            "Campaign budget approval evidence has already been used".into(),
+        ));
+    }
+
+    let state: String = row.try_get("budget_state")?;
+    if state == "revoked" {
+        return Err(DbError::AccessDenied(
+            "A revoked Campaign budget cannot be reactivated".into(),
+        ));
+    }
+    let existing_approval_event_id: Option<Vec<u8>> = row.try_get("budget_approval_event_id")?;
+    if existing_approval_event_id.as_deref() == Some(approval_event_id.as_slice()) {
+        return Err(DbError::AccessDenied(
+            "Campaign budget approval evidence has already been used".into(),
+        ));
+    }
+    let spent: i64 = row.try_get("budget_spent_nanousd")?;
+    let reserved: i64 = row.try_get("budget_reserved_nanousd")?;
+    let minimum = spent
+        .checked_add(reserved)
+        .ok_or_else(|| DbError::InvalidData("Campaign budget amount overflow".into()))?;
+    if approval.approved_nanousd.get() < minimum {
+        return Err(DbError::InvalidData(
+            "Campaign budget cannot be reduced below spent and reserved Credits".into(),
+        ));
+    }
+    let existing_payer: Option<Vec<u8>> = row.try_get("budget_payer_pubkey")?;
+    let existing_fingerprint: Option<Vec<u8>> = row.try_get("budget_fingerprint")?;
+    let existing_price: Option<i64> = row.try_get("price_per_retained_lead_nanousd")?;
+    if existing_payer
+        .as_deref()
+        .is_some_and(|existing| existing != payer.as_slice())
+        || existing_fingerprint
+            .as_deref()
+            .is_some_and(|fingerprint| fingerprint != expected_fingerprint)
+        || existing_price
+            .is_some_and(|price| price != approval.price_per_retained_lead_nanousd.get())
+    {
+        return Err(DbError::AccessDenied(
+            "Campaign budget identity or price cannot change".into(),
+        ));
+    }
+    let state = if approval.approved_nanousd.get() == minimum {
+        "exhausted"
+    } else {
+        "active"
+    };
+    sqlx::query(
+        "UPDATE discovery_campaigns SET budget_payer_pubkey=$3,budget_approved_nanousd=$4,\
+         budget_state=$5,budget_approval_event_id=$6,budget_approved_at=now(),\
+         budget_fingerprint=$7,price_per_retained_lead_nanousd=$8,\
+         source_mode='waterfall',\
+         source_keys=ARRAY['google_maps','brave_search','exa_search']::TEXT[],updated_at=now() \
+         WHERE community_id=$1 AND id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(approval.campaign_id)
+    .bind(payer.as_slice())
+    .bind(approval.approved_nanousd.get())
+    .bind(state)
+    .bind(approval_event_id.as_slice())
+    .bind(expected_fingerprint.as_slice())
+    .bind(approval.price_per_retained_lead_nanousd.get())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn set_campaign_budget_state_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    actor_pubkey: &[u8; 32],
+    campaign_id: Uuid,
+    state: DiscoveryCampaignBudgetState,
+) -> Result<()> {
+    let state_text = match state {
+        DiscoveryCampaignBudgetState::Paused => "paused",
+        DiscoveryCampaignBudgetState::Revoked => "revoked",
+        _ => {
+            return Err(DbError::InvalidData(
+                "Unsupported Campaign budget state transition".into(),
+            ))
+        }
+    };
+    if state == DiscoveryCampaignBudgetState::Revoked {
+        let active_run: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM discovery_runs \
+             WHERE community_id=$1 AND campaign_id=$2 \
+               AND discovery_protocol_version=3 AND state IN ('queued','running'))",
+        )
+        .bind(community_id.as_uuid())
+        .bind(campaign_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if active_run {
+            return Err(DbError::AccessDenied(
+                "Cancel the active Discovery run before revoking its budget".into(),
+            ));
+        }
+    }
     let updated = sqlx::query(
-        "UPDATE discovery_campaigns SET source_mode=$3,source_keys=$4,updated_at=now() \
-         WHERE community_id=$1 AND id=$2 RETURNING id",
+        "UPDATE discovery_campaigns SET budget_state=$4,updated_at=now() \
+         WHERE community_id=$1 AND id=$2 AND budget_payer_pubkey=$3 \
+         AND budget_state IN ('active','paused','exhausted')",
     )
     .bind(community_id.as_uuid())
     .bind(campaign_id)
-    .bind(source_mode_text(source_config.mode))
-    .bind(source_keys)
-    .fetch_optional(&mut **tx)
+    .bind(actor_pubkey.as_slice())
+    .bind(state_text)
+    .execute(&mut **tx)
     .await?;
-    if updated.is_none() {
-        return Err(DbError::NotFound("Discovery campaign".into()));
+    if updated.rows_affected() != 1 {
+        return Err(DbError::AccessDenied(
+            "Only the human Campaign payer can change this budget".into(),
+        ));
     }
     Ok(())
+}
+
+pub(crate) async fn load_campaign_budget_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    campaign_id: Uuid,
+    for_update: bool,
+) -> Result<DiscoveryCampaignBudgetProjection> {
+    let row = if for_update {
+        sqlx::query(
+            "SELECT budget_state,budget_payer_pubkey,budget_approved_nanousd,\
+             budget_spent_nanousd,budget_reserved_nanousd,price_per_retained_lead_nanousd,\
+             budget_fingerprint,budget_approval_event_id,budget_approved_at \
+             FROM discovery_campaigns WHERE community_id=$1 AND id=$2 FOR UPDATE",
+        )
+        .bind(community_id.as_uuid())
+        .bind(campaign_id)
+        .fetch_optional(&mut **tx)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT budget_state,budget_payer_pubkey,budget_approved_nanousd,\
+             budget_spent_nanousd,budget_reserved_nanousd,price_per_retained_lead_nanousd,\
+             budget_fingerprint,budget_approval_event_id,budget_approved_at \
+             FROM discovery_campaigns WHERE community_id=$1 AND id=$2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(campaign_id)
+        .fetch_optional(&mut **tx)
+        .await?
+    }
+    .ok_or_else(|| DbError::NotFound("Discovery campaign".into()))?;
+    campaign_budget_from_row(&row)
+}
+
+fn campaign_budget_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<DiscoveryCampaignBudgetProjection> {
+    let payer: Option<Vec<u8>> = row.try_get("budget_payer_pubkey")?;
+    let payer_pubkey = payer
+        .map(|value| {
+            PublicKey::from_slice(&value)
+                .map_err(|_| DbError::InvalidData("Campaign budget payer is invalid".into()))
+        })
+        .transpose()?;
+    let state = match row.try_get::<String, _>("budget_state")?.as_str() {
+        "unapproved" => DiscoveryCampaignBudgetState::Unapproved,
+        "active" => DiscoveryCampaignBudgetState::Active,
+        "paused" => DiscoveryCampaignBudgetState::Paused,
+        "revoked" => DiscoveryCampaignBudgetState::Revoked,
+        "exhausted" => DiscoveryCampaignBudgetState::Exhausted,
+        _ => {
+            return Err(DbError::InvalidData(
+                "Campaign budget state is invalid".into(),
+            ))
+        }
+    };
+    let projection = DiscoveryCampaignBudgetProjection {
+        state,
+        payer_pubkey,
+        approved_nanousd: DiscoveryNanoUsd::new(row.try_get("budget_approved_nanousd")?)
+            .map_err(|error| DbError::InvalidData(error.to_string()))?,
+        spent_nanousd: DiscoveryNanoUsd::new(row.try_get("budget_spent_nanousd")?)
+            .map_err(|error| DbError::InvalidData(error.to_string()))?,
+        reserved_nanousd: DiscoveryNanoUsd::new(row.try_get("budget_reserved_nanousd")?)
+            .map_err(|error| DbError::InvalidData(error.to_string()))?,
+        price_per_retained_lead_nanousd: row
+            .try_get::<Option<i64>, _>("price_per_retained_lead_nanousd")?
+            .map(DiscoveryNanoUsd::new)
+            .transpose()
+            .map_err(|error| DbError::InvalidData(error.to_string()))?,
+        campaign_fingerprint: row
+            .try_get::<Option<Vec<u8>>, _>("budget_fingerprint")?
+            .map(hex::encode),
+        approval_action_event_id: row
+            .try_get::<Option<Vec<u8>>, _>("budget_approval_event_id")?
+            .map(hex::encode),
+        approved_at: row.try_get("budget_approved_at")?,
+    };
+    projection
+        .validate()
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    Ok(projection)
 }
 
 async fn load_campaign_tx(
@@ -568,10 +943,10 @@ async fn list_lead_counts_tx(
     .fetch_one(&mut **tx)
     .await?;
     let industry_rows = sqlx::query(
-        "SELECT c.industry_id, count(*) AS lead_count \
+        "SELECT c.industry_id, count(DISTINCT cl.lead_id) AS lead_count \
          FROM discovery_business_observations o \
-         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
-         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id \
+         JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id \
          WHERE o.community_id=$1 \
          GROUP BY c.industry_id \
          ORDER BY lead_count DESC, c.industry_id ASC",
@@ -590,10 +965,10 @@ async fn list_lead_counts_tx(
         })
         .collect::<Result<Vec<_>>>()?;
     let vertical_rows = sqlx::query(
-        "SELECT c.industry_id, c.vertical_id, count(*) AS lead_count \
+        "SELECT c.industry_id, c.vertical_id, count(DISTINCT cl.lead_id) AS lead_count \
          FROM discovery_business_observations o \
-         JOIN discovery_runs r ON r.community_id=o.community_id AND r.id=o.first_run_id \
-         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id \
+         JOIN discovery_campaigns c ON c.community_id=cl.community_id AND c.id=cl.campaign_id \
          WHERE o.community_id=$1 \
          GROUP BY c.industry_id, c.vertical_id \
          ORDER BY lead_count DESC, c.vertical_id ASC",
@@ -622,9 +997,18 @@ const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
     "SELECT ",
     "c.id AS campaign_record_id,c.name,c.industry_id,c.industry_name,c.vertical_id,c.vertical_name,\
      c.query,c.location,c.target,c.description,c.language,c.region,c.source_mode,c.source_keys,c.created_at,\
+     c.budget_state,c.budget_payer_pubkey,c.budget_approved_nanousd,c.budget_spent_nanousd,\
+     c.budget_reserved_nanousd,c.price_per_retained_lead_nanousd,c.budget_fingerprint,\
+     c.budget_approval_event_id,c.budget_approved_at,\
      GREATEST(c.updated_at,COALESCE(r.updated_at,c.updated_at)) AS campaign_updated_at,\
      COALESCE(l.lead_count,0) AS lead_count,r.id AS run_id,r.campaign_id AS run_campaign_id,\
      r.state AS run_state,r.completed_steps,r.total_steps,r.cancel_requested,r.terminal_reason,\
+     r.discovery_protocol_version AS run_protocol_version,r.payer_pubkey AS run_payer_pubkey,\
+     r.price_per_retained_lead_nanousd AS run_price_nanousd,\
+     r.billable_lead_limit AS run_billable_lead_limit,r.reserved_nanousd AS run_reserved_nanousd,\
+     r.settled_nanousd AS run_settled_nanousd,r.released_nanousd AS run_released_nanousd,\
+     r.billed_retained_lead_count AS run_billed_retained_lead_count,\
+     r.settlement_ref AS run_settlement_ref,r.settled_at AS run_settled_at,\
      r.created_at AS run_created_at,r.updated_at AS run_updated_at,\
      COALESCE((SELECT jsonb_agg(jsonb_build_object(\
        'source',rs.source_key,'provider',rs.provider,'position',rs.position,\
@@ -637,12 +1021,13 @@ const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
        AND rs.run_id=r.id),'[]'::jsonb) AS run_source_states ",
     "FROM discovery_campaigns c ",
     "LEFT JOIN LATERAL (SELECT id,campaign_id,state,completed_steps,total_steps,cancel_requested,\
-      terminal_reason,created_at,updated_at FROM discovery_runs \
+      terminal_reason,discovery_protocol_version,payer_pubkey,price_per_retained_lead_nanousd,\
+      billable_lead_limit,reserved_nanousd,settled_nanousd,released_nanousd,\
+      billed_retained_lead_count,settlement_ref,settled_at,created_at,updated_at FROM discovery_runs \
       WHERE community_id=c.community_id AND campaign_id=c.id \
       ORDER BY created_at DESC,id DESC LIMIT 1) r ON TRUE ",
-    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_business_observations o \
-      JOIN discovery_runs lr ON lr.community_id=o.community_id AND lr.id=o.first_run_id \
-      WHERE o.community_id=c.community_id AND lr.campaign_id=c.id) l ON TRUE ",
+    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_campaign_leads cl \
+      WHERE cl.community_id=c.community_id AND cl.campaign_id=c.id) l ON TRUE ",
     "WHERE c.community_id=$1 AND c.id=$2"
 );
 
@@ -650,9 +1035,18 @@ const CAMPAIGN_PROJECTION_SELECT_FILTERED: &str = concat!(
     "SELECT ",
     "c.id AS campaign_record_id,c.name,c.industry_id,c.industry_name,c.vertical_id,c.vertical_name,\
      c.query,c.location,c.target,c.description,c.language,c.region,c.source_mode,c.source_keys,c.created_at,\
+     c.budget_state,c.budget_payer_pubkey,c.budget_approved_nanousd,c.budget_spent_nanousd,\
+     c.budget_reserved_nanousd,c.price_per_retained_lead_nanousd,c.budget_fingerprint,\
+     c.budget_approval_event_id,c.budget_approved_at,\
      GREATEST(c.updated_at,COALESCE(r.updated_at,c.updated_at)) AS campaign_updated_at,\
      COALESCE(l.lead_count,0) AS lead_count,r.id AS run_id,r.campaign_id AS run_campaign_id,\
      r.state AS run_state,r.completed_steps,r.total_steps,r.cancel_requested,r.terminal_reason,\
+     r.discovery_protocol_version AS run_protocol_version,r.payer_pubkey AS run_payer_pubkey,\
+     r.price_per_retained_lead_nanousd AS run_price_nanousd,\
+     r.billable_lead_limit AS run_billable_lead_limit,r.reserved_nanousd AS run_reserved_nanousd,\
+     r.settled_nanousd AS run_settled_nanousd,r.released_nanousd AS run_released_nanousd,\
+     r.billed_retained_lead_count AS run_billed_retained_lead_count,\
+     r.settlement_ref AS run_settlement_ref,r.settled_at AS run_settled_at,\
      r.created_at AS run_created_at,r.updated_at AS run_updated_at,\
      COALESCE((SELECT jsonb_agg(jsonb_build_object(\
        'source',rs.source_key,'provider',rs.provider,'position',rs.position,\
@@ -665,12 +1059,13 @@ const CAMPAIGN_PROJECTION_SELECT_FILTERED: &str = concat!(
        AND rs.run_id=r.id),'[]'::jsonb) AS run_source_states ",
     "FROM discovery_campaigns c ",
     "LEFT JOIN LATERAL (SELECT id,campaign_id,state,completed_steps,total_steps,cancel_requested,\
-      terminal_reason,created_at,updated_at FROM discovery_runs \
+      terminal_reason,discovery_protocol_version,payer_pubkey,price_per_retained_lead_nanousd,\
+      billable_lead_limit,reserved_nanousd,settled_nanousd,released_nanousd,\
+      billed_retained_lead_count,settlement_ref,settled_at,created_at,updated_at FROM discovery_runs \
       WHERE community_id=c.community_id AND campaign_id=c.id \
       ORDER BY created_at DESC,id DESC LIMIT 1) r ON TRUE ",
-    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_business_observations o \
-      JOIN discovery_runs lr ON lr.community_id=o.community_id AND lr.id=o.first_run_id \
-      WHERE o.community_id=c.community_id AND lr.campaign_id=c.id) l ON TRUE ",
+    "LEFT JOIN LATERAL (SELECT count(*) AS lead_count FROM discovery_campaign_leads cl \
+      WHERE cl.community_id=c.community_id AND cl.campaign_id=c.id) l ON TRUE ",
     "WHERE c.community_id=$1 AND ($2::text IS NULL OR c.industry_id=$2) \
       AND ($3::text IS NULL OR c.vertical_id=$3) \
       ORDER BY c.created_at DESC,c.id DESC LIMIT $4 OFFSET $5"
@@ -702,6 +1097,7 @@ fn campaign_from_row(row: &sqlx::postgres::PgRow) -> Result<DiscoveryCampaignPro
         latest_run,
         latest_run_sources: serde_json::from_value(row.try_get("run_source_states")?)
             .map_err(|_| DbError::InvalidData("Discovery source states are invalid".into()))?,
+        budget: Some(campaign_budget_from_row(row)?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("campaign_updated_at")?,
     })
@@ -713,9 +1109,50 @@ fn run_projection_from_row(
 ) -> Result<DiscoveryRunProjection> {
     let completed: i32 = row.try_get("completed_steps")?;
     let total: i32 = row.try_get("total_steps")?;
+    let protocol_version: i16 = row.try_get("run_protocol_version")?;
+    let billing = if protocol_version == 3 {
+        let payer: Vec<u8> = row.try_get("run_payer_pubkey")?;
+        Some(DiscoveryRunBillingProjection {
+            payer_pubkey: PublicKey::from_slice(&payer)
+                .map_err(|_| DbError::InvalidData("Discovery run payer is invalid".into()))?,
+            price_per_retained_lead_nanousd: DiscoveryNanoUsd::new(
+                row.try_get("run_price_nanousd")?,
+            )
+            .map_err(|error| DbError::InvalidData(error.to_string()))?,
+            billable_lead_limit: u16::try_from(row.try_get::<i16, _>("run_billable_lead_limit")?)
+                .map_err(|_| {
+                DbError::InvalidData("Discovery billable Lead limit is invalid".into())
+            })?,
+            reserved_nanousd: DiscoveryNanoUsd::new(row.try_get("run_reserved_nanousd")?)
+                .map_err(|error| DbError::InvalidData(error.to_string()))?,
+            settled_nanousd: row
+                .try_get::<Option<i64>, _>("run_settled_nanousd")?
+                .map(DiscoveryNanoUsd::new)
+                .transpose()
+                .map_err(|error| DbError::InvalidData(error.to_string()))?,
+            released_nanousd: row
+                .try_get::<Option<i64>, _>("run_released_nanousd")?
+                .map(DiscoveryNanoUsd::new)
+                .transpose()
+                .map_err(|error| DbError::InvalidData(error.to_string()))?,
+            billed_retained_lead_count: row
+                .try_get::<Option<i16>, _>("run_billed_retained_lead_count")?
+                .map(u16::try_from)
+                .transpose()
+                .map_err(|_| {
+                    DbError::InvalidData("Discovery billed Lead count is invalid".into())
+                })?,
+            settlement_ref: row.try_get("run_settlement_ref")?,
+            settled_at: row.try_get("run_settled_at")?,
+        })
+    } else {
+        None
+    };
     Ok(DiscoveryRunProjection {
         run_id,
         campaign_id: row.try_get("run_campaign_id")?,
+        protocol_version: u16::try_from(protocol_version)
+            .map_err(|_| DbError::InvalidData("Discovery run protocol is invalid".into()))?,
         state: parse_run_state(row.try_get("run_state")?)?,
         completed_steps: u32::try_from(completed)
             .map_err(|_| DbError::InvalidData("Discovery completed steps are invalid".into()))?,
@@ -723,6 +1160,7 @@ fn run_projection_from_row(
             .map_err(|_| DbError::InvalidData("Discovery total steps are invalid".into()))?,
         cancel_requested: row.try_get("cancel_requested")?,
         terminal_reason: parse_terminal_reason(row.try_get("terminal_reason")?)?,
+        billing,
         created_at: row.try_get("run_created_at")?,
         updated_at: row.try_get("run_updated_at")?,
     })
@@ -925,6 +1363,10 @@ fn operation_text(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::Access => "access",
         DiscoveryWorkspaceOperation::CreateCampaign => "create_campaign",
         DiscoveryWorkspaceOperation::UpdateCampaignSources => "update_campaign_sources",
+        DiscoveryWorkspaceOperation::ApproveCampaignBudget => "approve_campaign_budget",
+        DiscoveryWorkspaceOperation::PauseCampaignBudget => "pause_campaign_budget",
+        DiscoveryWorkspaceOperation::RevokeCampaignBudget => "revoke_campaign_budget",
+        DiscoveryWorkspaceOperation::GetCampaignBudget => "get_campaign_budget",
         DiscoveryWorkspaceOperation::GetCampaign => "get_campaign",
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
@@ -1014,7 +1456,30 @@ fn count_to_u32(value: i64, entity: &str) -> Result<u32> {
 #[cfg(test)]
 mod fingerprint_tests {
     use super::*;
-    use buzz_core::discovery_workspace::{DiscoveryCampaignInput, DiscoveryWorkspaceActionPayload};
+    use crate::{Db, DbConfig};
+    use buzz_core::discovery::DiscoveryNanoUsd;
+    use buzz_core::discovery_workspace::{
+        DiscoveryCampaignInput, DiscoveryCampaignInputV2, DiscoveryWorkspaceActionPayload,
+    };
+    use nostr::PublicKey;
+
+    static APPROVAL_CLAIM_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn clean_approval_replay_community(db: &Db, community: CommunityId) {
+        for table in crate::deletion::PURGE_SCOPED_TABLES {
+            let sql = format!("DELETE FROM {table} WHERE community_id=$1");
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(community.as_uuid())
+                .execute(&db.pool)
+                .await
+                .unwrap_or_else(|error| panic!("clean {table} approval replay fixture: {error}"));
+        }
+        sqlx::query("DELETE FROM communities WHERE id=$1")
+            .bind(community.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("clean approval replay community");
+    }
 
     #[test]
     fn default_source_campaign_keeps_the_released_workspace_fingerprint_shape() {
@@ -1022,21 +1487,26 @@ mod fingerprint_tests {
             request_id: Uuid::from_u128(1),
             idempotency_key: Uuid::from_u128(2),
             payload: DiscoveryWorkspaceActionPayload::CreateCampaign {
-                campaign: Box::new(DiscoveryCampaignInput {
-                    campaign_id: Uuid::from_u128(3),
-                    name: "Legacy dentists".into(),
-                    industry_id: "healthcare".into(),
-                    industry_name: "Healthcare".into(),
-                    vertical_id: "dentists".into(),
-                    vertical_name: "Dentists".into(),
-                    query: "dentists".into(),
-                    location: "Sandton, South Africa".into(),
-                    target: 100,
-                    description: None,
-                    language: "en".into(),
-                    region: Some("ZA".into()),
-                    source_config: DiscoverySourceConfig::default(),
-                }),
+                campaign: Box::new(
+                    buzz_core::discovery_workspace::DiscoveryCampaignCreateInput::Legacy(
+                        DiscoveryCampaignInput {
+                            campaign_id: Uuid::from_u128(3),
+                            name: "Legacy dentists".into(),
+                            industry_id: "healthcare".into(),
+                            industry_name: "Healthcare".into(),
+                            vertical_id: "dentists".into(),
+                            vertical_name: "Dentists".into(),
+                            query: "dentists".into(),
+                            location: "Sandton, South Africa".into(),
+                            target: 100,
+                            description: None,
+                            language: "en".into(),
+                            region: Some("ZA".into()),
+                            source_config: DiscoverySourceConfig::default(),
+                        },
+                    ),
+                ),
+                budget_approval: None,
             },
         };
         let encoded = serde_json::to_string(&request).expect("encode workspace request");
@@ -1045,5 +1515,153 @@ mod fingerprint_tests {
             workspace_request_fingerprint(&request).expect("fingerprint request"),
             <[u8; 32]>::from(Sha256::digest(encoded.as_bytes()))
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn approval_event_cannot_be_replayed_across_communities() {
+        let _guard = APPROVAL_CLAIM_TEST_LOCK.lock().await;
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_owned());
+        let db = Db::new(&DbConfig {
+            database_url,
+            max_connections: 2,
+            min_connections: 0,
+            ..DbConfig::default()
+        })
+        .await
+        .expect("connect approval replay database");
+        crate::migration::run_migrations(&db.pool)
+            .await
+            .expect("apply approval replay migrations");
+
+        let payer = [71_u8; 32];
+        sqlx::query("DELETE FROM discovery_budget_approval_claims WHERE payer_pubkey=$1")
+            .bind(payer.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("clean abandoned approval replay claims");
+        let abandoned: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM communities WHERE host LIKE 'approval-replay-%.test'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .expect("find abandoned approval replay communities");
+        for community in abandoned {
+            clean_approval_replay_community(&db, CommunityId::from_uuid(community)).await;
+        }
+        let payer_key = PublicKey::from_slice(&payer).expect("valid payer key");
+        let campaign_id = Uuid::new_v4();
+        let communities = [
+            CommunityId::from_uuid(Uuid::new_v4()),
+            CommunityId::from_uuid(Uuid::new_v4()),
+        ];
+        let campaign = DiscoveryCampaignInputV2 {
+            campaign_id,
+            name: "Approval replay dentists".into(),
+            industry_id: "healthcare".into(),
+            industry_name: "Healthcare".into(),
+            vertical_id: "dentists".into(),
+            vertical_name: "Dentists".into(),
+            query: "dentists".into(),
+            location: "Cape Town".into(),
+            target: 2,
+            description: None,
+            language: "en".into(),
+            region: Some("ZA".into()),
+        };
+        for community in communities {
+            sqlx::query("INSERT INTO communities (id,host) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(format!("approval-replay-{}.test", community.as_uuid()))
+                .execute(&db.pool)
+                .await
+                .expect("insert approval replay community");
+            sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+                .bind(community.as_uuid())
+                .bind(payer.as_slice())
+                .execute(&db.pool)
+                .await
+                .expect("insert approval replay payer");
+            sqlx::query(
+                "INSERT INTO discovery_campaigns \
+                 (community_id,id,created_by,name,industry_id,industry_name,vertical_id,\
+                  vertical_name,query,location,target,language,region) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            )
+            .bind(community.as_uuid())
+            .bind(campaign_id)
+            .bind(payer.as_slice())
+            .bind(&campaign.name)
+            .bind(&campaign.industry_id)
+            .bind(&campaign.industry_name)
+            .bind(&campaign.vertical_id)
+            .bind(&campaign.vertical_name)
+            .bind(&campaign.query)
+            .bind(&campaign.location)
+            .bind(i16::try_from(campaign.target).expect("test target fits SMALLINT"))
+            .bind(&campaign.language)
+            .bind(campaign.region.as_deref())
+            .execute(&db.pool)
+            .await
+            .expect("insert approval replay Campaign");
+        }
+        let price = DiscoveryNanoUsd::new(50_000_000).expect("valid test price");
+        let approval = DiscoveryCampaignBudgetApproval {
+            campaign_id,
+            payer_pubkey: payer_key,
+            approved_nanousd: price.checked_mul(2).expect("valid test budget"),
+            price_per_retained_lead_nanousd: price,
+            campaign_fingerprint: hex::encode(
+                campaign_budget_fingerprint(&campaign, &payer_key, price)
+                    .expect("approval replay fingerprint"),
+            ),
+            approval_action_event_id: None,
+            approval_expires_at: None,
+        };
+        let approval_event_id = [99_u8; 32];
+        let mut first = db.pool.begin().await.expect("begin first approval");
+        approve_campaign_budget_tx(
+            &mut first,
+            communities[0],
+            &payer,
+            None,
+            &approval_event_id,
+            &approval,
+        )
+        .await
+        .expect("claim approval evidence once");
+        first.commit().await.expect("commit first approval");
+
+        let mut replay = db.pool.begin().await.expect("begin replay approval");
+        assert!(matches!(
+            approve_campaign_budget_tx(
+                &mut replay,
+                communities[1],
+                &payer,
+                None,
+                &approval_event_id,
+                &approval,
+            )
+            .await,
+            Err(DbError::AccessDenied(message))
+                if message == "Campaign budget approval evidence has already been used"
+        ));
+        replay.rollback().await.expect("rollback rejected replay");
+
+        sqlx::query("DELETE FROM discovery_budget_approval_claims WHERE approval_event_id=$1")
+            .bind(approval_event_id.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("clean approval claim");
+        for community in communities {
+            clean_approval_replay_community(&db, community).await;
+        }
+        sqlx::query("DELETE FROM accounts WHERE pubkey=$1")
+            .bind(payer.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("clean approval replay account");
     }
 }

@@ -192,7 +192,36 @@ echo "# Canvas from stdin" | buzz canvas set --channel "$CHANNEL_ID" --content -
 # canvas get
 buzz canvas get --channel "$CHANNEL_ID"
 # Expected: raw markdown string, or: null
+
+# Thread-scoped canvas: post a thread root, then write its canvas
+ROOT_ID=$(buzz messages send --channel "$CHANNEL_ID" --content "thread root for canvas test" | jq -r '.event_id')
+
+# canvas set --thread (thread working memory)
+buzz canvas set --channel "$CHANNEL_ID" --thread "$ROOT_ID" --content "Thread A memory" | jq .
+# Expected: {"event_id":"...","accepted":true,"message":"..."}
+
+# canvas get --thread round-trips that thread's content
+buzz canvas get --channel "$CHANNEL_ID" --thread "$ROOT_ID"
+# Expected: Thread A memory
+
+# Omitting --thread reads the channel canvas — must NOT return the thread's
+buzz canvas get --channel "$CHANNEL_ID"
+# Expected: # Test Canvas (or the last channel-canvas set), never "Thread A memory"
+
+# Two threads in one channel hold independent canvases
+ROOT2_ID=$(buzz messages send --channel "$CHANNEL_ID" --content "second thread root" | jq -r '.event_id')
+buzz canvas set --channel "$CHANNEL_ID" --thread "$ROOT2_ID" --content "Thread B memory" | jq .
+buzz canvas get --channel "$CHANNEL_ID" --thread "$ROOT_ID"
+# Expected: Thread A memory (unchanged by the Thread B write)
+buzz canvas get --channel "$CHANNEL_ID" --thread "$ROOT2_ID"
+# Expected: Thread B memory
+
+# Over-cap writes surface the relay's rejection message naming cap and size
+python3 -c "print('z'*5000)" | buzz canvas set --channel "$CHANNEL_ID" --thread "$ROOT_ID" --content -
+# Expected: rejected; message contains "exceeds maximum size of 4096 bytes (got 5000)"
+# Exit code: 2 (network/relay rejection)
 ```
+
 
 ### 6.3 Messages
 
@@ -897,8 +926,8 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 | 20 | `channels members` | ☐ | |
 | 21 | `channels add-member` | ☐ | Needs admin:channels |
 | 22 | `channels remove-member` | ☐ | Needs admin:channels |
-| 23 | `canvas get` | ☐ | |
-| 24 | `canvas set` | ☐ | Direct and stdin |
+| 23 | `canvas get` | ☐ | Channel + `--thread` variants |
+| 24 | `canvas set` | ☐ | Direct, stdin, and `--thread` variants; over-cap rejection |
 | 25 | `reactions add` | ☐ | |
 | 26 | `reactions remove` | ☐ | |
 | 27 | `reactions get` | ☐ | |

@@ -16,10 +16,8 @@ import type { AgentCreateIntent } from "./agentCreateIntent";
 import type { EditAgentFocusTarget } from "@/features/agents/openEditAgentEvent";
 import { AgentInstanceEditDialog } from "./AgentInstanceEditDialog";
 import { createPersonaDialogState } from "./personaDialogState";
-import {
-  AgentDefinitionDialog,
-  type AgentDefinitionSubmitOptions,
-} from "./AgentDefinitionDialog";
+import { AgentDefinitionDialog } from "./AgentDefinitionDialog";
+import type { AgentDefinitionSubmitOptions } from "./agentDefinitionDialogProps";
 import { WhereToRunSection } from "./WhereToRunSection";
 import {
   canSubmitWhereToRun,
@@ -43,10 +41,13 @@ type AgentDialogCreateProps = {
     label: string;
     onSelect: () => void;
   };
+  /** Offers org rank + manager at create time; requires a submit path that honors it. */
+  orgPlacement?: boolean;
   onSubmitDefinition: (
     input: CreatePersonaInput | UpdatePersonaInput,
     intent: AgentCreateIntent,
     backendIntent: BackendIntent | null,
+    options?: AgentDefinitionSubmitOptions,
   ) => Promise<boolean>;
 };
 
@@ -144,6 +145,7 @@ function AgentCreateDialogRouter({
   secondaryAction,
   submitLabel,
   onDirtyChange,
+  orgPlacement = false,
   onSubmitDefinition,
 }: AgentDialogCreateProps) {
   const [runDraft, setRunDraft] = React.useState(emptyWhereToRunDraft);
@@ -177,11 +179,12 @@ function AgentCreateDialogRouter({
         isPending={isDefinitionPending}
         onDirtyChange={onDirtyChange}
         onOpenChange={onOpenChange}
-        onSubmit={async (input) => {
+        onSubmit={async (input, options) => {
           const submitted = await onSubmitDefinition(
             input,
             "definition_start",
             resolveBackendIntent(runDraft),
+            options,
           );
           if (submitted) {
             onDirtyChange?.(false);
@@ -189,6 +192,7 @@ function AgentCreateDialogRouter({
           }
         }}
         open
+        orgPlacement={orgPlacement}
         runtimes={runtimes}
         runtimeCatalogStatus={
           runtimeCatalogStatus ?? (runtimesLoading ? "loading" : "ready")

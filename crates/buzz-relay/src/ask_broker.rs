@@ -187,6 +187,18 @@ async fn handle_ask(
         .await
     {
         Ok(()) => {
+            // Expose the deadline this filing just stamped: the ask-state
+            // head is the only Nostr-visible copy of it. Best-effort -- a
+            // lost head heals on the next transition of this ask.
+            crate::ask_state_head::publish_head_for_new_ask(
+                tenant,
+                state,
+                event.id.as_bytes(),
+                deadline_at,
+                &parsed.audience_hex,
+                parsed.default_option.as_deref(),
+            )
+            .await;
             if let Some(prior) = prior_ask_bytes.as_deref() {
                 close_superseded_prior(tenant, state, prior, event, &parsed).await;
             }
@@ -835,6 +847,19 @@ async fn handle_resolution(
         });
     }
 
+    // The ask's outcome just changed: close its deadline head so no client
+    // keeps counting down toward a deadline that can no longer fire.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &ask_event_bytes,
+        &crate::ask_state_head::AskClosure::Resolved {
+            default_executed: parsed.default_executed,
+            default_option: None,
+        },
+    )
+    .await;
+
     if let Some(origin_thread_hex) = &ask.origin_thread_hex {
         // C1 fix: `stored_ask.event.pubkey` is the signer of the ASK EVENT
         // itself, which for a promoted ask is the relay, not the original
@@ -954,6 +979,15 @@ async fn handle_withdrawal(
             message: "that ask is not open".to_string(),
         });
     }
+
+    // Close the deadline head: a withdrawn ask's countdown is over.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &ask_event_bytes,
+        &crate::ask_state_head::AskClosure::Withdrawn,
+    )
+    .await;
 
     if let Some(origin_thread_hex) = &ask.origin_thread_hex {
         // C1 fix: see `handle_resolution`'s identical comment.
@@ -1231,6 +1265,18 @@ async fn try_resolve_one_candidate(
         // this exact ask a moment earlier -- nothing left to wake.
         return Ok(());
     }
+
+    // The owner's reply just resolved this ask: close its deadline head.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &row.ask_event_id,
+        &crate::ask_state_head::AskClosure::Resolved {
+            default_executed: false,
+            default_option: None,
+        },
+    )
+    .await;
 
     wake_filer_after_auto_resolve(tenant, state, row, thread_root_hex).await;
     Ok(())

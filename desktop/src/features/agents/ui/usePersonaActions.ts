@@ -34,6 +34,12 @@ import {
   useUpdatePersonaAndPublishMutation,
 } from "@/features/agents/lib/usePersonaCatalogRelay";
 import { personaSaveNotice } from "@/features/agents/lib/personaSaveNotice";
+import {
+  ManagedAgentHeadNotLandedError,
+  publishManagedAgentRankHead,
+} from "@/features/agents/managedAgentHeads";
+import type { AgentRank } from "@/features/agents/employeeHeads";
+import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import { useCreatedAgentChannelAttachment } from "@/features/agents/useCreatedAgentChannelAttachment";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { useCommunities } from "@/features/communities/useCommunities";
@@ -68,6 +74,45 @@ import {
 
 type PersonaFeedbackSurface = "catalog" | "library";
 
+/**
+ * Ranking a freshly created agent races the relay minting its identity: the
+ * rank republish needs the agent's owner-authored head to merge into, and
+ * that lands asynchronously after create. Poll briefly before giving up --
+ * the agent itself is fine either way, and the People screen's Unranked
+ * group is the fallback path.
+ */
+const ORG_RANK_WAIT_MS = 10_000;
+const ORG_RANK_POLL_MS = 1_000;
+
+async function rankCreatedAgent(
+  agent: { pubkey: string; name: string },
+  tier: AgentRank,
+  manager: string | undefined,
+  ownerPubkeys: ReadonlySet<string>,
+): Promise<void> {
+  const deadline = Date.now() + ORG_RANK_WAIT_MS;
+  for (;;) {
+    try {
+      await publishManagedAgentRankHead(
+        {
+          pubkey: agent.pubkey,
+          name: agent.name,
+          tier,
+          manager: manager ?? null,
+        },
+        ownerPubkeys,
+      );
+      return;
+    } catch (error) {
+      const stillWaiting =
+        error instanceof ManagedAgentHeadNotLandedError &&
+        Date.now() < deadline;
+      if (!stillWaiting) throw error;
+      await new Promise((resolve) => setTimeout(resolve, ORG_RANK_POLL_MS));
+    }
+  }
+}
+
 export function usePersonaActions() {
   const queryClient = useQueryClient();
   const { activeCommunity } = useCommunities();
@@ -85,6 +130,10 @@ export function usePersonaActions() {
   });
   const createAgentMutation = useCreateManagedAgentMutation();
   const createPersonaMutation = useCreatePersonaMutation();
+  const ownersQuery = useCommunityOwnersQuery(
+    communityId ?? "",
+    communityId !== null,
+  );
   const updatePersonaMutation = useUpdatePersonaMutation();
   const updatePersonaAndPublishMutation =
     useUpdatePersonaAndPublishMutation(communityId);
@@ -180,7 +229,11 @@ export function usePersonaActions() {
     intent?: AgentCreateIntent,
     backendIntent?: BackendIntent | null,
     targetChannel?: Pick<Channel, "id" | "name"> | null,
-    options?: { publishCatalogUpdates?: boolean },
+    options?: {
+      publishCatalogUpdates?: boolean;
+      orgRank?: AgentRank;
+      orgManager?: string;
+    },
   ): Promise<boolean> {
     if (isPersonaSubmitPending) {
       return false;
@@ -281,6 +334,28 @@ export function usePersonaActions() {
             created,
             targetChannel,
           );
+          if (options?.orgRank && created.agent.pubkey) {
+            try {
+              await rankCreatedAgent(
+                { pubkey: created.agent.pubkey, name: created.agent.name },
+                options.orgRank,
+                options.orgManager,
+                ownersQuery.data ?? new Set<string>(),
+              );
+              await queryClient.invalidateQueries({
+                queryKey: ["colony-managed-agent-heads"],
+              });
+            } catch (rankError) {
+              // Creation succeeded; the org placement is the part that
+              // failed. Name it so the owner knows to retry from People
+              // and roles rather than re-creating the agent.
+              setPersonaErrorMessage(
+                rankError instanceof Error
+                  ? `${created.agent.name} was created, but placing it in the org failed: ${rankError.message}`
+                  : `${created.agent.name} was created, but placing it in the org failed.`,
+              );
+            }
+          }
           if (created.spawnError) {
             setPersonaErrorMessage(
               `${persona.displayName} was created, but it did not start: ${created.spawnError}`,

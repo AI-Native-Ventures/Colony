@@ -47,9 +47,9 @@ test("buildChannelReactionAuxFilter fetches only kind:7 by #e", () => {
   assert.equal("#h" in filter, false);
 });
 
-test("buildChannelStructuralAuxFilter excludes reactions", () => {
+test("buildChannelStructuralAuxFilter restores Block state but excludes reactions", () => {
   const filter = buildChannelStructuralAuxFilter(CHANNEL, IDS);
-  assert.deepEqual(filter.kinds, [5, 9005, 40003]);
+  assert.deepEqual(filter.kinds, [5, 9005, 40003, 40010, 40011]);
   assert.deepEqual(filter["#e"], IDS);
   assert.equal("#h" in filter, false);
 });

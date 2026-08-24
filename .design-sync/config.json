@@ -1,0 +1,84 @@
+{
+  "projectId": "575cb183-8547-4ee3-a159-5d63e565b95e",
+  "shape": "package",
+  "pkg": "buzz",
+  "globalName": "ColonyDS",
+  "srcDir": "src/shared/ui",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "ds-styles.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "extraFonts": [
+    "node_modules/@fontsource/jetbrains-mono/400.css",
+    "node_modules/@fontsource/jetbrains-mono/700.css"
+  ],
+  "provider": {
+    "component": "ColonyProvider"
+  },
+  "overrides": {
+    "Dialog": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "760x520"
+    },
+    "AlertDialog": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "760x520"
+    },
+    "Sheet": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "900x560"
+    },
+    "DropdownMenu": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "560x420"
+    },
+    "ContextMenu": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "560x420"
+    },
+    "Popover": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "560x400"
+    },
+    "Tooltip": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "480x260"
+    },
+    "Carousel": {
+      "cardMode": "column"
+    }
+  },
+  "componentSrcMap": {
+    "Alert": "src/shared/ui/alert.tsx",
+    "AlertDialog": "src/shared/ui/alert-dialog.tsx",
+    "Avatar": "src/shared/ui/avatar.tsx",
+    "Badge": "src/shared/ui/badge.tsx",
+    "Button": "src/shared/ui/button.tsx",
+    "Card": "src/shared/ui/card.tsx",
+    "Carousel": "src/shared/ui/carousel.tsx",
+    "Checkbox": "src/shared/ui/checkbox.tsx",
+    "ContextMenu": "src/shared/ui/context-menu.tsx",
+    "Dialog": "src/shared/ui/dialog.tsx",
+    "DropdownMenu": "src/shared/ui/dropdown-menu.tsx",
+    "Input": "src/shared/ui/input.tsx",
+    "PageHeader": "src/shared/ui/PageHeader.tsx",
+    "Popover": "src/shared/ui/popover.tsx",
+    "Progress": "src/shared/ui/progress.tsx",
+    "Separator": "src/shared/ui/separator.tsx",
+    "Sheet": "src/shared/ui/sheet.tsx",
+    "Skeleton": "src/shared/ui/skeleton.tsx",
+    "Spinner": "src/shared/ui/spinner.tsx",
+    "StepProgress": "src/shared/ui/step-progress.tsx",
+    "Switch": "src/shared/ui/switch.tsx",
+    "Tabs": "src/shared/ui/tabs.tsx",
+    "Textarea": "src/shared/ui/textarea.tsx",
+    "Toggle": "src/shared/ui/toggle.tsx",
+    "Tooltip": "src/shared/ui/tooltip.tsx"
+  }
+}

@@ -154,6 +154,31 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::invites::accept_policy),
         )
         .route("/api/invites/claim", post(api::invites::claim_invite))
+        // Email and password accounts: unauthenticated by design, signup
+        // precedes key ownership (see api::accounts).
+        .route("/api/accounts/signup", post(api::accounts::signup))
+        .route("/api/accounts/signin", post(api::accounts::signin))
+        .route("/api/accounts/recover", post(api::accounts::recover))
+        .route(
+            "/api/accounts/reset-password",
+            post(api::accounts::reset_password),
+        )
+        // Card top-ups: two NIP-98-signed client routes plus the
+        // signature-verified provider webhooks, the only paths that credit
+        // (see api::payments). One webhook path per provider: each gateway
+        // is configured with its own callback URL.
+        .route("/api/payments/packs", get(api::payments::packs))
+        .route("/api/payments/initialize", post(api::payments::initialize))
+        .route("/api/payments/verify", post(api::payments::verify))
+        .route("/api/payments/balance", post(api::payments::balance))
+        .route(
+            "/api/payments/webhook/paystack",
+            post(api::payments::webhook_paystack),
+        )
+        .route(
+            "/api/payments/webhook/payfast",
+            post(api::payments::webhook_payfast),
+        )
         // Moderation queue reads (NIP-98 auth + mod-authz gate, L6)
         .route("/moderation/reports", get(api::bridge::moderation_reports))
         .route("/moderation/audit", get(api::bridge::moderation_audit))
@@ -186,6 +211,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // unconfigured deployment answers 404 for the gateway paths exactly
         // as if the routes did not exist.
         merged = merged.merge(crate::gateway::router(state.clone(), Arc::clone(gateway)));
+    }
+    if let Some(gateway) = state.discovery_gateway.get() {
+        merged = merged.merge(crate::discovery_gateway::router(
+            state.clone(),
+            Arc::clone(gateway),
+        ));
     }
     if let Some(admin_router) = admin_router {
         merged = merged.merge(admin_router);

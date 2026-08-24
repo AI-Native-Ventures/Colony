@@ -90,6 +90,8 @@ export type MockEmployeeHeadSeed = {
   role?: string;
   name?: string;
   rank: "worker" | "leader" | "executive";
+  /** The agent this employee reports to (pubkey); omitted means no manager. */
+  manager?: string;
 };
 
 type MockHuddleSeed = {
@@ -191,6 +193,11 @@ type MockBridgeOptions = {
   discoveryCredentialSaveDelayMs?: number;
   /** Signed Block manifests/catalog events served by the mock relay. */
   blockEvents?: RelayEvent[];
+  /**
+   * Owner-authored delegation grant heads (kind 30189) served by the mock
+   * relay, keyed by their `d` tag; drives the promotion confirmation.
+   */
+  delegationGrantEvents?: RelayEvent[];
   /** Signed Block timeline events seeded before the app subscribes. */
   blockTimelineEvents?: Array<{
     channelName: string;
@@ -362,6 +369,16 @@ type MockBridgeOptions = {
   deepHistoryMessageCount?: number;
   feedReadError?: string;
   canvasReadError?: string;
+  /** Reject `get_thread_canvas` calls with this message. */
+  threadCanvasReadError?: string;
+  /** Thread canvases seeded for `get_thread_canvas`, per (channel, thread root). */
+  threadCanvases?: Array<{
+    channelId: string;
+    threadRootId: string;
+    content: string;
+  }>;
+  /** Reject successive `set_thread_canvas` calls with these messages, then resume. */
+  threadCanvasSaveErrors?: string[];
   /** Delay (ms) for `apply_workspace`; see e2eBridge mock config. */
   applyCommunityDelayMs?: number;
   openDmDelayMs?: number;
@@ -445,6 +462,13 @@ type MockBridgeOptions = {
    * evaluates false).
    */
   relayRole?: "owner" | "admin" | "member" | null;
+  /**
+   * Serve `list_relay_members` from the mock member table. Opt-in because
+   * owners-unknown vs viewer-is-owner flips what owner-gated reads trust
+   * (community owners, delegation-grant authorship), and every existing
+   * spec was built against the command being unsupported.
+   */
+  relayMembers?: boolean;
   /**
    * Descriptors returned by the mocked `pick_and_upload_media` /
    * `upload_media_bytes` commands. When omitted, the bridge returns a single
@@ -543,6 +567,9 @@ type MockBridgeOptions = {
   /** Volatile Colony Credits account returned by the authenticated mock command. */
   colonyCreditsAccount?: {
     balance_nanousd: string;
+    total_balance_nanousd?: string;
+    discovery_reserved_nanousd?: string;
+    available_balance_nanousd?: string;
     currency: "USD";
     status: "active" | "depleted";
   };
@@ -881,6 +908,18 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
+  } else {
+    // The redesigned flow is the product default now, so a first-run spec
+    // that says nothing would suddenly be driving different screens. Specs
+    // opt into the redesign by setting this key to "1" themselves, which
+    // runs first and this leaves alone; everything else stays on the flow it
+    // was written against.
+    await page.addInitScript(() => {
+      const key = "colony.e2e.newOnboarding";
+      if (window.localStorage.getItem(key) === null) {
+        window.localStorage.setItem(key, "0");
+      }
+    });
   }
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.
