@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn list_managed_agent_runtimes_returns_a_future() {
+    fn assert_async_command<F, Fut>(_command: F)
+    where
+        F: Fn(AppHandle) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<ManagedAgentRuntimeStatus>, String>>,
+    {
+    }
+
+    assert_async_command(list_managed_agent_runtimes);
+}
+
 fn payload(
     relay_url: &str,
     lifecycle: ManagedAgentRuntimeLifecycle,
