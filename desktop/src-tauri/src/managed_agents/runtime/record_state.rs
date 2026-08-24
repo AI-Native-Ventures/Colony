@@ -9,7 +9,11 @@
 
 use tauri::AppHandle;
 
-use crate::managed_agents::types::{ManagedAgentRecord, ManagedAgentRuntimeKey};
+use crate::managed_agents::types::ManagedAgentRecord;
+// ManagedAgentRuntimeKey lives in runtime_types, re-exported from the module
+// root. The back-merge brought this import across as though both names came
+// from `types`, which compiles on neither side.
+use crate::managed_agents::ManagedAgentRuntimeKey;
 
 /// Classify an agent's persona against the live catalog for the Agents-menu
 /// drift indicator. Returns `(out_of_date, orphaned)`.

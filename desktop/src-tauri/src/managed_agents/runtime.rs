@@ -119,9 +119,12 @@ mod lifecycle;
 use lifecycle::kill_stale_tracked_processes_with;
 pub use lifecycle::{kill_stale_tracked_processes, sync_managed_agent_processes};
 
-pub(crate) use record_state::{
-    persona_drift_state, resolve_workspace_pair_key, workspace_pair_key,
-};
+pub(crate) use record_state::{persona_drift_state, workspace_pair_key};
+// Reached as `super::resolve_workspace_pair_key` from the test module and
+// nowhere else, so an unconditional re-export is dead weight in a normal
+// build and fails clippy's -D warnings.
+#[cfg(test)]
+pub(crate) use record_state::resolve_workspace_pair_key;
 
 pub fn build_managed_agent_summary(
     app: &AppHandle,
