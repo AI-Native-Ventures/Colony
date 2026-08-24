@@ -25,6 +25,7 @@ pub(crate) fn shut_down_app(app: &tauri::AppHandle, shutdown_done: &std::sync::a
         if let Err(error) = crate::provisioned_credits::prepare_provisioned_credits_shutdown(app) {
             eprintln!("buzz-desktop: failed to close Colony Credits rotations: {error}");
         }
+        crate::channel_head_cache::flush(app);
         if let Err(error) = shutdown_managed_agents(app) {
             eprintln!("buzz-desktop: failed to stop managed agents: {error}");
         }
