@@ -211,7 +211,14 @@ test.describe("agent provider dropdown screenshots", () => {
     });
   });
 
-  test("04-codex-definition-exposes-model-without-global-provider-defaults", async ({
+  // Codex used to be a harness that could not be told a provider or a model,
+  // so this test asserted the dialog hid the global provider and printed the
+  // bare "Harness default". A live spike proved codex-acp honours a model over
+  // ACP (`session/set_config_option`), and it now ships with provider and
+  // model pickers, so a codex definition on defaults inherits the global pair
+  // like every other harness. Hiding them would restate the old lie: the
+  // agent would run the global model while the dialog denied one was set.
+  test("04-codex-definition-inherits-the-global-provider-and-model", async ({
     page,
   }) => {
     await installMockBridge(page, {
@@ -241,12 +248,18 @@ test.describe("agent provider dropdown screenshots", () => {
     await expect(
       dialog.getByRole("tab", { name: "Customize for this agent" }),
     ).toBeVisible();
+    // This definition pins codex explicitly, so the dialog opens already on
+    // Customize -- a bare harness pin is a customisation. Neither defaults
+    // notice renders in that mode, which is why this asserts the tab state
+    // rather than a notice.
     await expect(
-      dialog.getByText("Harness default", { exact: true }),
-    ).toBeVisible();
+      dialog.getByRole("tab", { name: "Customize for this agent" }),
+    ).toHaveAttribute("aria-selected", "true");
+    // A pinned agent does not inherit: the global databricks pair belongs to
+    // agents on defaults, and must not leak into this one's fields.
+    await expect(dialog.getByText(/global-databricks-model/)).toHaveCount(0);
     await expect(dialog.getByText(/Databricks/i)).toHaveCount(0);
 
-    await dialog.getByRole("tab", { name: "Customize for this agent" }).click();
     await expect(
       dialog.getByRole("combobox", { name: /model/i }),
     ).toBeVisible();

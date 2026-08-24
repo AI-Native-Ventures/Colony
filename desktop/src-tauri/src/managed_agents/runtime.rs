@@ -82,6 +82,7 @@ mod stop;
 pub(crate) use stop::managed_agent_runtime_keys;
 pub use stop::{stop_managed_agent_process, stop_managed_agent_workspace_pair};
 
+mod record_state;
 mod sweep;
 pub(crate) use sweep::sweep_untracked_bundle_harnesses;
 
@@ -118,64 +119,12 @@ mod lifecycle;
 use lifecycle::kill_stale_tracked_processes_with;
 pub use lifecycle::{kill_stale_tracked_processes, sync_managed_agent_processes};
 
-/// Classify an agent's persona against the live catalog for the Agents-menu
-/// drift indicator. Returns `(out_of_date, orphaned)`.
-///
-/// Drift basis is the RECORD's `persona_source_version`, never the engram:
-/// - persona_id set + persona present: out_of_date when the snapshot hash
-///   differs from the persona's current content hash.
-/// - persona_id set + persona gone: orphaned (no current hash to respawn into,
-///   so never out_of_date — we must not tell the user to respawn into nothing).
-/// - no persona_id: neither — a hand-built agent has no persona to drift from.
-fn persona_drift_state(
-    record: &ManagedAgentRecord,
-    personas: &[crate::managed_agents::types::AgentDefinition],
-) -> (bool, bool) {
-    let Some(persona_id) = record.persona_id.as_deref() else {
-        return (false, false);
-    };
-    let Some(persona) = personas.iter().find(|p| p.id == persona_id) else {
-        return (false, true);
-    };
-    let current = crate::managed_agents::persona_events::persona_content_hash(
-        &crate::managed_agents::persona_events::persona_event_content(persona),
-    );
-    let out_of_date = record
-        .persona_source_version
-        .as_deref()
-        .is_some_and(|pinned| pinned != current);
-    (out_of_date, false)
-}
-
-/// Resolve the runtime-pair key this record maps to: its own community's
-/// relay when pinned, the active workspace relay when not (see
-/// `effective_agent_relay_url`). Returns `None` for records that cannot form a
-/// valid pair key yet (e.g. key-less agents that mint keys on first start).
-pub(crate) fn workspace_pair_key(
-    app: &AppHandle,
-    record: &ManagedAgentRecord,
-) -> Option<ManagedAgentRuntimeKey> {
-    use tauri::Manager;
-    let state = app.state::<crate::app_state::AppState>();
-    resolve_workspace_pair_key(
-        &record.pubkey,
-        &record.relay_url,
-        &crate::relay::relay_ws_url_with_override(&state),
-    )
-}
-
-/// Pure core of [`workspace_pair_key`]: pin-first relay resolution plus
-/// canonical key construction, kept `AppHandle`-free so summary/stop scoping
-/// semantics are unit-testable.
-pub(crate) fn resolve_workspace_pair_key(
-    pubkey: &str,
-    record_relay_url: &str,
-    workspace_relay_url: &str,
-) -> Option<ManagedAgentRuntimeKey> {
-    let effective_relay =
-        crate::relay::effective_agent_relay_url(record_relay_url, workspace_relay_url);
-    ManagedAgentRuntimeKey::new(pubkey.to_string(), &effective_relay).ok()
-}
+pub(crate) use record_state::{persona_drift_state, workspace_pair_key};
+// Reached as `super::resolve_workspace_pair_key` from the test module and
+// nowhere else, so an unconditional re-export is dead weight in a normal
+// build and fails clippy's -D warnings.
+#[cfg(test)]
+pub(crate) use record_state::resolve_workspace_pair_key;
 
 pub fn build_managed_agent_summary(
     app: &AppHandle,
@@ -745,7 +694,19 @@ fn spawn_agent_child_inner(
     // Prompt, model, and provider come from the single `effective_cfg` resolve
     // (the SAME resolve `spawn_config_hash` performs, so env write and restart
     // badge cannot disagree); definition-less instances fall back to their own
-    // fields, then global. Derive the mesh decision before moving fields out:
+    // fields, then global.
+    //
+    // Model/provider reach EVERY harness through these two universal keys:
+    // buzz-acp reads them and applies the model on session creation via ACP
+    // switching (`session/set_config_option(configId:"model")` or unstable
+    // `session/set_model`, matched against the adapter's own catalog — both
+    // proven live 2026-08-23 for codex-acp, claude-agent-acp and
+    // `opencode acp`). Harness-specific env vars (`GOOSE_MODEL`,
+    // `BUZZ_AGENT_MODEL`, ...) are layered separately below from
+    // `KnownAcpRuntime.model_env_var`; runtimes without one rely solely on
+    // this universal path.
+    //
+    // Derive the mesh decision before moving fields out:
     // `relay_mesh_model_id` is the single authoritative gate.
     #[cfg(feature = "mesh-llm")]
     let mesh_model_id = effective_cfg.relay_mesh_model_id();

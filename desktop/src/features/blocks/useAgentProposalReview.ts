@@ -15,9 +15,13 @@ import {
   useManagedAgentsQuery,
   usePersonasQuery,
 } from "@/features/agents/hooks";
-import { availableRuntimesForStart } from "@/features/agents/lib/instanceInputForDefinition";
+import {
+  availableRuntimesForStart,
+  resolveCreateRuntime,
+} from "@/features/agents/lib/instanceInputForDefinition";
 import type { BackendIntent } from "@/features/agents/lib/instanceInputForDefinition";
 import { resolveRemoteManagedAgentAvatarUrl } from "@/features/agents/ui/managedAgentAvatar";
+import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { editPersonaDialogState } from "@/features/agents/ui/personaDialogState";
 import type { AgentCreateIntent } from "@/features/agents/ui/agentCreateIntent";
 import type {
@@ -86,6 +90,7 @@ export function useAgentProposalReview() {
   const managedAgentsQuery = useManagedAgentsQuery();
   const channelsQuery = useChannelsQuery();
   const runtimesQuery = useAcpRuntimesQuery({ enabled: true });
+  const { globalConfig } = useGlobalAgentConfig();
   const [selectedProposal, setSelectedProposal] =
     React.useState<AgentProposalInstance | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -205,11 +210,21 @@ export function useAgentProposalReview() {
       }
       assertProposalOrigin(proposal);
       const runtimes = await availableRuntimesForStart(runtimesQuery);
-      const runtime = runtimes.find(
-        (candidate) => candidate.id === input.runtime,
+      // Same chain the backend and the agents page use. "Use agent defaults"
+      // submits no pin, so matching on `input.runtime` alone threw here for
+      // every defaults-mode proposal approval, leaving an enabled "Create
+      // agent" button that did nothing.
+      const { named, runtime } = resolveCreateRuntime(
+        runtimes,
+        input.runtime,
+        globalConfig.preferred_runtime,
       );
       if (!runtime) {
-        throw new Error("Choose an available runtime for this agent.");
+        throw new Error(
+          named
+            ? `The harness ${named} is not available. Choose one for this agent, or change your global defaults.`
+            : "No harness is available to run this agent. Open Settings > Agents to set one up.",
+        );
       }
       // The safe-action schema only accepts https avatar URLs, so inline
       // emoji avatars must be uploaded (rasterized to PNG) before submit.

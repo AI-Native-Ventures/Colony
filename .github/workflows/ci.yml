@@ -1886,7 +1886,7 @@ jobs:
       RAW_SECURITY: ${{ needs.changes.outputs.raw-security }}
       RAW_CROSS_COMPILE: ${{ needs.changes.outputs.raw-cross-compile }}
     steps:
-      - name: Require complete develop promotion proof
+      - name: Require complete promotion proof
         shell: bash
         run: |
           set -euo pipefail
@@ -1919,8 +1919,15 @@ jobs:
             esac
           }
 
-          if [ "$HEAD_REF" != "develop" ]; then
-            fail "Production promotions must come from develop; got '$HEAD_REF'"
+          # develop is the normal promotion source. A `hotfix/*` branch forked
+          # from main is the one other permitted source: it exists so a
+          # production fix can reach main without dragging every commit that
+          # has accumulated on develop since the last promotion. It buys no
+          # leniency — every require_success / require_optional check below
+          # applies identically, so a hotfix carries the same proof a promotion
+          # does. Any other head ref is still refused.
+          if [ "$HEAD_REF" != "develop" ] && [[ "$HEAD_REF" != hotfix/* ]]; then
+            fail "Promotions to main must come from develop or a hotfix/* branch; got '$HEAD_REF'"
           fi
 
           require_success "Detect Changed Paths" "$CHANGES_RESULT"
@@ -1948,4 +1955,4 @@ jobs:
           require_optional "Mobile" "$RAW_MOBILE" "$MOBILE_RESULT"
           require_optional "Blocks" "$RAW_BLOCKS" "$BLOCKS_RESULT"
 
-          echo "Promotion from develop has complete required and path-selected proof."
+          echo "Promotion from '$HEAD_REF' has complete required and path-selected proof."

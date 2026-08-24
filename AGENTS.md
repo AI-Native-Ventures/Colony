@@ -99,8 +99,16 @@ enforce it themselves.
   `Detect Changed Paths`, `Desktop`, `Desktop Core`, `Rust Lint`, `Unit Tests`
   and `Relay Suites` to pass. Run the local gates below anyway: they are
   faster than a CI round trip and catch the same things.
-- **`main`** is production. The only thing that merges into main is a
-  promotion PR from develop, and it runs the full CI matrix.
+- **`main`** is production. Two things merge into main, and both run the full
+  CI matrix: a promotion PR from develop, and a PR from a **`hotfix/*`** branch
+  forked from main.
+- **`hotfix/*` is the narrow lane, not a shortcut.** It exists only for a fix
+  that must reach production without dragging every commit that has landed on
+  develop since the last promotion. `Promotion Gate` grants it no leniency: it
+  demands exactly the same required and path-selected proof a promotion does.
+  A `hotfix/*` PR needs the same green matrix, and after it merges you
+  back-merge `main` into `develop` so the two branches do not diverge. Anything
+  that can wait for the next promotion goes through develop instead.
 - **Never merge a promotion PR while any check is failing or still running.**
   Verify with `gh pr checks <pr>` and require every non-skipped check to
   read `pass` before `gh pr merge`. A red or pending gate is an absolute

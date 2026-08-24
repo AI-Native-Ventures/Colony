@@ -134,7 +134,11 @@ fn status_for_with(
     inputs: StatusInputs<'_>,
 ) -> ManagedAgentRuntimeStatus {
     let StatusInputs { personas, global } = inputs;
-    let command = record_agent_command(record, personas);
+    // One harness resolver (record → definition → global preferred runtime):
+    // readiness must be judged against the harness that would run.
+    let command =
+        super::effective_config::resolve_effective_harness_command(record, personas, global)
+            .unwrap_or_else(|_| record_agent_command(record, personas));
     let metadata = super::known_acp_runtime(&command);
     let effective = resolve_effective_agent_env(record, personas, metadata, global);
     let local_setup = matches!(agent_readiness(&effective), AgentReadiness::Ready);
@@ -670,17 +674,8 @@ fn start_pair(
     // relay is the target: this spawn may serve a community other than the
     // active workspace, and the profile must land where the process connects.
     let reconcile_personas = load_personas(&app).unwrap_or_default();
-    let reconcile_data = crate::commands::ProfileReconcileData {
-        private_key_nsec: record.private_key_nsec.clone(),
-        name: record.name.clone(),
-        relay_url: record.relay_url.clone(),
-        avatar_url: record.avatar_url.clone(),
-        auth_tag: record.auth_tag.clone(),
-        pubkey: record.pubkey.clone(),
-        agent_command: record_agent_command(record, &reconcile_personas),
-        persona_id: record.persona_id.clone(),
-        role_id: record.role_id.clone(),
-    };
+    let reconcile_data =
+        crate::commands::ProfileReconcileData::build(&app, record, &reconcile_personas);
     runtimes.insert(key.clone(), ManagedAgentPairRuntime::starting(process));
     let status = status_for(&app, record, &key, runtimes.get(&key), None);
     drop(runtimes);
@@ -841,7 +836,9 @@ fn unkeyable_failed_status(
     personas: &[super::AgentDefinition],
     global: &super::GlobalAgentConfig,
 ) -> ManagedAgentRuntimeStatus {
-    let command = record_agent_command(record, personas);
+    let command =
+        super::effective_config::resolve_effective_harness_command(record, personas, global)
+            .unwrap_or_else(|_| record_agent_command(record, personas));
     let metadata = super::known_acp_runtime(&command);
     let effective = resolve_effective_agent_env(record, personas, metadata, global);
     ManagedAgentRuntimeStatus {

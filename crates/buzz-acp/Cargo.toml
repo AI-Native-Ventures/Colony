@@ -21,6 +21,7 @@ buzz-core = { workspace = true }
 buzz-meter = { workspace = true }
 buzz-sdk = { workspace = true }
 buzz-persona = { path = "../buzz-persona" }
+buzz-ws-client = { path = "../buzz-ws-client" }
 
 # Nostr
 nostr = { workspace = true }

@@ -849,6 +849,7 @@ dependencies = [
  "buzz-meter",
  "buzz-persona",
  "buzz-sdk",
+ "buzz-ws-client",
  "chrono",
  "clap",
  "dirs",
