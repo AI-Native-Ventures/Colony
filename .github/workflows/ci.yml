@@ -1890,7 +1890,13 @@ jobs:
       RAW_MOBILE: ${{ needs.changes.outputs.raw-mobile }}
       RAW_BLOCKS: ${{ needs.changes.outputs.raw-blocks }}
       RAW_DESKTOP_INTEGRATION: ${{ needs.changes.outputs.raw-desktop-integration }}
-      RAW_WINDOWS: ${{ needs.changes.outputs.raw-windows }}
+      # Windows relevance mirrors the windows-rust job's own firing condition
+      # (secondary-enabled && release-push) instead of raw-windows: since the
+      # Windows type-check moved to windows-typecheck-nightly.yml, the job can
+      # never run on a pull_request, so a skipped result must pass the gate.
+      # Keep this expression in sync with that job's `if:`; if Windows coverage
+      # returns to per-PR runs, point this back at raw-windows in step.
+      WINDOWS_RELEVANT: ${{ (needs.changes.outputs.secondary-enabled == 'true' && needs.changes.outputs.release-push == 'true') && 'true' || 'false' }}
       RAW_SECURITY: ${{ needs.changes.outputs.raw-security }}
       RAW_CROSS_COMPILE: ${{ needs.changes.outputs.raw-cross-compile }}
     steps:
@@ -1956,7 +1962,10 @@ jobs:
           require_optional "Relay Suites" "$RAW_RUST" "$RELAY_SUITES_RESULT"
 
           require_optional "Desktop Integration" "$RAW_DESKTOP_INTEGRATION" "$DESKTOP_INTEGRATION_RESULT"
-          require_optional "Windows" "$RAW_WINDOWS" "$WINDOWS_RESULT"
+          # Relevance derives from the job's firing condition, not raw-windows
+          # (see WINDOWS_RELEVANT above): on a pull_request into main the
+          # windows-rust job legitimately skips, and "skipped" passes.
+          require_optional "Windows" "$WINDOWS_RELEVANT" "$WINDOWS_RESULT"
           require_optional "Security" "$RAW_SECURITY" "$SECURITY_RESULT"
           require_optional "Server Cross-Compile" "$RAW_CROSS_COMPILE" "$CROSS_COMPILE_RESULT"
           require_optional "Web" "$RAW_WEB" "$WEB_RESULT"
