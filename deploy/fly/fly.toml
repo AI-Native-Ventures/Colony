@@ -39,7 +39,16 @@ BUZZ_REQUIRE_RELAY_MEMBERSHIP = "true"
 BUZZ_REQUIRE_AUTH_TOKEN = "true"
 BUZZ_ALLOW_NIP_OA_AUTH = "true"
 BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
-BUZZ_DISCOVERY_HOSTED_ENABLED = "true"
+# 2026-08-25: setting BUZZ_DISCOVERY_HOSTED_ENABLED=true took production down
+# for ~14 minutes on relay 0.9.0 (crash loop, Fly max restart count reached).
+# It is NOT a degraded mode: if the flag is true without ALL THREE of
+# OUTSCRAPER_API_KEY, BRAVE_SEARCH_API_KEY, and EXA_SEARCH_API_KEY present in
+# Fly secrets, the relay refuses to boot (see
+# crates/buzz-relay/src/discovery_gateway.rs config_from_env). A PARTIAL set
+# of those keys fails boot too - all three or nothing. Only flip this back to
+# "true" after running: flyctl secrets set OUTSCRAPER_API_KEY=... \
+# BRAVE_SEARCH_API_KEY=... EXA_SEARCH_API_KEY=... -a colony-relay
+BUZZ_DISCOVERY_HOSTED_ENABLED = "false"
 # Member self-serve community creation: any relay member may create
 # <slug>.colony.ainative.ventures via POST /api/communities (NIP-98 with
 # their own key). Wildcard DNS + the Fly wildcard cert cover every slug.
