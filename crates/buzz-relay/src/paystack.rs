@@ -168,6 +168,7 @@ impl PaymentProvider for LivePaystack {
         minor_units: i64,
         email: &str,
         reference: &str,
+        callback_url: &str,
     ) -> Result<String, ProviderError> {
         let body = serde_json::json!({
             "amount": minor_units,

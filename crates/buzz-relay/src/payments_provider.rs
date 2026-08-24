@@ -104,11 +104,20 @@ pub trait PaymentProvider: Send + Sync {
     /// figure straight off the credit pack rather than converting one
     /// currency into the other, so no exchange rate exists on this path and
     /// no implementation may introduce one.
+    ///
+    /// `callback_url` is where this gateway must deliver its notification,
+    /// built from the tenant host the checkout was requested through. It is
+    /// per-request rather than per-deployment because the relay is
+    /// multi-tenant and binds a delivery's community from the host it
+    /// arrives at: one fixed URL would route every community's callbacks to
+    /// whichever community that URL names, and the rest would never find
+    /// their own intents.
     async fn initialize(
         &self,
         minor_units: i64,
         email: &str,
         reference: &str,
+        callback_url: &str,
     ) -> Result<String, ProviderError>;
 
     /// The currency this gateway bills in.

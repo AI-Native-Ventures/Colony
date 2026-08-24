@@ -430,6 +430,21 @@ fn build_selected_provider() -> Option<SharedProvider> {
     }
 }
 
+/// The absolute URL a gateway must call back on for this tenant.
+///
+/// `COLONY_PAYMENT_CALLBACK_ORIGIN` overrides the scheme and host for
+/// deployments whose public origin is not the host the relay sees (a tunnel
+/// in development, say). Left unset in production, where the tenant host is
+/// already the public one.
+fn callback_url_for(provider_name: &str, tenant_host: &str) -> String {
+    let origin = env_nonempty("COLONY_PAYMENT_CALLBACK_ORIGIN")
+        .unwrap_or_else(|| format!("https://{tenant_host}"));
+    format!(
+        "{}/api/payments/webhook/{provider_name}",
+        origin.trim_end_matches('/')
+    )
+}
+
 /// `initialize` core: validate, write the pending intent, then open checkout.
 ///
 /// The intent is written before the provider is called so a crash mid-call
@@ -478,9 +493,16 @@ pub(crate) async fn initialize_payment(
         .await
         .map_err(|error| internal_error(&format!("create payment intent: {error}")))?;
 
+    // Where this gateway must deliver its notification. Built from the host
+    // this checkout arrived through, because the webhook binds its community
+    // from the host it lands on: one fixed URL would send every community's
+    // callbacks to whichever community that URL names, and every other
+    // community's buyers would pay and never be credited.
+    let callback_url = callback_url_for(provider.name(), tenant.host());
+
     let email = normalise_email(&request.email);
     match provider
-        .initialize(charge_minor_units, &email, &reference)
+        .initialize(charge_minor_units, &email, &reference, &callback_url)
         .await
     {
         Ok(authorization_url) => Ok(Json(json!({
@@ -1053,6 +1075,7 @@ mod tests {
             minor_units: i64,
             email: &str,
             reference: &str,
+            _callback_url: &str,
         ) -> Result<String, ProviderError> {
             self.calls.lock().unwrap().push((
                 minor_units,
@@ -1257,6 +1280,29 @@ mod tests {
             ));
             Ok(())
         }
+    }
+
+    #[test]
+    fn each_community_gets_a_callback_on_its_own_host() {
+        // The webhook binds its community from the host the delivery lands
+        // on. A single deployment-wide notify URL would therefore send every
+        // community's callbacks to whichever community that URL names: their
+        // buyers pay, the intent is looked up in the wrong tenant, and
+        // nobody is ever credited. Users self-provision communities, so that
+        // is most of them.
+        assert_eq!(
+            callback_url_for("payfast", "acme.colony.ainative.ventures"),
+            "https://acme.colony.ainative.ventures/api/payments/webhook/payfast"
+        );
+        assert_eq!(
+            callback_url_for("payfast", "other.colony.ainative.ventures"),
+            "https://other.colony.ainative.ventures/api/payments/webhook/payfast"
+        );
+        // One path per gateway, never sniffed.
+        assert_eq!(
+            callback_url_for("paystack", "acme.colony.ainative.ventures"),
+            "https://acme.colony.ainative.ventures/api/payments/webhook/paystack"
+        );
     }
 
     #[test]
