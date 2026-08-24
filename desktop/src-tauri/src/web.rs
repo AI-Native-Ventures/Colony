@@ -5,8 +5,12 @@
 //! frontend. A session owns its host and websocket task until an explicit tab
 //! close, community reset, app shutdown, or connection failure ends it.
 
+mod events;
 mod validation;
 
+use self::events::{
+    emit_error, emit_frame, emit_startup_timings, SessionStartupTimings, WebClosedEvent,
+};
 use self::validation::{
     normalize_url, validate_device_scale_factor, validate_key, validate_mouse, validate_text,
     validate_viewport, validate_wheel,
@@ -649,36 +653,6 @@ async fn initialize_page(
     Ok(())
 }
 
-/// Per-session startup timings captured for one-shot first-frame reporting.
-///
-/// Every instant is taken with [`Instant::now`] from the moment the public
-/// `start` path is invoked. The four deltas (`host_ready`, `cdp_connected`,
-/// `page_initialized`, `first_frame`) are emitted once, on the first
-/// `Page.screencastFrame`, and never again per session.
-struct SessionStartupTimings {
-    start: Instant,
-    host_ready: Instant,
-    cdp_connected: Instant,
-    page_initialized: Instant,
-}
-
-/// Log one-shot startup deltas (ms) for a session's first screencast frame.
-fn emit_startup_timings(session_id: &str, timings: &SessionStartupTimings) {
-    let host_ready_ms = timings.host_ready.duration_since(timings.start).as_millis();
-    let cdp_connected_ms = timings
-        .cdp_connected
-        .duration_since(timings.start)
-        .as_millis();
-    let page_initialized_ms = timings
-        .page_initialized
-        .duration_since(timings.start)
-        .as_millis();
-    let first_frame_ms = Instant::now().duration_since(timings.start).as_millis();
-    eprintln!(
-        "buzz-desktop: web session {session_id} startup: host_ready={host_ready_ms}ms cdp_connected={cdp_connected_ms}ms page_initialized={page_initialized_ms}ms first_frame={first_frame_ms}ms"
-    );
-}
-
 async fn run_session<R: Runtime>(
     app: AppHandle<R>,
     session_id: String,
@@ -898,72 +872,6 @@ async fn navigate_history(client: &mut CdpClient, delta: i64) -> Result<(), Stri
     .await
     .map(|_| ())
     .map_err(|error| error.to_string())
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebFrameEvent {
-    session_id: String,
-    data: String,
-    width: u32,
-    height: u32,
-    device_scale_factor: f64,
-    offset_top: f64,
-    scroll_offset_x: f64,
-    scroll_offset_y: f64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebErrorEvent {
-    session_id: String,
-    error: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebClosedEvent {
-    session_id: String,
-    error: Option<String>,
-}
-
-fn emit_frame<R: Runtime>(
-    app: &AppHandle<R>,
-    session_id: &str,
-    event: &Value,
-) -> Result<(), String> {
-    let params = &event["params"];
-    let data = params["data"]
-        .as_str()
-        .filter(|data| !data.is_empty())
-        .ok_or_else(|| "screencast frame had no image data".to_string())?;
-    let metadata = &params["metadata"];
-    app.emit(
-        WEB_FRAME_EVENT,
-        WebFrameEvent {
-            session_id: session_id.to_string(),
-            data: data.to_string(),
-            width: metadata["deviceWidth"].as_u64().unwrap_or(1) as u32,
-            height: metadata["deviceHeight"].as_u64().unwrap_or(1) as u32,
-            device_scale_factor: metadata["deviceScaleFactor"].as_f64().unwrap_or(1.0),
-            offset_top: metadata["offsetTop"].as_f64().unwrap_or(0.0),
-            scroll_offset_x: metadata["scrollOffsetX"].as_f64().unwrap_or(0.0),
-            scroll_offset_y: metadata["scrollOffsetY"].as_f64().unwrap_or(0.0),
-        },
-    )
-    .map_err(|error| format!("failed to emit web frame: {error}"))
-}
-
-fn emit_error<R: Runtime>(app: &AppHandle<R>, session_id: &str, error: &str) {
-    if let Err(emit_error) = app.emit(
-        WEB_ERROR_EVENT,
-        WebErrorEvent {
-            session_id: session_id.to_string(),
-            error: error.to_string(),
-        },
-    ) {
-        eprintln!("buzz-desktop: failed to emit web error: {emit_error}");
-    }
 }
 
 #[cfg(test)]
