@@ -54,6 +54,12 @@ pub enum ProviderError {
     /// string, which is ours and static.
     #[error("callback rejected: {0}")]
     RejectedCallback(&'static str),
+
+    /// A provider was configured with a value it cannot safely operate on,
+    /// such as an exchange rate outside any plausible band. Raised at
+    /// startup: mispricing live charges is worse than refusing to start.
+    #[error("provider misconfigured: {0}")]
+    Configuration(String),
 }
 
 /// Convert USD cents into ledger nanoUSD.
@@ -100,7 +106,10 @@ pub trait PaymentProvider: Send + Sync {
     /// Open a hosted checkout and return the URL to send the user to.
     ///
     /// `usd_cents` is the contract amount: USD is the product currency end to
-    /// end, and no implementation may convert it.
+    /// end. An implementation whose gateway cannot be charged in USD (PayFast
+    /// bills only in ZAR) converts at its own boundary and converts the
+    /// settled amount back before returning [`ProviderEvent::Paid`], so what
+    /// crosses this trait is dollars in both directions.
     async fn initialize(
         &self,
         usd_cents: i64,

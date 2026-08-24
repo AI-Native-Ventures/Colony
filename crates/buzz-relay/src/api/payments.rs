@@ -358,6 +358,44 @@ fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+/// Parse a decimal rate ("17.5", "18", "18.250") into thousandths.
+///
+/// By hand rather than through `f64`: this number multiplies every charge,
+/// and a rate that cannot be represented exactly cannot be reconciled
+/// exactly. At most three fraction digits, no sign, no exponent — anything
+/// else is refused rather than rounded into a price.
+fn parse_rate_millis(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    let (whole, fraction) = match raw.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (raw, ""),
+    };
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !whole.chars().all(|c| c.is_ascii_digit())
+        || !fraction.chars().all(|c| c.is_ascii_digit())
+        || fraction.len() > 3
+    {
+        return None;
+    }
+    let units: i64 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().ok()?
+    };
+    // Right-pad so "5" reads as 500 thousandths, not 5.
+    let mut millis: i64 = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse().ok()?
+    };
+    for _ in fraction.len()..3 {
+        millis = millis.checked_mul(10)?;
+    }
+    units.checked_mul(1_000)?.checked_add(millis)
+}
+
 fn build_selected_provider() -> Option<SharedProvider> {
     let choice = env_nonempty("COLONY_PAYMENT_PROVIDER")?;
     match choice.to_ascii_lowercase().as_str() {
@@ -401,15 +439,39 @@ fn build_selected_provider() -> Option<SharedProvider> {
                 );
                 return None;
             };
-            crate::payfast::PayFast::new(crate::payfast::PayFastCredentials {
+            // PayFast bills in ZAR and has no currency field, so a USD price
+            // needs a rate before it can be charged at all. Required, with no
+            // default: a guessed rate misprices every charge silently, which
+            // is the failure this whole path exists to prevent.
+            let Some(rate_raw) = env_nonempty("PAYFAST_USD_ZAR_RATE") else {
+                tracing::error!(
+                    "COLONY_PAYMENT_PROVIDER=payfast requires PAYFAST_USD_ZAR_RATE \
+                     (Rands per USD, e.g. 17.50); payments disabled"
+                );
+                return None;
+            };
+            let Some(usd_zar_rate_millis) = parse_rate_millis(&rate_raw) else {
+                tracing::error!(
+                    rate = %rate_raw,
+                    "PAYFAST_USD_ZAR_RATE is not a plain decimal number; payments disabled"
+                );
+                return None;
+            };
+            let credentials = crate::payfast::PayFastCredentials {
                 merchant_id,
                 merchant_key,
                 passphrase,
                 notify_url,
                 sandbox,
-            })
-            .ok()
-            .map(|provider| Arc::new(provider) as SharedProvider)
+                usd_zar_rate_millis,
+            };
+            if let Err(error) = credentials.validate_rate() {
+                tracing::error!(%error, "payfast rate rejected; payments disabled");
+                return None;
+            }
+            crate::payfast::PayFast::new(credentials)
+                .ok()
+                .map(|provider| Arc::new(provider) as SharedProvider)
         }
         _ => {
             tracing::error!(
@@ -839,6 +901,25 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
+
+    #[test]
+    fn a_rate_parses_into_exact_thousandths() {
+        // Whole, one, two and three decimals all right-pad to thousandths:
+        // "17.5" is R17.500, not R17.005.
+        assert_eq!(parse_rate_millis("18"), Some(18_000));
+        assert_eq!(parse_rate_millis("17.5"), Some(17_500));
+        assert_eq!(parse_rate_millis("17.50"), Some(17_500));
+        assert_eq!(parse_rate_millis("18.255"), Some(18_255));
+        assert_eq!(parse_rate_millis(" 18.25 "), Some(18_250));
+        // Anything that would have to be rounded, guessed, or sign-flipped
+        // is refused: this number multiplies every charge.
+        assert_eq!(parse_rate_millis("18.2555"), None, "beyond thousandths");
+        assert_eq!(parse_rate_millis("-18"), None);
+        assert_eq!(parse_rate_millis("1e2"), None);
+        assert_eq!(parse_rate_millis("R18"), None);
+        assert_eq!(parse_rate_millis(""), None);
+        assert_eq!(parse_rate_millis("."), None);
+    }
 
     fn community() -> CommunityId {
         CommunityId::from_uuid(uuid::Uuid::new_v4())

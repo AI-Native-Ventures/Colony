@@ -15,12 +15,28 @@
 //! 3. **Postback**: the received ITN bytes are posted back to PayFast's
 //!    `/eng/query/validate`, which must answer exactly `VALID`.
 //!
-//! The USD constraint lives here too, stated once: this provider never
-//! converts currency. Colony requests the charge in USD (Multi-Currency
-//! Pricing shows and charges the customer dollars), so the amount parsed
-//! from the ITN is USD cents by construction, and the ledger credits exactly
-//! what was charged. No exchange rate enters this module in either
-//! direction; settlement currency is a treasury matter outside this code.
+//! Currency lives here too, and it is the one thing about PayFast that will
+//! quietly cost money if assumed rather than checked. **PayFast is ZAR-only
+//! on the wire.** Its checkout has no currency parameter, and `amount` is
+//! always Rands. Enabling Multi-Currency Pricing does not change that: MCP
+//! lets a *buyer* choose to pay in their own currency against a price still
+//! quoted in ZAR, and settles the merchant in ZAR ("You'll get a settled
+//! amount in ZAR").
+//!
+//! Colony's ledger is nanoUSD end to end, so this module is the boundary
+//! where dollars become Rands and back, at the rate in
+//! [`PayFastCredentials::usd_zar_rate_millis`]. Both conversions round in
+//! Colony's favour, because the two errors point opposite ways:
+//!
+//! - Charging rounds **up**: never bill less than the dollars sold.
+//! - Crediting rounds **down**: never grant more Credits than were paid for.
+//!
+//! An earlier version of this file sent `usd_cents` as `amount` and parsed
+//! `amount_gross` straight back into `usd_cents`. Every gate still passed and
+//! nothing logged, but PayFast read a $5.00 top-up as R5.00, so Colony
+//! collected about 27c and granted $5.00 of Credits. Treating a Rand as a
+//! dollar is silent by construction; that is why the rate is required
+//! configuration and a missing or absurd one refuses to start.
 
 use std::net::IpAddr;
 use std::time::Duration;
@@ -154,6 +170,63 @@ pub(crate) struct PayFastCredentials {
     pub(crate) notify_url: String,
     /// Sandbox endpoints instead of live ones.
     pub(crate) sandbox: bool,
+    /// Rands per US dollar, in thousandths (18_500 is R18.500/USD).
+    ///
+    /// Thousandths rather than a float because this multiplies money: a rate
+    /// that cannot be written exactly cannot be reconciled exactly. Pinned
+    /// configuration rather than a live feed, so a rate-provider outage can
+    /// never price a charge, and it is set deliberately below spot to leave
+    /// margin for the move between deploys.
+    pub(crate) usd_zar_rate_millis: i64,
+}
+
+/// Rands per dollar, thousandths, outside which the rate is a mistake rather
+/// than a market. ZAR has not traded near either bound in its history, so a
+/// value outside them is a typo or a misread unit, and pricing on it would
+/// be worse than refusing to price at all.
+const MIN_USD_ZAR_RATE_MILLIS: i64 = 5_000;
+/// Upper bound of the sane band. See [`MIN_USD_ZAR_RATE_MILLIS`].
+const MAX_USD_ZAR_RATE_MILLIS: i64 = 100_000;
+
+/// Millis in one whole unit of rate.
+const RATE_SCALE: i64 = 1_000;
+
+impl PayFastCredentials {
+    /// Reject a rate that is missing, non-positive, or outside the sane band.
+    ///
+    /// Called at startup so a bad rate stops the process rather than
+    /// mispricing live charges.
+    pub(crate) fn validate_rate(&self) -> Result<(), ProviderError> {
+        if !(MIN_USD_ZAR_RATE_MILLIS..=MAX_USD_ZAR_RATE_MILLIS).contains(&self.usd_zar_rate_millis)
+        {
+            return Err(ProviderError::Configuration(format!(
+                "PAYFAST_USD_ZAR_RATE is {} per USD, outside the sane band {}..={}",
+                self.usd_zar_rate_millis as f64 / RATE_SCALE as f64,
+                MIN_USD_ZAR_RATE_MILLIS / RATE_SCALE,
+                MAX_USD_ZAR_RATE_MILLIS / RATE_SCALE,
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// USD cents into ZAR cents for a charge, rounding **up**.
+///
+/// Up, because this is what Colony bills: rounding down would sell dollars
+/// of Credits for fewer Rands than they cost.
+fn zar_cents_from_usd_cents(usd_cents: i64, rate_millis: i64) -> Option<i64> {
+    let scaled = usd_cents.checked_mul(rate_millis)?;
+    Some(scaled.div_euclid(RATE_SCALE) + i64::from(scaled.rem_euclid(RATE_SCALE) != 0))
+}
+
+/// ZAR cents from a settled ITN back into USD cents, rounding **down**.
+///
+/// Down, because this is what Colony grants: rounding up would credit more
+/// dollars than the Rands actually received are worth.
+fn usd_cents_from_zar_cents(zar_cents: i64, rate_millis: i64) -> Option<i64> {
+    zar_cents
+        .checked_mul(RATE_SCALE)
+        .map(|scaled| scaled.div_euclid(rate_millis))
 }
 
 /// Encode one value as application/x-www-form-urlencoded: space becomes
@@ -234,7 +307,10 @@ fn parse_itn(raw_body: &[u8]) -> (Vec<(String, String)>, Option<String>) {
     (pairs, signature)
 }
 
-/// Parse a gateway amount string ("5.00", "123.45") into USD cents.
+/// Parse a gateway amount string ("5.00", "123.45") into ZAR cents.
+///
+/// Cents of whatever PayFast sent, which is always Rands; converting to
+/// dollars is the caller's job and happens once, at the ITN boundary.
 ///
 /// Fixed-point by hand: float parsing rounds, and rounding money is how
 /// off-by-one-cent bugs become reconciliation incidents. More than two
@@ -334,7 +410,12 @@ impl PayFast {
         if usd_cents < 0 {
             return Err(ProviderError::NegativeAmount);
         }
-        let amount = format!("{}.{:02}", usd_cents / 100, usd_cents % 100);
+        // PayFast bills in Rands and has no currency field, so the dollars
+        // the contract speaks must become Rands here or the gateway silently
+        // reads them as Rands anyway. Rounding up never undercharges.
+        let zar_cents = zar_cents_from_usd_cents(usd_cents, self.credentials.usd_zar_rate_millis)
+            .ok_or(ProviderError::AmountOverflow)?;
+        let amount = format!("{}.{:02}", zar_cents / 100, zar_cents % 100);
         // PayFast's documented field ordering, restricted to what we send.
         let ordered = [
             ("merchant_id", self.credentials.merchant_id.as_str()),
@@ -448,11 +529,25 @@ impl crate::payments_provider::PaymentProvider for PayFast {
             tracing::warn!(reference, "payfast ITN COMPLETE without an amount_gross");
             return Ok(ProviderEvent::Ignored);
         };
-        let Some(usd_cents) = parse_amount_cents(amount_raw) else {
+        // amount_gross is what PayFast settled, and PayFast settles in ZAR
+        // even when the buyer chose to pay in another currency. Back to
+        // dollars before it reaches the ledger; rounding down never grants
+        // more Credits than were paid for.
+        let Some(zar_cents) = parse_amount_cents(amount_raw) else {
             tracing::error!(
                 reference,
                 amount = amount_raw,
                 "payfast ITN COMPLETE with an unparseable amount"
+            );
+            return Ok(ProviderEvent::Ignored);
+        };
+        let Some(usd_cents) =
+            usd_cents_from_zar_cents(zar_cents, self.credentials.usd_zar_rate_millis)
+        else {
+            tracing::error!(
+                reference,
+                amount = amount_raw,
+                "payfast ITN COMPLETE whose amount overflows conversion"
             );
             return Ok(ProviderEvent::Ignored);
         };
@@ -477,6 +572,9 @@ mod tests {
     const TEST_MERCHANT_ID: &str = "test-merchant-id";
     const TEST_MERCHANT_KEY: &str = "test-merchant-key";
     const TEST_PASSPHRASE: &str = "test-passphrase";
+    /// R20.000 per USD: a round rate keeps the arithmetic in these tests
+    /// checkable by eye, so a wrong expectation reads as wrong.
+    const TEST_RATE_MILLIS: i64 = 20_000;
 
     fn credentials() -> PayFastCredentials {
         PayFastCredentials {
@@ -485,6 +583,7 @@ mod tests {
             passphrase: TEST_PASSPHRASE.into(),
             notify_url: "https://relay.example/api/payments/webhook/payfast".into(),
             sandbox: true,
+            usd_zar_rate_millis: TEST_RATE_MILLIS,
         }
     }
 
@@ -600,13 +699,14 @@ mod tests {
         serializer.finish().into_bytes()
     }
 
-    /// A complete, correctly signed ITN for a $5.00 top-up.
+    /// A complete, correctly signed ITN for a $5.00 top-up, settled by
+    /// PayFast in Rands: R100.00 at the R20.000/USD test rate.
     fn valid_itn() -> (Vec<(String, String)>, Vec<u8>, String) {
         let pairs: Vec<(&str, &str)> = vec![
             ("m_payment_id", "topup-ref-1"),
             ("item_name", "Colony credit top-up"),
             ("payment_status", "COMPLETE"),
-            ("amount_gross", "5.00"),
+            ("amount_gross", "100.00"),
             ("email_address", "founder@example.com"),
             ("merchant_id", TEST_MERCHANT_ID),
         ];
@@ -759,7 +859,8 @@ mod tests {
         let provider = trusted_provider(validator);
         let unusual_order: Vec<(&str, &str)> = vec![
             ("merchant_id", TEST_MERCHANT_ID),
-            ("amount_gross", "7.50"),
+            // R150.00 settled is $7.50 at the R20.000/USD test rate.
+            ("amount_gross", "150.00"),
             ("payment_status", "COMPLETE"),
             ("email_address", "founder@example.com"),
             ("m_payment_id", "topup-order-1"),
@@ -966,6 +1067,72 @@ mod tests {
     }
 
     #[test]
+    fn a_charge_is_billed_in_rands_not_dollars() {
+        // The bug this replaces: $5.00 went out as "5.00", which PayFast
+        // billed as R5.00. At R20.000/USD the correct request is R100.00.
+        let url = trusted_provider(FakeValidator::valid())
+            .process_url_for(500, "founder@example.com", "topup-ref-1")
+            .expect("a positive amount builds a checkout URL");
+        assert!(
+            url.contains("amount=100.00"),
+            "expected R100.00 for a $5.00 sale at R20.000/USD, got {url}"
+        );
+    }
+
+    #[test]
+    fn charging_rounds_up_and_crediting_rounds_down() {
+        // R17.505/USD: a rate whose products land off a cent boundary, so
+        // the two roundings are visible and must point opposite ways.
+        let rate = 17_505;
+        // 1c of Credits costs 17.505c, billed as 18c: never bill less than
+        // the dollars sold.
+        assert_eq!(zar_cents_from_usd_cents(1, rate), Some(18));
+        // 18c settled is worth 1.028c, credited as 1c: never grant more
+        // Credits than the Rands received are worth.
+        assert_eq!(usd_cents_from_zar_cents(18, rate), Some(1));
+        // Exact multiples must not drift upward.
+        assert_eq!(zar_cents_from_usd_cents(1000, 20_000), Some(20_000));
+        assert_eq!(usd_cents_from_zar_cents(20_000, 20_000), Some(1000));
+        assert_eq!(zar_cents_from_usd_cents(0, rate), Some(0));
+    }
+
+    #[test]
+    fn a_round_trip_never_credits_more_than_was_billed() {
+        // The property that keeps the ledger solvent: converting out and
+        // back can lose a fraction of a cent to Colony, never gain one.
+        for rate in [5_000, 17_505, 18_000, 20_000, 99_999] {
+            for usd_cents in [1, 7, 99, 500, 12_345, 1_000_000] {
+                let billed = zar_cents_from_usd_cents(usd_cents, rate)
+                    .expect("test amounts stay far inside i64");
+                let credited = usd_cents_from_zar_cents(billed, rate)
+                    .expect("test amounts stay far inside i64");
+                assert!(
+                    credited <= usd_cents,
+                    "rate {rate}, {usd_cents}c billed as {billed} ZAR cents, \
+                     credited back as {credited}c: more than was sold"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_implausible_rate_refuses_to_start() {
+        let with_rate = |millis| PayFastCredentials {
+            usd_zar_rate_millis: millis,
+            ..credentials()
+        };
+        // A rate of 0 would make every charge free; a negative one is a
+        // caller bug. Both must stop the process, not price a sale.
+        assert!(with_rate(0).validate_rate().is_err());
+        assert!(with_rate(-18_000).validate_rate().is_err());
+        // 18 millis is R0.018/USD: almost certainly "18" written in the
+        // wrong unit, and it would bill 1/1000th of the real price.
+        assert!(with_rate(18).validate_rate().is_err());
+        assert!(with_rate(500_000).validate_rate().is_err());
+        assert!(with_rate(18_000).validate_rate().is_ok());
+    }
+
+    #[test]
     fn form_encoding_matches_the_url_encoded_form_style() {
         assert_eq!(form_encode("plain"), "plain");
         assert_eq!(form_encode("hello world"), "hello+world");
@@ -1098,7 +1265,9 @@ mod tests {
             ],
             "fields travel in PayFast's documented order"
         );
-        assert!(fields.contains(&("amount", "5.00")));
+        // R100.00, not "5.00": the field is Rands, and the $5.00 sale is
+        // converted at the R20.000/USD test rate before it is signed.
+        assert!(fields.contains(&("amount", "100.00")));
         assert!(fields.contains(&("m_payment_id", "topup-ref-9")));
         assert!(fields.contains(&("merchant_id", TEST_MERCHANT_ID)));
 
@@ -1125,6 +1294,8 @@ mod tests {
         let url = provider
             .process_url_for(12345, "founder@example.com", "ref-x")
             .expect("url");
-        assert!(url.contains("amount=123.45"), "{url}");
+        // $123.45 at R20.000/USD is R2469.00: the format is fixed-point
+        // Rands, whole and fraction each carried across the conversion.
+        assert!(url.contains("amount=2469.00"), "{url}");
     }
 }
