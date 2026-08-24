@@ -152,9 +152,12 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await expect(campaignDrawer).toContainText(
     "Tell Jen where to find leads and how many you need.",
   );
+  // "Advanced: Data Sources" went with 0af2187a2b: Discovery bills through
+  // Colony now, so a campaign no longer picks per-device API sources. The
+  // criteria section is the advanced surface that remains.
   await expect(
     campaignDrawer.getByText("Advanced: Data Sources", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     campaignDrawer.getByText("Advanced Criteria", { exact: true }),
   ).toBeVisible();
