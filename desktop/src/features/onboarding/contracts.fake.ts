@@ -48,10 +48,46 @@ export function createFakeServices(
       },
     },
     payments: {
-      createTransaction: async (usdCents) => {
+      // Mirrors the relay's own table closely enough for the screen to look
+      // real, and bills ZAR, since that is what every South African gateway
+      // does and the case most likely to be got wrong.
+      packs: async () => {
+        await wait();
+        return {
+          currency: "ZAR" as const,
+          packs: [
+            {
+              id: "starter",
+              name: "Starter",
+              zarCents: 11_900,
+              usdCents: 699,
+              grantNanousd: 5_000_000_000,
+            },
+            {
+              id: "growth",
+              name: "Growth",
+              zarCents: 29_900,
+              usdCents: 1_799,
+              grantNanousd: 14_000_000_000,
+            },
+            {
+              id: "scale",
+              name: "Scale",
+              zarCents: 89_900,
+              usdCents: 5_499,
+              grantNanousd: 44_000_000_000,
+            },
+          ],
+        };
+      },
+      createTransaction: async (packId) => {
         await wait();
         const reference = `ref_${pending.size + 1}`;
-        pending.set(reference, usdCents);
+        // Record what the pack grants, not what it costs: settlement credits
+        // Credits, and the fake must not imply the two are the same number.
+        const grantCents =
+          packId === "scale" ? 4_400 : packId === "growth" ? 1_400 : 500;
+        pending.set(reference, grantCents);
         return {
           authorizationUrl: `https://checkout.example/${reference}`,
           reference,

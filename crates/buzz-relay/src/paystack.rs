@@ -165,12 +165,16 @@ impl LivePaystack {
 impl PaymentProvider for LivePaystack {
     async fn initialize(
         &self,
-        usd_cents: i64,
+        minor_units: i64,
         email: &str,
         reference: &str,
+        // Paystack delivers webhooks to a URL configured in its dashboard
+        // rather than one named per transaction, so it has nowhere to put
+        // this. PayFast is the gateway that takes it on the request.
+        _callback_url: &str,
     ) -> Result<String, ProviderError> {
         let body = serde_json::json!({
-            "amount": usd_cents,
+            "amount": minor_units,
             "email": email,
             "reference": reference,
             "currency": "USD",
@@ -212,6 +216,13 @@ impl PaymentProvider for LivePaystack {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
         verify_and_parse_delivery(raw_body, signature, &self.secret)
+    }
+
+    fn currency(&self) -> crate::credit_packs::Currency {
+        // Paystack bills Colony in USD. Note this is the currency of the
+        // charge, not of settlement: a South African Paystack account is
+        // still paid out in ZAR, and that conversion is Paystack's to make.
+        crate::credit_packs::Currency::Usd
     }
 
     fn name(&self) -> &'static str {

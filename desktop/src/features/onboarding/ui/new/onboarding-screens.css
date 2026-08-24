@@ -54,7 +54,10 @@
      chooser and a form (credits) never lands them in the same cell. */
   :where(.onb-canvas)
     .onb-screen:not([data-wide="true"]):not([data-solo="true"])
-    .onb-amounts {
+    .onb-amounts,
+  :where(.onb-canvas)
+    .onb-screen:not([data-wide="true"]):not([data-solo="true"])
+    .onb-packs {
     grid-column: 2;
     grid-row: 1;
     margin-top: 0;
@@ -822,7 +825,59 @@
     margin-bottom: 5px;
   }
 
-  /* Screen 9: credits. */
+  /* Screen 9: credits. Fixed packs rather than a free amount: no South
+     African gateway may charge in USD, so an arbitrary dollar figure could
+     only reach the gateway through an exchange rate. Each card therefore
+     carries two independent numbers — what it grants, and what it costs. */
+  :where(.onb-canvas) .onb-packs {
+    display: flex;
+    gap: 0.625rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  :where(.onb-canvas) .onb-pack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    min-width: 8.5rem;
+    padding: 0.9rem 1.1rem;
+    border-radius: 0.875rem;
+    border: 1px solid var(--onb-shell-line);
+    background: var(--onb-shell);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+    transition:
+      transform 240ms var(--onb-ease),
+      border-color 240ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-pack:hover {
+    transform: translate3d(0, -2px, 0);
+  }
+
+  :where(.onb-canvas) .onb-pack[data-selected="true"] {
+    border-color: currentColor;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
+  }
+
+  /* The grant leads: it is the product. The price is secondary, because it
+     is the same purchase whichever currency the gateway bills. */
+  :where(.onb-canvas) .onb-pack-grant {
+    font-weight: 600;
+    font-size: 1.0625rem;
+  }
+
+  :where(.onb-canvas) .onb-pack-price {
+    font-size: 0.875rem;
+    opacity: 0.72;
+  }
+
   :where(.onb-canvas) .onb-amounts {
     display: flex;
     gap: 0.625rem;

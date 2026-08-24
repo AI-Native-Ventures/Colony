@@ -25,7 +25,7 @@
 //!
 //! On all three client routes the pubkey comes from the NIP-98 signature,
 //! never from a body field. Every error carries a typed string from the set
-//! the desktop client maps to screen states (`amount_too_small`,
+//! the desktop client maps to screen states (`unknown_pack`,
 //! `rate_limited`, `unknown_reference`, `payment_unavailable`); anything
 //! unrecognized falls through to the client's `unreachable` bucket, so no
 //! new string can break a screen.
@@ -63,7 +63,7 @@ use buzz_auth::account_crypto::normalise_email;
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::credits;
-use buzz_db::payment_intents::{self, PaymentIntent};
+use buzz_db::payment_intents::{self, PackTerms, PaymentIntent};
 use buzz_db::DbError;
 
 use crate::payments_provider::{
@@ -79,9 +79,6 @@ use super::{api_error, internal_error};
 /// points without spelling bounds at every use site.
 type SharedProvider = Arc<dyn PaymentProvider>;
 
-/// The smallest top-up accepted, in USD cents ($5.00).
-pub(crate) const MIN_TOPUP_CENTS: i64 = 500;
-
 /// RFC 5321 caps an address at 254 octets.
 const MAX_EMAIL_LEN: usize = 254;
 
@@ -93,8 +90,15 @@ const MAX_REFERENCE_LEN: usize = 200;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
-    /// Amount to collect, in USD cents. Minimum [`MIN_TOPUP_CENTS`].
-    pub usd_cents: i64,
+    /// Which credit pack is being bought. The client names a pack, never a
+    /// price: a client that could name its own price could name zero.
+    ///
+    /// This replaced a free-text USD amount. No South African gateway may
+    /// charge in USD (SARB permits ZAR-denominated processing only), so an
+    /// arbitrary dollar figure could only reach PayFast through an exchange
+    /// rate, and a rate is a currency position Colony has no business
+    /// holding. A pack carries a price per currency instead.
+    pub pack_id: String,
     /// Receipt email passed through to the hosted checkout.
     pub email: String,
 }
@@ -117,12 +121,15 @@ fn is_plausible_email(email: &str) -> bool {
 /// Validate an initialize request against the typed error strings the client
 /// maps. Never returns free text: the client must not parse prose.
 pub(crate) fn validate_initialize(request: &InitializeRequest) -> Result<(), &'static str> {
-    if request.usd_cents < MIN_TOPUP_CENTS {
-        return Err("amount_too_small");
-    }
-    // Refused here rather than at credit time so a nonsense amount never
+    // An unrecognised pack is a stale client or a tampered body. Both refuse:
+    // there is no default pack, because charging someone for a pack they did
+    // not choose is worse than failing their checkout.
+    let Some(pack) = crate::credit_packs::find_pack(&request.pack_id) else {
+        return Err("unknown_pack");
+    };
+    // Refused here rather than at credit time so a nonsense grant never
     // becomes a stored intent.
-    if nano_usd_from_cents(request.usd_cents).is_err() {
+    if nano_usd_from_cents(pack.usd_cents).is_err() {
         return Err("amount_too_large");
     }
     if !is_plausible_email(&normalise_email(&request.email)) {
@@ -146,6 +153,7 @@ pub(crate) trait PaymentStore: Send + Sync {
         pubkey: &[u8],
         usd_cents: i64,
         provider: &str,
+        pack: Option<&PackTerms>,
     ) -> Result<(), DbError>;
 
     /// Look up one intent by reference inside one tenant.
@@ -195,9 +203,10 @@ impl PaymentStore for RealStore {
         pubkey: &[u8],
         usd_cents: i64,
         provider: &str,
+        pack: Option<&PackTerms>,
     ) -> Result<(), DbError> {
         payment_intents::create_intent(
-            &self.pool, community, reference, pubkey, usd_cents, provider,
+            &self.pool, community, reference, pubkey, usd_cents, provider, pack,
         )
         .await
     }
@@ -373,14 +382,16 @@ fn build_selected_provider() -> Option<SharedProvider> {
                 .map(|client| Arc::new(client) as SharedProvider)
         }
         "payfast" => {
-            let (Some(merchant_id), Some(merchant_key), Some(notify_url)) = (
+            // No notify URL here: it is built per request from the tenant
+            // host, because the webhook binds its community from the host it
+            // arrives at and this relay serves many.
+            let (Some(merchant_id), Some(merchant_key)) = (
                 env_nonempty("PAYFAST_MERCHANT_ID"),
                 env_nonempty("PAYFAST_MERCHANT_KEY"),
-                env_nonempty("PAYFAST_NOTIFY_URL"),
             ) else {
                 tracing::error!(
-                    "COLONY_PAYMENT_PROVIDER=payfast but PAYFAST_MERCHANT_ID, \
-                     PAYFAST_MERCHANT_KEY or PAYFAST_NOTIFY_URL unset; payments disabled"
+                    "COLONY_PAYMENT_PROVIDER=payfast but PAYFAST_MERCHANT_ID or \
+                     PAYFAST_MERCHANT_KEY unset; payments disabled"
                 );
                 return None;
             };
@@ -405,7 +416,6 @@ fn build_selected_provider() -> Option<SharedProvider> {
                 merchant_id,
                 merchant_key,
                 passphrase,
-                notify_url,
                 sandbox,
             })
             .ok()
@@ -419,6 +429,21 @@ fn build_selected_provider() -> Option<SharedProvider> {
             None
         }
     }
+}
+
+/// The absolute URL a gateway must call back on for this tenant.
+///
+/// `COLONY_PAYMENT_CALLBACK_ORIGIN` overrides the scheme and host for
+/// deployments whose public origin is not the host the relay sees (a tunnel
+/// in development, say). Left unset in production, where the tenant host is
+/// already the public one.
+fn callback_url_for(provider_name: &str, tenant_host: &str) -> String {
+    let origin = env_nonempty("COLONY_PAYMENT_CALLBACK_ORIGIN")
+        .unwrap_or_else(|| format!("https://{tenant_host}"));
+    format!(
+        "{}/api/payments/webhook/{provider_name}",
+        origin.trim_end_matches('/')
+    )
 }
 
 /// `initialize` core: validate, write the pending intent, then open checkout.
@@ -438,21 +463,47 @@ pub(crate) async fn initialize_payment(
         return Err(api_error(StatusCode::BAD_REQUEST, reason));
     }
 
+    // Validation already resolved this; re-resolving keeps the pack out of
+    // the request type, so a handler can never be handed a price the client
+    // supplied.
+    let pack = crate::credit_packs::find_pack(&request.pack_id)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "unknown_pack"))?;
+    let currency = provider.currency();
+    // The price in the gateway's own currency, read off the pack. Nothing is
+    // converted, so there is no rate to go stale between here and settlement.
+    let charge_minor_units = pack.price_in(currency);
+    let terms = PackTerms {
+        pack_id: pack.id.to_string(),
+        charge_minor_units,
+        charge_currency: currency.code().to_string(),
+        // Recorded now so a price edit between checkout and callback cannot
+        // change what this purchase is worth.
+        grant_nanousd: pack.grant_nanousd,
+    };
+
     let reference = format!("topup-{}", uuid::Uuid::new_v4());
     store
         .create_intent(
             tenant.community(),
             &reference,
             &signer_pubkey,
-            request.usd_cents,
+            pack.usd_cents,
             provider.name(),
+            Some(&terms),
         )
         .await
         .map_err(|error| internal_error(&format!("create payment intent: {error}")))?;
 
+    // Where this gateway must deliver its notification. Built from the host
+    // this checkout arrived through, because the webhook binds its community
+    // from the host it lands on: one fixed URL would send every community's
+    // callbacks to whichever community that URL names, and every other
+    // community's buyers would pay and never be credited.
+    let callback_url = callback_url_for(provider.name(), tenant.host());
+
     let email = normalise_email(&request.email);
     match provider
-        .initialize(request.usd_cents, &email, &reference)
+        .initialize(charge_minor_units, &email, &reference, &callback_url)
         .await
     {
         Ok(authorization_url) => Ok(Json(json!({
@@ -604,6 +655,25 @@ pub async fn balance(
     balance_payment(&store, pubkey.to_bytes()).await
 }
 
+/// `GET /api/payments/packs`: what a top-up costs, and in which currency.
+///
+/// Served rather than compiled into the client so a price change reaches
+/// users without shipping a desktop build, and so the client never holds a
+/// price of its own to send back. Unauthenticated: a price list is public,
+/// and a checkout still authenticates.
+///
+/// `currency` names which of each pack's prices actually applies, decided by
+/// the configured gateway. When payments are disabled there is no gateway to
+/// ask, so the field is absent and the client shows the packs without a
+/// price rather than inventing one.
+pub async fn packs() -> Json<Value> {
+    let currency = selected_provider().map(|provider| provider.currency());
+    Json(json!({
+        "packs": crate::credit_packs::CREDIT_PACKS,
+        "currency": currency.map(|currency| currency.code()),
+    }))
+}
+
 /// `webhook` core: verify through the provider, then credit and settle
 /// exactly once.
 ///
@@ -690,21 +760,39 @@ pub(crate) async fn webhook_payment(
         return Ok(StatusCode::OK);
     }
 
-    // The amount is checked against our own record, not trusted from the
-    // callback: what was actually paid is what gets credited, and any
-    // mismatch between the two numbers is logged, never silently resolved in
-    // either direction.
-    if paid_cents != intent.usd_cents {
+    // What the gateway says was paid is checked against our own record, in
+    // the currency that record was written in. A pack intent was charged in
+    // the gateway's currency (Rands for PayFast), so comparing it against
+    // the USD list price would flag every correct payment as a mismatch.
+    let expected_minor_units = match &intent.pack {
+        Some(terms) => terms.charge_minor_units,
+        None => intent.usd_cents,
+    };
+    if paid_cents != expected_minor_units {
         tracing::warn!(
             provider = provider.name(),
             reference = %reference,
-            asked_cents = intent.usd_cents,
-            paid_cents,
+            asked = expected_minor_units,
+            currency = intent
+                .pack
+                .as_ref()
+                .map(|terms| terms.charge_currency.as_str())
+                .unwrap_or("USD"),
+            paid = paid_cents,
             "payment webhook: paid amount differed from the requested amount"
         );
     }
 
-    let nanousd = match nano_usd_from_cents(paid_cents) {
+    // Credit the grant fixed at checkout, never an amount derived from the
+    // callback. The charge and the grant are in different currencies, so
+    // there is no arithmetic that could turn one into the other honestly —
+    // and this is also what makes an unexpected callback amount unable to
+    // mis-credit anyone.
+    let nanousd = match &intent.pack {
+        Some(terms) => Ok(terms.grant_nanousd),
+        None => nano_usd_from_cents(paid_cents),
+    };
+    let nanousd = match nanousd {
         Ok(nanousd) => nanousd,
         Err(error) => {
             tracing::error!(
@@ -741,9 +829,60 @@ const WEBHOOK_BODY_LIMIT: usize = 1024 * 1024;
 /// Providers that authenticate the source treat `None` as untrusted, which
 /// is exactly the fail-closed default.
 fn source_ip_of(req: &axum::extract::Request) -> Option<std::net::IpAddr> {
-    req.extensions()
+    let peer = req
+        .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|connect_info| connect_info.0.ip())
+        .map(|connect_info| connect_info.0.ip());
+    source_ip_from(req.headers(), peer)
+}
+
+/// Resolve the true source of a webhook delivery.
+///
+/// PayFast authenticates the *source* of an ITN, so this address is authz,
+/// not telemetry, and that rules out trusting a forwarded header the way
+/// rate limiting does. Behind Fly's proxy the socket peer is the proxy
+/// rather than the gateway, so reading the peer alone would reject every
+/// genuine ITN: the buyer's card is charged, the delivery is refused, and no
+/// Credits are ever granted. Reading the header alone would let anyone who
+/// can reach the relay claim to be PayFast.
+///
+/// So the header is consulted only when the peer is itself a private,
+/// loopback or unspecified address, which is the case exactly when a local
+/// proxy really is in front of us. Fly's proxy connects over the private
+/// 6PN network and overwrites `Fly-Client-IP` itself, so a spoofed value
+/// cannot survive it. A directly exposed relay sees a public peer, ignores
+/// the header entirely, and falls back to the address it can actually see.
+fn source_ip_from(headers: &HeaderMap, peer: Option<std::net::IpAddr>) -> Option<std::net::IpAddr> {
+    let behind_local_proxy = peer.is_none_or(is_private_address);
+    if behind_local_proxy {
+        if let Some(forwarded) = headers
+            .get("fly-client-ip")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<std::net::IpAddr>().ok())
+        {
+            return Some(forwarded);
+        }
+    }
+    peer
+}
+
+/// Whether an address belongs to a private, loopback or unspecified range,
+/// which is what a local reverse proxy connects from.
+fn is_private_address(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
+        }
+        // Fly's private network is fdaa::/16, inside the fc00::/7 unique-local
+        // range; `is_unique_local` is unstable, so the leading bits are
+        // checked directly.
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 /// Shared webhook core for both routes.
@@ -852,9 +991,13 @@ mod tests {
         TenantContext::resolved(community, "relay.example")
     }
 
-    fn init_request(usd_cents: i64) -> InitializeRequest {
+    /// The cheapest real pack, used wherever a test needs a valid request
+    /// and does not care which one.
+    const TEST_PACK: &str = "starter";
+
+    fn init_request(pack_id: &str) -> InitializeRequest {
         InitializeRequest {
-            usd_cents,
+            pack_id: pack_id.into(),
             email: "founder@example.com".into(),
         }
     }
@@ -930,14 +1073,16 @@ mod tests {
     impl PaymentProvider for FakeProvider {
         async fn initialize(
             &self,
-            usd_cents: i64,
+            minor_units: i64,
             email: &str,
             reference: &str,
+            _callback_url: &str,
         ) -> Result<String, ProviderError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((usd_cents, email.to_string(), reference.to_string()));
+            self.calls.lock().unwrap().push((
+                minor_units,
+                email.to_string(),
+                reference.to_string(),
+            ));
             if self.fail {
                 return Err(ProviderError::Status { status: 500 });
             }
@@ -958,6 +1103,12 @@ mod tests {
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or("");
             verify_and_parse_delivery(raw_body, signature, &self.secret)
+        }
+
+        fn currency(&self) -> crate::credit_packs::Currency {
+            // The fake stands in for Paystack, which bills Colony in dollars.
+            // The ZAR path is asserted against the real PayFast provider.
+            crate::credit_packs::Currency::Usd
         }
 
         fn name(&self) -> &'static str {
@@ -1018,6 +1169,10 @@ mod tests {
                     status: "pending".into(),
                     provider: provider.to_string(),
                     paid_cents: None,
+                    // Seeded without pack terms: these fixtures predate packs
+                    // and exercise the legacy free-amount path, which still
+                    // has to settle correctly for rows written before 0067.
+                    pack: None,
                 },
             );
         }
@@ -1038,6 +1193,7 @@ mod tests {
                     status: intent.status.clone(),
                     provider: intent.provider.clone(),
                     paid_cents: intent.paid_cents,
+                    pack: intent.pack.clone(),
                 })
         }
     }
@@ -1054,6 +1210,7 @@ mod tests {
             pubkey: &[u8],
             usd_cents: i64,
             provider: &str,
+            pack: Option<&PackTerms>,
         ) -> Result<(), DbError> {
             self.insert_pending_via(
                 reference,
@@ -1061,6 +1218,14 @@ mod tests {
                 usd_cents,
                 provider,
             );
+            // Record the terms the caller passed rather than dropping them:
+            // a fake that silently discards the grant would let a settlement
+            // bug that credits the wrong amount pass every test here.
+            if let Some(terms) = pack {
+                if let Some(intent) = self.intents.lock().unwrap().get_mut(reference) {
+                    intent.pack = Some(terms.clone());
+                }
+            }
             Ok(())
         }
 
@@ -1119,41 +1284,138 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_amount_below_the_minimum() {
+    fn each_community_gets_a_callback_on_its_own_host() {
+        // The webhook binds its community from the host the delivery lands
+        // on. A single deployment-wide notify URL would therefore send every
+        // community's callbacks to whichever community that URL names: their
+        // buyers pay, the intent is looked up in the wrong tenant, and
+        // nobody is ever credited. Users self-provision communities, so that
+        // is most of them.
         assert_eq!(
-            validate_initialize(&init_request(MIN_TOPUP_CENTS - 1)).unwrap_err(),
-            "amount_too_small"
+            callback_url_for("payfast", "acme.colony.ainative.ventures"),
+            "https://acme.colony.ainative.ventures/api/payments/webhook/payfast"
+        );
+        assert_eq!(
+            callback_url_for("payfast", "other.colony.ainative.ventures"),
+            "https://other.colony.ainative.ventures/api/payments/webhook/payfast"
+        );
+        // One path per gateway, never sniffed.
+        assert_eq!(
+            callback_url_for("paystack", "acme.colony.ainative.ventures"),
+            "https://acme.colony.ainative.ventures/api/payments/webhook/paystack"
         );
     }
 
     #[test]
-    fn accepts_exactly_the_minimum() {
-        assert!(validate_initialize(&init_request(MIN_TOPUP_CENTS)).is_ok());
+    fn behind_a_proxy_the_gateway_address_comes_from_the_header() {
+        // The failure this prevents: on Fly the socket peer is the proxy, so
+        // reading it alone means PayFast's source check never matches and
+        // every ITN is refused. The buyer is charged and credited nothing,
+        // which is the worst outcome available to this code.
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "197.97.99.1".parse().unwrap());
+        // Fly's proxy reaches the app over its private 6PN network.
+        let fly_proxy: std::net::IpAddr = "fdaa:0:1::3".parse().unwrap();
+        assert_eq!(
+            source_ip_from(&headers, Some(fly_proxy)),
+            Some("197.97.99.1".parse().unwrap())
+        );
+        // Same for an IPv4 private peer, and for no peer at all.
+        assert_eq!(
+            source_ip_from(&headers, Some("172.19.0.4".parse().unwrap())),
+            Some("197.97.99.1".parse().unwrap())
+        );
+        assert_eq!(
+            source_ip_from(&headers, None),
+            Some("197.97.99.1".parse().unwrap())
+        );
     }
 
     #[test]
-    fn rejects_a_zero_or_negative_amount_as_below_the_minimum() {
+    fn a_public_peer_cannot_spoof_the_gateway_address() {
+        // This address is authz, not telemetry: PayFast authenticates the
+        // source of a delivery. A relay reachable directly must therefore
+        // ignore the header entirely, or anyone who can post to it could
+        // claim to be PayFast and settle their own intents.
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "197.97.99.1".parse().unwrap());
+        let attacker: std::net::IpAddr = "203.0.113.9".parse().unwrap();
         assert_eq!(
-            validate_initialize(&init_request(0)).unwrap_err(),
-            "amount_too_small"
+            source_ip_from(&headers, Some(attacker)),
+            Some(attacker),
+            "a public peer's claim about its own identity is worthless"
         );
+        // A public IPv6 peer is refused the same way.
+        let attacker_v6: std::net::IpAddr = "2001:db8::1".parse().unwrap();
         assert_eq!(
-            validate_initialize(&init_request(-500)).unwrap_err(),
-            "amount_too_small"
+            source_ip_from(&headers, Some(attacker_v6)),
+            Some(attacker_v6)
         );
     }
 
     #[test]
-    fn rejects_an_amount_that_would_overflow_nano_usd() {
+    fn a_missing_or_malformed_header_falls_back_to_the_peer() {
+        let peer: std::net::IpAddr = "fdaa:0:1::3".parse().unwrap();
+        assert_eq!(source_ip_from(&HeaderMap::new(), Some(peer)), Some(peer));
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "not-an-ip".parse().unwrap());
+        assert_eq!(source_ip_from(&headers, Some(peer)), Some(peer));
+        // Unknown either way stays unknown; PayFast's own check refuses a
+        // delivery whose source cannot be established.
+        assert_eq!(source_ip_from(&HeaderMap::new(), None), None);
+    }
+
+    #[test]
+    fn accepts_every_pack_on_sale() {
+        // Whatever the price table holds must be buyable. A pack that fails
+        // validation would be visible on the packs route and unpurchasable.
+        for pack in crate::credit_packs::CREDIT_PACKS {
+            assert!(
+                validate_initialize(&init_request(pack.id)).is_ok(),
+                "{} is on sale but cannot be bought",
+                pack.id
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_pack() {
+        // A stale client or a tampered body. There is no default pack:
+        // charging for one the buyer did not choose is worse than failing.
+        for id in ["", "enterprise", "STARTER", "starter "] {
+            assert_eq!(
+                validate_initialize(&init_request(id)).unwrap_err(),
+                "unknown_pack",
+                "{id:?} must not resolve to a pack"
+            );
+        }
+    }
+
+    #[test]
+    fn a_client_cannot_name_its_own_price() {
+        // The whole reason initialize takes a pack id: a body carrying an
+        // amount has nowhere to put it, so no request can undercut a price.
+        // Deserialising proves the field is gone, not merely ignored.
+        let body = serde_json::json!({
+            "packId": TEST_PACK,
+            "email": "founder@example.com",
+            "usdCents": 1,
+            "amount": 1,
+            "zarCents": 1,
+        });
+        let request: InitializeRequest =
+            serde_json::from_value(body).expect("unknown fields are ignored, not rejected");
+        let pack = crate::credit_packs::find_pack(&request.pack_id).expect("known pack");
         assert_eq!(
-            validate_initialize(&init_request(i64::MAX)).unwrap_err(),
-            "amount_too_large"
+            pack.usd_cents, 699,
+            "price comes from the table, not the body"
         );
+        assert_eq!(pack.zar_cents, 11_900);
     }
 
     #[test]
     fn rejects_an_implausible_email() {
-        let mut request = init_request(500);
+        let mut request = init_request(TEST_PACK);
         request.email = "founder".into();
         assert_eq!(validate_initialize(&request).unwrap_err(), "invalid_email");
     }
@@ -1165,8 +1427,9 @@ mod tests {
         let tenant = tenant_of(store.community);
         let key = signer();
 
-        let response =
-            ok_value(initialize_payment(&store, &provider, &tenant, key, &init_request(500)).await);
+        let response = ok_value(
+            initialize_payment(&store, &provider, &tenant, key, &init_request(TEST_PACK)).await,
+        );
 
         let reference = response
             .get("reference")
@@ -1180,8 +1443,18 @@ mod tests {
 
         let stored = store.get(&reference).expect("intent stored");
         assert_eq!(stored.pubkey, key.to_vec());
-        assert_eq!(stored.usd_cents, 500);
+        // The USD list price of the pack, taken from the table rather than
+        // from anything the client sent.
+        assert_eq!(stored.usd_cents, 699);
         assert_eq!(stored.status, "pending");
+        // The terms are frozen onto the row at checkout, so a later price
+        // edit cannot change what this purchase is worth when it settles.
+        let terms = stored.pack.as_ref().expect("pack terms recorded");
+        assert_eq!(terms.pack_id, TEST_PACK);
+        assert_eq!(terms.grant_nanousd, 500 * NANO_USD_PER_CENT);
+        // The fake bills dollars, so the charge is the pack's USD price.
+        assert_eq!(terms.charge_currency, "USD");
+        assert_eq!(terms.charge_minor_units, 699);
         assert_eq!(provider.calls.lock().unwrap().len(), 1, "one checkout call");
     }
 
@@ -1189,7 +1462,7 @@ mod tests {
     async fn initialize_sends_the_normalised_email_and_amount_to_the_provider() {
         let store = FakeStore::new(community());
         let provider = FakeProvider::new("paystack");
-        let mut request = init_request(1200);
+        let mut request = init_request(TEST_PACK);
         request.email = "Founder@Example.COM".into();
 
         let _response = initialize_payment(
@@ -1203,8 +1476,34 @@ mod tests {
         .expect("initialize succeeds");
 
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].0, 1200, "cents pass through unchanged");
+        // The provider is charged the pack's price in its own currency, read
+        // straight off the table. Nothing converts, so no rate exists here.
+        assert_eq!(
+            calls[0].0, 699,
+            "the pack's price in the provider's currency reaches the gateway"
+        );
         assert_eq!(calls[0].1, "founder@example.com");
+    }
+
+    #[test]
+    fn payfast_is_charged_rands_and_paystack_dollars() {
+        // The bug this design removes: PayFast's `amount` field is Rands and
+        // it has no currency parameter, so sending it the USD price still
+        // signs, still postbacks, still settles, and collects roughly a
+        // eighteenth of the intended money. The two gateways must therefore
+        // receive different numbers for the same pack.
+        let pack = crate::credit_packs::find_pack(TEST_PACK).expect("known pack");
+        let zar = pack.price_in(crate::credit_packs::Currency::Zar);
+        let usd = pack.price_in(crate::credit_packs::Currency::Usd);
+        assert_eq!(zar, 11_900, "PayFast is charged the ZAR price");
+        assert_eq!(usd, 699, "Paystack is charged the USD price");
+        assert_ne!(
+            zar, usd,
+            "if these ever match, a conversion has crept back in"
+        );
+        // And the grant is neither of them: Credits are what the buyer gets,
+        // priced separately in each currency they can pay with.
+        assert_eq!(pack.grant_nanousd, 500 * NANO_USD_PER_CENT);
     }
 
     #[tokio::test]
@@ -1216,7 +1515,7 @@ mod tests {
             &FakeProvider::failing(),
             &tenant_of(store.community),
             signer(),
-            &init_request(500),
+            &init_request(TEST_PACK),
         )
         .await;
 
@@ -1264,6 +1563,7 @@ mod tests {
                 status: "paid".into(),
                 provider: "paystack".into(),
                 paid_cents: Some(700),
+                pack: None,
             },
         );
 
@@ -1494,6 +1794,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pack_grants_its_credits_not_the_amount_the_gateway_reports() {
+        // The failure this guards: PayFast settles in Rands, so a R119
+        // payment arrives as 11 900. Crediting the reported figure as USD
+        // cents would grant $119.00 of Credits for a $5.00 purchase.
+        //
+        // The grant is frozen onto the intent at checkout, so what the
+        // gateway reports is only ever compared, never converted.
+        let store = FakeStore::new(community());
+        let key = signer();
+        store.insert_pending("ref-pack", key, 699);
+        store
+            .intents
+            .lock()
+            .unwrap()
+            .get_mut("ref-pack")
+            .expect("seeded")
+            .pack = Some(PackTerms {
+            pack_id: TEST_PACK.into(),
+            charge_minor_units: 11_900,
+            charge_currency: "ZAR".into(),
+            grant_nanousd: 500 * NANO_USD_PER_CENT,
+        });
+        let body = success_body("ref-pack", 11_900);
+
+        let status = deliver(&store, &sign(TEST_WEBHOOK_SECRET, &body), &body)
+            .await
+            .expect("delivery acknowledged");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_credits(&store, &[(key.to_vec(), 5_000_000_000, "ref-pack")]);
+    }
+
+    #[tokio::test]
     async fn a_replayed_delivery_credits_zero_more_times() {
         let store = FakeStore::new(community());
         let key = signer();
@@ -1703,7 +2036,7 @@ mod tests {
                 &provider,
                 &tenant_of(store.community),
                 signer(),
-                &init_request(500),
+                &init_request(TEST_PACK),
             )
             .await,
         );

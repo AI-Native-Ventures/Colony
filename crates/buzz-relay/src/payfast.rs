@@ -148,10 +148,6 @@ pub(crate) struct PayFastCredentials {
     pub(crate) merchant_key: String,
     /// Optional passphrase bound into every signature. Empty means none.
     pub(crate) passphrase: String,
-    /// Absolute URL of our PayFast webhook route; PayFast posts the ITN
-    /// there. Without it PayFast sends no notifications and no payment can
-    /// ever settle, so a deployment without it stays disabled.
-    pub(crate) notify_url: String,
     /// Sandbox endpoints instead of live ones.
     pub(crate) sandbox: bool,
 }
@@ -330,6 +326,7 @@ impl PayFast {
         usd_cents: i64,
         email: &str,
         reference: &str,
+        callback_url: &str,
     ) -> Result<String, ProviderError> {
         if usd_cents < 0 {
             return Err(ProviderError::NegativeAmount);
@@ -339,7 +336,7 @@ impl PayFast {
         let ordered = [
             ("merchant_id", self.credentials.merchant_id.as_str()),
             ("merchant_key", self.credentials.merchant_key.as_str()),
-            ("notify_url", self.credentials.notify_url.as_str()),
+            ("notify_url", callback_url),
             ("email_address", email),
             ("m_payment_id", reference),
             ("amount", amount.as_str()),
@@ -367,11 +364,18 @@ impl PayFast {
 impl crate::payments_provider::PaymentProvider for PayFast {
     async fn initialize(
         &self,
-        usd_cents: i64,
+        minor_units: i64,
         email: &str,
         reference: &str,
+        callback_url: &str,
     ) -> Result<String, ProviderError> {
-        self.process_url_for(usd_cents, email, reference)
+        self.process_url_for(minor_units, email, reference, callback_url)
+    }
+
+    fn currency(&self) -> crate::credit_packs::Currency {
+        // PayFast has no currency parameter and bills only in Rands, which
+        // South African exchange control requires of a local gateway.
+        crate::credit_packs::Currency::Zar
     }
 
     async fn verify_callback(
@@ -483,7 +487,6 @@ mod tests {
             merchant_id: TEST_MERCHANT_ID.into(),
             merchant_key: TEST_MERCHANT_KEY.into(),
             passphrase: TEST_PASSPHRASE.into(),
-            notify_url: "https://relay.example/api/payments/webhook/payfast".into(),
             sandbox: true,
         }
     }
@@ -1058,7 +1061,12 @@ mod tests {
         let provider = trusted_provider(FakeValidator::valid());
 
         let url = provider
-            .initialize(500, "founder@example.com", "topup-ref-9")
+            .initialize(
+                500,
+                "founder@example.com",
+                "topup-ref-9",
+                "https://relay.example/api/payments/webhook/payfast",
+            )
             .await
             .expect("initialize builds a URL");
 
@@ -1115,7 +1123,14 @@ mod tests {
     #[tokio::test]
     async fn initialize_refuses_negative_amounts() {
         let provider = trusted_provider(FakeValidator::valid());
-        let result = provider.initialize(-1, "founder@example.com", "ref").await;
+        let result = provider
+            .initialize(
+                -1,
+                "founder@example.com",
+                "ref",
+                "https://relay.example/api/payments/webhook/payfast",
+            )
+            .await;
         assert!(matches!(result, Err(ProviderError::NegativeAmount)));
     }
 
@@ -1123,7 +1138,12 @@ mod tests {
     fn cents_format_as_gateway_amounts() {
         let provider = trusted_provider(FakeValidator::valid());
         let url = provider
-            .process_url_for(12345, "founder@example.com", "ref-x")
+            .process_url_for(
+                12345,
+                "founder@example.com",
+                "ref-x",
+                "https://relay.example/api/payments/webhook/payfast",
+            )
             .expect("url");
         assert!(url.contains("amount=123.45"), "{url}");
     }

@@ -2,29 +2,34 @@
  * The real onboarding payments service.
  *
  * Hands the user a hosted checkout URL and watches for the payment to land.
- * Colony never sees card details: Paystack hosts the checkout page, so all
- * this service ever sends is an amount and a receipt email. Every relay
- * failure becomes a `PaymentsFailure`, so no screen ever sees an HTTP status
- * or parses an error string.
+ * Colony never sees card details: the gateway hosts the checkout page, so all
+ * this service ever sends is a pack id and a receipt email. It sends no
+ * price: the relay prices the pack, because a client that could name its own
+ * price could name zero. Every relay failure becomes a `PaymentsFailure`, so
+ * no screen ever sees an HTTP status or parses an error string.
  *
  * See docs/superpowers/specs/2026-08-22-paystack-topups-design.md.
  */
 
 import { normaliseEmail } from "./authCrypto";
-import type { OnboardingServices } from "./contracts";
-
-/** The smallest top-up the relay accepts, in USD cents ($5.00). */
-export const MIN_TOPUP_CENTS = 500;
+import type {
+  CreditPack,
+  CreditPackList,
+  OnboardingServices,
+} from "./contracts";
 
 /**
  * Why a payment attempt failed. Screens switch on `kind` and nothing else;
  * there is deliberately no field carrying a status code or a message. There
  * is no "payment declined" kind on purpose: a declined card never reaches
- * this service, because the decline happens on Paystack's page and shows up
- * here only as an unpaid answer from `verify`.
+ * this service, because the decline happens on the gateway's page and shows
+ * up here only as an unpaid answer from `verify`.
+ *
+ * `unknown-pack` means the client offered an id the relay does not sell,
+ * which is a stale build rather than anything the user did.
  */
 export type PaymentsFailure =
-  | { kind: "amount-too-small" }
+  | { kind: "unknown-pack" }
   | { kind: "locked"; retryAfterSecs: number }
   | { kind: "unreachable" };
 
@@ -37,6 +42,8 @@ export type PaymentsDeps = {
     path: string,
     body: unknown,
   ) => Promise<{ status: number; body: unknown }>;
+  /** Unauthenticated read for the public price list. */
+  get: (path: string) => Promise<{ status: number; body: unknown }>;
 };
 
 function readString(body: unknown, field: string): string | undefined {
@@ -70,8 +77,8 @@ function isOk(status: number): boolean {
  */
 function failureFromResponse(body: unknown): PaymentsFailure {
   switch (readString(body, "error")) {
-    case "amount_too_small":
-      return { kind: "amount-too-small" };
+    case "unknown_pack":
+      return { kind: "unknown-pack" };
     // Both mean "wait, then try again", and both carry how long. Rate limiting
     // must not fall through to `unreachable`: that tells the user to retry, and
     // retrying is what keeps the window open.
@@ -105,6 +112,49 @@ function unreachable(): PaymentsFailure {
   return { kind: "unreachable" };
 }
 
+/**
+ * Parse the price list, refusing anything partial.
+ *
+ * Strict on purpose: a pack missing its price would render as a blank or a
+ * NaN next to a Pay button, and a pack missing its grant would promise
+ * nothing. One bad entry rejects the whole list, because showing some of a
+ * price list is worse than showing none of it.
+ *
+ * `currency` is legitimately absent when payments are disabled, so that alone
+ * is not a parse failure.
+ */
+function readPacks(body: unknown): CreditPackList | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const raw = (body as Record<string, unknown>).packs;
+  if (!Array.isArray(raw)) return undefined;
+  const packs: CreditPack[] = [];
+  for (const entry of raw) {
+    const id = readString(entry, "id");
+    const name = readString(entry, "name");
+    const zarCents = readNumber(entry, "zarCents");
+    const usdCents = readNumber(entry, "usdCents");
+    const grantNanousd = readNumber(entry, "grantNanousd");
+    if (
+      id === undefined ||
+      name === undefined ||
+      zarCents === undefined ||
+      usdCents === undefined ||
+      grantNanousd === undefined
+    ) {
+      return undefined;
+    }
+    // A non-positive price would be a free or negative sale; a non-positive
+    // grant would charge for nothing. Neither is a state to render.
+    if (zarCents <= 0 || usdCents <= 0 || grantNanousd <= 0) return undefined;
+    packs.push({ id, name, zarCents, usdCents, grantNanousd });
+  }
+  const currency = readString(body, "currency");
+  if (currency !== undefined && currency !== "ZAR" && currency !== "USD") {
+    return undefined;
+  }
+  return { packs, currency: currency ?? null };
+}
+
 async function guard<T>(attempt: () => Promise<T>): Promise<T> {
   try {
     return await attempt();
@@ -116,8 +166,8 @@ async function guard<T>(attempt: () => Promise<T>): Promise<T> {
 /**
  * Build the service the onboarding flow consumes.
  *
- * `createTransaction` refuses a below-minimum amount before any request,
- * then hands back the checkout URL to open in the system browser. `verify`
+ * `packs` reads the price list. `createTransaction` names a pack and hands
+ * back the checkout URL to open in the system browser. `verify`
  * reads our own record of one payment; it never moves money, so an unpaid
  * answer just means keep waiting. `balance` answers with what the workspace
  * already holds, so a payer whose confirmation is slow is never stranded.
@@ -126,13 +176,25 @@ export function createPaymentsService(
   deps: PaymentsDeps,
 ): OnboardingServices["payments"] {
   return {
-    createTransaction: (usdCents, email) =>
+    packs: () =>
       guard(async () => {
-        if (!Number.isFinite(usdCents) || usdCents < MIN_TOPUP_CENTS) {
-          throw { kind: "amount-too-small" } satisfies PaymentsFailure;
+        const response = await deps.get("/api/payments/packs");
+        if (!isOk(response.status)) {
+          throw failureFromResponse(response.body);
         }
+        const packs = readPacks(response.body);
+        if (packs === undefined) {
+          throw unreachable();
+        }
+        return packs;
+      }),
+    // The pack id is all that travels. A price in this body would be a price
+    // the client could choose, and a client that can choose a price can
+    // choose zero.
+    createTransaction: (packId, email) =>
+      guard(async () => {
         const response = await deps.post("/api/payments/initialize", {
-          usdCents,
+          packId,
           email: normaliseEmail(email),
         });
         if (!isOk(response.status)) {

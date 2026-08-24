@@ -72,5 +72,18 @@ export function createWiredPaymentsService(): OnboardingServices["payments"] {
       const parsed: unknown = await response.json().catch(() => ({}));
       return { status: response.status, body: parsed };
     },
+    // Unsigned: a price list is public, and the checkout that follows still
+    // authenticates. Signing a read would mean a user could not see what a
+    // top-up costs before they had an identity to sign with.
+    get: async (path) => {
+      const base = await getRelayHttpUrl();
+      const url = `${base.replace(/\/+$/, "")}${path}`;
+      const response = await fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(PAYMENTS_REQUEST_TIMEOUT_MS),
+      });
+      const parsed: unknown = await response.json().catch(() => ({}));
+      return { status: response.status, body: parsed };
+    },
   });
 }

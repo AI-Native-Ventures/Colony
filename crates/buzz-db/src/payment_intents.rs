@@ -36,6 +36,34 @@ pub struct PaymentIntent {
     pub provider: String,
     /// The amount actually paid, in USD cents, recorded at settlement.
     pub paid_cents: Option<i64>,
+    /// What the buyer is being charged, in the gateway's own currency, and
+    /// what settling grants them. `None` on rows predating credit packs,
+    /// which were free-amount top-ups priced in USD; those fall back to
+    /// [`PaymentIntent::usd_cents`].
+    pub pack: Option<PackTerms>,
+}
+
+/// The purchase terms fixed at checkout: what the gateway collects, and what
+/// the ledger grants for it.
+///
+/// Both are stored rather than derived. No South African gateway may charge
+/// in USD (SARB permits ZAR-denominated processing only), so the charge is
+/// often in a different currency from the grant, and the only safe
+/// relationship between them is the one a human chose when pricing the pack.
+/// Recomputing either at settlement would let a price edit change what an
+/// in-flight purchase is worth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackTerms {
+    /// Which pack was bought.
+    pub pack_id: String,
+    /// Amount asked of the gateway, in [`Self::charge_currency`]'s minor
+    /// unit (ZAR cents, USD cents).
+    pub charge_minor_units: i64,
+    /// ISO 4217 code of the charge: `ZAR` or `USD`.
+    pub charge_currency: String,
+    /// Credits granted on settlement, in ledger nanoUSD. Independent of what
+    /// was charged, and of what any callback claims was paid.
+    pub grant_nanousd: i64,
 }
 
 /// Write a new pending intent for one member's checkout attempt.
@@ -50,20 +78,27 @@ pub async fn create_intent(
     pubkey: &[u8],
     usd_cents: i64,
     provider: &str,
+    pack: Option<&PackTerms>,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
     DeletionStore::new(pool.clone())
         .guard_transaction(&mut tx, community)
         .await?;
     sqlx::query(
-        "INSERT INTO payment_intents (community_id, reference, pubkey, usd_cents, provider) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO payment_intents \
+         (community_id, reference, pubkey, usd_cents, provider, \
+          pack_id, charge_minor_units, charge_currency, grant_nanousd) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(community.as_uuid())
     .bind(reference)
     .bind(pubkey)
     .bind(usd_cents)
     .bind(provider)
+    .bind(pack.map(|terms| terms.pack_id.as_str()))
+    .bind(pack.map(|terms| terms.charge_minor_units))
+    .bind(pack.map(|terms| terms.charge_currency.as_str()))
+    .bind(pack.map(|terms| terms.grant_nanousd))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -77,7 +112,8 @@ pub async fn find_intent(
     reference: &str,
 ) -> Result<Option<PaymentIntent>> {
     let row = sqlx::query(
-        "SELECT reference, pubkey, usd_cents, status, provider, paid_cents \
+        "SELECT reference, pubkey, usd_cents, status, provider, paid_cents, \
+                pack_id, charge_minor_units, charge_currency, grant_nanousd \
          FROM payment_intents \
          WHERE community_id = $1 AND reference = $2",
     )
@@ -86,14 +122,31 @@ pub async fn find_intent(
     .fetch_optional(pool)
     .await?;
     match row {
-        Some(row) => Ok(Some(PaymentIntent {
-            reference: row.try_get("reference")?,
-            pubkey: row.try_get("pubkey")?,
-            usd_cents: row.try_get("usd_cents")?,
-            status: row.try_get("status")?,
-            provider: row.try_get("provider")?,
-            paid_cents: row.try_get("paid_cents")?,
-        })),
+        Some(row) => {
+            // The migration's CHECK keeps these four together, so reading
+            // pack_id alone decides the shape. Reconstructing from a partial
+            // row is deliberately impossible rather than defaulted: a pack
+            // whose grant went missing must not settle for a guessed amount.
+            let pack_id: Option<String> = row.try_get("pack_id")?;
+            let pack = match pack_id {
+                Some(pack_id) => Some(PackTerms {
+                    pack_id,
+                    charge_minor_units: row.try_get("charge_minor_units")?,
+                    charge_currency: row.try_get("charge_currency")?,
+                    grant_nanousd: row.try_get("grant_nanousd")?,
+                }),
+                None => None,
+            };
+            Ok(Some(PaymentIntent {
+                reference: row.try_get("reference")?,
+                pubkey: row.try_get("pubkey")?,
+                usd_cents: row.try_get("usd_cents")?,
+                status: row.try_get("status")?,
+                provider: row.try_get("provider")?,
+                paid_cents: row.try_get("paid_cents")?,
+                pack,
+            }))
+        }
         None => Ok(None),
     }
 }
@@ -200,9 +253,17 @@ mod tests {
     async fn creates_then_finds_an_intent() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
-            .await
-            .expect("create should succeed");
+        create_intent(
+            &pool,
+            community,
+            "ref-1",
+            &sample_pubkey(),
+            500,
+            "paystack",
+            None,
+        )
+        .await
+        .expect("create should succeed");
 
         let found = find_intent(&pool, community, "ref-1")
             .await
@@ -222,11 +283,27 @@ mod tests {
     async fn rejects_a_duplicate_reference() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
-            .await
-            .expect("first insert");
-        let second =
-            create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack").await;
+        create_intent(
+            &pool,
+            community,
+            "ref-1",
+            &sample_pubkey(),
+            500,
+            "paystack",
+            None,
+        )
+        .await
+        .expect("first insert");
+        let second = create_intent(
+            &pool,
+            community,
+            "ref-1",
+            &sample_pubkey(),
+            500,
+            "paystack",
+            None,
+        )
+        .await;
         assert!(second.is_err(), "a duplicate reference must be rejected");
         delete_test_community(&pool, community).await;
     }
@@ -237,9 +314,17 @@ mod tests {
         let pool = setup_pool().await;
         let first = make_test_community(&pool).await;
         let second = make_test_community(&pool).await;
-        create_intent(&pool, first, "ref-1", &sample_pubkey(), 500, "paystack")
-            .await
-            .expect("first community");
+        create_intent(
+            &pool,
+            first,
+            "ref-1",
+            &sample_pubkey(),
+            500,
+            "paystack",
+            None,
+        )
+        .await
+        .expect("first community");
         let found = find_intent(&pool, second, "ref-1")
             .await
             .expect("cross-tenant lookup");
@@ -253,9 +338,17 @@ mod tests {
     async fn settles_once_and_refuses_a_replay() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
-            .await
-            .expect("create");
+        create_intent(
+            &pool,
+            community,
+            "ref-1",
+            &sample_pubkey(),
+            500,
+            "paystack",
+            None,
+        )
+        .await
+        .expect("create");
 
         let settled = settle_intent(&pool, community, "ref-1", 500)
             .await
@@ -280,9 +373,17 @@ mod tests {
     async fn a_settled_intent_keeps_its_original_amount_alongside_paid_cents() {
         let pool = setup_pool().await;
         let community = make_test_community(&pool).await;
-        create_intent(&pool, community, "ref-1", &sample_pubkey(), 500, "paystack")
-            .await
-            .expect("create");
+        create_intent(
+            &pool,
+            community,
+            "ref-1",
+            &sample_pubkey(),
+            500,
+            "paystack",
+            None,
+        )
+        .await
+        .expect("create");
 
         // The callback reported more than we asked for. Both numbers must
         // survive: what we hoped for and what was actually paid.
