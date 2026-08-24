@@ -367,11 +367,17 @@ impl PayFast {
 impl crate::payments_provider::PaymentProvider for PayFast {
     async fn initialize(
         &self,
-        usd_cents: i64,
+        minor_units: i64,
         email: &str,
         reference: &str,
     ) -> Result<String, ProviderError> {
-        self.process_url_for(usd_cents, email, reference)
+        self.process_url_for(minor_units, email, reference)
+    }
+
+    fn currency(&self) -> crate::credit_packs::Currency {
+        // PayFast has no currency parameter and bills only in Rands, which
+        // South African exchange control requires of a local gateway.
+        crate::credit_packs::Currency::Zar
     }
 
     async fn verify_callback(

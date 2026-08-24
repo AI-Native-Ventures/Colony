@@ -99,14 +99,26 @@ pub enum ProviderEvent {
 pub trait PaymentProvider: Send + Sync {
     /// Open a hosted checkout and return the URL to send the user to.
     ///
-    /// `usd_cents` is the contract amount: USD is the product currency end to
-    /// end, and no implementation may convert it.
+    /// `minor_units` is the price in this provider's own [`Self::currency`]:
+    /// ZAR cents for PayFast, USD cents for Paystack. The caller reads that
+    /// figure straight off the credit pack rather than converting one
+    /// currency into the other, so no exchange rate exists on this path and
+    /// no implementation may introduce one.
     async fn initialize(
         &self,
-        usd_cents: i64,
+        minor_units: i64,
         email: &str,
         reference: &str,
     ) -> Result<String, ProviderError>;
+
+    /// The currency this gateway bills in.
+    ///
+    /// A method rather than a comment because getting it wrong is silent.
+    /// PayFast's `amount` field is Rands and has no currency parameter, so
+    /// sending it dollars still produces a valid signature, a successful
+    /// postback and a consistent ledger, while collecting roughly a
+    /// eighteenth of the intended price.
+    fn currency(&self) -> crate::credit_packs::Currency;
 
     /// Turn a raw inbound callback into a verified event, or reject it.
     ///

@@ -735,7 +735,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 66);
+        assert_eq!(migrations.len(), 67);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1437,6 +1437,26 @@ mod tests {
         assert!(payment_intents.contains("octet_length(pubkey) = 32"));
         assert!(payment_intents.contains("usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500)"));
         assert!(payment_intents.contains("attach_community_write_fence('payment_intents')"));
+
+        // Packs, added once it was clear no South African gateway may charge
+        // in USD (SARB permits ZAR-denominated processing only). The four
+        // columns must travel together: a row with a pack but no grant, or a
+        // grant with no charge currency, would leave settlement guessing what
+        // a purchase was worth, and guessing about money is how a ledger
+        // silently stops matching the bank.
+        let packs = migrations
+            .iter()
+            .find(|migration| migration.version == 67)
+            .expect("payment intent packs migration")
+            .sql
+            .as_str();
+        assert!(packs.contains("ADD COLUMN pack_id TEXT"));
+        assert!(packs.contains("charge_currency TEXT"));
+        assert!(packs.contains("IN ('ZAR', 'USD')"));
+        assert!(packs.contains("payment_intents_pack_columns_travel_together"));
+        // The grant is stored, never recomputed: a price edit mid-flight must
+        // not change what an already-paid purchase is worth.
+        assert!(packs.contains("ADD COLUMN grant_nanousd BIGINT"));
     }
     #[test]
     fn block_action_claim_migration_is_community_scoped() {

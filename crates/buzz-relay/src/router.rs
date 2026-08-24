@@ -167,6 +167,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // signature-verified provider webhooks, the only paths that credit
         // (see api::payments). One webhook path per provider: each gateway
         // is configured with its own callback URL.
+        .route("/api/payments/packs", get(api::payments::packs))
         .route("/api/payments/initialize", post(api::payments::initialize))
         .route("/api/payments/verify", post(api::payments::verify))
         .route("/api/payments/balance", post(api::payments::balance))
