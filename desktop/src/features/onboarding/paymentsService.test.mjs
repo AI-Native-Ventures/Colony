@@ -6,6 +6,19 @@ import { createPaymentsService } from "./paymentsService.ts";
 function deps(overrides = {}) {
   return {
     post: async () => ({ status: 200, body: {} }),
+    get: async () => ({ status: 200, body: { packs: [], currency: "ZAR" } }),
+    ...overrides,
+  };
+}
+
+/** One well-formed pack, so a test can vary a single field from valid. */
+function pack(overrides = {}) {
+  return {
+    id: "starter",
+    name: "Starter",
+    zarCents: 11_900,
+    usdCents: 699,
+    grantNanousd: 5_000_000_000,
     ...overrides,
   };
 }
@@ -28,33 +41,73 @@ test("createTransaction returns the checkout URL and the reference", async () =>
       },
     }),
   );
-  const result = await payments.createTransaction(500, " Founder@Example.COM ");
+  const result = await payments.createTransaction(
+    "starter",
+    " Founder@Example.COM ",
+  );
   assert.deepEqual(result, {
     authorizationUrl: "https://checkout.paystack.com/abc123",
     reference: "ref_1",
   });
   assert.equal(path, "/api/payments/initialize");
-  // The exact keys pin what leaves the app: an amount and a receipt address,
-  // normalised. Nothing else, and above all no card details of any kind.
-  // Colony never touches card data; Paystack hosts the checkout.
-  assert.deepEqual(sent, { usdCents: 500, email: "founder@example.com" });
+  // The exact keys pin what leaves the app: which pack, and a normalised
+  // receipt address. Above all no price — the relay prices the pack, because
+  // a client that could name its own price could name zero. And no card
+  // details of any kind; the gateway hosts the checkout.
+  assert.deepEqual(sent, { packId: "starter", email: "founder@example.com" });
 });
 
-test("an amount below the minimum is refused before any request", async () => {
-  let requests = 0;
+test("the price list is read unsigned and passed through", async () => {
+  let path;
   const payments = createPaymentsService(
     deps({
-      post: async () => {
-        requests += 1;
-        return { status: 200, body: {} };
+      get: async (requestedPath) => {
+        path = requestedPath;
+        return { status: 200, body: { packs: [pack()], currency: "ZAR" } };
       },
     }),
   );
-  await assert.rejects(
-    () => payments.createTransaction(499, "founder@example.com"),
-    (error) => error.kind === "amount-too-small",
+  const list = await payments.packs();
+  assert.equal(path, "/api/payments/packs");
+  assert.deepEqual(list, { packs: [pack()], currency: "ZAR" });
+});
+
+test("a missing currency means payments are off, not a broken list", async () => {
+  // The relay omits `currency` when no gateway is configured. The screen
+  // still shows what a pack grants; it just cannot show a price.
+  const payments = createPaymentsService(
+    deps({
+      get: async () => ({ status: 200, body: { packs: [pack()] } }),
+    }),
   );
-  assert.equal(requests, 0, "nothing is sent for a refused amount");
+  const list = await payments.packs();
+  assert.equal(list.currency, null);
+  assert.equal(list.packs.length, 1);
+});
+
+test("a partial or nonsensical pack rejects the whole list", async () => {
+  // Showing some of a price list is worse than showing none: a pack missing
+  // its price renders a blank next to a Pay button, and a free or negative
+  // one would sell Credits for nothing.
+  const bad = [
+    { packs: [{ id: "starter", name: "Starter", zarCents: 11_900 }] },
+    { packs: [pack({ zarCents: 0 })] },
+    { packs: [pack({ usdCents: -1 })] },
+    { packs: [pack({ grantNanousd: 0 })] },
+    { packs: [pack()], currency: "GBP" },
+    { packs: "not-an-array" },
+    {},
+  ];
+  for (const body of bad) {
+    const payments = createPaymentsService(
+      deps({ get: async () => ({ status: 200, body }) }),
+    );
+    await assert.rejects(
+      () => payments.packs(),
+      (error) => error.kind === "unreachable",
+      `${JSON.stringify(body)} must not parse`,
+    );
+  }
 });
 
 test("verify maps a paid answer through", async () => {
@@ -151,18 +204,18 @@ test("a temporary lockout carries its retry delay", async () => {
   );
 });
 
-test("the relay refusing a small amount maps to amount-too-small", async () => {
+test("the relay refusing an unknown pack maps to unknown-pack", async () => {
   const payments = createPaymentsService(
     deps({
       post: async () => ({
         status: 400,
-        body: { error: "amount_too_small" },
+        body: { error: "unknown_pack" },
       }),
     }),
   );
   await assert.rejects(
     () => payments.createTransaction(300, "founder@example.com"),
-    (error) => error.kind === "amount-too-small",
+    (error) => error.kind === "unknown-pack",
   );
 });
 

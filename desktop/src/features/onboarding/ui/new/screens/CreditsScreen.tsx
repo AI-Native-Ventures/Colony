@@ -1,17 +1,45 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/shared/ui/button";
 import { openUrl } from "@/shared/api/nativeBridge";
-import type { OnboardingServices } from "../../../contracts";
+import type {
+  ChargeCurrency,
+  CreditPack,
+  OnboardingServices,
+} from "../../../contracts";
 import type { OnboardingTrack } from "../../../flow/steps";
 
-export const AMOUNTS_USD = [5, 10, 25] as const;
-export const MIN_USD = 5;
+export type CheckoutState = "idle" | "leaving" | "abandoned";
 
-export function amountValid(usd: number): boolean {
-  return Number.isFinite(usd) && usd >= MIN_USD;
+/** NanoUSD in one US cent, mirroring the relay's ledger unit. */
+const NANO_USD_PER_CENT = 10_000_000;
+
+/**
+ * Format a price in the currency the gateway actually bills.
+ *
+ * The symbol is chosen from that currency rather than assumed, because the
+ * charge is Rands on PayFast and dollars on Paystack, and showing the wrong
+ * one turns a R119 charge into an apparent $119.
+ */
+export function formatPrice(minorUnits: number, currency: ChargeCurrency) {
+  const symbol = currency === "ZAR" ? "R" : "$";
+  const whole = Math.floor(minorUnits / 100);
+  const cents = minorUnits % 100;
+  return cents === 0
+    ? `${symbol}${whole}`
+    : `${symbol}${whole}.${String(cents).padStart(2, "0")}`;
 }
 
-export type CheckoutState = "idle" | "leaving" | "abandoned";
+/** What a pack grants, in dollars, which is how Credits are denominated. */
+export function formatGrant(grantNanousd: number) {
+  const cents = Math.round(grantNanousd / NANO_USD_PER_CENT);
+  const whole = Math.floor(cents / 100);
+  return `$${whole}`;
+}
+
+/** The price this gateway charges for a pack. Never converted. */
+export function priceOf(pack: CreditPack, currency: ChargeCurrency) {
+  return currency === "ZAR" ? pack.zarCents : pack.usdCents;
+}
 
 type Props = {
   track: OnboardingTrack;
@@ -33,24 +61,41 @@ export function CreditsScreen({
   onBack,
 }: Props) {
   const [state, setState] = useState<CheckoutState>("idle");
-  const [amount, setAmount] = useState<number>(MIN_USD);
-  const [custom, setCustom] = useState("");
-  const [usingCustom, setUsingCustom] = useState(false);
-  const customRef = useRef<HTMLInputElement>(null);
+  const [packs, setPacks] = useState<CreditPack[] | null>(null);
+  const [currency, setCurrency] = useState<ChargeCurrency | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
+  // Prices come from the relay so a change reaches users without a new
+  // desktop build, and so the client never holds a price it could send back.
   useEffect(() => {
-    if (usingCustom) customRef.current?.focus();
-  }, [usingCustom]);
+    let live = true;
+    services.payments
+      .packs()
+      .then((list) => {
+        if (!live) return;
+        setPacks(list.packs);
+        setCurrency(list.currency);
+        // Default to the middle option where there is one: the cheapest
+        // reads as the safe choice, and the dearest as a hard sell.
+        const fallback = list.packs[Math.floor(list.packs.length / 2)];
+        setSelected(fallback?.id ?? null);
+      })
+      .catch(() => {
+        if (live) setLoadFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [services]);
 
-  const chosen = usingCustom ? Number(custom || 0) : amount;
-  const valid = amountValid(chosen);
+  const chosen = packs?.find((pack) => pack.id === selected) ?? null;
 
   const pay = async () => {
+    if (!chosen) return;
     setState("leaving");
-    const started = await services.payments.createTransaction(
-      Math.round(chosen * 100),
-      email,
-    );
+    // The pack id goes to the relay, never a price. The relay prices it.
+    const started = await services.payments.createTransaction(chosen.id, email);
     await openUrl(started.authorizationUrl);
 
     // The webhook is the source of truth, not the browser coming back. Poll
@@ -81,43 +126,32 @@ export function CreditsScreen({
             : "You picked a tool you already pay for, so it covers your helpers' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."}
         </p>
       </div>
-      <div className="onb-amounts">
-        {AMOUNTS_USD.map((value) => (
-          <button
-            type="button"
-            key={value}
-            className="onb-amount"
-            data-selected={!usingCustom && amount === value}
-            onClick={() => {
-              setUsingCustom(false);
-              setAmount(value);
-            }}
-          >
-            ${value}
-          </button>
-        ))}
-        {usingCustom ? (
-          <span className="onb-amount" data-selected="true">
-            $
-            <input
-              ref={customRef}
-              inputMode="numeric"
-              aria-label="Custom amount in dollars"
-              value={custom}
-              style={{ width: `${Math.max(2, custom.length || 2)}ch` }}
-              onChange={(event) =>
-                setCustom(event.target.value.replace(/\D/g, "").slice(0, 5))
-              }
-            />
-          </span>
+      <div className="onb-packs">
+        {packs === null ? (
+          <p className="onb-note">
+            {loadFailed
+              ? "Could not load prices. Check your connection and try again."
+              : "Loading prices…"}
+          </p>
         ) : (
-          <button
-            type="button"
-            className="onb-amount"
-            onClick={() => setUsingCustom(true)}
-          >
-            Another amount
-          </button>
+          packs.map((pack) => (
+            <button
+              type="button"
+              key={pack.id}
+              className="onb-pack"
+              data-selected={selected === pack.id}
+              onClick={() => setSelected(pack.id)}
+            >
+              <span className="onb-pack-grant">
+                {formatGrant(pack.grantNanousd)} of credits
+              </span>
+              {currency ? (
+                <span className="onb-pack-price">
+                  {formatPrice(priceOf(pack, currency), currency)}
+                </span>
+              ) : null}
+            </button>
+          ))
         )}
       </div>
       <div className="onb-panel">
@@ -134,22 +168,24 @@ export function CreditsScreen({
         >
           {state === "abandoned"
             ? "That payment was not completed. Nothing has been charged."
-            : usingCustom && custom && !valid
-              ? `The minimum is $${MIN_USD}.`
-              : `$${MIN_USD} minimum. Anything we spent reading your website comes off this first payment.`}
+            : currency === "ZAR"
+              ? "Credits are priced in dollars because that is what the thinking costs. You pay in rands, and your bank handles the rest. Anything we spent reading your website comes off this first payment."
+              : "Anything we spent reading your website comes off this first payment."}
         </p>
       </div>
       <div className="onb-actions">
         <Button
           size="lg"
-          disabled={!valid || state === "leaving"}
+          disabled={!chosen || state === "leaving"}
           onClick={pay}
         >
           {state === "leaving"
             ? "Opening checkout"
             : state === "abandoned"
               ? "Try again"
-              : `Pay $${valid ? chosen : MIN_USD}`}
+              : chosen && currency
+                ? `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
+                : "Pay"}
         </Button>
         {track === "byo" ? (
           <button type="button" className="onb-quiet-action" onClick={onSkip}>
