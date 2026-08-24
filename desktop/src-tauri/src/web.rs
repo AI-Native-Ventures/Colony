@@ -21,7 +21,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::{mpsc, oneshot};
 
@@ -625,6 +625,19 @@ async fn initialize_page(
     Ok(())
 }
 
+/// Per-session startup timings captured for one-shot first-frame reporting.
+///
+/// Every instant is taken with [`Instant::now`] from the moment the public
+/// `start` path is invoked. The four deltas (`host_ready`, `cdp_connected`,
+/// `page_initialized`, `first_frame`) are emitted once, on the first
+/// `Page.screencastFrame`, and never again per session.
+struct SessionStartupTimings {
+    start: Instant,
+    host_ready: Instant,
+    cdp_connected: Instant,
+    page_initialized: Instant,
+}
+
 async fn run_session<R: Runtime>(
     app: AppHandle<R>,
     session_id: String,
@@ -633,6 +646,7 @@ async fn run_session<R: Runtime>(
     stop_requested: Arc<AtomicBool>,
     mut commands: mpsc::Receiver<WebCommand>,
     done_sender: std::sync::mpsc::Sender<()>,
+    startup_timings: SessionStartupTimings,
 ) {
     #[cfg(test)]
     if let Some(pause) = web_lifecycle_tests::take_session_pause() {
@@ -645,6 +659,7 @@ async fn run_session<R: Runtime>(
         &mut client,
         &stop_requested,
         &mut commands,
+        &startup_timings,
     )
     .await;
     if let Err(error) = &result {
@@ -667,7 +682,9 @@ async fn run_session_loop<R: Runtime>(
     client: &mut CdpClient,
     stop_requested: &AtomicBool,
     commands: &mut mpsc::Receiver<WebCommand>,
+    startup_timings: &SessionStartupTimings,
 ) -> Result<(), String> {
+    let mut first_frame_logged = false;
     loop {
         if stop_requested.load(Ordering::SeqCst) {
             let _ = tokio::time::timeout(
@@ -681,6 +698,10 @@ async fn run_session_loop<R: Runtime>(
         match tokio::time::timeout(SESSION_POLL, client.next_event()).await {
             Ok(Ok(event)) => {
                 if event["method"].as_str() == Some("Page.screencastFrame") {
+                    if !first_frame_logged {
+                        first_frame_logged = true;
+                        emit_startup_timings(session_id, startup_timings);
+                    }
                     emit_frame(app, session_id, &event)?;
                     let frame_id = event["params"]["sessionId"]
                         .as_u64()
