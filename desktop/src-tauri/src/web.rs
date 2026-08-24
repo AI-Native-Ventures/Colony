@@ -218,6 +218,7 @@ impl WebManager {
         url: String,
         token: StartToken,
     ) -> Result<WebStartResult, String> {
+        let start = Instant::now();
         let params = ConnectParams {
             // Launch configuration stays in buzz-browser's trusted discovery
             // path. The relay-synchronized tab payload never chooses a local
@@ -236,6 +237,7 @@ impl WebManager {
             .await
             .map_err(|_| "browser connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
+        let host_ready = Instant::now();
         let owns_browser_process = host.owns_browser_process();
         let browser_pid = host.process_id();
         let targets = tokio::time::timeout(START_TIMEOUT, host.list_targets())
@@ -249,10 +251,18 @@ impl WebManager {
             .await
             .map_err(|_| "CDP connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
+        let cdp_connected = Instant::now();
 
         initialize_page(&mut client, &url)
             .await
             .map_err(|error| error.to_string())?;
+        let page_initialized = Instant::now();
+        let startup_timings = SessionStartupTimings {
+            start,
+            host_ready,
+            cdp_connected,
+            page_initialized,
+        };
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -278,6 +288,7 @@ impl WebManager {
             stop_requested,
             receiver,
             done_sender,
+            startup_timings,
         ));
         let mut task_slot = match session.task.lock() {
             Ok(task_slot) => task_slot,
@@ -636,6 +647,23 @@ struct SessionStartupTimings {
     host_ready: Instant,
     cdp_connected: Instant,
     page_initialized: Instant,
+}
+
+/// Log one-shot startup deltas (ms) for a session's first screencast frame.
+fn emit_startup_timings(session_id: &str, timings: &SessionStartupTimings) {
+    let host_ready_ms = timings.host_ready.duration_since(timings.start).as_millis();
+    let cdp_connected_ms = timings
+        .cdp_connected
+        .duration_since(timings.start)
+        .as_millis();
+    let page_initialized_ms = timings
+        .page_initialized
+        .duration_since(timings.start)
+        .as_millis();
+    let first_frame_ms = Instant::now().duration_since(timings.start).as_millis();
+    eprintln!(
+        "buzz-desktop: web session {session_id} startup: host_ready={host_ready_ms}ms cdp_connected={cdp_connected_ms}ms page_initialized={page_initialized_ms}ms first_frame={first_frame_ms}ms"
+    );
 }
 
 async fn run_session<R: Runtime>(
