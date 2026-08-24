@@ -283,13 +283,20 @@ export function useDiscoveryRun(
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const generation = React.useRef(0);
-  const budgetReady = campaign.budget?.state === "active";
+  // A budget only exists where Credits are actually spent. The preview is
+  // cost-free and has no approval control at all (CampaignDetailView renders
+  // it only for the live experience), so requiring one there left the preview
+  // permanently unstartable with a message pointing at a button nobody can
+  // see.
+  const spendsCredits = entitlement?.experience === "live";
+  const budgetReady = !spendsCredits || campaign.budget?.state === "active";
   const startBlockedReason = (() => {
     if (!canStartDiscovery({ state: entitlement?.state ?? "loading" })) {
       return entitlement?.state === "error"
         ? "Discovery access could not be confirmed. Try again."
         : "Discovery access is required before this Campaign can run.";
     }
+    if (!spendsCredits) return null;
     switch (campaign.budget?.state) {
       case "active":
         return null;
