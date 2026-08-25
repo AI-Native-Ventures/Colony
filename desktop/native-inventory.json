@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 419,
-    "rust_lines": 165099,
-    "tauri_coupled": 166,
-    "portable": 253,
-    "portable_lines": 93347,
+    "rust_total": 416,
+    "rust_lines": 164753,
+    "tauri_coupled": 165,
+    "portable": 251,
+    "portable_lines": 92933,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -170,7 +170,6 @@
       "src-tauri/src/terminal_runtime.rs",
       "src-tauri/src/tray_menu.rs",
       "src-tauri/src/web.rs",
-      "src-tauri/src/web/events.rs",
       "src-tauri/src/web_lifecycle_tests.rs"
     ],
     "portable_list": [
@@ -422,8 +421,6 @@
       "src-tauri/src/terminal_runtime/scroll_sign.rs",
       "src-tauri/src/terminal_transport.rs",
       "src-tauri/src/util.rs",
-      "src-tauri/src/web/commands.rs",
-      "src-tauri/src/web/shared_host.rs",
       "src-tauri/src/web/validation.rs",
       "src-tauri/src/webkit_rendering.rs",
       "src-tauri/src/webkit_rendering/tests.rs"
@@ -3961,7 +3958,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:658"
+        "src/features/workspace/lib/webSessions.ts:652"
       ]
     },
     "workspace_web_close": {
@@ -3972,7 +3969,7 @@
       "example_sites": [
         "src/features/workspace/lib/webSessions.ts:424",
         "src/features/workspace/lib/webSessions.ts:451",
-        "src/features/workspace/lib/webSessions.ts:678"
+        "src/features/workspace/lib/webSessions.ts:672"
       ]
     },
     "workspace_web_close_all": {
@@ -3981,7 +3978,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:706"
+        "src/features/workspace/lib/webSessions.ts:700"
       ]
     },
     "workspace_web_forward": {
@@ -3990,7 +3987,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:662"
+        "src/features/workspace/lib/webSessions.ts:656"
       ]
     },
     "workspace_web_key": {
@@ -4026,7 +4023,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:666"
+        "src/features/workspace/lib/webSessions.ts:660"
       ]
     },
     "workspace_web_resize": {
@@ -4035,7 +4032,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:648"
+        "src/features/workspace/lib/webSessions.ts:647"
       ]
     },
     "workspace_web_start": {
