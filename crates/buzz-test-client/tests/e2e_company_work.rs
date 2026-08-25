@@ -291,6 +291,53 @@ fn now() -> i64 {
     Timestamp::now().as_secs() as i64
 }
 
+async fn e2e_db_pool() -> sqlx::Pool<sqlx::Postgres> {
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect to e2e Postgres")
+}
+
+/// The company broker requires the acting key to be a human community
+/// owner: a relay_members row with role 'owner' plus a users row without an
+/// agent_owner_pubkey. Owner assignment has no Nostr-event form in this
+/// codebase, so this is a DB fixture on the same pattern as
+/// `e2e_interrupts::seed_relay_owner`, not a protocol step under test.
+async fn seed_company_owner(keys: &Keys) {
+    let pool = e2e_db_pool().await;
+    let host = relay_url().replace("wss://", "").replace("ws://", "");
+    let community_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM communities WHERE lower(host) = lower($1)")
+            .bind(&host)
+            .fetch_optional(&pool)
+            .await
+            .expect("query the deployment community")
+            .unwrap_or_else(|| {
+                panic!("community for host {host} must exist; start-relay-for-tests.sh seeds it")
+            });
+
+    // users.pubkey is BYTEA; relay_members.pubkey is TEXT hex.
+    sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        .bind(community_id)
+        .bind(keys.public_key().to_bytes())
+        .execute(&pool)
+        .await
+        .expect("seed the owner as a user");
+    sqlx::query(
+        "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+         VALUES ($1, $2, 'owner', NULL) \
+         ON CONFLICT (community_id, pubkey) DO UPDATE SET role = 'owner'",
+    )
+    .bind(community_id)
+    .bind(keys.public_key().to_hex())
+    .execute(&pool)
+    .await
+    .expect("seed the owner member role");
+}
+
 async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
     let role = format!("task-runner-{}", Uuid::new_v4().simple());
     let request = EventBuilder::new(Kind::Custom(KIND_HIRE_REQUEST as u16), "")
@@ -1173,10 +1220,14 @@ async fn nobody_but_the_owner_can_change_company_state() {
 /// tests in `buzz-relay` prove the decision logic against snapshots, and
 /// this proves the relay actually finds dependents through stored `v` tags,
 /// republishes them, and stays idempotent against real Postgres.
+///
+/// Needs no `BUZZ_EMPLOYEE_KEK`: nothing here hires an employee. It does
+/// need `DATABASE_URL` to seed the owner fixture.
 #[tokio::test]
-#[ignore = "requires a running relay with Postgres and BUZZ_EMPLOYEE_KEK"]
+#[ignore = "requires a running relay with Postgres (DATABASE_URL for owner seeding)"]
 async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
     let owner = owner_keys();
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
