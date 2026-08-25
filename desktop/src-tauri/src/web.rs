@@ -2,16 +2,22 @@
 //!
 //! The browser engine remains `buzz-browser`: this module only owns the Tauri
 //! lifecycle and forwards the page's CDP screencast/input traffic to the
-//! frontend. A session owns its host and websocket task until an explicit tab
-//! close, community reset, app shutdown, or connection failure ends it.
+//! frontend. A session owns its websocket task until an explicit tab close,
+//! community reset, app shutdown, or connection failure ends it; the browser
+//! process itself is shared and refcounted (see `shared_host`).
 
+mod commands;
 mod events;
 mod shared_endpoint;
+mod shared_host;
 mod validation;
 
+use self::commands::{execute_command, WebCommand};
+pub use self::commands::{WebKeyInput, WebMouseInput, WebWheelInput};
 use self::events::{
     emit_error, emit_frame, emit_startup_timings, SessionStartupTimings, WebClosedEvent,
 };
+use self::shared_host::SharedHostSlot;
 use self::validation::{
     normalize_url, validate_device_scale_factor, validate_key, validate_mouse, validate_text,
     validate_viewport, validate_wheel,
@@ -20,7 +26,7 @@ use buzz_browser_pkg::{
     cdp::CdpClient,
     mcp::{open_host, pick_target, ConnectParams},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{
@@ -69,96 +75,26 @@ pub struct WebStartResult {
     pub browser_pid: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebMouseInput {
-    /// CDP mouse event type: move, press, or release.
-    pub event_type: String,
-    /// Page-space horizontal coordinate.
-    pub x: f64,
-    /// Page-space vertical coordinate.
-    pub y: f64,
-    /// Optional CDP mouse button.
-    pub button: Option<String>,
-    /// Optional click count for press/release events.
-    pub click_count: Option<u8>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebWheelInput {
-    /// Page-space horizontal coordinate.
-    pub x: f64,
-    /// Page-space vertical coordinate.
-    pub y: f64,
-    /// Horizontal wheel delta.
-    pub delta_x: f64,
-    /// Vertical wheel delta.
-    pub delta_y: f64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebKeyInput {
-    /// CDP key event type: `keyDown` or `keyUp`.
-    pub event_type: String,
-    /// Logical key value.
-    pub key: String,
-    /// Optional physical key code.
-    pub code: Option<String>,
-    /// Optional text associated with a key-down event.
-    pub text: Option<String>,
-    /// CDP modifier bitmask.
-    pub modifiers: Option<u8>,
-    /// Optional Windows virtual key code.
-    pub windows_virtual_key_code: Option<i64>,
-}
-
-enum WebCommand {
-    Navigate {
-        url: String,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Mouse {
-        input: WebMouseInput,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Wheel {
-        input: WebWheelInput,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Key {
-        input: WebKeyInput,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Text {
-        text: String,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Back {
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Forward {
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Reload {
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    Resize {
-        width: u32,
-        height: u32,
-        device_scale_factor: f64,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-}
-
 struct WebSession {
     commands: mpsc::Sender<WebCommand>,
     stop_requested: Arc<AtomicBool>,
     done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    owned_process_cleanup: Option<buzz_browser_pkg::host::OwnedBrowserCleanup>,
+    /// Set when this session's host came from the shared-launch path
+    /// (`shared_host::acquire_host`). Every session attaches rather than
+    /// owning its browser process directly; releasing this claim on drop
+    /// keeps the shared browser alive exactly as long as any session still
+    /// needs it, and kills it once the last one is gone.
+    shared_host: Option<SharedHostSlot>,
     shared: shared_endpoint::SharedTabInfo,
+}
+
+impl Drop for WebSession {
+    fn drop(&mut self) {
+        if let Some(shared_host) = &self.shared_host {
+            shared_host::release(shared_host);
+        }
+    }
 }
 
 struct PendingStart {
@@ -195,6 +131,9 @@ type WebShutdownWork = (Vec<Arc<WebSession>>, Vec<std::sync::mpsc::Receiver<()>>
 pub struct WebManager {
     sessions: Mutex<HashMap<String, Arc<WebSession>>>,
     starts: Mutex<StartState>,
+    /// One Chromium shared across every launch-path session (no explicit
+    /// `endpoint`). See `shared_host` for the refcounting.
+    shared_host: SharedHostSlot,
 }
 
 impl WebManager {
@@ -227,34 +166,59 @@ impl WebManager {
         token: StartToken,
     ) -> Result<WebStartResult, String> {
         let start = Instant::now();
-        let params = ConnectParams {
-            // Launch configuration stays in buzz-browser's trusted discovery
-            // path. The relay-synchronized tab payload never chooses a local
-            // executable and every owned launch is headless.
-            binary: None,
-            headless: Some(true),
-            endpoint: request
-                .endpoint
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned),
-            target_id: request.target_id,
+        let endpoint = request
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+
+        // Two ways to get a ready host: attach to a caller-supplied DevTools
+        // endpoint (unchanged), or - the common case, no endpoint - reuse the
+        // one Chromium this process already launched for earlier tabs.
+        // Measured cold launch is ~7s versus ~250ms to attach to a running
+        // host, so relaunching per tab was the dominant cost in first paint.
+        let (host, shared_reservation) = if let Some(endpoint) = endpoint.clone() {
+            let params = ConnectParams {
+                // Launch configuration stays in buzz-browser's trusted
+                // discovery path. The relay-synchronized tab payload never
+                // chooses a local executable and every owned launch is
+                // headless.
+                binary: None,
+                headless: Some(true),
+                endpoint: Some(endpoint),
+                target_id: request.target_id.clone(),
+            };
+            let host = tokio::time::timeout(START_TIMEOUT, open_host(&params))
+                .await
+                .map_err(|_| "browser connection timed out".to_string())?
+                .map_err(|error| error.to_string())?;
+            (host, None)
+        } else {
+            let (host, reservation) =
+                tokio::time::timeout(START_TIMEOUT, shared_host::acquire_host(&self.shared_host))
+                    .await
+                    .map_err(|_| "browser connection timed out".to_string())?
+                    .map_err(|error| error.to_string())?;
+            (host, Some(reservation))
         };
-        let host = tokio::time::timeout(START_TIMEOUT, open_host(&params))
-            .await
-            .map_err(|_| "browser connection timed out".to_string())?
-            .map_err(|error| error.to_string())?;
         let host_ready = Instant::now();
         let owns_browser_process = host.owns_browser_process();
         let browser_pid = host.process_id();
-        let targets = tokio::time::timeout(START_TIMEOUT, host.list_targets())
-            .await
-            .map_err(|_| "browser target listing timed out".to_string())?
-            .map_err(|error| error.to_string())?;
-        let target = pick_target(&targets, params.target_id.as_deref())
-            .map_err(|error| error.to_string())?
-            .clone();
+        let target = if endpoint.is_some() {
+            let targets = tokio::time::timeout(START_TIMEOUT, host.list_targets())
+                .await
+                .map_err(|_| "browser target listing timed out".to_string())?
+                .map_err(|error| error.to_string())?;
+            pick_target(&targets, request.target_id.as_deref())
+                .map_err(|error| error.to_string())?
+                .clone()
+        } else {
+            tokio::time::timeout(START_TIMEOUT, host.new_target())
+                .await
+                .map_err(|_| "browser target listing timed out".to_string())?
+                .map_err(|error| error.to_string())?
+        };
         let mut client = tokio::time::timeout(START_TIMEOUT, CdpClient::connect(&target.ws_url))
             .await
             .map_err(|_| "CDP connection timed out".to_string())?
@@ -281,7 +245,7 @@ impl WebManager {
             stop_requested: Arc::clone(&stop_requested),
             done: Mutex::new(Some(done_receiver)),
             task: Mutex::new(None),
-            owned_process_cleanup: host.cleanup_handle(),
+            shared_host: shared_reservation.map(shared_host::SharedHostReservation::keep),
             shared: shared_endpoint::SharedTabInfo {
                 endpoint: host.base_url().to_string(),
                 target_id: target.id.clone(),
@@ -430,7 +394,6 @@ impl WebManager {
             session.stop_requested.store(true, Ordering::SeqCst);
             if !wait_for_done(&session) {
                 eprintln!("buzz-desktop: timed out stopping web session task");
-                cleanup_owned_process(&session);
                 abort_session_task_now(&session);
             } else {
                 drop_session_task(&session);
@@ -557,6 +520,13 @@ impl WebManager {
             .map_err(|error| format!("web session store is poisoned: {error}"))
             .map(|mut sessions| sessions.remove(session_id))
     }
+
+    /// Test-only: the shared browser's PID, if a launch-path session has one
+    /// running. See `shared_host::pid`.
+    #[cfg(test)]
+    pub(super) fn shared_host_pid(&self) -> Option<u32> {
+        shared_host::pid(&self.shared_host)
+    }
 }
 
 async fn stop_and_wait(session: Arc<WebSession>) -> Result<(), String> {
@@ -569,15 +539,8 @@ async fn stop_and_wait(session: Arc<WebSession>) -> Result<(), String> {
         reap_session_task(&session).await;
         Ok(())
     } else {
-        cleanup_owned_process(&session);
         abort_session_task(&session).await;
         Err("timed out stopping web session task".to_string())
-    }
-}
-
-fn cleanup_owned_process(session: &WebSession) {
-    if let Some(cleanup) = session.owned_process_cleanup.as_ref() {
-        cleanup.cleanup();
     }
 }
 
@@ -759,139 +722,6 @@ async fn run_session_loop<R: Runtime>(
             result?;
         }
     }
-}
-
-async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<(), String> {
-    match command {
-        WebCommand::Navigate { url, reply } => {
-            let result = send_command_bounded(client, "Page.navigate", json!({ "url": url }))
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-        WebCommand::Mouse { input, reply } => {
-            let mut params = json!({
-                "type": input.event_type,
-                "x": input.x,
-                "y": input.y,
-                "button": input.button.unwrap_or_else(|| "none".to_string()),
-            });
-            if let Some(click_count) = input.click_count {
-                params["clickCount"] = json!(click_count);
-            }
-            let result = send_command_bounded(client, "Input.dispatchMouseEvent", params)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-        WebCommand::Wheel { input, reply } => {
-            let result = send_command_bounded(
-                client,
-                "Input.dispatchMouseEvent",
-                json!({
-                    "type": "mouseWheel",
-                    "x": input.x,
-                    "y": input.y,
-                    "deltaX": input.delta_x,
-                    "deltaY": input.delta_y,
-                }),
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-        WebCommand::Key { input, reply } => {
-            let mut params = json!({
-                "type": input.event_type,
-                "key": input.key,
-                "code": input.code.unwrap_or_default(),
-                "modifiers": input.modifiers.unwrap_or(0),
-            });
-            if let Some(text) = input.text {
-                params["text"] = json!(text);
-            }
-            if let Some(key_code) = input.windows_virtual_key_code {
-                params["windowsVirtualKeyCode"] = json!(key_code);
-            }
-            let result = send_command_bounded(client, "Input.dispatchKeyEvent", params)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-        WebCommand::Text { text, reply } => {
-            let result = send_command_bounded(client, "Input.insertText", json!({ "text": text }))
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-        WebCommand::Back { reply } => {
-            let _ = reply.send(navigate_history(client, -1).await);
-        }
-        WebCommand::Forward { reply } => {
-            let _ = reply.send(navigate_history(client, 1).await);
-        }
-        WebCommand::Reload { reply } => {
-            let result =
-                send_command_bounded(client, "Page.reload", json!({ "ignoreCache": false }))
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-        WebCommand::Resize {
-            width,
-            height,
-            device_scale_factor,
-            reply,
-        } => {
-            let result = send_command_bounded(
-                client,
-                "Emulation.setDeviceMetricsOverride",
-                json!({
-                    "width": width,
-                    "height": height,
-                    "deviceScaleFactor": device_scale_factor,
-                    "mobile": false
-                }),
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-            let _ = reply.send(result);
-        }
-    }
-    Ok(())
-}
-
-async fn navigate_history(client: &mut CdpClient, delta: i64) -> Result<(), String> {
-    let history = send_command_bounded(client, "Page.getNavigationHistory", json!({}))
-        .await
-        .map_err(|error| error.to_string())?;
-    let index = history["currentIndex"].as_i64().unwrap_or(0) + delta;
-    let entry_id = history["entries"]
-        .as_array()
-        .and_then(|entries| {
-            usize::try_from(index)
-                .ok()
-                .and_then(|index| entries.get(index))
-        })
-        .and_then(|entry| entry["id"].as_i64());
-    let Some(entry_id) = entry_id else {
-        return Ok(());
-    };
-    send_command_bounded(
-        client,
-        "Page.navigateToHistoryEntry",
-        json!({ "entryId": entry_id }),
-    )
-    .await
-    .map(|_| ())
-    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
