@@ -143,12 +143,36 @@ export function resolveManagedAgentRank(
   return head.tierRank;
 }
 
+/**
+ * Bumped by `resetManagedAgentHeadsState()`. A read that started before a
+ * community switch resolves after it, and must not deliver the old
+ * community's managed-agent heads into the new one — the same guard
+ * `fetchEmployeeHeads` uses via `resetEmployeeHeadsState`.
+ */
+let repositoryGeneration = 0;
+
+export function resetManagedAgentHeadsState(): void {
+  repositoryGeneration += 1;
+}
+
 export async function fetchManagedAgentHeadEvents(): Promise<RelayEvent[]> {
+  const generation = repositoryGeneration;
   const filter: RelaySubscriptionFilter = {
     kinds: [KIND_MANAGED_AGENT],
     limit: 500,
   };
-  return relayClient.fetchEvents(filter);
+  let events: RelayEvent[];
+  try {
+    events = await relayClient.fetchEvents(filter);
+  } catch (error) {
+    if (generation !== repositoryGeneration) return [];
+    throw error;
+  }
+  if (generation !== repositoryGeneration) {
+    // The community switched mid-read; drop everything.
+    return [];
+  }
+  return events;
 }
 
 const MANAGED_AGENT_HEADS_ROOT = "colony-managed-agent-heads" as const;

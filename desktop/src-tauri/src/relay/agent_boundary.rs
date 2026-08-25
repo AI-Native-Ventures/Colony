@@ -42,6 +42,12 @@ pub fn effective_agent_relay_url(record_relay: &str, workspace_relay: &str) -> S
 /// Blank pins are unassigned and belong to whichever community is asking, so
 /// they keep working until the user assigns them. Both sides are normalized so
 /// equivalent spellings of one relay compare equal.
+///
+/// **Display callers** (`list_managed_agents`) should additionally exclude
+/// blank pins from the roster: an unassigned agent showing in every community
+/// is the cross-community leak. This function remains `true` for blank pins so
+/// runtime paths (`start_managed_agent`, auto-start) keep the agent running;
+/// `effective_agent_relay_url` still resolves a blank pin to the workspace relay.
 pub fn agent_belongs_to_workspace(record_relay: &str, workspace_relay: &str) -> bool {
     let pinned = record_relay.trim();
     if pinned.is_empty() {
