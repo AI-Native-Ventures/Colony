@@ -19,6 +19,18 @@ export const LIVE_SOURCE_CONFIG: CampaignSourceConfig = {
   order: ["google_maps"],
 };
 
+export type CampaignBudgetProjection = {
+  state: "unapproved" | "active" | "paused" | "revoked" | "exhausted";
+  payer_pubkey: string | null;
+  approved_nanousd: string;
+  spent_nanousd: string;
+  reserved_nanousd: string;
+  price_per_retained_lead_nanousd: string | null;
+  campaign_fingerprint: string | null;
+  approval_action_event_id: string | null;
+  approved_at: string | null;
+};
+
 export type RunProjection = {
   run_id: string;
   campaign_id: string;
@@ -31,6 +43,15 @@ export type RunProjection = {
     | "entitlement_revoked"
     | "executor_failed"
     | null;
+  protocol_version?: number;
+  billing?: {
+    payer_pubkey: string;
+    reserved_nanousd: string;
+    price_per_retained_lead_nanousd: string;
+    billable_lead_limit: number;
+    settled_nanousd: string | null;
+    settled_retained_leads: number | null;
+  } | null;
   created_at: string;
   updated_at: string;
 };
@@ -79,6 +100,7 @@ export type CampaignProjection = {
   lead_count: number;
   latest_run: RunProjection | null;
   latest_run_sources?: RunSourceProjection[];
+  budget?: CampaignBudgetProjection | null;
   created_at: string;
   updated_at: string;
 };
@@ -293,6 +315,14 @@ function campaignStatus(campaign: CampaignProjection): CampaignStatus {
 }
 
 export function mapCampaign(campaign: CampaignProjection): CampaignDetail {
+  const budget = campaign.budget;
+  const remainingNanousd = budget
+    ? (
+        BigInt(budget.approved_nanousd) -
+        BigInt(budget.spent_nanousd) -
+        BigInt(budget.reserved_nanousd)
+      ).toString()
+    : "0";
   return {
     id: campaign.campaign_id,
     name: campaign.name,
@@ -310,6 +340,19 @@ export function mapCampaign(campaign: CampaignProjection): CampaignDetail {
     createdAt: campaign.created_at,
     updatedAt: campaign.updated_at,
     sourceConfig: campaignSourceConfig(campaign),
+    budget: budget
+      ? {
+          state: budget.state,
+          payerPubkey: budget.payer_pubkey ?? undefined,
+          approvedNanousd: budget.approved_nanousd,
+          spentNanousd: budget.spent_nanousd,
+          reservedNanousd: budget.reserved_nanousd,
+          remainingNanousd,
+          pricePerRetainedLeadNanousd:
+            budget.price_per_retained_lead_nanousd ?? undefined,
+          approvedAt: budget.approved_at ?? undefined,
+        }
+      : undefined,
     run: mapRun(campaign),
     metrics: {
       companiesFound: campaign.lead_count,

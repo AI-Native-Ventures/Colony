@@ -168,6 +168,7 @@ fn reserved_keys_include_remote_lifetime_policy() {
         "BUZZ_ACP_EXIT_AFTER_INACTIVITY",
         "BUZZ_ACP_IDLE_POOL_SLEEP",
         "BUZZ_ACP_NO_PRESENCE",
+        "BUZZ_ACP_NO_METER",
     ] {
         assert!(is_reserved_env_key(key), "{key} should be reserved");
         let agent = map(&[(key, "0")]);

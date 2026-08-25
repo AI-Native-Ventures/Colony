@@ -167,9 +167,31 @@ with a TypeScript lookup table or an id comparison in a component.
     `creation_request_id` uniqueness check is repeated under the same managed
     agent store lock as the final record push and save — an earlier recovery
     read alone is not a concurrency boundary.
+13. **The AI configuration toggle owns harness + provider + model + effort
+    together.** "Use agent defaults" submits no pins at all — runtime,
+    provider, and model are omitted so the definition follows the global
+    defaults, and every catalog-declared thinking-effort env key is stripped
+    from the draft; "Customize for this agent" pins all four. (The in-dialog
+    harness DRAFT survives a switch to defaults on purpose: the picker is
+    hidden there and the credential/readiness gates must evaluate what
+    inheritance would actually run.) There is exactly one label for the defaults tab — the old
+    per-harness "Use harness defaults" spelling is deleted — and the
+    inheritance chain itself has one resolver:
+    `effective_config::resolve_effective_runtime_id`
+    (`record.runtime → definition.runtime → global.preferred_runtime`),
+    converted to a command by
+    `effective_config::resolve_effective_harness_command` and consumed by the
+    harness descriptor at spawn, readiness, provider deploy, summaries, and
+    spawn-config snapshots. Never re-derive this chain inline; never render a
+    second meaning onto the toggle. A pinned-but-unresolvable id surfaces as
+    the typed dangling-harness error everywhere, including a global default
+    that lost its harness.
 
 ## The tests that enforce this
 
+- `ui/agentAiConfigurationPolicy.test.mjs` — the toggle's four-field
+  ownership (defaults clears harness+provider+model together; Customize pins
+  them, seeding from the inherited values) and the initial-mode derivation.
 - `lib/agentConfigCore.test.mjs` — field model per harness × scope, clearing
   policy. Update when the capability model changes.
 - `ui/agentConfigFieldsContract.test.mjs` — canonical behaviors + disclosure

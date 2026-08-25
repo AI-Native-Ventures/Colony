@@ -1,6 +1,61 @@
 use super::*;
 
 #[tokio::test]
+async fn legacy_drain_claims_released_protocols_with_only_stored_keys() {
+    let protocol = FakeProtocol::new(vec![
+        DiscoveryWorkerReceiptOutcome::Idle,
+        DiscoveryWorkerReceiptOutcome::Idle,
+    ]);
+    let (outscraper, _, outscraper_server) = start_local_outscraper().await;
+    let (brave, exa, source_server) = start_local_synchronous_sources().await;
+    let providers = ProductionProviderClients::for_test(outscraper, brave, exa);
+    let credentials = LocalProviderCredentials::for_test(Some("legacy-key"), None, None);
+    let dir = tempfile::tempdir().expect("legacy drain directory");
+    let outbox = DiscoveryOutbox::open(
+        dir.path(),
+        "wss://relay-one.example",
+        "31029e74e8d93b2238fdf0be93f56a084b923e4e5b6ff55b03109bd86a87061b",
+    )
+    .expect("legacy drain outbox");
+    let worker_id = Uuid::new_v4();
+    for version in [
+        buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+        1,
+    ] {
+        assert_eq!(
+            run_multi_source_production_for_protocol_once(
+                &protocol,
+                &providers,
+                &credentials,
+                &outbox,
+                worker_id,
+                credentials.available_providers(),
+                version,
+            )
+            .await
+            .expect("legacy drain claim"),
+            HostRunOutcome::Idle
+        );
+    }
+    let claims = protocol.claims.lock().expect("legacy claims");
+    assert_eq!(
+        claims
+            .iter()
+            .map(|claim| claim.protocol_version)
+            .collect::<Vec<_>>(),
+        vec![
+            buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            1
+        ]
+    );
+    assert!(claims
+        .iter()
+        .all(|claim| { claim.available_providers == vec![DiscoveryProvider::Outscraper] }));
+    outscraper_server.abort();
+    source_server.abort();
+}
+
+#[tokio::test]
 async fn reclaimed_run_resumes_after_provider_submitted() {
     let submitted = DiscoveryWorkerCheckpoint {
         sequence: 1,

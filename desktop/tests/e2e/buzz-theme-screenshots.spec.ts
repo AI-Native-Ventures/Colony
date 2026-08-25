@@ -70,8 +70,12 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
     mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
   const rowHoverSurface =
     mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-  const activeSurface =
-    mode === "light" ? "rgba(0, 0, 0, 0.07)" : "rgba(255, 255, 255, 0.16)";
+  // The selected row is the accent, not a wash. It used to be a 7% black
+  // tint that read as a faint grey pill on a violet sidebar, and no accent
+  // could reach it. Violet is the default, so that is what a default install
+  // paints here; Neutral still gets the wash, which its own case covers.
+  const activeSurface = "rgb(137, 90, 246)";
+  const activeForeground = "rgb(255, 255, 255)";
   const chromeColor =
     mode === "light" ? "rgba(0, 0, 0, 0.5)" : "rgba(255, 255, 255, 0.5)";
   const search = page.getByTestId("open-search");
@@ -200,6 +204,11 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
   await expect(page.getByTestId("channel-general")).toHaveCSS(
     "background-color",
     activeSurface,
+  );
+  // Label and icon ride the accent rather than keeping their resting tint.
+  await expect(page.getByTestId("channel-general")).toHaveCSS(
+    "color",
+    activeForeground,
   );
   const hoverChannel = page.getByTestId("channel-random");
   await hoverChannel.hover();
@@ -391,11 +400,13 @@ async function expectAppliedBuzzTheme(
       storedTheme,
       isDark,
       buzzTheme: themeName,
-      // Colony violet, derived from hsl(258 90% 66%). Keep in sync with
-      // --buzz-gradient-* in shared/styles/globals/theme.css and with
+      // Light is one flat violet, top and bottom the same: a gradient in name
+      // only. It used to fade violet into a grey-blue, which read as a wash
+      // rather than as the brand colour. Dark keeps its fade. Keep in sync
+      // with --buzz-gradient-* in shared/styles/globals/theme.css and with
       // mobile/lib/shared/theme/colony_theme.dart.
-      gradientTop: isDark ? "#2a1e48" : "#d9cdf3",
-      gradientBottom: isDark ? "#0a1423" : "#c4d0da",
+      gradientTop: isDark ? "#2a1e48" : "#c9b6f7",
+      gradientBottom: isDark ? "#0a1423" : "#c9b6f7",
     });
 }
 
@@ -733,7 +744,7 @@ test("prominent active tab is opt-in and switches selection surfaces", async ({
   const toggle = page.getByTestId("prominent-active-tab-toggle");
   await expect(toggle).not.toBeChecked();
   await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
-  await expect(activeRow).toHaveCSS("background-color", "rgba(0, 0, 0, 0.07)");
+  await expect(activeRow).toHaveCSS("background-color", "rgb(137, 90, 246)");
   const subtleTextStyle = await activeRow.evaluate((element) => {
     const styles = getComputedStyle(element);
     return { color: styles.color, fontWeight: styles.fontWeight };
@@ -766,11 +777,17 @@ test("prominent active tab is opt-in and switches selection surfaces", async ({
     const styles = getComputedStyle(element);
     return { color: styles.color, fontWeight: styles.fontWeight };
   });
-  expect(prominentTextStyle).toEqual(subtleTextStyle);
+  // The two surfaces no longer share a text treatment, and cannot: the
+  // non-prominent row is the saturated accent and needs white on it, while
+  // the prominent row is a near-white surface and needs dark. Weight is still
+  // shared, which is what "prominent" was ever about.
+  expect(subtleTextStyle.color).toBe("rgb(255, 255, 255)");
+  expect(prominentTextStyle.color).not.toBe(subtleTextStyle.color);
+  expect(prominentTextStyle.fontWeight).toBe(subtleTextStyle.fontWeight);
 
   await toggle.click();
   await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
-  await expect(activeRow).toHaveCSS("background-color", "rgba(0, 0, 0, 0.07)");
+  await expect(activeRow).toHaveCSS("background-color", "rgb(137, 90, 246)");
   await expect
     .poll(() =>
       page.evaluate(
@@ -822,13 +839,13 @@ test("prominent channel and direct-message rows share one flat active state", as
 
 for (const { activeSurface, hoverSurface, mode, theme } of [
   {
-    activeSurface: "rgba(0, 0, 0, 0.07)",
+    activeSurface: "rgb(137, 90, 246)",
     hoverSurface: "rgba(0, 0, 0, 0.04)",
     mode: "light" as const,
     theme: "buzz",
   },
   {
-    activeSurface: "rgba(255, 255, 255, 0.16)",
+    activeSurface: "rgb(137, 90, 246)",
     hoverSurface: "rgba(255, 255, 255, 0.04)",
     mode: "dark" as const,
     theme: "buzz-dark",
@@ -1252,18 +1269,23 @@ test("accent picker reveals/hides when toggling Buzz", async ({ page }) => {
         return { x: box.x, y: box.y };
       }),
     );
-  expect(swatchBoxes).toHaveLength(10);
+  // Eleven since Violet joined the ramp as Colony's own hue and the default.
+  expect(swatchBoxes).toHaveLength(11);
   expect(new Set(swatchBoxes.map((box) => Math.round(box.y))).size).toBe(1);
   await expect(page.getByTestId("accent-color-options")).toHaveCSS(
     "overflow-x",
     "auto",
   );
-  await expect(page.getByTestId("accent-color-blue")).toHaveAttribute(
+  // Violet leads the ramp and is the default, so it is the pressed swatch on
+  // an install that has never chosen one. Blue held this before violet joined.
+  await expect(page.getByTestId("accent-color-violet")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
   await expect(
-    page.getByTestId("accent-color-blue").getByTestId("accent-color-selection"),
+    page
+      .getByTestId("accent-color-violet")
+      .getByTestId("accent-color-selection"),
   ).toBeVisible();
   await waitForAnimations(page);
   await page.getByTestId("settings-theme").screenshot({

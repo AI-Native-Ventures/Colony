@@ -538,9 +538,6 @@ export const CANONICALIZERS: Record<string, Canonicalizer> = {
   get_nsec: redact("nsec"),
   get_runtime_file_config: redact("runtime config may hold keys"),
   get_global_agent_config: redact("global agent config may hold keys"),
-  get_discovery_credential_status: redact(
-    "discovery credential status may echo secrets",
-  ),
   nip44_encrypt_to_self: redact("nonce-bearing ciphertext"),
 
   // Signed events embed their own generated id, signature and timestamp.

@@ -19,7 +19,6 @@ import type {
   Vertical,
   VerticalDetail,
 } from "../types";
-import type { CampaignSourceConfig } from "../sourceConfig";
 
 export interface DiscoveryDataSource {
   getEntitlement(): Promise<DiscoveryEntitlement>;
@@ -53,10 +52,9 @@ export interface DiscoveryDataSource {
     body: string,
   ): Promise<ConversationThread>;
   createCampaign(input: CampaignDraft): Promise<CampaignDetail>;
-  updateSourceConfig(
-    campaignId: string,
-    config: CampaignSourceConfig,
-  ): Promise<CampaignDetail>;
+  approveCampaignBudget(campaignId: string): Promise<CampaignDetail>;
+  pauseCampaignBudget(campaignId: string): Promise<CampaignDetail>;
+  revokeCampaignBudget(campaignId: string): Promise<CampaignDetail>;
   startDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent>;
   cancelDiscovery(campaignId: string): Promise<void>;
   retryDiscovery(campaignId: string): AsyncIterable<DiscoveryEvent>;

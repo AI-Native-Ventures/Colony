@@ -296,6 +296,7 @@ fn wire_record(
         timestamp: Timestamp::now().to_human_datetime(),
         payment_mode: PaymentMode::Metered,
         tokens: Some(tokens),
+        unknown_token_fields: Vec::new(),
         amount_nanousd: None,
         observed_cost_nanousd: None,
         harness: Some("buzz-acp".to_string()),

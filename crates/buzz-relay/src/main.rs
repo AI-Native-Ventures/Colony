@@ -504,6 +504,19 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("Colony Credits gateway disabled (no VERCEL_AI_GATEWAY_KEY)");
     }
+    if let Some(discovery_config) = buzz_relay::discovery_gateway::config_from_env()? {
+        let discovery_gateway = buzz_relay::discovery_gateway::DiscoveryGatewayState::new(
+            discovery_config,
+        )
+        .map_err(|error| anyhow::anyhow!("failed to initialize the Discovery gateway: {error}"))?;
+        app_state
+            .discovery_gateway
+            .set(Arc::new(discovery_gateway))
+            .map_err(|_| anyhow::anyhow!("Discovery gateway initialized twice"))?;
+        info!("Colony-hosted Discovery provider gateway enabled");
+    } else {
+        info!("Colony-hosted Discovery provider gateway disabled");
+    }
     let state = Arc::new(app_state);
 
     // Every relay pod may run the bounded rollup worker. The transactional

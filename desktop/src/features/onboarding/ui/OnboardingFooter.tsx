@@ -52,7 +52,7 @@ export function OnboardingFooterProvider({
       {backAction ? (
         <div className="fixed bottom-5 left-6 z-20">
           <Button
-            className="h-9 rounded-full bg-foreground/10 px-6 text-sm text-foreground hover:bg-foreground/15 hover:text-foreground"
+            className="onb-back h-9 rounded-full px-6 text-sm"
             data-testid={backAction.testId ?? "onboarding-back"}
             disabled={backAction.disabled}
             onClick={backAction.onClick}
@@ -89,7 +89,7 @@ export function OnboardingFooter({
   const group = (
     <div
       className={cn(
-        "flex w-full max-w-[500px] flex-col items-center gap-3",
+        "onb-actions flex w-full max-w-[500px] flex-col items-center gap-3",
         // The docked slot is click-through (`pointer-events-none`); re-enable
         // pointer events on the CTA group itself. Inline (no slot) needs no
         // override since it sits in normal flow.

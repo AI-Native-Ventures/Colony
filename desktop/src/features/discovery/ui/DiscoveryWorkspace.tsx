@@ -564,7 +564,6 @@ export function DiscoveryWorkspace({
             );
           }}
           onOpenChange={setCreateCampaignOpen}
-          onRetryEntitlement={() => window.location.reload()}
           open={createCampaignOpen}
           vertical={vertical}
         />

@@ -12,6 +12,7 @@ use uuid::Uuid;
 pub use crate::discovery::DiscoveryProvider;
 use crate::discovery::{
     DiscoveryBusinessSearchSpec, DiscoveryRunProjection, DiscoverySource, DiscoverySourceConfig,
+    DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION, DISCOVERY_RELEASED_PROTOCOL_VERSION,
 };
 
 /// Operation requested by a trusted local Discovery worker.
@@ -558,22 +559,37 @@ pub struct DiscoveryWorkerClaimRequest {
     pub idempotency_key: Uuid,
     /// Stable identifier for this local worker installation.
     pub worker_id: Uuid,
-    /// Ordered, unique providers configured on this device. No credential data is included.
+    /// Worker protocol. Released payloads without this field remain V2.
+    #[serde(
+        default = "default_released_worker_protocol_version",
+        skip_serializing_if = "is_released_worker_protocol_version"
+    )]
+    pub protocol_version: u16,
+    /// Released V2 device provider capabilities. V3 uses Colony-hosted providers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub available_providers: Vec<DiscoveryProvider>,
 }
 
 impl DiscoveryWorkerClaimRequest {
     /// Validate the non-secret capability advertisement used for run matching.
     pub fn validate(&self) -> Result<(), DiscoveryWorkerClaimError> {
-        if self.available_providers.is_empty()
-            || self.available_providers.len() > MAX_AVAILABLE_PROVIDERS
-            || self
-                .available_providers
-                .iter()
-                .enumerate()
-                .any(|(index, provider)| self.available_providers[..index].contains(provider))
-        {
-            return Err(DiscoveryWorkerClaimError::InvalidAvailableProviders);
+        match self.protocol_version {
+            1 | DISCOVERY_RELEASED_PROTOCOL_VERSION => {
+                if self.available_providers.is_empty()
+                    || self.available_providers.len() > MAX_AVAILABLE_PROVIDERS
+                    || self
+                        .available_providers
+                        .iter()
+                        .enumerate()
+                        .any(|(index, provider)| {
+                            self.available_providers[..index].contains(provider)
+                        })
+                {
+                    return Err(DiscoveryWorkerClaimError::InvalidAvailableProviders);
+                }
+            }
+            DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION if self.available_providers.is_empty() => {}
+            _ => return Err(DiscoveryWorkerClaimError::InvalidProtocol),
         }
         Ok(())
     }
@@ -585,6 +601,17 @@ pub enum DiscoveryWorkerClaimError {
     /// The provider list was empty, too large, or contained duplicates.
     #[error("invalid Discovery worker provider capabilities")]
     InvalidAvailableProviders,
+    /// Protocol is unknown or carries capabilities from the wrong trust model.
+    #[error("invalid Discovery worker protocol")]
+    InvalidProtocol,
+}
+
+const fn default_released_worker_protocol_version() -> u16 {
+    DISCOVERY_RELEASED_PROTOCOL_VERSION
+}
+
+const fn is_released_worker_protocol_version(version: &u16) -> bool {
+    *version == DISCOVERY_RELEASED_PROTOCOL_VERSION
 }
 
 /// Durable execution state for one source in an immutable run plan.
@@ -1052,6 +1079,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             worker_id: Uuid::new_v4(),
+            protocol_version: 2,
             available_providers: vec![
                 DiscoveryProvider::Outscraper,
                 DiscoveryProvider::BraveSearch,
@@ -1075,10 +1103,39 @@ mod tests {
             "idempotency_key": Uuid::new_v4(),
             "worker_id": Uuid::new_v4()
         });
-        assert!(
-            serde_json::from_value::<DiscoveryWorkerClaimRequest>(legacy_without_capabilities)
-                .is_err()
-        );
+        let legacy_without_capabilities: DiscoveryWorkerClaimRequest =
+            serde_json::from_value(legacy_without_capabilities).expect("decode released claim");
+        assert!(legacy_without_capabilities.validate().is_err());
+    }
+
+    #[test]
+    fn hosted_gateway_claim_uses_protocol_three_without_device_providers() {
+        let hosted = DiscoveryWorkerClaimRequest {
+            request_id: Uuid::new_v4(),
+            idempotency_key: Uuid::new_v4(),
+            worker_id: Uuid::new_v4(),
+            protocol_version: DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+            available_providers: Vec::new(),
+        };
+        assert_eq!(hosted.validate(), Ok(()));
+        let json = serde_json::to_value(&hosted).expect("serialize hosted claim");
+        assert_eq!(json["protocol_version"], 3);
+        assert!(json.get("available_providers").is_none());
+
+        let released = serde_json::json!({
+            "request_id": Uuid::new_v4(),
+            "idempotency_key": Uuid::new_v4(),
+            "worker_id": Uuid::new_v4(),
+            "available_providers": ["outscraper"]
+        });
+        let released: DiscoveryWorkerClaimRequest =
+            serde_json::from_value(released).expect("decode released claim");
+        assert_eq!(released.protocol_version, 2);
+        assert_eq!(released.validate(), Ok(()));
+
+        let mut invalid_hosted = hosted;
+        invalid_hosted.available_providers = vec![DiscoveryProvider::Outscraper];
+        assert!(invalid_hosted.validate().is_err());
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub mod discovery;
 pub mod discovery_workspace;
 /// Direct message channel persistence.
 pub mod dm;
+/// Email and password account persistence (zero-knowledge key escrow).
+pub mod email_accounts;
 pub mod employees;
 /// Database error types.
 pub mod error;
@@ -51,6 +53,8 @@ pub mod moderation;
 pub mod operator_analytics;
 /// Monthly table partition management.
 pub mod partition;
+/// Payment top-up intents: pending checkout records keyed by reference.
+pub mod payment_intents;
 /// Buzz product-feedback sidecar persistence.
 pub mod product_feedback;
 /// Community-scoped push lease and durable wake-outbox persistence.
@@ -3816,25 +3820,6 @@ impl Db {
         channel::get_channel(&self.pool, community_id, channel_id).await
     }
 
-    /// Returns the canvas content for a channel, if any.
-    pub async fn get_canvas(
-        &self,
-        community_id: CommunityId,
-        channel_id: Uuid,
-    ) -> Result<Option<String>> {
-        channel::get_canvas(&self.pool, community_id, channel_id).await
-    }
-
-    /// Sets or clears the canvas content for a channel.
-    pub async fn set_canvas(
-        &self,
-        community_id: CommunityId,
-        channel_id: Uuid,
-        canvas: Option<&str>,
-    ) -> Result<()> {
-        channel::set_canvas(&self.pool, community_id, channel_id, canvas).await
-    }
-
     /// Adds a member to a channel.
     pub async fn add_member(
         &self,
@@ -5832,6 +5817,20 @@ impl Db {
     /// Retire an employee, freeing its role (see [`employees::retire_employee`]).
     pub async fn retire_employee(&self, community: CommunityId, pubkey: &[u8]) -> Result<bool> {
         employees::retire_employee(&self.pool, community, pubkey).await
+    }
+
+    /// Apply an owner-validated rank/manager/status change to an employee
+    /// (see [`employees::update_employee`]). `None` when no active row
+    /// matches, so a repeat retire settles instead of erroring.
+    pub async fn update_employee(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+        rank: Option<&str>,
+        manager: Option<Option<&[u8]>>,
+        status: Option<&str>,
+    ) -> Result<Option<employees::EmployeeRow>> {
+        employees::update_employee(&self.pool, community, pubkey, rank, manager, status).await
     }
 
     /// File a job. `None` when this filing already produced one

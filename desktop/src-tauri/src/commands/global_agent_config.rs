@@ -207,7 +207,16 @@ fn collect_restart_candidates(
             }
             let provisioned_supported =
                 provisioned_runtime_supported(record, &all_personas, new_global);
-            let effective_cmd = record_agent_command(record, &all_personas);
+            // Resolve through the one harness chain against the NEW global so a
+            // preferred-runtime switch is visible: the per-harness env keys and
+            // readiness differ, and the restart scan must see both sides.
+            let effective_cmd =
+                crate::managed_agents::effective_config::resolve_effective_harness_command(
+                    record,
+                    &all_personas,
+                    new_global,
+                )
+                .unwrap_or_else(|_| record_agent_command(record, &all_personas));
             let runtime_meta = known_acp_runtime(&effective_cmd);
             let old_effective =
                 resolve_effective_agent_env(record, &all_personas, runtime_meta, old_global);
@@ -333,7 +342,15 @@ async fn restart_local_agent_on_config_change(
         //
         // Reuse personas_snapshot from Phase 1 — avoids loading personas again
         // per agent when the save-command personas haven't changed.
-        let effective_cmd = record_agent_command(record, &personas_owned);
+        // One harness chain against the NEW global, so a preferred-runtime
+        // switch resolves each side's env against its own harness.
+        let effective_cmd =
+            crate::managed_agents::effective_config::resolve_effective_harness_command(
+                record,
+                &personas_owned,
+                &new_global_clone,
+            )
+            .unwrap_or_else(|_| record_agent_command(record, &personas_owned));
         let runtime_meta = known_acp_runtime(&effective_cmd);
         let old_effective =
             resolve_effective_agent_env(record, &personas_owned, runtime_meta, &old_global_clone);
@@ -436,7 +453,10 @@ fn provisioned_runtime_supported(
     personas: &[crate::managed_agents::AgentDefinition],
     global: &GlobalAgentConfig,
 ) -> bool {
-    let command = record_agent_command(record, personas);
+    let command = crate::managed_agents::effective_config::resolve_effective_harness_command(
+        record, personas, global,
+    )
+    .unwrap_or_else(|_| record_agent_command(record, personas));
     let runtime_id = known_acp_runtime(&command)
         .map(|runtime| runtime.id)
         .unwrap_or("custom");

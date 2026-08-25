@@ -93,10 +93,10 @@ function GateRow({ gate }: { gate: GateResult }) {
   );
 }
 
-export function ContentChecksPanel({ report }: { report: GateReport | null }) {
-  const absent = missingGates(report);
+export function ContentChecksPanel({ reports }: { reports: GateReport[] }) {
+  const absent = missingGates(reports);
 
-  if (!report) {
+  if (reports.length === 0) {
     return (
       <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
         <p className="text-sm font-medium">Nothing measured</p>
@@ -107,18 +107,26 @@ export function ContentChecksPanel({ report }: { report: GateReport | null }) {
     );
   }
 
+  // Show the first report's metadata; the gates from all reports are merged.
+  const firstReport = reports[0];
   const engine =
-    report.renderer && typeof report.renderer.engine === "string"
-      ? report.renderer.engine
+    firstReport.renderer && typeof firstReport.renderer.engine === "string"
+      ? firstReport.renderer.engine
       : null;
+  const allGates = reports.flatMap((report) => report.gates);
+  const verdict = reports.every((report) => report.verdict === "pass")
+    ? "pass"
+    : reports.some((report) => report.verdict === "fail")
+      ? "fail"
+      : "incomplete";
 
   return (
     <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
       <div className="flex items-baseline justify-between gap-3">
         <p className="text-sm font-medium">Checks</p>
-        {report.verdict === "pass" ? (
+        {verdict === "pass" ? (
           <Badge variant="success">All passed</Badge>
-        ) : report.verdict === "fail" ? (
+        ) : verdict === "fail" ? (
           <Badge variant="destructive">Failed</Badge>
         ) : (
           <Badge variant="warning">Not fully checked</Badge>
@@ -126,7 +134,7 @@ export function ContentChecksPanel({ report }: { report: GateReport | null }) {
       </div>
 
       <ul className="mt-2">
-        {report.gates.map((gate) => (
+        {allGates.map((gate) => (
           <GateRow gate={gate} key={gate.id} />
         ))}
         {absent.map((id) => (
@@ -150,7 +158,7 @@ export function ContentChecksPanel({ report }: { report: GateReport | null }) {
       <p className="mt-2 text-xs text-muted-foreground">
         Measured on these exact bytes
         {engine ? ` by ${engine}` : ""}
-        {report.renderedAt ? `, ${report.renderedAt}` : ""}.
+        {firstReport.renderedAt ? `, ${firstReport.renderedAt}` : ""}.
       </p>
     </div>
   );

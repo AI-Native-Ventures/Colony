@@ -70,6 +70,13 @@ pub struct EventQuery {
     /// Restrict results to events with an `e` tag referencing any of these event IDs (hex).
     /// Uses JSONB containment (`tags @> ...`) against the `tags` column.
     pub e_tags: Option<Vec<String>>,
+    /// Restrict results to events carrying this exact single-value tag
+    /// `(name, value)`. JSONB containment (`tags @> [["name","value"]]`)
+    /// against the `tags` column, served by the same GIN index as `e_tags`.
+    /// Used where a wire-format tag IS the indexable fact -- e.g. kind 30190 /
+    /// owner-authored 30177 heads carrying `["manager", <pubkey hex>]`, which
+    /// is how an agent's direct reports are found without scanning every head.
+    pub tag_contains: Option<(String, String)>,
     /// Restrict results to events in any of these channels, while retaining
     /// channel-less global events. Applied before SQL `LIMIT` so access-filtered
     /// historical pages have exact exhaustion semantics.
@@ -95,6 +102,13 @@ pub struct EventQuery {
     /// SQL pushdown is sound.  Keeping `event_visible_to_reader` as post-filter
     /// defense-in-depth catches any residual mismatch.
     pub shared_gated_reader: Option<Vec<u8>>,
+    /// Exclude thread-scoped canvases (kind 40100 events carrying an `e` tag)
+    /// from the candidate page. Set for canvas queries that do not constrain
+    /// `#e`: a channel-canvas read must not have thread canvases crowd the
+    /// page out from under its SQL LIMIT. Applied as
+    /// `AND NOT (kind = 40100 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags) t WHERE t->>0 = 'e'))`
+    /// so mixed-kind lists are unaffected.
+    pub exclude_thread_canvas: bool,
 }
 
 impl EventQuery {
@@ -121,9 +135,11 @@ impl EventQuery {
             authors: None,
             ids: None,
             e_tags: None,
+            tag_contains: None,
             channel_ids: None,
             max_limit: None,
             shared_gated_reader: None,
+            exclude_thread_canvas: false,
         }
     }
 }
@@ -703,11 +719,24 @@ pub(crate) async fn query_events_on(
         }
     }
 
-    // e-tag pushdown via JSONB containment: tags @> '[["e","<hex>"]]'.
+    // e-tag pushdown via JSONB containment: tags @> '[["e","<hex>"]].
     // Multiple e-tags use OR (any match). Served by idx_events_tags_gin
     // (GIN, jsonb_path_ops — migrations/0004): the channel-window aux closure
     // fans this out once per retained row, which made unindexed containment
     // the dominant scroll-back cost (~1.7s/page on staging).
+
+    // Thread-canvas exclusion pushdown (kind 40100, no #e constraint): a
+    // channel-canvas read must not have thread canvases crowd the page out
+    // from under its SQL LIMIT. Kind-guarded so mixed-kind lists keep their
+    // reply rows.
+    if q.exclude_thread_canvas {
+        qb.push(format!(
+            " AND NOT ({col_prefix}kind = 40100 AND EXISTS (\
+             SELECT 1 FROM jsonb_array_elements({col_prefix}tags) AS t \
+             WHERE t->>0 = 'e'))"
+        ));
+    }
+
     if let Some(ref e_tags) = q.e_tags {
         if !e_tags.is_empty() {
             qb.push(" AND (");
@@ -722,6 +751,15 @@ pub(crate) async fn query_events_on(
             }
             qb.push(")");
         }
+    }
+
+    // Single-value tag containment: tags @> '[["<name>","<value>"]]'.
+    // Same GIN-served pushdown as `e_tags` above, for wire-format tags whose
+    // value is itself the lookup key (e.g. the `manager` reporting-line tag).
+    if let Some((tag_name, tag_value)) = &q.tag_contains {
+        let containment = serde_json::json!([[tag_name, tag_value]]);
+        qb.push(format!(" AND {col_prefix}tags @> "));
+        qb.push_bind(containment);
     }
 
     if let Some(s) = q.since {
@@ -1010,6 +1048,16 @@ pub(crate) async fn count_events_on(conn: &mut sqlx::PgConnection, q: &EventQuer
             }
             qb.push(")");
         }
+    }
+
+    // Thread-canvas exclusion pushdown — mirrors query_events_on so COUNT
+    // stays exact for canvas filters without an #e constraint.
+    if q.exclude_thread_canvas {
+        qb.push(format!(
+            " AND NOT ({col_prefix}kind = 40100 AND EXISTS (\
+             SELECT 1 FROM jsonb_array_elements({col_prefix}tags) AS t \
+             WHERE t->>0 = 'e'))"
+        ));
     }
 
     if let Some(ref e_tags) = q.e_tags {

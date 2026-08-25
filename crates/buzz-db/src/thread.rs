@@ -332,8 +332,11 @@ pub async fn decrement_reply_count(
 ///
 /// - `depth_limit` -- if `Some(n)`, only returns replies at depth <= n.
 /// - `cursor` -- keyset pagination cursor. The result order is
-///   `(event_created_at ASC, event_id ASC)`; the cursor is the composite key of
-///   the last row already seen and the query returns rows strictly after it. A
+///   `(event_created_at ASC, event_id DESC)` -- the chronological reading of the
+///   relay's canonical `(created_at DESC, id ASC)` order, so a same-second pair
+///   sorts identically here and in [`get_channel_window`]; the cursor is the
+///   composite key of the last row already seen and the query returns rows
+///   strictly after it. A
 ///   composite `(timestamp, event_id)` tiebreak is required because thread
 ///   replies routinely share a `created_at` second (bursty threads); a
 ///   timestamp-only cursor silently drops every tied reply past the page limit.
@@ -430,12 +433,15 @@ pub(crate) async fn get_thread_replies_on(
     }
     match &cursor_key {
         Some((_, Some(_))) => {
-            // Composite keyset: strict row comparison with an event_id tiebreak
-            // so same-second replies paginate without gaps or duplicates.
+            // Composite keyset with an event_id tiebreak so same-second replies
+            // paginate without gaps or duplicates. The tiebreak runs DESC to
+            // match the ORDER BY below, so the "next page" predicate is
+            // event_created_at > ts OR (event_created_at = ts AND event_id < id)
+            // rather than a plain row comparison.
             let ts_idx = param_idx;
             let id_idx = param_idx + 1;
             sql.push_str(&format!(
-                " AND (tm.event_created_at, tm.event_id) > (${ts_idx}, ${id_idx})"
+                " AND (tm.event_created_at > ${ts_idx} OR (tm.event_created_at = ${ts_idx} AND tm.event_id < ${id_idx}))"
             ));
             param_idx += 2;
         }
@@ -448,7 +454,7 @@ pub(crate) async fn get_thread_replies_on(
     }
 
     sql.push_str(&format!(
-        " ORDER BY tm.event_created_at ASC, tm.event_id ASC LIMIT ${param_idx}"
+        " ORDER BY tm.event_created_at ASC, tm.event_id DESC LIMIT ${param_idx}"
     ));
 
     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))

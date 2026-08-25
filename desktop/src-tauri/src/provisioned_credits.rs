@@ -23,6 +23,8 @@ use crate::{
     relay::build_nip98_auth_header_for_keys,
 };
 
+mod account;
+
 /// Gateway token lifetime requested by the desktop. Short-lived leases bound
 /// the credential exposure window when a process exits before graceful drain.
 pub const GATEWAY_TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
@@ -87,40 +89,21 @@ pub enum GatewayAccountStatus {
     Depleted,
 }
 
-/// Typed account response. `balance_nanousd` intentionally remains a string
-/// at the Tauri/TypeScript boundary so no floating point conversion occurs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayAccount {
-    /// Signed decimal nanodollar balance supplied by the relay.
     pub balance_nanousd: String,
-    /// The only supported presentation currency.
+    #[serde(default)]
+    pub total_balance_nanousd: String,
+    #[serde(default)]
+    pub discovery_reserved_nanousd: String,
+    #[serde(default)]
+    pub gateway_reserved_nanousd: String,
+    #[serde(default)]
+    pub available_balance_nanousd: String,
     pub currency: String,
-    /// Relay-provided display status; callers also validate it against the
-    /// integer balance before showing it.
     pub status: GatewayAccountStatus,
 }
 
-impl GatewayAccount {
-    /// Parse the signed decimal balance with integer-safe semantics and verify
-    /// the account contract. The returned value is nanodollars, not USD.
-    pub fn balance_nanousd_i128(&self) -> Result<i128, String> {
-        if self.currency != "USD" {
-            return Err("gateway account returned an unsupported currency".to_string());
-        }
-        let balance = parse_balance_nanousd(&self.balance_nanousd)?;
-        let computed = if balance > 0 {
-            GatewayAccountStatus::Active
-        } else {
-            GatewayAccountStatus::Depleted
-        };
-        if self.status != computed {
-            return Err("gateway account status does not match its balance".to_string());
-        }
-        Ok(balance)
-    }
-}
-
-/// Parse a signed decimal nanodollar balance without a precision-losing float.
 pub fn parse_balance_nanousd(value: &str) -> Result<i128, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -131,7 +114,6 @@ pub fn parse_balance_nanousd(value: &str) -> Result<i128, String> {
         .map_err(|_| "gateway account balance is not a valid signed decimal".to_string())
 }
 
-/// Opaque token wrapper whose debug output cannot disclose the token.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RedactedToken(String);
 
