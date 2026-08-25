@@ -79,9 +79,13 @@ pub async fn workspace_web_resize(
     session_id: String,
     width: u32,
     height: u32,
+    device_scale_factor: f64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state.web_sessions.resize(&session_id, width, height).await
+    state
+        .web_sessions
+        .resize(&session_id, width, height, device_scale_factor)
+        .await
 }
 
 /// Forward a pointer event to the page driven by an existing web session.

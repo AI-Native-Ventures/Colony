@@ -11,6 +11,17 @@ const SAMPLE_DESCRIPTION =
   "You handle servicing, diagnostics and repairs for private owners and " +
   "small fleets, with a 48 hour turnaround on most jobs.";
 
+/** Pack id to granted cents, mirroring the relay's grant column. */
+const FAKE_GRANT_CENTS: Record<string, number> = {
+  starter: 500,
+  growth: 1_400,
+  scale: 4_400,
+  pro: 12_000,
+  studio: 25_000,
+  agency: 50_000,
+  enterprise: 100_000,
+};
+
 /**
  * Hand-written fakes, not mocks: the flow is built and tested against these
  * until the real auth, payments, scrape and invite services exist.
@@ -77,6 +88,34 @@ export function createFakeServices(
               usdCents: 5_499,
               grantNanousd: 44_000_000_000,
             },
+            {
+              id: "pro",
+              name: "Pro",
+              zarCents: 244_900,
+              usdCents: 14_899,
+              grantNanousd: 120_000_000_000,
+            },
+            {
+              id: "studio",
+              name: "Studio",
+              zarCents: 508_900,
+              usdCents: 30_799,
+              grantNanousd: 250_000_000_000,
+            },
+            {
+              id: "agency",
+              name: "Agency",
+              zarCents: 1_014_900,
+              usdCents: 60_999,
+              grantNanousd: 500_000_000_000,
+            },
+            {
+              id: "enterprise",
+              name: "Enterprise",
+              zarCents: 2_024_900,
+              usdCents: 120_999,
+              grantNanousd: 1_000_000_000_000,
+            },
           ],
         };
       },
@@ -85,8 +124,7 @@ export function createFakeServices(
         const reference = `ref_${pending.size + 1}`;
         // Record what the pack grants, not what it costs: settlement credits
         // Credits, and the fake must not imply the two are the same number.
-        const grantCents =
-          packId === "scale" ? 4_400 : packId === "growth" ? 1_400 : 500;
+        const grantCents = FAKE_GRANT_CENTS[packId] ?? 500;
         pending.set(reference, grantCents);
         return {
           authorizationUrl: `https://checkout.example/${reference}`,

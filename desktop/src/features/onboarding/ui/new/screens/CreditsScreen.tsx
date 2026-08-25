@@ -41,6 +41,20 @@ export function priceOf(pack: CreditPack, currency: ChargeCurrency) {
   return currency === "ZAR" ? pack.zarCents : pack.usdCents;
 }
 
+/** The pack a first-time buyer lands on, pinned by id.
+ *
+ * A positional default drifts every time the catalogue changes: the middle
+ * of three packs is "growth", the middle of seven is "pro" at ten times the
+ * price. "growth" is what the default was when the screen shipped, so that
+ * is what it stays. If the relay ever stops selling it, fall back to the
+ * first pack: the list is ordered cheapest-first, so the fallback errs
+ * toward the smallest charge, never a larger one. */
+export const DEFAULT_PACK_ID = "growth";
+
+export function defaultPack(packs: CreditPack[]): CreditPack | null {
+  return packs.find((pack) => pack.id === DEFAULT_PACK_ID) ?? packs[0] ?? null;
+}
+
 type Props = {
   track: OnboardingTrack;
   email: string;
@@ -76,10 +90,9 @@ export function CreditsScreen({
         if (!live) return;
         setPacks(list.packs);
         setCurrency(list.currency);
-        // Default to the middle option where there is one: the cheapest
-        // reads as the safe choice, and the dearest as a hard sell.
-        const fallback = list.packs[Math.floor(list.packs.length / 2)];
-        setSelected(fallback?.id ?? null);
+        // The default is a named pack, not a position: adding tiers to the
+        // catalogue must not move what a new buyer is defaulted into.
+        setSelected(defaultPack(list.packs)?.id ?? null);
       })
       .catch(() => {
         if (live) setLoadFailed(true);

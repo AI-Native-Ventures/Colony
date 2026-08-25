@@ -1,10 +1,16 @@
-//! Owned-browser lifecycle for `WebManager`, against a real headless Chromium.
+//! Shared-browser lifecycle for `WebManager`, against a real headless Chromium.
 //!
 //! These tests replace the three visible browser sessions the packaged WDIO
 //! journey used to open. A generic Tauri runtime lets
 //! `tauri::test::mock_app` drive the complete `WebManager::start` path with no
 //! window, so a full session can be started and torn down in seconds without
 //! a packaged build.
+//!
+//! No session owns its browser process directly any more (T3: every
+//! launch-path session attaches to one shared, refcounted Chromium - see
+//! `shared_host`), so these tests read the live PID via
+//! `WebManager::shared_host_pid` rather than a session's own
+//! `WebStartResult::browser_pid`.
 //!
 //! Gated on `BUZZ_BROWSER_REAL=1` because they launch an actual browser.
 use std::path::PathBuf;
@@ -68,7 +74,7 @@ async fn wait_for_pid_gone(pid: u32, timeout: Duration) -> bool {
 
 fn owned_request() -> WebStartRequest {
     WebStartRequest {
-        // No endpoint means Colony launches and owns the browser.
+        // No endpoint means Colony launches (or reuses) the shared browser.
         endpoint: None,
         target_id: None,
         url: "about:blank".to_string(),
@@ -146,7 +152,7 @@ fn owned_profile_dirs() -> Vec<PathBuf> {
 
 #[tokio::test]
 #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
-async fn closing_a_session_reaps_the_browser_it_owns() {
+async fn closing_the_only_session_reaps_the_shared_browser() {
     if std::env::var("BUZZ_BROWSER_REAL").is_err() {
         return;
     }
@@ -156,10 +162,14 @@ async fn closing_a_session_reaps_the_browser_it_owns() {
     let started = start_owned(&manager, app.handle().clone())
         .await
         .expect("owned web session failed to start");
-    assert!(started.owns_browser_process);
-    let pid = started
-        .browser_pid
-        .expect("an owned session must expose a browser PID");
+    assert!(
+        !started.owns_browser_process,
+        "sessions attach to the shared host now; the manager owns the process"
+    );
+    assert!(started.browser_pid.is_none());
+    let pid = manager
+        .shared_host_pid()
+        .expect("a launched session must have a live shared host");
     assert!(process_is_alive(pid), "browser {pid} was not running");
 
     manager
@@ -176,7 +186,7 @@ async fn closing_a_session_reaps_the_browser_it_owns() {
 
 #[tokio::test]
 #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
-async fn close_all_reaps_every_owned_browser() {
+async fn concurrent_starts_share_one_browser_and_close_all_reaps_it() {
     if std::env::var("BUZZ_BROWSER_REAL").is_err() {
         return;
     }
@@ -187,13 +197,15 @@ async fn close_all_reaps_every_owned_browser() {
         start_two_owned(&manager, app.handle().clone(), app.handle().clone()).await;
     let first = first.expect("first owned web session failed to start");
     let second = second.expect("second owned web session failed to start");
-    let pids: Vec<u32> = [first.browser_pid, second.browser_pid]
-        .into_iter()
-        .map(|pid| pid.expect("an owned session must expose a browser PID"))
-        .collect();
-    for pid in &pids {
-        assert!(process_is_alive(*pid), "browser {pid} was not running");
-    }
+    assert_ne!(
+        first.target_id, second.target_id,
+        "two tabs opened on the shared host must not collide on one CDP target"
+    );
+
+    let pid = manager
+        .shared_host_pid()
+        .expect("a launched session must have a live shared host");
+    assert!(process_is_alive(pid), "browser {pid} was not running");
 
     // This is the community-reset path: it calls close_all_async.
     manager
@@ -201,30 +213,70 @@ async fn close_all_reaps_every_owned_browser() {
         .await
         .expect("close_all_async failed");
 
-    for pid in pids {
-        assert!(
-            wait_for_pid_gone(pid, Duration::from_secs(30)).await,
-            "browser {pid} survived close_all"
-        );
-    }
+    assert!(
+        wait_for_pid_gone(pid, Duration::from_secs(30)).await,
+        "browser {pid} survived close_all"
+    );
     cleanup_profile_root();
 }
 
 #[tokio::test]
 #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
-async fn synchronous_close_all_reaps_every_owned_browser() {
+async fn closing_one_of_two_tabs_leaves_the_other_running() {
     if std::env::var("BUZZ_BROWSER_REAL").is_err() {
         return;
     }
     let app = tauri::test::mock_app();
     let manager = Arc::new(WebManager::default());
 
-    let started = start_owned(&manager, app.handle().clone())
+    let first = start_owned(&manager, app.handle().clone())
+        .await
+        .expect("first session failed to start");
+    let second = start_owned(&manager, app.handle().clone())
+        .await
+        .expect("second session failed to start");
+    assert_ne!(first.target_id, second.target_id);
+
+    let pid = manager
+        .shared_host_pid()
+        .expect("a launched session must have a live shared host");
+    assert!(process_is_alive(pid), "browser {pid} was not running");
+
+    manager
+        .close(&first.session_id)
+        .await
+        .expect("closing the first session failed");
+    assert!(
+        process_is_alive(pid),
+        "closing one of two tabs must not kill the shared browser"
+    );
+
+    manager
+        .close(&second.session_id)
+        .await
+        .expect("closing the second session failed");
+    assert!(
+        wait_for_pid_gone(pid, Duration::from_secs(30)).await,
+        "browser {pid} survived closing its last tab"
+    );
+    cleanup_profile_root();
+}
+
+#[tokio::test]
+#[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
+async fn synchronous_close_all_reaps_the_shared_browser() {
+    if std::env::var("BUZZ_BROWSER_REAL").is_err() {
+        return;
+    }
+    let app = tauri::test::mock_app();
+    let manager = Arc::new(WebManager::default());
+
+    start_owned(&manager, app.handle().clone())
         .await
         .expect("owned web session failed to start");
-    let pid = started
-        .browser_pid
-        .expect("an owned session must expose a browser PID");
+    let pid = manager
+        .shared_host_pid()
+        .expect("a launched session must have a live shared host");
     assert!(process_is_alive(pid), "browser {pid} was not running");
 
     // App shutdown calls the synchronous path from its signal and exit hooks.
@@ -242,7 +294,7 @@ async fn synchronous_close_all_reaps_every_owned_browser() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a real browser; run with BUZZ_BROWSER_REAL=1"]
-async fn synchronous_close_all_timeout_reaps_owned_browser_before_return() {
+async fn synchronous_close_all_timeout_reaps_shared_browser_before_return() {
     if std::env::var("BUZZ_BROWSER_REAL").is_err() {
         return;
     }
@@ -252,12 +304,12 @@ async fn synchronous_close_all_timeout_reaps_owned_browser_before_return() {
     let (release_sender, release_receiver) = std::sync::mpsc::channel();
     install_session_pause(entered_sender, release_receiver);
 
-    let started = start_owned(&manager, app.handle().clone())
+    start_owned(&manager, app.handle().clone())
         .await
         .expect("owned web session failed to start");
-    let pid = started
-        .browser_pid
-        .expect("an owned session must expose a browser PID");
+    let pid = manager
+        .shared_host_pid()
+        .expect("a launched session must have a live shared host");
     assert!(process_is_alive(pid), "browser {pid} was not running");
     tokio::task::spawn_blocking(move || {
         entered_receiver
