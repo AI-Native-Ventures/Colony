@@ -113,7 +113,7 @@ fn test_session() -> Arc<WebSession> {
         stop_requested: Arc::new(AtomicBool::new(false)),
         done: Mutex::new(Some(done_receiver)),
         task: Mutex::new(None),
-        owned_process_cleanup: None,
+        shared_host: None,
         shared: shared_endpoint::SharedTabInfo {
             endpoint: "ws://127.0.0.1:9222".into(),
             target_id: "target-1".into(),
