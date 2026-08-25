@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { companyRepository } from "./companyRepository";
+import type { TaskQuery } from "./companyRepository";
 import type { CompanyParseResult } from "./contracts";
 
 /**
@@ -30,17 +31,26 @@ export function initiativeQueryKey(communityId: string, initiativeId: string) {
   return [COMPANY_ROOT, communityId, "initiative", initiativeId] as const;
 }
 
-export function tasksQueryKey(
-  communityId: string,
-  scope: { companyId?: string; initiativeId?: string },
-) {
+export function tasksQueryKey(communityId: string, scope: TaskQuery) {
   return [
     COMPANY_ROOT,
     communityId,
     "tasks",
     scope.companyId ?? "",
     scope.initiativeId ?? "",
+    scope.status ?? "",
+    scope.teamId ?? "",
+    scope.stage ?? "",
+    scope.subject ? `${scope.subject.kind}:${scope.subject.ref}` : "",
   ] as const;
+}
+
+export function taskQueryKey(communityId: string, taskId: string) {
+  return [COMPANY_ROOT, communityId, "task", taskId] as const;
+}
+
+export function threadTasksQueryKey(communityId: string, threadRoot: string) {
+  return [COMPANY_ROOT, communityId, "thread-tasks", threadRoot] as const;
 }
 
 /**
@@ -114,7 +124,7 @@ export function useInitiative(
 
 export function useCompanyTasks(
   communityId: string,
-  scope: { companyId?: string; initiativeId?: string },
+  scope: TaskQuery,
   enabled = true,
 ) {
   const scoped = !!scope.companyId || !!scope.initiativeId;
@@ -123,6 +133,38 @@ export function useCompanyTasks(
     queryFn: async () =>
       requireAvailable(await companyRepository.listTasks(scope)),
     enabled: enabled && communityId !== "" && scoped,
+    staleTime: 15_000,
+  });
+}
+
+export function useTask(
+  communityId: string,
+  taskId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: taskQueryKey(communityId, taskId ?? ""),
+    queryFn: async () =>
+      requireAvailable(await companyRepository.getTask(taskId as string)),
+    enabled: enabled && communityId !== "" && !!taskId,
+    staleTime: 15_000,
+  });
+}
+
+export function useThreadTasks(
+  communityId: string,
+  threadRoot: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: threadTasksQueryKey(communityId, threadRoot ?? ""),
+    queryFn: async () =>
+      requireAvailable(
+        await companyRepository.listThreadTasks({
+          threadRoot: threadRoot as string,
+        }),
+      ),
+    enabled: enabled && communityId !== "" && !!threadRoot,
     staleTime: 15_000,
   });
 }

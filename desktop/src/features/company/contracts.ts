@@ -58,6 +58,17 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const DOER_KINDS = ["agent", "human"] as const;
 export type DoerKind = (typeof DOER_KINDS)[number];
 
+/**
+ * Statuses a task never leaves. Every other status is live work, which is why
+ * the thread surface sorts those above these as "earlier tasks".
+ */
+export const TERMINAL_TASK_STATUSES = ["completed", "cancelled"] as const;
+export type TerminalTaskStatus = (typeof TERMINAL_TASK_STATUSES)[number];
+
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return (TERMINAL_TASK_STATUSES as readonly string[]).includes(status);
+}
+
 export const SUBJECT_KINDS = [
   "party",
   "task",
