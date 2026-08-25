@@ -55,6 +55,16 @@ fn viewport_validation_rejects_tiny_and_unbounded_surfaces() {
     assert!(validate_viewport(1280, 8_000).is_err());
 }
 
+#[test]
+fn device_scale_factor_validation_rejects_out_of_range_and_non_finite() {
+    assert!(validate_device_scale_factor(1.0).is_ok());
+    assert!(validate_device_scale_factor(2.0).is_ok());
+    assert!(validate_device_scale_factor(1.5).is_ok());
+    assert!(validate_device_scale_factor(0.5).is_err());
+    assert!(validate_device_scale_factor(2.5).is_err());
+    assert!(validate_device_scale_factor(f64::NAN).is_err());
+}
+
 #[tokio::test]
 async fn close_all_invalidates_a_deferred_start_before_late_insertion() {
     let manager = WebManager::default();

@@ -5,11 +5,16 @@
 //! frontend. A session owns its host and websocket task until an explicit tab
 //! close, community reset, app shutdown, or connection failure ends it.
 
+mod events;
 mod shared_endpoint;
 mod validation;
 
+use self::events::{
+    emit_error, emit_frame, emit_startup_timings, SessionStartupTimings, WebClosedEvent,
+};
 use self::validation::{
-    normalize_url, validate_key, validate_mouse, validate_text, validate_viewport, validate_wheel,
+    normalize_url, validate_device_scale_factor, validate_key, validate_mouse, validate_text,
+    validate_viewport, validate_wheel,
 };
 use buzz_browser_pkg::{
     cdp::CdpClient,
@@ -22,7 +27,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::{mpsc, oneshot};
 
@@ -142,6 +147,7 @@ enum WebCommand {
     Resize {
         width: u32,
         height: u32,
+        device_scale_factor: f64,
         reply: oneshot::Sender<Result<(), String>>,
     },
 }
@@ -220,6 +226,7 @@ impl WebManager {
         url: String,
         token: StartToken,
     ) -> Result<WebStartResult, String> {
+        let start = Instant::now();
         let params = ConnectParams {
             // Launch configuration stays in buzz-browser's trusted discovery
             // path. The relay-synchronized tab payload never chooses a local
@@ -238,6 +245,7 @@ impl WebManager {
             .await
             .map_err(|_| "browser connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
+        let host_ready = Instant::now();
         let owns_browser_process = host.owns_browser_process();
         let browser_pid = host.process_id();
         let targets = tokio::time::timeout(START_TIMEOUT, host.list_targets())
@@ -251,10 +259,18 @@ impl WebManager {
             .await
             .map_err(|_| "CDP connection timed out".to_string())?
             .map_err(|error| error.to_string())?;
+        let cdp_connected = Instant::now();
 
         initialize_page(&mut client, &url)
             .await
             .map_err(|error| error.to_string())?;
+        let page_initialized = Instant::now();
+        let startup_timings = SessionStartupTimings {
+            start,
+            host_ready,
+            cdp_connected,
+            page_initialized,
+        };
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -279,8 +295,11 @@ impl WebManager {
         let task = tokio::spawn(run_session(
             app,
             session_id.clone(),
-            host,
-            client,
+            SessionRuntime {
+                host,
+                client,
+                startup_timings,
+            },
             stop_requested,
             receiver,
             done_sender,
@@ -326,11 +345,19 @@ impl WebManager {
             .await
     }
 
-    pub async fn resize(&self, session_id: &str, width: u32, height: u32) -> Result<(), String> {
+    pub async fn resize(
+        &self,
+        session_id: &str,
+        width: u32,
+        height: u32,
+        device_scale_factor: f64,
+    ) -> Result<(), String> {
         validate_viewport(width, height)?;
+        validate_device_scale_factor(device_scale_factor)?;
         self.dispatch(session_id, |reply| WebCommand::Resize {
             width,
             height,
+            device_scale_factor,
             reply,
         })
         .await
@@ -618,9 +645,12 @@ async fn initialize_page(
         "Page.startScreencast",
         json!({
             "format": "jpeg",
-            "quality": 85,
-            "maxWidth": 1600,
-            "maxHeight": 1200,
+            // Static cap sized for a 2x-scaled 1600x1200 CSS viewport (the
+            // largest we clamp devicePixelRatio to) so a retina resize is
+            // never re-shrunk by the screencast itself.
+            "quality": 92,
+            "maxWidth": 3200,
+            "maxHeight": 2400,
             "everyNthFrame": 1
         }),
     )
@@ -631,15 +661,28 @@ async fn initialize_page(
     Ok(())
 }
 
+/// The browser-side pieces a running session owns: the host process handle,
+/// its CDP connection, and the startup timings reported on the first frame.
+/// Grouped so `run_session` stays inside the argument-count lint.
+struct SessionRuntime {
+    host: buzz_browser_pkg::host::BrowserHost,
+    client: CdpClient,
+    startup_timings: SessionStartupTimings,
+}
+
 async fn run_session<R: Runtime>(
     app: AppHandle<R>,
     session_id: String,
-    host: buzz_browser_pkg::host::BrowserHost,
-    mut client: CdpClient,
+    runtime: SessionRuntime,
     stop_requested: Arc<AtomicBool>,
     mut commands: mpsc::Receiver<WebCommand>,
     done_sender: std::sync::mpsc::Sender<()>,
 ) {
+    let SessionRuntime {
+        host,
+        mut client,
+        startup_timings,
+    } = runtime;
     #[cfg(test)]
     if let Some(pause) = web_lifecycle_tests::take_session_pause() {
         let _ = pause.entered.send(());
@@ -651,6 +694,7 @@ async fn run_session<R: Runtime>(
         &mut client,
         &stop_requested,
         &mut commands,
+        &startup_timings,
     )
     .await;
     if let Err(error) = &result {
@@ -673,7 +717,9 @@ async fn run_session_loop<R: Runtime>(
     client: &mut CdpClient,
     stop_requested: &AtomicBool,
     commands: &mut mpsc::Receiver<WebCommand>,
+    startup_timings: &SessionStartupTimings,
 ) -> Result<(), String> {
+    let mut first_frame_logged = false;
     loop {
         if stop_requested.load(Ordering::SeqCst) {
             let _ = tokio::time::timeout(
@@ -687,6 +733,10 @@ async fn run_session_loop<R: Runtime>(
         match tokio::time::timeout(SESSION_POLL, client.next_event()).await {
             Ok(Ok(event)) => {
                 if event["method"].as_str() == Some("Page.screencastFrame") {
+                    if !first_frame_logged {
+                        first_frame_logged = true;
+                        emit_startup_timings(session_id, startup_timings);
+                    }
                     emit_frame(app, session_id, &event)?;
                     let frame_id = event["params"]["sessionId"]
                         .as_u64()
@@ -796,12 +846,18 @@ async fn execute_command(client: &mut CdpClient, command: WebCommand) -> Result<
         WebCommand::Resize {
             width,
             height,
+            device_scale_factor,
             reply,
         } => {
             let result = send_command_bounded(
                 client,
                 "Emulation.setDeviceMetricsOverride",
-                json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+                json!({
+                    "width": width,
+                    "height": height,
+                    "deviceScaleFactor": device_scale_factor,
+                    "mobile": false
+                }),
             )
             .await
             .map(|_| ())
@@ -836,72 +892,6 @@ async fn navigate_history(client: &mut CdpClient, delta: i64) -> Result<(), Stri
     .await
     .map(|_| ())
     .map_err(|error| error.to_string())
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebFrameEvent {
-    session_id: String,
-    data: String,
-    width: u32,
-    height: u32,
-    device_scale_factor: f64,
-    offset_top: f64,
-    scroll_offset_x: f64,
-    scroll_offset_y: f64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebErrorEvent {
-    session_id: String,
-    error: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebClosedEvent {
-    session_id: String,
-    error: Option<String>,
-}
-
-fn emit_frame<R: Runtime>(
-    app: &AppHandle<R>,
-    session_id: &str,
-    event: &Value,
-) -> Result<(), String> {
-    let params = &event["params"];
-    let data = params["data"]
-        .as_str()
-        .filter(|data| !data.is_empty())
-        .ok_or_else(|| "screencast frame had no image data".to_string())?;
-    let metadata = &params["metadata"];
-    app.emit(
-        WEB_FRAME_EVENT,
-        WebFrameEvent {
-            session_id: session_id.to_string(),
-            data: data.to_string(),
-            width: metadata["deviceWidth"].as_u64().unwrap_or(1) as u32,
-            height: metadata["deviceHeight"].as_u64().unwrap_or(1) as u32,
-            device_scale_factor: metadata["deviceScaleFactor"].as_f64().unwrap_or(1.0),
-            offset_top: metadata["offsetTop"].as_f64().unwrap_or(0.0),
-            scroll_offset_x: metadata["scrollOffsetX"].as_f64().unwrap_or(0.0),
-            scroll_offset_y: metadata["scrollOffsetY"].as_f64().unwrap_or(0.0),
-        },
-    )
-    .map_err(|error| format!("failed to emit web frame: {error}"))
-}
-
-fn emit_error<R: Runtime>(app: &AppHandle<R>, session_id: &str, error: &str) {
-    if let Err(emit_error) = app.emit(
-        WEB_ERROR_EVENT,
-        WebErrorEvent {
-            session_id: session_id.to_string(),
-            error: error.to_string(),
-        },
-    ) {
-        eprintln!("buzz-desktop: failed to emit web error: {emit_error}");
-    }
 }
 
 #[cfg(test)]
