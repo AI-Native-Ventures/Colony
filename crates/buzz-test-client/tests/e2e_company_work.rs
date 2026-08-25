@@ -216,7 +216,7 @@ async fn broker(
 
     // The receipt is authored by the relay after it processes the action, so
     // this polls rather than assuming it is already stored.
-    for _ in 0..40 {
+    for attempt in 0..40 {
         let id = sub_id("receipt");
         let filter = Filter::new()
             .kind(Kind::Custom(KIND_COMPANY_RECEIPT as u16))
@@ -227,10 +227,20 @@ async fn broker(
             .subscribe(&id, vec![filter])
             .await
             .expect("subscribe");
-        let events = client
-            .collect_until_eose(&id, Duration::from_secs(5))
-            .await
-            .expect("collect");
+        // A single silent window (no EOSE inside the timeout) is a transport
+        // hiccup, not an answer: the loop below exists to poll, so a timed
+        //-out window is retried like an empty one instead of failing the
+        // whole suite. The final panic stays strict — 40 windows with no
+        // receipt at all IS an answer, a wrong one.
+        let events = match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => events,
+            Err(error) => {
+                eprintln!("receipt poll {attempt} for {action_id} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+        };
         let _ = client.close_subscription(&id).await;
         if let Some(event) = events.first() {
             let receipt = parse_company_receipt(event).expect("receipt parses");
@@ -336,6 +346,52 @@ async fn seed_company_owner(keys: &Keys) {
     .execute(&pool)
     .await
     .expect("seed the owner member role");
+}
+
+/// Provision a real channel the owner may post into, via the same signed
+/// kind:9007 event `e2e_relay::create_test_channel` uses.
+///
+/// Nothing in the CI relay seed (start-relay-for-tests.sh) creates channels
+/// or grants membership: it seeds only the deployment community row and
+/// bootstraps the configured owner. A test that needs a channel must create
+/// one, or it only ever passes against an environment that happens to have a
+/// channel pre-seeded — which is exactly how this suite rotted unnoticed.
+async fn create_task_channel(keys: &Keys) -> String {
+    let client = reqwest::Client::new();
+    let pubkey_hex = keys.public_key().to_hex();
+    let channel_uuid = Uuid::new_v4();
+
+    let event = EventBuilder::new(Kind::Custom(9007), "")
+        .tags(vec![
+            Tag::parse(["h", channel_uuid.to_string().as_str()]).expect("h tag"),
+            Tag::parse(["name", format!("company-e2e-{}", channel_uuid).as_str()])
+                .expect("name tag"),
+            Tag::parse(["channel_type", "stream"]).expect("type tag"),
+            Tag::parse(["visibility", "open"]).expect("visibility tag"),
+        ])
+        .sign_with_keys(keys)
+        .expect("create-channel event signs");
+
+    let response = client
+        .post(format!("{}/events", http_url()))
+        .header("X-Pubkey", pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).expect("event serializes"))
+        .send()
+        .await
+        .expect("submit create-channel event");
+    assert!(
+        response.status().is_success(),
+        "channel creation event failed: {}",
+        response.status()
+    );
+    let body: serde_json::Value = response.json().await.expect("event response is JSON");
+    assert!(
+        body["accepted"].as_bool().unwrap_or(false),
+        "channel creation not accepted: {body}"
+    );
+
+    channel_uuid.to_string()
 }
 
 async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
@@ -490,6 +546,7 @@ async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
 #[ignore = "requires a running relay with Postgres and BUZZ_EMPLOYEE_KEK"]
 async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_delivery() {
     let owner = owner_keys();
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
@@ -511,10 +568,11 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
         CompanyReceiptOutcome::Applied
     );
 
-    // The isolated relay seed makes the fixed owner a member of `general`.
-    // A random UUID would exercise the membership refusal rather than the
-    // Task-run protocol this scenario is proving.
-    let channel_id = "9f28288a-d724-587a-9709-92dc7f967110".to_string();
+    // The chat thread lives in a channel this test provisions itself. The
+    // old hardcoded UUID only existed in the abandoned isolated harness's
+    // seed, so on any other relay the membership refusal fired here instead
+    // of the Task-run protocol this scenario proves.
+    let channel_id = create_task_channel(&fixture.owner).await;
     let chat_root_event = job_event(
         &fixture.owner,
         KIND_STREAM_MESSAGE_V2,
@@ -1413,6 +1471,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
 #[ignore = "requires a running relay whose community owner is this test's key"]
 async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
     let owner = owner_keys();
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
