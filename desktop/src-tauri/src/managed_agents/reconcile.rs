@@ -17,6 +17,9 @@
 //! - A malformed store fails loudly: the broken file is preserved as
 //!   `managed-agents.json.invalid` (see [`super::storage::backup_invalid_store`])
 //!   and an error is returned, never silently skipped.
+//! - Tenant-scoped: only records pinned to the ACTIVE relay are reconciled,
+//!   so a multi-community store never leaks one business's agent identities
+//!   into another's relay at boot.
 
 use std::path::Path;
 
@@ -28,6 +31,9 @@ use super::{
 };
 use buzz_core_pkg::kind::KIND_MANAGED_AGENT;
 use nostr::JsonUtil;
+use tauri::Manager;
+
+use crate::app_state::AppState;
 
 /// Reconcile `managed-agents.json` into kind:30177 events in the retention
 /// store. Boot-time entry point, called from `event_sync::run_event_sync`
@@ -41,7 +47,9 @@ pub(crate) fn reconcile_agents_to_events(
         return;
     };
 
-    match reconcile_agents_in_dir_at(&base_dir, keys, db_path) {
+    let active_relay = crate::relay::relay_ws_url_with_override(&app.state::<AppState>());
+
+    match reconcile_agents_in_dir_at(&base_dir, keys, db_path, &active_relay) {
         Ok(0) => {}
         Ok(reconciled) => {
             eprintln!(
@@ -67,13 +75,21 @@ pub(crate) fn reconcile_agents_to_events(
 /// Returns the number of agents (re)written to the retention store.
 #[cfg(test)]
 pub(crate) fn reconcile_agents_in_dir(base_dir: &Path, keys: &nostr::Keys) -> Result<u32, String> {
-    reconcile_agents_in_dir_at(base_dir, keys, &base_dir.join("retention.db"))
+    // The fixtures in `tests` pin `wss://localhost:3000`, so that is the
+    // community this harness "boots into".
+    reconcile_agents_in_dir_at(
+        base_dir,
+        keys,
+        &base_dir.join("retention.db"),
+        tests::TEST_ACTIVE_RELAY,
+    )
 }
 
 fn reconcile_agents_in_dir_at(
     base_dir: &Path,
     keys: &nostr::Keys,
     db_path: &Path,
+    active_relay: &str,
 ) -> Result<u32, String> {
     let store_path = base_dir.join("managed-agents.json");
     if !store_path.exists() {
@@ -104,12 +120,55 @@ fn reconcile_agents_in_dir_at(
             continue;
         }
 
+        // Tenant isolation: retain only records belonging to the community
+        // this boot is reconciling into. The flush loop drains every
+        // pending_sync row to whichever relay is connected, so retaining a
+        // record pinned elsewhere would publish its identity into the wrong
+        // tenant on every boot.
+        if !record_belongs_to_active_relay(record, active_relay) {
+            continue;
+        }
+
         if retain_agent_record(&conn, keys, record)? {
             reconciled += 1;
         }
     }
 
     Ok(reconciled)
+}
+
+/// Whether `record`'s community pin names the relay this boot publishes to.
+///
+/// A blank pin is deliberately NOT "belongs everywhere" here. That is the
+/// runtime rule in `agent_boundary::agent_belongs_to_workspace` (an unassigned
+/// agent must keep running in whichever community opened it), but publishing
+/// is a cross-tenant WRITE: retaining an unpinned record under whichever relay
+/// happens to be connected at boot is exactly the leak this scoping closes.
+/// Unpinned records are skipped until the user assigns them a community.
+fn record_belongs_to_active_relay(record: &ManagedAgentRecord, active_relay: &str) -> bool {
+    let pinned = record.relay_url.trim();
+    !pinned.is_empty() && same_relay_community(pinned, active_relay)
+}
+
+/// Trivial-spelling-insensitive comparison of two relay URLs for community
+/// scoping. Both sides go through buzz-core's single canonicalizer
+/// (`normalize_relay_url`: lowercased host, default port and trailing slash
+/// dropped, loopback spellings folded), then compare authority only so `ws://`
+/// and `wss://` spellings of one deployment match — pins have drifted between
+/// schemes in practice, and treating them as different communities would drop
+/// an agent from its own roster. An unparseable side falls back to a trimmed,
+/// lowercased verbatim form, which fails closed against a parseable one.
+fn same_relay_community(a: &str, b: &str) -> bool {
+    fn authority(url: &str) -> String {
+        match buzz_core_pkg::relay::normalize_relay_url(url) {
+            Ok(canonical) => canonical
+                .split_once("://")
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or(canonical),
+            Err(_) => url.trim().trim_end_matches('/').to_ascii_lowercase(),
+        }
+    }
+    authority(a) == authority(b)
 }
 
 /// Retain `record`'s kind:30177 identity record, marking it `pending_sync`

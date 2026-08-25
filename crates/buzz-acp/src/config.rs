@@ -264,6 +264,22 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_MCP_COMMAND", default_value = "")]
     pub mcp_command: String,
 
+    /// Resolved absolute path to the `buzz-browserd` MCP binary, set by
+    /// desktop only when it found the binary. Empty means absent — mirrors
+    /// `mcp_command`'s resolve-then-forward contract, not re-checked here.
+    #[arg(long, env = "BUZZ_ACP_BROWSER_MCP_COMMAND", default_value = "")]
+    pub browser_mcp_command: String,
+
+    /// DevTools endpoint of the human's open workspace tab, set by desktop
+    /// only when exactly one is live. Empty means launch a fresh browser.
+    #[arg(long, env = "BUZZ_ACP_BROWSER_ENDPOINT", default_value = "")]
+    pub browser_endpoint: String,
+
+    /// Page target id paired with `browser_endpoint`. Empty means "first
+    /// page target" once the MCP server attaches.
+    #[arg(long, env = "BUZZ_ACP_BROWSER_TARGET_ID", default_value = "")]
+    pub browser_target_id: String,
+
     /// Idle timeout: max seconds of silence before killing a turn.
     /// Resets on any agent stdout activity.
     #[arg(long, env = "BUZZ_ACP_IDLE_TIMEOUT")]
@@ -627,6 +643,14 @@ pub struct Config {
     pub agent_command: String,
     pub agent_args: Vec<String>,
     pub mcp_command: String,
+    /// Resolved absolute path to the `buzz-browserd` MCP binary. Empty when
+    /// desktop did not find it on this machine.
+    pub browser_mcp_command: String,
+    /// DevTools endpoint of the human's open workspace tab. Empty when none
+    /// is live, or when more than one is (see `WebManager::shared_endpoint`).
+    pub browser_endpoint: String,
+    /// Page target id paired with `browser_endpoint`.
+    pub browser_target_id: String,
     pub idle_timeout_secs: u64,
     pub max_turn_duration_secs: u64,
     pub agents: u32,
@@ -1266,6 +1290,9 @@ impl Config {
             agent_command,
             agent_args,
             mcp_command: args.mcp_command,
+            browser_mcp_command: args.browser_mcp_command,
+            browser_endpoint: args.browser_endpoint,
+            browser_target_id: args.browser_target_id,
             idle_timeout_secs,
             max_turn_duration_secs,
             agents: args.agents,
@@ -1646,6 +1673,9 @@ mod tests {
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "".into(),
+            browser_mcp_command: "".into(),
+            browser_endpoint: "".into(),
+            browser_target_id: "".into(),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,

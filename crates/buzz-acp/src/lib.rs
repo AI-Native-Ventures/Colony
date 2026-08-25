@@ -5835,61 +5835,103 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Server name used by `crates/buzz-browser/src/agent_proof.rs`'s
+/// `browser_mcp_server()` helper — the same shape a live ACP agent already
+/// drove through the reference journey. Kept identical here so the two
+/// construction sites agree on what an agent sees.
+const BROWSER_MCP_SERVER_NAME: &str = "buzz-browser";
+
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
-    if config.mcp_command.is_empty() {
-        return vec![];
+    let mut servers = Vec::new();
+
+    if !config.mcp_command.is_empty() {
+        servers.push(McpServer {
+            name: std::path::Path::new(&config.mcp_command)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("mcp")
+                .to_string(),
+            command: config.mcp_command.clone(),
+            args: vec![],
+            env: {
+                let mut env = vec![
+                    EnvVar {
+                        name: "BUZZ_RELAY_URL".into(),
+                        value: config.relay_url.clone(),
+                    },
+                    EnvVar {
+                        name: "BUZZ_PRIVATE_KEY".into(),
+                        // bech32 encoding of a valid secret key is infallible.
+                        // Panic here is correct: injecting a bogus secret would cause
+                        // delayed, hard-to-diagnose agent failures downstream.
+                        value: config
+                            .keys
+                            .secret_key()
+                            .to_bech32()
+                            .expect("secret key bech32 encoding should never fail"),
+                    },
+                ];
+                // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
+                // so the MCP server can attach it to every signed event.
+                if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
+                    if !auth_tag.is_empty() {
+                        env.push(EnvVar {
+                            name: "BUZZ_AUTH_TAG".into(),
+                            value: auth_tag,
+                        });
+                    }
+                }
+                // Forward the agent's display name so dev-mcp can use it as the git
+                // author name instead of the raw npub. Read from the process env
+                // rather than Config: this is a pass-through of a contract owned
+                // upstream, and absent simply means dev-mcp falls back to the npub.
+                if let Ok(display_name) = std::env::var("BUZZ_ACP_DISPLAY_NAME") {
+                    if !display_name.is_empty() {
+                        env.push(EnvVar {
+                            name: "BUZZ_ACP_DISPLAY_NAME".into(),
+                            value: display_name,
+                        });
+                    }
+                }
+                env
+            },
+        });
     }
-    vec![McpServer {
-        name: std::path::Path::new(&config.mcp_command)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mcp")
-            .to_string(),
-        command: config.mcp_command.clone(),
-        args: vec![],
-        env: {
-            let mut env = vec![
-                EnvVar {
-                    name: "BUZZ_RELAY_URL".into(),
-                    value: config.relay_url.clone(),
-                },
-                EnvVar {
-                    name: "BUZZ_PRIVATE_KEY".into(),
-                    // bech32 encoding of a valid secret key is infallible.
-                    // Panic here is correct: injecting a bogus secret would cause
-                    // delayed, hard-to-diagnose agent failures downstream.
-                    value: config
-                        .keys
-                        .secret_key()
-                        .to_bech32()
-                        .expect("secret key bech32 encoding should never fail"),
-                },
-            ];
-            // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
-            // so the MCP server can attach it to every signed event.
-            if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
-                if !auth_tag.is_empty() {
-                    env.push(EnvVar {
-                        name: "BUZZ_AUTH_TAG".into(),
-                        value: auth_tag,
-                    });
-                }
+
+    // `config.browser_mcp_command` is only non-empty when desktop resolved
+    // `buzz-browserd` to an absolute path on this machine (same
+    // resolve-then-forward contract as `mcp_command`, see
+    // `desktop/src-tauri/src/managed_agents/runtime.rs`). An environment
+    // without the binary keeps returning just the entry above, unchanged.
+    if !config.browser_mcp_command.is_empty() {
+        // T5: forward the human's open workspace tab, when desktop found
+        // exactly one live, so `browser_connect` attaches to it instead of
+        // launching an invisible second browser (see
+        // `crates/buzz-browser/src/mcp.rs`'s env fallback in `connect`).
+        // Empty means desktop had none live, or more than one — either way
+        // the MCP server falls back to launching its own.
+        let mut env = vec![];
+        if !config.browser_endpoint.is_empty() {
+            env.push(EnvVar {
+                name: "BUZZ_BROWSER_SHARED_ENDPOINT".into(),
+                value: config.browser_endpoint.clone(),
+            });
+            if !config.browser_target_id.is_empty() {
+                env.push(EnvVar {
+                    name: "BUZZ_BROWSER_SHARED_TARGET_ID".into(),
+                    value: config.browser_target_id.clone(),
+                });
             }
-            // Forward the agent's display name so dev-mcp can use it as the git
-            // author name instead of the raw npub. Read from the process env
-            // rather than Config: this is a pass-through of a contract owned
-            // upstream, and absent simply means dev-mcp falls back to the npub.
-            if let Ok(display_name) = std::env::var("BUZZ_ACP_DISPLAY_NAME") {
-                if !display_name.is_empty() {
-                    env.push(EnvVar {
-                        name: "BUZZ_ACP_DISPLAY_NAME".into(),
-                        value: display_name,
-                    });
-                }
-            }
-            env
-        },
-    }]
+        }
+        servers.push(McpServer {
+            name: BROWSER_MCP_SERVER_NAME.to_string(),
+            command: config.browser_mcp_command.clone(),
+            args: vec!["mcp".into()],
+            env,
+        });
+    }
+
+    servers
 }
 
 #[cfg(test)]
@@ -7596,6 +7638,9 @@ mod build_mcp_servers_tests {
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "test-mcp-server".into(),
+            browser_mcp_command: "".into(),
+            browser_endpoint: "".into(),
+            browser_target_id: "".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
@@ -7792,6 +7837,95 @@ mod build_mcp_servers_tests {
             "Path::new(\".\").file_stem() is None — should fall back to \"mcp\""
         );
     }
+
+    #[test]
+    fn browser_mcp_command_absent_returns_only_the_primary_server() {
+        let mut config = test_config();
+        config.browser_mcp_command = "".into();
+        let servers = build_mcp_servers(&config);
+        assert_eq!(
+            servers.len(),
+            1,
+            "no buzz-browser entry should appear when the binary was not found"
+        );
+        assert_eq!(servers[0].name, "test-mcp-server");
+    }
+
+    #[test]
+    fn browser_mcp_command_present_adds_a_second_server() {
+        let mut config = test_config();
+        config.browser_mcp_command = "/opt/bin/buzz-browserd".into();
+        let servers = build_mcp_servers(&config);
+        assert_eq!(
+            servers.len(),
+            2,
+            "expected both mcp_command and browser servers"
+        );
+
+        let browser = servers
+            .iter()
+            .find(|s| s.name == "buzz-browser")
+            .expect("buzz-browser server missing");
+        assert_eq!(browser.command, "/opt/bin/buzz-browserd");
+        assert_eq!(browser.args, vec!["mcp".to_string()]);
+        assert!(
+            browser.env.is_empty(),
+            "no shared endpoint configured should mean no env"
+        );
+    }
+
+    #[test]
+    fn browser_endpoint_is_forwarded_as_env_vars_on_the_browser_server() {
+        let mut config = test_config();
+        config.browser_mcp_command = "/opt/bin/buzz-browserd".into();
+        config.browser_endpoint = "http://127.0.0.1:9222".into();
+        config.browser_target_id = "tab-a".into();
+        let servers = build_mcp_servers(&config);
+        let browser = servers
+            .iter()
+            .find(|s| s.name == "buzz-browser")
+            .expect("buzz-browser server missing");
+        assert!(browser.env.iter().any(
+            |e| e.name == "BUZZ_BROWSER_SHARED_ENDPOINT" && e.value == "http://127.0.0.1:9222"
+        ));
+        assert!(browser
+            .env
+            .iter()
+            .any(|e| e.name == "BUZZ_BROWSER_SHARED_TARGET_ID" && e.value == "tab-a"));
+    }
+
+    #[test]
+    fn browser_endpoint_without_target_id_omits_the_target_env_var() {
+        let mut config = test_config();
+        config.browser_mcp_command = "/opt/bin/buzz-browserd".into();
+        config.browser_endpoint = "http://127.0.0.1:9222".into();
+        config.browser_target_id = "".into();
+        let servers = build_mcp_servers(&config);
+        let browser = servers
+            .iter()
+            .find(|s| s.name == "buzz-browser")
+            .expect("buzz-browser server missing");
+        assert!(browser
+            .env
+            .iter()
+            .any(|e| e.name == "BUZZ_BROWSER_SHARED_ENDPOINT"));
+        assert!(!browser
+            .env
+            .iter()
+            .any(|e| e.name == "BUZZ_BROWSER_SHARED_TARGET_ID"));
+    }
+
+    #[test]
+    fn both_mcp_command_and_browser_absent_returns_no_servers() {
+        let mut config = test_config();
+        config.mcp_command = "".into();
+        config.browser_mcp_command = "".into();
+        let servers = build_mcp_servers(&config);
+        assert!(
+            servers.is_empty(),
+            "no servers should be returned when neither binary is available"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -7830,6 +7964,9 @@ mod error_outcome_emission_tests {
             agent_command: "true".into(),
             agent_args: vec![],
             mcp_command: "test-mcp-server".into(),
+            browser_mcp_command: "".into(),
+            browser_endpoint: "".into(),
+            browser_target_id: "".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,

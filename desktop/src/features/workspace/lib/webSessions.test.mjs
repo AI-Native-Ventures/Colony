@@ -52,7 +52,7 @@ test("forwards wheel and text input through the native web session", async () =>
     deltaY: 120,
   });
   await sendWebText("tab-1", "hello");
-  await resizeWeb("tab-1", 1280, 720);
+  await resizeWeb("tab-1", 1280, 720, 2);
   await goBackWeb("tab-1");
   await reloadWeb("tab-1");
 
@@ -81,7 +81,12 @@ test("forwards wheel and text input through the native web session", async () =>
       },
       {
         command: "workspace_web_resize",
-        args: { sessionId: "session-1", width: 1280, height: 720 },
+        args: {
+          sessionId: "session-1",
+          width: 1280,
+          height: 720,
+          deviceScaleFactor: 2,
+        },
       },
       {
         command: "workspace_web_back",

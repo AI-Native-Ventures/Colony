@@ -641,10 +641,16 @@ export async function resizeWeb(
   tabId: string,
   width: number,
   height: number,
+  deviceScaleFactor: number,
 ): Promise<void> {
   const sessionId = sessions.get(tabId)?.sessionId;
   if (!sessionId) return;
-  await invoke("workspace_web_resize", { sessionId, width, height });
+  await invoke("workspace_web_resize", {
+    sessionId,
+    width,
+    height,
+    deviceScaleFactor,
+  });
 }
 
 /** Navigate backward in the current page history. */

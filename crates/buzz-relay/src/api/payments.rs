@@ -1382,7 +1382,9 @@ mod tests {
     fn rejects_an_unknown_pack() {
         // A stale client or a tampered body. There is no default pack:
         // charging for one the buyer did not choose is worse than failing.
-        for id in ["", "enterprise", "STARTER", "starter "] {
+        // "mega" reads like a tier but is not one; "enterprise" left this
+        // list when it went on sale.
+        for id in ["", "mega", "STARTER", "starter "] {
             assert_eq!(
                 validate_initialize(&init_request(id)).unwrap_err(),
                 "unknown_pack",
