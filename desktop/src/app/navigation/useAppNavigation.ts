@@ -252,6 +252,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goWork = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goWorkflows = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -456,6 +467,7 @@ export function useAppNavigation() {
     goSettings,
     goSpend,
     goWorkflow,
+    goWork,
     goWorkflows,
     openSearchHit,
   };
