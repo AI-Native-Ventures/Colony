@@ -18,6 +18,8 @@ import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import type { OrgMember } from "@/features/agents/orgTree";
 import { escalationTarget } from "@/features/agents/orgTree";
 import { useRetiredEmployeePubkeys } from "@/features/agents/retiredEmployees";
+import { useArchivedIdentitiesSnapshotQuery } from "@/features/identity-archive/archivedSnapshot";
+import type { ArchivedIdentitiesSnapshot } from "@/shared/api/tauriIdentityArchive";
 import { truncatePubkey, normalizePubkey } from "@/shared/lib/pubkey";
 
 /**
@@ -34,6 +36,9 @@ import { truncatePubkey, normalizePubkey } from "@/shared/lib/pubkey";
  * offer a one-click path onto the chart. Only owner-authored heads are read
  * here (the scan happens in trustedManagedAgentHeads), so a self-published
  * head puts nothing in either list.
+ *
+ * Pubkeys the owner has retired or the relay has archived (NIP-IA
+ * kind:13535) appear in neither list.
  */
 
 /** A chart member that knows which side of the payroll it came from. */
@@ -81,6 +86,58 @@ function managedHeadToOrgMember(
 }
 
 /**
+ * Pubkeys removed from BOTH output lists. Each source is a deny-list the
+ * owner expressed elsewhere: `retired` is the device-local retirement
+ * record, `archived` is the relay's kind-13535 archive snapshot and so
+ * applies to every device.
+ */
+export type HiddenRosterPubkeys = {
+  retired?: ReadonlySet<string>;
+  archived?: ReadonlySet<string>;
+};
+
+/**
+ * Absence of evidence hides nobody: callers pass empty or absent sets
+ * while those reads load or fail, making "unknown" mean show-everything.
+ * That direction is deliberate -- an empty set can only ever leave a leaked
+ * agent visible for one more render, while the opposite would blank the
+ * whole roster on a cold start or a relay error.
+ */
+
+/** Merged, normalized hidden set, or null when nothing is hidden. */
+function hiddenPubkeySet(
+  hidden: HiddenRosterPubkeys,
+): ReadonlySet<string> | null {
+  if (!hidden.retired?.size && !hidden.archived?.size) return null;
+  const merged = new Set<string>();
+  for (const pubkey of hidden.retired ?? []) {
+    merged.add(normalizePubkey(pubkey));
+  }
+  for (const pubkey of hidden.archived ?? []) {
+    merged.add(normalizePubkey(pubkey));
+  }
+  return merged;
+}
+
+/**
+ * The roster's hidden set for an archive-snapshot query state. React Query
+ * has no `data` while the snapshot loads, errored, or is disabled alike --
+ * all three collapse to an empty set, i.e. hide nothing.
+ */
+export function archivedHiddenPubkeys(
+  snapshot: ArchivedIdentitiesSnapshot | undefined,
+): ReadonlySet<string> {
+  if (!snapshot) return emptyPubkeys;
+  const hidden = new Set<string>();
+  for (const pubkey of snapshot.archived) {
+    hidden.add(normalizePubkey(pubkey));
+  }
+  return hidden;
+}
+
+const emptyPubkeys: ReadonlySet<string> = new Set();
+
+/**
  * Pure projection from the two head sources onto chart members and the
  * unranked group. Employees win collisions; a head at an employee's pubkey
  * adds nothing anywhere.
@@ -88,6 +145,7 @@ function managedHeadToOrgMember(
 export function orgMembersFromSources(
   heads: readonly EmployeeHead[],
   trustedHeads: readonly ManagedAgentHead[],
+  hidden: HiddenRosterPubkeys = {},
 ): { members: OrgChartMember[]; unrankedAgents: UnrankedAgent[] } {
   const employeesByRole = new Map<string, { rank: OrgMember["rank"] }>();
   for (const head of heads) {
@@ -115,9 +173,14 @@ export function orgMembersFromSources(
 
   const byPubkey = (a: { pubkey: string }, b: { pubkey: string }) =>
     normalizePubkey(a.pubkey).localeCompare(normalizePubkey(b.pubkey));
+  const hiddenSet = hiddenPubkeySet(hidden);
   return {
-    members: [...members.values()].sort(byPubkey),
-    unrankedAgents: unrankedAgents.sort(byPubkey),
+    members: [...members.values()]
+      .filter((member) => !hiddenSet?.has(normalizePubkey(member.pubkey)))
+      .sort(byPubkey),
+    unrankedAgents: unrankedAgents
+      .filter((agent) => !hiddenSet?.has(normalizePubkey(agent.pubkey)))
+      .sort(byPubkey),
   };
 }
 
@@ -158,6 +221,10 @@ export function useOrgMembers(
     staleTime: 30_000,
   });
   const retired = useRetiredEmployeePubkeys(communityId);
+  const archivedSnapshotQuery = useArchivedIdentitiesSnapshotQuery(
+    communityId,
+    enabled,
+  );
 
   return React.useMemo(() => {
     const heads = headsQuery.data;
@@ -173,22 +240,25 @@ export function useOrgMembers(
       };
     }
 
-    const { members, unrankedAgents } = orgMembersFromSources(
-      [...heads.values()],
-      trustedManagedAgentHeads(headEventsQuery.data ?? [], owners),
-    );
-
     // Retirement lives on the relay's row and no head carries it, so this
     // device keeps the employees it has retired out of the chart itself;
     // they surface in the retired tray instead of silently returning on the
-    // next refetch.
-    const visible =
-      retired.size > 0
-        ? members.filter((member) => !retired.has(member.pubkey))
-        : members;
+    // next refetch. The relay's kind-13535 archive snapshot is the same
+    // idea for every device: identities the relay has archived (e.g. the
+    // boot-reconcile leak cleanup) leave both the chart and the unranked
+    // group. While that snapshot loads or errors it is `undefined`, which
+    // maps to an empty set -- an unknown archive hides nothing.
+    const { members, unrankedAgents } = orgMembersFromSources(
+      [...heads.values()],
+      trustedManagedAgentHeads(headEventsQuery.data ?? [], owners),
+      {
+        retired,
+        archived: archivedHiddenPubkeys(archivedSnapshotQuery.data),
+      },
+    );
 
     return {
-      members: visible,
+      members,
       unrankedAgents,
       isLoading: headsQuery.isLoading || ownersQuery.isLoading,
       error:
@@ -207,5 +277,6 @@ export function useOrgMembers(
     headEventsQuery.data,
     headEventsQuery.error,
     retired,
+    archivedSnapshotQuery.data,
   ]);
 }
