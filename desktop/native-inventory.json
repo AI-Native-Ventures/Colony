@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 416,
-    "rust_lines": 164877,
-    "tauri_coupled": 165,
+    "rust_total": 420,
+    "rust_lines": 165085,
+    "tauri_coupled": 169,
     "portable": 251,
-    "portable_lines": 92998,
+    "portable_lines": 93007,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -133,6 +133,7 @@
       "src-tauri/src/managed_agents/restore.rs",
       "src-tauri/src/managed_agents/retention.rs",
       "src-tauri/src/managed_agents/runtime.rs",
+      "src-tauri/src/managed_agents/runtime/browser_shared.rs",
       "src-tauri/src/managed_agents/runtime/orphan_sweep.rs",
       "src-tauri/src/managed_agents/runtime/process.rs",
       "src-tauri/src/managed_agents/runtime/provisioned.rs",
@@ -170,7 +171,10 @@
       "src-tauri/src/terminal_runtime.rs",
       "src-tauri/src/tray_menu.rs",
       "src-tauri/src/web.rs",
-      "src-tauri/src/web_lifecycle_tests.rs"
+      "src-tauri/src/web/events.rs",
+      "src-tauri/src/web/shared_endpoint.rs",
+      "src-tauri/src/web_lifecycle_tests.rs",
+      "src-tauri/src/web_tests.rs"
     ],
     "portable_list": [
       "src-tauri/src/app_state_env.rs",
@@ -445,7 +449,7 @@
     ]
   },
   "params": {
-    "AppHandle": 353,
+    "AppHandle": 354,
     "State": 256,
     "Window": 7,
     "ipc::Request": 1,
@@ -453,7 +457,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 350,
+      "AppHandle": 351,
       "State": 256,
       "Window": 7,
       "ipc::Request": 1,
@@ -472,7 +476,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 110,
+    ".state::<": 111,
     ".emit(": 47,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -3958,7 +3962,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:652"
+        "src/features/workspace/lib/webSessions.ts:658"
       ]
     },
     "workspace_web_close": {
@@ -3969,7 +3973,7 @@
       "example_sites": [
         "src/features/workspace/lib/webSessions.ts:424",
         "src/features/workspace/lib/webSessions.ts:451",
-        "src/features/workspace/lib/webSessions.ts:672"
+        "src/features/workspace/lib/webSessions.ts:678"
       ]
     },
     "workspace_web_close_all": {
@@ -3978,7 +3982,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:700"
+        "src/features/workspace/lib/webSessions.ts:706"
       ]
     },
     "workspace_web_forward": {
@@ -3987,7 +3991,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:656"
+        "src/features/workspace/lib/webSessions.ts:662"
       ]
     },
     "workspace_web_key": {
@@ -4023,7 +4027,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:660"
+        "src/features/workspace/lib/webSessions.ts:666"
       ]
     },
     "workspace_web_resize": {
@@ -4032,7 +4036,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/webSessions.ts:647"
+        "src/features/workspace/lib/webSessions.ts:648"
       ]
     },
     "workspace_web_start": {

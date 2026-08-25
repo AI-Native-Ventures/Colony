@@ -115,6 +115,41 @@ pub const CREDIT_PACKS: &[CreditPack] = &[
         usd_cents: 5_499,
         grant_nanousd: 4_400 * NANO_USD_PER_CENT,
     },
+    // The ladder is squeezed from here up. The R20 floor puts the lowest
+    // legal price per granted dollar at 2000 cents, and `scale` already sits
+    // at 2043, so every larger tier must land inside that narrow band to stay
+    // both self-covering and never worse value than the pack above it.
+    // Steeper bulk discounts mean revisiting MIN_ZAR_CENTS_PER_GRANTED_USD,
+    // which is a pricing decision about how much Rand movement Colony
+    // absorbs between price reviews.
+    CreditPack {
+        id: "pro",
+        name: "Pro",
+        zar_cents: 244_900,
+        usd_cents: 14_899,
+        grant_nanousd: 12_000 * NANO_USD_PER_CENT,
+    },
+    CreditPack {
+        id: "studio",
+        name: "Studio",
+        zar_cents: 508_900,
+        usd_cents: 30_799,
+        grant_nanousd: 25_000 * NANO_USD_PER_CENT,
+    },
+    CreditPack {
+        id: "agency",
+        name: "Agency",
+        zar_cents: 1_014_900,
+        usd_cents: 60_999,
+        grant_nanousd: 50_000 * NANO_USD_PER_CENT,
+    },
+    CreditPack {
+        id: "enterprise",
+        name: "Enterprise",
+        zar_cents: 2_024_900,
+        usd_cents: 120_999,
+        grant_nanousd: 100_000 * NANO_USD_PER_CENT,
+    },
 ];
 
 /// Resolve a client-supplied pack id.
@@ -192,7 +227,9 @@ mod tests {
         // than refusing the request.
         assert!(find_pack("").is_none());
         assert!(find_pack("STARTER").is_none());
-        assert!(find_pack("enterprise").is_none());
+        // "mega" reads like a tier but is not one; "enterprise" used to
+        // stand here until it went on sale.
+        assert!(find_pack("mega").is_none());
     }
 
     #[test]

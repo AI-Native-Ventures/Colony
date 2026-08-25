@@ -5,6 +5,8 @@ const MAX_COMMAND_TEXT: usize = 64 * 1024;
 const MAX_COORDINATE: f64 = 100_000.0;
 const MIN_VIEWPORT: u32 = 240;
 const MAX_VIEWPORT: u32 = 4_096;
+const MIN_DEVICE_SCALE_FACTOR: f64 = 1.0;
+const MAX_DEVICE_SCALE_FACTOR: f64 = 2.0;
 
 pub(crate) fn normalize_url(url: &str) -> Result<String, String> {
     let url = url.trim();
@@ -84,6 +86,13 @@ pub(crate) fn validate_viewport(width: u32, height: u32) -> Result<(), String> {
         || !(MIN_VIEWPORT..=MAX_VIEWPORT).contains(&height)
     {
         return Err("web viewport dimensions are outside the supported range".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_device_scale_factor(value: f64) -> Result<(), String> {
+    if !value.is_finite() || !(MIN_DEVICE_SCALE_FACTOR..=MAX_DEVICE_SCALE_FACTOR).contains(&value) {
+        return Err("web device scale factor is outside the supported range".to_string());
     }
     Ok(())
 }

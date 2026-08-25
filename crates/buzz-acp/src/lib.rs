@@ -5904,11 +5904,30 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     // `desktop/src-tauri/src/managed_agents/runtime.rs`). An environment
     // without the binary keeps returning just the entry above, unchanged.
     if !config.browser_mcp_command.is_empty() {
+        // T5: forward the human's open workspace tab, when desktop found
+        // exactly one live, so `browser_connect` attaches to it instead of
+        // launching an invisible second browser (see
+        // `crates/buzz-browser/src/mcp.rs`'s env fallback in `connect`).
+        // Empty means desktop had none live, or more than one — either way
+        // the MCP server falls back to launching its own.
+        let mut env = vec![];
+        if !config.browser_endpoint.is_empty() {
+            env.push(EnvVar {
+                name: "BUZZ_BROWSER_SHARED_ENDPOINT".into(),
+                value: config.browser_endpoint.clone(),
+            });
+            if !config.browser_target_id.is_empty() {
+                env.push(EnvVar {
+                    name: "BUZZ_BROWSER_SHARED_TARGET_ID".into(),
+                    value: config.browser_target_id.clone(),
+                });
+            }
+        }
         servers.push(McpServer {
             name: BROWSER_MCP_SERVER_NAME.to_string(),
             command: config.browser_mcp_command.clone(),
             args: vec!["mcp".into()],
-            env: vec![],
+            env,
         });
     }
 
@@ -7620,6 +7639,8 @@ mod build_mcp_servers_tests {
             agent_args: vec!["acp".into()],
             mcp_command: "test-mcp-server".into(),
             browser_mcp_command: "".into(),
+            browser_endpoint: "".into(),
+            browser_target_id: "".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
@@ -7847,6 +7868,51 @@ mod build_mcp_servers_tests {
             .expect("buzz-browser server missing");
         assert_eq!(browser.command, "/opt/bin/buzz-browserd");
         assert_eq!(browser.args, vec!["mcp".to_string()]);
+        assert!(
+            browser.env.is_empty(),
+            "no shared endpoint configured should mean no env"
+        );
+    }
+
+    #[test]
+    fn browser_endpoint_is_forwarded_as_env_vars_on_the_browser_server() {
+        let mut config = test_config();
+        config.browser_mcp_command = "/opt/bin/buzz-browserd".into();
+        config.browser_endpoint = "http://127.0.0.1:9222".into();
+        config.browser_target_id = "tab-a".into();
+        let servers = build_mcp_servers(&config);
+        let browser = servers
+            .iter()
+            .find(|s| s.name == "buzz-browser")
+            .expect("buzz-browser server missing");
+        assert!(browser.env.iter().any(
+            |e| e.name == "BUZZ_BROWSER_SHARED_ENDPOINT" && e.value == "http://127.0.0.1:9222"
+        ));
+        assert!(browser
+            .env
+            .iter()
+            .any(|e| e.name == "BUZZ_BROWSER_SHARED_TARGET_ID" && e.value == "tab-a"));
+    }
+
+    #[test]
+    fn browser_endpoint_without_target_id_omits_the_target_env_var() {
+        let mut config = test_config();
+        config.browser_mcp_command = "/opt/bin/buzz-browserd".into();
+        config.browser_endpoint = "http://127.0.0.1:9222".into();
+        config.browser_target_id = "".into();
+        let servers = build_mcp_servers(&config);
+        let browser = servers
+            .iter()
+            .find(|s| s.name == "buzz-browser")
+            .expect("buzz-browser server missing");
+        assert!(browser
+            .env
+            .iter()
+            .any(|e| e.name == "BUZZ_BROWSER_SHARED_ENDPOINT"));
+        assert!(!browser
+            .env
+            .iter()
+            .any(|e| e.name == "BUZZ_BROWSER_SHARED_TARGET_ID"));
     }
 
     #[test]
@@ -7899,6 +7965,8 @@ mod error_outcome_emission_tests {
             agent_args: vec![],
             mcp_command: "test-mcp-server".into(),
             browser_mcp_command: "".into(),
+            browser_endpoint: "".into(),
+            browser_target_id: "".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
