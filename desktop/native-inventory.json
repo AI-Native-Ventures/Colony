@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 422,
-    "rust_lines": 165372,
+    "rust_lines": 165385,
     "tauri_coupled": 169,
     "portable": 253,
-    "portable_lines": 93412,
+    "portable_lines": 93418,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -720,7 +720,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:268",
+        "src/features/communities/useCommunityInit.ts:270",
         "src/features/communities/useNestNotifications.ts:12",
         "src/features/communities/useNestNotifications.ts:21"
       ]
@@ -2261,7 +2261,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:254",
+        "src/features/communities/useCommunityInit.ts:256",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:37"
       ]

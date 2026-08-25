@@ -52,10 +52,17 @@ pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSumma
         let global_config =
             crate::managed_agents::load_global_agent_config(&app).unwrap_or_default();
         // Only what is *shown* is scoped: see `agent_belongs_to_workspace`.
+        // Blank pins are additionally excluded from the roster so unassigned
+        // agents do not leak into every community's People and roles. Runtime
+        // paths still resolve a blank pin to the workspace relay and keep the
+        // agent running; this filter is display-only.
         let workspace_relay = relay_ws_url_with_override(&state);
         records
             .iter()
-            .filter(|record| agent_belongs_to_workspace(&record.relay_url, &workspace_relay))
+            .filter(|record| {
+                !record.relay_url.trim().is_empty()
+                    && agent_belongs_to_workspace(&record.relay_url, &workspace_relay)
+            })
             .map(|record| {
                 build_managed_agent_summary(&app, record, &runtimes, &personas, &global_config)
             })
