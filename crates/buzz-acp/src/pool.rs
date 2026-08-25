@@ -6621,6 +6621,189 @@ done"#
         );
     }
 
+    /// A channel batch whose triggering event carries a NIP-10 `root` tag, i.e.
+    /// a turn that happens inside a thread rather than at channel top level.
+    fn thread_reply_batch(channel_id: Uuid, root_id: &str, content: &str) -> FlushBatch {
+        let event = EventBuilder::new(Kind::Custom(9), content)
+            .tags([Tag::parse(["e", root_id, "", "root"]).expect("valid NIP-10 root tag")])
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        FlushBatch {
+            channel_id,
+            events: vec![crate::queue::BatchEvent {
+                event,
+                prompt_tag: "@agent".into(),
+                received_at: std::time::Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn different_threads_in_same_channel_must_get_different_acp_sessions() {
+        // Mock agent: answers `session/new` with a FRESH session id each time
+        // (`sess-1`, `sess-2`, ...) and every other request with end_turn.
+        // Every inbound request line is captured so the test can read which
+        // `sessionId` each `session/prompt` actually carried.
+        let capture = std::env::temp_dir().join(format!(
+            "buzz-acp-thread-session-scope-{}.ndjson",
+            Uuid::new_v4()
+        ));
+        let quoted_capture = capture.to_string_lossy().replace('\'', "'\\''");
+        let script = format!(
+            r#"n=0
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{quoted_capture}'
+  id=0
+  [[ "$line" =~ \"id\":([0-9]+) ]] && id=${{BASH_REMATCH[1]}}
+  case "$line" in
+    *'"method":"session/new"'*)
+      n=$((n + 1))
+      printf '%s\n' "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{{\"sessionId\":\"sess-$n\"}}}}"
+      ;;
+    *)
+      printf '%s\n' "{{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{{\"stopReason\":\"end_turn\"}}}}"
+      ;;
+  esac
+done"#
+        );
+        let acp = AcpClient::spawn("bash", &["-c".to_string(), script], &[], false, None)
+            .await
+            .expect("spawn thread-session-scope ACP script");
+        let channel_id = Uuid::new_v4();
+        // Fresh state apart from lookups this test does not target: settle the
+        // company-onboarding protocol up front and pin the channel's metadata
+        // so no REST fetch (which would stall against the dead base URL)
+        // contaminates what is otherwise a pure session-keying probe.
+        let mut agent = OwnedAgent {
+            index: 0,
+            acp,
+            state: SessionState::default(),
+            model_capabilities: None,
+            desired_model: None,
+            provider: None,
+            model_overridden: false,
+            agent_name: "legacy-test-agent".into(),
+            goose_system_prompt_supported: None,
+            protocol_version: 1,
+        };
+        agent
+            .state
+            .onboarding_resolution
+            .insert(channel_id, OnboardingResolution::Settled(None));
+
+        const ROOT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const ROOT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        let mut ctx = make_prompt_context_no_owner();
+        // Local REST stub so per-turn lookups (prompt profile lookup runs on
+        // every batch turn) resolve instantly instead of stalling against the
+        // dead default base URL. Empty array satisfies every query shape.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind rest stub listener");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = vec![0; 16 * 1024];
+                let _ = socket.read(&mut request).await;
+                let body = "[]";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        ctx.rest_client.base_url = base_url.clone();
+        ctx.channel_info = ChannelInfoResolver::new(
+            HashMap::from([(
+                channel_id,
+                crate::relay::ChannelInfo {
+                    name: "client-builds".into(),
+                    channel_type: "dm".into(),
+                    description: None,
+                },
+            )]),
+            RestClient {
+                http: reqwest::Client::new(),
+                base_url,
+                keys: ctx.agent_keys.clone(),
+                auth_tag_json: None,
+            },
+        );
+        let ctx = Arc::new(ctx);
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel();
+
+        // Turn A: work inside thread ROOT_A.
+        run_prompt_task(
+            agent,
+            Some(thread_reply_batch(channel_id, ROOT_A, "thread A task")),
+            None,
+            Arc::clone(&ctx),
+            result_tx.clone(),
+            None,
+            "turn-thread-a".into(),
+            PromptSource::Channel(channel_id),
+        )
+        .await;
+        let result_a = result_rx.recv().await.expect("thread A prompt result");
+        assert!(matches!(
+            result_a.outcome,
+            PromptOutcome::Ok(StopReason::EndTurn)
+        ));
+        agent = result_a.agent;
+
+        // Turn B: work inside thread ROOT_B, SAME channel.
+        run_prompt_task(
+            agent,
+            Some(thread_reply_batch(channel_id, ROOT_B, "thread B task")),
+            None,
+            Arc::clone(&ctx),
+            result_tx.clone(),
+            None,
+            "turn-thread-b".into(),
+            PromptSource::Channel(channel_id),
+        )
+        .await;
+        let result_b = result_rx.recv().await.expect("thread B prompt result");
+        assert!(matches!(
+            result_b.outcome,
+            PromptOutcome::Ok(StopReason::EndTurn)
+        ));
+        agent = result_b.agent;
+        agent.acp.shutdown().await;
+        server.abort();
+
+        let requests: Vec<serde_json::Value> = std::fs::read_to_string(&capture)
+            .expect("read captured ACP requests")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("captured request is JSON"))
+            .collect();
+        std::fs::remove_file(&capture).expect("remove ACP capture");
+
+        let prompts: Vec<&serde_json::Value> = requests
+            .iter()
+            .filter(|r| r["method"] == "session/prompt")
+            .collect();
+        assert_eq!(prompts.len(), 2, "both thread turns must reach the agent");
+        let session_a = prompts[0]["params"]["sessionId"]
+            .as_str()
+            .expect("prompt carries sessionId");
+        let session_b = prompts[1]["params"]["sessionId"]
+            .as_str()
+            .expect("prompt carries sessionId");
+        assert_ne!(
+            session_a, session_b,
+            "two threads in the SAME channel must run in DIFFERENT ACP sessions: \
+             both turns shared session {session_a}, so thread A's conversation \
+             context is live when the agent works thread B"
+        );
+    }
+
     #[tokio::test]
     async fn merged_cancel_prompt_commits_and_deduplicates_all_rendered_event_ids() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
