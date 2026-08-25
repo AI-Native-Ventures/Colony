@@ -26,6 +26,8 @@ const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
 const MAX_SUMMARY_LEN: usize = 4_000;
 const MAX_ASSIGNEES: usize = 100;
+/// Matches `MAX_DEPENDENCIES` in the company contract.
+const MAX_DEPENDENCIES: usize = 100;
 
 /// Mutation requested by the current company owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,7 +329,7 @@ pub fn parse_company_action(event: &Event) -> Result<CompanyAction, CompanySdkEr
 /// Relay authorship must be checked by the caller against its tenant relay key.
 pub fn parse_company_event(event: &Event) -> Result<CompanyProfile, CompanySdkError> {
     require_kind(event, KIND_COMPANY_PROFILE)?;
-    require_head_tag_names(event, &["d", "company"], &["c"], "company head")?;
+    require_head_tag_names(event, &["d", "company"], &["c"], &[], "company head")?;
     let coordinate = required_scalar_tag(event, "d")?;
     let company_tag = required_scalar_tag(event, "company")?;
     let profile: CompanyProfile = parse_canonical_content(&event.content, "company")?;
@@ -346,6 +348,7 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
         event,
         &["d", "company", "cost-centre"],
         &["c", "client", "w"],
+        &[],
         "initiative head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
@@ -382,12 +385,16 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
 /// `u` subject as `kind:ref`) are optional so heads written before the mirrors
 /// existed still parse, and verified against the content when present so an
 /// index a client filters on can never disagree with the record it indexes.
+/// The `v` tags are the dependency edges, one per `dependsOn` entry; they are
+/// verified as a set, because "which tasks wait on X" is answered by filtering
+/// them and a lying edge would return heads the record does not warrant.
 pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_kind(event, KIND_TASK)?;
     require_head_tag_names(
         event,
         &["d", "company", "team", "cost-centre"],
         &["c", "initiative", "client", "g", "i", "s", "u", "w"],
+        &["v"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
@@ -418,6 +425,22 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     });
     ensure_mirror_matches(subject_ref, subject_mirror, "task")?;
     ensure_mirror_matches(serde_enum_slug(&task.status), status_mirror, "task")?;
+    // Dependency edges are a set mirror: exactly one `v` per dependsOn entry,
+    // each naming an entry the content actually declares. A head whose edges
+    // and list disagree would make "tasks waiting on X" return wrong answers.
+    let dependency_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("v"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    if dependency_mirrors.len() != task.depends_on.len()
+        || !dependency_mirrors
+            .iter()
+            .all(|mirror| task.depends_on.iter().any(|dep| dep == *mirror))
+    {
+        return Err(CompanySdkError::TagContentMismatch("task"));
+    }
     Ok(task)
 }
 
@@ -712,6 +735,7 @@ fn require_head_tag_names(
     event: &Event,
     required: &[&str],
     optional: &[&str],
+    repeated: &[&str],
     entity: &'static str,
 ) -> Result<(), CompanySdkError> {
     for name in required {
@@ -736,9 +760,22 @@ fn require_head_tag_names(
             return Err(CompanySdkError::InvalidTag("company head"));
         }
     }
+    // Repeated tag names carry one value per content entry (a task's `v`
+    // dependency edges); each occurrence must still be a scalar pair.
+    for tag in event.tags.iter().filter(|tag| {
+        tag.as_slice()
+            .first()
+            .is_some_and(|name| repeated.contains(&name.as_str()))
+    }) {
+        if tag.as_slice().len() != 2 {
+            return Err(CompanySdkError::InvalidTag("company head"));
+        }
+    }
     if event.tags.iter().any(|tag| {
         tag.as_slice().first().is_none_or(|name| {
-            !required.contains(&name.as_str()) && !optional.contains(&name.as_str())
+            !required.contains(&name.as_str())
+                && !optional.contains(&name.as_str())
+                && !repeated.contains(&name.as_str())
         })
     }) {
         return Err(CompanySdkError::UnexpectedTag(entity));
@@ -872,6 +909,32 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
             return Err(CompanySdkError::InvalidContent("task"));
         }
     }
+    // Chain and identity fields: the same rules the core contract enforces at
+    // ingest, restated here so a client-side parse cannot accept content the
+    // relay would have refused.
+    if task.depends_on.len() > MAX_DEPENDENCIES {
+        return Err(CompanySdkError::InvalidContent("task"));
+    }
+    let mut dependencies = HashSet::new();
+    for dependency in &task.depends_on {
+        validate_id(dependency, "task")?;
+        if !dependencies.insert(dependency.as_str()) {
+            return Err(CompanySdkError::InvalidContent("task"));
+        }
+    }
+    if let Some(subject) = &task.subject {
+        if subject.r#ref.trim().is_empty() || subject.r#ref.len() > MAX_ID_LEN {
+            return Err(CompanySdkError::InvalidContent("task"));
+        }
+    }
+    if task
+        .stage
+        .as_deref()
+        .is_some_and(|stage| stage.len() > MAX_NAME_LEN)
+    {
+        return Err(CompanySdkError::InvalidContent("task"));
+    }
+    validate_optional_id(task.thread_root.as_deref(), "task")?;
     Ok(())
 }
 

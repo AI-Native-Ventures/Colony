@@ -22,8 +22,9 @@
 use std::sync::Arc;
 
 use buzz_core::company::{
-    validate_company, validate_company_update, validate_initiative, validate_initiative_update,
-    validate_task, validate_task_update, CompanyProfile, CompanyTeamRef,
+    is_task_status_transition_allowed, validate_company, validate_company_update,
+    validate_initiative, validate_initiative_update, validate_task, validate_task_update,
+    CompanyProfile, CompanyTeamRef, TaskStatus,
 };
 use buzz_core::kind::{
     KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
@@ -145,6 +146,12 @@ fn build_head(
                 // Mirror of the status in the signed content.
                 scalar_tag("w", &serialized_slug(&task.status)?)?,
             ];
+            // One dependency edge per dependsOn entry. Repeated tags are how
+            // "which tasks wait on X" becomes a single indexed filter instead
+            // of a scan of every task head in the company.
+            for dependency in &task.depends_on {
+                tags.push(scalar_tag("v", dependency)?);
+            }
             if let Some(initiative_id) = task.initiative_id.as_deref() {
                 tags.push(scalar_tag("initiative", initiative_id)?);
                 // Mirror of `initiative`.
@@ -216,6 +223,189 @@ fn build_receipt(
         .tags(tags)
         .sign_with_keys(relay)
         .map_err(|error| format!("failed to sign company receipt: {error}"))
+}
+
+/// Upper bound on dependent heads examined for a single completion.
+const MAX_READY_DERIVATION_CANDIDATES: usize = 1_000;
+
+/// Decide whether one blocked task may wake given its dependencies' current
+/// statuses, parallel to its `dependsOn` list. Pure so the diamond, replay,
+/// and cancellation rules are testable without a database.
+///
+/// Ruling on terminal-bad dependencies: only `Completed` satisfies an edge.
+/// A cancelled dependency leaves the dependent blocked rather than silently
+/// claimable — work whose premise was deliberately killed must not become
+/// assignable while the owner believes the branch is dead, and a blocked card
+/// on the board is the visible prompt to resolve the branch by hand. Cascade
+/// cancellation is a later phase.
+fn dependent_is_ready_to_wake(
+    dependent_status: TaskStatus,
+    dependency_statuses: &[Option<TaskStatus>],
+) -> bool {
+    // No edges means nothing for completion to derive from: tasks without
+    // dependencies reach ready the ordinary way and are never woken here.
+    !dependency_statuses.is_empty()
+        && dependent_status == TaskStatus::Blocked
+        && dependency_statuses
+            .iter()
+            .all(|status| *status == Some(TaskStatus::Completed))
+}
+
+/// Current status of one relay-authored task head, if it exists.
+async fn task_head_status(
+    tenant: &TenantContext,
+    state: &AppState,
+    task_id: &str,
+) -> Result<Option<TaskStatus>, String> {
+    let Some(head) = load_head(tenant, state, KIND_TASK, task_id).await? else {
+        return Ok(None);
+    };
+    parse_task_event(&head)
+        .map(|task| Some(task.status))
+        .map_err(|error| format!("stored task head {task_id} does not parse: {error}"))
+}
+
+/// Derive `blocked -> ready` for tasks waiting on a completed dependency.
+///
+/// Spec section 04: a blocked task becomes ready when EVERY task in its
+/// `dependsOn` has reached a terminal-good state. Never fails the caller:
+/// the owner's action already committed, so a hiccup here is logged and the
+/// chain waits for the next completion instead of surfacing an error for a
+/// write that did succeed.
+async fn derive_ready_dependents(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    completed_task_id: &str,
+) {
+    if let Err(error) = derive_ready_dependents_inner(tenant, state, completed_task_id).await {
+        tracing::warn!(completed_task_id, %error, "blocked-to-ready derivation failed");
+    }
+}
+
+async fn derive_ready_dependents_inner(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    completed_task_id: &str,
+) -> Result<(), String> {
+    // Reachability: every head carries one `v` tag per dependsOn entry, so
+    // the dependents of one completed task are exactly the heads carrying
+    // that value — a GIN-served JSONB containment pushdown, not a scan of
+    // every task head in the company.
+    let candidates = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_TASK as i32]),
+            global_only: true,
+            tag_contains: Some(("v".to_string(), completed_task_id.to_string())),
+            limit: Some(MAX_READY_DERIVATION_CANDIDATES as i64),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("database error finding dependents: {error}"))?;
+    if candidates.len() == MAX_READY_DERIVATION_CANDIDATES {
+        tracing::warn!(
+            completed_task_id,
+            candidates = candidates.len(),
+            "dependency fan-in reached the derivation candidate bound"
+        );
+    }
+
+    for stored in candidates {
+        if let Err(error) =
+            wake_dependent_if_ready(tenant, state, completed_task_id, &stored.event).await
+        {
+            tracing::warn!(
+                dependent = %stored.event.id.to_hex(),
+                %error,
+                "skipped a dependent during blocked-to-ready derivation"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Attempt to wake ONE dependent candidate. `Ok(None)` means no wake was due
+/// (already awake, dependencies unsatisfied); `Ok(Some(_))` means published;
+/// `Err` means the candidate was unreadable or unwritable and was skipped.
+async fn wake_dependent_if_ready(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    completed_task_id: &str,
+    candidate_head: &Event,
+) -> Result<Option<Event>, String> {
+    let dependent = parse_task_event(candidate_head)
+        .map_err(|error| format!("dependent head does not parse: {error}"))?;
+    if !dependent
+        .depends_on
+        .contains(&completed_task_id.to_string())
+    {
+        // Stale snapshot: the candidate replaced this edge since the query ran.
+        return Ok(None);
+    }
+
+    let mut dependency_statuses = Vec::with_capacity(dependent.depends_on.len());
+    for dependency in &dependent.depends_on {
+        dependency_statuses.push(task_head_status(tenant, state, dependency).await?);
+    }
+    if !dependent_is_ready_to_wake(dependent.status, &dependency_statuses) {
+        return Ok(None);
+    }
+
+    // Re-read the current head instead of trusting the query snapshot: a
+    // concurrent writer may have moved this coordinate since the filter ran.
+    // Finding anything but Blocked means someone got there first, which is
+    // what makes replays and racing diamonds converge to one wake.
+    let previous_event = load_head(tenant, state, KIND_TASK, &dependent.id)
+        .await?
+        .ok_or_else(|| format!("dependent {} vanished before wake", dependent.id))?;
+    let previous = parse_task_event(&previous_event)
+        .map_err(|error| format!("dependent head does not parse on re-read: {error}"))?;
+    if previous.status != TaskStatus::Blocked {
+        return Ok(None);
+    }
+
+    let mut replacement = previous.clone();
+    replacement.status = TaskStatus::Ready;
+    // Only status and updatedAt differ from a head that passed full contract
+    // validation when it was written; identity fields are untouched, so the
+    // checks re-run here are exactly the ones the change could violate.
+    replacement.updated_at = replacement
+        .updated_at
+        .max(chrono::Utc::now().timestamp())
+        .max(previous.updated_at + 1);
+    if !is_task_status_transition_allowed(
+        previous.status,
+        replacement.status,
+        replacement.doer_kind,
+    ) {
+        return Ok(None);
+    }
+
+    // build_head re-derives every mirror (`w` becomes ready, `v` edges stay
+    // identical) from the validated content, so the derived head is filtered
+    // exactly like a hand-written one.
+    let head = build_head(
+        &state.relay_keypair,
+        &CompanyActionPayload::Task(replacement),
+        Some(&previous_event),
+    )?;
+    let (stored_head, inserted) = state
+        .db
+        .insert_event(tenant.community(), &head, None)
+        .await
+        .map_err(|error| format!("failed to store derived ready head: {error}"))?;
+    if inserted {
+        dispatch_persistent_event(
+            tenant,
+            state,
+            &stored_head,
+            KIND_TASK,
+            &state.relay_keypair.public_key().to_hex(),
+            None,
+        )
+        .await;
+    }
+    Ok(Some(head))
 }
 
 /// Load one head by coordinate under an explicit author.
@@ -615,6 +805,16 @@ pub(crate) async fn handle_company_action(
                 None,
             )
             .await;
+            // A task reaching Completed may unblock downstream work. Derived
+            // after the commit and after dispatch so the completing write is
+            // never delayed or failed by derivation; see
+            // `derive_ready_dependents` for the reachability and idempotency
+            // story.
+            if let CompanyActionPayload::Task(task) = &action.payload {
+                if task.status == TaskStatus::Completed {
+                    derive_ready_dependents(tenant, state, &task.id).await;
+                }
+            }
             Ok(CompanyBrokerOutcome::Applied)
         }
         CompanyActionApply::Duplicate {
@@ -784,6 +984,14 @@ mod tests {
             .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
             .map(|tag| tag.as_slice()[1].as_str())
             .next()
+    }
+
+    fn scalar_tag_values<'a>(head: &'a Event, name: &str) -> Vec<&'a str> {
+        head.tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
+            .map(|tag| tag.as_slice()[1].as_str())
+            .collect()
     }
 
     fn tag_count(head: &Event, name: &str) -> usize {
@@ -972,7 +1180,7 @@ mod tests {
             source_channel_id: "general".to_string(),
             source_event_id: None,
             implicit: false,
-            depends_on: Vec::new(),
+            depends_on: vec!["write-homepage-brief".to_string()],
             subject: Some(buzz_core::company::SubjectRef {
                 kind: buzz_core::company::SubjectKind::Party,
                 r#ref: "acme-lead".to_string(),
@@ -1048,6 +1256,7 @@ mod tests {
             ("s", "build-site"),
             ("u", "party:acme-lead"),
             ("w", "inProgress"),
+            ("v", "write-homepage-brief"),
         ] {
             assert_eq!(tag_count(&task_head, name), 1);
             assert_eq!(
@@ -1058,10 +1267,35 @@ mod tests {
         }
     }
 
+    /// One `v` tag per dependency entry: two edges on the content, two tags
+    /// on the head, each naming a declared dependency. This repetition is
+    /// what makes "dependents of X" an indexed filter later.
+    #[test]
+    fn every_dependency_emits_its_own_edge_tag() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.depends_on = vec![
+            "write-homepage-brief".to_string(),
+            "approve-budget".to_string(),
+        ];
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        assert_eq!(tag_count(&head, "v"), 2);
+        assert_eq!(scalar_tag_values(&head, "v").len(), 2);
+        for edge in ["write-homepage-brief", "approve-budget"] {
+            assert!(
+                scalar_tag_values(&head, "v").contains(&edge),
+                "dependency {edge} must have its own `v` tag"
+            );
+        }
+        parse_task_event(&head).expect("multi-edge head parses");
+    }
+
     /// A Task with no initiative and no client must omit both optional tags;
     /// emitting them empty would fail the strict parser. The same discipline
     /// applies to the optional mirrors `i`, `s` and `u`, while the mirrors of
-    /// required fields (`g` team, `w` status) stay present.
+    /// required fields (`g` team, `w` status) stay present. An empty
+    /// dependsOn emits no `v` edges at all.
     #[test]
     fn task_head_omits_absent_optional_coordinates() {
         let relay = Keys::generate();
@@ -1070,10 +1304,11 @@ mod tests {
         task.client_organization_id = None;
         task.stage = None;
         task.subject = None;
+        task.depends_on = Vec::new();
 
         let head =
             build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
-        for name in ["initiative", "client", "i", "s", "u"] {
+        for name in ["initiative", "client", "i", "s", "u", "v"] {
             assert!(
                 !head.tags.iter().any(|tag| tag.as_slice()[0] == name),
                 "absent `{name}` must not produce a tag"
@@ -1086,6 +1321,7 @@ mod tests {
         assert_eq!(parsed.client_organization_id, None);
         assert_eq!(parsed.stage, None);
         assert_eq!(parsed.subject, None);
+        assert_eq!(parsed.depends_on, Vec::<String>::new());
     }
 
     /// A mirror that disagrees with the signed content must be refused: the
@@ -1113,22 +1349,80 @@ mod tests {
 
     /// Heads written before the mirrors existed carry none of them and must
     /// still parse: absent mirrors mean the content stays authoritative, not
-    /// that the head is broken.
+    /// that the head is broken. The content is also rolled back to the
+    /// pre-chain shape (empty dependsOn) so edges and list agree the way a
+    /// genuinely old head's would.
     #[test]
     fn heads_written_before_mirrors_existed_still_parse() {
         let relay = Keys::generate();
-        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
-            .expect("build task head");
+        let mut task = sample_task();
+        task.depends_on = Vec::new();
+        let mut head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
         head.tags.retain(|tag| {
             !matches!(
                 tag.as_slice().first().map(String::as_str),
-                Some("g" | "i" | "s" | "u" | "w")
+                Some("g" | "i" | "s" | "u" | "w" | "v")
             )
         });
         let parsed = parse_task_event(&head).expect("pre-mirror head parses");
         assert_eq!(parsed.owning_team_id, "team-marketing");
         assert_eq!(parsed.status, buzz_core::company::TaskStatus::InProgress);
         assert_eq!(parsed.initiative_id.as_deref(), Some("init-homepage"));
+    }
+
+    /// A dependency edge the content does not declare must be refused with
+    /// the same force as a lying status: dependents of a task are found by
+    /// filtering `v`, so an invented edge would wake work that never waited.
+    #[test]
+    fn lying_dependency_edges_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
+            .expect("build task head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("v") {
+                    Tag::parse(["v", "some-other-task"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_task_event(&head).expect_err("lying edge must be refused");
+        assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// Diamond: D waits on B and C, both complete in sequence. After B only,
+    /// D must stay blocked; after C, exactly the one remaining check passes.
+    /// A replay or racing duplicate finds D no longer Blocked and does
+    /// nothing — the status guard IS the once-only guarantee.
+    #[test]
+    fn diamond_wakes_exactly_when_the_last_dependency_completes() {
+        // After B completes: C still running, D stays blocked.
+        let after_b = [Some(TaskStatus::Completed), Some(TaskStatus::InProgress)];
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Blocked, &after_b));
+        // After C completes: every edge terminal-good, D wakes.
+        let after_c = [Some(TaskStatus::Completed), Some(TaskStatus::Completed)];
+        assert!(dependent_is_ready_to_wake(TaskStatus::Blocked, &after_c));
+        // A second derivation pass against an already-woken D does nothing.
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Ready, &after_c));
+    }
+
+    /// Terminal-bad dependencies never manufacture claimable work: a
+    /// cancelled upstream leaves the dependent visibly blocked for the owner
+    /// to resolve, and an unresolvable dependency blocks just the same.
+    #[test]
+    fn cancelled_and_missing_dependencies_never_wake_a_task() {
+        let cancelled = [Some(TaskStatus::Completed), Some(TaskStatus::Cancelled)];
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Blocked, &cancelled));
+        let missing_upstream = [Some(TaskStatus::Completed), None];
+        assert!(!dependent_is_ready_to_wake(
+            TaskStatus::Blocked,
+            &missing_upstream
+        ));
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Blocked, &[]));
     }
 
     #[test]
