@@ -91,7 +91,7 @@ pub(crate) fn validate_viewport(width: u32, height: u32) -> Result<(), String> {
 }
 
 pub(crate) fn validate_device_scale_factor(value: f64) -> Result<(), String> {
-    if !value.is_finite() || value < MIN_DEVICE_SCALE_FACTOR || value > MAX_DEVICE_SCALE_FACTOR {
+    if !value.is_finite() || !(MIN_DEVICE_SCALE_FACTOR..=MAX_DEVICE_SCALE_FACTOR).contains(&value) {
         return Err("web device scale factor is outside the supported range".to_string());
     }
     Ok(())

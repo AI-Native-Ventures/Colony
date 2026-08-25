@@ -289,12 +289,14 @@ impl WebManager {
         let task = tokio::spawn(run_session(
             app,
             session_id.clone(),
-            host,
-            client,
+            SessionRuntime {
+                host,
+                client,
+                startup_timings,
+            },
             stop_requested,
             receiver,
             done_sender,
-            startup_timings,
         ));
         let mut task_slot = match session.task.lock() {
             Ok(task_slot) => task_slot,
@@ -653,16 +655,28 @@ async fn initialize_page(
     Ok(())
 }
 
+/// The browser-side pieces a running session owns: the host process handle,
+/// its CDP connection, and the startup timings reported on the first frame.
+/// Grouped so `run_session` stays inside the argument-count lint.
+struct SessionRuntime {
+    host: buzz_browser_pkg::host::BrowserHost,
+    client: CdpClient,
+    startup_timings: SessionStartupTimings,
+}
+
 async fn run_session<R: Runtime>(
     app: AppHandle<R>,
     session_id: String,
-    host: buzz_browser_pkg::host::BrowserHost,
-    mut client: CdpClient,
+    runtime: SessionRuntime,
     stop_requested: Arc<AtomicBool>,
     mut commands: mpsc::Receiver<WebCommand>,
     done_sender: std::sync::mpsc::Sender<()>,
-    startup_timings: SessionStartupTimings,
 ) {
+    let SessionRuntime {
+        host,
+        mut client,
+        startup_timings,
+    } = runtime;
     #[cfg(test)]
     if let Some(pause) = web_lifecycle_tests::take_session_pause() {
         let _ = pause.entered.send(());
