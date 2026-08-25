@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 420,
-    "rust_lines": 165085,
+    "rust_total": 422,
+    "rust_lines": 165372,
     "tauri_coupled": 169,
-    "portable": 251,
-    "portable_lines": 93007,
+    "portable": 253,
+    "portable_lines": 93412,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -425,6 +425,8 @@
       "src-tauri/src/terminal_runtime/scroll_sign.rs",
       "src-tauri/src/terminal_transport.rs",
       "src-tauri/src/util.rs",
+      "src-tauri/src/web/commands.rs",
+      "src-tauri/src/web/shared_host.rs",
       "src-tauri/src/web/validation.rs",
       "src-tauri/src/webkit_rendering.rs",
       "src-tauri/src/webkit_rendering/tests.rs"
