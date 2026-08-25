@@ -225,9 +225,13 @@ impl SessionState {
     }
 
     /// Invalidate every conversation a channel holds, plus its channel-level
-    /// caches. Whole-channel teardown: the agent left the channel, the relay
-    /// rejected it, or the operator switched its model. Returns `true` if the
-    /// channel had any active session.
+    /// caches. Whole-channel teardown: the agent left the channel, or the relay
+    /// rejected it. Returns `true` if the channel had any active session.
+    ///
+    /// Not the model-switch path. A rotation or model switch invalidates only
+    /// the conversation it happened in, via [`Self::invalidate`], so sibling
+    /// threads keep their sessions and the channel's core/canvas renders stay
+    /// warm.
     pub fn invalidate_channel(&mut self, channel_id: &Uuid) -> bool {
         self.turn_counts.retain(|(cid, _), _| cid != channel_id);
         self.core_sections.remove(channel_id);
