@@ -1231,6 +1231,14 @@ jobs:
         run: |
           chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
           ./scripts/start-relay-for-tests.sh --no-build
+        env:
+          # Employee key sealing is a no-op without a KEK, so a hire request is
+          # accepted and then quietly produces no employee. e2e_company_work
+          # hires one, and failed with "employee was not created for hire
+          # request" the first time that suite ever ran in CI. Test-only value
+          # sealing ephemeral rows in a throwaway database, same standing as the
+          # hardcoded BUZZ_TEST_POSTGRES_PASSWORD in this workflow.
+          BUZZ_EMPLOYEE_KEK: "0000000000000000000000000000000000000000000000000000000000000001"
       - name: Relay E2E tests
         run: |
           # e2e_ask_chain must run first. Its absorption gate asserts on the deadline sweep, and interrupt_runtime::find_unique_executive refuses to promote when the community holds more than one executive. Every suite in this job shares one host-bound community and one database, so any suite that seeds a ladder before this one silently disables the sweep's promotion hop and the gate's positive control times out.
