@@ -4,7 +4,10 @@ use std::{collections::HashSet, str::FromStr};
 
 use buzz_core::{
     block::canonical_json,
-    company::{validate_company, CompanyContractError, CompanyProfile, CompanyTask, Initiative},
+    company::{
+        serde_enum_slug, validate_company, CompanyContractError, CompanyProfile, CompanyTask,
+        Initiative,
+    },
     kind::{
         KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
         KIND_PERSONA, KIND_TASK, KIND_TEAM,
@@ -342,13 +345,16 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
     require_head_tag_names(
         event,
         &["d", "company", "cost-centre"],
-        &["c", "client"],
+        &["c", "client", "w"],
         "initiative head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
     let company_tag = required_scalar_tag(event, "company")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
+    // `w` is the single-letter mirror of the status in the content. Only
+    // single-letter tags are indexed, so this is the spelling filters see.
+    let status_mirror = optional_scalar_tag(event, "w")?;
     let initiative: Initiative = parse_canonical_content(&event.content, "initiative")?;
     validate_initiative_content(&initiative)?;
     ensure_matches(&initiative.id, coordinate, "initiative")?;
@@ -359,6 +365,11 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
         client_tag,
         "initiative",
     )?;
+    ensure_mirror_matches(
+        serde_enum_slug(&initiative.status),
+        status_mirror,
+        "initiative",
+    )?;
     Ok(initiative)
 }
 
@@ -366,12 +377,17 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
 ///
 /// Cross-record Company, Initiative, cost-centre, and Team validation remains
 /// a relay concern.
+///
+/// The single-letter mirrors (`g` team, `w` status, `i` initiative, `s` stage,
+/// `u` subject as `kind:ref`) are optional so heads written before the mirrors
+/// existed still parse, and verified against the content when present so an
+/// index a client filters on can never disagree with the record it indexes.
 pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_kind(event, KIND_TASK)?;
     require_head_tag_names(
         event,
         &["d", "company", "team", "cost-centre"],
-        &["c", "initiative", "client"],
+        &["c", "initiative", "client", "g", "i", "s", "u", "w"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
@@ -380,6 +396,11 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     let initiative_tag = optional_scalar_tag(event, "initiative")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
+    let team_mirror = optional_scalar_tag(event, "g")?;
+    let initiative_mirror = optional_scalar_tag(event, "i")?;
+    let stage_mirror = optional_scalar_tag(event, "s")?;
+    let subject_mirror = optional_scalar_tag(event, "u")?;
+    let status_mirror = optional_scalar_tag(event, "w")?;
     let task: CompanyTask = parse_canonical_content(&event.content, "task")?;
     validate_task_content(&task)?;
     ensure_matches(&task.id, coordinate, "task")?;
@@ -388,6 +409,15 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     ensure_optional_matches(task.initiative_id.as_deref(), initiative_tag, "task")?;
     ensure_matches(&task.cost_centre_id, cost_centre_tag, "task")?;
     ensure_optional_matches(task.client_organization_id.as_deref(), client_tag, "task")?;
+    ensure_mirror_matches(Some(task.owning_team_id.clone()), team_mirror, "task")?;
+    ensure_mirror_matches(task.initiative_id.clone(), initiative_mirror, "task")?;
+    ensure_mirror_matches(task.stage.clone(), stage_mirror, "task")?;
+    let subject_ref = task.subject.as_ref().and_then(|subject| {
+        let kind = serde_enum_slug(&subject.kind)?;
+        Some(format!("{kind}:{}", subject.r#ref))
+    });
+    ensure_mirror_matches(subject_ref, subject_mirror, "task")?;
+    ensure_mirror_matches(serde_enum_slug(&task.status), status_mirror, "task")?;
     Ok(task)
 }
 
@@ -779,6 +809,24 @@ fn ensure_optional_matches(
         Ok(())
     } else {
         Err(CompanySdkError::TagContentMismatch(entity))
+    }
+}
+
+/// Verify a single-letter mirror against the content it indexes.
+///
+/// Unlike `ensure_optional_matches`, an absent tag beside a set field is
+/// accepted: heads written before the mirrors existed carry no tag at all,
+/// and their content stays authoritative. A mirror that IS present must
+/// agree exactly, because a client filters on it instead of the content.
+fn ensure_mirror_matches(
+    expected: Option<String>,
+    tag_value: Option<&str>,
+    entity: &'static str,
+) -> Result<(), CompanySdkError> {
+    match (expected, tag_value) {
+        (Some(expected), Some(tag)) if expected == tag => Ok(()),
+        (_, None) => Ok(()),
+        _ => Err(CompanySdkError::TagContentMismatch(entity)),
     }
 }
 

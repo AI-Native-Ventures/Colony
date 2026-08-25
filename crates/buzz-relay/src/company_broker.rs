@@ -36,6 +36,7 @@ use buzz_sdk::company::{
     CompanyAction, CompanyActionOperation, CompanyActionPayload, CompanyReceiptOutcome,
 };
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
+use serde::Serialize;
 use serde_json::json;
 
 use crate::handlers::event::dispatch_persistent_event;
@@ -102,11 +103,12 @@ fn build_head(
     payload: &CompanyActionPayload,
     previous_head: Option<&Event>,
 ) -> Result<Event, String> {
-    // Every head carries `c` alongside the readable `company` tag. Only
-    // single-letter tags are indexed, so `#company` is a filter the relay
-    // never receives: the nostr filter type drops it before parsing, and a
-    // client asking for one company's records gets every company's. `c` is
-    // what makes that question answerable where the records are.
+    // Every board dimension carries a single-letter mirror of its readable
+    // tag (`c` company, `g` team, `w` status, `i` initiative, `s` stage, `u`
+    // subject). Only single-letter tags are indexed — the nostr filter type
+    // drops multi-letter keys before parsing — so without a mirror a value is
+    // readable once you already have the event but unfilterable over the
+    // wire, and "this run's tasks" is a question the relay cannot answer.
     let (kind, tags, content) = match payload {
         CompanyActionPayload::Company(profile) => {
             let tags = vec![
@@ -122,6 +124,9 @@ fn build_head(
                 scalar_tag("c", &initiative.company_id)?,
                 scalar_tag("company", &initiative.company_id)?,
                 scalar_tag("cost-centre", &initiative.cost_centre_id)?,
+                // Mirror of the status in the signed content, spelled exactly
+                // as it serialises there.
+                scalar_tag("w", &serialized_slug(&initiative.status)?)?,
             ];
             if let Some(client) = initiative.client_organization_id.as_deref() {
                 tags.push(scalar_tag("client", client)?);
@@ -134,13 +139,30 @@ fn build_head(
                 scalar_tag("c", &task.company_id)?,
                 scalar_tag("company", &task.company_id)?,
                 scalar_tag("team", &task.owning_team_id)?,
+                // Mirror of `team`.
+                scalar_tag("g", &task.owning_team_id)?,
                 scalar_tag("cost-centre", &task.cost_centre_id)?,
+                // Mirror of the status in the signed content.
+                scalar_tag("w", &serialized_slug(&task.status)?)?,
             ];
             if let Some(initiative_id) = task.initiative_id.as_deref() {
                 tags.push(scalar_tag("initiative", initiative_id)?);
+                // Mirror of `initiative`.
+                tags.push(scalar_tag("i", initiative_id)?);
             }
             if let Some(client) = task.client_organization_id.as_deref() {
                 tags.push(scalar_tag("client", client)?);
+            }
+            if let Some(stage) = task.stage.as_deref() {
+                // Mirror of the template stage slug: the kanban column key.
+                tags.push(scalar_tag("s", stage)?);
+            }
+            if let Some(subject) = &task.subject {
+                // Mirror of the subject as its `kind:ref` swimlane key.
+                tags.push(scalar_tag(
+                    "u",
+                    &format!("{}:{}", serialized_slug(&subject.kind)?, subject.r#ref),
+                )?);
             }
             (KIND_TASK, tags, serde_json::to_value(task))
         }
@@ -152,6 +174,16 @@ fn build_head(
         .custom_created_at(head_timestamp(previous_head))
         .sign_with_keys(relay)
         .map_err(|error| format!("failed to sign company head: {error}"))
+}
+
+/// The exact string a validated enum serialises to in head content.
+///
+/// Mirrors must spell statuses and subject kinds exactly as the signed
+/// content does, or a filter for one status would match heads carrying
+/// another. Deriving them through serde keeps that from drifting.
+fn serialized_slug<T: Serialize>(value: &T) -> Result<String, String> {
+    buzz_core::company::serde_enum_slug(value)
+        .ok_or_else(|| "failed to derive single-letter tag value".to_string())
 }
 
 /// Build the exact four-tag relay-signed receipt the SDK parser accepts.
@@ -744,6 +776,22 @@ async fn authorize_company_actor(
 mod tests {
     use super::*;
     use buzz_core::company::{CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind};
+    use buzz_sdk::company::CompanySdkError;
+
+    fn scalar_tag_value<'a>(head: &'a Event, name: &str) -> Option<&'a str> {
+        head.tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
+            .map(|tag| tag.as_slice()[1].as_str())
+            .next()
+    }
+
+    fn tag_count(head: &Event, name: &str) -> usize {
+        head.tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
+            .count()
+    }
 
     fn sample_company() -> CompanyProfile {
         CompanyProfile {
@@ -914,7 +962,7 @@ mod tests {
             company_id: "horizon-labs".to_string(),
             initiative_id: Some("init-homepage".to_string()),
             title: "Write homepage copy".to_string(),
-            status: buzz_core::company::TaskStatus::Proposed,
+            status: buzz_core::company::TaskStatus::InProgress,
             owning_team_id: "team-marketing".to_string(),
             assignee_persona_ids: vec!["builtin:content".to_string()],
             qa_persona_id: "builtin:marketing-lead".to_string(),
@@ -925,8 +973,11 @@ mod tests {
             source_event_id: None,
             implicit: false,
             depends_on: Vec::new(),
-            subject: None,
-            stage: None,
+            subject: Some(buzz_core::company::SubjectRef {
+                kind: buzz_core::company::SubjectKind::Party,
+                r#ref: "acme-lead".to_string(),
+            }),
+            stage: Some("build-site".to_string()),
             thread_root: None,
             doer_kind: buzz_core::company::DoerKind::Agent,
             wake_at: None,
@@ -961,6 +1012,10 @@ mod tests {
             .tags
             .iter()
             .any(|tag| tag.as_slice()[0] == "client"));
+        // The status mirror is present exactly once and spells the status
+        // exactly as the signed content does.
+        assert_eq!(tag_count(&initiative_head, "w"), 1);
+        assert_eq!(scalar_tag_value(&initiative_head, "w"), Some("proposed"));
 
         let task_head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
             .expect("build task head");
@@ -983,28 +1038,97 @@ mod tests {
                 "task head must carry exactly one `{name}` tag"
             );
         }
+
+        // Single-letter mirrors: exactly one each, spelled as the content
+        // spells them. `inProgress` proves the mirror is serde-derived rather
+        // than lowercased by hand.
+        for (name, expected) in [
+            ("g", "team-marketing"),
+            ("i", "init-homepage"),
+            ("s", "build-site"),
+            ("u", "party:acme-lead"),
+            ("w", "inProgress"),
+        ] {
+            assert_eq!(tag_count(&task_head, name), 1);
+            assert_eq!(
+                scalar_tag_value(&task_head, name),
+                Some(expected),
+                "mirror `{name}` must match the signed content"
+            );
+        }
     }
 
     /// A Task with no initiative and no client must omit both optional tags;
-    /// emitting them empty would fail the strict parser.
+    /// emitting them empty would fail the strict parser. The same discipline
+    /// applies to the optional mirrors `i`, `s` and `u`, while the mirrors of
+    /// required fields (`g` team, `w` status) stay present.
     #[test]
     fn task_head_omits_absent_optional_coordinates() {
         let relay = Keys::generate();
         let mut task = sample_task();
         task.initiative_id = None;
         task.client_organization_id = None;
+        task.stage = None;
+        task.subject = None;
 
         let head =
             build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
-        for name in ["initiative", "client"] {
+        for name in ["initiative", "client", "i", "s", "u"] {
             assert!(
                 !head.tags.iter().any(|tag| tag.as_slice()[0] == name),
                 "absent `{name}` must not produce a tag"
             );
         }
+        assert_eq!(tag_count(&head, "g"), 1);
+        assert_eq!(tag_count(&head, "w"), 1);
         let parsed = parse_task_event(&head).expect("parse task head");
         assert_eq!(parsed.initiative_id, None);
         assert_eq!(parsed.client_organization_id, None);
+        assert_eq!(parsed.stage, None);
+        assert_eq!(parsed.subject, None);
+    }
+
+    /// A mirror that disagrees with the signed content must be refused: the
+    /// whole point of an index is that clients filter on it instead of the
+    /// content, so it may never say something the content does not.
+    #[test]
+    fn lying_single_letter_mirrors_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
+            .expect("build task head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("w") {
+                    Tag::parse(["w", "completed"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_task_event(&head).expect_err("lying status mirror must be refused");
+        assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// Heads written before the mirrors existed carry none of them and must
+    /// still parse: absent mirrors mean the content stays authoritative, not
+    /// that the head is broken.
+    #[test]
+    fn heads_written_before_mirrors_existed_still_parse() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
+            .expect("build task head");
+        head.tags.retain(|tag| {
+            !matches!(
+                tag.as_slice().first().map(String::as_str),
+                Some("g" | "i" | "s" | "u" | "w")
+            )
+        });
+        let parsed = parse_task_event(&head).expect("pre-mirror head parses");
+        assert_eq!(parsed.owning_team_id, "team-marketing");
+        assert_eq!(parsed.status, buzz_core::company::TaskStatus::InProgress);
+        assert_eq!(parsed.initiative_id.as_deref(), Some("init-homepage"));
     }
 
     #[test]

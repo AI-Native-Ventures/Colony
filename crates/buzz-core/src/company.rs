@@ -851,6 +851,21 @@ pub fn validate_team_ref(team: &CompanyTeamRef) -> Result<(), CompanyContractErr
     Ok(())
 }
 
+/// The exact string one of this crate's unit enums serialises to.
+///
+/// Single-letter tag mirrors on relay-authored company heads must spell
+/// statuses and subject kinds exactly as the signed content spells them, so a
+/// filter for one status can never match a head carrying another. Deriving the
+/// mirror through serde rather than a hand-written slug table is what keeps
+/// the two from drifting. Returns `None` only for non-string encodings, which
+/// this crate's unit enums never produce.
+pub fn serde_enum_slug<T: Serialize>(value: &T) -> Option<String> {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(slug)) => Some(slug),
+        _ => None,
+    }
+}
+
 fn validate_teams(teams: &[CompanyTeamRef]) -> Result<(), CompanyContractError> {
     let mut team_ids = HashSet::new();
     for team in teams {
@@ -1624,6 +1639,29 @@ mod tests {
         assert_eq!(parsed.doer_kind, DoerKind::Agent);
         assert_eq!(parsed.wake_at, None);
         assert_eq!(parsed.status, TaskStatus::InProgress);
+    }
+
+    /// Single-letter tag mirrors must carry serde's own spelling of a status,
+    /// not a hand-written slug table that can drift from the signed content.
+    #[test]
+    fn serde_enum_slug_matches_content_spelling() {
+        assert_eq!(
+            serde_enum_slug(&TaskStatus::InProgress).as_deref(),
+            Some("inProgress")
+        );
+        assert_eq!(
+            serde_enum_slug(&TaskStatus::Snoozed).as_deref(),
+            Some("snoozed")
+        );
+        assert_eq!(
+            serde_enum_slug(&SubjectKind::Party).as_deref(),
+            Some("party")
+        );
+        assert_eq!(
+            serde_enum_slug(&InitiativeStatus::Active).as_deref(),
+            Some("active")
+        );
+        assert_eq!(serde_enum_slug(&1_000_i64), None);
     }
 
     #[test]
