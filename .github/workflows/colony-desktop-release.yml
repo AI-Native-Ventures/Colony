@@ -213,18 +213,19 @@ jobs:
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
-      - name: Verify the bundle
-        run: |
-          # Where cargo actually writes for the Tauri crate. NOT hardcoded to
-          # desktop/src-tauri/target: cargo honours `build.target-dir` from
-          # ~/.cargo/config.toml and $CARGO_TARGET_DIR, and the self-hosted
-          # release runner sets a shared target directory so ~180 checkouts
-          # stop each minting their own. When that landed, every hardcoded
-          # path below pointed at a directory that no longer exists and the
-          # v0.11.2 release failed at "Verify the bundle" with the dmg built
-          # and correct in the shared location.
+          # Publish the resolved target directory for every later step. Those
+          # steps do NOT source hermit, so `cargo` is not on their PATH and a
+          # per-step `cargo metadata` there silently falls back to the wrong
+          # path — which is exactly how v0.11.3 failed at "Verify the bundle"
+          # with the dmg built and correct in the shared directory. Resolve it
+          # once, here, where cargo exists.
           TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
           [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
+          echo "TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT" >> "$GITHUB_ENV"
+          echo "resolved TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT"
+
+      - name: Verify the bundle
+        run: |
           BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
           APP="$BUNDLE/macos/Colony.app"
           DMG="$BUNDLE/dmg/Colony_${VERSION}_aarch64.dmg"
@@ -242,16 +243,6 @@ jobs:
         # The one property no downstream artifact reveals. Everything else
         # about a release can be correct while the app cannot update itself.
         run: |
-          # Where cargo actually writes for the Tauri crate. NOT hardcoded to
-          # desktop/src-tauri/target: cargo honours `build.target-dir` from
-          # ~/.cargo/config.toml and $CARGO_TARGET_DIR, and the self-hosted
-          # release runner sets a shared target directory so ~180 checkouts
-          # stop each minting their own. When that landed, every hardcoded
-          # path below pointed at a directory that no longer exists and the
-          # v0.11.2 release failed at "Verify the bundle" with the dmg built
-          # and correct in the shared location.
-          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
-          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
           set -euo pipefail
           BIN="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop"
           # `grep -c`, not `grep -q`: -q exits at the first match, which sends
@@ -278,16 +269,6 @@ jobs:
         # that way and beta testers hit it. Nothing else in the release
         # artifacts reveals the difference, so pin it here.
         run: |
-          # Where cargo actually writes for the Tauri crate. NOT hardcoded to
-          # desktop/src-tauri/target: cargo honours `build.target-dir` from
-          # ~/.cargo/config.toml and $CARGO_TARGET_DIR, and the self-hosted
-          # release runner sets a shared target directory so ~180 checkouts
-          # stop each minting their own. When that landed, every hardcoded
-          # path below pointed at a directory that no longer exists and the
-          # v0.11.2 release failed at "Verify the bundle" with the dmg built
-          # and correct in the shared location.
-          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
-          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
           set -euo pipefail
           BIN="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop"
           # `grep -c`, not `grep -q` — see the updater gate above for why.
@@ -310,16 +291,6 @@ jobs:
         # lost TAURI_SIGNING_PRIVATE_KEY, which would publish a manifest no
         # client can verify, so fail here rather than ship it.
         run: |
-          # Where cargo actually writes for the Tauri crate. NOT hardcoded to
-          # desktop/src-tauri/target: cargo honours `build.target-dir` from
-          # ~/.cargo/config.toml and $CARGO_TARGET_DIR, and the self-hosted
-          # release runner sets a shared target directory so ~180 checkouts
-          # stop each minting their own. When that landed, every hardcoded
-          # path below pointed at a directory that no longer exists and the
-          # v0.11.2 release failed at "Verify the bundle" with the dmg built
-          # and correct in the shared location.
-          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
-          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
           set -euo pipefail
           BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
           ARCHIVE=$(find "$BUNDLE/macos" -name '*.app.tar.gz' ! -name '*.sig' -type f | head -1)
@@ -591,18 +562,8 @@ jobs:
 
       - name: Locate Windows build artifacts
         run: |
-          # Where cargo actually writes for the Tauri crate. NOT hardcoded to
-          # desktop/src-tauri/target: cargo honours `build.target-dir` from
-          # ~/.cargo/config.toml and $CARGO_TARGET_DIR, and the self-hosted
-          # release runner sets a shared target directory so ~180 checkouts
-          # stop each minting their own. When that landed, every hardcoded
-          # path below pointed at a directory that no longer exists and the
-          # v0.11.2 release failed at "Verify the bundle" with the dmg built
-          # and correct in the shared location.
-          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
-          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
           set -euo pipefail
-          BUNDLE_DIR="$TAURI_TARGET_ROOT/${TARGET}/release/bundle"
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
           EXE=$(find "$BUNDLE_DIR/nsis" -name '*.exe' -type f | head -1)
           if [[ -z "$EXE" ]]; then
             echo "::error::No NSIS installer found in $BUNDLE_DIR/nsis"
