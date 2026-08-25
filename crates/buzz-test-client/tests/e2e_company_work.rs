@@ -34,8 +34,8 @@ use buzz_core::kind::{
     KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_STREAM_MESSAGE_V2, KIND_TASK, KIND_TEAM,
 };
 use buzz_sdk::company::{
-    build_company_action, parse_company_receipt, CompanyAction, CompanyActionOperation,
-    CompanyActionPayload, CompanyReceiptOutcome,
+    build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
+    CompanyActionOperation, CompanyActionPayload, CompanyReceiptOutcome,
 };
 use buzz_sdk::implicit_task::plan_implicit_task;
 use buzz_sdk::initiative_activation::{next_step, InitiativeIntent, InitiativeStep};
@@ -1160,6 +1160,196 @@ async fn nobody_but_the_owner_can_change_company_state() {
     }
 
     stranger_client.disconnect().await.ok();
+    client.disconnect().await.ok();
+}
+
+/// A chain actually advances: B depends on A and sits blocked; completing A
+/// through the ordinary owner-signed action path wakes B, asserted by
+/// reading B's head back from the relay rather than by calling any
+/// derivation function. A replayed completion must not produce a second
+/// wake, proven by B's head event id staying identical.
+///
+/// This is the end-to-end half of blocked-to-ready derivation: the unit
+/// tests in `buzz-relay` prove the decision logic against snapshots, and
+/// this proves the relay actually finds dependents through stored `v` tags,
+/// republishes them, and stays idempotent against real Postgres.
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres and BUZZ_EMPLOYEE_KEK"]
+async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut client, owner.clone()).await;
+    let stamp = now();
+
+    // --- Company and two tasks: A human-doer InProgress, B Blocked on A ----
+    let profile = company(&fixture.company_id, stamp);
+    assert_eq!(
+        broker(
+            &mut client,
+            &fixture.owner,
+            &fixture.relay,
+            &action(
+                &fixture.relay,
+                CompanyActionOperation::Create,
+                CompanyActionPayload::Company(profile),
+                coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+                None,
+            ),
+        )
+        .await
+        .0,
+        CompanyReceiptOutcome::Applied
+    );
+
+    let task_a_id = format!("{}:call-the-client", fixture.company_id);
+    let task_b_id = format!("{}:send-the-followup", fixture.company_id);
+
+    // A is a phone call: doerKind human, so it completes without review.
+    let mut task_a = task(&fixture.company_id, &task_a_id, &fixture.team, stamp);
+    task_a.status = TaskStatus::InProgress;
+    task_a.doer_kind = DoerKind::Human;
+    let (a_outcome, a_head_id) = broker(
+        &mut client,
+        &fixture.owner,
+        &fixture.relay,
+        &action(
+            &fixture.relay,
+            CompanyActionOperation::Create,
+            CompanyActionPayload::Task(task_a.clone()),
+            coordinate(KIND_TASK, &fixture.relay, &task_a_id),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(a_outcome, CompanyReceiptOutcome::Applied);
+    let a_head_id = a_head_id.expect("an applied receipt names its head");
+
+    // B starts blocked on A, exactly the eager fan-out shape: the whole
+    // graph exists up front and downstream work waits.
+    let mut task_b = task(&fixture.company_id, &task_b_id, &fixture.team, stamp);
+    task_b.status = TaskStatus::Blocked;
+    task_b.depends_on = vec![task_a_id.clone()];
+    assert_eq!(
+        broker(
+            &mut client,
+            &fixture.owner,
+            &fixture.relay,
+            &action(
+                &fixture.relay,
+                CompanyActionOperation::Create,
+                CompanyActionPayload::Task(task_b.clone()),
+                coordinate(KIND_TASK, &fixture.relay, &task_b_id),
+                None,
+            ),
+        )
+        .await
+        .0,
+        CompanyReceiptOutcome::Applied
+    );
+
+    async fn dependent_head(
+        client: &mut BuzzTestClient,
+        relay: &str,
+        d_tag: &str,
+    ) -> buzz_core::company::CompanyTask {
+        let event = head(client, relay, KIND_TASK, d_tag)
+            .await
+            .unwrap_or_else(|| panic!("head for {d_tag} must exist"));
+        parse_task_event(&event).expect("the relay's own head parses")
+    }
+
+    // Before anything completes, B is blocked. Reading from the relay, not
+    // trusting local state.
+    let before = dependent_head(&mut client, &fixture.relay, &task_b_id).await;
+    assert_eq!(
+        before.status,
+        TaskStatus::Blocked,
+        "the dependent must start blocked"
+    );
+
+    // --- Complete A through the ordinary owner-signed action path ---------
+    let mut completed_a = task_a.clone();
+    completed_a.status = TaskStatus::Completed;
+    completed_a.updated_at += 1;
+    assert_eq!(
+        broker(
+            &mut client,
+            &fixture.owner,
+            &fixture.relay,
+            &action(
+                &fixture.relay,
+                CompanyActionOperation::Update,
+                CompanyActionPayload::Task(completed_a),
+                coordinate(KIND_TASK, &fixture.relay, &task_a_id),
+                Some(a_head_id.clone()),
+            ),
+        )
+        .await
+        .0,
+        CompanyReceiptOutcome::Applied,
+        "a human phone call completes without review"
+    );
+
+    // The wake is derived after the commit, so poll rather than assume.
+    let mut woken_head_id = None;
+    for _ in 0..40 {
+        let event = head(&mut client, &fixture.relay, KIND_TASK, &task_b_id)
+            .await
+            .expect("B head exists");
+        if parse_task_event(&event)
+            .expect("the relay's own head parses")
+            .status
+            == TaskStatus::Ready
+        {
+            woken_head_id = Some(event.id.to_hex());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let woken_head_id =
+        woken_head_id.expect("the dependent must become ready after its dependency completed");
+
+    // --- Replay the same completion; nothing may wake twice ---------------
+    // A second completion action carries a stale compare-and-set head (B's
+    // wake did not touch A, but A moved when it completed), so the relay
+    // refuses it rather than applying anything. The assertion that matters
+    // is downstream: B's head event id is unchanged, meaning no second wake
+    // was ever published even though the completion was attempted twice.
+    let mut completed_again = task_a.clone();
+    completed_again.status = TaskStatus::Completed;
+    completed_again.updated_at += 1;
+    let (replay_outcome, _) = broker(
+        &mut client,
+        &fixture.owner,
+        &fixture.relay,
+        &action(
+            &fixture.relay,
+            CompanyActionOperation::Update,
+            CompanyActionPayload::Task(completed_again),
+            coordinate(KIND_TASK, &fixture.relay, &task_a_id),
+            Some(a_head_id),
+        ),
+    )
+    .await;
+    assert_eq!(
+        replay_outcome,
+        CompanyReceiptOutcome::Conflict,
+        "completing an already-completed head must lose compare-and-set"
+    );
+
+    let after_replay = dependent_head(&mut client, &fixture.relay, &task_b_id).await;
+    let after_replay_head = head(&mut client, &fixture.relay, KIND_TASK, &task_b_id)
+        .await
+        .expect("B head exists");
+    assert_eq!(after_replay.status, TaskStatus::Ready, "B stays ready");
+    assert_eq!(
+        after_replay_head.id.to_hex(),
+        woken_head_id,
+        "no second wake: B's head is byte-for-byte the one the first completion produced"
+    );
+
     client.disconnect().await.ok();
 }
 
