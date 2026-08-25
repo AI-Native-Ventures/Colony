@@ -9,7 +9,6 @@ import {
   groupWorkRows,
   shortIdLabel,
   sortWorkRows,
-  statusPillTone,
   WORK_LIST_GROUP_LABELS,
   WORK_LIST_GROUPS,
   WORK_LIST_SORT_LABELS,
@@ -18,7 +17,10 @@ import {
   type WorkListRow,
   type WorkListSortKey,
 } from "@/features/company/workListModel";
-import { cn } from "@/shared/lib/cn";
+import {
+  ExecutionDot,
+  StatusPill,
+} from "@/features/company/ui/taskStatusPresentation";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -39,22 +41,6 @@ import { Switch } from "@/shared/ui/switch";
  * Presentational: the caller owns fetching and row assembly. Controls are
  * local state on purpose - group/sort/filter are view concerns, not data.
  */
-
-const STATUS_PILL_CLASS: Record<string, string> = {
-  active: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
-  danger: "bg-red-500/15 text-red-600 dark:text-red-400",
-  neutral: "bg-muted text-muted-foreground",
-  success: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-  warning: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-};
-
-const EXECUTION_DOT_CLASS: Record<string, string> = {
-  active: "bg-blue-500 motion-safe:animate-pulse",
-  danger: "bg-red-500",
-  neutral: "bg-muted-foreground/40",
-  success: "bg-emerald-500",
-  warning: "bg-amber-500",
-};
 
 function ToolbarSelect({
   label,
@@ -108,35 +94,21 @@ function TaskRow({
 }) {
   const { task, execution } = row;
   const degraded = execution.tone === "warning" || execution.tone === "danger";
-  const pillTone = statusPillTone(task.status);
   return (
     <li
       className="flex items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/40"
       data-task-id={task.id}
       data-testid="task-list-row"
     >
-      <span
-        aria-label={execution.label}
-        className={cn(
-          "mt-1.5 size-2 shrink-0 rounded-full",
-          EXECUTION_DOT_CLASS[execution.tone],
-        )}
-        role="img"
-        title={execution.label}
-      />
+      <span className="mt-1.5">
+        <ExecutionDot execution={execution} />
+      </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm font-medium text-foreground">
             {task.title}
           </span>
-          <span
-            className={cn(
-              "shrink-0 rounded-full px-1.5 py-0.5 text-2xs font-medium leading-none",
-              STATUS_PILL_CLASS[pillTone],
-            )}
-          >
-            {task.status}
-          </span>
+          <StatusPill status={task.status} />
           {degraded ? (
             <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-2xs font-medium leading-none text-amber-600 dark:text-amber-400">
               {execution.label}

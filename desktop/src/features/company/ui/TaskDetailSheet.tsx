@@ -71,6 +71,7 @@ export function TaskDetailSheet({
   run,
   task,
   threadId,
+  triggerLabel = "Details",
 }: {
   channelId: string;
   channelName: string;
@@ -80,13 +81,15 @@ export function TaskDetailSheet({
   run: TaskRunHead | null;
   task: CompanyTask;
   threadId: string;
+  /** Row surfaces name the affordance after the action, not the record. */
+  triggerLabel?: string;
 }) {
   const canonicalLink = buildMessageLink({ channelId, messageId: threadId });
   return (
     <Sheet>
       <SheetTrigger asChild>
         <Button data-testid="task-detail-open" size="xs" variant="ghost">
-          Details
+          {triggerLabel}
         </Button>
       </SheetTrigger>
       <SheetContent className="w-full overflow-y-auto sm:max-w-md">
