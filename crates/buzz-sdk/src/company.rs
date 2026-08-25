@@ -887,8 +887,8 @@ fn validate_text(value: &str, max: usize, entity: &'static str) -> Result<(), Co
 #[cfg(test)]
 mod tests {
     use buzz_core::company::{
-        CommercialPurpose, CompanyOnboardingStatus, CostCentre, CostCentreKind, InitiativeStatus,
-        TaskStatus,
+        CommercialPurpose, CompanyOnboardingStatus, CostCentre, CostCentreKind, DoerKind,
+        InitiativeStatus, TaskStatus,
     };
     use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 
@@ -955,6 +955,12 @@ mod tests {
             source_channel_id: "general".to_owned(),
             source_event_id: None,
             implicit: false,
+            depends_on: Vec::new(),
+            subject: None,
+            stage: None,
+            thread_root: None,
+            doer_kind: DoerKind::Agent,
+            wake_at: None,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }

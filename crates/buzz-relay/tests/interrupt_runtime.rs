@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use buzz_core::company::{CommercialPurpose, CompanyTask, TaskStatus};
+use buzz_core::company::{CommercialPurpose, CompanyTask, DoerKind, TaskStatus};
 use buzz_core::kind::{
     KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE, KIND_TASK,
 };
@@ -294,6 +294,12 @@ fn default_task(
         source_channel_id: source_channel_id.to_string(),
         source_event_id: None,
         implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
         created_at: created_at_secs,
         updated_at: created_at_secs,
     }

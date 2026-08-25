@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use buzz_core::company::{
     CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyService, CompanyTask,
-    CompanyTeamRef, CostCentre, CostCentreKind, Initiative, InitiativeStatus, TaskStatus,
+    CompanyTeamRef, CostCentre, CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus,
     COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
 use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint};
@@ -153,6 +153,12 @@ fn task(company_id: &str, id: &str, team: &CompanyTeamRef, now: i64) -> CompanyT
         source_channel_id: "welcome".to_string(),
         source_event_id: None,
         implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
         created_at: now,
         updated_at: now,
     }

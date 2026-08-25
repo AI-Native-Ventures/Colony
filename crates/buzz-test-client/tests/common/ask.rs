@@ -10,7 +10,7 @@ use std::time::Duration;
 use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
     CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyService, CompanyTask,
-    CompanyTeamRef, CostCentre, CostCentreKind, Initiative, InitiativeStatus, TaskStatus,
+    CompanyTeamRef, CostCentre, CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus,
     COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
@@ -345,6 +345,12 @@ fn chat_task(company_id: &str, id: &str, team: &CompanyTeamRef, stamp: i64) -> C
         source_channel_id: "engineering".to_string(),
         source_event_id: None,
         implicit: true,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
         created_at: stamp,
         updated_at: stamp,
     }

@@ -924,6 +924,12 @@ mod tests {
             source_channel_id: "general".to_string(),
             source_event_id: None,
             implicit: false,
+            depends_on: Vec::new(),
+            subject: None,
+            stage: None,
+            thread_root: None,
+            doer_kind: buzz_core::company::DoerKind::Agent,
+            wake_at: None,
             created_at: 1_000,
             updated_at: 1_000,
         }

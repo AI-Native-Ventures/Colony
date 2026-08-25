@@ -651,8 +651,8 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
 mod tests {
     use super::*;
     use buzz_core::company::{
-        CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind, InitiativeStatus,
-        TaskStatus, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+        CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind, DoerKind,
+        InitiativeStatus, TaskStatus, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
     };
     use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 
@@ -731,6 +731,12 @@ mod tests {
             source_channel_id: "engineering".to_string(),
             source_event_id: None,
             implicit: true,
+            depends_on: Vec::new(),
+            subject: None,
+            stage: None,
+            thread_root: None,
+            doer_kind: DoerKind::Agent,
+            wake_at: None,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_000,
         }

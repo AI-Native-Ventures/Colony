@@ -16,6 +16,7 @@ const MAX_SUMMARY_LEN: usize = 4_000;
 const MAX_SERVICES: usize = 100;
 const MAX_COST_CENTRES: usize = 100;
 const MAX_ASSIGNEES: usize = 100;
+const MAX_DEPENDENCIES: usize = 100;
 
 /// A service the company sells or delivers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,10 +184,53 @@ pub enum TaskStatus {
     InReview,
     /// Task cannot currently progress.
     Blocked,
+    /// Task is parked until its `wake_at` timestamp passes.
+    Snoozed,
     /// Task completed successfully.
     Completed,
     /// Task was cancelled.
     Cancelled,
+}
+
+/// Whether an agent or a person performs a task. Selects the completion rule:
+/// agent work must pass the review gate, human work may complete directly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DoerKind {
+    /// An AI agent performs the task and its output is reviewed before
+    /// completion.
+    #[default]
+    Agent,
+    /// A human performs the task and may complete it without review.
+    Human,
+}
+
+/// Which kind of entity a task's subject reference points at.
+///
+/// A subject is deliberately not a party id: a recruitment firm's work is about
+/// a job requisition, not a candidate, and hardcoding parties would bake one
+/// industry into the primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubjectKind {
+    /// A party: a lead, a candidate, or a client contact.
+    Party,
+    /// Another task in the same company.
+    Task,
+    /// An initiative in the same company.
+    Initiative,
+    /// A record that lives outside Colony entirely.
+    External,
+}
+
+/// What a task's work is about, typed so any industry fits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubjectRef {
+    /// Which kind of entity the reference points at.
+    pub kind: SubjectKind,
+    /// Stable identifier of the referenced entity.
+    pub r#ref: String,
 }
 
 /// A unit of work owned by exactly one team.
@@ -223,6 +267,23 @@ pub struct CompanyTask {
     pub source_event_id: Option<String>,
     /// Whether Colony created this task implicitly from chat.
     pub implicit: bool,
+    /// Upstream task ids that must reach a terminal-good state before this
+    /// task becomes ready. Ordering only: payloads travel through task inputs,
+    /// not through this list.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// What this task's work is about, as the swimlane key for board columns.
+    pub subject: Option<SubjectRef>,
+    /// Template stage slug this task was fanned out from.
+    pub stage: Option<String>,
+    /// Root event id of the thread this task is worked in.
+    pub thread_root: Option<String>,
+    /// Whether an agent or a human performs this task; selects lease and
+    /// completion rules.
+    #[serde(default)]
+    pub doer_kind: DoerKind,
+    /// Unix timestamp at which a snoozed task returns to ready.
+    pub wake_at: Option<i64>,
     /// Unix timestamp at which the task was created.
     pub created_at: i64,
     /// Unix timestamp at which the task was last updated.
@@ -400,39 +461,57 @@ pub const fn is_initiative_status_transition_allowed(
 /// Return whether a task lifecycle transition is allowed.
 ///
 /// Same-status replacements are allowed. Completed and cancelled tasks cannot
-/// transition to another status.
-pub const fn is_task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool {
+/// transition to another status. Any non-terminal task may snooze, and a
+/// snoozed task wakes back to ready. Completion skips review only for human
+/// tasks — nobody reviews a phone call — while agent work always passes the
+/// `InReview` quality gate.
+pub const fn is_task_status_transition_allowed(
+    from: TaskStatus,
+    to: TaskStatus,
+    doer_kind: DoerKind,
+) -> bool {
     if from as u8 == to as u8 {
         return true;
     }
-    matches!(
-        (from, to),
+    match (from, to) {
         (TaskStatus::Proposed, TaskStatus::Ready)
-            | (
-                TaskStatus::Ready,
-                TaskStatus::InProgress | TaskStatus::Blocked
-            )
-            | (
-                TaskStatus::InProgress,
-                TaskStatus::InReview | TaskStatus::Blocked
-            )
-            | (
-                TaskStatus::InReview,
-                TaskStatus::InProgress | TaskStatus::Completed | TaskStatus::Blocked
-            )
-            | (
-                TaskStatus::Blocked,
-                TaskStatus::Ready | TaskStatus::InProgress
-            )
-            | (
-                TaskStatus::Proposed
-                    | TaskStatus::Ready
-                    | TaskStatus::InProgress
-                    | TaskStatus::InReview
-                    | TaskStatus::Blocked,
-                TaskStatus::Cancelled
-            )
-    )
+        | (
+            TaskStatus::Ready,
+            TaskStatus::InProgress | TaskStatus::Blocked | TaskStatus::Snoozed,
+        )
+        | (
+            TaskStatus::InProgress,
+            TaskStatus::InReview | TaskStatus::Blocked | TaskStatus::Snoozed,
+        )
+        | (
+            TaskStatus::InReview,
+            TaskStatus::InProgress | TaskStatus::Completed | TaskStatus::Blocked
+                | TaskStatus::Snoozed,
+        )
+        | (
+            TaskStatus::Blocked,
+            TaskStatus::Ready | TaskStatus::InProgress | TaskStatus::Snoozed,
+        )
+        // A proposed task has no doer yet; snooze it like any other parked state.
+        | (TaskStatus::Proposed, TaskStatus::Snoozed)
+        // A snoozed task wakes back up ready for its owning team.
+        | (TaskStatus::Snoozed, TaskStatus::Ready)
+        | (
+            TaskStatus::Proposed
+                | TaskStatus::Ready
+                | TaskStatus::InProgress
+                | TaskStatus::InReview
+                | TaskStatus::Blocked
+                | TaskStatus::Snoozed,
+            TaskStatus::Cancelled,
+        ) => true,
+        // A human completing their own work needs no reviewer; an agent's
+        // output is never trusted straight to done.
+        (TaskStatus::InProgress, TaskStatus::Completed) => {
+            doer_kind as u8 == DoerKind::Human as u8
+        }
+        _ => false,
+    }
 }
 
 /// Validate immutable coordinates, timestamps, and lifecycle state for a
@@ -509,7 +588,11 @@ pub fn validate_task_update(
         replacement.created_at,
         replacement.updated_at,
     )?;
-    if !is_task_status_transition_allowed(previous.status, replacement.status) {
+    if !is_task_status_transition_allowed(
+        previous.status,
+        replacement.status,
+        replacement.doer_kind,
+    ) {
         return Err(CompanyContractError::InvalidStatusTransition("task"));
     }
     Ok(())
@@ -664,6 +747,21 @@ pub fn validate_task(
     )?;
     validate_id(&task.source_channel_id, "task.sourceChannelId")?;
     validate_optional_id(task.source_event_id.as_deref(), "task.sourceEventId")?;
+    validate_optional_id(task.thread_root.as_deref(), "task.threadRoot")?;
+    ensure_cardinality(&task.depends_on, "task.dependsOn", MAX_DEPENDENCIES)?;
+    let mut dependencies = HashSet::new();
+    for dependency in &task.depends_on {
+        validate_id(dependency, "task.dependsOn")?;
+        if !dependencies.insert(dependency.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier("task.dependsOn"));
+        }
+    }
+    // The ref may point outside Colony (`SubjectKind::External`), so it is
+    // bounded text rather than a Colony identifier.
+    if let Some(subject) = &task.subject {
+        validate_required_text(&subject.r#ref, "task.subject.ref", MAX_ID_LEN)?;
+    }
+    validate_optional_text(task.stage.as_deref(), "task.stage", MAX_NAME_LEN)?;
     ensure_cardinality(
         &task.assignee_persona_ids,
         "task.assigneePersonaIds",
@@ -1074,6 +1172,15 @@ mod tests {
                 source_channel_id: "sales".to_string(),
                 source_event_id: Some("message-2".to_string()),
                 implicit: false,
+                depends_on: Vec::new(),
+                subject: Some(SubjectRef {
+                    kind: SubjectKind::Party,
+                    r#ref: "tennant-group".to_string(),
+                }),
+                stage: Some("build-site".to_string()),
+                thread_root: Some("thread-event-2".to_string()),
+                doer_kind: DoerKind::Agent,
+                wake_at: None,
                 created_at: 1_785_400_400,
                 updated_at: 1_785_400_500,
             },
@@ -1093,6 +1200,15 @@ mod tests {
                 source_channel_id: "sales".to_string(),
                 source_event_id: Some("message-3".to_string()),
                 implicit: false,
+                depends_on: vec!["build-tennant-site".to_string()],
+                subject: Some(SubjectRef {
+                    kind: SubjectKind::Party,
+                    r#ref: "tennant-group".to_string(),
+                }),
+                stage: Some("run-outreach".to_string()),
+                thread_root: None,
+                doer_kind: DoerKind::Human,
+                wake_at: None,
                 created_at: 1_785_400_600,
                 updated_at: 1_785_400_700,
             },
@@ -1161,9 +1277,21 @@ mod tests {
         assert_eq!(task_value["sourceChannelId"], "sales");
         assert_eq!(task_value["sourceEventId"], "message-2");
         assert_eq!(task_value["implicit"], false);
+        assert_eq!(task_value["dependsOn"], serde_json::json!([]));
+        assert_eq!(task_value["subject"]["kind"], "party");
+        assert_eq!(task_value["subject"]["ref"], "tennant-group");
+        assert_eq!(task_value["stage"], "build-site");
+        assert_eq!(task_value["threadRoot"], "thread-event-2");
+        assert_eq!(task_value["doerKind"], "agent");
+        assert!(task_value["wakeAt"].is_null());
         assert_eq!(task_value["createdAt"], 1_785_400_400_i64);
         assert_eq!(task_value["updatedAt"], 1_785_400_500_i64);
         assert!(task_value.get("owning_team_id").is_none());
+
+        let launch_json = serde_json::to_string(&tasks[1]).expect("serialize second task");
+        assert!(launch_json.contains(r#""dependsOn":["build-tennant-site"]"#));
+        assert!(launch_json.contains(r#""doerKind":"human""#));
+        assert!(launch_json.contains(r#""threadRoot":null"#));
 
         assert_eq!(
             serde_json::from_str::<CompanyProfile>(&company_json).expect("parse company"),
@@ -1385,6 +1513,7 @@ mod tests {
             TaskStatus::InProgress,
             TaskStatus::InReview,
             TaskStatus::Blocked,
+            TaskStatus::Snoozed,
             TaskStatus::Completed,
             TaskStatus::Cancelled,
         ];
@@ -1399,6 +1528,14 @@ mod tests {
             (TaskStatus::InReview, TaskStatus::Blocked),
             (TaskStatus::Blocked, TaskStatus::Ready),
             (TaskStatus::Blocked, TaskStatus::InProgress),
+            // Snooze is reachable from any non-terminal status and wakes ready.
+            (TaskStatus::Proposed, TaskStatus::Snoozed),
+            (TaskStatus::Ready, TaskStatus::Snoozed),
+            (TaskStatus::InProgress, TaskStatus::Snoozed),
+            (TaskStatus::InReview, TaskStatus::Snoozed),
+            (TaskStatus::Blocked, TaskStatus::Snoozed),
+            (TaskStatus::Snoozed, TaskStatus::Ready),
+            (TaskStatus::Snoozed, TaskStatus::Cancelled),
             (TaskStatus::Proposed, TaskStatus::Cancelled),
             (TaskStatus::Ready, TaskStatus::Cancelled),
             (TaskStatus::InProgress, TaskStatus::Cancelled),
@@ -1408,14 +1545,85 @@ mod tests {
 
         for from in statuses {
             for to in statuses {
-                let expected = from == to || allowed_changes.contains(&(from, to));
+                let mut expected = from == to || allowed_changes.contains(&(from, to));
                 assert_eq!(
-                    is_task_status_transition_allowed(from, to),
+                    is_task_status_transition_allowed(from, to, DoerKind::Agent),
                     expected,
-                    "unexpected task transition result: {from:?} -> {to:?}"
+                    "unexpected agent task transition result: {from:?} -> {to:?}"
+                );
+                if from == TaskStatus::InProgress && to == TaskStatus::Completed {
+                    expected = true;
+                }
+                assert_eq!(
+                    is_task_status_transition_allowed(from, to, DoerKind::Human),
+                    expected,
+                    "unexpected human task transition result: {from:?} -> {to:?}"
                 );
             }
         }
+    }
+
+    /// Agent work keeps the mandatory review gate; a human completing their
+    /// own phone call does not route through QA.
+    #[test]
+    fn only_human_tasks_complete_without_review() {
+        assert!(!is_task_status_transition_allowed(
+            TaskStatus::InProgress,
+            TaskStatus::Completed,
+            DoerKind::Agent
+        ));
+        assert!(is_task_status_transition_allowed(
+            TaskStatus::InProgress,
+            TaskStatus::Completed,
+            DoerKind::Human
+        ));
+        assert!(is_task_status_transition_allowed(
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+            DoerKind::Agent
+        ));
+        assert!(is_task_status_transition_allowed(
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+            DoerKind::Human
+        ));
+    }
+
+    /// Tasks already written to the relay predate dependsOn, subject, stage,
+    /// threadRoot, doerKind and wakeAt. The head carries deny_unknown_fields,
+    /// so every one of these fields must fall back to a default instead of
+    /// failing the parse — otherwise a client upgrade makes every stored task
+    /// head unreadable.
+    #[test]
+    fn old_shape_task_json_without_new_fields_still_parses() {
+        let json = r#"{
+            "schema": "colony.task/v1",
+            "id": "build-tennant-site",
+            "companyId": "horizon-labs",
+            "initiativeId": "tennant-premium-site",
+            "title": "Build the Tennant Group website",
+            "status": "inProgress",
+            "owningTeamId": "web-team",
+            "assigneePersonaIds": ["frontend-engineer"],
+            "qaPersonaId": "cto",
+            "costCentreId": "web-delivery",
+            "commercialPurpose": "clientDelivery",
+            "clientOrganizationId": "tennant-group",
+            "sourceChannelId": "sales",
+            "sourceEventId": null,
+            "implicit": false,
+            "createdAt": 1785400400,
+            "updatedAt": 1785400500
+        }"#;
+
+        let parsed: CompanyTask = serde_json::from_str(json).expect("old-shape task parses");
+        assert_eq!(parsed.depends_on, Vec::<String>::new());
+        assert_eq!(parsed.subject, None);
+        assert_eq!(parsed.stage, None);
+        assert_eq!(parsed.thread_root, None);
+        assert_eq!(parsed.doer_kind, DoerKind::Agent);
+        assert_eq!(parsed.wake_at, None);
+        assert_eq!(parsed.status, TaskStatus::InProgress);
     }
 
     #[test]

@@ -15,8 +15,8 @@
 
 use buzz_core::{
     company::{
-        CompanyProfile, CompanyTask, CompanyTeamRef, Initiative, InitiativeStatus, TaskStatus,
-        INITIATIVE_SCHEMA,
+        CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, Initiative, InitiativeStatus,
+        TaskStatus, INITIATIVE_SCHEMA,
     },
     company_roster::step_idempotency_key,
     kind::{KIND_INITIATIVE, KIND_TASK},
@@ -176,6 +176,12 @@ fn kickoff_action(
         source_event_id: initiative.source_event_id.clone(),
         // The owner started this deliberately; it was not inferred from chat.
         implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
         created_at: initiative.updated_at,
         updated_at: initiative.updated_at,
     };
