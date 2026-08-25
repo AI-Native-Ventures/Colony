@@ -1,5 +1,7 @@
 import type * as React from "react";
 
+import { truncatePubkey } from "@/shared/lib/pubkey";
+
 import { shortIdLabel } from "./workListModel";
 
 /**
@@ -89,7 +91,7 @@ export function describeTaskTransition(
       resolveName ? (
         resolveName(pubkey)
       ) : (
-        <span className="break-all">{pubkey.slice(0, 8)}</span>
+        <span className="break-all">{truncatePubkey(pubkey)}</span>
       )
     ) : null;
 
