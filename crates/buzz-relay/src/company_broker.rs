@@ -99,7 +99,7 @@ fn head_timestamp(previous_head: Option<&Event>) -> nostr::Timestamp {
 ///
 /// The action carries a target coordinate, but trusting its tags would let a
 /// requester point a validated payload at someone else's coordinate.
-fn build_head(
+pub(crate) fn build_head(
     relay: &Keys,
     payload: &CompanyActionPayload,
     previous_head: Option<&Event>,
@@ -567,7 +567,7 @@ async fn load_head_authored_by(
 }
 
 /// Load one relay-authored canonical head by coordinate, if it exists.
-async fn load_head(
+pub(crate) async fn load_head(
     tenant: &TenantContext,
     state: &AppState,
     kind: u32,
@@ -1093,17 +1093,23 @@ async fn refuse(
     Ok(CompanyBrokerOutcome::Refused { message })
 }
 
-/// Which committed task actions earn a thread system row, and which kind.
+/// Which committed OWNER-SIGNED task actions earn a thread system row, and
+/// which kind. Autonomous relay-authored transitions this broker derives on
+/// its own — the ready-derivation and blocked-derivation sweeps, and the
+/// snooze-wake sweep in `interrupt_runtime::run_snooze_wake_tick` — do not
+/// go through `handle_company_action` at all, so they are not decided here;
+/// the wake sweep calls `emit_task_transition` directly with `"task_woke"`.
 ///
-/// Only seven moments are news to the thread: created, review handoff,
-/// review rejected, bounce, completed, escalated, cancelled. Everything else
-/// is board churn a status column already shows — a caption for
-/// `ready -> inProgress` turns the thread into a status log and buries the
-/// conversation under it. Escalation has no operation yet, so it stays
-/// deliberately absent from this decision rather than emitted never; its
-/// desktop copy path stays dormant until the model carries it. Bounce is
-/// live: `completed -> ready` only ever means a bounce (`validate_bounce_delta`
-/// guards that), so the state delta alone is enough to name it.
+/// Of owner-signed transitions, seven moments are news to the thread:
+/// created, review handoff, review rejected, bounce, completed, escalated,
+/// cancelled. Everything else is board churn a status column already shows
+/// — a caption for `ready -> inProgress` turns the thread into a status log
+/// and buries the conversation under it. Escalation has no operation yet, so
+/// it stays deliberately absent from this decision rather than emitted
+/// never; its desktop copy path stays dormant until the model carries it.
+/// Bounce is live: `completed -> ready` only ever means a bounce
+/// (`validate_bounce_delta` guards that), so the state delta alone is
+/// enough to name it.
 ///
 /// The decision keys off the ACTUAL state delta (`previous_status` versus
 /// the replacement), not the action's declared verb: an Update that moves
@@ -1167,7 +1173,7 @@ fn task_transition_payload(event_type: &str, task: &CompanyTask) -> serde_json::
 /// Exactly-once comes from placement, not bookkeeping: this runs only inside
 /// the `Applied` arm of one committed action, and a replayed idempotency key
 /// short-circuits at the claim lookup long before any emission happens.
-async fn emit_task_transition(
+pub(crate) async fn emit_task_transition(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     event_type: &str,
