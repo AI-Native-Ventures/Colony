@@ -263,6 +263,20 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goWorkBoard = React.useCallback(
+    (initiativeId?: string, behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+          search: initiativeId
+            ? { initiativeId, view: "board" }
+            : { view: "board" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goWorkflows = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -468,6 +482,7 @@ export function useAppNavigation() {
     goSpend,
     goWorkflow,
     goWork,
+    goWorkBoard,
     goWorkflows,
     openSearchHit,
   };

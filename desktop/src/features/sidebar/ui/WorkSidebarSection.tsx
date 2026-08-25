@@ -1,5 +1,9 @@
-import { ChevronDown, ListTodo } from "lucide-react";
+import { ChevronDown, LayoutGrid, ListTodo } from "lucide-react";
+import { useLocation } from "@tanstack/react-router";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { useActiveCompany, useInitiatives } from "@/features/company/hooks";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { cn } from "@/shared/lib/cn";
 import {
   SidebarGroup,
@@ -18,6 +22,15 @@ import {
  * for a given collapsed flag. The label markup mirrors `SidebarSection`'s:
  * chevron hidden until the section or label is hovered, rotating when
  * collapsed.
+ *
+ * Board navigation and its initiative list are owned entirely inside this
+ * component (own data fetch, own active-route read, own navigation) rather
+ * than threaded through AppSidebar's props - that file is already at its
+ * file-size ratchet, and the initiatives query is cheap: its cache key is
+ * shared with the board screen's own fetch, so visiting either warms both.
+ * Per-initiative task counts are deliberately not fetched here: that would
+ * mean every screen loads the full company task list just to badge a
+ * sidebar row, which is a real cost for a component mounted everywhere.
  */
 
 const WORK_SECTION_LABEL_CLASS =
@@ -36,6 +49,23 @@ export function WorkSidebarSection({
   onSelect: () => void;
   onToggleCollapsed: () => void;
 }) {
+  const location = useLocation();
+  const { goWorkBoard } = useAppNavigation();
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
+  const companyQuery = useActiveCompany(communityId);
+  const companyId = companyQuery.data?.ok ? companyQuery.data.value.id : null;
+  const initiativesQuery = useInitiatives(communityId, companyId);
+  const initiatives = initiativesQuery.data?.ok
+    ? initiativesQuery.data.value
+    : [];
+
+  const search = location.search as { view?: string; initiativeId?: string };
+  const isBoardActive = isActive && search.view === "board";
+  const activeInitiativeId = isBoardActive
+    ? (search.initiativeId ?? null)
+    : null;
+
   return (
     <SidebarGroup
       className="group/sidebar-section select-none"
@@ -69,8 +99,26 @@ export function WorkSidebarSection({
             <SidebarMenuItem className="group/menu-item">
               <SidebarMenuButton
                 className="data-[active=true]:font-normal"
+                data-testid="open-work-board"
+                isActive={isBoardActive}
+                onClick={() => goWorkBoard()}
+                tooltip="Board"
+                type="button"
+              >
+                <LayoutGrid className="h-4 w-4" />
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  data-sidebar-row-label
+                >
+                  Board
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem className="group/menu-item">
+              <SidebarMenuButton
+                className="data-[active=true]:font-normal"
                 data-testid="open-work-view"
-                isActive={isActive}
+                isActive={isActive && !isBoardActive}
                 onClick={onSelect}
                 tooltip="All tasks"
                 type="button"
@@ -85,6 +133,35 @@ export function WorkSidebarSection({
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
+          {initiatives.length > 0 ? (
+            <SidebarMenu
+              className="mt-1 border-t border-sidebar-border/60 pt-1"
+              data-testid="work-initiative-list"
+            >
+              {initiatives.map((initiative) => (
+                <SidebarMenuItem
+                  className="group/menu-item"
+                  key={initiative.id}
+                >
+                  <SidebarMenuButton
+                    className="data-[active=true]:font-normal"
+                    data-testid="open-work-board-initiative"
+                    isActive={activeInitiativeId === initiative.id}
+                    onClick={() => goWorkBoard(initiative.id)}
+                    tooltip={initiative.title}
+                    type="button"
+                  >
+                    <span
+                      className="min-w-0 flex-1 truncate"
+                      data-sidebar-row-label
+                    >
+                      {initiative.title}
+                    </span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          ) : null}
         </SidebarGroupContent>
       ) : null}
     </SidebarGroup>

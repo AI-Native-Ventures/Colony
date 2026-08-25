@@ -6,7 +6,21 @@ const WorkRouteScreen = React.lazy(async () => {
   return { default: module.WorkRouteScreen };
 });
 
+export type WorkRouteSearch = {
+  view?: "list" | "board";
+  initiativeId?: string;
+};
+
+function validateWorkSearch(search: Record<string, unknown>): WorkRouteSearch {
+  return {
+    initiativeId:
+      typeof search.initiativeId === "string" ? search.initiativeId : undefined,
+    view: search.view === "board" ? "board" : undefined,
+  };
+}
+
 export const Route = createFileRoute("/work")({
+  validateSearch: validateWorkSearch,
   component: WorkRouteComponent,
 });
 
