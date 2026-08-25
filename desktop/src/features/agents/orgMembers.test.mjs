@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { orgMembersFromSources } from "./orgMembers.ts";
+import { archivedHiddenPubkeys, orgMembersFromSources } from "./orgMembers.ts";
 
 const AGENT =
   "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66";
@@ -9,6 +9,8 @@ const OTHER_AGENT =
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const EMPLOYEE =
   "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const ARCHIVED_AGENT =
+  "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
 function employeeHead(overrides = {}) {
   return {
@@ -115,6 +117,64 @@ test("the head's manager tag is carried onto the chart member", () => {
     [managedHead({ tierRank: "worker", manager: EMPLOYEE })],
   );
   assert.equal(members[0]?.manager, EMPLOYEE);
+});
+
+test("an archived pubkey is excluded from unrankedAgents", () => {
+  // The relay's kind:13535 snapshot is the cross-device signal that these
+  // leaked foreign identities are gone; the roster must honor it on the
+  // unranked side too, not just the chart.
+  const { members, unrankedAgents } = orgMembersFromSources(
+    [employeeHead()],
+    [managedHead()],
+    { archived: new Set([AGENT]) },
+  );
+  assert.equal(unrankedAgents.length, 0);
+  assert.equal(members.length, 1);
+});
+
+test("an archived agent is excluded from the chart members as well", () => {
+  const { members, unrankedAgents } = orgMembersFromSources(
+    [],
+    [managedHead({ tierRank: "worker" })],
+    { archived: new Set([AGENT]) },
+  );
+  assert.equal(members.length, 0);
+  assert.equal(unrankedAgents.length, 0);
+});
+
+test("a retired pubkey stays excluded through the same projection", () => {
+  const { members } = orgMembersFromSources([employeeHead()], [], {
+    retired: new Set([EMPLOYEE]),
+  });
+  assert.equal(members.length, 0);
+});
+
+test("an empty archive snapshot hides nothing from either list", () => {
+  const withEmptySets = orgMembersFromSources(
+    [employeeHead()],
+    [managedHead({ pubkey: OTHER_AGENT, tierRank: "leader" }), managedHead()],
+    { archived: new Set(), retired: new Set() },
+  );
+  const withoutFilter = orgMembersFromSources(
+    [employeeHead()],
+    [managedHead({ pubkey: OTHER_AGENT, tierRank: "leader" }), managedHead()],
+  );
+  assert.deepEqual(withEmptySets, withoutFilter);
+  assert.equal(withEmptySets.unrankedAgents.length, 1);
+});
+
+test("an absent snapshot means hide nothing", () => {
+  // undefined covers loading, errored, and disabled alike: React Query has
+  // no data for any of them, and all three must leave the roster intact.
+  assert.equal(archivedHiddenPubkeys(undefined).size, 0);
+});
+
+test("a loaded snapshot becomes a normalized hidden set", () => {
+  const hidden = archivedHiddenPubkeys({
+    archived: [AGENT, `  ${ARCHIVED_AGENT.toUpperCase()}  `.trim()],
+  });
+  assert.equal(hidden.size, 2);
+  assert.ok(hidden.has(AGENT));
 });
 
 test("members and unranked agents both sort by pubkey deterministically", () => {
