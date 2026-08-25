@@ -1384,6 +1384,11 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
     // --- Complete A through the ordinary owner-signed action path ---------
     let mut completed_a = task_a.clone();
     completed_a.status = TaskStatus::Completed;
+    // A human doer must say what actually happened: there is no bare "done"
+    // for a person, because "40 completed" is worthless and the reason is the
+    // only funnel data the chain ever produces. The stage supplies the real
+    // vocabulary once pipeline templates exist.
+    completed_a.outcome_reason = Some("reached-and-agreed".to_string());
     completed_a.updated_at += 1;
     assert_eq!(
         broker(
