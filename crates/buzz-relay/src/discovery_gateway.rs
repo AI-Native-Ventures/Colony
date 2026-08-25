@@ -103,8 +103,11 @@ impl std::fmt::Debug for DiscoveryGatewayConfig {
 }
 
 /// Read hosted Discovery configuration. No keys leaves the routes disabled;
-/// partial configuration fails startup so the relay never advertises a broken
-/// paid-Discovery capability.
+/// any single provider key enables them, with each provider serving requests
+/// only while its own key is present (an absent key fails that provider's
+/// requests cleanly instead of refusing to boot). Enabling Discovery with no
+/// provider key at all still fails startup so the relay never advertises a
+/// paid-Discovery capability that cannot work.
 pub fn config_from_env() -> anyhow::Result<Option<DiscoveryGatewayConfig>> {
     let enabled = std::env::var("BUZZ_DISCOVERY_HOSTED_ENABLED")
         .ok()
@@ -116,12 +119,17 @@ pub fn config_from_env() -> anyhow::Result<Option<DiscoveryGatewayConfig>> {
         configured_secret("OUTSCRAPER_API_KEY"),
         configured_secret("BRAVE_SEARCH_API_KEY"),
         configured_secret("EXA_SEARCH_API_KEY"),
-    )?
-    else {
+    ) else {
         anyhow::bail!(
-            "hosted Discovery is enabled but OUTSCRAPER_API_KEY, BRAVE_SEARCH_API_KEY, and EXA_SEARCH_API_KEY are missing"
+            "hosted Discovery is enabled but OUTSCRAPER_API_KEY, BRAVE_SEARCH_API_KEY, and EXA_SEARCH_API_KEY are all missing"
         );
     };
+    tracing::info!(
+        outscraper_api_key_configured = !outscraper_api_key.is_empty(),
+        brave_api_key_configured = !brave_api_key.is_empty(),
+        exa_api_key_configured = !exa_api_key.is_empty(),
+        "hosted Discovery providers configured"
+    );
     let search_url = std::env::var("BUZZ_DISCOVERY_OUTSCRAPER_SEARCH_URL")
         .unwrap_or_else(|_| DEFAULT_SEARCH_URL.to_owned());
     let requests_url = std::env::var("BUZZ_DISCOVERY_OUTSCRAPER_REQUESTS_URL")
@@ -178,29 +186,24 @@ fn configured_secret(name: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Resolve the provider keys under the "at least one provider" rule. Brave
+/// and Exa are alternative search providers selected per request, not stages
+/// of one pipeline, so an absent key becomes an empty string that disables
+/// only its own provider at request time; `None` means no provider is
+/// configured at all and the caller must refuse to boot.
 fn complete_provider_keys(
     outscraper: Option<String>,
     brave: Option<String>,
     exa: Option<String>,
-) -> anyhow::Result<Option<(String, String, String)>> {
-    match (outscraper, brave, exa) {
-        (None, None, None) => Ok(None),
-        (Some(outscraper), Some(brave), Some(exa)) => Ok(Some((outscraper, brave, exa))),
-        (outscraper, brave, exa) => {
-            let missing = [
-                ("OUTSCRAPER_API_KEY", outscraper.is_none()),
-                ("BRAVE_SEARCH_API_KEY", brave.is_none()),
-                ("EXA_SEARCH_API_KEY", exa.is_none()),
-            ]
-            .into_iter()
-            .filter_map(|(name, absent)| absent.then_some(name))
-            .collect::<Vec<_>>()
-            .join(", ");
-            anyhow::bail!(
-                "hosted Discovery provider configuration is incomplete; missing {missing}"
-            )
-        }
+) -> Option<(String, String, String)> {
+    if outscraper.is_none() && brave.is_none() && exa.is_none() {
+        return None;
     }
+    Some((
+        outscraper.unwrap_or_default(),
+        brave.unwrap_or_default(),
+        exa.unwrap_or_default(),
+    ))
 }
 
 /// Shared hosted Discovery provider client.
@@ -483,6 +486,7 @@ async fn submit_outscraper(
     search: &DiscoveryBusinessSearchSpec,
     remaining_target: u16,
 ) -> Result<ProviderResponse, (StatusCode, Json<Value>)> {
+    require_provider_key(&state.config.outscraper_api_key)?;
     let query = search.provider_query();
     let limit = remaining_target.to_string();
     let mut parameters = vec![
@@ -545,6 +549,7 @@ async fn submit_brave(
     search: &DiscoveryBusinessSearchSpec,
     remaining_target: u16,
 ) -> Result<ProviderResponse, (StatusCode, Json<Value>)> {
+    require_provider_key(&state.config.brave_api_key)?;
     let query = search.provider_query();
     let count = usize::from(remaining_target).min(20).to_string();
     let mut url = reqwest::Url::parse(&state.config.brave_url)
@@ -628,6 +633,7 @@ async fn submit_exa(
     search: &DiscoveryBusinessSearchSpec,
     remaining_target: u16,
 ) -> Result<ProviderResponse, (StatusCode, Json<Value>)> {
+    require_provider_key(&state.config.exa_api_key)?;
     let query = search.provider_query();
     let request = ExaRequest {
         query: &query,
@@ -783,6 +789,7 @@ async fn poll(
         .poll_limit
         .try_acquire()
         .map_err(|_| safe_error(StatusCode::TOO_MANY_REQUESTS, "poll_capacity"))?;
+    require_provider_key(&state.provider.config.outscraper_api_key)?;
     let url = format!(
         "{}/{}",
         state.provider.config.requests_url.trim_end_matches('/'),
@@ -1281,6 +1288,20 @@ fn safe_error(status: StatusCode, code: &'static str) -> (StatusCode, Json<Value
     (status, Json(json!({ "error": code })))
 }
 
+/// A locally unconfigured provider must fail its own requests with the same
+/// sanitized error the upstream providers get for credential trouble; it
+/// never names the missing variable or reaches the network.
+fn require_provider_key(key: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if key.is_empty() {
+        Err(safe_error(
+            StatusCode::BAD_GATEWAY,
+            "provider_configuration",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1316,24 +1337,153 @@ mod tests {
     }
 
     #[test]
-    fn hosted_provider_keys_are_all_or_nothing() {
-        assert!(complete_provider_keys(None, None, None)
-            .expect("fully unset configuration")
-            .is_none());
-        assert!(complete_provider_keys(
+    fn hosted_provider_keys_need_at_least_one_provider() {
+        assert!(
+            complete_provider_keys(None, None, None).is_none(),
+            "no provider configured must leave the gateway unmounted"
+        );
+        let (outscraper, brave, exa) = complete_provider_keys(
             Some("outscraper".into()),
             Some("brave".into()),
             Some("exa".into()),
         )
-        .expect("complete configuration")
-        .is_some());
+        .expect("complete configuration");
+        assert_eq!(outscraper, "outscraper");
+        assert_eq!(brave, "brave");
+        assert_eq!(exa, "exa");
 
-        let error = complete_provider_keys(Some("outscraper".into()), None, None)
-            .expect_err("partial configuration must fail")
+        // Any single key boots; the absent ones disable only their own
+        // provider at request time.
+        let (outscraper, brave, exa) =
+            complete_provider_keys(Some("outscraper".into()), None, None)
+                .expect("Outscraper-only configuration");
+        assert_eq!(outscraper, "outscraper");
+        assert!(brave.is_empty());
+        assert!(exa.is_empty());
+
+        let (_, brave, _) = complete_provider_keys(None, Some("brave".into()), None)
+            .expect("Brave-only configuration");
+        assert_eq!(brave, "brave");
+
+        let (_, _, exa) =
+            complete_provider_keys(None, None, Some("exa".into())).expect("Exa-only configuration");
+        assert_eq!(exa, "exa");
+    }
+
+    /// Env access is process-global, so these run under one test rather than
+    /// racing each other (same pattern as price_feed).
+    #[test]
+    fn hosted_discovery_boots_with_any_single_provider_key() {
+        let vars = [
+            "BUZZ_DISCOVERY_HOSTED_ENABLED",
+            "OUTSCRAPER_API_KEY",
+            "BRAVE_SEARCH_API_KEY",
+            "EXA_SEARCH_API_KEY",
+            "BUZZ_DISCOVERY_OUTSCRAPER_SEARCH_URL",
+            "BUZZ_DISCOVERY_OUTSCRAPER_REQUESTS_URL",
+            "BUZZ_DISCOVERY_BRAVE_SEARCH_URL",
+            "BUZZ_DISCOVERY_EXA_SEARCH_URL",
+        ];
+        let restore: Vec<_> = vars.iter().map(|key| (*key, std::env::var(key))).collect();
+        let clear = || {
+            for key in vars {
+                std::env::remove_var(key);
+            }
+        };
+
+        // Flag off: routes stay unmounted regardless of what is configured.
+        clear();
+        assert!(config_from_env().expect("disabled configuration").is_none());
+        clear();
+        std::env::set_var("OUTSCRAPER_API_KEY", "outscraper");
+        assert!(config_from_env().expect("disabled configuration").is_none());
+
+        // Flag on with no key at all stays fatal: the capability would be
+        // advertised with nothing behind it.
+        clear();
+        std::env::set_var("BUZZ_DISCOVERY_HOSTED_ENABLED", "true");
+        let error = config_from_env()
+            .expect_err("no keys with the flag on must fail")
             .to_string();
-        assert!(error.contains("BRAVE_SEARCH_API_KEY"));
-        assert!(error.contains("EXA_SEARCH_API_KEY"));
-        assert!(!error.contains("outscraper"));
+        assert!(error.contains("OUTSCRAPER_API_KEY"), "{error}");
+
+        // Any single provider key boots; the others start locally disabled.
+        clear();
+        std::env::set_var("BUZZ_DISCOVERY_HOSTED_ENABLED", "true");
+        std::env::set_var("OUTSCRAPER_API_KEY", "outscraper");
+        let config = config_from_env()
+            .expect("Outscraper-only boot")
+            .expect("enabled");
+        assert_eq!(config.outscraper_api_key, "outscraper");
+        assert!(config.brave_api_key.is_empty());
+        assert!(config.exa_api_key.is_empty());
+
+        clear();
+        std::env::set_var("BUZZ_DISCOVERY_HOSTED_ENABLED", "true");
+        std::env::set_var("BRAVE_SEARCH_API_KEY", "brave");
+        let config = config_from_env()
+            .expect("Brave-only boot")
+            .expect("enabled");
+        assert!(config.outscraper_api_key.is_empty());
+        assert_eq!(config.brave_api_key, "brave");
+
+        clear();
+        std::env::set_var("BUZZ_DISCOVERY_HOSTED_ENABLED", "true");
+        std::env::set_var("EXA_SEARCH_API_KEY", "exa");
+        let config = config_from_env().expect("Exa-only boot").expect("enabled");
+        assert!(config.outscraper_api_key.is_empty());
+        assert!(config.brave_api_key.is_empty());
+        assert_eq!(config.exa_api_key, "exa");
+
+        clear();
+        for (key, value) in restore {
+            match value {
+                Ok(value) => std::env::set_var(key, value),
+                Err(_) => std::env::remove_var(key),
+            }
+        }
+    }
+
+    /// A missing per-provider key must fail that provider's request with the
+    /// shared sanitized error, never panic and never leak which variable is
+    /// absent.
+    #[tokio::test]
+    async fn an_unconfigured_provider_fails_cleanly_without_a_request() {
+        let mut config = provider_config("http://127.0.0.1:1");
+        config.outscraper_api_key = String::new();
+        let state = DiscoveryGatewayState::new(config).expect("provider state");
+        let error = submit_outscraper(&state, &search(), 3)
+            .await
+            .expect_err("an unconfigured provider must fail cleanly");
+        assert_eq!(error.0, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            (error.1).0.get("error"),
+            Some(&json!("provider_configuration"))
+        );
+
+        let mut config = provider_config("http://127.0.0.1:1");
+        config.brave_api_key = String::new();
+        let state = DiscoveryGatewayState::new(config).expect("provider state");
+        let error = submit_brave(&state, &search(), 3)
+            .await
+            .expect_err("an unconfigured provider must fail cleanly");
+        assert_eq!(error.0, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            (error.1).0.get("error"),
+            Some(&json!("provider_configuration"))
+        );
+
+        let mut config = provider_config("http://127.0.0.1:1");
+        config.exa_api_key = String::new();
+        let state = DiscoveryGatewayState::new(config).expect("provider state");
+        let error = submit_exa(&state, &search(), 3)
+            .await
+            .expect_err("an unconfigured provider must fail cleanly");
+        assert_eq!(error.0, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            (error.1).0.get("error"),
+            Some(&json!("provider_configuration"))
+        );
     }
 
     #[test]
