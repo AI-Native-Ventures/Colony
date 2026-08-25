@@ -11,7 +11,9 @@
 //! owner authorizes it.
 
 use buzz_core::company::{CompanyProfile, CompanyTask, Initiative, TaskStatus};
-use buzz_core::kind::{KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK};
+use buzz_core::kind::{
+    KIND_COHORT, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
+};
 use buzz_sdk::company::{
     build_company_action, parse_company_event, parse_initiative_event, parse_task_event,
     CompanyAction, CompanyActionOperation, CompanyActionPayload,
@@ -327,6 +329,7 @@ fn payload_kind(payload: &CompanyActionPayload) -> u32 {
         CompanyActionPayload::Company(_) => KIND_COMPANY_PROFILE,
         CompanyActionPayload::Initiative(_) => KIND_INITIATIVE,
         CompanyActionPayload::Task(_) => KIND_TASK,
+        CompanyActionPayload::Cohort(_) => KIND_COHORT,
     }
 }
 
@@ -335,6 +338,7 @@ fn payload_id(payload: &CompanyActionPayload) -> &str {
         CompanyActionPayload::Company(profile) => &profile.id,
         CompanyActionPayload::Initiative(initiative) => &initiative.id,
         CompanyActionPayload::Task(task) => &task.id,
+        CompanyActionPayload::Cohort(cohort) => &cohort.id,
     }
 }
 

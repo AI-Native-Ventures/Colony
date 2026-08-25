@@ -5,12 +5,12 @@ use std::{collections::HashSet, str::FromStr};
 use buzz_core::{
     block::canonical_json,
     company::{
-        serde_enum_slug, validate_company, CompanyContractError, CompanyProfile, CompanyTask,
-        Initiative,
+        serde_enum_slug, validate_company, Cohort, CompanyContractError, CompanyProfile,
+        CompanyTask, Initiative,
     },
     kind::{
-        KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
-        KIND_PERSONA, KIND_TASK, KIND_TEAM,
+        KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
+        KIND_INITIATIVE, KIND_PERSONA, KIND_TASK, KIND_TEAM,
     },
 };
 use nostr::{Event, EventBuilder, EventId, Kind, PublicKey, Tag};
@@ -22,12 +22,15 @@ const ACTION_SCHEMA: &str = "colony.company-action/v1";
 const RECEIPT_SCHEMA: &str = "colony.company-receipt/v1";
 const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
+const COHORT_SCHEMA: &str = "colony.cohort/v1";
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
 const MAX_SUMMARY_LEN: usize = 4_000;
 const MAX_ASSIGNEES: usize = 100;
 /// Matches `MAX_DEPENDENCIES` in the company contract.
 const MAX_DEPENDENCIES: usize = 100;
+/// Matches `MAX_COHORT_MEMBERS` in the company contract.
+const MAX_COHORT_MEMBERS: usize = 100;
 
 /// Mutation requested by the current company owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +78,8 @@ pub enum CompanyActionPayload {
     Initiative(Initiative),
     /// A complete Company Task.
     Task(CompanyTask),
+    /// A complete Cohort.
+    Cohort(Cohort),
 }
 
 impl CompanyActionPayload {
@@ -83,6 +88,7 @@ impl CompanyActionPayload {
             Self::Company(_) => KIND_COMPANY_PROFILE,
             Self::Initiative(_) => KIND_INITIATIVE,
             Self::Task(_) => KIND_TASK,
+            Self::Cohort(_) => KIND_COHORT,
         }
     }
 
@@ -91,6 +97,7 @@ impl CompanyActionPayload {
             Self::Company(profile) => &profile.id,
             Self::Initiative(initiative) => &initiative.id,
             Self::Task(task) => &task.id,
+            Self::Cohort(cohort) => &cohort.id,
         }
     }
 
@@ -99,6 +106,7 @@ impl CompanyActionPayload {
             Self::Company(profile) => &profile.id,
             Self::Initiative(initiative) => &initiative.company_id,
             Self::Task(task) => &task.company_id,
+            Self::Cohort(cohort) => &cohort.company_id,
         }
     }
 }
@@ -444,6 +452,50 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     Ok(task)
 }
 
+/// Parse a strict relay-authored Cohort head's self-contained contract.
+///
+/// The `m` tags are the member mirrors, one per `members` entry, spelled
+/// `kind:ref` exactly like a task's `u` subject mirror — that is what makes
+/// "which cohorts contain this party" an indexed `#m` filter instead of a
+/// full scan. Verified as a set, the same reason `v` (task dependency
+/// edges) is: a lying edge would make that filter return heads the record
+/// does not warrant.
+pub fn parse_cohort_event(event: &Event) -> Result<Cohort, CompanySdkError> {
+    require_kind(event, KIND_COHORT)?;
+    require_head_tag_names(event, &["d", "company"], &["c"], &["m"], "cohort head")?;
+    let coordinate = required_scalar_tag(event, "d")?;
+    let company_tag = required_scalar_tag(event, "company")?;
+    let cohort: Cohort = parse_canonical_content(&event.content, "cohort")?;
+    validate_cohort_content(&cohort)?;
+    ensure_matches(&cohort.id, coordinate, "cohort")?;
+    ensure_matches(&cohort.company_id, company_tag, "cohort")?;
+
+    let member_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("m"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    let expected_member_mirrors: Vec<String> = cohort
+        .members
+        .iter()
+        .filter_map(|member| {
+            let kind = serde_enum_slug(&member.kind)?;
+            Some(format!("{kind}:{}", member.r#ref))
+        })
+        .collect();
+    if member_mirrors.len() != expected_member_mirrors.len()
+        || !member_mirrors.iter().all(|mirror| {
+            expected_member_mirrors
+                .iter()
+                .any(|expected| expected == mirror)
+        })
+    {
+        return Err(CompanySdkError::TagContentMismatch("cohort"));
+    }
+    Ok(cohort)
+}
+
 /// Parse an exact, relay-authored Company Receipt without exposing payload data.
 ///
 /// The receipt must contain exactly four tags and canonical, non-confidential
@@ -548,6 +600,7 @@ fn validate_payload(payload: &CompanyActionPayload) -> Result<(), CompanySdkErro
         CompanyActionPayload::Company(profile) => validate_company(profile).map_err(Into::into),
         CompanyActionPayload::Initiative(initiative) => validate_initiative_content(initiative),
         CompanyActionPayload::Task(task) => validate_task_content(task),
+        CompanyActionPayload::Cohort(cohort) => validate_cohort_content(cohort),
     }
 }
 
@@ -935,6 +988,31 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
         return Err(CompanySdkError::InvalidContent("task"));
     }
     validate_optional_id(task.thread_root.as_deref(), "task")?;
+    Ok(())
+}
+
+fn validate_cohort_content(cohort: &Cohort) -> Result<(), CompanySdkError> {
+    validate_schema(&cohort.schema, COHORT_SCHEMA, "cohort")?;
+    validate_id(&cohort.id, "cohort")?;
+    validate_id(&cohort.company_id, "cohort")?;
+    validate_required_text(&cohort.name, MAX_NAME_LEN, "cohort")?;
+    if cohort.members.len() > MAX_COHORT_MEMBERS {
+        return Err(CompanySdkError::InvalidContent("cohort"));
+    }
+    let mut seen_members = HashSet::new();
+    for member in &cohort.members {
+        if member.r#ref.trim().is_empty() || member.r#ref.len() > MAX_ID_LEN {
+            return Err(CompanySdkError::InvalidContent("cohort"));
+        }
+        let key = format!(
+            "{}:{}",
+            serde_enum_slug(&member.kind).unwrap_or_default(),
+            member.r#ref
+        );
+        if !seen_members.insert(key) {
+            return Err(CompanySdkError::InvalidContent("cohort"));
+        }
+    }
     Ok(())
 }
 

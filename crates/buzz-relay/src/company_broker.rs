@@ -22,19 +22,20 @@
 use std::sync::Arc;
 
 use buzz_core::company::{
-    is_task_status_transition_allowed, validate_company, validate_company_update,
-    validate_initiative, validate_initiative_update, validate_task, validate_task_update,
-    CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, TaskStatus,
+    is_task_status_transition_allowed, validate_cohort, validate_cohort_update, validate_company,
+    validate_company_update, validate_initiative, validate_initiative_update, validate_task,
+    validate_task_update, CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, TaskStatus,
 };
 use buzz_core::kind::{
-    KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
+    KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
     KIND_SYSTEM_MESSAGE, KIND_TASK, KIND_TEAM,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::CompanyActionApply;
 use buzz_sdk::company::{
-    parse_company_action, parse_company_event, parse_initiative_event, parse_task_event,
-    CompanyAction, CompanyActionOperation, CompanyActionPayload, CompanyReceiptOutcome,
+    parse_cohort_event, parse_company_action, parse_company_event, parse_initiative_event,
+    parse_task_event, CompanyAction, CompanyActionOperation, CompanyActionPayload,
+    CompanyReceiptOutcome,
 };
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 use serde::Serialize;
@@ -172,6 +173,23 @@ pub(crate) fn build_head(
                 )?);
             }
             (KIND_TASK, tags, serde_json::to_value(task))
+        }
+        CompanyActionPayload::Cohort(cohort) => {
+            let mut tags = vec![
+                scalar_tag("d", &cohort.id)?,
+                scalar_tag("c", &cohort.company_id)?,
+                scalar_tag("company", &cohort.company_id)?,
+            ];
+            // One member mirror per entry, spelled exactly like a task's `u`
+            // subject mirror (`kind:ref`) — what makes "which cohorts contain
+            // this party" an indexed `#m` filter instead of a full scan.
+            for member in &cohort.members {
+                tags.push(scalar_tag(
+                    "m",
+                    &format!("{}:{}", serialized_slug(&member.kind)?, member.r#ref),
+                )?);
+            }
+            (KIND_COHORT, tags, serde_json::to_value(cohort))
         }
     };
     let content =
@@ -728,6 +746,16 @@ async fn validate_payload_against_state(
                     .map_err(|error| error.to_string())?;
             }
         }
+        CompanyActionPayload::Cohort(cohort) => {
+            let company = load_company(tenant, state, &cohort.company_id).await?;
+            validate_cohort(cohort, &company).map_err(|error| error.to_string())?;
+            if let Some(previous) = previous_head {
+                let previous = parse_cohort_event(previous)
+                    .map_err(|error| format!("stored cohort head is unreadable: {error}"))?;
+                validate_cohort_update(&previous, cohort, &company)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
     }
     Ok(())
 }
@@ -824,11 +852,13 @@ pub(crate) async fn handle_company_action(
         CompanyActionPayload::Company(_) => KIND_COMPANY_PROFILE,
         CompanyActionPayload::Initiative(_) => KIND_INITIATIVE,
         CompanyActionPayload::Task(_) => KIND_TASK,
+        CompanyActionPayload::Cohort(_) => KIND_COHORT,
     };
     let entity_id = match &action.payload {
         CompanyActionPayload::Company(profile) => profile.id.clone(),
         CompanyActionPayload::Initiative(initiative) => initiative.id.clone(),
         CompanyActionPayload::Task(task) => task.id.clone(),
+        CompanyActionPayload::Cohort(cohort) => cohort.id.clone(),
     };
     let previous_head = load_head(tenant, state, payload_kind, &entity_id).await?;
 
@@ -1600,6 +1630,66 @@ mod tests {
         parse_task_event(&head).expect("multi-edge head parses");
     }
 
+    fn sample_cohort() -> buzz_core::company::Cohort {
+        buzz_core::company::Cohort {
+            schema: "colony.cohort/v1".to_string(),
+            id: "q3-outbound-leads".to_string(),
+            company_id: "horizon-labs".to_string(),
+            name: "Q3 outbound leads".to_string(),
+            members: vec![
+                buzz_core::company::SubjectRef {
+                    kind: buzz_core::company::SubjectKind::Party,
+                    r#ref: "acme-lead".to_string(),
+                },
+                buzz_core::company::SubjectRef {
+                    kind: buzz_core::company::SubjectKind::Party,
+                    r#ref: "globex-lead".to_string(),
+                },
+            ],
+            created_at: 1_000,
+            updated_at: 1_000,
+        }
+    }
+
+    /// One `m` tag per member, spelled `kind:ref` exactly like a task's `u`
+    /// subject mirror — what makes "which cohorts contain this party" an
+    /// indexed filter later.
+    #[test]
+    fn relay_authored_cohort_head_round_trips_through_the_strict_parser() {
+        let relay = Keys::generate();
+        let head = build_head(&relay, &CompanyActionPayload::Cohort(sample_cohort()), None)
+            .expect("build cohort head");
+        assert_eq!(head.kind.as_u16() as u32, KIND_COHORT);
+        assert!(!head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
+        let parsed = parse_cohort_event(&head).expect("parse cohort head");
+        assert_eq!(parsed.id, "q3-outbound-leads");
+        assert_eq!(parsed.members.len(), 2);
+
+        assert_eq!(tag_count(&head, "m"), 2);
+        for expected in ["party:acme-lead", "party:globex-lead"] {
+            assert!(
+                scalar_tag_values(&head, "m").contains(&expected),
+                "member {expected} must have its own `m` tag"
+            );
+        }
+    }
+
+    /// A cohort must express any subject kind, not just party ids — the same
+    /// mistake `task.subject` itself made once and had to undo.
+    #[test]
+    fn a_cohort_mixing_subject_kinds_mirrors_each_kind_correctly() {
+        let relay = Keys::generate();
+        let mut cohort = sample_cohort();
+        cohort.members.push(buzz_core::company::SubjectRef {
+            kind: buzz_core::company::SubjectKind::External,
+            r#ref: "crm-9".to_string(),
+        });
+        let head = build_head(&relay, &CompanyActionPayload::Cohort(cohort), None)
+            .expect("build cohort head");
+        assert!(scalar_tag_values(&head, "m").contains(&"external:crm-9"));
+        parse_cohort_event(&head).expect("mixed-kind cohort head parses");
+    }
+
     /// A Task with no initiative and no client must omit both optional tags;
     /// emitting them empty would fail the strict parser. The same discipline
     /// applies to the optional mirrors `i`, `s` and `u`, while the mirrors of
@@ -1701,6 +1791,31 @@ mod tests {
             .collect();
         let error = parse_task_event(&head).expect_err("lying edge must be refused");
         assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// Same guarantee as `lying_dependency_edges_are_refused`, for a
+    /// cohort's `m` member mirrors.
+    #[test]
+    fn lying_cohort_member_mirrors_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Cohort(sample_cohort()), None)
+            .expect("build cohort head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("m") {
+                    Tag::parse(["m", "party:someone-not-a-member"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_cohort_event(&head).expect_err("lying member mirror must be refused");
+        assert!(matches!(
+            error,
+            CompanySdkError::TagContentMismatch("cohort")
+        ));
     }
 
     /// Diamond: D waits on B and C, both complete in sequence. After B only,

@@ -10,6 +10,8 @@ pub const COMPANY_SCHEMA: &str = "colony.company/v1";
 /// Schema string every Initiative carries.
 pub const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
+/// Schema string every Cohort carries.
+pub const COHORT_SCHEMA: &str = "colony.cohort/v1";
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
 const MAX_SUMMARY_LEN: usize = 4_000;
@@ -19,6 +21,10 @@ const MAX_ASSIGNEES: usize = 100;
 const MAX_DEPENDENCIES: usize = 100;
 /// Bounds an `outcomeReason` or a bounce's free-text reason.
 const MAX_REASON_LEN: usize = 500;
+/// Matches the neighbouring bounded-list constants (`MAX_ASSIGNEES`,
+/// `MAX_DEPENDENCIES`): a real cap, not a guess at how large a real cohort
+/// gets. Widen once fan-out proves it too small rather than guessing now.
+const MAX_COHORT_MEMBERS: usize = 100;
 
 /// A service the company sells or delivers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,6 +342,35 @@ pub struct CompanyTask {
     /// Unix timestamp at which the task was created.
     pub created_at: i64,
     /// Unix timestamp at which the task was last updated.
+    pub updated_at: i64,
+}
+
+/// A named, bounded set of subjects fan-out will run over.
+///
+/// Members are typed `SubjectRef`s - the SAME primitive `CompanyTask.subject`
+/// already uses - never a list of party ids. A cohort of 38 leads, 12
+/// candidates, or 6 job requisitions must all be expressible without
+/// hardcoding one industry into the primitive; that is exactly the mistake
+/// `subject` itself made once and had to undo.
+///
+/// Inert on its own: nothing in this step reads a Cohort. It exists so a
+/// later fan-out step has a "who" to run over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Cohort {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable cohort coordinate identifier.
+    pub id: String,
+    /// Company that owns the cohort.
+    pub company_id: String,
+    /// Human-readable cohort name.
+    pub name: String,
+    /// The bounded set of subjects fan-out will run over.
+    pub members: Vec<SubjectRef>,
+    /// Unix timestamp at which the cohort was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the cohort was last updated.
     pub updated_at: i64,
 }
 
@@ -942,6 +977,68 @@ pub fn validate_task(
     Ok(())
 }
 
+/// Validate one relay-authored canonical Cohort.
+pub fn validate_cohort(
+    cohort: &Cohort,
+    company: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_company(company)?;
+    validate_schema(&cohort.schema, COHORT_SCHEMA, "cohort")?;
+    validate_id(&cohort.id, "cohort.id")?;
+    validate_id(&cohort.company_id, "cohort.companyId")?;
+    validate_required_text(&cohort.name, "cohort.name", MAX_NAME_LEN)?;
+    ensure_cardinality(&cohort.members, "cohort.members", MAX_COHORT_MEMBERS)?;
+
+    let mut seen_members = HashSet::new();
+    for member in &cohort.members {
+        // The ref may point outside Colony (`SubjectKind::External`), so it
+        // is bounded text rather than a Colony identifier - same rule
+        // `task.subject.ref` already follows.
+        validate_required_text(&member.r#ref, "cohort.members.ref", MAX_ID_LEN)?;
+        let key = format!(
+            "{}:{}",
+            serde_enum_slug(&member.kind).unwrap_or_default(),
+            member.r#ref
+        );
+        if !seen_members.insert(key) {
+            return Err(CompanyContractError::DuplicateIdentifier("cohort.members"));
+        }
+    }
+
+    if cohort.company_id != company.id {
+        return Err(CompanyContractError::MismatchedReference(
+            "cohort.companyId",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate immutable coordinates and timestamps for a replacement Cohort
+/// head. No lifecycle status exists to check - a Cohort is inert data, not a
+/// state machine.
+pub fn validate_cohort_update(
+    previous: &Cohort,
+    replacement: &Cohort,
+    company: &CompanyProfile,
+) -> Result<(), CompanyContractError> {
+    validate_cohort(replacement, company)?;
+    validate_immutable(&previous.schema, &replacement.schema, "cohort.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "cohort.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "cohort.companyId",
+    )?;
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    Ok(())
+}
+
 /// Validate one team reference in isolation.
 ///
 /// Exported so callers that must FILTER teams before validation — the relay
@@ -1280,6 +1377,27 @@ mod tests {
             source_event_id: Some("message-1".to_string()),
             created_at: 1_785_400_200,
             updated_at: 1_785_400_300,
+        }
+    }
+
+    fn cohort_fixture() -> Cohort {
+        Cohort {
+            schema: COHORT_SCHEMA.to_string(),
+            id: "q3-outbound-leads".to_string(),
+            company_id: "horizon-labs".to_string(),
+            name: "Q3 outbound leads".to_string(),
+            members: vec![
+                SubjectRef {
+                    kind: SubjectKind::Party,
+                    r#ref: "acme-lead".to_string(),
+                },
+                SubjectRef {
+                    kind: SubjectKind::Party,
+                    r#ref: "globex-lead".to_string(),
+                },
+            ],
+            created_at: 1_785_400_400,
+            updated_at: 1_785_400_500,
         }
     }
 
@@ -2037,6 +2155,115 @@ mod tests {
         assert_eq!(
             criterion,
             serde_json::json!({"kind": "criterion", "value": "ac-1"})
+        );
+    }
+
+    #[test]
+    fn a_well_formed_cohort_is_accepted() {
+        let company = company_fixture();
+        assert!(validate_cohort(&cohort_fixture(), &company).is_ok());
+    }
+
+    #[test]
+    fn a_cohort_mixes_subject_kinds_freely_not_just_parties() {
+        let company = company_fixture();
+        let mut cohort = cohort_fixture();
+        cohort.members.push(SubjectRef {
+            kind: SubjectKind::External,
+            r#ref: "external-crm-123".to_string(),
+        });
+        cohort.members.push(SubjectRef {
+            kind: SubjectKind::Initiative,
+            r#ref: "tennant-premium-site".to_string(),
+        });
+        assert!(
+            validate_cohort(&cohort, &company).is_ok(),
+            "a cohort must express any subject kind, not just party ids - \
+             the same mistake `subject` itself made once"
+        );
+    }
+
+    #[test]
+    fn a_cohort_rejects_the_same_member_twice() {
+        let company = company_fixture();
+        let mut cohort = cohort_fixture();
+        cohort.members.push(cohort.members[0].clone());
+        assert_eq!(
+            validate_cohort(&cohort, &company),
+            Err(CompanyContractError::DuplicateIdentifier("cohort.members"))
+        );
+    }
+
+    #[test]
+    fn two_members_of_different_kinds_sharing_a_ref_are_not_duplicates() {
+        // party:acme-lead and task:acme-lead name different things; the
+        // duplicate check must key on (kind, ref) together, not ref alone.
+        let company = company_fixture();
+        let mut cohort = cohort_fixture();
+        cohort.members = vec![
+            SubjectRef {
+                kind: SubjectKind::Party,
+                r#ref: "acme-lead".to_string(),
+            },
+            SubjectRef {
+                kind: SubjectKind::Task,
+                r#ref: "acme-lead".to_string(),
+            },
+        ];
+        assert!(validate_cohort(&cohort, &company).is_ok());
+    }
+
+    #[test]
+    fn a_cohort_over_the_member_cap_is_refused() {
+        let company = company_fixture();
+        let mut cohort = cohort_fixture();
+        cohort.members = (0..MAX_COHORT_MEMBERS + 1)
+            .map(|index| SubjectRef {
+                kind: SubjectKind::Party,
+                r#ref: format!("lead-{index}"),
+            })
+            .collect();
+        assert!(matches!(
+            validate_cohort(&cohort, &company),
+            Err(CompanyContractError::TooManyItems { .. })
+        ));
+    }
+
+    #[test]
+    fn a_cohort_for_another_company_is_refused() {
+        let company = company_fixture();
+        let mut cohort = cohort_fixture();
+        cohort.company_id = "someone-elses-company".to_string();
+        assert_eq!(
+            validate_cohort(&cohort, &company),
+            Err(CompanyContractError::MismatchedReference(
+                "cohort.companyId"
+            ))
+        );
+    }
+
+    #[test]
+    fn cohort_replacement_requires_immutable_identity_and_monotonic_time() {
+        let company = company_fixture();
+        let previous = cohort_fixture();
+
+        let mut renamed = previous.clone();
+        renamed.name = "Q3 outbound leads, expanded".to_string();
+        renamed.updated_at += 1;
+        assert!(validate_cohort_update(&previous, &renamed, &company).is_ok());
+
+        let mut changed_id = renamed.clone();
+        changed_id.id = "different-cohort".to_string();
+        assert_eq!(
+            validate_cohort_update(&previous, &changed_id, &company),
+            Err(CompanyContractError::ImmutableField("cohort.id"))
+        );
+
+        let mut stale = renamed;
+        stale.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_cohort_update(&previous, &stale, &company),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
         );
     }
 
