@@ -24,7 +24,7 @@ use std::sync::Arc;
 use buzz_core::company::{
     is_task_status_transition_allowed, validate_company, validate_company_update,
     validate_initiative, validate_initiative_update, validate_task, validate_task_update,
-    CompanyProfile, CompanyTask, CompanyTeamRef, TaskStatus,
+    CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, TaskStatus,
 };
 use buzz_core::kind::{
     KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
@@ -394,6 +394,134 @@ async fn wake_dependent_if_ready(
         .insert_event(tenant.community(), &head, None)
         .await
         .map_err(|error| format!("failed to store derived ready head: {error}"))?;
+    if inserted {
+        dispatch_persistent_event(
+            tenant,
+            state,
+            &stored_head,
+            KIND_TASK,
+            &state.relay_keypair.public_key().to_hex(),
+            None,
+        )
+        .await;
+    }
+    Ok(Some(head))
+}
+
+/// Derive `<live> -> blocked` for tasks depending on a task that just bounced.
+///
+/// The mirror image of `derive_ready_dependents`: a bounce moves a task back
+/// from `completed` to `ready` because its delivered output was rejected, so
+/// everything depending on that output is now depending on something that
+/// isn't actually done. Same reachability query (the reverse `v`-tag index),
+/// same never-fails-the-caller contract - the owner's bounce already
+/// committed, so a hiccup here is logged and a dependent stays live until the
+/// next pass instead of surfacing an error for a write that did succeed.
+async fn derive_blocked_dependents(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    bounced_task_id: &str,
+) {
+    if let Err(error) = derive_blocked_dependents_inner(tenant, state, bounced_task_id).await {
+        tracing::warn!(bounced_task_id, %error, "live-to-blocked derivation failed");
+    }
+}
+
+async fn derive_blocked_dependents_inner(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    bounced_task_id: &str,
+) -> Result<(), String> {
+    let candidates = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_TASK as i32]),
+            global_only: true,
+            tag_contains: Some(("v".to_string(), bounced_task_id.to_string())),
+            limit: Some(MAX_READY_DERIVATION_CANDIDATES as i64),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("database error finding dependents: {error}"))?;
+    if candidates.len() == MAX_READY_DERIVATION_CANDIDATES {
+        tracing::warn!(
+            bounced_task_id,
+            candidates = candidates.len(),
+            "dependency fan-in reached the derivation candidate bound"
+        );
+    }
+
+    for stored in candidates {
+        if let Err(error) =
+            block_dependent_if_live(tenant, state, bounced_task_id, &stored.event).await
+        {
+            tracing::warn!(
+                dependent = %stored.event.id.to_hex(),
+                %error,
+                "skipped a dependent during live-to-blocked derivation"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Whether a dependent currently in `dependent_status` should be blocked
+/// because a task it depends on just bounced back to ready. Already blocked
+/// has nothing to change, and a terminal dependent (completed or cancelled)
+/// has already said its final word - the general transition table would
+/// refuse `Blocked` from either anyway, so this is that check made explicit
+/// and testable on its own.
+fn dependent_should_block(dependent_status: TaskStatus, doer_kind: DoerKind) -> bool {
+    dependent_status != TaskStatus::Blocked
+        && is_task_status_transition_allowed(dependent_status, TaskStatus::Blocked, doer_kind)
+}
+
+/// Attempt to block ONE dependent candidate. `Ok(None)` means no block was
+/// due (already blocked, terminal, or the dependency edge was stale);
+/// `Ok(Some(_))` means published; `Err` means the candidate was unreadable or
+/// unwritable and was skipped.
+async fn block_dependent_if_live(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    bounced_task_id: &str,
+    candidate_head: &Event,
+) -> Result<Option<Event>, String> {
+    let dependent = parse_task_event(candidate_head)
+        .map_err(|error| format!("dependent head does not parse: {error}"))?;
+    if !dependent.depends_on.contains(&bounced_task_id.to_string()) {
+        // Stale snapshot: the candidate replaced this edge since the query ran.
+        return Ok(None);
+    }
+
+    // Re-read the current head instead of trusting the query snapshot, same
+    // as the ready-derivation path: a concurrent writer may have moved this
+    // coordinate since the filter ran.
+    let previous_event = load_head(tenant, state, KIND_TASK, &dependent.id)
+        .await?
+        .ok_or_else(|| format!("dependent {} vanished before block", dependent.id))?;
+    let previous = parse_task_event(&previous_event)
+        .map_err(|error| format!("dependent head does not parse on re-read: {error}"))?;
+    if !dependent_should_block(previous.status, previous.doer_kind) {
+        return Ok(None);
+    }
+
+    let mut replacement = previous.clone();
+    replacement.status = TaskStatus::Blocked;
+    replacement.updated_at = replacement
+        .updated_at
+        .max(chrono::Utc::now().timestamp())
+        .max(previous.updated_at + 1);
+
+    let head = build_head(
+        &state.relay_keypair,
+        &CompanyActionPayload::Task(replacement),
+        Some(&previous_event),
+    )?;
+    let (stored_head, inserted) = state
+        .db
+        .insert_event(tenant.community(), &head, None)
+        .await
+        .map_err(|error| format!("failed to store derived blocked head: {error}"))?;
     if inserted {
         dispatch_persistent_event(
             tenant,
@@ -805,12 +933,13 @@ pub(crate) async fn handle_company_action(
                 None,
             )
             .await;
-            // A committed task transition earns its thread row, and a task
-            // reaching Completed may unblock downstream work. Both derive
-            // after the commit and after dispatch so the completing write is
-            // never delayed or failed by either; see
-            // `emit_task_transition` and `derive_ready_dependents` for the
-            // reachability and idempotency stories.
+            // A committed task transition earns its thread row, a task
+            // reaching Completed may unblock downstream work, and a bounce
+            // (Completed -> Ready) blocks it again. All three derive after
+            // the commit and after dispatch so the completing write is never
+            // delayed or failed by any of them; see `emit_task_transition`,
+            // `derive_ready_dependents`, and `derive_blocked_dependents` for
+            // the reachability and idempotency stories.
             if let CompanyActionPayload::Task(task) = &action.payload {
                 let previous_status = match previous_head.as_ref() {
                     Some(head) => match parse_task_event(head) {
@@ -833,6 +962,10 @@ pub(crate) async fn handle_company_action(
                 }
                 if task.status == TaskStatus::Completed {
                     derive_ready_dependents(tenant, state, &task.id).await;
+                } else if task.status == TaskStatus::Ready
+                    && previous_status == Some(TaskStatus::Completed)
+                {
+                    derive_blocked_dependents(tenant, state, &task.id).await;
                 }
             }
             Ok(CompanyBrokerOutcome::Applied)
@@ -966,10 +1099,11 @@ async fn refuse(
 /// review rejected, bounce, completed, escalated, cancelled. Everything else
 /// is board churn a status column already shows — a caption for
 /// `ready -> inProgress` turns the thread into a status log and buries the
-/// conversation under it. Bounce and escalation have no operation yet, so
-/// they are deliberately absent from this decision rather than emitted
-/// never; their desktop copy paths stay dormant until the model carries
-/// them.
+/// conversation under it. Escalation has no operation yet, so it stays
+/// deliberately absent from this decision rather than emitted never; its
+/// desktop copy path stays dormant until the model carries it. Bounce is
+/// live: `completed -> ready` only ever means a bounce (`validate_bounce_delta`
+/// guards that), so the state delta alone is enough to name it.
 ///
 /// The decision keys off the ACTUAL state delta (`previous_status` versus
 /// the replacement), not the action's declared verb: an Update that moves
@@ -991,6 +1125,7 @@ fn task_transition_event(
             TaskStatus::InProgress if previous == TaskStatus::InReview => {
                 Some("task_review_rejected")
             }
+            TaskStatus::Ready if previous == TaskStatus::Completed => Some("task_bounced"),
             _ => None,
         },
         _ => None,
@@ -1001,14 +1136,21 @@ fn task_transition_event(
 /// fields stay absent until a truthful source exists: nothing in the task
 /// contract names a reviewer pubkey or an issue count today, and a row that
 /// invents one would be wrong in the exact place people look for who did
-/// what.
+/// what. A bounce is the one transition with a truthful `reason` today, so
+/// it is the one case that gets one.
 fn task_transition_payload(event_type: &str, task: &CompanyTask) -> serde_json::Value {
-    json!({
+    let mut payload = json!({
         "type": event_type,
         "task": task.id,
         "title": task.title,
         "team": task.owning_team_id,
-    })
+    });
+    if event_type == "task_bounced" {
+        if let Some(reason) = &task.bounce_reason {
+            payload["reason"] = json!(reason.text());
+        }
+    }
+    payload
 }
 
 /// Emit one kind 40099 system row for a committed task transition.
@@ -1347,6 +1489,9 @@ mod tests {
             thread_root: None,
             doer_kind: buzz_core::company::DoerKind::Agent,
             wake_at: None,
+            outcome_reason: None,
+            bounce_reason: None,
+            bounce_count: 0,
             created_at: 1_000,
             updated_at: 1_000,
         }
@@ -1584,6 +1729,48 @@ mod tests {
     }
 
     #[test]
+    fn a_bounce_blocks_live_dependents_and_leaves_finished_ones_alone() {
+        // The general transition table only reaches `Blocked` from Ready,
+        // InProgress, or InReview - active work a bounce should interrupt.
+        for status in [
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+        ] {
+            assert!(
+                dependent_should_block(status, DoerKind::Agent),
+                "{status:?} should block"
+            );
+        }
+        // Already blocked: nothing to change.
+        assert!(!dependent_should_block(
+            TaskStatus::Blocked,
+            DoerKind::Agent
+        ));
+        // Terminal: already said its final word, and re-blocking a completed
+        // or cancelled dependent would misreport work that already finished.
+        assert!(!dependent_should_block(
+            TaskStatus::Completed,
+            DoerKind::Agent
+        ));
+        assert!(!dependent_should_block(
+            TaskStatus::Cancelled,
+            DoerKind::Agent
+        ));
+        // Proposed (not yet accepted) and Snoozed (already parked) have no
+        // arm into Blocked at all - dependency status isn't why they aren't
+        // moving, so a bounce leaves them exactly where they are.
+        assert!(!dependent_should_block(
+            TaskStatus::Proposed,
+            DoerKind::Agent
+        ));
+        assert!(!dependent_should_block(
+            TaskStatus::Snoozed,
+            DoerKind::Agent
+        ));
+    }
+
+    #[test]
     fn receipt_round_trips_and_an_applied_receipt_names_its_head() {
         let relay = Keys::generate();
         let owner = Keys::generate();
@@ -1716,6 +1903,23 @@ mod tests {
             );
         }
 
+        // A bounce is news: completed -> ready is the one status delta that
+        // always means "rejected, redo it" - never board churn.
+        let mut bounced = handoff.clone();
+        bounced.status = TaskStatus::Ready;
+        bounced.bounce_count = 1;
+        bounced.bounce_reason = Some(buzz_core::company::BounceReason::FreeText(
+            "missed the brief".to_string(),
+        ));
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::Completed),
+                &bounced,
+            ),
+            Some("task_bounced")
+        );
+
         // Board churn earns nothing: ordinary claiming, blocking, parking,
         // waking, and field edits on a live task.
         let mut churned = handoff.clone();
@@ -1764,6 +1968,18 @@ mod tests {
         assert!(payload.get("reviewer").is_none());
         assert!(payload.get("issues").is_none());
         assert!(payload.get("reason").is_none());
+
+        // A bounce is the one transition with a truthful reason - it carries
+        // it; anything without one stays honestly absent, not a placeholder.
+        let mut bounced = sample_task();
+        bounced.bounce_reason = Some(buzz_core::company::BounceReason::FreeText(
+            "missed the brief".to_string(),
+        ));
+        let bounced_payload = task_transition_payload("task_bounced", &bounced);
+        assert_eq!(bounced_payload["reason"], "missed the brief");
+
+        let reasonless_bounce_payload = task_transition_payload("task_bounced", &sample_task());
+        assert!(reasonless_bounce_payload.get("reason").is_none());
 
         // And it survives canonicalization, which is what gets signed into
         // the system message content.

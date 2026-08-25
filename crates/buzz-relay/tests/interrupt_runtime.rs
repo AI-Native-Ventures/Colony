@@ -300,6 +300,9 @@ fn default_task(
         thread_root: None,
         doer_kind: DoerKind::Agent,
         wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: created_at_secs,
         updated_at: created_at_secs,
     }

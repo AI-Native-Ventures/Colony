@@ -17,6 +17,8 @@ const MAX_SERVICES: usize = 100;
 const MAX_COST_CENTRES: usize = 100;
 const MAX_ASSIGNEES: usize = 100;
 const MAX_DEPENDENCIES: usize = 100;
+/// Bounds an `outcomeReason` or a bounce's free-text reason.
+const MAX_REASON_LEN: usize = 500;
 
 /// A service the company sells or delivers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,6 +235,37 @@ pub struct SubjectRef {
     pub r#ref: String,
 }
 
+/// Why a task's most recent completion was rejected and sent back for
+/// rework.
+///
+/// Pipeline templates, which will declare each stage's closed set of
+/// acceptance criteria, do not exist yet. So `Criterion` is dormant - nothing
+/// produces it today - and every bounce is `FreeText` until templates land.
+/// The variant exists now so a criterion id can slot in later without a
+/// schema migration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    tag = "kind",
+    content = "value",
+    deny_unknown_fields
+)]
+pub enum BounceReason {
+    /// A specific failed acceptance criterion id. Not producible yet.
+    Criterion(String),
+    /// Free text, the only variant reachable until acceptance criteria exist.
+    FreeText(String),
+}
+
+impl BounceReason {
+    /// The reason's display text, regardless of which variant carries it.
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Criterion(value) | Self::FreeText(value) => value,
+        }
+    }
+}
+
 /// A unit of work owned by exactly one team.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -284,6 +317,22 @@ pub struct CompanyTask {
     pub doer_kind: DoerKind,
     /// Unix timestamp at which a snoozed task returns to ready.
     pub wake_at: Option<i64>,
+    /// Business-outcome note required to complete a task a human performs.
+    /// Ignored for agent tasks: agent completion passes the review gate
+    /// instead. "40 completed" says nothing; "18 sent, 9 replied, 3 booked,
+    /// 10 disqualified" is the business, but that vocabulary is stage-
+    /// specific and pipeline templates don't declare it yet - any non-empty
+    /// bounded string is accepted until they do.
+    #[serde(default)]
+    pub outcome_reason: Option<String>,
+    /// Reason this task's most recent completion was bounced back for
+    /// rework. Set only by a bounce; `bounce_count` is the durable counter,
+    /// this is only the latest reason.
+    #[serde(default)]
+    pub bounce_reason: Option<BounceReason>,
+    /// How many times this task's delivered output has been bounced back.
+    #[serde(default)]
+    pub bounce_count: u32,
     /// Unix timestamp at which the task was created.
     pub created_at: i64,
     /// Unix timestamp at which the task was last updated.
@@ -405,6 +454,12 @@ pub enum CompanyContractError {
     /// A lifecycle state change is outside the exact transition graph.
     #[error("invalid {0} status transition")]
     InvalidStatusTransition(&'static str),
+    /// A human-doer task reached `completed` without stating why.
+    #[error("outcomeReason is required to complete a task a human performs")]
+    MissingOutcomeReason,
+    /// A `completed -> ready` transition did not carry a real bounce.
+    #[error("invalid bounce: {0}")]
+    InvalidBounce(&'static str),
 }
 
 /// Return whether a company lifecycle transition is allowed.
@@ -460,11 +515,15 @@ pub const fn is_initiative_status_transition_allowed(
 
 /// Return whether a task lifecycle transition is allowed.
 ///
-/// Same-status replacements are allowed. Completed and cancelled tasks cannot
-/// transition to another status. Any non-terminal task may snooze, and a
-/// snoozed task wakes back to ready. Completion skips review only for human
-/// tasks — nobody reviews a phone call — while agent work always passes the
-/// `InReview` quality gate.
+/// Same-status replacements are allowed. Cancelled is a dead end, and
+/// completed has exactly one way out: a bounce sends a completed task back to
+/// ready when its delivered output is rejected. `validate_bounce_delta` is
+/// what keeps that one arm from being a general "uncomplete anything" escape
+/// hatch - this function only says the shape is reachable, not that any
+/// replacement claiming it is a real bounce. Any non-terminal task may
+/// snooze, and a snoozed task wakes back to ready. Completion skips review
+/// only for human tasks — nobody reviews a phone call — while agent work
+/// always passes the `InReview` quality gate.
 pub const fn is_task_status_transition_allowed(
     from: TaskStatus,
     to: TaskStatus,
@@ -496,6 +555,12 @@ pub const fn is_task_status_transition_allowed(
         | (TaskStatus::Proposed, TaskStatus::Snoozed)
         // A snoozed task wakes back up ready for its owning team.
         | (TaskStatus::Snoozed, TaskStatus::Ready)
+        // Bounce: a completed task's output was rejected, so it goes back to
+        // ready for rework. The only way out of completed - cancelled has
+        // none. `validate_bounce_delta` guards that a replacement claiming
+        // this arm is an actual bounce (reason attached, count advanced by
+        // exactly one), not a general un-complete.
+        | (TaskStatus::Completed, TaskStatus::Ready)
         | (
             TaskStatus::Proposed
                 | TaskStatus::Ready
@@ -594,6 +659,41 @@ pub fn validate_task_update(
         replacement.doer_kind,
     ) {
         return Err(CompanyContractError::InvalidStatusTransition("task"));
+    }
+    validate_bounce_delta(previous, replacement)?;
+    Ok(())
+}
+
+/// `completed -> ready` is reachable only through a bounce, so it is
+/// validated narrowly here rather than opened as a general transition: the
+/// replacement must attach a reason and advance `bounceCount` by exactly one
+/// in that same write. Nothing else may move `bounceCount` at all - a
+/// replacement that changes it without making that exact transition is
+/// rejected just as firmly as one that makes the transition without it.
+fn validate_bounce_delta(
+    previous: &CompanyTask,
+    replacement: &CompanyTask,
+) -> Result<(), CompanyContractError> {
+    let is_bounce_transition =
+        previous.status == TaskStatus::Completed && replacement.status == TaskStatus::Ready;
+    let bounce_count_advanced_by_one =
+        replacement.bounce_count == previous.bounce_count.saturating_add(1);
+
+    if is_bounce_transition {
+        if !bounce_count_advanced_by_one {
+            return Err(CompanyContractError::InvalidBounce(
+                "a completed-to-ready transition must advance bounceCount by exactly one",
+            ));
+        }
+        if replacement.bounce_reason.is_none() {
+            return Err(CompanyContractError::InvalidBounce(
+                "a bounce must attach a reason",
+            ));
+        }
+    } else if replacement.bounce_count != previous.bounce_count {
+        return Err(CompanyContractError::InvalidBounce(
+            "bounceCount may only advance via a completed-to-ready bounce",
+        ));
     }
     Ok(())
 }
@@ -767,6 +867,23 @@ pub fn validate_task(
         "task.assigneePersonaIds",
         MAX_ASSIGNEES,
     )?;
+    validate_optional_text(
+        task.outcome_reason.as_deref(),
+        "task.outcomeReason",
+        MAX_REASON_LEN,
+    )?;
+    // "40 completed" says nothing; a human-doer task must say what happened.
+    // Agent completion has no such requirement - it passes the review gate
+    // instead, which is its own evidence.
+    if task.status == TaskStatus::Completed
+        && task.doer_kind == DoerKind::Human
+        && task.outcome_reason.is_none()
+    {
+        return Err(CompanyContractError::MissingOutcomeReason);
+    }
+    if let Some(bounce_reason) = &task.bounce_reason {
+        validate_required_text(bounce_reason.text(), "task.bounceReason", MAX_REASON_LEN)?;
+    }
 
     if task.company_id != company.id {
         return Err(CompanyContractError::MismatchedReference("task.companyId"));
@@ -1196,6 +1313,9 @@ mod tests {
                 thread_root: Some("thread-event-2".to_string()),
                 doer_kind: DoerKind::Agent,
                 wake_at: None,
+                outcome_reason: None,
+                bounce_reason: None,
+                bounce_count: 0,
                 created_at: 1_785_400_400,
                 updated_at: 1_785_400_500,
             },
@@ -1224,6 +1344,9 @@ mod tests {
                 thread_root: None,
                 doer_kind: DoerKind::Human,
                 wake_at: None,
+                outcome_reason: None,
+                bounce_reason: None,
+                bounce_count: 0,
                 created_at: 1_785_400_600,
                 updated_at: 1_785_400_700,
             },
@@ -1551,6 +1674,8 @@ mod tests {
             (TaskStatus::Blocked, TaskStatus::Snoozed),
             (TaskStatus::Snoozed, TaskStatus::Ready),
             (TaskStatus::Snoozed, TaskStatus::Cancelled),
+            // Bounce: a rejected completed task goes back to ready.
+            (TaskStatus::Completed, TaskStatus::Ready),
             (TaskStatus::Proposed, TaskStatus::Cancelled),
             (TaskStatus::Ready, TaskStatus::Cancelled),
             (TaskStatus::InProgress, TaskStatus::Cancelled),
@@ -1793,6 +1918,125 @@ mod tests {
         assert_eq!(
             validate_task_update(&previous, &stale, &company, Some(&initiative), &teams),
             Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn a_real_bounce_is_accepted_a_reasonless_or_miscounted_one_is_not() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let mut previous = task_fixtures().remove(0);
+        previous.status = TaskStatus::Completed;
+        previous.bounce_count = 0;
+
+        let mut no_reason = previous.clone();
+        no_reason.status = TaskStatus::Ready;
+        no_reason.bounce_count = 1;
+        no_reason.updated_at += 1;
+        assert_eq!(
+            validate_task_update(&previous, &no_reason, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::InvalidBounce(
+                "a bounce must attach a reason"
+            ))
+        );
+
+        let mut wrong_count = previous.clone();
+        wrong_count.status = TaskStatus::Ready;
+        wrong_count.bounce_reason = Some(BounceReason::FreeText("missed the brief".to_string()));
+        wrong_count.bounce_count = 2;
+        wrong_count.updated_at += 1;
+        assert_eq!(
+            validate_task_update(&previous, &wrong_count, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::InvalidBounce(
+                "a completed-to-ready transition must advance bounceCount by exactly one"
+            ))
+        );
+
+        let mut real_bounce = previous.clone();
+        real_bounce.status = TaskStatus::Ready;
+        real_bounce.bounce_reason = Some(BounceReason::FreeText("missed the brief".to_string()));
+        real_bounce.bounce_count = 1;
+        real_bounce.updated_at += 1;
+        assert!(
+            validate_task_update(&previous, &real_bounce, &company, Some(&initiative), &teams)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn bounce_count_cannot_move_outside_a_completed_to_ready_transition() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        // Same-status replacement, no transition at all.
+        let previous = task_fixtures().remove(0);
+        let mut tampered = previous.clone();
+        tampered.bounce_count = 1;
+        tampered.updated_at += 1;
+        assert_eq!(
+            validate_task_update(&previous, &tampered, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::InvalidBounce(
+                "bounceCount may only advance via a completed-to-ready bounce"
+            ))
+        );
+    }
+
+    #[test]
+    fn bouncing_a_cancelled_upstream_is_refused_not_silently_ignored() {
+        // Cancelled has no arm back to ready at all - the general transition
+        // table refuses it, which is what turns an attempted bounce on a
+        // cancelled upstream into a stored Refused receipt rather than a
+        // write that quietly does nothing.
+        assert!(!is_task_status_transition_allowed(
+            TaskStatus::Cancelled,
+            TaskStatus::Ready,
+            DoerKind::Agent
+        ));
+        assert!(!is_task_status_transition_allowed(
+            TaskStatus::Cancelled,
+            TaskStatus::Ready,
+            DoerKind::Human
+        ));
+    }
+
+    #[test]
+    fn human_completion_requires_an_outcome_reason_agent_completion_does_not() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+
+        let mut human_task = task_fixtures().remove(1);
+        assert_eq!(human_task.doer_kind, DoerKind::Human);
+        human_task.status = TaskStatus::Completed;
+        human_task.outcome_reason = None;
+        assert_eq!(
+            validate_task(&human_task, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::MissingOutcomeReason)
+        );
+        human_task.outcome_reason = Some("client signed off, deal booked".to_string());
+        assert!(validate_task(&human_task, &company, Some(&initiative), &teams).is_ok());
+
+        let mut agent_task = task_fixtures().remove(0);
+        assert_eq!(agent_task.doer_kind, DoerKind::Agent);
+        agent_task.status = TaskStatus::Completed;
+        agent_task.outcome_reason = None;
+        assert!(validate_task(&agent_task, &company, Some(&initiative), &teams).is_ok());
+    }
+
+    #[test]
+    fn bounce_reason_variants_serialize_with_a_kind_tag() {
+        let free_text = serde_json::to_value(BounceReason::FreeText("nope".to_string()))
+            .expect("serialize free text");
+        assert_eq!(
+            free_text,
+            serde_json::json!({"kind": "freeText", "value": "nope"})
+        );
+        let criterion = serde_json::to_value(BounceReason::Criterion("ac-1".to_string()))
+            .expect("serialize criterion");
+        assert_eq!(
+            criterion,
+            serde_json::json!({"kind": "criterion", "value": "ac-1"})
         );
     }
 

@@ -159,6 +159,9 @@ fn task(company_id: &str, id: &str, team: &CompanyTeamRef, now: i64) -> CompanyT
         thread_root: None,
         doer_kind: DoerKind::Agent,
         wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: now,
         updated_at: now,
     }
