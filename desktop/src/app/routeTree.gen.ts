@@ -257,18 +257,18 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof workflowsRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/spend": {
-      id: "/spend";
-      path: "/spend";
-      fullPath: "/spend";
-      preLoaderRoute: typeof spendRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/work": {
       id: "/work";
       path: "/work";
       fullPath: "/work";
       preLoaderRoute: typeof workRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/spend": {
+      id: "/spend";
+      path: "/spend";
+      fullPath: "/spend";
+      preLoaderRoute: typeof spendRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/settings": {

@@ -24,11 +24,11 @@ use std::sync::Arc;
 use buzz_core::company::{
     is_task_status_transition_allowed, validate_company, validate_company_update,
     validate_initiative, validate_initiative_update, validate_task, validate_task_update,
-    CompanyProfile, CompanyTeamRef, TaskStatus,
+    CompanyProfile, CompanyTask, CompanyTeamRef, TaskStatus,
 };
 use buzz_core::kind::{
-    KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
-    KIND_TEAM,
+    KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
+    KIND_SYSTEM_MESSAGE, KIND_TASK, KIND_TEAM,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::CompanyActionApply;
@@ -805,12 +805,32 @@ pub(crate) async fn handle_company_action(
                 None,
             )
             .await;
-            // A task reaching Completed may unblock downstream work. Derived
+            // A committed task transition earns its thread row, and a task
+            // reaching Completed may unblock downstream work. Both derive
             // after the commit and after dispatch so the completing write is
-            // never delayed or failed by derivation; see
-            // `derive_ready_dependents` for the reachability and idempotency
-            // story.
+            // never delayed or failed by either; see
+            // `emit_task_transition` and `derive_ready_dependents` for the
+            // reachability and idempotency stories.
             if let CompanyActionPayload::Task(task) = &action.payload {
+                let previous_status = match previous_head.as_ref() {
+                    Some(head) => match parse_task_event(head) {
+                        Ok(previous) => Some(previous.status),
+                        Err(error) => {
+                            tracing::warn!(
+                                task_id = %task.id,
+                                %error,
+                                "previous task head unreadable; no transition row emitted"
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                if let Some(transition) =
+                    task_transition_event(action.operation, previous_status, task)
+                {
+                    emit_task_transition(tenant, state, transition, task).await;
+                }
                 if task.status == TaskStatus::Completed {
                     derive_ready_dependents(tenant, state, &task.id).await;
                 }
@@ -940,8 +960,146 @@ async fn refuse(
     Ok(CompanyBrokerOutcome::Refused { message })
 }
 
-/// Company mutations require the community's current human OWNER.
+/// Which committed task actions earn a thread system row, and which kind.
 ///
+/// Only seven moments are news to the thread: created, review handoff,
+/// review rejected, bounce, completed, escalated, cancelled. Everything else
+/// is board churn a status column already shows — a caption for
+/// `ready -> inProgress` turns the thread into a status log and buries the
+/// conversation under it. Bounce and escalation have no operation yet, so
+/// they are deliberately absent from this decision rather than emitted
+/// never; their desktop copy paths stay dormant until the model carries
+/// them.
+///
+/// The decision keys off the ACTUAL state delta (`previous_status` versus
+/// the replacement), not the action's declared verb: an Update that moves
+/// status is a transition in effect. A replacement that changes no status is
+/// a field edit and earns nothing.
+fn task_transition_event(
+    operation: CompanyActionOperation,
+    previous_status: Option<TaskStatus>,
+    replacement: &CompanyTask,
+) -> Option<&'static str> {
+    match (operation, previous_status) {
+        (CompanyActionOperation::Create, None) => Some("task_created"),
+        (_, Some(previous)) if previous != replacement.status => match replacement.status {
+            TaskStatus::Completed => Some("task_completed"),
+            TaskStatus::Cancelled => Some("task_cancelled"),
+            TaskStatus::InReview if previous == TaskStatus::InProgress => {
+                Some("task_review_handoff")
+            }
+            TaskStatus::InProgress if previous == TaskStatus::InReview => {
+                Some("task_review_rejected")
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The exact payload `describeTaskTransition` on desktop parses. Optional
+/// fields stay absent until a truthful source exists: nothing in the task
+/// contract names a reviewer pubkey or an issue count today, and a row that
+/// invents one would be wrong in the exact place people look for who did
+/// what.
+fn task_transition_payload(event_type: &str, task: &CompanyTask) -> serde_json::Value {
+    json!({
+        "type": event_type,
+        "task": task.id,
+        "title": task.title,
+        "team": task.owning_team_id,
+    })
+}
+
+/// Emit one kind 40099 system row for a committed task transition.
+///
+/// Scoped to where the work happens: the task's source channel, tagged into
+/// its own thread with an `e` root marker when it has one — the same shape
+/// ask receipts use — so a row never lands in a channel the task does not
+/// belong to.
+///
+/// Best-effort exactly like every other post-commit side effect: the owner's
+/// action is already durable when this runs, so any failure here is logged
+/// and swallowed rather than surfaced against a write that succeeded.
+///
+/// Exactly-once comes from placement, not bookkeeping: this runs only inside
+/// the `Applied` arm of one committed action, and a replayed idempotency key
+/// short-circuits at the claim lookup long before any emission happens.
+async fn emit_task_transition(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    event_type: &str,
+    task: &CompanyTask,
+) {
+    let content = match canonical_content(&task_transition_payload(event_type, task)) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, %error, "task transition payload build failed");
+            return;
+        }
+    };
+    let Ok(channel_id) = uuid::Uuid::parse_str(&task.source_channel_id) else {
+        tracing::warn!(
+            task_id = %task.id,
+            channel = %task.source_channel_id,
+            "task transition skipped: source channel is not a channel id"
+        );
+        return;
+    };
+
+    let mut tags = Vec::with_capacity(2);
+    match Tag::parse(["h", channel_id.to_string().as_str()]) {
+        Ok(tag) => tags.push(tag),
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, %error, "task transition `h` tag build failed");
+            return;
+        }
+    }
+    if let Some(thread_root) = task.thread_root.as_deref() {
+        match Tag::parse(["e", thread_root, "", "root"]) {
+            Ok(tag) => tags.push(tag),
+            Err(error) => {
+                // The row still lands in the right channel; only the thread
+                // scoping is lost, which the channel timeline renders anyway.
+                tracing::warn!(
+                    task_id = %task.id,
+                    thread_root,
+                    %error,
+                    "task transition thread scope dropped"
+                );
+            }
+        }
+    }
+
+    let event = match EventBuilder::new(Kind::Custom(KIND_SYSTEM_MESSAGE as u16), content)
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+    {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, %error, "task transition sign failed");
+            return;
+        }
+    };
+
+    if let Err(error) = state
+        .db
+        .insert_event(tenant.community(), &event, Some(channel_id))
+        .await
+    {
+        tracing::warn!(%error, channel_id = %channel_id, "task transition row store failed");
+        return;
+    }
+    if let Err(error) = state
+        .pubsub
+        .publish_event(tenant, buzz_pubsub::EventTopic::Channel(channel_id), &event)
+        .await
+    {
+        tracing::warn!(%error, "task transition row fan-out failed");
+    }
+}
+
+/// Company mutations require the community's current human OWNER.///
 /// Deliberately stricter than the Block catalog broker, which also accepts
 /// admins: company state carries commercial and accounting authority, and the
 /// corrected design makes owner identity the single authorization anchor.
@@ -1481,5 +1639,138 @@ mod tests {
         let parsed = buzz_sdk::company::parse_company_receipt(&conflict).expect("parse receipt");
         assert_eq!(parsed.outcome, CompanyReceiptOutcome::Conflict);
         assert_eq!(parsed.head_event_id, None);
+    }
+
+    /// The seven thread moments and nothing else. Every edge here is
+    /// reachable through `is_task_status_transition_allowed`, so the rows the
+    /// decision emits are exactly the ones that can happen today.
+    #[test]
+    fn only_the_seven_thread_moments_produce_a_transition_row() {
+        use buzz_core::company::{DoerKind, TaskStatus};
+
+        // Creation is news.
+        assert_eq!(
+            task_transition_event(CompanyActionOperation::Create, None, &sample_task()),
+            Some("task_created")
+        );
+
+        let handoff = sample_task();
+        let mut rejected = handoff.clone();
+        rejected.status = TaskStatus::InReview;
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InProgress),
+                &rejected,
+            ),
+            Some("task_review_handoff")
+        );
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InReview),
+                &handoff,
+            ),
+            Some("task_review_rejected")
+        );
+
+        let mut completed = handoff.clone();
+        completed.status = TaskStatus::Completed;
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InReview),
+                &completed,
+            ),
+            Some("task_completed")
+        );
+        // A human finishing their own work completes from inProgress too.
+        let mut human_done = completed.clone();
+        human_done.doer_kind = DoerKind::Human;
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InProgress),
+                &human_done,
+            ),
+            Some("task_completed")
+        );
+
+        let mut cancelled = handoff.clone();
+        cancelled.status = TaskStatus::Cancelled;
+        for previous in [
+            TaskStatus::Proposed,
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::Blocked,
+            TaskStatus::Snoozed,
+        ] {
+            assert_eq!(
+                task_transition_event(
+                    CompanyActionOperation::Transition,
+                    Some(previous),
+                    &cancelled,
+                ),
+                Some("task_cancelled"),
+                "cancellation from {previous:?} is thread news"
+            );
+        }
+
+        // Board churn earns nothing: ordinary claiming, blocking, parking,
+        // waking, and field edits on a live task.
+        let mut churned = handoff.clone();
+        for (from, to) in [
+            (TaskStatus::Proposed, TaskStatus::Ready),
+            (TaskStatus::Ready, TaskStatus::InProgress),
+            (TaskStatus::Ready, TaskStatus::Blocked),
+            (TaskStatus::InProgress, TaskStatus::Blocked),
+            (TaskStatus::Blocked, TaskStatus::Ready),
+            (TaskStatus::Snoozed, TaskStatus::Ready),
+        ] {
+            churned.status = to;
+            assert_eq!(
+                task_transition_event(CompanyActionOperation::Update, Some(from), &churned,),
+                None,
+                "{from:?} -> {to:?} is board churn, not thread news"
+            );
+        }
+
+        // A replacement that changes no status is a field edit.
+        let mut untouched = handoff.clone();
+        untouched.title = "Renamed".to_string();
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Update,
+                Some(handoff.status),
+                &untouched,
+            ),
+            None
+        );
+    }
+
+    /// The payload is the exact contract `describeTaskTransition` parses:
+    /// required keys always present, optional keys honestly absent until a
+    /// truthful source exists.
+    #[test]
+    fn transition_payload_matches_the_desktop_contract() {
+        let payload = task_transition_payload("task_completed", &sample_task());
+        assert_eq!(payload["type"], "task_completed");
+        assert_eq!(payload["task"], "task-copy");
+        assert_eq!(payload["title"], "Write homepage copy");
+        assert_eq!(payload["team"], "team-marketing");
+        // No reviewer pubkey or issue count exists on the task contract yet;
+        // absent beats invented. The desktop parser treats both as optional
+        // and renders without them (its tests cover the absent paths).
+        assert!(payload.get("reviewer").is_none());
+        assert!(payload.get("issues").is_none());
+        assert!(payload.get("reason").is_none());
+
+        // And it survives canonicalization, which is what gets signed into
+        // the system message content.
+        let content = canonical_content(&task_transition_payload("task_created", &sample_task()))
+            .expect("canonicalize transition payload");
+        let round: serde_json::Value =
+            serde_json::from_str(&content).expect("canonical content is JSON");
+        assert_eq!(round["type"], "task_created");
     }
 }
