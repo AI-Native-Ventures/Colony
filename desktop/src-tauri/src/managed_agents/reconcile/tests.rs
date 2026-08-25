@@ -159,6 +159,71 @@ fn missing_record_is_never_tombstoned() {
     assert!(survivor.is_some(), "missing record must stay retained");
 }
 
+/// The boot reconcile is scoped to the community it boots into: the test
+/// harness's active relay is the one [`sample_record`] pins
+/// (`wss://localhost:3000`), so records carrying any other community's pin —
+/// or no pin at all — must never be reconciled into this store.
+pub(crate) const TEST_ACTIVE_RELAY: &str = "wss://localhost:3000";
+
+/// An agent pinned to a DIFFERENT community must not be retained here: the
+/// flush publishes every pending row to whichever relay is connected, so
+/// retaining it would publish its identity into the wrong tenant (the owner
+/// had six same-named agents from six communities rendering in one roster,
+/// and one business's agent identity leaking into an unrelated business).
+#[test]
+fn foreign_relay_record_is_not_retained() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let mut record = sample_record("7".repeat(64).as_str(), "foreign-agent");
+    assert_ne!(record.relay_url, "wss://other-community.example.com");
+    record.relay_url = "wss://other-community.example.com".to_string();
+    write_store(&dir, &[record]);
+
+    assert_eq!(reconcile_agents_in_dir(dir.path(), &keys).unwrap(), 0);
+
+    let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+    assert!(
+        get_pending_sync(&conn).unwrap().is_empty(),
+        "a foreign-community record must not queue for publish"
+    );
+}
+
+/// A blank `relay_url` means unassigned. Publishing is a cross-tenant WRITE,
+/// so unlike the runtime boundary (`agent_boundary`, where a blank pin runs
+/// wherever opened), an unpinned record must NOT be published everywhere.
+/// Skip until the user assigns it a community.
+#[test]
+fn empty_relay_record_is_not_retained() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let mut record = sample_record("6".repeat(64).as_str(), "unassigned-agent");
+    record.relay_url = String::new();
+    write_store(&dir, &[record]);
+
+    assert_eq!(reconcile_agents_in_dir(dir.path(), &keys).unwrap(), 0);
+
+    let conn = open_retention_db(&dir.path().join("retention.db")).unwrap();
+    assert!(
+        get_pending_sync(&conn).unwrap().is_empty(),
+        "an unassigned record must not queue for publish"
+    );
+}
+
+/// Positive control for the scoping above: a record whose pin names THIS
+/// community in a trivially different spelling still reconciles, so the fix
+/// cannot be allowed to silently drop every legitimately-home agent whose
+/// stored URL drifted in case, scheme spelling, or a trailing slash.
+#[test]
+fn equivalent_spelling_of_active_relay_is_retained() {
+    let dir = TempDir::new().unwrap();
+    let keys = nostr::Keys::generate();
+    let mut record = sample_record("5".repeat(64).as_str(), "home-agent");
+    record.relay_url = "WSS://LocalHost:3000/".to_string();
+    write_store(&dir, &[record]);
+
+    assert_eq!(reconcile_agents_in_dir(dir.path(), &keys).unwrap(), 1);
+}
+
 #[test]
 fn keyless_record_is_skipped() {
     let dir = TempDir::new().unwrap();
