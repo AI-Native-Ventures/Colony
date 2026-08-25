@@ -492,6 +492,12 @@ fn spawn_agent_child_inner(
             }
         }
     };
+    // The browser MCP server is offered to every runtime, not gated behind
+    // `known_acp_runtime` like `mcp_command` — it is a standalone sidecar
+    // binary, not a per-harness dev-mcp. `resolve_command` returns `None`
+    // when `buzz-browserd` was never built for this machine, and that
+    // absence alone must leave every agent's behaviour unchanged.
+    let resolved_browser_mcp_command: Option<std::path::PathBuf> = resolve_command("buzz-browserd");
     // Resolve agent command to a full path (DMG launches have minimal PATH).
     let resolved_agent_command = resolve_command(effective_command)
         .map(|p| p.display().to_string())
@@ -537,6 +543,14 @@ fn spawn_agent_child_inner(
         }
         None => {
             command.env("BUZZ_ACP_MCP_COMMAND", "");
+        }
+    }
+    match &resolved_browser_mcp_command {
+        Some(browser_cmd) => {
+            command.env("BUZZ_ACP_BROWSER_MCP_COMMAND", browser_cmd);
+        }
+        None => {
+            command.env("BUZZ_ACP_BROWSER_MCP_COMMAND", "");
         }
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
