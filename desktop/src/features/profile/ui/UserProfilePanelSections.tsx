@@ -295,6 +295,9 @@ export function ProfileSummaryView({
     diagnosticsFields.some((field) => field.label !== "Status") ||
     canOpenAgentLogs;
   const showActivityIngress = canViewActivity;
+  // Decision logs are community audit records: any agent profile carries the
+  // ingress, independent of whether its activity pane is openable.
+  const showDecisionLogIngress = isBot && pubkey !== null;
   const showInfoTab =
     agentInfoFields.length > 0 ||
     displayedRuntimeFields.length > 0 ||
@@ -594,6 +597,7 @@ export function ProfileSummaryView({
                 onOpenActivity={onOpenActivity}
                 pubkey={pubkey}
                 showActivityIngress={showActivityIngress}
+                showDecisionLogIngress={showDecisionLogIngress}
                 showInstructionBlock={showInstructionBlock}
               />
             ) : null}

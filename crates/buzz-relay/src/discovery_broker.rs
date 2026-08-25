@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use buzz_core::{
-    discovery::{DiscoveryAction, DiscoveryReceipt, DiscoveryRunProjection},
+    discovery::{
+        DiscoveryAction, DiscoveryReceipt, DiscoveryRunProjection,
+        DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION,
+    },
     kind::{KIND_DISCOVERY_ACTION, KIND_DISCOVERY_RECEIPT},
     tenant::TenantContext,
 };
@@ -49,6 +52,10 @@ pub(crate) fn is_discovery_action_candidate(event: &Event) -> bool {
     event.kind.as_u16() as u32 == KIND_DISCOVERY_ACTION
 }
 
+fn accepts_new_start(fake_executor_enabled: bool, protocol_version: u16) -> bool {
+    fake_executor_enabled || protocol_version == DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+}
+
 /// Apply one authenticated actor-signed Discovery command.
 pub(crate) async fn handle_discovery_action(
     tenant: &TenantContext,
@@ -86,6 +93,21 @@ pub(crate) async fn handle_discovery_action(
                     "Discovery execution is not enabled on this relay".into(),
                 ));
             }
+            if !accepts_new_start(
+                state.config.discovery.fake_executor_enabled,
+                request.protocol_version,
+            ) {
+                return Err(DiscoveryBrokerError::Conflict(
+                    "desktop_upgrade_required".into(),
+                ));
+            }
+            if request.protocol_version == DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+                && state.discovery_gateway.get().is_none()
+            {
+                return Err(DiscoveryBrokerError::Conflict(
+                    "desktop_upgrade_required".into(),
+                ));
+            }
             DiscoveryCommandMutation::Start {
                 campaign_id: request.campaign_id,
                 business_search: request.business_search,
@@ -94,10 +116,7 @@ pub(crate) async fn handle_discovery_action(
                 } else {
                     1
                 },
-                supports_multi_source: matches!(
-                    wire_version,
-                    buzz_sdk::discovery::DiscoveryWireVersion::V2
-                ),
+                protocol_version: request.protocol_version,
                 accepted_at: chrono::Utc::now(),
             }
         }
@@ -215,6 +234,20 @@ fn classify_db_error(error: buzz_db::DbError) -> DiscoveryBrokerError {
         {
             DiscoveryBrokerError::Conflict(message)
         }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Campaign has no approved Credits budget" =>
+        {
+            DiscoveryBrokerError::Conflict("budget_unapproved".into())
+        }
+        buzz_db::DbError::AccessDenied(message)
+            if message == "Campaign Credits budget is not active"
+                || message == "budget_exhausted" =>
+        {
+            DiscoveryBrokerError::Conflict("budget_exhausted".into())
+        }
+        buzz_db::DbError::AccessDenied(message) if message == "balance_depleted" => {
+            DiscoveryBrokerError::Conflict("balance_depleted".into())
+        }
         buzz_db::DbError::NotFound(message) if message.contains("campaign") => {
             DiscoveryBrokerError::Invalid("Discovery campaign not found".into())
         }
@@ -246,18 +279,30 @@ mod tests {
             request_id: Uuid::new_v4(),
             idempotency_key: Uuid::new_v4(),
             campaign_id: Uuid::new_v4(),
-            business_search: DiscoveryBusinessSearchSpec {
+            protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+            business_search: Some(DiscoveryBusinessSearchSpec {
                 query: "dentists".to_owned(),
                 location: "Sandton, Johannesburg, South Africa".to_owned(),
                 limit: 3,
                 language: "en".to_owned(),
                 region: Some("ZA".to_owned()),
-            },
+            }),
         };
         let event = build_discovery_start_action(relay.public_key(), &request)
             .expect("valid builder")
             .sign_with_keys(&actor)
             .expect("valid signature");
         assert!(is_discovery_action_candidate(&event));
+    }
+
+    #[test]
+    fn production_accepts_only_new_paid_starts_while_fake_runs_remain_compatible() {
+        assert!(accepts_new_start(
+            false,
+            DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
+        ));
+        assert!(!accepts_new_start(false, 2));
+        assert!(!accepts_new_start(false, 1));
+        assert!(accepts_new_start(true, 1));
     }
 }

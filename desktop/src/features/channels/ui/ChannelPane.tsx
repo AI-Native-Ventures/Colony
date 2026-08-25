@@ -27,19 +27,17 @@ import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeig
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { ChannelWorkspaceDock } from "@/features/workspace/ui/ChannelWorkspaceDock";
+import { WorkspaceFocusThreadPane } from "@/features/workspace/ui/WorkspaceFocusThreadPane";
 import { WorkspaceLinkProvider } from "@/features/workspace/ui/WorkspaceLinkContext";
-import {
-  useChannelSurfaceMode,
-  useWorkspaceExpanded,
-} from "@/features/workspace/lib/channelSurfaceMode";
+import { useChannelSurfaceMode } from "@/features/workspace/lib/channelSurfaceMode";
+import { useWorkspaceFocusSplit } from "@/features/workspace/ui/useWorkspaceFocusSplit";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
-import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { THREAD_SURFACE_KEY } from "@/features/channels/lib/threadFocusLayout";
-import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
 import { useEffectiveThreadViewMode } from "@/features/workspace/lib/effectiveThreadViewMode";
+import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
 import { useThreadViewModeSwitch } from "@/features/channels/ui/useThreadViewModeSwitch";
 import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
 import { useChannelWorkingAgentPubkeys } from "@/features/agents/agentWorkingSignal";
@@ -52,6 +50,7 @@ import {
 } from "@/features/channels/ui/WelcomeComposerBanner";
 import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
 import { mentionsKnownAgent } from "@/features/channels/ui/ChannelPane.helpers";
+import { HUDDLE_TRANSCRIPT_ROOT_STYLE } from "@/features/channels/ui/ChannelPane.constants";
 import { HuddleStartingView, HuddleTranscriptIntro } from "@/features/huddle";
 import { useChannelIntro } from "@/features/channels/ui/useChannelIntro";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
@@ -66,10 +65,6 @@ import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
-const HUDDLE_TRANSCRIPT_ROOT_STYLE = {
-  "--buzz-channel-content-top-padding": "0rem",
-  "--channel-top-chrome-height": "0.25rem",
-} as React.CSSProperties;
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentPubkeys,
@@ -450,21 +445,35 @@ export const ChannelPane = React.memo(function ChannelPane({
   const isOverlay = useIsThreadPanelOverlay();
   const workspaceOpen =
     useChannelSurfaceMode(activeChannel?.id) === "workspace";
-  const workspaceExpanded = useWorkspaceExpanded(activeChannel?.id);
+  const hasWorkspaceThread =
+    Boolean(threadHeadMessage) || shouldShowThreadSkeleton;
+  const {
+    canReset: canResetWorkspaceWidth,
+    onReset: onResetWorkspaceWidth,
+    onResizeKeyDown: onWorkspaceResizeKeyDown,
+    onResizeStart: onWorkspaceResizeStart,
+    threadWidthPx: workspaceThreadWidthPx,
+    workspaceWidthPx,
+  } = useWorkspaceFocusSplit(layoutRef, hasWorkspaceThread);
   const useSplitAuxiliaryPane =
     !isSinglePanelView && (!isOverlay || workspaceOpen);
   const threadViewMode = useEffectiveThreadViewMode(activeChannel?.id);
   const useFocusThreadDrawer =
+    !workspaceOpen &&
     threadViewMode === "focus" &&
     useSplitAuxiliaryPane &&
     (Boolean(threadHeadMessage) || shouldShowThreadSkeleton);
+  const settleFocusExit =
+    workspaceOpen || (hasWorkspaceThread && threadViewMode === "split");
   const { channelIsCovered, markExitComplete } = useFocusDrawerPresence(
     useFocusThreadDrawer,
     onCloseThread,
+    settleFocusExit,
   );
   const { changeThreadViewMode, layoutScrollTargetId, resolveScrollTarget } =
     useThreadViewModeSwitch({
       activeThreadHeadId: threadHeadMessage?.id ?? null,
+      channelId: activeChannelId,
       externalScrollTargetId: threadScrollTargetId,
       onExternalTargetResolved: onThreadScrollTargetResolved,
       onModeChange: markExitComplete,
@@ -505,18 +514,26 @@ export const ChannelPane = React.memo(function ChannelPane({
     ) : (
       <React.Fragment key={options.key ?? testId}>{panel}</React.Fragment>
     );
-  const wrapThreadPanel = (panel: React.ReactNode) =>
-    useFocusThreadDrawer ? (
-      <FocusThreadDrawer
-        channelName={activeChannel?.name ?? "channel"}
-        key={THREAD_SURFACE_KEY}
-        onClose={onCloseThread}
-      >
-        {panel}
-      </FocusThreadDrawer>
-    ) : (
-      wrapAux(panel, "message-thread-panel", { key: THREAD_SURFACE_KEY })
-    );
+  const wrapThreadPanel = (panel: React.ReactNode) => (
+    <WorkspaceFocusThreadPane
+      canResetWidth={canResetThreadPanelWidth}
+      channelName={activeChannel?.name ?? "channel"}
+      focusOpen={useFocusThreadDrawer}
+      focusWidthPx={workspaceThreadWidthPx}
+      key={THREAD_SURFACE_KEY}
+      normalWidthPx={threadPanelWidthPx}
+      onClose={onCloseThread}
+      ownsMessageThreadTestId={
+        useSplitAuxiliaryPane && threadViewMode === "split"
+      }
+      onResetWidth={onResetThreadPanelWidth}
+      onResizeStart={onThreadPanelResizeStart}
+      split={useSplitAuxiliaryPane}
+      workspaceOpen={workspaceOpen}
+    >
+      {panel}
+    </WorkspaceFocusThreadPane>
+  );
   const threadHeaderLeading = useSplitAuxiliaryPane ? (
     <ThreadViewModeToggle onChange={changeThreadViewMode} />
   ) : undefined;
@@ -532,7 +549,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     <WorkspaceLinkProvider channelId={activeChannelId}>
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden"
-        data-workspace-expanded={workspaceExpanded}
         ref={layoutRef}
         style={isHuddleTranscript ? HUDDLE_TRANSCRIPT_ROOT_STYLE : undefined}
       >
@@ -551,9 +567,9 @@ export const ChannelPane = React.memo(function ChannelPane({
           <section
             aria-label="Channel messages and composer"
             className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-            hidden={workspaceExpanded}
-            inert={channelIsCovered ? true : undefined}
             data-testid="channel-drop-zone"
+            hidden={workspaceOpen}
+            inert={workspaceOpen || channelIsCovered ? true : undefined}
             onDragEnter={
               canDropInMainColumn
                 ? mainComposerMedia.handleDragEnter
@@ -791,7 +807,7 @@ export const ChannelPane = React.memo(function ChannelPane({
          * frozen snapshot because the panel is fully prop-driven.
          */}
         <AnimatePresence onExitComplete={markExitComplete}>
-          {channelManagementOpen && activeChannel ? (
+          {!workspaceOpen && channelManagementOpen && activeChannel ? (
             <ChannelManagementAuxiliaryPanel
               activeChannel={activeChannel}
               canResetThreadPanelWidth={canResetThreadPanelWidth}
@@ -824,6 +840,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                   isFollowingThread={isFollowingThread}
                   isMessageUnreadById={isMessageUnreadById}
                   isSending={isSending}
+                  showWorkspaceContext={workspaceOpen}
                   {...threadLayoutProps}
                   autoSendDraftKey={autoSendDraftKey}
                   onAutoSubmitComplete={handleAutoSubmitComplete}
@@ -843,12 +860,15 @@ export const ChannelPane = React.memo(function ChannelPane({
                   onSendToChannel={
                     isComposerDisabled ? undefined : onSendToChannel
                   }
-                  onScrollTargetResolved={() => resolveScrollTarget()}
+                  onScrollTargetResolved={() =>
+                    resolveScrollTarget(layoutScrollTargetId ?? undefined)
+                  }
                   onScrollTargetSettled={resolveScrollTarget}
                   onToggleReaction={onToggleReaction}
                   onUnfollowThread={onUnfollowThread}
                   profiles={profiles}
                   replyTargetMessage={threadReplyTargetMessage}
+                  disableScrollTargetCenterPin={Boolean(layoutScrollTargetId)}
                   scrollTargetHighlights={!layoutScrollTargetId}
                   scrollTargetId={layoutScrollTargetId ?? threadScrollTargetId}
                   threadHead={threadHeadMessage}
@@ -893,7 +913,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               );
               return wrapThreadPanel(panel);
             })()
-          ) : activeChannel && selectedAgent ? (
+          ) : !workspaceOpen && activeChannel && selectedAgent ? (
             (() => {
               // When the panel was opened from a different channel than the
               // currently active one, re-scope it to the active channel so
@@ -934,7 +954,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               );
               return wrapAux(panel, "agent-session-thread-panel");
             })()
-          ) : profilePanelPubkey ? (
+          ) : !workspaceOpen && profilePanelPubkey ? (
             (() => {
               const panel = (
                 <UserProfilePanel
@@ -962,9 +982,14 @@ export const ChannelPane = React.memo(function ChannelPane({
           ) : null}
         </AnimatePresence>
         <ChannelWorkspaceDock
+          canResetWidth={canResetWorkspaceWidth}
           channelId={activeChannelId}
-          hasAuxiliaryPane={useSplitAuxiliaryPane}
-          layoutRef={layoutRef}
+          hasThread={hasWorkspaceThread}
+          onResetWidth={onResetWorkspaceWidth}
+          onResizeKeyDown={onWorkspaceResizeKeyDown}
+          onResizeStart={onWorkspaceResizeStart}
+          threadWidthPx={workspaceThreadWidthPx}
+          workspaceWidthPx={workspaceWidthPx}
         />
       </div>
     </WorkspaceLinkProvider>

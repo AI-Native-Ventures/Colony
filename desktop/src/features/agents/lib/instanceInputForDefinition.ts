@@ -37,6 +37,44 @@ export async function availableRuntimesForStart(
 }
 
 /**
+ * The harness a create falls back to when nothing names one. Mirrors
+ * `default_agent_command()` in `managed_agents/discovery.rs`, which resolves
+ * the bundled `buzz-agent`.
+ */
+export const BUNDLED_DEFAULT_RUNTIME_ID = "buzz-agent";
+
+/**
+ * The harness a create should use, following the same chain the backend does:
+ * the definition's own pin → `global.preferred_runtime` → the bundled default.
+ *
+ * Every create path needs this, and each one used to inline
+ * `runtimes.find((r) => r.id === input.runtime)` instead. Once "Use agent
+ * defaults" started submitting no pin, that lookup missed on every
+ * defaults-mode create and each copy refused in its own way: the agents page
+ * returned false, and the Agent Proposal review threw. Both surfaced as an
+ * enabled button that did nothing. One resolver so a fourth caller cannot
+ * reintroduce it.
+ *
+ * `named` is the id that was actually asked for, empty when none was. A caller
+ * distinguishes "asked for a harness that is unavailable", which is a real
+ * error worth naming, from "asked for nothing", which is legal and inherits.
+ */
+export function resolveCreateRuntime(
+  runtimes: AcpRuntime[],
+  pinnedRuntimeId: string | null | undefined,
+  globalPreferredRuntimeId: string | null | undefined,
+): { named: string; runtime: AcpRuntime | undefined } {
+  const named =
+    pinnedRuntimeId?.trim() || globalPreferredRuntimeId?.trim() || "";
+  return {
+    named,
+    runtime: runtimes.find(
+      (candidate) => candidate.id === (named || BUNDLED_DEFAULT_RUNTIME_ID),
+    ),
+  };
+}
+
+/**
  * Resolve the runtime a definition should start on, refusing when the
  * definition's configured runtime is not available (Phase 1B.3.5 row 1,
  * Wes's call: one consistent refuse-with-actionable-error everywhere —
@@ -93,11 +131,13 @@ export type BackendIntent = {
  * surface that creates a running instance from a definition builds its
  * CreateManagedAgentInput here so the mapping cannot drift per-site.
  *
- * - harnessOverride uses the backend-aligned formula: true only when the
- *   definition has no runtime preference or the picked runtime matches it
- *   (`create_time_agent_command_override` stores None when picked ==
- *   inherited; on fallback `harness_override: false` keeps the definition
- *   authoritative).
+ * - harnessOverride is true only when the definition names a runtime AND the
+ *   picked one matches it. A definition with no runtime is on global defaults
+ *   and must submit false: `create_time_agent_command_override` compares the
+ *   picked command against the persona-inherited one, and a caller that
+ *   resolves through global picks a command that differs from it, so a true
+ *   here would be stored as a real pin and freeze the new agent on today's
+ *   global harness.
  * - avatarUrl goes through resolveManagedAgentAvatarUrl (base64 data URIs
  *   upload via the injectable `upload`; other URLs pass through unchanged).
  * - envVars are never seeded from the definition: record.env_vars is
@@ -151,7 +191,16 @@ export async function buildInstanceInputForDefinition(
     // at top of this function).
     agentArgs: [],
     mcpCommand: runtime.mcpCommand ?? "",
-    harnessOverride: !persona.runtime || persona.runtime === runtime.id,
+    // A definition with no runtime of its own is on global defaults, so there
+    // is nothing for the user to have deliberately diverged from and this must
+    // be false. It used to be true for that case, which mattered once the
+    // caller began resolving the harness through global: the picked command
+    // then differs from the persona-inherited one, so
+    // `create_time_agent_command_override` stores it as a real pin. The new
+    // agent would be born stamped with today's global harness and stop
+    // following global from that moment — the exact create-time stamping the
+    // one-shot migration exists to clear.
+    harnessOverride: Boolean(persona.runtime) && persona.runtime === runtime.id,
     model: persona.model ?? undefined,
     provider: persona.provider ?? undefined,
     spawnAfterCreate: true,

@@ -83,11 +83,11 @@ function DayCard({
       onClick={() => onSelect(post)}
       type="button"
     >
-      {post.image ? (
+      {post.images.length > 0 ? (
         <img
           alt=""
           className="aspect-[4/5] w-full rounded-md border border-border/40 object-cover"
-          src={rewriteRelayUrl(post.image.url)}
+          src={rewriteRelayUrl(post.images[0].url)}
         />
       ) : (
         <div className="flex aspect-[4/5] w-full items-center justify-center rounded-md border border-dashed border-border/50 text-xs text-muted-foreground">
@@ -282,6 +282,7 @@ export function ContentScreen() {
           {selectedPost ? (
             <aside className="flex w-[26rem] shrink-0 flex-col border-l border-border/60">
               <ContentDayDetail
+                communityId={communityId}
                 decisions={decisions}
                 key={selectedPost.address}
                 onSubmit={handleSubmit}

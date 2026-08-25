@@ -55,6 +55,18 @@ pub enum TestClientError {
     /// No NIP-42 AUTH challenge was received from the relay.
     #[error("No AUTH challenge received from relay")]
     NoAuthChallenge,
+
+    /// An operation targeted a relay other than the pinned one. Mirrors
+    /// [`WsClientError::ForeignRelay`] as a distinct variant rather than
+    /// collapsing to a string, so an integration test can assert the identity
+    /// boundary refused a specific relay instead of pattern-matching a message.
+    #[error("refusing relay {requested}: identity is pinned to {pinned}")]
+    ForeignRelay {
+        /// The canonical URL of the pinned relay.
+        pinned: String,
+        /// The canonical URL of the refused relay.
+        requested: String,
+    },
 }
 
 impl From<WsClientError> for TestClientError {
@@ -70,6 +82,9 @@ impl From<WsClientError> for TestClientError {
             WsClientError::AuthFailed(s) => TestClientError::AuthFailed(s),
             WsClientError::EventRejected(s) => TestClientError::EventRejected(s),
             WsClientError::NoAuthChallenge => TestClientError::NoAuthChallenge,
+            WsClientError::ForeignRelay { pinned, requested } => {
+                TestClientError::ForeignRelay { pinned, requested }
+            }
         }
     }
 }

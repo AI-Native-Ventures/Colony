@@ -1,6 +1,8 @@
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 
+export { summarizeThreadRoot } from "@/features/messages/lib/sentFromThread";
+
 /** Whether another visible entry at the same depth follows this one. */
 export function hasLaterVisibleSibling(
   entries: readonly MainTimelineEntry[],

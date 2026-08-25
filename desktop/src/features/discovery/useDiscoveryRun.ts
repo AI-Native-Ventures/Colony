@@ -258,6 +258,7 @@ export type UseDiscoveryRunResult = DiscoveryRunState & {
   busy: boolean;
   error: string | null;
   canStart: boolean;
+  startBlockedReason: string | null;
   start: () => void;
   retry: () => void;
   cancel: () => void;
@@ -282,6 +283,33 @@ export function useDiscoveryRun(
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const generation = React.useRef(0);
+  // A budget only exists where Credits are actually spent. The preview is
+  // cost-free and has no approval control at all (CampaignDetailView renders
+  // it only for the live experience), so requiring one there left the preview
+  // permanently unstartable with a message pointing at a button nobody can
+  // see.
+  const spendsCredits = entitlement?.experience === "live";
+  const budgetReady = !spendsCredits || campaign.budget?.state === "active";
+  const startBlockedReason = (() => {
+    if (!canStartDiscovery({ state: entitlement?.state ?? "loading" })) {
+      return entitlement?.state === "error"
+        ? "Discovery access could not be confirmed. Try again."
+        : "Discovery access is required before this Campaign can run.";
+    }
+    if (!spendsCredits) return null;
+    switch (campaign.budget?.state) {
+      case "active":
+        return null;
+      case "paused":
+        return "Resume this Campaign budget in Settings before starting Discovery.";
+      case "revoked":
+        return "This Campaign budget was permanently revoked. Create a new Campaign to search again.";
+      case "exhausted":
+        return "This Campaign has used its approved Credits. Create a new Campaign for another paid search.";
+      default:
+        return "Approve this Campaign budget in Settings before starting Discovery.";
+    }
+  })();
 
   React.useEffect(() => {
     generation.current += 1;
@@ -321,6 +349,14 @@ export function useDiscoveryRun(
         );
         return;
       }
+      if (!budgetReady) {
+        setError(
+          campaign.budget?.state === "unapproved" || !campaign.budget
+            ? "Approve the exact Campaign budget before starting Discovery."
+            : "This Campaign budget cannot start a new Discovery run.",
+        );
+        return;
+      }
       generation.current += 1;
       const token = generation.current;
       // Every explicit start/retry is a fresh local session. Reusing a
@@ -335,7 +371,14 @@ export function useDiscoveryRun(
           : dataSource.startDiscovery(campaignId);
       void consume(stream, token);
     },
-    [campaign, campaignId, consume, dataSource, entitlement?.state],
+    [
+      budgetReady,
+      campaign,
+      campaignId,
+      consume,
+      dataSource,
+      entitlement?.state,
+    ],
   );
 
   const cancel = React.useCallback(() => {
@@ -360,7 +403,10 @@ export function useDiscoveryRun(
     ...state,
     busy,
     error,
-    canStart: canStartDiscovery({ state: entitlement?.state ?? "loading" }),
+    canStart:
+      canStartDiscovery({ state: entitlement?.state ?? "loading" }) &&
+      budgetReady,
+    startBlockedReason,
     start: () => startStream("start"),
     retry: () => startStream("retry"),
     cancel,

@@ -99,8 +99,16 @@ enforce it themselves.
   `Detect Changed Paths`, `Desktop`, `Desktop Core`, `Rust Lint`, `Unit Tests`
   and `Relay Suites` to pass. Run the local gates below anyway: they are
   faster than a CI round trip and catch the same things.
-- **`main`** is production. The only thing that merges into main is a
-  promotion PR from develop, and it runs the full CI matrix.
+- **`main`** is production. Two things merge into main, and both run the full
+  CI matrix: a promotion PR from develop, and a PR from a **`hotfix/*`** branch
+  forked from main.
+- **`hotfix/*` is the narrow lane, not a shortcut.** It exists only for a fix
+  that must reach production without dragging every commit that has landed on
+  develop since the last promotion. `Promotion Gate` grants it no leniency: it
+  demands exactly the same required and path-selected proof a promotion does.
+  A `hotfix/*` PR needs the same green matrix, and after it merges you
+  back-merge `main` into `develop` so the two branches do not diverge. Anything
+  that can wait for the next promotion goes through develop instead.
 - **Never merge a promotion PR while any check is failing or still running.**
   Verify with `gh pr checks <pr>` and require every non-skipped check to
   read `pass` before `gh pr merge`. A red or pending gate is an absolute
@@ -178,10 +186,14 @@ Run `just test` for integration tests if you touched `buzz-relay`,
 formatting via `stage_fixed`. Pre-commit runs fix variants in parallel (Rust
 fmt, Tauri Rust fmt, desktop biome fix, web biome fix, mobile dart format).
 Auto-fixable issues are fixed and re-staged; unfixable lint issues block the
-commit. **Pre-push hooks** run clippy (workspace + Tauri), desktop TypeScript
-typechecking (`tsc --noEmit`), and fast unit tests in parallel (Rust, desktop
-JS, Tauri Rust, mobile Flutter) — no overlap with pre-commit. Builds are
-CI-only. Run `just fix-all` to auto-fix all formatting in one shot. Run
+commit. **Pre-push hooks** run the desktop and mobile checks in parallel:
+branch-skew, biome lint, TypeScript typechecking (`tsc --noEmit`), desktop unit
+tests, the file-size ratchet, and Flutter tests — no overlap with pre-commit.
+**Rust is NOT gated pre-push.** `just test-unit` and the Tauri clippy/test pair
+run the same commands as the required "Unit Tests" and "Desktop Core" CI jobs,
+so locally they gated nothing a merge could skip while costing roughly an hour
+of cold Cargo compilation in a fresh worktree. Push Rust changes and let CI run
+the matrix. Builds are CI-only. Run `just fix-all` to auto-fix all formatting in one shot. Run
 `just ci` for the full local gate. Run `just hooks` to
 re-install hooks after env changes. Before agents run Git or hooks, activate the
 repo's Hermit environment (`. ./bin/activate-hermit`); do not rewrite hook
@@ -626,6 +638,12 @@ your final report.
 5. **Desktop crate excluded from root workspace** — `cargo test` at repo root does NOT run desktop tests. Use `cargo test --manifest-path desktop/src-tauri/Cargo.toml` explicitly.
 6. **Desktop Tauri fmt fails in worktrees and blocks commits** — the pre-commit hook runs `just desktop-tauri-fmt`, which fails in git worktrees because `cargo fmt` resolves workspace paths relative to the worktree root. Run `just desktop-tauri-fmt` from the main checkout to apply the fix, then re-stage and commit. CI is unaffected.
 7. **React render perf: `React.memo` is all-or-nothing** — it only skips a re-render when *every* prop is reference-stable; one unstable prop (inline arrow/JSX, or a hook returning a fresh `{}`/`[]`/`Map` each render) defeats it. Two repeat offenders: (a) React Query results (`useMutation`/`useQuery`) are a **new object each render** — depend on the stable method (`mutation.mutateAsync`), not the object; (b) derived `Map`/array state that recomputes on a version bump — wrap in a content-equality ref cache (`shared/hooks/useStableReference.ts`). When chasing interaction lag, **measure with DevTools closed and no perf probes** (an open Web Inspector + per-keystroke `console.log` inflate the numbers), and isolate by removing one suspect at a time rather than guessing.
+
+8. **Rasterising DOM to a canvas: use a `data:` URI for the SVG, never `blob:`** — a `blob:` URL taints the canvas in **both** WebKit and Chromium, so `getImageData` throws `"The operation is insecure."` and no pixel gate can read a pixel. The first WebKit spike failed *identically in both engines* and read as "WebKit cannot do this"; only a Chromium control showed it was the URL scheme rather than the engine. Corollary: **run a Chromium control before blaming WebKit.** Tauri ships WebKit (WKWebView on macOS, WebKit2GTK on Linux), so a Playwright spec proving something in Chromium proves nothing about the app. Reproduce with `desktop/tests/spikes/webkit-rasterisation-spike.mjs`.
+
+9. **Pixel gates: keep luminance thresholds in `Float64Array`, never `Float32Array`** — a float32 threshold rejects its own pixels by 1 ulp when compared against float64 per-pixel arithmetic. It presents as "no readable pixels" while the box maximum is exactly the colour being looked for, so it reads as a broken gate rather than a broken comparison.
+
+10. **A text-width probe does not prove a font rendered** — layout and rasterisation are separate steps, and only the second goes through `foreignObject`, so widths can differ while the PNG falls back to a system face. For a zero-font-fallback check, rasterise twice, with and without the inline base64 `@font-face`, and compare mean absolute luminance inside the text box (measured delta: 20.1). Inside `foreignObject` a font referenced by family name or URL falls back **silently**, so it must be inlined as a base64 `data:` URI.
 
 ---
 

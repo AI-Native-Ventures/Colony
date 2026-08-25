@@ -292,7 +292,7 @@ enum Cmd {
     /// File, claim, heartbeat, checkpoint, and finish employee jobs (kinds 43010-43014)
     #[command(subcommand)]
     Jobs(JobsCmd),
-    /// Plan, render, and approve social content (kinds 30195-30197, 40025)
+    /// Plan, render, and approve social content (kinds 30195-30198, 40025)
     #[command(subcommand)]
     Content(ContentCmd),
 }
@@ -362,6 +362,74 @@ pub enum ContentCmd {
         #[arg(long)]
         scope: Option<String>,
     },
+    /// Create or replace a brand kit head (kind 30198)
+    ///
+    /// The kit is the source of truth every content gate measures against.
+    /// The relay validates the structure (shapes, hex colours, hashes, enum
+    /// arms, caps) and does not interpret it, so this command stores what a
+    /// scan produced or a human edited; it never derives anything itself.
+    KitSet {
+        /// Kit id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the kit JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one brand kit head
+    KitGet {
+        /// Kit id
+        #[arg(long)]
+        id: String,
+    },
+    /// List brand kits, newest head per id
+    KitList {},
+    /// Derive a brand kit proposal from a website scan (kind 30198)
+    ///
+    /// Runs a bounded scan of `--url`, aggregates the brand evidence the scan
+    /// already collects, solves every text-bearing ramp stop against WCAG
+    /// contrast by bisection, fetches and uploads the site's logo and favicon
+    /// as marks, and prints the proposed kit body. Nothing is published:
+    /// derivation proposes and the owner accepts with `content kit set`,
+    /// editing first if they want to. A re-scan therefore never clobbers a
+    /// hand-edited kit.
+    KitDerive {
+        /// Site to scan for brand evidence
+        #[arg(long)]
+        url: String,
+        /// Most pages to read. Fewer than a company brief needs; style
+        /// evidence saturates early.
+        #[arg(long)]
+        max_pages: Option<usize>,
+        /// Skip mark upload and emit hues/type/canvases/rules only
+        #[arg(long)]
+        skip_marks: bool,
+        /// Write the proposal here instead of stdout (`@` not needed)
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Create or replace an asset library head (kind 30199)
+    ///
+    /// The library is an index over media that already lives in Blossom,
+    /// not a second store: each item names a sha256 plus its tags, alt
+    /// text, rights note, provenance, and whether the depicted subject is
+    /// fictional. This command stores the index; it never uploads anything.
+    LibrarySet {
+        /// Library id, `[a-z0-9-]{1,64}`. This is the `d` tag
+        #[arg(long)]
+        id: String,
+        /// Path to the library JSON, `@path`, or `-` for stdin
+        #[arg(long)]
+        data: String,
+    },
+    /// Read one asset library head
+    LibraryGet {
+        /// Library id
+        #[arg(long)]
+        id: String,
+    },
+    /// List asset libraries, newest head per id
+    LibraryList {},
     /// Approve a post or send it back (kind 40025)
     ///
     /// Built from the post as it currently stands on the relay: the decision
@@ -795,24 +863,6 @@ pub enum CompanyCmd {
     },
 }
 
-/// Workspace-scoped business Discovery operations.
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum DiscoverySourceModeArg {
-    Waterfall,
-    Concurrent,
-}
-
-/// Live Businesses source accepted by Discovery Campaign commands.
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum DiscoverySourceArg {
-    #[value(name = "google_maps")]
-    GoogleMaps,
-    #[value(name = "brave_search")]
-    BraveSearch,
-    #[value(name = "exa_search")]
-    ExaSearch,
-}
-
 /// Funnel status accepted by `buzz discovery lead-update`.
 #[derive(Clone, Copy, clap::ValueEnum)]
 pub enum DiscoveryLeadStatusArg {
@@ -890,27 +940,54 @@ pub enum DiscoveryCmd {
         /// Optional ISO 3166-1 alpha-2 country code.
         #[arg(long)]
         region: Option<String>,
-        /// Source execution mode for future runs.
-        #[arg(long, value_enum, default_value = "waterfall")]
-        source_mode: DiscoverySourceModeArg,
-        /// Selected source in waterfall order. Repeat to select multiple.
-        #[arg(long = "source", value_enum)]
-        sources: Vec<DiscoverySourceArg>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
     },
-    /// Replace the source mode and selection used by future Campaign runs
-    CampaignSources {
+    /// Build the exact Approval Block for this Campaign without spending Credits
+    CampaignBudgetRequest {
         /// Campaign UUID.
         #[arg(long)]
         campaign: Uuid,
-        /// Source execution mode.
-        #[arg(long, value_enum)]
-        source_mode: DiscoverySourceModeArg,
-        /// Selected source in waterfall order. Repeat for each source.
-        #[arg(long = "source", value_enum, required = true)]
-        sources: Vec<DiscoverySourceArg>,
+        /// Number of seconds before the human approval expires.
+        #[arg(long, default_value_t = 900)]
+        expires_in: u64,
+        /// Stable retry key for reading the Campaign.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Approve or increase a Campaign spending budget from a strict JSON file
+    CampaignBudgetApprove {
+        /// JSON file containing the exact Campaign budget approval.
+        #[arg(long)]
+        file: String,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Pause new paid runs under an approved Campaign budget
+    CampaignBudgetPause {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Permanently revoke new paid runs under a Campaign budget
+    CampaignBudgetRevoke {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
+    /// Read the current Campaign budget and remaining capacity
+    CampaignBudgetGet {
+        /// Campaign UUID.
+        #[arg(long)]
+        campaign: Uuid,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -1022,21 +1099,6 @@ pub enum DiscoveryCmd {
         /// Campaign UUID owned by the Discovery work surface.
         #[arg(long)]
         campaign: Uuid,
-        /// Business category or web-search phrase.
-        #[arg(long)]
-        query: String,
-        /// Geography included in every selected source query.
-        #[arg(long)]
-        location: String,
-        /// Maximum unique new organizations requested for the run.
-        #[arg(long, default_value_t = 100)]
-        limit: u16,
-        /// ISO 639-1 language code.
-        #[arg(long, default_value = "en")]
-        language: String,
-        /// Optional ISO 3166-1 alpha-2 country code.
-        #[arg(long)]
-        region: Option<String>,
         /// Stable retry key. Reuse it after an uncertain delivery.
         #[arg(long)]
         idempotency_key: Option<Uuid>,
@@ -1606,12 +1668,18 @@ pub enum CanvasCmd {
         /// Channel UUID
         #[arg(long)]
         channel: String,
+        /// Thread root event ID (64-char hex). Omit to read the channel canvas.
+        #[arg(long)]
+        thread: Option<String>,
     },
     /// Set (replace) the canvas document for a channel
     Set {
         /// Channel UUID
         #[arg(long)]
         channel: String,
+        /// Thread root event ID (64-char hex). Omit to write the channel canvas.
+        #[arg(long)]
+        thread: Option<String>,
         /// Canvas content (markdown; use '-' to read from stdin)
         #[arg(long)]
         content: String,
@@ -2814,9 +2882,11 @@ pub struct AskFileArgs {
     pub ask_type: String,
     /// Audience pubkey (64-char hex): must be exactly one tier above the
     /// filer (worker -> leader, leader -> executive, executive -> a
-    /// community owner)
+    /// community owner). Optional: when omitted, `asks raise` addresses the
+    /// filer's manager, resolved from the relay's reporting-line records.
+    /// An explicit value always wins.
     #[arg(long)]
-    pub to: String,
+    pub to: Option<String>,
     /// Initiative id this ask belongs to. Copy it from the
     /// `<colony-work-context>` block's `Initiative id` line. Omit it when
     /// that line reads `none`: work with no initiative (any task created
@@ -2879,6 +2949,42 @@ pub enum EmployeesCmd {
         /// Where the employee sits on the interrupt ladder
         #[arg(long, default_value = "worker")]
         rank: String,
+        /// Manager pubkey (64 hex): an agent one rank up. Executives take
+        /// none; workers point at a leader, leaders at the executive.
+        #[arg(long)]
+        manager: Option<String>,
+    },
+    /// Change an employee's rank (kind 9046). Identity, role slug and hire
+    /// event are untouched; the row and head update together. A demotion is
+    /// refused while any report would be stranded below its escalation
+    /// target -- reassign them first.
+    Promote {
+        /// The employee's pubkey (64 hex characters)
+        pubkey: String,
+        /// New rank on the interrupt ladder
+        #[arg(long)]
+        rank: String,
+        /// New manager pubkey (64 hex), when the change should also move the
+        /// reporting line. Required when the new rank needs a manager the
+        /// employee does not yet have.
+        #[arg(long)]
+        manager: Option<String>,
+    },
+    /// Move an employee's reporting line to a new manager (kind 9046),
+    /// without changing rank.
+    Reassign {
+        /// The employee's pubkey (64 hex characters)
+        pubkey: String,
+        /// New manager pubkey (64 hex): must sit exactly one rank up.
+        #[arg(long)]
+        manager: String,
+    },
+    /// Retire an employee (kind 9046), freeing its role for a future hire.
+    /// Refused while anyone still reports to them -- reassign those first;
+    /// the refusal names them.
+    Retire {
+        /// The employee's pubkey (64 hex characters)
+        pubkey: String,
     },
     /// List the workspace's employees
     List,
@@ -3329,25 +3435,41 @@ mod tests {
                 "dentists",
                 "--location",
                 "Sandton, South Africa",
-                "--source-mode",
-                "concurrent",
-                "--source",
-                "brave_search",
-                "--source",
-                "exa_search",
             ],
             vec![
                 "buzz",
                 "discovery",
-                "campaign-sources",
+                "campaign-budget-request",
                 "--campaign",
                 campaign,
-                "--source-mode",
-                "waterfall",
-                "--source",
-                "exa_search",
-                "--source",
-                "google_maps",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-approve",
+                "--file",
+                "campaign-budget.json",
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-pause",
+                "--campaign",
+                campaign,
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-revoke",
+                "--campaign",
+                campaign,
+            ],
+            vec![
+                "buzz",
+                "discovery",
+                "campaign-budget-get",
+                "--campaign",
+                campaign,
             ],
             vec!["buzz", "discovery", "campaign-get", "--campaign", campaign],
             vec!["buzz", "discovery", "campaign-list", "--limit", "100"],
@@ -3372,17 +3494,7 @@ mod tests {
                 "--notes",
                 "Warm intro",
             ],
-            vec![
-                "buzz",
-                "discovery",
-                "start",
-                "--campaign",
-                campaign,
-                "--query",
-                "dentists",
-                "--location",
-                "Sandton, South Africa",
-            ],
+            vec!["buzz", "discovery", "start", "--campaign", campaign],
             vec!["buzz", "discovery", "status", "--run", run],
             vec![
                 "buzz",
@@ -3403,18 +3515,37 @@ mod tests {
         assert!(
             Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", "dentists"]).is_err()
         );
-        assert!(
-            Cli::try_parse_from(["buzz", "discovery", "start", "--campaign", campaign,]).is_err()
-        );
         assert!(Cli::try_parse_from(["buzz", "discovery", "status"]).is_err());
         assert!(Cli::try_parse_from([
             "buzz",
             "discovery",
-            "campaign-sources",
+            "campaign-create",
+            "--name",
+            "Sandton dentists",
+            "--industry",
+            "healthcare",
+            "--industry-name",
+            "Healthcare",
+            "--vertical",
+            "dentists",
+            "--vertical-name",
+            "Dentists",
+            "--query",
+            "dentists",
+            "--location",
+            "Sandton, South Africa",
+            "--source",
+            "exa_search",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "buzz",
+            "discovery",
+            "start",
             "--campaign",
             campaign,
-            "--source-mode",
-            "concurrent"
+            "--query",
+            "dentists",
         ])
         .is_err());
         assert!(Cli::try_parse_from([
@@ -3975,6 +4106,13 @@ mod tests {
                 "campaign-set",
                 "decide",
                 "decisions",
+                "kit-derive",
+                "kit-get",
+                "kit-list",
+                "kit-set",
+                "library-get",
+                "library-list",
+                "library-set",
                 "post-get",
                 "post-list",
                 "post-set",

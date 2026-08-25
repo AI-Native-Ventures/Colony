@@ -83,7 +83,6 @@ CREATE TABLE channels (
     channel_type    channel_type NOT NULL DEFAULT 'stream',
     visibility      channel_visibility NOT NULL DEFAULT 'open',
     description     TEXT,
-    canvas          TEXT,
     created_by      BYTEA NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -219,10 +218,14 @@ CREATE TABLE events (
     -- Privacy: encrypted/private routing wrappers and p-gated membership notices
     -- must never be discoverable through NIP-50 full-text search. NULL tsvector
     -- never matches `@@`.
-    -- Keep in sync with migrations (final state: 0001 + 0005 + 0009 + 0031).
+    -- Keep in sync with migrations. The migrated final state (0008's positive
+    -- allowlist, later wrapped by 0014/0037 exclusions that are no-ops under
+    -- the allowlist) indexes exactly kinds 0, 9, 40002, 45001, 45003; every
+    -- other kind stays NULL.
     search_tsv  TSVECTOR GENERATED ALWAYS AS (
-        CASE WHEN kind IN (1059, 30179, 30180, 30181, 30300, 30350, 30622, 40013, 40014, 40015, 40016, 40017, 40018, 40019, 40020, 40021, 40022, 44100, 44101, 44200, 44210) THEN NULL::tsvector
-             ELSE to_tsvector('simple', content)
+        CASE WHEN kind IN (0, 9, 40002, 45001, 45003)
+             THEN to_tsvector('simple', content)
+             ELSE NULL::tsvector
         END
     ) STORED,
     sig         BYTEA NOT NULL,
@@ -278,6 +281,11 @@ CREATE INDEX idx_events_not_before ON events (community_id, not_before)
 -- EXPLAIN before its work lands (Quinn option A; Max's index-spelling caveat).
 CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
 
+-- E-tag containment lookups (migration 0004): tags @> '[["e","<hex>"]]' fan-out
+-- resolves through this GIN; jsonb_path_ops supports exactly the @> operator
+-- the query path uses. Partition children inherit it at ATTACH time.
+CREATE INDEX idx_events_tags_gin ON events USING GIN (tags jsonb_path_ops);
+
 -- ── Event mentions ────────────────────────────────────────────────────────────
 -- Conformance: "Channel-less global events and DMs" (#p fan-out). The join to
 -- events MUST carry the community tuple (e.community_id = m.community_id AND
@@ -298,6 +306,11 @@ CREATE INDEX idx_event_mentions_pubkey_created
     ON event_mentions (community_id, pubkey_hex, event_created_at DESC);
 CREATE INDEX idx_event_mentions_pubkey_kind_created
     ON event_mentions (community_id, pubkey_hex, event_kind, event_created_at DESC);
+
+-- Community-scoped mention join (migration 0007): the relay's per-community
+-- mention hydration filters (community_id, event_id) directly.
+CREATE INDEX idx_event_mentions_community_event
+    ON event_mentions (community_id, event_id);
 
 -- ── Subscriptions ─────────────────────────────────────────────────────────────
 -- Conformance: "Mesh, agents, ACP/MCP, and CLI" (persisted subscriptions).
@@ -506,6 +519,30 @@ CREATE TABLE rate_limit_violations (
     actual_value    INT,
     action_taken    VARCHAR(64)
 );
+
+-- ── Product feedback (migration 0017, amended by 0060) ──────────────────────
+-- OPERATOR-GLOBAL: accepted through a dedicated signed event kind and
+-- sidecarred here instead of entering the ordinary events table. Rows remain
+-- attributable to their source community; deployment operators review the
+-- table across communities through internal tooling. community_id is
+-- provenance only (nullable since 0060: SET NULL on tenant deletion) and the
+-- table is excluded from the community write fence.
+CREATE TABLE product_feedback (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    community_id        UUID REFERENCES communities(id) ON DELETE SET NULL,
+    event_id            BYTEA NOT NULL UNIQUE CHECK (length(event_id) = 32),
+    submitter_pubkey    BYTEA NOT NULL CHECK (length(submitter_pubkey) = 32),
+    category            TEXT CHECK (category IN ('bug', 'praise', 'needs-work')),
+    body                TEXT NOT NULL CHECK (length(btrim(body)) > 0),
+    tags                JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(tags) = 'array'),
+    event_created_at    TIMESTAMPTZ NOT NULL,
+    received_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_product_feedback_received
+    ON product_feedback (received_at DESC, id);
+CREATE INDEX idx_product_feedback_community_received
+    ON product_feedback (community_id, received_at DESC, id);
 
 -- ── Thread metadata ───────────────────────────────────────────────────────────
 -- Conformance: thread lookups filter by community before event matching.
@@ -793,6 +830,7 @@ CREATE TABLE _operator_global_tables (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('communities',           'the tenant registry itself; id IS the community key'),
     ('rate_limit_violations', 'deployment abuse/health; never tenant-observable; community_id is an attribution label only'),
+    ('product_feedback',      'deployment product inbox; community_id is provenance only'),
     ('_operator_global_tables', 'the registry table itself'),
     ('accounts',               'credit balances are identity-global, not community-scoped'),
     ('credit_ledger',          'append-only money journal is identity-global, not community-scoped'),
@@ -824,16 +862,76 @@ CREATE TABLE credit_ledger (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     pubkey BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
     delta BIGINT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('debit', 'credit', 'seed', 'correction')),
+    kind TEXT NOT NULL CHECK (kind IN (
+        'debit', 'credit', 'seed', 'correction', 'hold', 'release'
+    )),
     ref TEXT NOT NULL,
     model TEXT,
     observed_cost BIGINT CHECK (observed_cost IS NULL OR observed_cost >= 0),
     request_id TEXT,
     settle_basis TEXT CHECK (settle_basis IS NULL OR settle_basis IN ('observed', 'estimated')),
+    service TEXT CHECK (service IN ('model', 'discovery')),
+    quantity BIGINT CHECK (quantity IS NULL OR quantity > 0),
+    unit_price_nanousd BIGINT
+        CHECK (unit_price_nanousd IS NULL OR unit_price_nanousd > 0),
+    discovery_community_id UUID,
+    discovery_campaign_id UUID,
+    discovery_run_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (pubkey, ref)
+    UNIQUE (pubkey, ref),
+    CONSTRAINT discovery_ledger_attribution_complete CHECK (
+        (
+            service IS NULL
+            AND model IS NULL
+            AND quantity IS NULL
+            AND unit_price_nanousd IS NULL
+            AND discovery_community_id IS NULL
+            AND discovery_campaign_id IS NULL
+            AND discovery_run_id IS NULL
+        ) OR (
+            service = 'model'
+            AND model IS NOT NULL
+            AND quantity IS NULL
+            AND unit_price_nanousd IS NULL
+            AND discovery_community_id IS NULL
+            AND discovery_campaign_id IS NULL
+            AND discovery_run_id IS NULL
+        ) OR (
+            service = 'discovery'
+            AND kind IN ('debit', 'hold', 'release')
+            AND ((kind IN ('debit', 'hold') AND delta < 0)
+                 OR (kind = 'release' AND delta > 0))
+            AND model IS NULL
+            AND observed_cost IS NULL
+            AND request_id IS NULL
+            AND settle_basis IS NULL
+            AND quantity IS NOT NULL
+            AND unit_price_nanousd IS NOT NULL
+            AND discovery_community_id IS NOT NULL
+            AND discovery_campaign_id IS NOT NULL
+            AND discovery_run_id IS NOT NULL
+            AND abs(delta::NUMERIC) = quantity::NUMERIC * unit_price_nanousd::NUMERIC
+        )
+    ),
+    CONSTRAINT credit_ledger_model_service_complete CHECK (
+        model IS NULL OR service = 'model'
+    )
 );
+CREATE FUNCTION credit_ledger_compat_attribution() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.model IS NOT NULL AND NEW.service IS NULL THEN
+        NEW.service := 'model';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER credit_ledger_compat_attribution
+BEFORE INSERT OR UPDATE OF model,service ON credit_ledger
+FOR EACH ROW EXECUTE FUNCTION credit_ledger_compat_attribution();
 CREATE INDEX credit_ledger_created_at_idx ON credit_ledger (created_at);
+CREATE UNIQUE INDEX credit_ledger_discovery_run_idx
+    ON credit_ledger (pubkey, discovery_run_id)
+    WHERE service = 'discovery' AND kind = 'debit';
 
 CREATE TABLE gateway_tokens (
     token_hash BYTEA PRIMARY KEY CHECK (octet_length(token_hash) = 32),
@@ -882,14 +980,60 @@ CREATE TABLE gateway_settlement_intents (
     provider_status SMALLINT,
     reason TEXT,
     correction_ref TEXT,
+    reserved_nanousd BIGINT NOT NULL DEFAULT 0 CHECK (reserved_nanousd >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at TIMESTAMPTZ,
-    UNIQUE (pubkey, reference)
+    UNIQUE (pubkey, reference),
+    CHECK (
+        (state IN ('admitted','provider_completed','reconciliation')
+         AND reserved_nanousd > 0)
+        OR (state IN ('debited','resolved') AND reserved_nanousd = 0)
+    )
 );
+
+CREATE FUNCTION gateway_settlement_intent_reservation_compat() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.state IN ('admitted','provider_completed','reconciliation') THEN
+        IF NEW.reserved_nanousd = 0 THEN
+            NEW.reserved_nanousd := GREATEST(
+                COALESCE(
+                    (SELECT typical_call_cost_nanousd FROM accounts WHERE pubkey=NEW.pubkey),
+                    50000000
+                ),
+                1
+            );
+        END IF;
+    ELSIF NEW.state IN ('debited','resolved') THEN
+        NEW.reserved_nanousd := 0;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_reservation_compat
+BEFORE INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW EXECUTE FUNCTION gateway_settlement_intent_reservation_compat();
+
+CREATE FUNCTION gateway_settlement_intent_account_lock() RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM 1 FROM accounts WHERE pubkey=NEW.pubkey FOR UPDATE;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER gateway_settlement_intent_account_lock
+AFTER INSERT OR UPDATE ON gateway_settlement_intents
+FOR EACH ROW
+WHEN (NEW.state IN ('admitted','provider_completed','reconciliation'))
+EXECUTE FUNCTION gateway_settlement_intent_account_lock();
 CREATE INDEX gateway_settlement_intents_pending_idx
     ON gateway_settlement_intents (updated_at)
     WHERE state <> 'resolved';
+CREATE INDEX gateway_settlement_intents_account_reservations_idx
+    ON gateway_settlement_intents (pubkey)
+    INCLUDE (reserved_nanousd)
+    WHERE state <> 'resolved' AND reserved_nanousd > 0;
 
 ALTER TABLE gateway_reconciliation_outcomes
     ADD COLUMN intent_id BIGINT REFERENCES gateway_settlement_intents(id),
@@ -1268,19 +1412,78 @@ CREATE TABLE discovery_campaigns (
         AND array_position(source_keys, source_keys[1], 2) IS NULL
         AND (cardinality(source_keys) < 2 OR array_position(source_keys, source_keys[2], 3) IS NULL)
     ),
+    budget_payer_pubkey BYTEA
+        CHECK (budget_payer_pubkey IS NULL OR octet_length(budget_payer_pubkey) = 32),
+    budget_approved_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (budget_approved_nanousd >= 0),
+    budget_spent_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (budget_spent_nanousd >= 0),
+    budget_reserved_nanousd BIGINT NOT NULL DEFAULT 0
+        CHECK (budget_reserved_nanousd >= 0),
+    budget_state TEXT NOT NULL DEFAULT 'unapproved'
+        CHECK (budget_state IN ('unapproved', 'active', 'paused', 'revoked', 'exhausted')),
+    budget_approval_event_id BYTEA
+        CHECK (budget_approval_event_id IS NULL OR octet_length(budget_approval_event_id) = 32),
+    budget_approved_at TIMESTAMPTZ,
+    budget_fingerprint BYTEA
+        CHECK (budget_fingerprint IS NULL OR octet_length(budget_fingerprint) = 32),
+    price_per_retained_lead_nanousd BIGINT
+        CHECK (price_per_retained_lead_nanousd IS NULL OR price_per_retained_lead_nanousd > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (community_id, id)
+    PRIMARY KEY (community_id, id),
+    CONSTRAINT discovery_campaigns_spent_and_reserved_within_approved CHECK (
+        budget_spent_nanousd::NUMERIC + budget_reserved_nanousd::NUMERIC
+            <= budget_approved_nanousd::NUMERIC
+    ),
+    CONSTRAINT discovery_campaigns_budget_approval_complete CHECK (
+        (
+            budget_state = 'unapproved'
+            AND budget_payer_pubkey IS NULL
+            AND budget_approved_nanousd = 0
+            AND budget_spent_nanousd = 0
+            AND budget_reserved_nanousd = 0
+            AND budget_approval_event_id IS NULL
+            AND budget_approved_at IS NULL
+            AND budget_fingerprint IS NULL
+            AND price_per_retained_lead_nanousd IS NULL
+        ) OR (
+            budget_state <> 'unapproved'
+            AND budget_payer_pubkey IS NOT NULL
+            AND budget_approved_nanousd > 0
+            AND budget_approval_event_id IS NOT NULL
+            AND budget_approved_at IS NOT NULL
+            AND budget_fingerprint IS NOT NULL
+            AND price_per_retained_lead_nanousd IS NOT NULL
+        )
+    )
 );
 
 CREATE INDEX discovery_campaigns_taxonomy_created_idx
     ON discovery_campaigns (community_id, industry_id, vertical_id, created_at DESC, id DESC);
+CREATE INDEX discovery_campaigns_budget_payer_active_idx
+    ON discovery_campaigns (budget_payer_pubkey, budget_state)
+    INCLUDE (budget_reserved_nanousd)
+    WHERE budget_payer_pubkey IS NOT NULL;
+CREATE UNIQUE INDEX discovery_campaign_budget_approval_event_unique
+    ON discovery_campaigns (community_id, budget_approval_event_id)
+    WHERE budget_approval_event_id IS NOT NULL;
+
+CREATE TABLE discovery_budget_approval_claims (
+    approval_event_id BYTEA PRIMARY KEY CHECK (octet_length(approval_event_id) = 32),
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE discovery_workspace_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     idempotency_key UUID NOT NULL,
     operation TEXT NOT NULL CHECK (operation IN (
         'access', 'create_campaign', 'update_campaign_sources',
+        'approve_campaign_budget', 'pause_campaign_budget',
+        'revoke_campaign_budget', 'get_campaign_budget',
         'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts',
         'get_lead', 'update_lead'
     )),
@@ -1299,9 +1502,9 @@ CREATE TABLE discovery_runs (
     requested_by BYTEA NOT NULL CHECK (octet_length(requested_by) = 32),
     start_idempotency_key UUID NOT NULL,
     discovery_protocol_version SMALLINT NOT NULL DEFAULT 1
-        CHECK (discovery_protocol_version IN (1, 2)),
+        CHECK (discovery_protocol_version IN (1, 2, 3)),
     lease_worker_protocol_version SMALLINT
-        CHECK (lease_worker_protocol_version IN (1, 2)),
+        CHECK (lease_worker_protocol_version IN (1, 2, 3)),
     lease_worker_protocol_claim_id UUID,
     state TEXT NOT NULL DEFAULT 'queued'
         CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
@@ -1313,12 +1516,79 @@ CREATE TABLE discovery_runs (
     attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
     terminal_reason TEXT
         CHECK (terminal_reason IN ('cancelled_by_actor', 'entitlement_revoked', 'executor_failed')),
+    payer_pubkey BYTEA
+        CHECK (payer_pubkey IS NULL OR octet_length(payer_pubkey) = 32),
+    price_per_retained_lead_nanousd BIGINT
+        CHECK (price_per_retained_lead_nanousd IS NULL OR price_per_retained_lead_nanousd > 0),
+    billable_lead_limit SMALLINT
+        CHECK (billable_lead_limit IS NULL OR billable_lead_limit BETWEEN 1 AND 500),
+    reserved_nanousd BIGINT
+        CHECK (reserved_nanousd IS NULL OR reserved_nanousd >= 0),
+    settled_nanousd BIGINT
+        CHECK (settled_nanousd IS NULL OR settled_nanousd >= 0),
+    released_nanousd BIGINT
+        CHECK (released_nanousd IS NULL OR released_nanousd >= 0),
+    billed_retained_lead_count SMALLINT
+        CHECK (billed_retained_lead_count IS NULL OR billed_retained_lead_count BETWEEN 0 AND 500),
+    settlement_ref TEXT CHECK (
+        settlement_ref IS NULL OR (
+            octet_length(settlement_ref) BETWEEN 1 AND 256
+            AND settlement_ref = btrim(settlement_ref)
+            AND settlement_ref !~ '[[:cntrl:]]'
+        )
+    ),
+    settled_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, id),
     UNIQUE (community_id, start_idempotency_key),
     CHECK (completed_steps <= total_steps),
-    CHECK ((claim_id IS NULL) = (lease_until IS NULL))
+    CHECK ((claim_id IS NULL) = (lease_until IS NULL)),
+    CONSTRAINT discovery_runs_billing_snapshot_complete CHECK (
+        (
+            discovery_protocol_version < 3
+            AND payer_pubkey IS NULL
+            AND price_per_retained_lead_nanousd IS NULL
+            AND billable_lead_limit IS NULL
+            AND reserved_nanousd IS NULL
+            AND settled_nanousd IS NULL
+            AND released_nanousd IS NULL
+            AND billed_retained_lead_count IS NULL
+            AND settlement_ref IS NULL
+            AND settled_at IS NULL
+        ) OR (
+            discovery_protocol_version = 3
+            AND payer_pubkey IS NOT NULL
+            AND price_per_retained_lead_nanousd IS NOT NULL
+            AND billable_lead_limit IS NOT NULL
+            AND reserved_nanousd IS NOT NULL
+            AND reserved_nanousd::NUMERIC =
+                price_per_retained_lead_nanousd::NUMERIC * billable_lead_limit::NUMERIC
+            AND (
+                (
+                    state IN ('queued', 'running')
+                    AND settled_nanousd IS NULL
+                    AND released_nanousd IS NULL
+                    AND billed_retained_lead_count IS NULL
+                    AND settlement_ref IS NULL
+                    AND settled_at IS NULL
+                ) OR (
+                    state IN ('succeeded', 'cancelled', 'failed')
+                    AND settled_nanousd IS NOT NULL
+                    AND released_nanousd IS NOT NULL
+                    AND billed_retained_lead_count IS NOT NULL
+                    AND billed_retained_lead_count <= billable_lead_limit
+                    AND settlement_ref IS NOT NULL
+                    AND settled_at IS NOT NULL
+                    AND settled_nanousd::NUMERIC + released_nanousd::NUMERIC
+                        = reserved_nanousd::NUMERIC
+                    AND settled_nanousd::NUMERIC =
+                        price_per_retained_lead_nanousd::NUMERIC
+                            * billed_retained_lead_count::NUMERIC
+                )
+            )
+        )
+    )
 );
 
 CREATE FUNCTION discovery_guard_active_campaign_run() RETURNS TRIGGER AS $$
@@ -1368,16 +1638,21 @@ BEGIN
         NEW.lease_worker_protocol_claim_id := NULL;
         RETURN NEW;
     END IF;
-    IF NEW.lease_worker_protocol_version=2
+    IF NEW.lease_worker_protocol_version IN (2, 3)
        AND NEW.lease_worker_protocol_claim_id=NEW.claim_id
     THEN
+        IF NEW.lease_worker_protocol_version <> NEW.discovery_protocol_version THEN
+            RAISE EXCEPTION
+                'Discovery worker protocol does not match the run protocol'
+                USING ERRCODE = 'check_violation';
+        END IF;
         RETURN NEW;
     END IF;
     NEW.lease_worker_protocol_version := 1;
     NEW.lease_worker_protocol_claim_id := NEW.claim_id;
-    IF NEW.discovery_protocol_version=2 THEN
+    IF NEW.discovery_protocol_version <> 1 THEN
         RAISE EXCEPTION
-            'Discovery protocol V1 worker cannot claim a protocol V2 run'
+            'Discovery protocol V1 worker cannot claim a newer protocol run'
             USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
@@ -1422,6 +1697,11 @@ CREATE INDEX discovery_runs_claimable_idx
 
 CREATE INDEX discovery_runs_community_created_idx
     ON discovery_runs (community_id, created_at DESC);
+CREATE INDEX discovery_runs_community_campaign_idx
+    ON discovery_runs (community_id, campaign_id, created_at DESC);
+CREATE UNIQUE INDEX discovery_runs_settlement_ref_idx
+    ON discovery_runs (community_id, settlement_ref)
+    WHERE settlement_ref IS NOT NULL;
 
 CREATE TABLE discovery_action_claims (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
@@ -1563,6 +1843,7 @@ CREATE TABLE discovery_run_sources (
         'rate_limited', 'provider_unavailable', 'response_too_large',
         'request_timed_out', 'malformed_response', 'outcome_unknown', 'cancelled'
     )),
+    provider_poll_after TIMESTAMPTZ,
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1573,6 +1854,42 @@ CREATE TABLE discovery_run_sources (
     CHECK ((status = 'pending' AND started_at IS NULL) OR started_at IS NOT NULL),
     CHECK ((status IN ('pending', 'active') AND finished_at IS NULL) OR finished_at IS NOT NULL)
 );
+
+CREATE TABLE discovery_gateway_attempts (
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    run_id UUID NOT NULL,
+    payer_pubkey BYTEA NOT NULL CHECK (octet_length(payer_pubkey) = 32),
+    provider TEXT NOT NULL CHECK (provider IN ('outscraper','brave_search','exa_search')),
+    intent_id TEXT NOT NULL CHECK (
+        octet_length(intent_id) BETWEEN 1 AND 128
+        AND intent_id = btrim(intent_id)
+        AND intent_id !~ '[[:cntrl:]]'
+    ),
+    provider_request_id TEXT CHECK (
+        provider_request_id IS NULL OR (
+            octet_length(provider_request_id) BETWEEN 1 AND 128
+            AND provider_request_id = btrim(provider_request_id)
+            AND provider_request_id !~ '[[:cntrl:]]'
+        )
+    ),
+    status TEXT NOT NULL CHECK (status IN ('intent','pending','ready')),
+    observations JSONB NOT NULL DEFAULT '[]'::JSONB
+        CHECK (jsonb_typeof(observations) = 'array'),
+    returned_count INTEGER NOT NULL DEFAULT 0 CHECK (returned_count BETWEEN 0 AND 500),
+    retained_count INTEGER NOT NULL DEFAULT 0 CHECK (retained_count BETWEEN 0 AND 500),
+    duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count BETWEEN 0 AND 500),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, run_id, provider),
+    FOREIGN KEY (community_id, campaign_id)
+        REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_gateway_attempts_payer_recent_idx
+    ON discovery_gateway_attempts (payer_pubkey, created_at DESC);
 
 CREATE FUNCTION discovery_seed_legacy_run_plan() RETURNS TRIGGER AS $$
 DECLARE
@@ -1780,6 +2097,39 @@ CREATE TABLE discovery_business_observations (
     FOREIGN KEY (community_id, first_run_id)
         REFERENCES discovery_runs(community_id, id)
 );
+
+CREATE TABLE discovery_campaign_leads (
+    community_id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    lead_id UUID NOT NULL,
+    discovered_run_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, campaign_id, lead_id),
+    FOREIGN KEY (community_id, campaign_id)
+        REFERENCES discovery_campaigns(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, lead_id)
+        REFERENCES discovery_business_observations(community_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (community_id, discovered_run_id)
+        REFERENCES discovery_runs(community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX discovery_campaign_leads_lead_idx
+    ON discovery_campaign_leads (community_id, lead_id);
+
+CREATE FUNCTION discovery_associate_observation_campaign() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO discovery_campaign_leads
+        (community_id,campaign_id,lead_id,discovered_run_id,created_at)
+    SELECT NEW.community_id,r.campaign_id,NEW.id,NEW.first_run_id,NEW.first_observed_at
+    FROM discovery_runs r
+    WHERE r.community_id=NEW.community_id AND r.id=NEW.first_run_id
+    ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER discovery_associate_observation_campaign
+AFTER INSERT ON discovery_business_observations
+FOR EACH ROW EXECUTE FUNCTION discovery_associate_observation_campaign();
 
 CREATE FUNCTION discovery_guard_legacy_observation_insert() RETURNS TRIGGER AS $$
 BEGIN
@@ -2001,6 +2351,21 @@ CREATE TABLE discovery_observation_batches (
     CHECK (accepted_count + existing_count BETWEEN 1 AND 25)
 );
 
+CREATE FUNCTION discovery_guard_legacy_duplicate_batch() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.existing_count > 0 AND pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION
+            'Released Discovery writer cannot safely commit duplicate Campaign Leads; update Colony'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER discovery_guard_legacy_duplicate_batch
+BEFORE INSERT ON discovery_observation_batches
+FOR EACH ROW EXECUTE FUNCTION discovery_guard_legacy_duplicate_batch();
+
 CREATE TABLE discovery_source_observation_batches (
     community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
     run_id UUID NOT NULL,
@@ -2147,13 +2512,19 @@ CREATE TABLE IF NOT EXISTS employees (
     -- events alone rather than trusting this table.
     hired_by      BYTEA NOT NULL,
     hire_event    BYTEA NOT NULL,
+    -- The agent this employee reports to, one rung up the interrupt ladder
+    -- (migration 0061). NULL means no manager: the root marker for
+    -- executives and the Unassigned-tray state for everyone else. Read by
+    -- interrupt_gate::agent_manager before any event is consulted.
+    manager       BYTEA,
     status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
     created_at    BIGINT NOT NULL,
     updated_at    BIGINT NOT NULL,
     PRIMARY KEY (community_id, pubkey),
     CHECK (LENGTH(pubkey) = 32),
     CHECK (LENGTH(hired_by) = 32),
-    CHECK (LENGTH(hire_event) = 32)
+    CHECK (LENGTH(hire_event) = 32),
+    CONSTRAINT employees_manager_len CHECK (manager IS NULL OR LENGTH(manager) = 32)
 );
 
 -- Hiring is driven by a best-effort side effect, which may run more than once
@@ -2191,6 +2562,10 @@ CREATE TABLE jobs (
     head_at          BIGINT NOT NULL DEFAULT 0,
     created_at       BIGINT NOT NULL,
     updated_at       BIGINT NOT NULL,
+    -- Execution stamps (migration 0047): which seat ran the work and on what
+    -- provider and model.
+    provider         TEXT,
+    model            TEXT,
     task_id          TEXT,
     checkpoint_seq   BIGINT NOT NULL DEFAULT 0,
     checkpoint       JSONB,
@@ -2407,15 +2782,19 @@ CREATE TABLE operator_access_log (
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('operator_access_log', 'deployment-wide operator accountability; filter and target values are stored only as digests');
 
--- Ported from migrations/0059_community_deletion.sql (upstream community-deletion + storage-sweep tables)
+-- Ported from migrations/0059_community_deletion.sql + 0060_community_deletion_recovery.sql
+-- (upstream community-deletion + storage-sweep tables; 0060 adds terminal abort recovery)
 CREATE TABLE community_deletion_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    community_id UUID NOT NULL UNIQUE REFERENCES communities(id),
+    -- 0060 dropped the blanket UNIQUE here: an aborted request must not
+    -- permanently consume the community's one active deletion slot. The one-
+    -- active-slot rule lives in the partial unique index below.
+    community_id UUID NOT NULL REFERENCES communities(id),
     community_host TEXT NOT NULL,
     stage TEXT NOT NULL DEFAULT 'submitted' CHECK (stage IN (
         'submitted', 'inventoried', 'approved', 'fenced', 'drained',
         'bindings_removed', 'postgres_purged', 'cache_purged',
-        'logically_verified', 'retention_pending'
+        'logically_verified', 'retention_pending', 'aborted'
     )),
     requested_by TEXT NOT NULL,
     reason TEXT,
@@ -2444,8 +2823,17 @@ CREATE TABLE community_deletion_requests (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMPTZ,
+    -- 0060 terminal abort recovery.
+    pre_quiesce_archived_at TIMESTAMPTZ,
+    quiescing_started_at TIMESTAMPTZ,
+    aborted_by TEXT,
+    abort_reason TEXT,
+    aborted_at TIMESTAMPTZ,
     CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL)),
     CHECK ((inventory_frozen_at IS NULL) = (inventory_digest IS NULL)),
+    CHECK ((stage = 'aborted') = (aborted_at IS NOT NULL)),
+    CHECK ((aborted_at IS NULL) = (aborted_by IS NULL)),
+    CHECK ((aborted_at IS NULL) = (abort_reason IS NULL)),
     UNIQUE (id, community_id, inventory_digest)
 );;
 
@@ -2510,6 +2898,12 @@ CREATE TABLE community_deletion_executor_heartbeats (
     stopped_at TIMESTAMPTZ
 );;
 
+
+-- Aborted requests remain immutable audit evidence, but must not permanently
+-- consume the community's one active deletion slot (migration 0060).
+CREATE UNIQUE INDEX community_deletion_requests_active_community
+    ON community_deletion_requests (community_id)
+    WHERE stage <> 'aborted';
 CREATE INDEX community_deletion_requests_runnable
     ON community_deletion_requests (next_attempt_at, created_at)
     WHERE blocked_at IS NULL
@@ -2536,6 +2930,117 @@ CREATE TABLE community_deletion_approvals (
         REFERENCES community_deletion_requests(id, community_id, inventory_digest)
         ON DELETE RESTRICT
 );;
+
+
+-- ── Deletion evidence immutability guards (migration 0059) ──────────────────
+-- The approval identity is only meaningful while its frozen target and
+-- inventory remain unchanged. Make those facts irreversible in the database,
+-- not merely conventions in the worker.
+CREATE FUNCTION prevent_community_deletion_request_retargeting()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.community_id IS DISTINCT FROM OLD.community_id
+        OR NEW.community_host IS DISTINCT FROM OLD.community_host
+    THEN
+        RAISE EXCEPTION 'community deletion target identity is immutable'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF OLD.inventory_frozen_at IS NOT NULL AND (
+        NEW.schema_manifest IS DISTINCT FROM OLD.schema_manifest
+        OR NEW.storage_manifest IS DISTINCT FROM OLD.storage_manifest
+        OR NEW.inventory_manifest IS DISTINCT FROM OLD.inventory_manifest
+        OR NEW.inventory_digest IS DISTINCT FROM OLD.inventory_digest
+        OR NEW.inventory_frozen_at IS DISTINCT FROM OLD.inventory_frozen_at
+    ) THEN
+        RAISE EXCEPTION 'frozen community deletion inventory is immutable'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF OLD.destructive_storage_frozen_at IS NOT NULL AND (
+        NEW.destructive_storage_manifest IS DISTINCT FROM OLD.destructive_storage_manifest
+        OR NEW.destructive_storage_frozen_at IS DISTINCT FROM OLD.destructive_storage_frozen_at
+    ) THEN
+        RAISE EXCEPTION 'frozen destructive storage manifest is immutable'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER community_deletion_request_retargeting_guard
+BEFORE UPDATE ON community_deletion_requests
+FOR EACH ROW
+EXECUTE FUNCTION prevent_community_deletion_request_retargeting();
+
+CREATE FUNCTION prevent_community_deletion_approval_removal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'community deletion approval evidence is immutable'
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+
+CREATE TRIGGER community_deletion_approval_removal_guard
+BEFORE UPDATE OR DELETE ON community_deletion_approvals
+FOR EACH ROW
+EXECUTE FUNCTION prevent_community_deletion_approval_removal();
+
+-- Chunk content is immutable once written; the only permitted update is the
+-- one-way deleted_at stamp. New chunks are permitted only while the request is
+-- fenced and its destructive manifest remains unfrozen. Removal is permitted
+-- only while the destructive manifest has not yet frozen (a retried partial
+-- freeze rewrites its chunks) or once the request has passed logical
+-- verification (terminal cleanup).
+CREATE FUNCTION protect_community_deletion_manifest_keys()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    frozen_at TIMESTAMPTZ;
+    request_stage TEXT;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.request_id IS DISTINCT FROM OLD.request_id
+            OR NEW.chunk_no IS DISTINCT FROM OLD.chunk_no
+            OR NEW.prefix IS DISTINCT FROM OLD.prefix
+            OR NEW.keys IS DISTINCT FROM OLD.keys
+            OR OLD.deleted_at IS NOT NULL
+        THEN
+            RAISE EXCEPTION 'community deletion manifest key chunks are immutable'
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+        RETURN NEW;
+    END IF;
+    SELECT destructive_storage_frozen_at, stage
+      INTO frozen_at, request_stage
+      FROM community_deletion_requests
+     WHERE id = CASE WHEN TG_OP = 'INSERT' THEN NEW.request_id ELSE OLD.request_id END
+     FOR UPDATE;
+    IF TG_OP = 'INSERT' THEN
+        IF FOUND AND frozen_at IS NULL AND request_stage = 'fenced' THEN
+            RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'community deletion manifest key chunks require an unfrozen fenced request'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF NOT FOUND
+        OR frozen_at IS NULL
+        OR request_stage IN ('logically_verified', 'retention_pending')
+    THEN
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'community deletion manifest key chunks cannot be removed mid-execution'
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+
+CREATE TRIGGER community_deletion_manifest_keys_guard
+BEFORE INSERT OR UPDATE OR DELETE ON community_deletion_manifest_keys
+FOR EACH ROW
+EXECUTE FUNCTION protect_community_deletion_manifest_keys();
 
 -- ── Git repo name registry (NIP-34 kind:30617) ───────────────────────────────
 -- Ported from migrations/0002_git_repo_names.sql (was KNOWN_DRIFT; needed by the
@@ -2564,6 +3069,208 @@ CREATE TABLE parameterized_event_watermarks (
     event_id      BYTEA NOT NULL,
     PRIMARY KEY (community_id, kind, pubkey, d_tag)
 );;
+
+-- ── NIP-RS / mesh-status database guards ─────────────────────────────────────
+-- Ported from migrations/0009 + 0010 + 0011 + 0019 (final bodies: 0011 and
+-- 0019). These enforce retention invariants against pre-migration relay
+-- binaries during a rolling deployment, so they belong to the desired state,
+-- not only to the migration history.
+--
+-- Every conforming NIP-RS insert must advance the watermark; an insert older
+-- than the greatest accepted tuple is rejected even when no live row remains.
+-- Exact replay is a durable coordinate-level no-op, independent of whether the
+-- physically retained payload still exists.
+CREATE FUNCTION guard_nip_rs_watermark() RETURNS trigger AS $$
+DECLARE
+    advanced BOOLEAN;
+BEGIN
+    IF NEW.kind = 30078
+       AND NEW.d_tag ~ '^read-state:[0-9a-f]{32}$'
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND tag->0 = '"d"'::jsonb
+       ) = 1
+       AND EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND jsonb_array_length(tag) >= 2
+             AND jsonb_typeof(tag->1) = 'string'
+             AND tag->>0 = 'd'
+             AND tag->>1 = NEW.d_tag
+       )
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE tag = '["t", "read-state"]'::jsonb
+       ) = 1 THEN
+        INSERT INTO parameterized_event_watermarks
+            (community_id, kind, pubkey, d_tag, created_at, event_id)
+        VALUES
+            (NEW.community_id, NEW.kind, NEW.pubkey, NEW.d_tag, NEW.created_at, NEW.id)
+        ON CONFLICT (community_id, kind, pubkey, d_tag) DO UPDATE SET
+            created_at = EXCLUDED.created_at,
+            event_id = EXCLUDED.event_id
+        WHERE EXCLUDED.created_at > parameterized_event_watermarks.created_at
+           OR (EXCLUDED.created_at = parameterized_event_watermarks.created_at
+               AND EXCLUDED.event_id < parameterized_event_watermarks.event_id)
+        RETURNING TRUE INTO advanced;
+
+        IF NOT COALESCE(advanced, FALSE) THEN
+            IF EXISTS (
+                SELECT 1
+                FROM parameterized_event_watermarks
+                WHERE community_id = NEW.community_id
+                  AND kind = NEW.kind
+                  AND pubkey = NEW.pubkey
+                  AND d_tag = NEW.d_tag
+                  AND created_at = NEW.created_at
+                  AND event_id = NEW.id
+            ) THEN
+                RETURN NULL;
+            END IF;
+
+            RAISE EXCEPTION 'stale NIP-RS event rejected by durable watermark'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- A relay binary from before migration 0011 can classify an incoming event by
+-- broad EXISTS predicates and hard-delete the current coordinate before its
+-- corrected INSERT guard runs. Fail the whole old-writer transaction rather
+-- than silently skipping the DELETE. Corrected paths opt in transaction-locally.
+CREATE FUNCTION guard_nip_rs_hard_delete() RETURNS trigger AS $$
+BEGIN
+    IF current_setting('buzz.nip_rs_hard_delete', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION 'NIP-RS hard delete requires corrected writer opt-in'
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+-- NIP-RS payloads have no historical product value. Enforce physical removal
+-- when old relay binaries use their legacy soft-delete path, including NIP-09
+-- coordinate deletion during a mixed-version rollout.
+CREATE OR REPLACE FUNCTION purge_soft_deleted_nip_rs() RETURNS trigger AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL
+       AND NEW.deleted_at IS NOT NULL
+       AND NEW.kind = 30078
+       AND NEW.d_tag ~ '^read-state:[0-9a-f]{32}$'
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND tag->0 = '"d"'::jsonb
+       ) = 1
+       AND EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE jsonb_typeof(tag) = 'array'
+             AND jsonb_array_length(tag) >= 2
+             AND jsonb_typeof(tag->1) = 'string'
+             AND tag->>0 = 'd'
+             AND tag->>1 = NEW.d_tag
+       )
+       AND (
+           SELECT count(*)
+           FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.tags) = 'array' THEN NEW.tags ELSE '[]'::jsonb END) tag
+           WHERE tag = '["t", "read-state"]'::jsonb
+       ) = 1 THEN
+        PERFORM set_config('buzz.nip_rs_hard_delete', 'on', true);
+
+        DELETE FROM events
+        WHERE community_id = NEW.community_id
+          AND created_at = NEW.created_at
+          AND id = NEW.id;
+
+        DELETE FROM event_mentions
+        WHERE community_id = NEW.community_id AND event_id = NEW.id;
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Mesh status is a heartbeat carried in a reserved kind:30003 coordinate
+-- (migration 0019). Only the live head has product value; purge superseded
+-- soft-deleted payloads written by older relay binaries during rolling deploys.
+CREATE FUNCTION purge_soft_deleted_buzz_mesh_status() RETURNS trigger AS $$
+BEGIN
+    IF OLD.deleted_at IS NULL
+       AND NEW.deleted_at IS NOT NULL
+       AND NEW.kind = 30003
+       AND NEW.d_tag LIKE 'buzz-mesh-member-status:%'
+       AND NEW.tags @> '[["k", "buzz-mesh-status"]]'::jsonb THEN
+        DELETE FROM events
+        WHERE community_id = NEW.community_id
+          AND created_at = NEW.created_at
+          AND id = NEW.id;
+
+        DELETE FROM event_mentions
+        WHERE community_id = NEW.community_id AND event_id = NEW.id;
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Mention indexing runs after the event transaction commits. Lock the live event
+-- row while a mention is inserted so a concurrent hard delete cannot leave an
+-- orphan behind; if deletion already won, silently skip the stale index row.
+-- (Migration 0009; unchanged by 0010/0011.)
+CREATE FUNCTION guard_event_mention_live() RETURNS trigger AS $$
+BEGIN
+    IF NEW.event_kind IS DISTINCT FROM 30078 THEN
+        RETURN NEW;
+    END IF;
+
+    PERFORM 1
+    FROM events
+    WHERE community_id = NEW.community_id
+      AND id = NEW.event_id
+      AND created_at = NEW.event_created_at
+      AND deleted_at IS NULL
+    FOR KEY SHARE;
+
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Triggers on the partitioned parent propagate to every attached partition.
+CREATE TRIGGER trg_events_nip_rs_watermark
+    BEFORE INSERT ON events
+    FOR EACH ROW EXECUTE FUNCTION guard_nip_rs_watermark();
+
+CREATE TRIGGER trg_events_guard_nip_rs_hard_delete
+    BEFORE DELETE ON events
+    FOR EACH ROW
+    WHEN (OLD.kind = 30078 AND OLD.d_tag ~ '^read-state:[0-9a-f]{32}$')
+    EXECUTE FUNCTION guard_nip_rs_hard_delete();
+
+CREATE TRIGGER trg_events_purge_soft_deleted_nip_rs
+    AFTER UPDATE OF deleted_at ON events
+    FOR EACH ROW EXECUTE FUNCTION purge_soft_deleted_nip_rs();
+
+CREATE TRIGGER trg_events_purge_soft_deleted_buzz_mesh_status
+    AFTER UPDATE OF deleted_at ON events
+    FOR EACH ROW EXECUTE FUNCTION purge_soft_deleted_buzz_mesh_status();
+
+CREATE TRIGGER trg_event_mentions_require_live_event
+    BEFORE INSERT ON event_mentions
+    FOR EACH ROW EXECUTE FUNCTION guard_event_mention_live();
 
 INSERT INTO _operator_global_tables (table_name, reason) VALUES
     ('community_deletion_requests', 'deployment deletion lifecycle and frozen inventory'),
@@ -2753,6 +3460,111 @@ END
 $$;
 CREATE TRIGGER communities_deletion_tombstone BEFORE UPDATE OR DELETE ON communities
 FOR EACH ROW EXECUTE FUNCTION enforce_community_tombstone();
+-- Email and password accounts with zero-knowledge key escrow.
+--
+-- The relay stores two opaque NIP-49 blobs per account. Both encrypt the same
+-- private key: one under the user's password, one under their recovery code.
+-- Neither the password nor the key is ever transmitted, so neither can be
+-- recovered from this table.
+--
+-- Named email_accounts because migration 0050 already owns `accounts` for
+-- identity-global credit balances. These rows are tenant scoped instead.
+CREATE TABLE email_accounts (
+    community_id       UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    id                 UUID NOT NULL DEFAULT gen_random_uuid(),
+    email              TEXT NOT NULL,
+    pubkey             TEXT NOT NULL CHECK (length(pubkey) = 64),
+    auth_hash          TEXT NOT NULL,
+    password_blob      TEXT NOT NULL,
+    recovery_blob      TEXT NOT NULL,
+    recovery_code_hash TEXT NOT NULL CHECK (length(recovery_code_hash) = 64),
+    kdf_version        SMALLINT NOT NULL DEFAULT 1 CHECK (kdf_version > 0),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_signin_at     TIMESTAMPTZ,
+    failed_attempts    INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    locked_until       TIMESTAMPTZ,
+    PRIMARY KEY (community_id, id)
+);
+
+-- Uniqueness is per community, and lower() in the index means the database
+-- enforces normalisation rather than trusting every caller to apply it.
+CREATE UNIQUE INDEX email_accounts_community_email_idx
+    ON email_accounts (community_id, lower(email));
+CREATE UNIQUE INDEX email_accounts_community_pubkey_idx
+    ON email_accounts (community_id, pubkey);
+
+-- Single-use, short-lived proof that a recovery code was presented, so the
+-- password reset that follows does not have to carry the code again. Tenant
+-- scoped like its parent so the write fence and the deletion purge cover it
+-- directly instead of relying on cascade timing.
+CREATE TABLE account_reset_tokens (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    account_id   UUID NOT NULL,
+    token_hash   TEXT NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, token_hash),
+    FOREIGN KEY (community_id, account_id)
+        REFERENCES email_accounts (community_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX account_reset_tokens_expiry_idx
+    ON account_reset_tokens (expires_at);
+
+-- Payment top-up intents.
+--
+-- One row per checkout attempt, written before the user leaves for the
+-- hosted payment page. The reference maps a later provider callback back to
+-- the member and the amount we asked for; the callback's own numbers are
+-- never trusted without this row to check them against.
+--
+-- Tenant scoped like every table here: the primary key leads with
+-- community_id, so the same reference may exist in two communities.
+CREATE TABLE payment_intents (
+    community_id  UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    reference     TEXT NOT NULL,
+    pubkey        BYTEA NOT NULL CHECK (octet_length(pubkey) = 32),
+    usd_cents     BIGINT NOT NULL CHECK (usd_cents >= 500),
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'paid', 'failed', 'abandoned')),
+    provider      TEXT NOT NULL DEFAULT 'paystack'
+                  CHECK (provider IN ('paystack', 'payfast')),
+    paid_cents    BIGINT,
+    -- Credit packs. No South African gateway may charge in USD (SARB permits
+    -- ZAR-denominated processing only), so what the gateway collects is often
+    -- in a different currency from what the ledger grants. Both are recorded
+    -- rather than derived: converting between them would put the currency
+    -- risk on Colony, and recomputing the grant at settlement would let a
+    -- price edit change what an in-flight purchase is worth.
+    pack_id             TEXT,
+    charge_minor_units  BIGINT
+                        CHECK (charge_minor_units IS NULL OR charge_minor_units > 0),
+    charge_currency     TEXT
+                        CHECK (charge_currency IS NULL OR charge_currency IN ('ZAR', 'USD')),
+    grant_nanousd       BIGINT
+                        CHECK (grant_nanousd IS NULL OR grant_nanousd > 0),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    settled_at    TIMESTAMPTZ,
+    PRIMARY KEY (community_id, reference),
+    -- Nullable for rows predating packs, which were free-amount top-ups
+    -- priced in USD. The four travel together or not at all; a row holding
+    -- some but not others would be a bug in the writer, not a state any
+    -- reader should have to model.
+    CONSTRAINT payment_intents_pack_columns_travel_together CHECK (
+        (pack_id IS NULL
+            AND charge_minor_units IS NULL
+            AND charge_currency IS NULL
+            AND grant_nanousd IS NULL)
+        OR (pack_id IS NOT NULL
+            AND charge_minor_units IS NOT NULL
+            AND charge_currency IS NOT NULL
+            AND grant_nanousd IS NOT NULL)
+    )
+);
+
+CREATE INDEX payment_intents_pubkey_idx ON payment_intents (community_id, pubkey);
+
 -- Attach the universal fence to one community-scoped relation. Future
 -- migrations must invoke this helper explicitly after CREATE/ALTER introduces
 -- community_id; the migration lint enforces that contract.
@@ -2827,6 +3639,7 @@ $$;
 -- these explicit calls as first-class catalog declarations. They also make the
 -- fence contract visible to migration linting instead of hiding it only in the
 -- dynamic bootstrap loop above.
+SELECT attach_community_write_fence('account_reset_tokens');
 SELECT attach_community_write_fence('api_tokens');
 SELECT attach_community_write_fence('archived_identities');
 SELECT attach_community_write_fence('asks');
@@ -2841,8 +3654,11 @@ SELECT attach_community_write_fence('delivery_log');
 SELECT attach_community_write_fence('discovery_action_claims');
 SELECT attach_community_write_fence('discovery_actor_grants');
 SELECT attach_community_write_fence('discovery_business_observations');
+SELECT attach_community_write_fence('discovery_campaign_leads');
+SELECT attach_community_write_fence('discovery_budget_approval_claims');
 SELECT attach_community_write_fence('discovery_campaigns');
 SELECT attach_community_write_fence('discovery_entitlements');
+SELECT attach_community_write_fence('discovery_gateway_attempts');
 SELECT attach_community_write_fence('discovery_lead_profiles');
 SELECT attach_community_write_fence('discovery_observation_batches');
 SELECT attach_community_write_fence('discovery_run_business_searches');
@@ -2856,6 +3672,7 @@ SELECT attach_community_write_fence('discovery_usage');
 SELECT attach_community_write_fence('discovery_worker_action_claims');
 SELECT attach_community_write_fence('discovery_workspace_action_claims');
 SELECT attach_community_write_fence('discovery_workspace_protocols');
+SELECT attach_community_write_fence('email_accounts');
 SELECT attach_community_write_fence('employees');
 SELECT attach_community_write_fence('event_mentions');
 SELECT attach_community_write_fence('events');
@@ -2869,6 +3686,7 @@ SELECT attach_community_write_fence('operator_activity_cursor');
 SELECT attach_community_write_fence('operator_activity_daily');
 SELECT attach_community_write_fence('parameterized_event_watermarks');
 SELECT attach_community_write_fence('party_action_claims');
+SELECT attach_community_write_fence('payment_intents');
 SELECT attach_community_write_fence('pubkey_allowlist');
 SELECT attach_community_write_fence('push_leases');
 SELECT attach_community_write_fence('push_match_queue');

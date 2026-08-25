@@ -662,6 +662,12 @@ test.describe("global agent config screenshots", () => {
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled();
     await page.getByTestId("persona-dialog-submit").click();
 
+    // `called` is asserted alongside the three omitted pins deliberately. The
+    // pins are read with `?.`, so a run where `create_persona` was never
+    // issued at all yields undefined for each and satisfies an assertion that
+    // only lists them -- the check passes hardest exactly when the submit
+    // button does nothing. Requiring `called: true` makes "no create" a
+    // failure instead of the strongest possible pass.
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -673,13 +679,51 @@ test.describe("global agent config screenshots", () => {
               }>;
             }
           ).__BUZZ_E2E_COMMAND_LOG__;
-          const createPayload = log?.find(
+          const createEntry = log?.find(
             (entry) => entry.command === "create_persona",
-          )?.payload.input;
-          return createPayload?.runtime;
+          );
+          const createPayload = createEntry?.payload.input;
+          return {
+            called: createEntry !== undefined,
+            runtime: createPayload?.runtime,
+            model: createPayload?.model,
+            provider: createPayload?.provider,
+          };
         }),
       )
-      .toBe("claude");
+      .toEqual({
+        called: true,
+        runtime: undefined,
+        model: undefined,
+        provider: undefined,
+      });
+
+    // Submitting closes the dialog. Asserted before reading the stored
+    // persona so a create that silently no-ops is reported here, against the
+    // dialog that stayed open, rather than later as a confusing "no persona
+    // named Test Agent" lookup miss.
+    await expect(page.getByRole("dialog", { name: "Add agent" })).toHaveCount(
+      0,
+    );
+
+    // The pins are absent AND the agent still resolves to the saved default:
+    // the bridge's create mirrors the backend inheritance chain, so the stored
+    // persona must carry the global preferred harness. Asserting only the
+    // omitted fields above would pass even if inheritance were broken.
+    const personas = (await page.evaluate(async () =>
+      (
+        window as typeof window & {
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload: unknown,
+          ) => Promise<unknown>;
+        }
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("list_personas", null),
+    )) as Array<{ display_name: string; runtime: string | null }>;
+    expect(
+      personas.find((persona) => persona.display_name === "Test Agent")
+        ?.runtime,
+    ).toBe("claude");
   });
 
   test("missing global credentials show the unset defaults notice", async ({
@@ -811,7 +855,7 @@ test.describe("global agent config screenshots", () => {
       page.locator("#persona-runtime"),
       "Claude Code",
     );
-    await page.getByRole("tab", { name: "Use harness defaults" }).click();
+    await page.getByRole("tab", { name: "Use agent defaults" }).click();
 
     // Provider picker hidden — the runtime drives its own provider.
     await expect(page.locator("#persona-llm-provider")).not.toBeVisible();

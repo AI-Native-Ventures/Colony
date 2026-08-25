@@ -13,6 +13,8 @@ type WebCommand = {
 
 type WebPerformanceControls = {
   emitFrameBurst: (count: number) => Promise<void>;
+  setStartHold: (hold: boolean) => void;
+  setStartErrors: (errors: string[]) => void;
   snapshot: () => { maxPendingWheelInvocations: number };
   setWheelDelay: (delayMs: number) => void;
 };
@@ -36,6 +38,9 @@ let sequence = 0;
 let installed = false;
 let maxPendingWheelInvocations = 0;
 let pendingWheelInvocations = 0;
+let releaseHeldStarts: Array<() => void> = [];
+let startHeld = false;
+let startErrors: string[] = [];
 let wheelDelayMs = 0;
 let wheelTail: Promise<void> = Promise.resolve();
 
@@ -50,6 +55,10 @@ function reset(): void {
   sequence = 0;
   maxPendingWheelInvocations = 0;
   pendingWheelInvocations = 0;
+  for (const release of releaseHeldStarts) release();
+  releaseHeldStarts = [];
+  startHeld = false;
+  startErrors = [];
   wheelDelayMs = 0;
   wheelTail = Promise.resolve();
 }
@@ -136,6 +145,11 @@ async function invokeWeb(
   switch (command) {
     case "workspace_web_start": {
       record(command, payload);
+      if (startHeld) {
+        await new Promise<void>((resolve) => releaseHeldStarts.push(resolve));
+      }
+      const startError = startErrors.shift();
+      if (startError) throw new Error(startError);
       const request = ((payload.request as unknown) ?? payload) as {
         targetId?: string | null;
         url?: string;
@@ -239,6 +253,15 @@ export function installWebE2eBridge(): void {
     commands.map((entry) => structuredClone(entry));
   window.__BUZZ_E2E_WEB_PERFORMANCE__ = {
     emitFrameBurst,
+    setStartHold(hold) {
+      startHeld = hold;
+      if (hold) return;
+      for (const release of releaseHeldStarts) release();
+      releaseHeldStarts = [];
+    },
+    setStartErrors(errors) {
+      startErrors = [...errors];
+    },
     snapshot: () => ({ maxPendingWheelInvocations }),
     setWheelDelay(delayMs) {
       wheelDelayMs = Math.max(0, delayMs);

@@ -1,13 +1,12 @@
 import * as React from "react";
-import { Building2, Check, Loader2, MapPin } from "lucide-react";
+import { Building2, Check, Coins, Loader2, MapPin } from "lucide-react";
 
+import {
+  formatNanousdAsUsd,
+  getColonyCreditsAccount,
+} from "@/shared/api/tauriProvisionedCredits";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import {
-  getDiscoveryCredentialStatus,
-  type DiscoveryCredentialProvider,
-  type DiscoveryCredentialStatus,
-} from "@/shared/api/discoveryCredentials";
 import {
   Sheet,
   SheetContent,
@@ -16,22 +15,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/shared/ui/sheet";
-import { Switch } from "@/shared/ui/switch";
-import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { DiscoveryDataSource } from "../data/DiscoveryDataSource";
-import type { DiscoveryEntitlement } from "../entitlement";
 import {
-  DEFAULT_SOURCE_CONFIG,
-  DISCOVERY_SOURCES,
-  DISCOVERY_SOURCE_LABELS,
-  DISCOVERY_SOURCE_PROVIDERS,
-  isLiveDiscoverySource,
-  toggleSource,
-  type DiscoveryMode,
-  type DiscoverySource,
-} from "../sourceConfig";
+  approvedCampaignBudgetNanousd,
+  formatDiscoveryNanousd,
+} from "../data/campaignBudget";
+import type { DiscoveryEntitlement } from "../entitlement";
 import type { CampaignDetail, Vertical } from "../types";
-import { EntitlementLock } from "./EntitlementLock";
 import { DISCOVERY_LIGHT_SURFACE_STYLE } from "./discoverySurfaceStyle";
 
 export type CreateCampaignSheetProps = {
@@ -39,7 +29,6 @@ export type CreateCampaignSheetProps = {
   onOpenChange: (open: boolean) => void;
   dataSource: DiscoveryDataSource;
   entitlement: DiscoveryEntitlement | null;
-  onRetryEntitlement: () => void;
   industryName: string;
   vertical: Vertical;
   onCreated: (campaign: CampaignDetail) => void;
@@ -67,7 +56,6 @@ export function CreateCampaignSheet({
   onOpenChange,
   dataSource,
   entitlement,
-  onRetryEntitlement,
   industryName,
   vertical,
   onCreated,
@@ -79,18 +67,33 @@ export function CreateCampaignSheet({
   const [hasWebsite, setHasWebsite] = React.useState(true);
   const [hasPhone, setHasPhone] = React.useState(true);
   const [hasEmail, setHasEmail] = React.useState(true);
-  const [sourceMode, setSourceMode] = React.useState<DiscoveryMode>(
-    DEFAULT_SOURCE_CONFIG.mode,
-  );
-  const [enabledSources, setEnabledSources] = React.useState<DiscoverySource[]>(
-    () => [...DEFAULT_SOURCE_CONFIG.order],
-  );
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [credentialStatuses, setCredentialStatuses] = React.useState<
-    Partial<Record<DiscoveryCredentialProvider, DiscoveryCredentialStatus>>
-  >({});
+  const [availableBalanceNanousd, setAvailableBalanceNanousd] = React.useState<
+    string | null
+  >(null);
+  const [balanceStatus, setBalanceStatus] = React.useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const liveBusinessPhase = entitlement?.experience === "live";
+  const loadBalance = React.useCallback(() => {
+    let active = true;
+    setBalanceStatus("loading");
+    setAvailableBalanceNanousd(null);
+    void getColonyCreditsAccount()
+      .then((account) => {
+        if (active) {
+          setAvailableBalanceNanousd(account.available_balance_nanousd);
+          setBalanceStatus("ready");
+        }
+      })
+      .catch(() => {
+        if (active) setBalanceStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -101,45 +104,39 @@ export function CreateCampaignSheet({
     setHasWebsite(true);
     setHasPhone(true);
     setHasEmail(true);
-    setSourceMode(DEFAULT_SOURCE_CONFIG.mode);
-    setEnabledSources(
-      liveBusinessPhase ? [] : [...DEFAULT_SOURCE_CONFIG.order],
-    );
-    setCredentialStatuses({});
     setError(null);
-    if (liveBusinessPhase) {
-      let cancelled = false;
-      void Promise.all(
-        Object.values(DISCOVERY_SOURCE_PROVIDERS).map(async (provider) => {
-          try {
-            return [
-              provider,
-              await getDiscoveryCredentialStatus(provider),
-            ] as const;
-          } catch {
-            return [provider, "unavailable"] as const;
-          }
-        }),
-      ).then((statuses) => {
-        if (cancelled) return;
-        const next = Object.fromEntries(statuses) as Partial<
-          Record<DiscoveryCredentialProvider, DiscoveryCredentialStatus>
-        >;
-        setCredentialStatuses(next);
-        const configuredSources = (
-          ["google_maps", "brave_search", "exa_search"] as const
-        ).filter(
-          (source) => next[DISCOVERY_SOURCE_PROVIDERS[source]] === "configured",
-        );
-        setEnabledSources(configuredSources);
-      });
-      return () => {
-        cancelled = true;
-      };
+  }, [open, vertical]);
+
+  React.useEffect(() => {
+    if (!open || !liveBusinessPhase) {
+      setAvailableBalanceNanousd(null);
+      setBalanceStatus("idle");
+      return;
     }
-  }, [liveBusinessPhase, open, vertical]);
+    return loadBalance();
+  }, [liveBusinessPhase, loadBalance, open]);
 
   const targetNumber = Math.max(0, Number.parseInt(target, 10) || 0);
+  const targetValid = targetNumber >= 1 && targetNumber <= 500;
+  const approvedBudget = targetValid
+    ? formatDiscoveryNanousd(approvedCampaignBudgetNanousd(targetNumber))
+    : null;
+  const availableBalance = availableBalanceNanousd
+    ? formatNanousdAsUsd(availableBalanceNanousd)
+    : null;
+  const balanceBelowApproval = (() => {
+    if (!availableBalanceNanousd || targetNumber < 1 || targetNumber > 500) {
+      return false;
+    }
+    try {
+      return (
+        BigInt(availableBalanceNanousd) <
+        BigInt(approvedCampaignBudgetNanousd(targetNumber))
+      );
+    } catch {
+      return false;
+    }
+  })();
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -152,11 +149,18 @@ export function CreateCampaignSheet({
       setError("Choose a lead target of at least one.");
       return;
     }
-    if (enabledSources.length === 0) {
+    if (targetNumber > 500) {
+      setError("Choose a lead target of 500 or fewer.");
+      return;
+    }
+    if (
+      liveBusinessPhase &&
+      (balanceStatus !== "ready" || balanceBelowApproval)
+    ) {
       setError(
-        liveBusinessPhase
-          ? "Connect an API key in Settings > Discovery, then select a source."
-          : "Select at least one Discovery source.",
+        balanceBelowApproval
+          ? "Top up Colony Credits before approving this Campaign."
+          : "Colony Credits could not be confirmed. Try again before approving.",
       );
       return;
     }
@@ -172,10 +176,6 @@ export function CreateCampaignSheet({
         description:
           description.trim() ||
           `Find ${vertical.name.toLowerCase()} businesses in ${normalizedLocation}.`,
-        sourceConfig: {
-          mode: sourceMode,
-          order: [...enabledSources],
-        },
       });
       onCreated(campaign);
     } catch (cause: unknown) {
@@ -277,6 +277,11 @@ export function CreateCampaignSheet({
                   className="w-32 text-center font-mono"
                   id="discovery-campaign-target"
                   min="1"
+                  max="500"
+                  aria-describedby={
+                    targetValid ? undefined : "discovery-target-error"
+                  }
+                  aria-invalid={!targetValid}
                   onChange={(event) => setTarget(event.target.value)}
                   type="number"
                   value={target}
@@ -285,112 +290,87 @@ export function CreateCampaignSheet({
                   per location
                 </span>
               </div>
+              {!targetValid ? (
+                <p
+                  className="mt-2 text-sm text-destructive"
+                  id="discovery-target-error"
+                  role="alert"
+                >
+                  Choose 1 to 500 leads.
+                </p>
+              ) : null}
             </section>
 
-            <div className="rounded-2xl bg-muted/60 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm text-muted-foreground">
-                    Provider usage
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Billed directly by your connected source account.
-                  </p>
+            <section className="rounded-2xl border border-primary/25 bg-primary/5 p-4">
+              <div className="flex gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-background text-primary">
+                  <Coins aria-hidden="true" className="h-4 w-4" />
                 </div>
-                <span className="text-right text-sm font-semibold text-primary">
-                  No Colony usage credits
-                </span>
-              </div>
-            </div>
-
-            <details className="group rounded-2xl border border-border p-4">
-              <summary className="cursor-pointer text-sm font-semibold text-foreground">
-                Advanced: Data Sources
-              </summary>
-              <div className="mt-4 space-y-4">
-                <Tabs
-                  onValueChange={(value) => {
-                    if (value === "waterfall" || value === "concurrent")
-                      setSourceMode(value);
-                  }}
-                  value={sourceMode}
-                >
-                  <TabsList aria-label="Campaign source mode">
-                    <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
-                    <TabsTrigger value="concurrent">Concurrent</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <div className="space-y-2">
-                  {DISCOVERY_SOURCES.map(({ key }) => {
-                    const enabled = enabledSources.includes(key);
-                    const liveAvailable =
-                      isLiveDiscoverySource(key) &&
-                      credentialStatuses[DISCOVERY_SOURCE_PROVIDERS[key]] ===
-                        "configured";
-                    const locked = liveBusinessPhase
-                      ? !liveAvailable
-                      : key === "linkedin_company_search" &&
-                        entitlement?.state !== "entitled";
-                    const liveHint = !liveBusinessPhase
-                      ? null
-                      : !isLiveDiscoverySource(key)
-                        ? "Not available yet"
-                        : credentialStatuses[
-                              DISCOVERY_SOURCE_PROVIDERS[key]
-                            ] === "configured"
-                          ? "Connected"
-                          : "Connect in Settings";
-                    return (
-                      <div
-                        className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/50 p-2.5"
-                        key={key}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-foreground">
+                      {liveBusinessPhase ? "Campaign budget" : "Preview only"}
+                    </p>
+                    <span className="text-sm font-semibold text-primary">
+                      {liveBusinessPhase
+                        ? approvedBudget
+                          ? `Up to ${approvedBudget}`
+                          : "Choose 1 to 500 leads"
+                        : "No Credits"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                    {liveBusinessPhase
+                      ? "Colony charges 5¢ only for each newly retained, deduplicated lead. Failed requests and duplicate leads are not charged. Colony chooses and funds the data source."
+                      : "This demo uses sample data and never approves or spends Colony Credits."}
+                  </p>
+                  {liveBusinessPhase && approvedBudget ? (
+                    <p className="mt-2 text-sm font-medium text-foreground">
+                      Creating this Campaign approves exactly {approvedBudget}{" "}
+                      in Colony Credits.
+                    </p>
+                  ) : null}
+                  {availableBalance ? (
+                    <p
+                      className={`mt-1 text-sm ${
+                        balanceBelowApproval
+                          ? "font-medium text-amber-700 dark:text-amber-300"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      Credits balance: {availableBalance}
+                      {balanceBelowApproval
+                        ? ". Top up before this Campaign can be approved and run."
+                        : ". Active Campaign reservations reduce the amount available to spend."}
+                    </p>
+                  ) : null}
+                  {balanceStatus === "loading" ? (
+                    <p
+                      className="mt-2 text-sm text-muted-foreground"
+                      role="status"
+                    >
+                      <Loader2 className="mr-1 inline h-4 w-4 animate-spin" />
+                      Checking Colony Credits...
+                    </p>
+                  ) : null}
+                  {balanceStatus === "error" ? (
+                    <div className="mt-2 flex items-center gap-2" role="alert">
+                      <p className="text-sm font-medium text-destructive">
+                        Colony Credits could not be confirmed.
+                      </p>
+                      <Button
+                        onClick={() => loadBalance()}
+                        size="sm"
+                        type="button"
+                        variant="outline"
                       >
-                        <span className="min-w-0 flex-1 text-sm text-foreground">
-                          {DISCOVERY_SOURCE_LABELS[key]}
-                        </span>
-                        {liveHint ? (
-                          <span className="text-xs text-muted-foreground">
-                            {liveHint}
-                          </span>
-                        ) : null}
-                        <Switch
-                          aria-label={`${enabled ? "Disable" : "Enable"} ${DISCOVERY_SOURCE_LABELS[key]}`}
-                          checked={enabled}
-                          disabled={locked}
-                          onCheckedChange={() => {
-                            if (liveBusinessPhase) {
-                              setEnabledSources((current) =>
-                                current.includes(key)
-                                  ? current.length > 1
-                                    ? current.filter((source) => source !== key)
-                                    : current
-                                  : [...current, key],
-                              );
-                              return;
-                            }
-                            setEnabledSources(
-                              (current) =>
-                                toggleSource(
-                                  { mode: sourceMode, order: current },
-                                  key,
-                                ).order,
-                            );
-                          }}
-                        />
-                        {locked && !liveBusinessPhase ? (
-                          <EntitlementLock
-                            actionLabel="Unlock source"
-                            entitlement={entitlement}
-                            onRetry={onRetryEntitlement}
-                            onRun={() => undefined}
-                          />
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
-            </details>
+            </section>
 
             <section className="space-y-4">
               {liveBusinessPhase ? (
@@ -492,11 +472,23 @@ export function CreateCampaignSheet({
             >
               Cancel
             </Button>
-            <Button disabled={submitting} type="submit">
+            <Button
+              disabled={
+                submitting ||
+                !targetValid ||
+                (liveBusinessPhase &&
+                  (balanceStatus !== "ready" || balanceBelowApproval))
+              }
+              type="submit"
+            >
               {submitting ? (
                 <Loader2 aria-hidden="true" className="animate-spin" />
               ) : null}
-              Create Campaign
+              {liveBusinessPhase
+                ? approvedBudget
+                  ? `Create and approve ${approvedBudget}`
+                  : "Choose 1 to 500 leads"
+                : "Create Campaign"}
             </Button>
           </SheetFooter>
         </form>

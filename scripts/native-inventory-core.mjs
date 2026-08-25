@@ -15,6 +15,14 @@ const REGISTERED_IN = [
   "src-tauri/src/native_websocket.rs",
 ];
 
+// An inline plugin registers its commands through its own Builder's
+// invoke_handler rather than the app's, so a file that constructs a
+// `tauri::plugin::Builder` is a registration site even when it is not in
+// REGISTERED_IN. Matching on this needle keeps test-only generate_handler!
+// uses (fixtures, mutation-test strings) out unless a plugin builder is
+// actually present in the same file.
+const PLUGIN_BUILDER_NEEDLE = "plugin::Builder::new(";
+
 function toPosixPath(relativePath) {
   return relativePath.split(path.sep).join("/");
 }
@@ -216,15 +224,7 @@ async function readStripped(filePath) {
 
 async function registeredCommands(projectRoot) {
   const out = new Map();
-  for (const rel of REGISTERED_IN) {
-    const filePath = path.join(projectRoot, rel);
-    let src;
-    try {
-      src = await readStripped(filePath);
-    } catch (error) {
-      if (error.code === "ENOENT") continue;
-      throw error;
-    }
+  const collect = (src, rel) => {
     for (const match of src.matchAll(GENERATE_HANDLER)) {
       const body = balancedSlice(src, match.index, "[", "]");
       for (const entry of body.split(",")) {
@@ -234,6 +234,33 @@ async function registeredCommands(projectRoot) {
         }
       }
     }
+  };
+  for (const rel of REGISTERED_IN) {
+    const filePath = path.join(projectRoot, rel);
+    let src;
+    try {
+      src = await readStripped(filePath);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    collect(src, rel);
+  }
+
+  // Inline plugin files: a `tauri::plugin::Builder::new(...)` whose
+  // invoke_handler lists commands registers them just like the app handler
+  // does; without this, plugin-defined commands read as defined but never
+  // registered and the counts drift apart.
+  const all = await walk(
+    path.join(projectRoot, "src-tauri", "src"),
+    new Set([".rs"]),
+  );
+  for (const filePath of all) {
+    const rel = toPosixPath(path.relative(projectRoot, filePath));
+    if (REGISTERED_IN.includes(rel)) continue;
+    const src = await readStripped(filePath);
+    if (!src.includes(PLUGIN_BUILDER_NEEDLE)) continue;
+    collect(src, rel);
   }
   return out;
 }

@@ -4,6 +4,7 @@ import test from "node:test";
 import { openAsksQueryKey, askClosuresQueryKey } from "../asks/useOpenAsks.ts";
 import { activeCompanyQueryKey } from "../company/hooks.ts";
 import { homeFeedQueryKey } from "../home/hooks.ts";
+import { pendingLiveMentionsQueryKey } from "../home/lib/liveMentionFeed.ts";
 import { remindersQueryKey } from "../reminders/hooks.ts";
 import { reminderWatermarkStorageKey } from "../reminders/useReminderNotifications.ts";
 import {
@@ -37,6 +38,7 @@ test("Action Center source query keys separate communities", () => {
 
 test("canonical source query keys separate communities", () => {
   assertCommunityScoped(homeFeedQueryKey);
+  assertCommunityScoped(pendingLiveMentionsQueryKey);
   assertCommunityScoped((communityId) =>
     openAsksQueryKey(communityId, "owner"),
   );

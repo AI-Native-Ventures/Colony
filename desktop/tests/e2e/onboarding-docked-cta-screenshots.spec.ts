@@ -15,7 +15,7 @@ const NCRYPTSEC =
 
 test.use({ viewport: { width: 1280, height: 800 } });
 
-test("machine onboarding: landing, backup, setup docked CTAs", async ({
+test("machine onboarding: simple entry and account recovery", async ({
   page,
 }) => {
   await installMockBridge(page, undefined, {
@@ -29,21 +29,30 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/01-landing.png` });
 
-  await page.getByRole("button", { name: "Use an existing key" }).click();
+  await expect(
+    page.getByRole("button", { name: "Start with Colony" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign in to an existing account" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Sign in to an existing account" })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Enter your private key" }),
   ).toBeVisible();
   const importCard = page.getByTestId("nostr-import-card");
   await expect(importCard).toBeVisible();
   await expect(page.getByLabel("Private key", { exact: true })).toBeVisible();
-  // The production card uses a baked nine-slice texture: no runtime SVG
-  // filter, measurement, or texture regeneration during resize.
+  // Inside the onboarding canvas the card drops its nine-slice texture: over
+  // a saturated field the texture read as a white smear, so the field is a
+  // rule here like every other field in the flow.
   await expect(importCard).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(importCard).toHaveCSS("border-top-width", "0px");
-  await expect(importCard).toHaveCSS("border-image-repeat", "repeat");
-  await expect(importCard).toHaveCSS("border-image-outset", "96px");
-  // Icon SVGs (e.g. the reveal toggle) are fine; a filter would mean the
-  // texture regressed to the runtime SVG pipeline.
+  await expect(importCard).toHaveCSS("border-image-source", "none");
+  // Icon SVGs (e.g. the reveal toggle) are fine. A filter here would mean the
+  // card regressed to the runtime SVG texture pipeline, which measures and
+  // regenerates on every resize; that must stay gone whatever the styling.
   await expect(importCard.locator("svg filter")).toHaveCount(0);
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/01b-enter-key.png` });
@@ -59,78 +68,21 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/01c-restore-backup.png` });
 
-  // The first Back returns to key selection; the second leaves import.
+  // The first Back returns to key entry; the second returns to simple entry.
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(importCard).toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Create a new identity key" }),
+    page.getByRole("button", { name: "Start with Colony" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Create a new identity key" }).click();
+  await page.getByRole("button", { name: "Start with Colony" }).click();
   await expect(
-    page.getByRole("heading", {
-      name: "Your unique identity key has been created",
-    }),
+    page.getByRole("heading", { name: "Join or create a community" }),
   ).toBeVisible();
+  await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-page-backup")).toHaveCount(0);
   await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02-backup.png` });
-
-  // The key stays masked behind an explicit reveal toggle.
-  await expect(page.getByTestId("backup-key-value")).toBeVisible();
-
-  // Reveal the key: box must not reflow (same-length monospace mask).
-  await page.getByTestId("backup-key-reveal-toggle").click();
-  await expect(page.getByTestId("backup-key-value")).toHaveClass(/select-text/);
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02b-backup-revealed.png` });
-
-  // Backup options leave the yellow flow for the dark security view without
-  // adding a progress step or a generic Next action.
-  await page.getByTestId("backup-options-link").click();
-  await expect(
-    page.getByTestId("onboarding-page-backup-options"),
-  ).toBeVisible();
-  await expect(page.getByTestId("onboarding-next")).toHaveCount(0);
-  const optionPanels = page.getByTestId("backup-option-panel");
-  await expect(optionPanels).toHaveCount(3);
-  await expect(
-    page.getByTestId("backup-options").locator(".buzz-card-textured"),
-  ).toHaveCount(0);
-  await expect(optionPanels.first()).toHaveCSS("padding-left", "24px");
-  const titleTops = await optionPanels
-    .locator("span.text-lg")
-    .evaluateAll((titles) =>
-      titles.map((title) => title.getBoundingClientRect().top),
-    );
-  expect(Math.max(...titleTops) - Math.min(...titleTops)).toBeLessThan(1);
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02c-backup-options.png` });
-
-  await page.getByTestId("backup-option-password").click();
-  await expect(page.getByTestId("onboarding-page-download")).toBeVisible();
-  const passwordPanel = page.getByTestId("backup-password-panel");
-  await expect(passwordPanel).toBeVisible();
-  await expect(passwordPanel).not.toHaveClass(/buzz-card-textured/);
-  await expect(passwordPanel).toHaveCSS("padding-left", "24px");
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02d-backup-password.png` });
-
-  await page.getByTestId("backup-passphrase-generate").click();
-  const generatorPopover = page.getByRole("dialog");
-  await expect(generatorPopover).toBeVisible();
-  await expect(generatorPopover).not.toHaveClass(/buzz-card-textured/);
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02e-backup-generator.png` });
-  await page.keyboard.press("Escape");
-
-  await page.getByTestId("backup-return-to-onboarding").click();
-  await expect(page.getByTestId("onboarding-page-backup")).toBeVisible();
-  await page.getByTestId("onboarding-next").click();
-  await expect(
-    page.getByRole("heading", { name: "Set up your agent harnesses" }),
-  ).toBeVisible();
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/03-setup.png` });
+  await page.screenshot({ path: `${SHOT_DIR}/02-community-choice.png` });
 });
 
 test("machine key import remains usable in a short viewport", async ({
@@ -142,7 +94,9 @@ test("machine key import remains usable in a short viewport", async ({
     skipOnboardingSeed: true,
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Use an existing key" }).click();
+  await page
+    .getByRole("button", { name: "Sign in to an existing account" })
+    .click();
 
   const heading = page.getByRole("heading", { name: "Enter your private key" });
   const input = page.getByLabel("Private key", { exact: true });
@@ -175,7 +129,7 @@ test("machine key import remains usable in a short viewport", async ({
   expect(layout.scrollWidth).toBe(layout.clientWidth);
 });
 
-test("backup options keep one-column geometry on narrow windows", async ({
+test("simple account entry keeps one-column geometry on narrow windows", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 600, height: 700 });
@@ -184,24 +138,35 @@ test("backup options keep one-column geometry on narrow windows", async ({
     skipOnboardingSeed: true,
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a new identity key" }).click();
-  await expect(
-    page.getByRole("heading", {
-      name: "Your unique identity key has been created",
-    }),
-  ).toBeVisible();
-  await page.getByTestId("backup-options-link").click();
-
-  const panels = page.getByTestId("backup-option-panel");
-  await expect(panels).toHaveCount(3);
+  const actions = page
+    .getByTestId("machine-onboarding-gate")
+    .getByRole("button")
+    .filter({ hasText: /Start with Colony|Sign in to an existing account/ });
+  await expect(actions).toHaveCount(2);
   await waitForAnimations(page);
-  const geometry = await panels.evaluateAll((elements) => ({
-    clientWidth: document.documentElement.clientWidth,
-    lefts: elements.map((element) => element.getBoundingClientRect().left),
-    rights: elements.map((element) => element.getBoundingClientRect().right),
-    scrollWidth: document.documentElement.scrollWidth,
-  }));
-  expect(new Set(geometry.lefts.map(Math.round)).size).toBe(1);
+  const geometry = await actions.evaluateAll((elements) => {
+    const first = elements[0];
+    const second = elements[1];
+    if (!(first instanceof HTMLElement) || !(second instanceof HTMLElement)) {
+      throw new Error("Expected both onboarding actions to be rendered");
+    }
+    const firstBox = first.getBoundingClientRect();
+    const secondBox = second.getBoundingClientRect();
+    return {
+      clientWidth: document.documentElement.clientWidth,
+      firstBottom: firstBox.bottom,
+      firstCenter: firstBox.left + firstBox.width / 2,
+      lefts: elements.map((element) => element.getBoundingClientRect().left),
+      rights: elements.map((element) => element.getBoundingClientRect().right),
+      scrollWidth: document.documentElement.scrollWidth,
+      secondCenter: secondBox.left + secondBox.width / 2,
+      secondTop: secondBox.top,
+    };
+  });
+  expect(Math.abs(geometry.firstCenter - geometry.secondCenter)).toBeLessThan(
+    1,
+  );
+  expect(geometry.secondTop).toBeGreaterThan(geometry.firstBottom);
   expect(geometry.lefts.every((left) => left >= 0)).toBe(true);
   expect(geometry.rights.every((right) => right <= geometry.clientWidth)).toBe(
     true,

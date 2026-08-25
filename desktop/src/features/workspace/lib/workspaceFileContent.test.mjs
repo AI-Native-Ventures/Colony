@@ -4,8 +4,8 @@ import test from "node:test";
 import { readFileSource } from "./filePayload.ts";
 import {
   encodeBase64,
-  isTextMime,
   loadWorkspaceFile,
+  resolveWorkspaceFilePresentation,
 } from "./workspaceFileContent.ts";
 
 function bytesOf(text) {
@@ -46,7 +46,7 @@ test("a URL payload falls back to the URL tail and an unknown MIME", () => {
   );
 });
 
-test("a local file is read over IPC and keeps the native text verdict", async () => {
+test("a local file is read over IPC and classifies its presentation", async () => {
   const file = await loadWorkspaceFile(
     { kind: "path", path: "/w/a.md" },
     {
@@ -70,7 +70,7 @@ test("a local file is read over IPC and keeps the native text verdict", async ()
   assert.deepEqual(file, {
     name: "a.md",
     mime: "text/markdown",
-    isText: true,
+    presentation: "text",
     bytesBase64: encodeBase64(bytesOf("# hello")),
   });
 });
@@ -97,16 +97,36 @@ test("an attachment is fetched over the media path, never off disk", async () =>
   assert.deepEqual(file, {
     name: "a.md",
     mime: "text/markdown",
-    isText: true,
+    presentation: "text",
     bytesBase64: encodeBase64(bytesOf("# remote")),
   });
 });
 
-test("text types render in the file view, binary ones do not", () => {
-  assert.ok(isTextMime("text/markdown"));
-  assert.ok(isTextMime("application/json"));
-  assert.ok(!isTextMime("application/pdf"));
-  assert.ok(!isTextMime("image/png"));
+test("classifies trusted text, extension-backed text, PDF, and binary files", () => {
+  assert.equal(
+    resolveWorkspaceFilePresentation("notes.md", "application/octet-stream"),
+    "text",
+  );
+  assert.equal(
+    resolveWorkspaceFilePresentation("data.json", "application/json"),
+    "text",
+  );
+  assert.equal(
+    resolveWorkspaceFilePresentation("paper.pdf", "application/pdf"),
+    "pdf",
+  );
+  assert.equal(
+    resolveWorkspaceFilePresentation("paper.PDF", "application/octet-stream"),
+    "pdf",
+  );
+  assert.equal(
+    resolveWorkspaceFilePresentation("payload.exe", "application/octet-stream"),
+    "binary",
+  );
+  assert.equal(
+    resolveWorkspaceFilePresentation("page.html", "text/html"),
+    "binary",
+  );
 });
 
 test("base64 encoding survives a payload larger than one chunk", () => {

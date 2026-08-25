@@ -21,7 +21,6 @@ import type {
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
-import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
 import { OnboardingFooter } from "./OnboardingFooter";
 import {
   type OnboardingTransitionDirection,
@@ -261,7 +260,7 @@ function AgentDefaultsSection({
   return (
     <fieldset
       aria-busy={isPending}
-      className="w-full space-y-4 text-left text-sm disabled:pointer-events-none disabled:opacity-70"
+      className="onb-fieldset"
       disabled={isPending}
     >
       {configSurfaceLoading ? (
@@ -276,14 +275,11 @@ function AgentDefaultsSection({
       ) : (
         <div className="space-y-7">
           <div className="space-y-4">
-            <label
-              className="pl-3 text-sm font-medium"
-              htmlFor="global-agent-default-harness"
-            >
+            <label className="onb-label" htmlFor="global-agent-default-harness">
               Default harness
             </label>
             <AgentDropdownSelect
-              className="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
+              className="onb-select"
               id="global-agent-default-harness"
               onValueChange={handleHarnessChange}
               options={harnessOptions}
@@ -322,7 +318,7 @@ function AgentDefaultsSection({
             onValidityChange={setConfigIsValid}
             placeholderClassName="text-foreground/70"
             runtimeFileConfig={runtimeFileConfig}
-            selectClassName="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
+            selectClassName="onb-select"
             disclosure="onboarding-essential"
             unstyled
             useCustomSelect
@@ -383,24 +379,23 @@ export function DefaultConfigStep({
 
   return (
     <OnboardingSlideTransition
-      className="flex min-h-full w-full flex-col items-center"
+      className="onb-screen"
       data-testid="onboarding-page-config"
       direction={direction}
       transitionKey={`default-config-${direction}`}
     >
-      <div className="w-full max-w-[500px] text-center">
-        <h1 className="text-title font-normal text-foreground">
-          Configure your default model settings
+      <div className="onb-col-head">
+        <h1 className="onb-headline">
+          Choose the <em>brain</em> your helpers think with.
         </h1>
-        <p className="mx-auto mt-3 max-w-[440px] text-sm leading-5 text-foreground/80">
-          This will be set as your default model configuration across Colony.
-          You can always change this in your Settings or give specific agents a
-          different configuration.
+        <p className="onb-sub">
+          Every helper you make will use this by default. You can change it
+          later in Settings, or give one helper something different.
         </p>
       </div>
 
-      <div className="flex w-full flex-1 items-center justify-center py-10">
-        <div className="w-full max-w-[328px]">
+      <div className="onb-panel">
+        <div className="onb-stack">
           <AgentDefaultsSection
             draft={draft}
             isPending={isSaving}
@@ -413,28 +408,27 @@ export function DefaultConfigStep({
 
       <OnboardingFooter>
         <Button
-          className={`${ONBOARDING_PRIMARY_CTA_CLASS} text-sm`}
           data-testid="onboarding-finish"
           disabled={!persistenceState.canComplete || isSaving}
           onClick={() => void handleComplete()}
+          size="lg"
           type="button"
         >
           {isSaving ? "Saving…" : "Next"}
         </Button>
-        <Button
-          className="h-9 whitespace-nowrap rounded-full px-6 text-sm hover:bg-foreground/10"
+        <button
+          className="onb-quiet-action"
           data-testid="onboarding-config-skip"
           disabled={isSaving}
           onClick={handleSkip}
           type="button"
-          variant="ghost"
         >
           Skip for now
-        </Button>
+        </button>
 
         {saveError ? (
           <p
-            className="max-w-[440px] text-center text-xs text-destructive"
+            className="onb-note-warn"
             data-testid="onboarding-config-save-error"
             role="alert"
           >

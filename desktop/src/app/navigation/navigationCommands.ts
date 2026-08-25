@@ -14,6 +14,7 @@ export type NavigationCommandTargets = {
   goDiscovery: DiscoveryCommandTarget;
   goHome: NavigationCommandTarget;
   goNewMessage: NavigationCommandTarget;
+  goPeople: NavigationCommandTarget;
   goProjects: NavigationCommandTarget;
   goPulse: NavigationCommandTarget;
   goSettings: NavigationCommandTarget;
@@ -54,6 +55,14 @@ export function buildNavigationCommands(
         void targets.goAgents();
       },
       title: "Open agents",
+    },
+    {
+      description: "Set up the agent org chart, roles, and hiring",
+      id: "open-people",
+      onSelect: () => {
+        void targets.goPeople();
+      },
+      title: "Open People and roles",
     },
     {
       description: "Start a direct message",
@@ -180,6 +189,7 @@ export function useNavigationCommands(
     goDiscovery,
     goHome,
     goNewMessage,
+    goPeople,
     goProjects,
     goPulse,
     goSettings,
@@ -204,6 +214,7 @@ export function useNavigationCommands(
         goDiscovery,
         goHome,
         goNewMessage,
+        goPeople,
         goProjects,
         goPulse,
         goSettings,
@@ -225,6 +236,7 @@ export function useNavigationCommands(
       goDiscovery,
       goHome,
       goNewMessage,
+      goPeople,
       goProjects,
       goPulse,
       goSettings,

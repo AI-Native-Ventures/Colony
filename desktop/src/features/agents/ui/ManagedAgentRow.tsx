@@ -8,6 +8,9 @@ import {
 } from "lucide-react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { useAgentRank } from "@/features/agents/employeeHeads";
+import { AgentRankBadge } from "@/features/agents/ui/AgentRankBadge";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
@@ -70,6 +73,10 @@ export function ManagedAgentRow({
   const personaLabel = agent.personaId
     ? (personaLabelsById[agent.personaId] ?? null)
     : null;
+  // Rank comes from the employee heads the relay publishes. A personal agent
+  // has no employee head and shows no rank badge at all.
+  const { activeCommunity } = useCommunities();
+  const rank = useAgentRank(activeCommunity?.id ?? "", agent.pubkey);
   const presenceStatus = presenceLookup[agent.pubkey.trim().toLowerCase()];
   const activeTurns = useAgentWorking(agent.pubkey).channels;
   const activeWorkingChannels = React.useMemo(
@@ -163,6 +170,7 @@ export function ManagedAgentRow({
                   isLogSelected={isLogSelected}
                   personaLabel={personaLabel}
                   presenceStatus={presenceStatus}
+                  rank={rank}
                 />
               </button>
               <StatusBlock
@@ -205,6 +213,7 @@ export function ManagedAgentRow({
                 isLogSelected={false}
                 personaLabel={personaLabel}
                 presenceStatus={presenceStatus}
+                rank={rank}
               />
               <StatusBlock
                 friendlyError={friendlyError}
@@ -281,6 +290,7 @@ function AgentSummary({
   isLogSelected,
   personaLabel,
   presenceStatus,
+  rank,
 }: {
   activeWorkingChannels: { id: string; name: string; anchorAt: number }[];
   agent: ManagedAgent;
@@ -289,6 +299,7 @@ function AgentSummary({
   isLogSelected: boolean;
   personaLabel: string | null;
   presenceStatus: PresenceStatus | undefined;
+  rank: ReturnType<typeof useAgentRank>;
 }) {
   const { goChannel } = useAppNavigation();
   const { openAgentActivity } = useOpenAgentActivity();
@@ -313,6 +324,7 @@ function AgentSummary({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium text-foreground">{agent.name}</p>
+            {rank ? <AgentRankBadge rank={rank} /> : null}
             {personaLabel ? (
               <Badge variant="secondary">{personaLabel}</Badge>
             ) : null}

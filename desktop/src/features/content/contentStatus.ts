@@ -16,7 +16,11 @@
  */
 
 import type { ContentDecision, ContentPost, GateVerdict } from "./contracts";
-import { approvalState, deriveVerdict, missingGates } from "./contracts";
+import {
+  approvalState,
+  missingGates,
+  postVerdict as contractPostVerdict,
+} from "./contracts";
 
 export type ChipTone = "neutral" | "good" | "warn" | "bad";
 
@@ -39,7 +43,7 @@ export function decisionsForPost(
 
 /** The verdict a post's own gates add up to, or null when nothing ran. */
 export function postVerdict(post: ContentPost): GateVerdict | null {
-  return post.gateReport ? deriveVerdict(post.gateReport.gates) : null;
+  return contractPostVerdict(post.gateReports);
 }
 
 /**
@@ -58,8 +62,9 @@ export function postChip(
 
   if (verdict === "fail") {
     const failed =
-      post.gateReport?.gates.find((gate) => gate.status === "fail")?.id ??
-      "a check";
+      post.gateReports
+        .flatMap((report) => report.gates)
+        .find((gate) => gate.status === "fail")?.id ?? "a check";
     return {
       detail: `The ${failed} check failed. This card cannot be approved until it passes.`,
       label: "Check failed",
@@ -101,19 +106,20 @@ export function postChip(
 
   if (post.status === "draft") {
     return {
-      detail: post.image
-        ? "Rendered but not offered for review yet."
-        : "Planned. Nothing rendered yet.",
-      label: post.image ? "Draft" : "Planned",
+      detail:
+        post.images.length > 0
+          ? "Rendered but not offered for review yet."
+          : "Planned. Nothing rendered yet.",
+      label: post.images.length > 0 ? "Draft" : "Planned",
       tone: "neutral",
     };
   }
 
   if (verdict === "incomplete") {
-    const skipped =
-      post.gateReport?.gates
-        .filter((gate) => gate.status === "skip")
-        .map((gate) => gate.id) ?? [];
+    const skipped = post.gateReports
+      .flatMap((report) => report.gates)
+      .filter((gate) => gate.status === "skip")
+      .map((gate) => gate.id);
     return {
       detail:
         skipped.length > 0
@@ -139,14 +145,14 @@ export function postChip(
  * sentence, and a person deciding whether to publish deserves the sentence.
  */
 export function unverifiedSummary(post: ContentPost): string | null {
-  const missing = missingGates(post.gateReport);
+  const missing = missingGates(post.gateReports);
   if (missing.length > 0) {
     return `Not reported at all: ${missing.join(", ")}.`;
   }
-  const skipped =
-    post.gateReport?.gates
-      .filter((gate) => gate.status === "skip")
-      .map((gate) => gate.id) ?? [];
+  const skipped = post.gateReports
+    .flatMap((report) => report.gates)
+    .filter((gate) => gate.status === "skip")
+    .map((gate) => gate.id);
   if (skipped.length > 0) {
     return `Reported as not run: ${skipped.join(", ")}.`;
   }

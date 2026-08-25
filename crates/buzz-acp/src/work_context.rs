@@ -23,7 +23,9 @@ use buzz_core::{
         classify_cost, AgentWorkContext, AttributionState, CommercialPurpose,
         CompanyOnboardingStatus, CompanyProfile, CompanyTask, Initiative,
     },
-    kind::{KIND_COMPANY_PROFILE, KIND_INITIATIVE, KIND_TASK},
+    employee::parse_employee_head,
+    interrupt::AgentTier,
+    kind::{KIND_COMPANY_PROFILE, KIND_EMPLOYEE, KIND_INITIATIVE, KIND_TASK},
 };
 use buzz_sdk::company::{parse_company_event, parse_initiative_event, parse_task_event};
 use nostr::Event;
@@ -48,8 +50,38 @@ pub struct HydratedWorkContext {
     pub initiative: Option<Initiative>,
     /// The canonical Company.
     pub company: CompanyProfile,
+    /// The agent's own place in the interrupt ladder, resolved from the
+    /// employee heads the relay publishes. `None` for an agent with no
+    /// employee head (a personal agent), which is the ordinary case.
+    pub rank: Option<AgentRankContext>,
     /// The snapshot written into the turn metric.
     pub metric: AgentWorkContext,
+}
+
+/// The agent's own rank and the ladder targets above it.
+///
+/// Resolved from employee heads (kind 30190), the same records the relay
+/// enforces against, so what the agent is told matches what ingest will
+/// accept. The pubkeys are what `buzz asks raise --to` needs; without them
+/// an agent told to "raise one tier up" had to discover the ladder itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRankContext {
+    /// The agent's own rank, from its employee head.
+    pub rank: AgentTier,
+    /// Leader-tier employee pubkeys (lowercase hex), for a worker. Several
+    /// are all listed: the relay accepts an ask to any leader, so naming one
+    /// of several would be a guess this module refuses to make.
+    pub leader_pubkeys: Vec<String>,
+    /// Executive-tier employee pubkeys (lowercase hex), for a leader.
+    pub executive_pubkeys: Vec<String>,
+    /// Whether the relay currently enforces the ladder (owner-contact
+    /// refusal, ask routing, auto-promotion). Ranks are always recorded and
+    /// shown; this flag is the workspace's choice about enforcement.
+    ///
+    /// Until the experimental feature gate ships, the relay enforces
+    /// unconditionally, so this is `true` and the injected block says
+    /// `Chain of command: active`.
+    pub ladder_enforced: bool,
 }
 
 fn scalar_tag<'a>(event: &'a Event, name: &str) -> Result<Option<&'a str>, String> {
@@ -241,18 +273,124 @@ pub fn hydrate(
         task,
         initiative,
         company,
+        // Rank is resolved by the caller (`resolve_for_event`) against the
+        // live relay; `hydrate` stays a pure function of the events passed in.
+        rank: None,
         metric,
     })
+}
+
+/// Resolve the agent's own rank and ladder targets from the employee heads
+/// the relay has published.
+///
+/// One query serves everything: a head is keyed by its own author (`d` tag =
+/// signer), so the newest head per pubkey is the employee's current record.
+/// `None` means the agent has no employee head (a personal agent, not
+/// company-hired) -- the ordinary case, not a failure. A transport or parse
+/// failure is logged and returned as `None` too: a missing rank section must
+/// not fail a turn that would otherwise run.
+pub async fn fetch_agent_rank_context(
+    rest: &crate::relay::RestClient,
+    agent_pubkey: &nostr::PublicKey,
+) -> Option<AgentRankContext> {
+    match try_fetch_agent_rank_context(rest, agent_pubkey).await {
+        Ok(context) => context,
+        Err(error) => {
+            tracing::warn!(
+                target: "work_context::rank",
+                "rank context could not be established: {error}"
+            );
+            None
+        }
+    }
+}
+
+async fn try_fetch_agent_rank_context(
+    rest: &crate::relay::RestClient,
+    agent_pubkey: &nostr::PublicKey,
+) -> Result<Option<AgentRankContext>, String> {
+    // Headroom over any real payroll; heads are one per employee.
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(KIND_EMPLOYEE as u16))
+        .limit(256);
+    let events = rest
+        .query_events(&[filter])
+        .await
+        .map_err(|error| format!("could not read employee heads: {error}"))?;
+
+    // Newest head per employee pubkey wins. Replacement should keep one head
+    // per key anyway; this is defensive against a relay that does not.
+    let mut newest_by_pubkey: HashMap<String, &Event> = HashMap::new();
+    for event in &events {
+        let Ok(parsed) = parse_employee_head(event) else {
+            continue;
+        };
+        match newest_by_pubkey.get_mut(&parsed.pubkey_hex) {
+            Some(current) => {
+                if event.created_at > current.created_at {
+                    *current = event;
+                }
+            }
+            None => {
+                newest_by_pubkey.insert(parsed.pubkey_hex, event);
+            }
+        }
+    }
+
+    let own_hex = agent_pubkey.to_hex().to_ascii_lowercase();
+    let own_rank = newest_by_pubkey
+        .get(&own_hex)
+        .and_then(|event| parse_employee_head(event).ok())
+        .map(|parsed| parsed.rank);
+    let Some(rank) = own_rank else {
+        return Ok(None);
+    };
+
+    let mut leaders: Vec<String> = Vec::new();
+    let mut executives: Vec<String> = Vec::new();
+    for (pubkey_hex, event) in &newest_by_pubkey {
+        let Ok(parsed) = parse_employee_head(event) else {
+            continue;
+        };
+        match parsed.rank {
+            AgentTier::Leader => leaders.push(pubkey_hex.clone()),
+            AgentTier::Executive => executives.push(pubkey_hex.clone()),
+            AgentTier::Worker => {}
+        }
+    }
+    leaders.sort();
+    executives.sort();
+
+    Ok(Some(AgentRankContext {
+        rank,
+        // Each tier only names the rung it escalates to; an executive has
+        // nobody above it and gets the rank alone.
+        leader_pubkeys: if rank == AgentTier::Worker {
+            leaders
+        } else {
+            Vec::new()
+        },
+        executive_pubkeys: if rank == AgentTier::Leader {
+            executives
+        } else {
+            Vec::new()
+        },
+        // The experimental feature gate replaces this with the workspace's
+        // own setting; until it ships the relay enforces unconditionally.
+        ladder_enforced: true,
+    }))
 }
 
 /// Resolve the work a triggering message points at, against the live relay.
 ///
 /// Two round trips, because the Task names the company and the company is not
 /// known until it is read. Both name their kinds and pin the author to the
-/// relay's own key.
+/// relay's own key. The agent's rank rides the same resolution so a turn is
+/// told what it is working on and where it sits in one pass.
 pub async fn resolve_for_event(
     rest: &crate::relay::RestClient,
     event: &Event,
+    agent_pubkey: &nostr::PublicKey,
 ) -> Result<Option<HydratedWorkContext>, String> {
     let Some(reference) = read_work_reference(event)? else {
         return Ok(None);
@@ -293,14 +431,15 @@ pub async fn resolve_for_event(
         .first()
         .ok_or_else(|| "the company this work belongs to does not exist".to_string())?;
 
-    hydrate(
+    let mut context = hydrate(
         &reference,
         task_event,
         initiative_event.as_ref(),
         company_event,
         &relay_pubkey,
-    )
-    .map(Some)
+    )?;
+    context.rank = fetch_agent_rank_context(rest, agent_pubkey).await;
+    Ok(Some(context))
 }
 
 /// Resolve the workspace's onboarding status from an already-fetched set of
@@ -389,6 +528,65 @@ fn purpose_label(purpose: CommercialPurpose) -> &'static str {
     }
 }
 
+/// The ladder lines for one resolved rank, rendered inside the work block.
+fn rank_lines(rank: &AgentRankContext) -> String {
+    let mut lines = format!("Your rank: {}\n", rank.rank.as_str());
+    match rank.rank {
+        AgentTier::Worker => {
+            lines.push_str(&format!(
+                "Leader pubkey: {}\n",
+                if rank.leader_pubkeys.is_empty() {
+                    "none".to_string()
+                } else {
+                    rank.leader_pubkeys.join(", ")
+                }
+            ));
+        }
+        AgentTier::Leader => {
+            lines.push_str(&format!(
+                "Executive pubkey: {}\n",
+                if rank.executive_pubkeys.is_empty() {
+                    "none".to_string()
+                } else {
+                    rank.executive_pubkeys.join(", ")
+                }
+            ));
+        }
+        AgentTier::Executive => {}
+    }
+    lines.push_str(&format!(
+        "Chain of command: {}\n",
+        if rank.ladder_enforced {
+            "active"
+        } else {
+            "inactive"
+        }
+    ));
+    lines
+}
+
+/// The escalation instruction for one resolved rank, rendered after the block.
+fn rank_instruction(rank: &AgentRankContext) -> String {
+    let target = match rank.rank {
+        AgentTier::Worker => "Leader pubkey",
+        AgentTier::Leader => "Executive pubkey",
+        AgentTier::Executive => return String::new(),
+    };
+    if rank.ladder_enforced {
+        format!(
+            "When you are blocked, escalate one tier up: `buzz asks raise --to <{target}>`, \
+             passing the pubkey above verbatim. Do not message an owner directly; the relay \
+             refuses it.\n"
+        )
+    } else {
+        format!(
+            "Ranks are recorded but not enforced right now, so you may message an owner \
+             directly. `buzz asks raise --to <{target}>` still works when you would rather \
+             escalate.\n"
+        )
+    }
+}
+
 /// The prompt section that tells the agent what it is working on.
 ///
 /// Deliberately does not carry the cost classification. The agent has no say in
@@ -411,6 +609,13 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
         Some(initiative) => (initiative.title.as_str(), initiative.id.as_str()),
         None => ("none", "none"),
     };
+    // Rank lines ride inside the block so the whole ladder picture is in one
+    // place the base prompt can point at. An agent with no employee head gets
+    // none of them: no rank is not a rank.
+    let (rank_block, rank_note) = match context.rank.as_ref() {
+        Some(rank) => (rank_lines(rank), rank_instruction(rank)),
+        None => (String::new(), String::new()),
+    };
     format!(
         "<colony-work-context>\n\
          Company: {company}\n\
@@ -420,6 +625,7 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
          Initiative: {initiative}\n\
          Initiative id: {initiative_id}\n\
          Commercial purpose: {purpose}\n\
+         {rank_block}\
          </colony-work-context>\n\
          This is the work this turn is charged to. Do not reinterpret it and do \
          not restate its accounting treatment; that is decided from the record, \
@@ -429,12 +635,15 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
          The two identifiers are what `buzz asks raise` needs when you are \
          blocked: pass them verbatim as `--task` and `--initiative`. When \
          `Initiative id` is `none`, omit `--initiative` entirely; do not invent \
-         one.",
+         one.\n\
+         {rank_note}",
         company = context.company.trading_name,
         task = context.task.title,
         task_id = context.task.id,
         team = context.task.owning_team_id,
         purpose = purpose_label(context.task.commercial_purpose),
+        rank_block = rank_block,
+        rank_note = rank_note,
     )
 }
 
@@ -982,6 +1191,176 @@ mod tests {
         assert!(
             section.contains("omit `--initiative`"),
             "the section must tell the agent to omit the flag rather than invent an id: {section}"
+        );
+    }
+
+    fn hydrated_with_rank(rank: Option<AgentRankContext>) -> HydratedWorkContext {
+        let keys = relay();
+        let mut context = hydrate(
+            &reference(),
+            &task_head(&task(), &keys),
+            None,
+            &company_head(&keys),
+            &keys.public_key(),
+        )
+        .expect("hydrate");
+        context.rank = rank;
+        context
+    }
+
+    const LEADER_PK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const EXECUTIVE_PK: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    fn worker_rank() -> AgentRankContext {
+        AgentRankContext {
+            rank: AgentTier::Worker,
+            leader_pubkeys: vec![LEADER_PK.to_string()],
+            executive_pubkeys: Vec::new(),
+            ladder_enforced: true,
+        }
+    }
+
+    #[test]
+    fn a_worker_is_told_its_rank_and_its_leader() {
+        let section = work_context_section(&hydrated_with_rank(Some(worker_rank())));
+        assert!(
+            section.contains("Your rank: worker"),
+            "the block must name the worker's own rank: {section}"
+        );
+        assert!(
+            section.contains(&format!("Leader pubkey: {LEADER_PK}")),
+            "a worker must be given its leader's pubkey verbatim: {section}"
+        );
+        assert!(
+            section.contains("Chain of command: active"),
+            "the block must state the ladder enforcement flag: {section}"
+        );
+        assert!(
+            !section.contains("Executive pubkey"),
+            "a worker is not told the executive rung: {section}"
+        );
+        assert!(
+            section.contains("buzz asks raise --to <Leader pubkey>"),
+            "the instruction must connect the pubkey to the --to flag: {section}"
+        );
+    }
+
+    #[test]
+    fn a_leader_is_told_its_rank_and_the_executive() {
+        let rank = AgentRankContext {
+            rank: AgentTier::Leader,
+            leader_pubkeys: Vec::new(),
+            executive_pubkeys: vec![EXECUTIVE_PK.to_string()],
+            ladder_enforced: true,
+        };
+        let section = work_context_section(&hydrated_with_rank(Some(rank)));
+        assert!(
+            section.contains("Your rank: leader"),
+            "the block must name the leader's own rank: {section}"
+        );
+        assert!(
+            section.contains(&format!("Executive pubkey: {EXECUTIVE_PK}")),
+            "a leader must be given the executive's pubkey verbatim: {section}"
+        );
+        assert!(
+            !section.contains("Leader pubkey"),
+            "a leader is not told the worker rung: {section}"
+        );
+        assert!(
+            section.contains("Chain of command: active"),
+            "the block must state the ladder enforcement flag: {section}"
+        );
+    }
+
+    #[test]
+    fn an_executive_gets_its_rank_alone() {
+        let rank = AgentRankContext {
+            rank: AgentTier::Executive,
+            leader_pubkeys: Vec::new(),
+            executive_pubkeys: Vec::new(),
+            ladder_enforced: true,
+        };
+        let section = work_context_section(&hydrated_with_rank(Some(rank)));
+        assert!(
+            section.contains("Your rank: executive"),
+            "the block must name the executive's own rank: {section}"
+        );
+        assert!(
+            !section.contains("pubkey"),
+            "an executive has nobody above it and gets no ladder pubkeys: {section}"
+        );
+        assert!(
+            section.contains("Chain of command: active"),
+            "the block must state the ladder enforcement flag: {section}"
+        );
+    }
+
+    #[test]
+    fn several_leaders_are_all_listed_rather_than_guessed() {
+        let mut rank = worker_rank();
+        rank.leader_pubkeys = vec![LEADER_PK.to_string(), EXECUTIVE_PK.to_string()];
+        let section = work_context_section(&hydrated_with_rank(Some(rank)));
+        assert!(
+            section.contains(&format!("Leader pubkey: {LEADER_PK}, {EXECUTIVE_PK}")),
+            "every leader must be listed so the agent can pick without hunting: {section}"
+        );
+    }
+
+    #[test]
+    fn a_missing_ladder_target_says_none_rather_than_leaving_a_blank() {
+        let mut no_leader = worker_rank();
+        no_leader.leader_pubkeys = Vec::new();
+        let section = work_context_section(&hydrated_with_rank(Some(no_leader)));
+        assert!(
+            section.contains("Leader pubkey: none"),
+            "no leader must render an explicit `none`: {section}"
+        );
+
+        let mut no_executive = AgentRankContext {
+            rank: AgentTier::Leader,
+            leader_pubkeys: Vec::new(),
+            executive_pubkeys: Vec::new(),
+            ladder_enforced: true,
+        };
+        no_executive.executive_pubkeys = Vec::new();
+        let section = work_context_section(&hydrated_with_rank(Some(no_executive)));
+        assert!(
+            section.contains("Executive pubkey: none"),
+            "no executive must render an explicit `none`: {section}"
+        );
+    }
+
+    #[test]
+    fn an_inactive_ladder_tells_the_agent_owner_contact_is_allowed() {
+        let mut rank = worker_rank();
+        rank.ladder_enforced = false;
+        let section = work_context_section(&hydrated_with_rank(Some(rank)));
+        assert!(
+            section.contains("Chain of command: inactive"),
+            "the block must state the flag as inactive when enforcement is off: {section}"
+        );
+        assert!(
+            section.contains("may message an owner directly"),
+            "an inactive ladder must tell the agent owner contact is allowed: {section}"
+        );
+    }
+
+    // An agent with no employee head (a personal agent) has no rank and must
+    // not be shown one. No rank lines, no flag line.
+    #[test]
+    fn an_agent_with_no_employee_head_gets_no_rank_lines_at_all() {
+        let section = work_context_section(&hydrated_with_rank(None));
+        assert!(
+            !section.contains("Your rank"),
+            "an untiered agent must not be told a rank: {section}"
+        );
+        assert!(
+            !section.contains("Chain of command"),
+            "an untiered agent must not be shown the ladder flag: {section}"
+        );
+        assert!(
+            !section.contains("pubkey"),
+            "an untiered agent must not be shown ladder pubkeys: {section}"
         );
     }
 

@@ -217,7 +217,7 @@ test("fingerprintBinary hashes dense numeric arrays (audio frames)", async () =>
 test("recorder keeps ARGS replayable and redacts sensitive RESULTS", async () => {
   const recorder = new ParityRecorder();
   await recorder.recordCommand(
-    "save_discovery_credential",
+    "save_runtime_file_config",
     { provider: "outscraper", key: "parity-oracle-fixture-key" },
     { ok: true, result: "configured" },
     1,

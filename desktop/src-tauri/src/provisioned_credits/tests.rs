@@ -59,6 +59,10 @@ fn one_day_lease_refreshes_before_expiry_without_an_immediate_loop() {
 fn account_requires_usd_and_matching_status() {
     let account: GatewayAccount = serde_json::from_value(serde_json::json!({
         "balance_nanousd": "-1",
+        "total_balance_nanousd": "9",
+        "discovery_reserved_nanousd": "10",
+        "gateway_reserved_nanousd": "0",
+        "available_balance_nanousd": "-1",
         "currency": "USD",
         "status": "depleted"
     }))
@@ -67,10 +71,30 @@ fn account_requires_usd_and_matching_status() {
 
     let mismatch = GatewayAccount {
         balance_nanousd: "0".to_string(),
+        total_balance_nanousd: "1".to_string(),
+        discovery_reserved_nanousd: "0".to_string(),
+        gateway_reserved_nanousd: "0".to_string(),
+        available_balance_nanousd: "0".to_string(),
         currency: "USD".to_string(),
         status: GatewayAccountStatus::Active,
     };
     assert!(mismatch.balance_nanousd_i128().is_err());
+}
+
+#[test]
+fn legacy_account_response_defaults_to_an_available_balance() {
+    let account: GatewayAccount = serde_json::from_value(serde_json::json!({
+        "balance_nanousd": "125000000",
+        "currency": "USD",
+        "status": "active"
+    }))
+    .expect("legacy account wire shape");
+
+    assert_eq!(account.balance_nanousd_i128(), Ok(125_000_000));
+    assert_eq!(account.total_balance_nanousd, "");
+    assert_eq!(account.discovery_reserved_nanousd, "");
+    assert_eq!(account.gateway_reserved_nanousd, "");
+    assert_eq!(account.available_balance_nanousd, "");
 }
 
 #[test]
