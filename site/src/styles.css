@@ -15,4 +15,6 @@
 
 body {
   background: var(--colony-canvas);
+  font-family: "Inter Tight", Inter, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
