@@ -122,7 +122,7 @@ export function BlockRenderer({
             role="status"
           >
             {latestStatus === "pending"
-              ? "Action submitted — waiting for the responsible agent."
+              ? "Action submitted. Waiting for the responsible agent."
               : latestStatus === "succeeded"
                 ? "Completed."
                 : latestStatus === "denied"
