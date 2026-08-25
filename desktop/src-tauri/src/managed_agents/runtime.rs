@@ -26,6 +26,7 @@ pub(crate) use metadata::{
     DISPLAY_NAME_ENV_VAR, SESSION_TITLE_ENV_VAR,
 };
 
+mod browser_shared;
 mod prime_agent_config;
 mod provisioned;
 pub(crate) use provisioned::{
@@ -498,6 +499,7 @@ fn spawn_agent_child_inner(
     // when `buzz-browserd` was never built for this machine, and that
     // absence alone must leave every agent's behaviour unchanged.
     let resolved_browser_mcp_command: Option<std::path::PathBuf> = resolve_command("buzz-browserd");
+    let shared_browser_endpoint = browser_shared::resolve(app);
     // Resolve agent command to a full path (DMG launches have minimal PATH).
     let resolved_agent_command = resolve_command(effective_command)
         .map(|p| p.display().to_string())
@@ -553,6 +555,7 @@ fn spawn_agent_child_inner(
             command.env("BUZZ_ACP_BROWSER_MCP_COMMAND", "");
         }
     }
+    browser_shared::apply_env(&mut command, &shared_browser_endpoint);
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {

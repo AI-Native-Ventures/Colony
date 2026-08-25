@@ -8,6 +8,7 @@
 
 mod commands;
 mod events;
+mod shared_endpoint;
 mod shared_host;
 mod validation;
 
@@ -85,6 +86,7 @@ struct WebSession {
     /// keeps the shared browser alive exactly as long as any session still
     /// needs it, and kills it once the last one is gone.
     shared_host: Option<SharedHostSlot>,
+    shared: shared_endpoint::SharedTabInfo,
 }
 
 impl Drop for WebSession {
@@ -244,6 +246,10 @@ impl WebManager {
             done: Mutex::new(Some(done_receiver)),
             task: Mutex::new(None),
             shared_host: shared_reservation.map(shared_host::SharedHostReservation::keep),
+            shared: shared_endpoint::SharedTabInfo {
+                endpoint: host.base_url().to_string(),
+                target_id: target.id.clone(),
+            },
         });
 
         if !self.insert_if_current(token, session_id.clone(), Arc::clone(&session))? {
@@ -719,68 +725,8 @@ async fn run_session_loop<R: Runtime>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn web_url_normalization_keeps_about_blank_and_rejects_empty() {
-        assert_eq!(normalize_url(" about:blank ").unwrap(), "about:blank");
-        assert!(normalize_url(" ").is_err());
-    }
-
-    #[test]
-    fn viewport_validation_rejects_tiny_and_unbounded_surfaces() {
-        assert!(validate_viewport(1280, 720).is_ok());
-        assert!(validate_viewport(120, 720).is_err());
-        assert!(validate_viewport(1280, 8_000).is_err());
-    }
-
-    #[test]
-    fn device_scale_factor_validation_rejects_out_of_range_and_non_finite() {
-        assert!(validate_device_scale_factor(1.0).is_ok());
-        assert!(validate_device_scale_factor(2.0).is_ok());
-        assert!(validate_device_scale_factor(1.5).is_ok());
-        assert!(validate_device_scale_factor(0.5).is_err());
-        assert!(validate_device_scale_factor(2.5).is_err());
-        assert!(validate_device_scale_factor(f64::NAN).is_err());
-    }
-
-    #[tokio::test]
-    async fn close_all_invalidates_a_deferred_start_before_late_insertion() {
-        let manager = WebManager::default();
-        let (token, done_sender, cancel_receiver) = manager.begin_start().unwrap();
-        let cancelled = tokio::spawn(async move { cancel_receiver.await.is_ok() });
-
-        let (drained_sessions, pending_starts) = manager.invalidate_and_drain().unwrap();
-        assert!(drained_sessions.is_empty());
-        assert_eq!(pending_starts.len(), 1);
-        assert!(
-            !manager
-                .insert_if_current(token, "late-session".into(), test_session())
-                .unwrap(),
-            "a late host must not populate after close_all invalidates its generation"
-        );
-        assert!(manager.sessions.lock().unwrap().is_empty());
-        assert!(cancelled.await.unwrap());
-
-        manager.finish_start(token, done_sender);
-        assert!(pending_starts[0]
-            .recv_timeout(Duration::from_secs(1))
-            .is_ok());
-    }
-
-    fn test_session() -> Arc<WebSession> {
-        let (commands, _receiver) = mpsc::channel(1);
-        let (_done_sender, done_receiver) = std::sync::mpsc::channel();
-        Arc::new(WebSession {
-            commands,
-            stop_requested: Arc::new(AtomicBool::new(false)),
-            done: Mutex::new(Some(done_receiver)),
-            task: Mutex::new(None),
-            shared_host: None,
-        })
-    }
-}
+#[path = "web_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "web_lifecycle_tests.rs"]

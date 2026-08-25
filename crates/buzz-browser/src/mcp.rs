@@ -93,6 +93,33 @@ pub async fn open_host(p: &ConnectParams) -> Result<BrowserHost, BrowserError> {
     launch(&cfg).await
 }
 
+/// The desktop-forwarded endpoint of the human's open workspace tab, when a
+/// caller passed no explicit `endpoint` (T5). Set as env vars on this
+/// server's `McpServer` entry by `buzz-acp`'s `build_mcp_servers`, itself fed
+/// by `WebManager::shared_endpoint`; empty/absent means desktop had none live
+/// or more than one, so the caller's own request (or a fresh launch) stands.
+fn shared_endpoint_params(p: ConnectParams) -> ConnectParams {
+    if p.endpoint.is_some() {
+        return p;
+    }
+    let endpoint = std::env::var("BUZZ_BROWSER_SHARED_ENDPOINT")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let Some(endpoint) = endpoint else {
+        return p;
+    };
+    let target_id = p.target_id.or_else(|| {
+        std::env::var("BUZZ_BROWSER_SHARED_TARGET_ID")
+            .ok()
+            .filter(|value| !value.is_empty())
+    });
+    ConnectParams {
+        endpoint: Some(endpoint),
+        target_id,
+        ..p
+    }
+}
+
 /// Choose the page target to drive: the requested id, else the first page.
 pub fn pick_target<'a>(
     targets: &'a [TargetInfo],
@@ -153,6 +180,7 @@ impl BuzzBrowserMcp {
                 "already connected".into(),
             )));
         }
+        let p = shared_endpoint_params(p);
         let host = open_host(&p).await.map_err(BuzzBrowserMcp::err_result)?;
         let targets = host
             .list_targets()
@@ -424,6 +452,52 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Env-var-touching tests must run serially -- env vars are process-global.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn no_endpoint_params() -> ConnectParams {
+        ConnectParams {
+            binary: None,
+            headless: None,
+            endpoint: None,
+            target_id: None,
+        }
+    }
+
+    #[test]
+    fn shared_endpoint_params_prefers_an_explicit_endpoint_over_the_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("BUZZ_BROWSER_SHARED_ENDPOINT", "9222");
+        let p = ConnectParams {
+            endpoint: Some("9333".into()),
+            ..no_endpoint_params()
+        };
+        let resolved = shared_endpoint_params(p);
+        assert_eq!(resolved.endpoint.as_deref(), Some("9333"));
+        std::env::remove_var("BUZZ_BROWSER_SHARED_ENDPOINT");
+    }
+
+    #[test]
+    fn shared_endpoint_params_falls_back_to_the_env_var_with_its_target_id() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("BUZZ_BROWSER_SHARED_ENDPOINT", "9222");
+        std::env::set_var("BUZZ_BROWSER_SHARED_TARGET_ID", "tab-a");
+        let resolved = shared_endpoint_params(no_endpoint_params());
+        assert_eq!(resolved.endpoint.as_deref(), Some("9222"));
+        assert_eq!(resolved.target_id.as_deref(), Some("tab-a"));
+        std::env::remove_var("BUZZ_BROWSER_SHARED_ENDPOINT");
+        std::env::remove_var("BUZZ_BROWSER_SHARED_TARGET_ID");
+    }
+
+    #[test]
+    fn shared_endpoint_params_is_a_no_op_with_no_env_var_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("BUZZ_BROWSER_SHARED_ENDPOINT");
+        std::env::remove_var("BUZZ_BROWSER_SHARED_TARGET_ID");
+        let resolved = shared_endpoint_params(no_endpoint_params());
+        assert!(resolved.endpoint.is_none());
+    }
 
     #[test]
     fn tool_names_are_stable() {
