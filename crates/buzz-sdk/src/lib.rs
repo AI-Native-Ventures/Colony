@@ -26,6 +26,7 @@ pub mod mentions;
 pub mod nip_oa;
 pub mod party;
 pub mod party_resolution;
+pub mod task_transition;
 
 pub use builders::*;
 pub use company::*;

@@ -1,27 +1,38 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import {
+  tasksQueryKey,
   useActiveCompany,
   useCompanyTasks,
   useInitiatives,
 } from "@/features/company/hooks";
+import { queueActioner } from "@/features/company/queueActions";
 import { selectTaskRuns } from "@/features/company/taskRuns";
 import { TaskListScreen } from "@/features/company/ui/TaskListScreen";
 import { TaskBoardScreen } from "@/features/company/ui/TaskBoardScreen";
+import { TaskQueueScreen } from "@/features/company/ui/TaskQueueScreen";
 import { buildTasksById } from "@/features/company/workBoardModel";
+import {
+  bounceTargetTaskId,
+  selectMyQueue,
+} from "@/features/company/workQueueModel";
 import {
   buildWorkListRows,
   filterWorkRows,
   type WorkListRow,
 } from "@/features/company/workListModel";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { useIdentityQuery } from "@/shared/api/hooks";
 import type { RelayEvent } from "@/shared/api/types";
 import { relayClient } from "@/shared/api/relayClient";
 import { KIND_JOB_HEAD } from "@/shared/constants/kinds";
 import { Route as WorkRoute } from "./work";
 
 const NO_EVENTS: RelayEvent[] = [];
+/** A queue snooze has no picker yet - it parks the card for a day. */
+const DEFAULT_SNOOZE_SECONDS = 24 * 60 * 60;
 
 export function WorkRouteScreen() {
   const search = WorkRoute.useSearch();
@@ -100,6 +111,98 @@ export function WorkRouteScreen() {
           }),
     [rows, search.initiativeId],
   );
+
+  const identityQuery = useIdentityQuery();
+  const selfPubkey = identityQuery.data?.pubkey ?? null;
+  const queue = React.useMemo(
+    () => (selfPubkey ? selectMyQueue(tasks, [selfPubkey]) : []),
+    [tasks, selfPubkey],
+  );
+  const initiativeTitleById = React.useMemo(
+    () => new Map(initiatives.map((entry) => [entry.id, entry.title])),
+    [initiatives],
+  );
+  const queryClient = useQueryClient();
+  const [pendingTaskId, setPendingTaskId] = React.useState<string | null>(null);
+
+  const runQueueAction = React.useCallback(
+    async (
+      taskId: string,
+      action: () => Promise<
+        { status: "applied" } | { status: "blocked"; message: string }
+      >,
+    ) => {
+      setPendingTaskId(taskId);
+      try {
+        const outcome = await action();
+        if (outcome.status === "blocked") {
+          toast.error(outcome.message);
+          return;
+        }
+        await queryClient.invalidateQueries({
+          queryKey: tasksQueryKey(communityId, {
+            companyId: companyId ?? undefined,
+          }),
+        });
+      } catch (thrown) {
+        toast.error(
+          thrown instanceof Error ? thrown.message : "That didn't go through.",
+        );
+      } finally {
+        setPendingTaskId(null);
+      }
+    },
+    [queryClient, communityId, companyId],
+  );
+
+  const handleQueueComplete = React.useCallback(
+    (taskId: string, outcomeReason: string) =>
+      runQueueAction(taskId, () =>
+        queueActioner.completeTask(taskId, outcomeReason),
+      ),
+    [runQueueAction],
+  );
+  const handleQueueSnooze = React.useCallback(
+    (taskId: string) =>
+      runQueueAction(taskId, () =>
+        queueActioner.snoozeTask(
+          taskId,
+          Math.floor(Date.now() / 1000) + DEFAULT_SNOOZE_SECONDS,
+        ),
+      ),
+    [runQueueAction],
+  );
+  const handleQueueBounce = React.useCallback(
+    (taskId: string, reason: string) => {
+      const task = tasks.find((entry) => entry.id === taskId);
+      const upstreamId = task ? bounceTargetTaskId(task) : null;
+      if (!upstreamId) {
+        toast.error("This task has no single upstream to bounce.");
+        return Promise.resolve();
+      }
+      return runQueueAction(taskId, () =>
+        queueActioner.bounceUpstreamTask(upstreamId, reason),
+      );
+    },
+    [runQueueAction, tasks],
+  );
+
+  if (search.view === "queue") {
+    return (
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <TaskQueueScreen
+          error={error}
+          initiativeTitleById={initiativeTitleById}
+          isLoading={isLoading}
+          onBounce={handleQueueBounce}
+          onComplete={handleQueueComplete}
+          onSnooze={handleQueueSnooze}
+          pendingTaskId={pendingTaskId}
+          queue={queue}
+        />
+      </div>
+    );
+  }
 
   if (search.view === "board") {
     const initiative =

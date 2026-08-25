@@ -7,7 +7,7 @@ const WorkRouteScreen = React.lazy(async () => {
 });
 
 export type WorkRouteSearch = {
-  view?: "list" | "board";
+  view?: "list" | "board" | "queue";
   initiativeId?: string;
 };
 
@@ -15,7 +15,10 @@ function validateWorkSearch(search: Record<string, unknown>): WorkRouteSearch {
   return {
     initiativeId:
       typeof search.initiativeId === "string" ? search.initiativeId : undefined,
-    view: search.view === "board" ? "board" : undefined,
+    view:
+      search.view === "board" || search.view === "queue"
+        ? search.view
+        : undefined,
   };
 }
 

@@ -277,6 +277,18 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goWorkQueue = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+          search: { view: "queue" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goWorkflows = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -483,6 +495,7 @@ export function useAppNavigation() {
     goWorkflow,
     goWork,
     goWorkBoard,
+    goWorkQueue,
     goWorkflows,
     openSearchHit,
   };
