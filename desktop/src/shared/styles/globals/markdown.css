@@ -1,5 +1,5 @@
 .message-markdown {
-  --inline-chip-padding-block-start: 0.1875rem;
+  --inline-chip-padding-block-start: 0.125rem;
   --inline-chip-padding-block-end: 0.125rem;
   --inline-chip-padding-inline: 0.25rem;
   --inline-chip-min-height: calc(
@@ -85,6 +85,27 @@
   font-size: inherit;
   background: hsl(var(--primary) / 0.15);
   color: hsl(var(--primary));
+}
+
+.message-markdown .mention-chip.wrapping-inline-chip {
+  display: inline;
+  line-height: calc(
+    1em +
+    var(--inline-chip-padding-block-start) +
+    var(--inline-chip-padding-block-end) +
+    0.25rem
+  );
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
+}
+
+.message-markdown .mention-chip.buzz-link-unavailable,
+.message-markdown .mention-chip.buzz-link-unavailable:hover,
+.message-markdown .mention-chip.buzz-link-deleted,
+.message-markdown .mention-chip.buzz-link-deleted:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground) / 0.7);
 }
 
 .message-markdown .mention-chip.inbox-channel-chip {
