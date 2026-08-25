@@ -1,5 +1,10 @@
 # Changelog
 
+## relay-v0.9.1
+
+- feat(payments): extend the credit ladder to $1,000 ([`a8c1ba12ab`](https://github.com/AI-Native-Ventures/Colony/commit/a8c1ba12ab763f6d2662abb0444c98d725157e9c))
+
+
 ## relay-v0.8.2
 
 - fix(credits): prevent a completed provider call from being debited twice
