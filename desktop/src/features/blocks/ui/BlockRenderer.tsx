@@ -5,6 +5,7 @@ import type {
   BlockTrust,
 } from "@/features/blocks/contracts";
 
+import { blockShellTier } from "@/features/blocks/blockShellTier";
 import {
   BlockRenderProvider,
   useBlockRenderContext,
@@ -87,6 +88,7 @@ export function BlockRenderer({
     manifest.validation.requires_attention,
     latestAttentionStatus,
   );
+  const shellTier = blockShellTier(manifest.tree);
   return (
     <BlockRenderProvider
       attentionResolution={attentionResolution}
@@ -101,14 +103,22 @@ export function BlockRenderer({
       trust={trust}
     >
       <div
-        className="my-1 max-w-2xl overflow-hidden rounded-xl border border-border/70 bg-card/70 p-4 shadow-sm"
+        className={
+          shellTier === "framed"
+            ? "my-1 max-w-[min(100%,32rem)] overflow-hidden rounded-lg border border-border/40 bg-background/40 p-3"
+            : "my-1 max-w-[min(100%,32rem)] min-w-0"
+        }
         data-block-handle={manifest.handle}
         data-block-trust={trust}
       >
         <BlockTree data={data} manifest={manifest} />
         {latestStatus ? (
           <p
-            className="mt-3 border-t border-border/60 pt-2 text-xs text-muted-foreground"
+            className={
+              shellTier === "inline"
+                ? "mt-2 text-xs text-muted-foreground"
+                : "mt-3 border-t border-border/60 pt-2 text-xs text-muted-foreground"
+            }
             role="status"
           >
             {latestStatus === "pending"
