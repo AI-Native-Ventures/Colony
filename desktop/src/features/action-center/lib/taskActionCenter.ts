@@ -1,5 +1,4 @@
 import type { CompanyTask } from "@/features/company/contracts";
-import type { TaskRunHead } from "@/features/company/taskRunContracts";
 import { selectTaskRuns } from "@/features/company/taskRuns";
 import type { RelayEvent } from "@/shared/api/types";
 import type { ActionTaskSource } from "../contracts";
