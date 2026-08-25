@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 416,
-    "rust_lines": 164753,
-    "tauri_coupled": 165,
+    "rust_total": 419,
+    "rust_lines": 164846,
+    "tauri_coupled": 168,
     "portable": 251,
     "portable_lines": 92933,
     "tauri_coupled_list": [
@@ -133,6 +133,7 @@
       "src-tauri/src/managed_agents/restore.rs",
       "src-tauri/src/managed_agents/retention.rs",
       "src-tauri/src/managed_agents/runtime.rs",
+      "src-tauri/src/managed_agents/runtime/browser_shared.rs",
       "src-tauri/src/managed_agents/runtime/orphan_sweep.rs",
       "src-tauri/src/managed_agents/runtime/process.rs",
       "src-tauri/src/managed_agents/runtime/provisioned.rs",
@@ -170,7 +171,9 @@
       "src-tauri/src/terminal_runtime.rs",
       "src-tauri/src/tray_menu.rs",
       "src-tauri/src/web.rs",
-      "src-tauri/src/web_lifecycle_tests.rs"
+      "src-tauri/src/web/shared_endpoint.rs",
+      "src-tauri/src/web_lifecycle_tests.rs",
+      "src-tauri/src/web_tests.rs"
     ],
     "portable_list": [
       "src-tauri/src/app_state_env.rs",
@@ -445,7 +448,7 @@
     ]
   },
   "params": {
-    "AppHandle": 353,
+    "AppHandle": 354,
     "State": 256,
     "Window": 7,
     "ipc::Request": 1,
@@ -453,7 +456,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 350,
+      "AppHandle": 351,
       "State": 256,
       "Window": 7,
       "ipc::Request": 1,
@@ -472,7 +475,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 109,
+    ".state::<": 110,
     ".emit(": 47,
     ".emit_to(": 2,
     ".dialog()": 5,
