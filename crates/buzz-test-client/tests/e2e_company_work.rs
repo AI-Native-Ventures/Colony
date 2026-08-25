@@ -259,28 +259,45 @@ async fn broker(
 }
 
 /// Read one relay-authored head by coordinate.
+///
+/// A single silent window (`collect_until_eose` errors before EOSE) is the
+/// same relay-side transport stall `broker`'s receipt poll retries past, not
+/// an absent record — every occurrence observed so far had already ingested
+/// its write with `accepted=true` before the read connection went quiet. An
+/// `Ok` result, even empty, is a real answer: "no head yet" is a legitimate
+/// outcome for a caller checking one does not exist, and returns immediately
+/// without retrying. Only a transport ERROR is retried; the final panic
+/// stays strict.
 async fn head(
     client: &mut BuzzTestClient,
     relay: &str,
     kind: u32,
     d_tag: &str,
 ) -> Option<nostr::Event> {
-    let id = sub_id("head");
-    let filter = Filter::new()
-        .kind(Kind::Custom(kind as u16))
-        .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
-        .identifier(d_tag)
-        .limit(1);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(5))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
-    events.into_iter().next()
+    for attempt in 0..10 {
+        let id = sub_id("head");
+        let filter = Filter::new()
+            .kind(Kind::Custom(kind as u16))
+            .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
+            .identifier(d_tag)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => {
+                let _ = client.close_subscription(&id).await;
+                return events.into_iter().next();
+            }
+            Err(error) => {
+                eprintln!("head poll {attempt} for {d_tag} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+    panic!("the relay never answered a head read for {d_tag}");
 }
 
 /// Publish the Team the relay validates Task ownership against.
@@ -418,7 +435,12 @@ async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
         accepted.message
     );
 
-    for _ in 0..40 {
+    // This loop already existed to wait for the employee to be created; the
+    // `.expect("collect")` it used to carry defeated that purpose against a
+    // transport error, since a panic never lets a `for` loop retry. A
+    // silent window is retried like an empty one, same as `broker`'s
+    // receipt poll; the final panic stays strict.
+    for attempt in 0..40 {
         let id = sub_id("employee");
         let filter = Filter::new()
             .kind(Kind::Custom(KIND_EMPLOYEE as u16))
@@ -428,10 +450,15 @@ async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
             .subscribe(&id, vec![filter])
             .await
             .expect("subscribe");
-        let events = client
-            .collect_until_eose(&id, Duration::from_secs(5))
-            .await
-            .expect("collect");
+        let events = match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => events,
+            Err(error) => {
+                eprintln!("employee poll {attempt} for {request_id} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+        };
         let _ = client.close_subscription(&id).await;
         if let Some(event) = events.first() {
             return event.pubkey.to_hex();
@@ -453,22 +480,35 @@ fn job_event(keys: &Keys, kind: u32, content: &str, tags: Vec<Vec<String>>) -> n
         .expect("job event signs")
 }
 
+/// Read the current job head, retrying past a silent transport window the
+/// same way `head` does — see its doc comment. `await_job_head`'s own retry
+/// loop depends on this NOT panicking on a transient error, since a panic
+/// here would kill that outer loop on the first hiccup rather than let it
+/// retry.
 async fn current_job_head(client: &mut BuzzTestClient, job_id: &str) -> Option<nostr::Event> {
-    let id = sub_id("job-head");
-    let filter = Filter::new()
-        .kind(Kind::Custom(KIND_JOB_HEAD as u16))
-        .identifier(job_id)
-        .limit(1);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(5))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
-    events.into_iter().next()
+    for attempt in 0..10 {
+        let id = sub_id("job-head");
+        let filter = Filter::new()
+            .kind(Kind::Custom(KIND_JOB_HEAD as u16))
+            .identifier(job_id)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => {
+                let _ = client.close_subscription(&id).await;
+                return events.into_iter().next();
+            }
+            Err(error) => {
+                eprintln!("job head poll {attempt} for {job_id} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+    panic!("the relay never answered a job head read for {job_id}");
 }
 
 async fn await_job_head(
@@ -1721,21 +1761,40 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
         .expect("the relay answers the metric");
     assert!(ok.accepted, "the relay refused the metric: {}", ok.message);
 
-    // Read it back the way the owner would: by kind, addressed to them.
-    let id = sub_id("metric");
-    let filter = Filter::new()
-        .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
-        .pubkey(owner.public_key())
-        .limit(20);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(10))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
+    // Read it back the way the owner would: by kind, addressed to them. The
+    // metric was JUST sent, so this races relay propagation the same way
+    // `head`'s read-after-write does; a silent window is retried the same
+    // way, with the final panic strict.
+    let mut events = Vec::new();
+    for attempt in 0..10 {
+        let id = sub_id("metric");
+        let filter = Filter::new()
+            .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
+            .pubkey(owner.public_key())
+            .limit(20);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        match client
+            .collect_until_eose(&id, Duration::from_secs(10))
+            .await
+        {
+            Ok(found) => {
+                let _ = client.close_subscription(&id).await;
+                events = found;
+                break;
+            }
+            Err(error) => {
+                eprintln!("metric read-back poll {attempt} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                if attempt == 9 {
+                    panic!("the relay never answered the metric read-back: {error}");
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
 
     let stored = events
         .iter()
@@ -1892,6 +1951,12 @@ async fn inspect_live_turn_metrics() {
         .await
         .expect("connect as owner");
 
+    // Deliberately left strict, unlike the CI-run polls above: this is a
+    // human-invoked inspection command ("run after a live agent turn"), not
+    // a correctness assertion racing a just-written record. If the read
+    // fails, that is exactly as informative to the person running it as a
+    // retried success would be, and retry machinery would only obscure
+    // what a live, one-off inspection actually saw.
     let id = sub_id("inspect");
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
