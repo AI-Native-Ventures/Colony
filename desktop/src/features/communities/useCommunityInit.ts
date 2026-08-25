@@ -38,6 +38,7 @@ import { resetBlockRepository } from "@/features/blocks/blockRepository";
 import { resetEmployeeHeadsState } from "@/features/agents/employeeHeads";
 import { resetManagedAgentHeadsState } from "@/features/agents/managedAgentHeads";
 import { resetPendingHireState } from "@/features/agents/pendingHires";
+import { resetArchivedIdentitySnapshotState } from "@/features/identity-archive/archivedSnapshot";
 import { resetCompanyRepositoryState } from "@/features/company/companyRepository";
 import { resetTaskRunRepositoryState } from "@/features/company/taskRunRepository";
 import { resetLedgerRepositoryState } from "@/features/ledger/ledgerRepository";
@@ -83,6 +84,7 @@ function resetCommunityState({
   resetBlockRepository();
   resetEmployeeHeadsState();
   resetManagedAgentHeadsState();
+  resetArchivedIdentitySnapshotState();
   resetPendingHireState();
   resetCompanyRepositoryState();
   resetContentRepositoryState();
