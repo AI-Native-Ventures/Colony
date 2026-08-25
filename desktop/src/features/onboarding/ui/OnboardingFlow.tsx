@@ -8,15 +8,32 @@ import {
 import { relayClient } from "@/shared/api/relayClient";
 import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
 import { isRelayUnreachableError } from "@/shared/lib/relayError";
+import { useIdentityQuery } from "@/shared/api/hooks";
 import {
   getIdentity,
   importIdentity,
   persistCurrentIdentity,
 } from "@/shared/api/tauriIdentity";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
-import { Button } from "@/shared/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
+import { buttonVariants, Button } from "@/shared/ui/button";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { AvatarStep } from "./AvatarStep";
+import { BackupStep } from "./BackupStep";
+import { DownloadKeyStep } from "./DownloadKeyStep";
+import {
+  resetEncryptedBackupSession,
+  useEncryptedBackupSession,
+} from "./EncryptedBackupCreator";
 import { OnboardingChrome } from "./OnboardingChrome";
 import { OnboardingFooterProvider } from "./OnboardingFooter";
 import { MembershipDenied } from "./MembershipDenied";
@@ -93,6 +110,9 @@ type OnboardingFlowProps = {
   initialProfile: OnboardingProfileSeed;
 };
 
+/** The three views of the key-backup ceremony page. */
+type BackupSubview = "main" | "options" | "password";
+
 function isFallbackDisplayName(value?: string | null) {
   const normalizedValue = value?.trim().toLowerCase() ?? "";
   return (
@@ -160,9 +180,10 @@ export function OnboardingFlow({
   identityLost = false,
   initialProfile,
 }: OnboardingFlowProps) {
-  const { complete, skipForNow } = actions;
+  const { complete } = actions;
   const { activeCommunity } = useCommunities();
   const queryClient = useQueryClient();
+  const { data: identity } = useIdentityQuery();
   const savedProfile = resolveSavedProfile(initialProfile);
   const profileUpdateMutation = useUpdateProfileMutation();
   const { error: profileSaveError, isPending: isSavingProfile } =
@@ -196,6 +217,15 @@ export function OnboardingFlow({
   } | null>(null);
   const [transitionDirection, setTransitionDirection] =
     React.useState<OnboardingTransitionDirection>("forward");
+  // Key-backup ceremony state, composed exactly like MachineOnboardingFlow:
+  // the flow owns the encrypted-backup session so progress survives moving
+  // between the key view, the options view, and the password subview.
+  const [backupSubview, setBackupSubview] =
+    React.useState<BackupSubview>("main");
+  const [backupDirection, setBackupDirection] =
+    React.useState<OnboardingTransitionDirection>("forward");
+  const backupSession = useEncryptedBackupSession();
+  const [isBackupAckOpen, setIsBackupAckOpen] = React.useState(false);
   const systemColorScheme = useSystemColorScheme();
 
   const resetProfileSaveError = React.useCallback(() => {
@@ -213,18 +243,22 @@ export function OnboardingFlow({
     [resetProfileSaveError],
   );
 
-  const showAvatarPage = React.useCallback(
-    (direction: OnboardingTransitionDirection = "forward") => {
-      setTransitionDirection(direction);
-      setCurrentPage("avatar");
-    },
-    [],
-  );
-
   const showProfilePage = React.useCallback(() => {
     setMembershipError(null);
     setTransitionDirection("backward");
     setCurrentPage("profile");
+  }, []);
+
+  const showAvatarPage = React.useCallback(() => {
+    setTransitionDirection("forward");
+    setCurrentPage("avatar");
+  }, []);
+
+  const showBackupPage = React.useCallback(() => {
+    setBackupDirection("forward");
+    setBackupSubview("main");
+    setTransitionDirection("forward");
+    setCurrentPage("backup");
   }, []);
 
   const showKeyImportPage = React.useCallback(() => {
@@ -319,7 +353,7 @@ export function OnboardingFlow({
         if (membershipStatus === "error") {
           setMembershipError({
             kind: "error",
-            message: "Server error — try again",
+            message: "Server error, try again",
           });
           return;
         }
@@ -347,6 +381,10 @@ export function OnboardingFlow({
           complete();
           return;
         }
+        if (nextPage === "backup") {
+          showBackupPage();
+          return;
+        }
         showAvatarPage();
       } finally {
         setIsProfileAdvancePending(false);
@@ -360,6 +398,7 @@ export function OnboardingFlow({
       complete,
       showMembershipDenied,
       showAvatarPage,
+      showBackupPage,
     ],
   );
 
@@ -390,6 +429,24 @@ export function OnboardingFlow({
     showAvatarPage();
   }, [profileUpdateMutation, savedProfile.displayName, showAvatarPage]);
 
+  const returnToBackupMain = React.useCallback(() => {
+    setBackupDirection("backward");
+    setBackupSubview("main");
+  }, []);
+
+  const openBackupPasswordSubview = React.useCallback(() => {
+    // Mirror MachineOnboardingFlow: entering the password flow starts from a
+    // clean session so a stale passphrase or test progress never carries in.
+    resetEncryptedBackupSession(backupSession);
+    setBackupDirection("forward");
+    setBackupSubview("password");
+  }, [backupSession]);
+
+  // The exact signal PrivateKeyBackupRow / EncryptedBackupCreator use: a
+  // session with a committed-and-saved blob (or a passed backup test) means
+  // the user already holds a recovery artifact this run.
+  const hasSavedKeyBackup = backupSession.created || backupSession.verified;
+
   const saveErrorMessage =
     profileSaveError instanceof Error ? profileSaveError.message : null;
   const profileStepState: ProfileStepState = {
@@ -418,9 +475,10 @@ export function OnboardingFlow({
         }
       : profileStepState.saveRecovery,
   };
-  // Machine-level identity, backup, and provider setup have already completed.
-  // This relay-scoped flow now owns only the community profile.
-  const activeSteps: OnboardingPage[] = ["profile", "avatar"];
+  // Machine-level identity and provider setup have already completed. This
+  // relay-scoped flow owns the community profile plus the key-backup
+  // ceremony: profile → avatar → backup.
+  const activeSteps: OnboardingPage[] = ["profile", "avatar", "backup"];
   const STEP_OFFSET = 1;
   // key-import occupies the same position as profile.
   const normalizedPage: OnboardingPage =
@@ -509,7 +567,19 @@ export function OnboardingFlow({
                 avatarStepState.isSaving || avatarStepState.isUploadingAvatar,
               onClick: showProfilePage,
             }
-          : undefined;
+          : currentPage === "backup"
+            ? backupSubview === "main"
+              ? {
+                  onClick: () => {
+                    setTransitionDirection("backward");
+                    setCurrentPage("avatar");
+                  },
+                }
+              : {
+                  label: "Back",
+                  onClick: returnToBackupMain,
+                }
+            : undefined;
 
   if (currentPage === "membership-denied") {
     return (
@@ -539,16 +609,29 @@ export function OnboardingFlow({
   return (
     <>
       <div
-        className="buzz-onboarding-neutral-theme buzz-startup-shell flex items-start justify-center overflow-y-auto bg-background px-4 pb-28 pt-[106px] text-foreground"
+        className={`buzz-onboarding-neutral-theme buzz-startup-shell flex items-start justify-center overflow-y-auto bg-background px-4 pb-28 pt-[106px] text-foreground ${
+          currentPage === "backup" && backupSubview === "password"
+            ? "buzz-onboarding-security-theme"
+            : ""
+        }`}
         data-testid="onboarding-gate"
         data-system-color-scheme={systemColorScheme}
       >
         <StartupWindowDragRegion />
-        <OnboardingChrome current={currentStep} total={totalOnboardingSteps} />
+        {!(currentPage === "backup" && backupSubview === "password") ? (
+          <OnboardingChrome
+            current={currentStep}
+            total={totalOnboardingSteps}
+          />
+        ) : null}
         <OnboardingFooterProvider backAction={chromeBackAction}>
           <div
             className={`relative flex w-full flex-col items-center text-center ${
-              currentPage === "avatar" ? "max-w-[1080px]" : "max-w-[500px]"
+              currentPage === "avatar"
+                ? "max-w-[1080px]"
+                : currentPage === "backup"
+                  ? "max-w-[1040px]"
+                  : "max-w-[500px]"
             }`}
           >
             {membershipError &&
@@ -591,7 +674,9 @@ export function OnboardingFlow({
                   clearAvatarDraft: resetAvatarDraft,
                   importExistingKey: showKeyImportPage,
                   onUploadingChange: setIsUploadingAvatar,
-                  skipForNow,
+                  // Error recovery no longer exits onboarding: every path out
+                  // now passes through the key-backup step.
+                  skipForNow: showBackupPage,
                   submit: () => {
                     void saveProfileAndContinue("avatar");
                   },
@@ -651,15 +736,44 @@ export function OnboardingFlow({
                   showPasswordStageBack={false}
                 />
               </OnboardingSlideTransition>
+            ) : currentPage === "backup" ? (
+              backupSubview === "password" ? (
+                <DownloadKeyStep
+                  direction={backupDirection}
+                  onBack={returnToBackupMain}
+                  session={backupSession}
+                />
+              ) : (
+                <BackupStep
+                  direction={backupDirection}
+                  identityStorage={identity?.storage}
+                  nextLabel={hasSavedKeyBackup ? "Finish" : "Continue"}
+                  onNext={
+                    hasSavedKeyBackup
+                      ? complete
+                      : () => setIsBackupAckOpen(true)
+                  }
+                  onOpenPasswordBackup={openBackupPasswordSubview}
+                  onShowOptions={() => {
+                    setBackupDirection("forward");
+                    setBackupSubview("options");
+                  }}
+                  optionsExpanded={backupSubview === "options"}
+                  returningFromSecurity={false}
+                />
+              )
             ) : (
               <AvatarStep
                 actions={{
-                  advanceWithoutSaving: complete,
+                  // Every avatar exit leads to the key-backup step; only the
+                  // backup ceremony (or its explicit acknowledgement) ends
+                  // onboarding.
+                  advanceWithoutSaving: showBackupPage,
                   back: showProfilePage,
                   onUploadingChange: setIsUploadingAvatar,
-                  skipForNow,
+                  skipForNow: showBackupPage,
                   submit: () => {
-                    void saveProfileAndContinue("complete");
+                    void saveProfileAndContinue("backup");
                   },
                   updateAvatarUrl: updateAvatarUrlDraft,
                 }}
@@ -677,6 +791,39 @@ export function OnboardingFlow({
           onClose={() => setIsCommunityChangeOpen(false)}
         />
       ) : null}
+      <AlertDialog
+        onOpenChange={setIsBackupAckOpen}
+        open={currentPage === "backup" && isBackupAckOpen}
+      >
+        <AlertDialogContent
+          className="buzz-onboarding-neutral-theme"
+          data-testid="onboarding-backup-ack-dialog"
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Continue without a backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your account is protected by a single key that lives only on this
+              device. If you lose this device, your account and company cannot
+              be recovered. Colony cannot restore it for you.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="onboarding-backup-ack-cancel">
+              Back up my key
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              data-testid="onboarding-backup-ack-confirm"
+              onClick={() => {
+                setIsBackupAckOpen(false);
+                complete();
+              }}
+            >
+              Continue without a backup
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

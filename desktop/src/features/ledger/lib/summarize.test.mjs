@@ -51,6 +51,14 @@ test("a report written before the price basis existed still reads", () => {
   // Spend screen for anyone whose relay is a version behind.
   const parsed = report({ entries: [entry()] });
   assert.equal(parsed.entries[0].priceBasis, null);
+  assert.equal(parsed.entries[0].source, "wire");
+});
+
+test("an adapter estimate keeps its protocol source label", () => {
+  const parsed = report({
+    entries: [entry({ source: "adapter_estimate", paymentMode: "imputed" })],
+  });
+  assert.equal(parsed.entries[0].source, "adapter_estimate");
 });
 
 test("the basis says whether a provider's own rate or the list rate was used", () => {

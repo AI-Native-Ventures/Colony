@@ -103,6 +103,7 @@ export type CampaignSummary = {
 
 export type CampaignDetail = CampaignSummary & {
   sourceConfig: CampaignSourceConfig;
+  budget?: CampaignBudget;
   run?: DiscoveryRun;
   metrics: {
     companiesFound: number;
@@ -122,7 +123,19 @@ export type CampaignDraft = {
   location: string;
   target: number;
   description?: string;
+  /** Preview-only source selection retained for individual Discovery fixtures. */
   sourceConfig?: CampaignSourceConfig;
+};
+
+export type CampaignBudget = {
+  state: "unapproved" | "active" | "paused" | "revoked" | "exhausted";
+  payerPubkey?: string;
+  approvedNanousd: string;
+  spentNanousd: string;
+  reservedNanousd: string;
+  remainingNanousd: string;
+  pricePerRetainedLeadNanousd?: string;
+  approvedAt?: string;
 };
 
 /** Funnel status vocabulary mirroring the Party relationship lifecycle. */

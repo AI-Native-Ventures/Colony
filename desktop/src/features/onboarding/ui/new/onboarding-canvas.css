@@ -1,0 +1,353 @@
+/* Canvas chrome for the redesigned onboarding flow.
+   Ported from prototypes/onboarding/app.css with the ob- prefix renamed to
+   onb-. Wrapped in @layer components per docs/BRAND.md: unlayered CSS beats
+   Tailwind utilities regardless of specificity and would silently defeat
+   call-site overrides. Motion rules follow docs/BRAND.md: transforms stay on
+   HTML wrappers, never SVG children, and each mechanism gets its own
+   prefers-reduced-motion fallback. */
+@layer components {
+  .onb-canvas {
+    /* Colony ink and surface tokens for the flow. The light-ink override
+       below rewrites them for the one dark screen. */
+    --onb-ease: cubic-bezier(0.16, 1, 0.3, 1); /* ease-out-expo */
+    /* Ink is constant across every hue, from site/src/brand/hue.ts. */
+    --onb-ink: #171717;
+    --onb-ink-soft: rgba(23, 23, 23, 0.66);
+    --onb-shell: rgba(255, 255, 255, 0.5);
+    --onb-shell-line: rgba(23, 23, 23, 0.14);
+    --onb-rule: rgba(23, 23, 23, 0.28);
+    --onb-accent: #171717;
+
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    transition: background-color 900ms var(--onb-ease);
+  }
+
+  /* Every onboarding screen uses this now. The pale-field variant above is
+     kept because the tokens still describe a valid pairing, but nothing
+     selects it: see canvasTheme.ts for why the whole flow went dark. */
+  .onb-canvas[data-ink="light"] {
+    --onb-ink: #f6f4f8;
+    --onb-ink-soft: rgba(246, 244, 248, 0.62);
+    --onb-shell: rgba(255, 255, 255, 0.045);
+    --onb-shell-line: rgba(255, 255, 255, 0.1);
+    --onb-rule: rgba(255, 255, 255, 0.14);
+    /* Accent is ink-on-light inverted, never a hue: the canvas already
+       carries the colour and a second one competes with it. */
+    --onb-accent: #ffffff;
+  }
+
+  /* Gradient mesh drawn as stacked radial gradients over a base fill. Static
+     by design: an animated mesh at this blur radius costs real GPU time on
+     the machines this flow is for, and the motion budget is better spent on
+     the ants. Saturated and close to the surface rather than blurred to a
+     pastel wash. */
+  .onb-mesh {
+    position: absolute;
+    inset: -18%;
+    filter: blur(52px) saturate(0.95);
+    transition: opacity 900ms var(--onb-ease);
+    will-change: opacity;
+  }
+
+  .onb-streak {
+    position: absolute;
+    inset: -40%;
+    opacity: 0.55;
+    transform: rotate(-22deg);
+    background: linear-gradient(
+      100deg,
+      transparent 24%,
+      rgba(255, 255, 255, 0.82) 44%,
+      rgba(255, 255, 255, 0.5) 56%,
+      transparent 74%
+    );
+    filter: blur(48px);
+    transition: opacity 900ms var(--onb-ease);
+  }
+
+  .onb-canvas[data-ink="light"] .onb-streak {
+    background: linear-gradient(
+      100deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.05) 48%,
+      transparent 70%
+    );
+    opacity: 0.5;
+  }
+
+  /* Dotted grain over the mesh. Large soft radials band visibly on cheap
+     panels, and a half-rem dot grid at this opacity breaks the banding
+     without reading as texture. soft-light did nothing useful against a dark
+     field, so this draws the dots directly. */
+  .onb-grain {
+    position: absolute;
+    inset: 0;
+    opacity: 0.5;
+    pointer-events: none;
+    background-image: radial-gradient(
+      rgba(23, 23, 23, 0.05) 0.5px,
+      transparent 0.5px
+    );
+    background-size: 0.5rem 0.5rem;
+  }
+
+  /* The stage hosts screen content above the mesh layers. Without it the
+     positioned mesh, streak and grain would paint over static children. */
+  .onb-stage {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    padding: clamp(2rem, 5vh, 4rem) clamp(2rem, 7vw, 8rem)
+      clamp(1.5rem, 4vh, 2.5rem);
+  }
+
+  /* Step marker. Mono, letterspaced, high on the page: the only numeric thing
+     in the flow, and it reads as a chapter mark rather than a progress bar. */
+  .onb-step {
+    position: absolute;
+    top: clamp(1.5rem, 4vh, 3rem);
+    left: clamp(2rem, 7vw, 8rem);
+    z-index: 3;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.28em;
+    color: var(--onb-ink);
+    opacity: 0.45;
+  }
+
+  /* Foot: trail + mark. Provisioned here so screens can drop an ant trail in
+     without new chrome CSS. */
+  .onb-foot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1rem;
+  }
+
+  .onb-trail {
+    width: min(34rem, 80vw);
+    height: 26px;
+    display: block;
+    overflow: visible;
+  }
+
+  .onb-trail__path {
+    animation: onb-pheromone 2.4s linear infinite;
+  }
+
+  @keyframes onb-pheromone {
+    to {
+      stroke-dashoffset: -60;
+    }
+  }
+
+  .onb-trail__node {
+    transition:
+      r 420ms var(--onb-ease),
+      opacity 420ms var(--onb-ease);
+  }
+
+  /* Ant sprite gait, copied verbatim from site-animations.css. Leg tripods
+     are HTML-level layers: transforms stay on the wrappers so they run on the
+     compositor even while the main thread is busy. */
+  .ant-sprite .ant-leg-layer {
+    will-change: transform;
+    transform-origin: 50% 72%;
+    animation-duration: 0.42s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+  }
+
+  .ant-sprite .ant-leg-layer-a {
+    animation-name: ant-step-a;
+  }
+
+  .ant-sprite .ant-leg-layer-b {
+    animation-name: ant-step-b;
+  }
+
+  .ant-sprite .ant-body-layer {
+    will-change: transform;
+    animation: ant-body-bob 0.42s ease-in-out infinite;
+  }
+
+  @keyframes ant-step-a {
+    0%,
+    100% {
+      transform: rotate(0deg) translateY(0);
+    }
+    50% {
+      transform: rotate(-5deg) translateY(-1.6%);
+    }
+  }
+
+  @keyframes ant-step-b {
+    0%,
+    100% {
+      transform: rotate(-5deg) translateY(-1.6%);
+    }
+    50% {
+      transform: rotate(0deg) translateY(0);
+    }
+  }
+
+  @keyframes ant-body-bob {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    25%,
+    75% {
+      transform: translateY(-1%);
+    }
+  }
+
+  /* Reduced motion: one gate per mechanism. CSS-driven animation is switched
+     off here. Timer-driven motion is gated separately in JS by the screens. */
+  @media (prefers-reduced-motion: reduce) {
+    .ant-sprite .ant-leg-layer,
+    .ant-sprite .ant-body-layer,
+    .onb-trail__path {
+      animation: none !important;
+    }
+  }
+
+  /* Narrow windows: the step marker overlapped content when absolutely
+     positioned, so it becomes a normal line above the stage. */
+  @media (max-width: 900px) {
+    .onb-step {
+      position: static;
+      padding: 1.25rem 1.5rem 0;
+    }
+
+    .onb-stage {
+      grid-template-rows: 1fr auto;
+      padding-top: 0.5rem;
+    }
+  }
+}
+
+@layer components {
+  /* The scatter field: a colony living behind the flow. Sits above the mesh
+     and below the stage, so it reads as depth rather than decoration. */
+  .onb-scatter {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* The wrapper drifts; the mark inside never moves. Transforming an HTML
+     wrapper runs on the compositor, while transforming SVG children paints on
+     the main thread and stutters exactly when onboarding is busiest. */
+  .onb-scatter__ant {
+    position: absolute;
+    will-change: transform;
+    animation-name: onb-drift;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* Each ant gets its own negative delay from AntScatter, so no two share a
+     gait phase. Without this the colony steps in lockstep and the field reads
+     as repeating texture rather than as life. */
+  .onb-scatter__ant .ant-leg-layer,
+  .onb-scatter__ant .ant-body-layer {
+    animation-delay: var(--onb-gait-delay, 0s);
+  }
+
+  @keyframes onb-drift {
+    0% {
+      transform: translate3d(0, 0, 0) rotate(0deg);
+    }
+    25% {
+      transform: translate3d(2.2rem, -1.4rem, 0) rotate(9deg);
+    }
+    50% {
+      transform: translate3d(0.6rem, 2.1rem, 0) rotate(-6deg);
+    }
+    75% {
+      transform: translate3d(-1.9rem, 0.7rem, 0) rotate(4deg);
+    }
+    100% {
+      transform: translate3d(0, 0, 0) rotate(0deg);
+    }
+  }
+
+  /* An ant walks the primary action on hover. It carries the click forward,
+     which is the one place in this flow where motion is a hint rather than a
+     status report.
+
+     Drawn as a masked pseudo-element rather than a real WalkingAnt so no
+     screen has to change: the primary action is the shared Button component,
+     used in eleven places. The mask is the body-and-head silhouette from
+     docs/BRAND.md. It does not step, and at 0.9rem crossing in just over a
+     second no one could see legs anyway. */
+  /* No container-type here. inline-size containment makes an element size
+     from its parent instead of its content, which collapsed this button to
+     its own padding and hid the label. The walker travels in percentages
+     instead, which needs no container. */
+  .onb-actions button[class*="inline-flex"] {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .onb-actions button[class*="inline-flex"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -1.6rem;
+    width: 0.9rem;
+    height: 0.58rem;
+    margin-top: -0.29rem;
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+    background: currentColor;
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 20'%3E%3Cellipse cx='8' cy='10' rx='6.4' ry='5.4' fill='%23000'/%3E%3Cellipse cx='17' cy='10' rx='3.6' ry='3.2' fill='%23000'/%3E%3Ccircle cx='23.5' cy='9.4' r='3.1' fill='%23000'/%3E%3C/svg%3E");
+    mask-size: contain;
+    mask-repeat: no-repeat;
+  }
+
+  .onb-actions button[class*="inline-flex"]:hover::after,
+  .onb-actions button[class*="inline-flex"]:focus-visible::after {
+    animation: onb-cross 1.15s linear;
+  }
+
+  @keyframes onb-cross {
+    0% {
+      left: -1.6rem;
+      opacity: 0;
+    }
+    12% {
+      opacity: 0.55;
+    }
+    88% {
+      opacity: 0.55;
+    }
+    100% {
+      left: calc(100% + 1rem);
+      opacity: 0;
+    }
+  }
+
+  /* Reduced motion: the colony stays, it simply stops. Removing the ants
+     would remove the brand, which is not what someone asking for less motion
+     is asking for. */
+  @media (prefers-reduced-motion: reduce) {
+    .onb-scatter__ant {
+      animation: none !important;
+    }
+
+    .onb-actions button[class*="inline-flex"]:hover::after,
+    .onb-actions button[class*="inline-flex"]:focus-visible::after {
+      animation: none !important;
+    }
+  }
+}

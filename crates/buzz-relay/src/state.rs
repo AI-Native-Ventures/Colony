@@ -794,6 +794,9 @@ pub struct AppState {
     /// so `AppState::new` call sites are untouched). Unset ⇒ the gateway
     /// routes do not exist and answer 404.
     pub gateway: Arc<std::sync::OnceLock<Arc<crate::gateway::GatewayState>>>,
+    /// Colony-hosted Discovery provider transport, enabled only with all server keys.
+    pub discovery_gateway:
+        Arc<std::sync::OnceLock<Arc<crate::discovery_gateway::DiscoveryGatewayState>>>,
 }
 
 impl AppState {
@@ -990,6 +993,7 @@ impl AppState {
             tracer: Arc::new(crate::conformance::NoopTracer),
             mesh: Arc::new(std::sync::OnceLock::new()),
             gateway: Arc::new(std::sync::OnceLock::new()),
+            discovery_gateway: Arc::new(std::sync::OnceLock::new()),
         };
         (
             state,

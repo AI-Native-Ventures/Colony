@@ -66,14 +66,13 @@ const settingsNavGroups: Array<{
   },
   {
     label: "Communities",
-    sections: ["channel-templates", "community-members"],
+    sections: ["channel-templates", "community-members", "operator-console"],
   },
   {
     label: "App",
     sections: [
       "agents",
       "blocks",
-      "discovery",
       "compute",
       "experimental",
       "mobile",
@@ -151,6 +150,12 @@ export function SettingsView({
       // Invites and member management require a discovered owner/admin role.
       // Open relays have no membership snapshot or invite controls.
       if (s.value === "community-members") {
+        return canManageCommunityMembers(myMembershipQuery.data);
+      }
+      // The admin console is owner/admin-only for the same reason: the card
+      // itself refuses non-operators, so a nav entry every member can see
+      // would only ever lead to a refusal.
+      if (s.value === "operator-console") {
         return canManageCommunityMembers(myMembershipQuery.data);
       }
       return true;

@@ -3,6 +3,8 @@ import {
   CHANNEL_EVENT_KINDS,
   CHANNEL_TIMELINE_CONTENT_KINDS,
   HOME_MENTION_EVENT_KINDS,
+  KIND_BLOCK_ACTION,
+  KIND_BLOCK_RECEIPT,
   KIND_DELETION,
   KIND_NIP29_DELETE_EVENT,
   KIND_REACTION,
@@ -103,9 +105,10 @@ export function buildChannelAuxFilter(
 }
 
 /**
- * Structural aux filter for history backfill: edits/deletions only. Reactions
- * are hydrated from the rows the GUI actually renders, so the slow kind:5 scan
- * never shares a request with first-paint reaction pills.
+ * Structural aux filter for history backfill: edits, deletions, and durable
+ * Block state. Reactions are hydrated from the rows the GUI actually renders,
+ * so the slow kind:5 scan never shares a request with first-paint reaction
+ * pills.
  */
 export function buildChannelStructuralAuxFilter(
   _channelId: string,
@@ -115,6 +118,8 @@ export function buildChannelStructuralAuxFilter(
     KIND_DELETION,
     KIND_NIP29_DELETE_EVENT,
     KIND_STREAM_MESSAGE_EDIT,
+    KIND_BLOCK_ACTION,
+    KIND_BLOCK_RECEIPT,
   ]);
 }
 

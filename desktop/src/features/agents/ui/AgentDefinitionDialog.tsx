@@ -2,11 +2,6 @@ import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
-import type {
-  AcpRuntimeCatalogEntry,
-  CreatePersonaInput,
-  UpdatePersonaInput,
-} from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
@@ -45,27 +40,27 @@ import {
   getRuntimePersonaModelOptions,
   NO_RUNTIME_DROPDOWN_VALUE,
   runtimeSupportsLlmProviderSelection,
-  type PersonaDropdownOption,
   PERSONA_FIELD_CONTROL_CLASS,
   PERSONA_FIELD_SHELL_CLASS,
   PERSONA_LABEL_OPTIONAL_CLASS,
   shouldClearKnownModelForSelectionScope,
 } from "./agentConfigOptions";
 import { RequiredFieldLabel } from "./agentConfigControls";
+import { relayMeshModelPickerState } from "./relayMeshModelPicker";
 import {
-  modelDropdownOptions as buildModelDropdownOptions,
-  relayMeshModelPickerState,
-} from "./relayMeshModelPicker";
+  AgentOrgPlacementSection,
+  emptyOrgPlacementDraft,
+  type OrgPlacementDraft,
+} from "./AgentOrgPlacementSection";
 import {
+  buildModelDropdownOptionsForScope,
+  buildProviderDropdownOptions,
   selectionOnModelDropdownChange,
   selectionOnProviderDropdownChange,
   selectionOnRuntimeChange,
   type RuntimeModelProviderSelection,
 } from "./runtimeModelProviderSelection";
-import {
-  MODEL_DISCOVERY_LOADING_VALUE,
-  usePersonaModelDiscovery,
-} from "./usePersonaModelDiscovery";
+import { usePersonaModelDiscovery } from "./usePersonaModelDiscovery";
 import { useBakedBuildEnvKeysQuery, useRuntimeFileConfigQuery } from "../hooks";
 import { useAgentDialogDefaults } from "./useAgentDialogDefaults";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
@@ -77,49 +72,22 @@ import {
 } from "./AgentAiConfigurationMode";
 import {
   agentAiConfigurationModeSatisfied,
-  agentAiConfigurationPairForMode,
   initialAgentAiConfigurationMode,
 } from "./agentAiConfigurationPolicy";
+import { applyAgentAiConfigurationModeChange } from "./agentAiConfigurationModeChange";
 import { useProviderApiKeyFieldState } from "./providerApiKeyFieldState";
 import { buildRuntimeModelProviderPayload } from "./agentDefinitionSubmitPayload";
 import { AgentDefinitionDialogFooter } from "./AgentDefinitionDialogFooter";
 import { AgentDefinitionDialogShell } from "./AgentDefinitionDialogShell";
 import { AddCustomHarnessDialog } from "./AddCustomHarnessDialog";
+import type { AgentDefinitionDialogProps } from "./agentDefinitionDialogProps";
+
+export type { AgentDefinitionSubmitOptions } from "./agentDefinitionDialogProps";
 import {
   ADD_CUSTOM_HARNESS_OPTION,
   runtimeDropdownAction,
   usePendingHarnessSelection,
 } from "./addCustomHarness";
-
-type AgentDefinitionDialogProps = {
-  open: boolean;
-  embedded?: boolean;
-  title: string;
-  description: string;
-  submitLabel: string;
-  initialValues: CreatePersonaInput | UpdatePersonaInput | null;
-  error: Error | null;
-  isPending: boolean;
-  runtimes: AcpRuntimeCatalogEntry[];
-  runtimeCatalogStatus?: "loading" | "ready" | "error";
-  runtimesLoading?: boolean;
-  secondaryAction?: { label: string; onSelect: () => void };
-  onDirtyChange?: (dirty: boolean) => void;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: (
-    input: CreatePersonaInput | UpdatePersonaInput,
-    options: AgentDefinitionSubmitOptions,
-  ) => Promise<unknown>;
-  /** Publishes saved changes when the edited agent is shared in the catalog. */
-  publishCatalogUpdatesOnSave?: boolean;
-  createRunSection?: React.ReactNode;
-  /** Extra create-mode submit gate (e.g. incomplete provider config). */
-  createSubmitBlocked?: boolean;
-};
-
-export type AgentDefinitionSubmitOptions = {
-  publishCatalogUpdates: boolean;
-};
 
 export function AgentDefinitionDialog({
   open,
@@ -139,6 +107,7 @@ export function AgentDefinitionDialog({
   onSubmit,
   publishCatalogUpdatesOnSave = false,
   createRunSection,
+  orgPlacement = false,
   createSubmitBlocked = false,
 }: AgentDefinitionDialogProps) {
   const runtimesLoading =
@@ -157,6 +126,11 @@ export function AgentDefinitionDialog({
   const [isCustomProviderEditing, setIsCustomProviderEditing] =
     React.useState(false);
   const [namePoolText, setNamePoolText] = React.useState("");
+  // Create-mode rank + manager. Published on the agent's owner-authored
+  // kind-30177 head only after the instance exists, so it travels through the
+  // submit options rather than the persona payload the relay mints from.
+  const [orgPlacementDraft, setOrgPlacementDraft] =
+    React.useState<OrgPlacementDraft>(emptyOrgPlacementDraft);
   const [envVars, setEnvVars] = React.useState<EnvVarsValue>({});
   const [behaviorDraft, setBehaviorDraft] = React.useState(
     emptyPersonaBehaviorDraft,
@@ -220,6 +194,7 @@ export function AgentDefinitionDialog({
       initialAgentAiConfigurationMode({
         provider: initialValues.provider ?? "",
         model: initialValues.model ?? "",
+        runtime: initialValues.runtime ?? "",
       }),
     );
     setIsCustomProviderEditing(false);
@@ -232,6 +207,7 @@ export function AgentDefinitionDialog({
     const nextBehaviorDraft = draftFromBehavior(initialValues.behavior);
     behaviorSeedRef.current = draftFromBehavior(initialValues.behavior);
     setBehaviorDraft(nextBehaviorDraft);
+    setOrgPlacementDraft(emptyOrgPlacementDraft());
     setNamePoolText(nextNamePoolText);
     setEnvVars(nextEnvVars);
     // Advanced always starts collapsed and only changes from its toggle.
@@ -321,6 +297,7 @@ export function AgentDefinitionDialog({
       setNamePoolText("");
       setEnvVars({});
       setBehaviorDraft(emptyPersonaBehaviorDraft);
+      setOrgPlacementDraft(emptyOrgPlacementDraft());
       behaviorSeedRef.current = emptyPersonaBehaviorDraft;
       setShowAdvancedFields(false);
       setIsAvatarUploadPending(false);
@@ -346,6 +323,7 @@ export function AgentDefinitionDialog({
       runtime,
       model: aiConfigurationMode === "defaults" ? "" : model,
       provider: aiConfigurationMode === "defaults" ? "" : provider,
+      isDefaultsMode: aiConfigurationMode === "defaults",
       isEditMode: "id" in initialValues,
       isAutoSeeded: isRuntimeAutoSeededRef.current,
       initialPreviousRuntime: initialValues.runtime?.trim() ?? "",
@@ -389,7 +367,15 @@ export function AgentDefinitionDialog({
       return;
     }
 
-    await onSubmit(baseInput, { publishCatalogUpdates: false });
+    await onSubmit(baseInput, {
+      publishCatalogUpdates: false,
+      ...(orgPlacementDraft.rank
+        ? {
+            orgRank: orgPlacementDraft.rank,
+            orgManager: orgPlacementDraft.manager || undefined,
+          }
+        : {}),
+    });
   }
 
   function handleSubmitForm(event: React.FormEvent<HTMLFormElement>) {
@@ -416,19 +402,23 @@ export function AgentDefinitionDialog({
     setAiConfigurationMode(nextMode);
     setIsCustomProviderEditing(false);
     setIsCustomModelEditing(false);
-    const nextPair = agentAiConfigurationPairForMode({
-      current: { provider, model },
-      inherited: runtimeCanChooseLlmProvider
-        ? {
-            provider: inheritedProviderDefault.value,
-            model: inheritedModelDefault.value,
-          }
-        : { provider: "", model: runtimeFileConfig?.model?.trim() ?? "" },
+    const next = applyAgentAiConfigurationModeChange({
       mode: nextMode,
+      runtime,
+      provider,
+      model,
+      envVars,
+      runtimes,
+      inheritedProvider: inheritedProviderDefault.value,
+      inheritedModel: inheritedModelDefault.value,
+      fileModel: runtimeFileConfig?.model,
+      inheritedRuntimeId: defaultRuntime?.id,
       needsProviderSelection: runtimeCanChooseLlmProvider,
     });
-    setProvider(nextPair.provider);
-    setModel(nextPair.model);
+    setRuntime(next.runtime);
+    setProvider(next.provider);
+    setModel(next.model);
+    setEnvVars(next.envVars);
   }
   const { data: bakedEnvKeys } = useBakedBuildEnvKeysQuery({ enabled: open });
   const localModeGate = React.useMemo(
@@ -507,7 +497,10 @@ export function AgentDefinitionDialog({
   // source of truth with the readiness gate so display and Save can't drift.
   const canSubmit =
     canSubmitPersonaDialog({ displayName, isPending }) &&
-    (!isCreateMode || runtime.trim().length > 0) &&
+    // Defaults inherits the harness from global — no explicit pin required.
+    (!isCreateMode ||
+      aiConfigurationMode === "defaults" ||
+      runtime.trim().length > 0) &&
     (!isCreateMode || selectedRuntimeIsAvailable) &&
     (!isCreateMode || !createSubmitBlocked) &&
     // Crash-loop guard, create AND edit: an empty allowlist would crash
@@ -596,31 +589,12 @@ export function AgentDefinitionDialog({
   const runtimeSummaryLabel = selectedRuntime
     ? formatRuntimeOptionLabel(selectedRuntime)
     : runtime.trim() || "Not configured";
-  const providerDropdownOptions: PersonaDropdownOption[] = [
-    ...providerOptions
-      .filter((option) => option.id.trim().length > 0)
-      .map((option) => ({
-        label: option.label,
-        value: option.id,
-      })),
-    { label: "Custom provider...", value: CUSTOM_PROVIDER_DROPDOWN_VALUE },
-  ];
-  const modelDropdownOptions: PersonaDropdownOption[] =
-    buildModelDropdownOptions({
-      allowCustom: !isRelayMesh,
-      globalModel: undefined,
-      loading: modelDiscoveryLoading && discoveredModelOptions === null,
-      loadingValue: MODEL_DISCOVERY_LOADING_VALUE,
-      options: modelOptions,
-    })
-      .filter(
-        (option) => isRelayMesh || option.value !== AUTO_MODEL_DROPDOWN_VALUE,
-      )
-      .map((option) =>
-        isRelayMesh && option.value === AUTO_MODEL_DROPDOWN_VALUE
-          ? { ...option, label: "Automatic" }
-          : option,
-      );
+  const providerDropdownOptions = buildProviderDropdownOptions(providerOptions);
+  const modelDropdownOptions = buildModelDropdownOptionsForScope(
+    isRelayMesh,
+    modelDiscoveryLoading && discoveredModelOptions === null,
+    modelOptions,
+  );
   const previewLabel = displayName.trim() || "Agent name";
   const previewAvatarUrl = avatarUrl.trim() || null;
   const runtimeWarningText = selectedRuntime
@@ -825,7 +799,6 @@ export function AgentDefinitionDialog({
         {modelFieldVisible ? (
           <AgentAiConfigurationModeField
             mode={aiConfigurationMode}
-            needsProviderSelection={runtimeCanChooseLlmProvider}
             onModeChange={handleAiConfigurationModeChange}
           />
         ) : null}
@@ -1020,6 +993,16 @@ export function AgentDefinitionDialog({
             ) : null}
           </AnimatePresence>
         </div>
+
+        {isCreateMode && orgPlacement ? (
+          <AgentOrgPlacementSection
+            onChange={(next) => {
+              setHasUserChanges(true);
+              setOrgPlacementDraft(next);
+            }}
+            value={orgPlacementDraft}
+          />
+        ) : null}
 
         {error ? (
           <p className="text-sm text-destructive">{error.message}</p>

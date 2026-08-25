@@ -241,6 +241,7 @@ async fn start_local_synchronous_sources() -> (
 struct FakeProtocol {
     outcomes: Mutex<VecDeque<DiscoveryWorkerReceiptOutcome>>,
     calls: Mutex<Vec<&'static str>>,
+    claims: Mutex<Vec<DiscoveryWorkerClaimRequest>>,
     observation_requests: Mutex<Vec<DiscoveryWorkerObservationBatchRequest>>,
 }
 
@@ -249,6 +250,7 @@ impl FakeProtocol {
         Self {
             outcomes: Mutex::new(outcomes.into()),
             calls: Mutex::new(Vec::new()),
+            claims: Mutex::new(Vec::new()),
             observation_requests: Mutex::new(Vec::new()),
         }
     }
@@ -268,8 +270,11 @@ impl WorkerProtocol for FakeProtocol {
         Box::pin(async { Err("status fixture is not configured".to_owned()) })
     }
 
-    fn claim(&self, _: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
-        Box::pin(async { self.next("claim") })
+    fn claim(&self, request: DiscoveryWorkerClaimRequest) -> ProtocolFuture<'_> {
+        Box::pin(async move {
+            self.claims.lock().expect("claims").push(request);
+            self.next("claim")
+        })
     }
 
     fn heartbeat(&self, _: DiscoveryWorkerLeaseRequest) -> ProtocolFuture<'_> {
@@ -628,11 +633,13 @@ fn run_projection() -> DiscoveryRunProjection {
     DiscoveryRunProjection {
         run_id: Uuid::new_v4(),
         campaign_id: Uuid::new_v4(),
+        protocol_version: buzz_core_pkg::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
         state: DiscoveryRunState::Running,
         completed_steps: 0,
         total_steps: 2,
         cancel_requested: false,
         terminal_reason: None,
+        billing: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     }

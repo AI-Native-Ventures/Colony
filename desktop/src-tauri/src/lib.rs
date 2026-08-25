@@ -32,6 +32,7 @@ mod models;
 mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
+mod operator_console;
 mod prevent_sleep;
 mod provisioned_credits;
 mod ptt_shortcut;
@@ -58,7 +59,6 @@ use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
-use discovery_credentials::*;
 use huddle::audio_output::{
     get_audio_output_device, list_audio_output_devices, set_audio_output_device,
 };
@@ -194,6 +194,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(native_websocket::init())
+        .plugin(operator_console::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
 
@@ -578,9 +579,6 @@ pub fn run() {
             colony_provisioning_config,
             title_bar_double_click,
             get_identity,
-            save_discovery_credential,
-            get_discovery_credential_status,
-            delete_discovery_credential,
             get_nsec,
             import_identity,
             persist_current_identity,
@@ -631,6 +629,8 @@ pub fn run() {
             get_default_relay_url,
             get_build_default_relay_url,
             auto_connect_default_relay_enabled,
+            scan_onboarding_company_website,
+            fetch_claim_source_page,
             get_legacy_workspace_storage,
             is_shared_identity,
             get_relay_ws_url,
@@ -674,6 +674,8 @@ pub fn run() {
             leave_channel,
             get_canvas,
             set_canvas,
+            get_thread_canvas,
+            set_thread_canvas,
             get_feed,
             search_messages,
             send_channel_message,
@@ -815,6 +817,7 @@ pub fn run() {
             get_huddle_state,
             close_huddle_companion,
             open_huddle_window,
+            operator_console::open_operator_console,
             push_audio_pcm,
             reconnect_huddle_audio,
             start_stt_pipeline,

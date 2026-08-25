@@ -44,6 +44,10 @@ function filter(name) {
 }
 
 requireContract(!/^  merge_group:\s*$/m.test(ci), "CI must not restore the disabled develop merge queue trigger");
+requireContract(
+  /^\s+cancel-in-progress: \$\{\{ github\.base_ref != 'main' \}\}$/m.test(ci),
+  "CI must keep in-flight main promotion runs alive while retaining cancellation elsewhere",
+);
 
 const changes = job("changes");
 for (const output of [
@@ -54,7 +58,6 @@ for (const output of [
   "raw-mobile",
   "raw-blocks",
   "raw-desktop-integration",
-  "raw-windows",
   "raw-security",
   "raw-cross-compile",
   "core-enabled",
@@ -81,7 +84,6 @@ for (const bucket of [
   "mobile",
   "blocks",
   "desktop-integration",
-  "windows",
   "security",
   "cross-compile",
 ]) {
@@ -108,6 +110,14 @@ for (const name of coreJobs) {
   requireContract(!block.includes("github.event_name == 'push' ||"), `${name} must not rerun on every push`);
 }
 
+// windows-rust is intentionally absent from secondaryJobs: the Windows
+// type-check moved out of ci.yml to .github/workflows/windows-typecheck-nightly.yml
+// (2026-08). Its rust-cache entry (v0-rust-windows-msvc-windows-rust, 2.47 GB)
+// was 26% of the 10 GB Actions cache budget and the eviction pressure it added
+// starved desktop-e2e-relay's cache. It runs nightly on develop with a
+// restore-only cache instead. Bring it back as a path-selected secondary job
+// here AND in ci.yml once the Windows installer is code-signed and actually
+// installable.
 const secondaryJobs = [
   "desktop-e2e-integration-shard",
   "desktop-e2e-integration",
@@ -116,7 +126,6 @@ const secondaryJobs = [
   "mobile",
   "security",
   "server-cross-compile",
-  "windows-rust",
 ];
 for (const name of secondaryJobs) {
   const block = job(name);
@@ -167,7 +176,6 @@ for (const dependency of [
   "desktop",
   "relay-suites",
   "desktop-e2e-integration",
-  "windows-rust",
   "security",
   "server-cross-compile",
   "web",
@@ -184,7 +192,6 @@ for (const result of [
   "needs.desktop.result",
   "needs.relay-suites.result",
   "needs.desktop-e2e-integration.result",
-  "needs.windows-rust.result",
   "needs.security.result",
   "needs.server-cross-compile.result",
   "needs.web.result",
@@ -238,6 +245,9 @@ noop=':'
 expect_mutation_failure \
   "merge_group trigger restored" \
   "perl -0pi -e 's/^on:$/on:\\n  merge_group:/m' '$tmp/ci.yml'" "$noop" "$noop"
+expect_mutation_failure \
+  "promotion cancellation restored" \
+  "sed -i.bak 's/cancel-in-progress:.*/cancel-in-progress: true/' '$tmp/ci.yml'" "$noop" "$noop"
 expect_mutation_failure \
   "core push rerun restored" \
   "perl -0pi -e \"s/needs\\.changes\\.outputs\\.core-enabled == 'true'/github.event_name == 'push'/\" '$tmp/ci.yml'" "$noop" "$noop"

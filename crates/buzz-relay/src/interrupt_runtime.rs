@@ -322,6 +322,20 @@ async fn execute_default(
         return Ok(());
     }
 
+    // The default just fired: close the ask-state head so no client keeps
+    // counting down toward a deadline that can no longer fire, naming the
+    // option that was applied.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &row.ask_event_id,
+        &crate::ask_state_head::AskClosure::Resolved {
+            default_executed: true,
+            default_option: Some(default_option.to_owned()),
+        },
+    )
+    .await;
+
     // Store the signed resolution itself so it is queryable like any other
     // ask-protocol event (`ask_broker`'s own resolutions fall through to
     // ordinary storage after the broker's checks pass; this sweep writes
@@ -547,6 +561,23 @@ async fn promote_to(
         return Ok(());
     }
 
+    // The original's outcome just changed: mark its deadline head `promoted`
+    // and name the successor, so clients stop counting down here and can
+    // follow the live countdown on the successor's own head (published by
+    // `handle_ask_event` below, through the ordinary filing path). If the
+    // successor then fails to file, the compensation reopens the row but no
+    // head is rewritten; the next sweep tick reprocesses the reopened row
+    // and heals the head.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &row.ask_event_id,
+        &crate::ask_state_head::AskClosure::Promoted {
+            successor: promoted_event.id.as_bytes().to_vec(),
+        },
+    )
+    .await;
+
     // C3 fix: an ordinary Err or a Refused here both mean the claim above
     // already committed but the successor never became a real open ask --
     // the need would otherwise be permanently orphaned (no open ask at any
@@ -728,6 +759,16 @@ async fn close_ask_with_no_backing_event(
         return Ok(());
     }
 
+    // Close the deadline head alongside the row: a released need must not
+    // keep showing a live countdown.
+    crate::ask_state_head::publish_closed_head(
+        tenant,
+        state,
+        &row.ask_event_id,
+        &crate::ask_state_head::AskClosure::Withdrawn,
+    )
+    .await;
+
     if let Err(error) = state
         .db
         .insert_event(tenant.community(), &withdrawal, None)
@@ -807,6 +848,15 @@ async fn redeadline(
         .extend_ask_deadline(community, &row.ask_event_id, new_deadline)
         .await
         .map_err(|error| format!("database error extending ask deadline: {error}"))?;
+
+    // The deadline just moved: republish the ask-state head so every
+    // counting-down client follows the real one, and so a freshly re-armed
+    // timer is distinguishable from a stale one (`rearmed_at`). Best-effort;
+    // also re-predicts the expiry outcome, since community state may have
+    // changed since filing. Takes the host lookup on itself because this
+    // function deliberately accepts a bare community id.
+    crate::ask_state_head::publish_rearmed_head(state, community, row, new_deadline, now_secs)
+        .await;
     Ok(())
 }
 
@@ -995,7 +1045,11 @@ fn unique_executive_in_roster(
 /// community and calls [`unique_executive_in_roster`] directly against the
 /// memoised copy (I5) -- both paths share the exact same trust rule via
 /// [`fetch_owner_authored_managed_agent_roster`].
-async fn find_unique_executive(
+///
+/// Also used by `ask_state_head`'s expiry prediction, which must decide
+/// "promote or re-arm" at publication time exactly as this sweep will at
+/// expiry -- hence `pub(crate)` rather than file-private.
+pub(crate) async fn find_unique_executive(
     tenant: &TenantContext,
     state: &AppState,
 ) -> Result<Option<PublicKey>, String> {
@@ -1201,7 +1255,11 @@ pub async fn resolve_owner_mention_route(
 ///
 /// Queries at most two rows: "is there exactly one" is answerable from two,
 /// and a community can have thousands of members.
-async fn find_unique_owner(
+///
+/// Also used by `ask_state_head`'s expiry prediction, which must decide
+/// "promote or re-arm" at publication time exactly as this sweep will at
+/// expiry -- hence `pub(crate)` rather than file-private.
+pub(crate) async fn find_unique_owner(
     tenant: &TenantContext,
     state: &AppState,
 ) -> Result<Option<PublicKey>, String> {

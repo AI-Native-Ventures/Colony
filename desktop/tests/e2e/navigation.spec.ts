@@ -454,3 +454,51 @@ test("message deep links survive reload", async ({ page }) => {
     "Engineering shipped the desktop build.",
   );
 });
+
+test("the agents route renders the People and Roles section via deep link", async ({
+  page,
+}) => {
+  await page.goto("/#/agents?section=people");
+
+  const section = page.getByTestId("people-roles-section");
+  await expect(section).toBeVisible();
+  await expect(
+    section.getByRole("heading", { name: "People and roles" }),
+  ).toBeVisible();
+  await expect(section.getByTestId("hire-employee-button")).toBeVisible();
+});
+
+test("the sidebar People entry navigates to the anchored section", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByTestId("open-people-view").click();
+
+  await expect(page).toHaveURL(/#\/agents\?section=people$/);
+  await expect(page.getByTestId("people-roles-section")).toBeVisible();
+  await expect(page.getByTestId("open-people-view")).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+  await expect(page.getByTestId("open-agents-view")).not.toHaveAttribute(
+    "data-active",
+    "true",
+  );
+});
+
+test("arriving by deep link puts People and Roles in view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/#/agents?section=people");
+
+  const section = page.getByTestId("people-roles-section");
+  await expect(section).toBeVisible();
+  await expect(section).toBeInViewport({ ratio: 0.5 });
+
+  // Bookmarkable: a reload lands in the same place.
+  await page.reload();
+  await expect(section).toBeVisible();
+  await expect(section).toBeInViewport({ ratio: 0.5 });
+});

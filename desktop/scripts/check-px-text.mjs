@@ -28,6 +28,11 @@ const overrides = new Set([
   "src/features/onboarding/ui/AvatarStep.tsx:text-[6rem]",
   "src/features/agents/ui/AgentCreationPreview.tsx:text-[4rem]",
   "src/features/agents/ui/AgentCreationPreview.tsx:text-[6rem]",
+  // Card compositions render a fixed 1080x1350 image, not app UI. Their type
+  // is positioned against artwork at that exact canvas size and is rasterised
+  // to a PNG, so it must NOT scale with the app's Cmd +/- zoom: a rem token
+  // here would move the type relative to the ground it was composed against.
+  "src/features/content/render/compositions.ts:font-size:23px",
 ]);
 
 await runPxTextCheck({

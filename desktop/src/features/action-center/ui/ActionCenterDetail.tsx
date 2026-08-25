@@ -4,6 +4,7 @@ import type { ActionItem, ActionMessageItem } from "../contracts";
 import { ActionCenterAskDetail } from "./ActionCenterAskDetail";
 import { ActionCenterMessageDetail } from "./ActionCenterMessageDetail";
 import { ActionCenterReminderDetail } from "./ActionCenterReminderDetail";
+import { ActionCenterResolvedAskDetail } from "./ActionCenterResolvedAskDetail";
 import { ActionCenterTaskDetail } from "./ActionCenterTaskDetail";
 import { ActionCenterWorkflowDetail } from "./ActionCenterWorkflowDetail";
 import { Button } from "@/shared/ui/button";
@@ -80,6 +81,21 @@ export function ActionCenterDetail({
 
   switch (item.source.kind) {
     case "ask":
+      // A closed ask shows how it closed instead of an answer form.
+      if (item.source.resolution) {
+        return (
+          <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
+            <ActionCenterResolvedAskDetail
+              onOpenSource={
+                item.capabilities.includes("open-source")
+                  ? () => onOpenSource(item)
+                  : undefined
+              }
+              source={item.source}
+            />
+          </section>
+        );
+      }
       return (
         <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
           <ActionCenterAskDetail

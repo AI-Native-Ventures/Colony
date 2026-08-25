@@ -34,9 +34,12 @@ pub(crate) struct KnownAcpRuntime {
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
     /// Whether this runtime handles model switching via ACP protocol natively.
-    /// Currently unused — env var injection runs unconditionally regardless of
-    /// this value. Retained as scaffolding for when ACP model switching matures.
-    #[allow(dead_code)]
+    ///
+    /// Consumed by the config bridge (`config_bridge::reader`) to decide how a
+    /// model change reaches the harness when no session configOptions cache is
+    /// available. Values for claude, codex and opencode were proven live on
+    /// 2026-08-23 by spawning each adapter, switching models over ACP and
+    /// confirming the turn ran on the switched model.
     pub supports_acp_model_switching: bool,
     pub model_env_var: Option<&'static str>,
     pub provider_env_var: Option<&'static str>,
@@ -106,5 +109,73 @@ mod tests {
         );
         assert!(codex.adapter_install_instructions_url.contains("codex-acp"));
         assert!(codex.cli_install_hint.contains("Codex CLI"));
+    }
+}
+
+#[cfg(test)]
+mod s2_harness_channel_tests {
+    /// OpenCode must be a compiled-in runtime, not a bare preset: its model
+    /// selection rides ACP `session/set_config_option` (proven live
+    /// 2026-08-23) and its provider rides the universal `BUZZ_ACP_PROVIDER`
+    /// env var, both of which are only surfaced to the config surfaces
+    /// through `KnownAcpRuntime`.
+    #[test]
+    fn opencode_is_a_first_class_runtime_with_proven_acp_model_channel() {
+        use crate::managed_agents::custom_harnesses::registry_test_lock;
+        use crate::managed_agents::discovery::presets::PRESET_HARNESSES;
+        use crate::managed_agents::discovery::{known_acp_runtime_exact, normalize_agent_args};
+
+        let rt = known_acp_runtime_exact("opencode")
+            .expect("opencode must be promoted out of presets into KNOWN_ACP_RUNTIMES");
+
+        assert_eq!(rt.commands, &["opencode"], "primary command stays stable");
+        assert_eq!(rt.label, "OpenCode");
+        assert!(
+            rt.supports_acp_model_switching,
+            "opencode honors session/set_config_option(configId=\"model\") — proven live"
+        );
+        assert_eq!(
+            rt.provider_env_var,
+            Some("BUZZ_ACP_PROVIDER"),
+            "provider picker is driven by the universal provider env var"
+        );
+        // Honest metadata: there is no per-harness model env var. The selected
+        // model reaches the harness via BUZZ_ACP_MODEL + the ACP config
+        // option, never via an OPENCODE_* variable.
+        assert!(rt.model_env_var.is_none());
+
+        // Promotion must not leave a shadowing duplicate in the preset list.
+        // The registry lock serializes with other discovery tests.
+        let _lock = registry_test_lock();
+        assert!(
+            !PRESET_HARNESSES.iter().any(|p| p.id == "opencode"),
+            "opencode must not exist as both builtin and preset"
+        );
+
+        // The spawn-arg normalizer keeps launching `opencode acp`.
+        assert_eq!(
+            normalize_agent_args("opencode", Vec::new()),
+            vec!["acp".to_string()]
+        );
+    }
+
+    /// Claude Code and Codex adapters were proven live (2026-08-23) to honor
+    /// a chosen model through ACP switching: claude-agent-acp via the stable
+    /// `session/set_config_option(configId:"model")`, codex-acp via both that
+    /// and the unstable `session/set_model`. Their runtime rows must say so —
+    /// a false flag makes the config bridge report their model field as
+    /// read-only.
+    #[test]
+    fn claude_and_codex_declare_proven_acp_model_switching() {
+        use crate::managed_agents::discovery::known_acp_runtime_exact;
+
+        for id in ["claude", "codex"] {
+            let rt = known_acp_runtime_exact(id)
+                .unwrap_or_else(|| panic!("{id} must be a known runtime"));
+            assert!(
+                rt.supports_acp_model_switching,
+                "{id} was proven to switch models over ACP; supports_acp_model_switching must be true"
+            );
+        }
     }
 }

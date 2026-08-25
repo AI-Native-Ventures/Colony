@@ -30,6 +30,7 @@ const RELAY_QUERY_ROOTS = new Set<string>([
   "reminders",
   "run-approvals",
   "search-messages",
+  "thread-canvas",
   "thread-replies",
   "user-profile",
   "user-search",

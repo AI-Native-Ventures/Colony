@@ -66,6 +66,19 @@ pub(crate) async fn handle_discovery_workspace_action(
         ));
     }
     let actor = action_event.pubkey.to_bytes();
+    let verified_approval_payer = match &parsed.request.payload {
+        buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ApproveCampaignBudget {
+            approval,
+        } => crate::blocks::validate_discovery_budget_approval(
+            tenant,
+            state,
+            &actor,
+            approval,
+        )
+        .await
+        .map_err(DiscoveryWorkspaceBrokerError::Restricted)?,
+        _ => None,
+    };
     let operation = parsed.request.payload.operation();
     let request_id = parsed.request.request_id;
     let idempotency_key = parsed.request.idempotency_key;
@@ -78,6 +91,7 @@ pub(crate) async fn handle_discovery_workspace_action(
         .apply_discovery_workspace_command_once(
             tenant.community(),
             &actor,
+            verified_approval_payer,
             &parsed.request,
             action_event,
             move |result| {

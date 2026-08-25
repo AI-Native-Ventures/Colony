@@ -111,7 +111,8 @@ pub(crate) struct EffectiveHarnessDescriptor {
 ///
 /// Returns `Err("DANGLING_HARNESS_ID:<id>")` when the record (or its linked
 /// persona) references a runtime id that no longer exists in the registry —
-/// the same typed error produced by `try_record_agent_command`.  Callers that
+/// the same typed error produced by
+/// `effective_config::resolve_effective_harness_command`.  Callers that
 /// cannot meaningfully continue with a dangling id (e.g. `spawn_agent_child`)
 /// propagate the error; callers that degrade gracefully may use
 /// `.unwrap_or_else(|_| …)`.
@@ -127,26 +128,20 @@ pub(crate) fn resolve_effective_harness_descriptor(
     personas: &[crate::managed_agents::types::AgentDefinition],
     global: &crate::managed_agents::GlobalAgentConfig,
 ) -> Result<EffectiveHarnessDescriptor, String> {
-    let effective_command = crate::managed_agents::try_record_agent_command(record, personas)?;
+    // The ONE harness resolver (effective_config): override pin → record
+    // runtime → definition runtime → global.preferred_runtime → bundled
+    // default, with the typed dangling-id sentinel for unresolvable pins.
+    let effective_command =
+        super::effective_config::resolve_effective_harness_command(record, personas, global)?;
+    let resolved_runtime_id =
+        super::effective_config::resolve_effective_runtime_id(record, personas, global);
     let runtime_meta = known_acp_runtime(&effective_command);
 
     // Look up the harness definition once — used for both args and env.
-    // Resolution order: record.runtime → persona.runtime → "".
-    let harness_def = {
-        let runtime_id = record
-            .runtime
-            .as_deref()
-            .or_else(|| {
-                record.persona_id.as_deref().and_then(|pid| {
-                    personas
-                        .iter()
-                        .find(|p| p.id == pid)
-                        .and_then(|p| p.runtime.as_deref())
-                })
-            })
-            .unwrap_or("");
-        crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(runtime_id)
-    };
+    let harness_def = resolved_runtime_id
+        .as_ref()
+        .and_then(|resolved| resolved.value.as_deref())
+        .and_then(crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id);
 
     // Args: explicit non-empty instance args win; otherwise use definition args.
     let args = {
@@ -190,23 +185,13 @@ pub(crate) fn resolve_effective_agent_env(
     global: &GlobalAgentConfig,
 ) -> EffectiveAgentEnv {
     // Look up the harness definition for definition-level env (preset/custom).
-    // Same resolution logic as spawn_agent_child: record runtime id first, then
-    // persona runtime id, then nothing.
-    let harness_def = {
-        let runtime_id = record
-            .runtime
+    // Same inherited chain as the descriptor: record runtime id → persona
+    // runtime id → global.preferred_runtime.
+    let harness_def =
+        super::effective_config::resolve_effective_runtime_id(record, personas, global)
+            .and_then(|resolved| resolved.value)
             .as_deref()
-            .or_else(|| {
-                record.persona_id.as_deref().and_then(|pid| {
-                    personas
-                        .iter()
-                        .find(|p| p.id == pid)
-                        .and_then(|p| p.runtime.as_deref())
-                })
-            })
-            .unwrap_or("");
-        crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(runtime_id)
-    };
+            .and_then(crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id);
 
     resolve_effective_agent_env_with_def(record, personas, runtime, global, harness_def)
 }
@@ -221,7 +206,12 @@ fn resolve_effective_agent_env_with_def(
     global: &GlobalAgentConfig,
     harness_def: Option<std::sync::Arc<crate::managed_agents::custom_harnesses::HarnessDefinition>>,
 ) -> EffectiveAgentEnv {
-    let effective_command = crate::managed_agents::record_agent_command(record, personas);
+    // The one harness resolver; on a dangling pin fall back to the legacy
+    // infallible chain so env assembly still produces a coherent shape — the
+    // dangling refusal is the descriptor caller's job, not this function's.
+    let effective_command =
+        super::effective_config::resolve_effective_harness_command(record, personas, global)
+            .unwrap_or_else(|_| crate::managed_agents::record_agent_command(record, personas));
 
     // Layer 1: baked build defaults (floor — internal builds only; OSS = empty).
     let mut env = baked_build_env();
@@ -1739,3 +1729,9 @@ mod tests {
 #[cfg(test)]
 #[path = "readiness_goose_file_config_tests.rs"]
 mod goose_file_config_tests;
+
+// S1 runtime-inheritance descriptor tests live in a sibling file so this
+// module stays under the desktop file-size ratchet.
+#[cfg(test)]
+#[path = "readiness_runtime_inherit_tests.rs"]
+mod runtime_inherit_tests;

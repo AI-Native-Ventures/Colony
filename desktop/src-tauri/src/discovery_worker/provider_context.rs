@@ -54,6 +54,14 @@ impl LocalProviderCredentials {
         })
     }
 
+    pub(super) const fn empty() -> Self {
+        Self {
+            outscraper: None,
+            brave: None,
+            exa: None,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn for_test(
         outscraper: Option<&str>,
@@ -67,6 +75,14 @@ impl LocalProviderCredentials {
         }
     }
 
+    pub(super) fn credential(&self, provider: DiscoveryProvider) -> Option<&Zeroizing<String>> {
+        match provider {
+            DiscoveryProvider::Outscraper => self.outscraper.as_ref(),
+            DiscoveryProvider::BraveSearch => self.brave.as_ref(),
+            DiscoveryProvider::ExaSearch => self.exa.as_ref(),
+        }
+    }
+
     pub(super) fn available_providers(&self) -> Vec<DiscoveryProvider> {
         [
             (DiscoveryProvider::Outscraper, self.outscraper.is_some()),
@@ -76,13 +92,5 @@ impl LocalProviderCredentials {
         .into_iter()
         .filter_map(|(provider, available)| available.then_some(provider))
         .collect()
-    }
-
-    pub(super) fn credential(&self, provider: DiscoveryProvider) -> Option<&Zeroizing<String>> {
-        match provider {
-            DiscoveryProvider::Outscraper => self.outscraper.as_ref(),
-            DiscoveryProvider::BraveSearch => self.brave.as_ref(),
-            DiscoveryProvider::ExaSearch => self.exa.as_ref(),
-        }
     }
 }
