@@ -85,8 +85,34 @@ const TASK = {
   sourceChannelId: "welcome",
   sourceEventId: null,
   implicit: false,
+  dependsOn: ["horizonlabs:launch-outbound:build-site"],
+  subject: { kind: "party", ref: "acme-lead" },
+  stage: "draft-list",
+  threadRoot:
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  doerKind: "human",
+  wakeAt: null,
   createdAt: 1_780_000_000,
   updatedAt: 1_780_000_000,
+};
+
+/** The six chain-and-identity fields serde defaults when absent, which is
+ * exactly what heads written before Phase 1a lack. */
+const CHAIN_FIELDS = [
+  "dependsOn",
+  "subject",
+  "stage",
+  "threadRoot",
+  "doerKind",
+  "wakeAt",
+];
+const CHAIN_FIELD_DEFAULTS = {
+  dependsOn: [],
+  subject: null,
+  stage: null,
+  threadRoot: null,
+  doerKind: "agent",
+  wakeAt: null,
 };
 
 /** Build the exact head the relay broker signs, so the parser is tested
@@ -166,7 +192,80 @@ test("initiative and task heads parse into their exact records", () => {
 
   const task = parseTaskHead(taskHead(), RELAY_PUBKEY);
   assert.equal(task.ok, true);
+  // The subject key is literally `ref` because the Rust field is the raw
+  // identifier `r#ref`; deepEqual proves the JSON spelling survived.
   assert.deepEqual(task.value, TASK);
+  assert.equal("ref" in task.value.subject, true);
+});
+
+/** Heads written before the chain-and-identity fields existed are still on
+ * real relays and still deserialize in Rust to the serde defaults. Desktop
+ * must accept them too: refusing them would blank every existing community's
+ * task board on upgrade. The injected defaults mirror Rust field for field,
+ * while unknown keys stay rejected — only these six may be absent. */
+test("a task head written before the chain fields existed still parses", () => {
+  const record = { ...TASK };
+  for (const name of CHAIN_FIELDS) delete record[name];
+  // Built raw rather than through taskHead(): that helper merges onto the
+  // full TASK fixture, which would quietly hand the six fields back.
+  const event = finalizeEvent(
+    {
+      kind: 30181,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", record.id],
+        ["c", record.companyId],
+        ["company", record.companyId],
+        ["team", record.owningTeamId],
+        ["cost-centre", record.costCentreId],
+        ["initiative", record.initiativeId],
+      ],
+      content: canonicalCompanyJson(record),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.value, { ...TASK, ...CHAIN_FIELD_DEFAULTS });
+});
+
+test("an explicit null or wrong-typed chain field is still refused", () => {
+  // An explicit `doerKind: null` in content fails in Rust (not an Option) and
+  // must fail here: the injection only covers ABSENT keys.
+  const nulled = parseTaskHead(
+    taskHead({ ...TASK, doerKind: null }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(nulled.ok, false);
+  assert.equal(nulled.code, "invalid-record");
+
+  const badDoer = parseTaskHead(
+    taskHead({ ...TASK, doerKind: "robot" }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(badDoer.ok, false);
+
+  // wakeAt is i64: a fractional timestamp is not an integer.
+  const fractional = parseTaskHead(
+    taskHead({ ...TASK, wakeAt: 1_800_000_000.5 }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(fractional.ok, false);
+
+  const incompleteSubject = parseTaskHead(
+    taskHead({ ...TASK, subject: { kind: "party" } }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(incompleteSubject.ok, false);
+});
+
+test("snoozed is a valid task status", () => {
+  const parsed = parseTaskHead(
+    taskHead({ ...TASK, status: "snoozed", wakeAt: 1_800_000_000 }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.status, "snoozed");
 });
 
 // The whole point of relay-authored heads is that nobody else can mint one. A

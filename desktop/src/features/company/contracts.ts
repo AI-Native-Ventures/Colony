@@ -49,10 +49,22 @@ export const TASK_STATUSES = [
   "inProgress",
   "inReview",
   "blocked",
+  "snoozed",
   "completed",
   "cancelled",
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export const DOER_KINDS = ["agent", "human"] as const;
+export type DoerKind = (typeof DOER_KINDS)[number];
+
+export const SUBJECT_KINDS = [
+  "party",
+  "task",
+  "initiative",
+  "external",
+] as const;
+export type SubjectKind = (typeof SUBJECT_KINDS)[number];
 
 export const COST_CLASSIFICATIONS = ["cogs", "opex", "needsReview"] as const;
 export type CostClassification = (typeof COST_CLASSIFICATIONS)[number];
@@ -112,6 +124,13 @@ export type Initiative = {
   updatedAt: number;
 };
 
+/** What a task's work is about. The JSON key is literally `ref`: the Rust
+ * field is the raw identifier `r#ref` and serde strips the prefix. */
+export type SubjectRef = {
+  kind: SubjectKind;
+  ref: string;
+};
+
 export type CompanyTask = {
   schema: string;
   id: string;
@@ -128,6 +147,12 @@ export type CompanyTask = {
   sourceChannelId: string;
   sourceEventId: string | null;
   implicit: boolean;
+  dependsOn: string[];
+  subject: SubjectRef | null;
+  stage: string | null;
+  threadRoot: string | null;
+  doerKind: DoerKind;
+  wakeAt: number | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -226,9 +251,11 @@ type FieldKind =
   | { type: "integer" }
   | { type: "boolean" }
   | { type: "optionalNumber" }
+  | { type: "optionalInteger" }
   | { type: "stringArray" }
   | { type: "enum"; values: readonly string[] }
-  | { type: "objectArray"; fields: Record<string, FieldKind> };
+  | { type: "objectArray"; fields: Record<string, FieldKind> }
+  | { type: "objectOrNull"; fields: Record<string, FieldKind> };
 
 function checkField(value: unknown, kind: FieldKind): boolean {
   switch (kind.type) {
@@ -244,6 +271,12 @@ function checkField(value: unknown, kind: FieldKind): boolean {
       return (
         value === null || (typeof value === "number" && Number.isFinite(value))
       );
+    // i64 fields: whole numbers only, unlike the f64 optionalNumber.
+    case "optionalInteger":
+      return (
+        value === null ||
+        (typeof value === "number" && Number.isSafeInteger(value))
+      );
     case "stringArray":
       return (
         Array.isArray(value) && value.every((item) => typeof item === "string")
@@ -254,6 +287,13 @@ function checkField(value: unknown, kind: FieldKind): boolean {
       return (
         Array.isArray(value) &&
         value.every((item) => matchesShape(item, kind.fields))
+      );
+    // Option<struct> on the Rust side: null is None, an object must be
+    // exactly its declared shape.
+    case "objectOrNull":
+      return (
+        value === null ||
+        (isPlainObject(value) && matchesShape(value, kind.fields))
       );
   }
 }
@@ -320,6 +360,11 @@ const INITIATIVE_FIELDS: Record<string, FieldKind> = {
   updatedAt: { type: "integer" },
 };
 
+const SUBJECT_REF_FIELDS: Record<string, FieldKind> = {
+  kind: { type: "enum", values: SUBJECT_KINDS },
+  ref: { type: "string" },
+};
+
 const TASK_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
@@ -336,8 +381,30 @@ const TASK_FIELDS: Record<string, FieldKind> = {
   sourceChannelId: { type: "string" },
   sourceEventId: { type: "optionalString" },
   implicit: { type: "boolean" },
+  dependsOn: { type: "stringArray" },
+  subject: { type: "objectOrNull", fields: SUBJECT_REF_FIELDS },
+  stage: { type: "optionalString" },
+  threadRoot: { type: "optionalString" },
+  doerKind: { type: "enum", values: DOER_KINDS },
+  wakeAt: { type: "optionalInteger" },
   createdAt: { type: "integer" },
   updatedAt: { type: "integer" },
+};
+
+/**
+ * What serde fills in when a task head's content lacks the chain-and-identity
+ * fields: `#[serde(default)]` on dependsOn and doerKind, `None` for the
+ * options. Heads written before those fields existed are still served by the
+ * relay verbatim and still deserialize in Rust, so desktop injects these same
+ * values before the exact-shape check instead of refusing every older head.
+ */
+const TASK_FIELD_DEFAULTS: Record<string, unknown> = {
+  dependsOn: [],
+  subject: null,
+  stage: null,
+  threadRoot: null,
+  doerKind: "agent",
+  wakeAt: null,
 };
 
 function scalarTags(event: RelayEvent, name: string): string[] {
@@ -455,7 +522,11 @@ export function parseTaskHead(
 ): CompanyParseResult<CompanyTask> {
   const head = readHead(event, relaySelfPubkey, KIND_TASK);
   if (!head.ok) return head;
-  const record = head.value;
+  // Older heads lack the defaulted keys entirely; the injection happens on a
+  // copy so the signed content itself is never rewritten. A key that IS
+  // present in the content always wins over its default, so a malformed
+  // explicit value still fails the shape check exactly as Rust would.
+  const record = { ...TASK_FIELD_DEFAULTS, ...head.value };
   if (!matchesShape(record, TASK_FIELDS)) {
     return companyFailure("invalid-record", "task record shape is invalid");
   }
