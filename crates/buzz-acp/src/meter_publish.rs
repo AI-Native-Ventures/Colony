@@ -54,6 +54,7 @@ pub fn build_usage_record_event(
         timestamp: call.timestamp,
         payment_mode: context.payment_mode(call.credential),
         tokens: Some(tokens),
+        unknown_token_fields: Vec::new(),
         amount_nanousd: None,
         observed_cost_nanousd: call.observed_cost_nanousd,
         harness: Some(context.harness.clone()),
@@ -68,10 +69,20 @@ pub fn build_usage_record_event(
         work_context: None,
     };
 
-    let ciphertext = match encrypt_usage_record(agent_keys, owner_pubkey, &payload) {
-        Ok(ciphertext) => ciphertext,
-        Err(error) => return Some(Err(format!("usage record encrypt failed: {error}"))),
-    };
+    Some(build_usage_payload_event(payload, agent_keys, owner_pubkey))
+}
+
+/// Encrypt and sign an already-normalized usage payload for the owner.
+///
+/// Wire-checkpoint and ACP-response records share this envelope so their
+/// privacy, author, and indexing tags cannot drift apart.
+pub(crate) fn build_usage_payload_event(
+    payload: UsageRecordPayload,
+    agent_keys: &Keys,
+    owner_pubkey: &PublicKey,
+) -> Result<Event, String> {
+    let ciphertext = encrypt_usage_record(agent_keys, owner_pubkey, &payload)
+        .map_err(|error| format!("usage record encrypt failed: {error}"))?;
 
     let owner_hex = owner_pubkey.to_hex();
     let agent_hex = agent_keys.public_key().to_hex();
@@ -82,17 +93,17 @@ pub fn build_usage_record_event(
     .tags([
         match Tag::parse(["p", &owner_hex]) {
             Ok(tag) => tag,
-            Err(error) => return Some(Err(format!("usage record p tag failed: {error}"))),
+            Err(error) => return Err(format!("usage record p tag failed: {error}")),
         },
         match Tag::parse(["agent", &agent_hex]) {
             Ok(tag) => tag,
-            Err(error) => return Some(Err(format!("usage record agent tag failed: {error}"))),
+            Err(error) => return Err(format!("usage record agent tag failed: {error}")),
         },
     ])
     .sign_with_keys(agent_keys)
     .map_err(|error| format!("usage record sign failed: {error}"));
 
-    Some(event)
+    event
 }
 
 #[cfg(test)]

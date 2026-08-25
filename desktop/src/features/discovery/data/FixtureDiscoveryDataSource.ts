@@ -680,6 +680,34 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
     return clone(campaign);
   }
 
+  async approveCampaignBudget(campaignId: string): Promise<CampaignDetail> {
+    const campaign = this.requireCampaign(campaignId);
+    const approvedNanousd = (BigInt(campaign.target) * 50_000_000n).toString();
+    campaign.budget = {
+      state: "active",
+      payerPubkey: "fixture",
+      approvedNanousd,
+      spentNanousd: "0",
+      reservedNanousd: "0",
+      remainingNanousd: approvedNanousd,
+      pricePerRetainedLeadNanousd: "50000000",
+      approvedAt: campaign.updatedAt,
+    };
+    return clone(campaign);
+  }
+
+  async pauseCampaignBudget(campaignId: string): Promise<CampaignDetail> {
+    const campaign = this.requireCampaign(campaignId);
+    if (campaign.budget) campaign.budget.state = "paused";
+    return clone(campaign);
+  }
+
+  async revokeCampaignBudget(campaignId: string): Promise<CampaignDetail> {
+    const campaign = this.requireCampaign(campaignId);
+    if (campaign.budget) campaign.budget.state = "revoked";
+    return clone(campaign);
+  }
+
   async updateSourceConfig(
     campaignId: string,
     config: CampaignSourceConfig,

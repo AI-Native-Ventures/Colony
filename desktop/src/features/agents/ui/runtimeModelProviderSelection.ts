@@ -1,6 +1,8 @@
 import type { EnvVarsValue } from "./EnvVarsEditor";
 import {
   AUTO_MODEL_DROPDOWN_VALUE,
+  type PersonaDropdownOption,
+  type PersonaModelOption,
   AUTO_PROVIDER_DROPDOWN_VALUE,
   CUSTOM_MODEL_DROPDOWN_VALUE,
   CUSTOM_PROVIDER_DROPDOWN_VALUE,
@@ -8,6 +10,8 @@ import {
   shouldClearKnownModelForSelectionScope,
 } from "./agentConfigOptions";
 import { shouldClearModelForRuntimeChange } from "./personaRuntimeModel";
+import { modelDropdownOptions } from "./relayMeshModelPicker";
+import { MODEL_DISCOVERY_LOADING_VALUE } from "./usePersonaModelDiscovery";
 import {
   envVarsClearingManagedApiKey,
   envVarsWithoutKey,
@@ -163,4 +167,51 @@ export function selectionOnModelDropdownChange(
   next.model =
     params.nextValue === AUTO_MODEL_DROPDOWN_VALUE ? "" : params.nextValue;
   return next;
+}
+
+// ── Dropdown option builders (extracted from AgentDefinitionDialog, size guard) ──
+
+/**
+ * Provider dropdown options for the definition dialog: the provider list with
+ * blank ids dropped, plus the trailing Custom entry.
+ */
+export function buildProviderDropdownOptions<
+  T extends { id: string; label: string },
+>(providerOptions: readonly T[]): PersonaDropdownOption[] {
+  return [
+    ...providerOptions
+      .filter((option) => option.id.trim().length > 0)
+      .map((option) => ({
+        label: option.label,
+        value: option.id,
+      })),
+    { label: "Custom provider...", value: CUSTOM_PROVIDER_DROPDOWN_VALUE },
+  ];
+}
+
+/**
+ * Model dropdown options for a relay-mesh-aware scope: discovery/loading
+ * states via the shared builder, then scope filtering — relay-mesh keeps its
+ * Automatic entry (relabeled), every other scope drops it.
+ */
+export function buildModelDropdownOptionsForScope(
+  isRelayMesh: boolean,
+  discoveryLoading: boolean,
+  options: readonly PersonaModelOption[],
+): PersonaDropdownOption[] {
+  return modelDropdownOptions({
+    allowCustom: !isRelayMesh,
+    globalModel: undefined,
+    loading: discoveryLoading,
+    loadingValue: MODEL_DISCOVERY_LOADING_VALUE,
+    options,
+  })
+    .filter(
+      (option) => isRelayMesh || option.value !== AUTO_MODEL_DROPDOWN_VALUE,
+    )
+    .map((option) =>
+      isRelayMesh && option.value === AUTO_MODEL_DROPDOWN_VALUE
+        ? { ...option, label: "Automatic" }
+        : option,
+    );
 }

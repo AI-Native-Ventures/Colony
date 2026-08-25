@@ -34,7 +34,14 @@ import {
   useUpdatePersonaAndPublishMutation,
 } from "@/features/agents/lib/usePersonaCatalogRelay";
 import { personaSaveNotice } from "@/features/agents/lib/personaSaveNotice";
+import {
+  ManagedAgentHeadNotLandedError,
+  publishManagedAgentRankHead,
+} from "@/features/agents/managedAgentHeads";
+import type { AgentRank } from "@/features/agents/employeeHeads";
+import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import { useCreatedAgentChannelAttachment } from "@/features/agents/useCreatedAgentChannelAttachment";
+import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type {
@@ -61,10 +68,50 @@ import {
 import { resolveManagedAgentAvatarUrl } from "./managedAgentAvatar";
 import {
   buildInstanceInputForDefinition,
+  resolveCreateRuntime,
   type BackendIntent,
 } from "../lib/instanceInputForDefinition";
 
 type PersonaFeedbackSurface = "catalog" | "library";
+
+/**
+ * Ranking a freshly created agent races the relay minting its identity: the
+ * rank republish needs the agent's owner-authored head to merge into, and
+ * that lands asynchronously after create. Poll briefly before giving up --
+ * the agent itself is fine either way, and the People screen's Unranked
+ * group is the fallback path.
+ */
+const ORG_RANK_WAIT_MS = 10_000;
+const ORG_RANK_POLL_MS = 1_000;
+
+async function rankCreatedAgent(
+  agent: { pubkey: string; name: string },
+  tier: AgentRank,
+  manager: string | undefined,
+  ownerPubkeys: ReadonlySet<string>,
+): Promise<void> {
+  const deadline = Date.now() + ORG_RANK_WAIT_MS;
+  for (;;) {
+    try {
+      await publishManagedAgentRankHead(
+        {
+          pubkey: agent.pubkey,
+          name: agent.name,
+          tier,
+          manager: manager ?? null,
+        },
+        ownerPubkeys,
+      );
+      return;
+    } catch (error) {
+      const stillWaiting =
+        error instanceof ManagedAgentHeadNotLandedError &&
+        Date.now() < deadline;
+      if (!stillWaiting) throw error;
+      await new Promise((resolve) => setTimeout(resolve, ORG_RANK_POLL_MS));
+    }
+  }
+}
 
 export function usePersonaActions() {
   const queryClient = useQueryClient();
@@ -83,6 +130,10 @@ export function usePersonaActions() {
   });
   const createAgentMutation = useCreateManagedAgentMutation();
   const createPersonaMutation = useCreatePersonaMutation();
+  const ownersQuery = useCommunityOwnersQuery(
+    communityId ?? "",
+    communityId !== null,
+  );
   const updatePersonaMutation = useUpdatePersonaMutation();
   const updatePersonaAndPublishMutation =
     useUpdatePersonaAndPublishMutation(communityId);
@@ -138,6 +189,7 @@ export function usePersonaActions() {
         .map((publication) => publication.sourcePersonaId),
     );
   }, [identityQuery.data?.pubkey, publications]);
+  const { globalConfig } = useGlobalAgentConfig();
   const availableRuntimes = React.useMemo(
     () =>
       (acpRuntimesQuery.data ?? []).filter(
@@ -177,7 +229,11 @@ export function usePersonaActions() {
     intent?: AgentCreateIntent,
     backendIntent?: BackendIntent | null,
     targetChannel?: Pick<Channel, "id" | "name"> | null,
-    options?: { publishCatalogUpdates?: boolean },
+    options?: {
+      publishCatalogUpdates?: boolean;
+      orgRank?: AgentRank;
+      orgManager?: string;
+    },
   ): Promise<boolean> {
     if (isPersonaSubmitPending) {
       return false;
@@ -206,12 +262,28 @@ export function usePersonaActions() {
           setPersonaNoticeMessage(personaSaveNotice(input.displayName, null));
         }
       } else {
-        const runtime = availableRuntimes.find(
-          (candidate) => candidate.id === input.runtime,
+        // "Use agent defaults" submits no runtime pin on purpose: the harness
+        // is resolved from the global config at spawn, readiness and deploy.
+        // Looking up `input.runtime` alone therefore found nothing for every
+        // defaults-mode create, and this returned false — leaving an enabled
+        // "Add agent" button that silently did nothing. Resolve the same
+        // record -> global chain the backend uses before deciding it is
+        // missing.
+        const { named: resolvedRuntimeId, runtime } = resolveCreateRuntime(
+          availableRuntimes,
+          input.runtime,
+          globalConfig.preferred_runtime,
         );
-        if (!runtime) {
+        // Only an id that was actually named and is unavailable is an error.
+        // Naming nothing is legal: `resolve_effective_runtime_id` returns None
+        // for it and the backend spawns the bundled default harness. Refusing
+        // here meant anyone who had not set a global default harness — every
+        // new account — could not create an agent at all, including from an
+        // agent proposal. `runtime` is used only for the avatar fallback,
+        // which is already optional.
+        if (resolvedRuntimeId && !runtime) {
           setPersonaErrorMessage(
-            "Choose an available provider for this agent.",
+            `The default harness (${resolvedRuntimeId}) is not available. Choose one for this agent, or change your global defaults.`,
           );
           return false;
         }
@@ -225,7 +297,7 @@ export function usePersonaActions() {
         const avatarUrl = await resolveManagedAgentAvatarUrl(
           input.avatarUrl,
           undefined,
-          runtime.avatarUrl,
+          runtime?.avatarUrl,
         );
         const persona = await createPersonaMutation.mutateAsync({
           ...input,
@@ -237,9 +309,21 @@ export function usePersonaActions() {
           setPersonaDialogState(null);
           return true;
         }
+        // Only the instance path needs a concrete runtime: it has to name the
+        // harness the agent will actually run. Nothing was named, so mirror
+        // `default_agent_command()` and take the bundled buzz-agent. The
+        // definition-only create above already returned, so a definition is
+        // never blocked on this.
+        const runtimeForInstance = runtime;
+        if (!runtimeForInstance) {
+          setPersonaErrorMessage(
+            "No harness is available to run this agent. Open Settings > Agents to set one up.",
+          );
+          return false;
+        }
         const agentInput = await buildInstanceInputForDefinition(
           persona,
-          runtime,
+          runtimeForInstance,
           undefined,
           startIntent ?? undefined,
         );
@@ -250,6 +334,28 @@ export function usePersonaActions() {
             created,
             targetChannel,
           );
+          if (options?.orgRank && created.agent.pubkey) {
+            try {
+              await rankCreatedAgent(
+                { pubkey: created.agent.pubkey, name: created.agent.name },
+                options.orgRank,
+                options.orgManager,
+                ownersQuery.data ?? new Set<string>(),
+              );
+              await queryClient.invalidateQueries({
+                queryKey: ["colony-managed-agent-heads"],
+              });
+            } catch (rankError) {
+              // Creation succeeded; the org placement is the part that
+              // failed. Name it so the owner knows to retry from People
+              // and roles rather than re-creating the agent.
+              setPersonaErrorMessage(
+                rankError instanceof Error
+                  ? `${created.agent.name} was created, but placing it in the org failed: ${rankError.message}`
+                  : `${created.agent.name} was created, but placing it in the org failed.`,
+              );
+            }
+          }
           if (created.spawnError) {
             setPersonaErrorMessage(
               `${persona.displayName} was created, but it did not start: ${created.spawnError}`,

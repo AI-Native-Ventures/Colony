@@ -176,6 +176,7 @@ mod tests {
                 cache_write_1h_tokens: 0,
                 output_tokens: 1,
             }),
+            unknown_token_fields: Vec::new(),
             amount_nanousd: None,
             observed_cost_nanousd: None,
             harness: harness.map(str::to_string),

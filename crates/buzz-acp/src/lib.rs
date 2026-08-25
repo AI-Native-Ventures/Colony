@@ -2,6 +2,8 @@
 
 mod acp;
 pub mod ask_context;
+mod codex_usage_adapter;
+pub mod completion_check;
 mod config;
 mod engram_fetch;
 mod filter;
@@ -14,6 +16,7 @@ mod queue;
 mod relay;
 mod setup_mode;
 mod usage;
+mod usage_outbox;
 mod work_context;
 
 pub use usage::TurnUsage;
@@ -777,11 +780,12 @@ struct ObserverChunkKey {
     agent_index: Option<usize>,
 }
 
-/// Flush coalesced chunks before they exceed the NIP-44 plaintext limit (65,535 bytes).
-/// Leave headroom for the JSON envelope wrapping the text. This is a SOFT pre-flush
-/// of raw text below the hard cap; `fit_observer_event_to_budget` (the final ceiling,
-/// keyed to `OBSERVER_MAX_PLAINTEXT_LEN` in buzz-core/observer.rs:25) is what actually
-/// guarantees the serialized frame fits. Edit one of these two and review the other.
+/// Flush coalesced chunks before they exceed the NIP-44 plaintext limit
+/// (65,408 bytes). Leave headroom for the JSON envelope wrapping the text.
+/// This is a SOFT pre-flush of raw text below the hard cap; the hard cap is
+/// `OBSERVER_MAX_PLAINTEXT_LEN` in buzz-core/observer.rs, and
+/// `fit_observer_event_to_budget` (keyed to it) is what actually guarantees
+/// the serialized frame fits. Edit one of these two and review the other.
 const OBSERVER_CHUNK_MAX_TEXT_BYTES: usize = 60_000;
 
 impl ObserverChunkCoalescer {
@@ -1767,6 +1771,61 @@ pub fn run() -> Result<()> {
     tokio_main()
 }
 
+fn should_use_codex_adapter_usage(
+    agent_command: &str,
+    provisioned: bool,
+    no_meter: bool,
+    meter_openai_key: Option<&str>,
+) -> bool {
+    !provisioned
+        && config::is_codex_command(agent_command)
+        && (no_meter || meter_openai_key.is_none_or(|key| key.trim().is_empty()))
+}
+
+#[cfg(test)]
+mod codex_adapter_usage_tests {
+    use super::should_use_codex_adapter_usage;
+
+    #[test]
+    fn subscription_codex_uses_adapter_usage() {
+        assert!(should_use_codex_adapter_usage(
+            "codex-acp",
+            false,
+            false,
+            None
+        ));
+        assert!(should_use_codex_adapter_usage(
+            "codex",
+            false,
+            false,
+            Some(" ")
+        ));
+        assert!(should_use_codex_adapter_usage(
+            "codex-acp",
+            false,
+            true,
+            Some("unused-key")
+        ));
+    }
+
+    #[test]
+    fn gateway_and_non_codex_paths_keep_wire_metering_authoritative() {
+        assert!(!should_use_codex_adapter_usage(
+            "codex-acp",
+            false,
+            false,
+            Some("gateway-key")
+        ));
+        assert!(!should_use_codex_adapter_usage("goose", false, true, None));
+        assert!(!should_use_codex_adapter_usage(
+            "codex-acp",
+            true,
+            false,
+            None
+        ));
+    }
+}
+
 #[tokio::main]
 async fn tokio_main() -> Result<()> {
     // Install the ring crypto provider for rustls (required for wss:// connections).
@@ -1807,7 +1866,16 @@ async fn tokio_main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("buzz_acp=info")),
+            // `pool::prompt` and `pool::completion` are custom targets, so a
+            // `buzz_acp=info` filter drops them: turn start, turn end, and every
+            // completion check become invisible. Without them a stalled agent and
+            // a working one produce identical logs, which is the diagnosis
+            // problem this harness exists to remove. Named explicitly here so the
+            // default install can answer "did the check run?" without anyone
+            // having to know to set RUST_LOG first.
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("buzz_acp=info,pool::prompt=info,pool::completion=info")
+            }),
         )
         .compact()
         .init();
@@ -1942,15 +2010,80 @@ async fn tokio_main() -> Result<()> {
     // spawn unmetered and spend money the ledger never sees. Metering needs an
     // owner to encrypt records to; without one there is nobody who could read
     // them, so it stays off rather than publishing records nobody can decrypt.
-    let mut meter_publisher_task = if config.no_meter && !config.provisioned {
+    // Codex authenticated through ChatGPT cannot carry that subscription
+    // through an API-key custom gateway. Its ACP prompt response still carries
+    // cumulative adapter counters, so use that labeled fallback unless a
+    // real OpenAI meter key or Colony Credits gateway is configured.
+    let codex_adapter_usage = should_use_codex_adapter_usage(
+        &config.agent_command,
+        config.provisioned,
+        config.no_meter,
+        config.meter_openai_key.as_deref(),
+    );
+    let adapter_usage_fallback = codex_adapter_usage;
+    let adapter_usage_provider = if adapter_usage_fallback {
+        Some("openai".to_string())
+    } else {
+        None
+    };
+
+    let adapter_usage_owner = startup_owner
+        .as_deref()
+        .and_then(|hex| nostr::PublicKey::from_hex(hex).ok());
+    let usage_outbox = if adapter_usage_owner.is_some() {
+        Some(Arc::new(
+            usage_outbox::UsageOutbox::open(&config.relay_url, config.keys.public_key())
+                .map_err(anyhow::Error::msg)?,
+        ))
+    } else {
+        None
+    };
+    let mut usage_retry_task = usage_outbox.as_ref().map(|outbox| {
+        let outbox = Arc::clone(outbox);
+        let rest = relay.rest_client();
+        tokio::spawn(async move {
+            loop {
+                match outbox.retry_pending(&rest).await {
+                    Ok(outcome) if outcome.delivered > 0 => tracing::info!(
+                        target: "meter::publish",
+                        delivered = outcome.delivered,
+                        remaining = outcome.remaining,
+                        "replayed durable Spend records"
+                    ),
+                    Ok(outcome) if outcome.remaining > 0 => tracing::warn!(
+                        target: "meter::publish",
+                        remaining = outcome.remaining,
+                        "durable Spend records remain queued"
+                    ),
+                    Ok(_) => {}
+                    Err(error) => tracing::error!(
+                        target: "meter::publish",
+                        "durable Spend replay failed: {error}"
+                    ),
+                }
+                tokio::time::sleep(Duration::from_secs(15)).await;
+            }
+        })
+    });
+    let mut meter_publisher_task = if adapter_usage_fallback {
+        if adapter_usage_owner.is_some() {
+            tracing::info!(
+                provider = adapter_usage_provider.as_deref().unwrap_or("unknown"),
+                "wire metering bypassed; labeled cumulative ACP estimates will reach the cost ledger"
+            );
+        } else {
+            tracing::warn!(
+                provider = adapter_usage_provider.as_deref().unwrap_or("unknown"),
+                "wire metering bypassed, but no owner identity is available to receive encrypted Spend records"
+            );
+        }
+        None
+    } else if config.no_meter && !config.provisioned {
         tracing::warn!(
             "wire metering disabled (--no-meter): agent spend will not reach the cost ledger"
         );
         None
-    } else if let Some(owner_pubkey) = startup_owner
-        .as_deref()
-        .and_then(|hex| nostr::PublicKey::from_hex(hex).ok())
-    {
+    } else if let Some(owner_pubkey) = adapter_usage_owner {
         let defaults = buzz_meter::MeterConfig::default();
         let meter_config = buzz_meter::MeterConfig {
             anthropic_api_key: config.meter_anthropic_key.clone(),
@@ -2021,6 +2154,10 @@ async fn tokio_main() -> Result<()> {
                 };
                 let agent_keys = config.keys.clone();
                 let rest = relay.rest_client();
+                let outbox = usage_outbox
+                    .as_ref()
+                    .expect("usage outbox exists when owner is resolved")
+                    .clone();
                 Some(tokio::spawn(async move {
                     while let Some(call) = calls.recv().await {
                         let Some(built) = meter_publish::build_usage_record_event(
@@ -2038,21 +2175,11 @@ async fn tokio_main() -> Result<()> {
                                 continue;
                             }
                         };
-                        // A publish failure must not stall metering or the
-                        // agent; the record is lost and reconciliation is what
-                        // surfaces the gap.
-                        const PUBLISH_TIMEOUT: Duration = Duration::from_secs(3);
-                        match tokio::time::timeout(PUBLISH_TIMEOUT, rest.submit_event(&event)).await
-                        {
-                            Ok(Ok(_)) => {}
-                            Ok(Err(error)) => tracing::warn!(
+                        if let Err(error) = outbox.enqueue_and_submit(&rest, event).await {
+                            tracing::warn!(
                                 target: "meter::publish",
-                                "usage record publish failed: {error}"
-                            ),
-                            Err(_) => tracing::warn!(
-                                target: "meter::publish",
-                                "usage record publish timed out"
-                            ),
+                                "usage record retained for retry: {error}"
+                            );
                         }
                     }
                 }))
@@ -2242,7 +2369,15 @@ async fn tokio_main() -> Result<()> {
     }
 
     let base_prompt_content = config.base_prompt_content.take();
+    // Completion-check continuations grant a turn a fresh budget from inside
+    // the prompt task, which does not own the queue. Unbounded and never
+    // awaited by the sender for the same reason the steer-ack channel is: a
+    // send that blocked here would stall the turn it is trying to protect.
+    let (deadline_extend_tx, mut deadline_extend_rx) = mpsc::unbounded_channel::<Uuid>();
+
     let ctx = Arc::new(PromptContext {
+        completion_check: config.completion_check,
+        deadline_extend_tx: Some(deadline_extend_tx.clone()),
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
         idle_timeout: Duration::from_secs(config.idle_timeout_secs),
@@ -2275,6 +2410,8 @@ async fn tokio_main() -> Result<()> {
             .and_then(|hex| nostr::PublicKey::from_hex(hex).ok()),
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
+        adapter_usage_provider,
+        usage_outbox: usage_outbox.clone(),
         relay_url: config.relay_url.clone(),
     });
 
@@ -2457,6 +2594,9 @@ async fn tokio_main() -> Result<()> {
         Panic(tokio::task::JoinError),
         SteerAck(SteerAckEvent),
         Wake(u32, Result<AgentPool, String>),
+        /// A completion-check continuation granted this channel's turn a fresh
+        /// budget; its in-flight deadline must move with it.
+        ExtendDeadline(Uuid),
     }
 
     loop {
@@ -2619,6 +2759,9 @@ async fn tokio_main() -> Result<()> {
                 // locked semantics (Eva + Max + Perci).
                 Some(ack_event) = steer_ack_rx.recv() => {
                     Some(PoolEvent::SteerAck(ack_event))
+                }
+                Some(channel_id) = deadline_extend_rx.recv() => {
+                    Some(PoolEvent::ExtendDeadline(channel_id))
                 }
                 Some((attempt, result)) = wake_rx.recv(), if config.lazy_pool && !pool_ready => {
                     Some(PoolEvent::Wake(attempt, result))
@@ -3324,6 +3467,11 @@ async fn tokio_main() -> Result<()> {
                     typing_channels.insert(channel_id, thread_tags);
                 }
             }
+            Some(PoolEvent::ExtendDeadline(channel_id)) => {
+                // Same grant a successful steer makes: the turn is still the
+                // same turn, and it has just been given more work to do.
+                queue.extend_in_flight_deadline(channel_id, config.max_turn_duration_secs);
+            }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
                 recover_panicked_agent(
@@ -3671,7 +3819,40 @@ async fn tokio_main() -> Result<()> {
         meter.handle.shutdown();
     }
     if let Some(handle) = meter_publisher_task.take() {
+        let mut handle = handle;
+        if tokio::time::timeout(Duration::from_secs(5), &mut handle)
+            .await
+            .is_err()
+        {
+            tracing::error!(target: "meter::publish", "meter publisher did not drain before shutdown");
+            handle.abort();
+        }
+    }
+    if let Some(handle) = usage_retry_task.take() {
         handle.abort();
+    }
+    if let Some(outbox) = &usage_outbox {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            outbox.retry_pending(&relay.rest_client()),
+        )
+        .await
+        {
+            Ok(Ok(outcome)) if outcome.remaining > 0 => tracing::warn!(
+                target: "meter::publish",
+                remaining = outcome.remaining,
+                "Spend records remain queued for the next launch"
+            ),
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::error!(
+                target: "meter::publish",
+                "final Spend replay failed: {error}"
+            ),
+            Err(_) => tracing::warn!(
+                target: "meter::publish",
+                "final Spend replay timed out; records remain queued"
+            ),
+        }
     }
 
     // Graceful relay shutdown — sends WebSocket close frame and waits up to 5s
@@ -7012,6 +7193,89 @@ mod observer_publish_queue_tests {
         assert_eq!(published, (1..=200).collect::<Vec<u64>>());
         assert_eq!(queue.dropped_events, 0);
     }
+
+    /// Every frame the packer produces must be encryptable AS-IS. Two
+    /// singletons far under the cap whose gathered batch weighs 65_472 bytes:
+    /// the old cap (65_535) accepted the batch, then NIP-44 rejected it whole,
+    /// taking every event inside it with it. Sized against the REAL serializer
+    /// via an affine probe so the arithmetic can never drift.
+    #[test]
+    fn every_gathered_batch_encrypts() {
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate().public_key();
+
+        fn padded(seq: u64, pad: usize) -> observer::ObserverEvent {
+            let mut e = event(seq, "acp_read", Some("chan-a"));
+            e.payload = serde_json::json!({ "pad": "x".repeat(pad) });
+            e
+        }
+
+        // Measure the zero-pad floors, then solve for the pad putting the pair
+        // at `target`: pair(pad) = pair_floor + 2 * pad (each pad byte appears
+        // once per inner copy).
+        let probe_a = padded(1, 0);
+        let probe_b = padded(2, 0);
+        let pair_floor = serialized_len(&batch_envelope(&[probe_a, probe_b]));
+
+        let dead_window_pair = {
+            const TARGET: usize = 65_472; // inside 65_409..=65_535
+            let pad = (TARGET - pair_floor) / 2;
+            assert!(pad > 0, "pair floor {} above target", pair_floor);
+            (padded(1, pad), padded(2, pad))
+        };
+        let (a, b) = &dead_window_pair;
+        let pair_len = serialized_len(&batch_envelope(&[a.clone(), b.clone()]));
+        assert!(
+            (65_409..=65_535).contains(&pair_len),
+            "scenario must land in the old dead window, got {pair_len}"
+        );
+        assert!(
+            serialized_len(a) < 65_408 && serialized_len(b) < 65_408,
+            "each singleton alone must sit far under the NIP-44 limit"
+        );
+
+        let mut queue = queue_of(vec![a.clone(), b.clone()]);
+        let frames = drain_frames(&mut queue);
+        assert!(!frames.is_empty(), "the queue must produce its frame(s)");
+        for frame in &frames {
+            let result = encrypt_observer_payload(&agent, &owner, frame);
+            assert!(
+                result.is_ok(),
+                "packed frame of {} bytes must encrypt, got {result:?}",
+                serialized_len(frame)
+            );
+        }
+    }
+
+    /// Positive control: a near-cap pair that fits UNDER the plaintext limit
+    /// genuinely gathers into one batch envelope, and that batch encrypts.
+    #[test]
+    fn near_cap_batch_gathers_and_encrypts() {
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate().public_key();
+
+        fn padded(seq: u64, pad: usize) -> observer::ObserverEvent {
+            let mut e = event(seq, "acp_read", Some("chan-a"));
+            e.payload = serde_json::json!({ "pad": "x".repeat(pad) });
+            e
+        }
+
+        let pair_floor = serialized_len(&batch_envelope(&[padded(1, 0), padded(2, 0)]));
+        const TARGET: usize = 64_900; // gathers under any plausible cap
+        let pad = (TARGET - pair_floor) / 2;
+        assert!(pad > 0);
+
+        let mut queue = queue_of(vec![padded(1, pad), padded(2, pad)]);
+        let frames = drain_frames(&mut queue);
+        assert_eq!(frames.len(), 1, "both events gather into one batch");
+        assert_eq!(frames[0].kind, OBSERVER_BATCH_KIND, "shipped as a batch");
+        let result = encrypt_observer_payload(&agent, &owner, &frames[0]);
+        assert!(
+            result.is_ok(),
+            "gathered batch of {} bytes must encrypt, got {result:?}",
+            serialized_len(&frames[0])
+        );
+    }
 }
 
 #[cfg(test)]
@@ -7368,6 +7632,7 @@ mod build_mcp_servers_tests {
 
     fn test_config() -> Config {
         Config {
+            completion_check: false,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
@@ -7690,6 +7955,7 @@ mod error_outcome_emission_tests {
 
     fn test_config() -> Config {
         Config {
+            completion_check: false,
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
             // `true` exits cleanly, so the async respawn fails fast and
@@ -9586,5 +9852,52 @@ mod observer_payload_trim_tests {
         assert!(leaf.starts_with('…'));
         assert!(leaf.ends_with('…'));
         assert!(leaf.contains("[elided"));
+    }
+
+    /// Build a frame whose SERIALIZED form is exactly `target` bytes, using
+    /// this module's `serialized` helper so envelope/escaping arithmetic can
+    /// never drift from the real serializer.
+    fn event_serialized_to(target: usize) -> observer::ObserverEvent {
+        let mut event = event_with_payload("acp_read", serde_json::json!({ "body": "" }));
+        let floor = serialized(&event).len();
+        let pad = target
+            .checked_sub(floor)
+            .expect("target must exceed the empty-frame floor");
+        event.payload["body"] = serde_json::Value::String("x".repeat(pad));
+        assert_eq!(serialized(&event).len(), target, "padding must be affine");
+        event
+    }
+
+    /// `fit_observer_event_to_budget` output must always be encryptable. The
+    /// old cap (65_535) let fitted frames land in 65_409..=65_535, a window our
+    /// check accepted but NIP-44 rejects whole ("message too long") — the
+    /// passthrough sizes below are exactly where production lands, since the
+    /// early-return path hands naturally-sized frames through untouched.
+    #[test]
+    fn test_fitted_frames_always_encrypt_across_the_boundary() {
+        let sender = nostr::Keys::generate();
+        let owner = nostr::Keys::generate().public_key();
+        let cases = [
+            ("at the cap", OBSERVER_MAX_PLAINTEXT_LEN),
+            // nostr 0.44.7's private MAX_SUPPORTED_PLAINTEXT_SIZE + 1.
+            ("one over the NIP-44 limit", 65_409),
+            ("mid old dead window", 65_472),
+            ("at the old broken cap", 65_535),
+            ("genuinely oversized", 100_000),
+        ];
+        for (label, target) in cases {
+            let mut event = event_serialized_to(target);
+            fit_observer_event_to_budget(&mut event);
+            assert!(
+                serialized(&event).len() <= OBSERVER_MAX_PLAINTEXT_LEN,
+                "{label}: fitted frame must respect the cap"
+            );
+            let result = encrypt_observer_payload(&sender, &owner, &event);
+            assert!(
+                result.is_ok(),
+                "{label}: fitted frame of {} bytes must encrypt, got {result:?}",
+                serialized(&event).len()
+            );
+        }
     }
 }

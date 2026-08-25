@@ -8,10 +8,14 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 
+import { verifyClaims } from "./claimVerifier";
+import { claimVerifierDependencies } from "./claimVerifierRuntime";
 import { contentRepository, HOUSE_STYLE_SCOPE } from "./contentRepository";
+import type { ContentPost } from "./contracts";
 import type { DecisionInput } from "./contentDecisions";
 import { buildDecisionEvent } from "./contentDecisions";
 
@@ -27,6 +31,10 @@ export function postsQueryKey(communityId: string, campaignId: string) {
 
 export function styleQueryKey(communityId: string, scope: string) {
   return [CONTENT_ROOT, communityId, "style", scope] as const;
+}
+
+export function claimStrictnessQueryKey(communityId: string) {
+  return [CONTENT_ROOT, communityId, "claim-strictness"] as const;
 }
 
 export function decisionsQueryKey(communityId: string) {
@@ -70,6 +78,53 @@ export function useContentDecisions(communityId: string, enabled = true) {
     enabled: enabled && communityId.length > 0,
     queryFn: () => contentRepository.listDecisions(),
     queryKey: decisionsQueryKey(communityId),
+  });
+}
+
+/**
+ * The brand kit's claim strictness for the workspace.
+ *
+ * Cached a minute: the gate reads this on every render pass and the kit
+ * changes rarely. Absent or unreadable kit resolves to strict.
+ */
+export function useContentClaimStrictness(communityId: string, enabled = true) {
+  return useQuery({
+    enabled: enabled && communityId.length > 0,
+    queryFn: () => contentRepository.getClaimStrictness(),
+    queryKey: claimStrictnessQueryKey(communityId),
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * Live claim verification for one post, keyed by claim id.
+ *
+ * Runs on every mount of the day detail: a page check is a local HTTP
+ * request, so freshness is free, and a stale tick is the one thing this
+ * screen must not show. Owner pubkeys come from the membership snapshot; a
+ * still-loading set fails closed, so nothing reads owner-signed before
+ * ownership is known.
+ */
+export function useClaimVerification(communityId: string, post: ContentPost) {
+  const ownersQuery = useCommunityOwnersQuery(communityId);
+  const owners = ownersQuery.data;
+  // In the key so verification re-runs once the snapshot lands: an owner
+  // claim checked against a still-loading set failed closed, and it must not
+  // keep that verdict after ownership becomes known.
+  const ownersKey = owners ? [...owners].sort().join(",") : "loading";
+  return useQuery({
+    enabled: post.claims.length > 0,
+    queryFn: () =>
+      verifyClaims(post.claims, claimVerifierDependencies(owners ?? new Set())),
+    queryKey: [
+      CONTENT_ROOT,
+      communityId,
+      "claim-verification",
+      post.eventId,
+      post.updatedAt,
+      ownersKey,
+    ],
+    staleTime: 0,
   });
 }
 

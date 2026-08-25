@@ -41,6 +41,21 @@ export const KIND_JOB_CLAIM = 43011;
 export const KIND_JOB_HEARTBEAT = 43012;
 export const KIND_JOB_OUTCOME = 43013;
 export const KIND_JOB_CHECKPOINT = 43014;
+// Colony employees: the workspace's statement of who it employs and at what
+// rank. Signed by the relay-held employee key, so the author IS the employee
+// pubkey, which the `d` tag also carries (NIP-33 parameterized replaceable).
+export const KIND_EMPLOYEE = 30190;
+export const KIND_HIRE_REQUEST = 9045;
+// Owner-signed request to change an EXISTING employee: new rank and/or
+// manager (p tag carries the employee pubkey), or retire=true. The relay
+// validates authority and ladder geometry at ingest, then republishes the
+// 30190 head from the row. Mirror of buzz-core's KIND_EMPLOYEE_UPDATE.
+export const KIND_EMPLOYEE_UPDATE = 9046;
+// Owner-signed NIP-33 delegation grant head (d tag = grant id). Content JSON
+// carries category, scope, active, and an optional cap_nano_usd. Authority is
+// resolved from rank plus ANY active grant: grants are community-wide, never
+// per-agent. Mirror of buzz-core's KIND_DELEGATION_GRANT.
+export const KIND_DELEGATION_GRANT = 30189;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
@@ -80,6 +95,15 @@ export const KIND_ASK = 44300;
 export const KIND_ASK_RESOLUTION = 44301;
 /** Withdrawal of an open ask by its filer. */
 export const KIND_ASK_WITHDRAWAL = 44302;
+/**
+ * A leader or executive recording a decision it made on its own authority
+ * under a delegation grant. Authored by the DECIDING AGENT, never by an
+ * owner: authority is rank plus the active community-wide grant cited by the
+ * `grant` tag, checked at ingest (`enforce_decision_log_authority`), so every
+ * stored log already passed tier, grant-active, category-match, and cap
+ * checks. Mirror of buzz-core's KIND_DECISION_LOG.
+ */
+export const KIND_DECISION_LOG = 44303;
 export const KIND_COMPANY_ACTION = 40013;
 export const KIND_COMPANY_RECEIPT = 40014;
 // Canonical external parties and the company's Lead/Client views over them.
@@ -119,6 +143,10 @@ export const KIND_DISCOVERY_WORKSPACE_RECEIPT = 40022;
 export const KIND_CONTENT_CAMPAIGN = 30195;
 export const KIND_CONTENT_POST = 30196;
 export const KIND_CONTENT_STYLE = 30197;
+// The brand kit: hues, type, marks, canvases, templates, and the rules the
+// gates read (rules.claim_strictness). Relay validates it structurally and
+// never interprets style meaning. Mirror of buzz-core's KIND_CONTENT_BRAND_KIT.
+export const KIND_CONTENT_BRAND_KIT = 30198;
 export const KIND_CONTENT_DECISION = 40025;
 export const KIND_USER_STATUS = 30315;
 export const KIND_AGENT_OBSERVER_FRAME = 24200;

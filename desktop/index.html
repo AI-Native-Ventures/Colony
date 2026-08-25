@@ -54,6 +54,16 @@
         }
       })();
     </script>
+    <style>
+      /* Cascade layer order, declared before any stylesheet loads.
+         Layers otherwise rank by first appearance in the built CSS, which
+         depends on Vite's chunking rather than intent: feature CSS opening
+         @layer components was landing ahead of Tailwind's @layer base, so
+         preflight outranked it and onboarding rendered as unstyled 16px text
+         against the page edge. Declaring it in source CSS did not survive the
+         bundler, so it lives here. */
+      @layer theme, base, components, utilities;
+    </style>
   </head>
 
   <body>

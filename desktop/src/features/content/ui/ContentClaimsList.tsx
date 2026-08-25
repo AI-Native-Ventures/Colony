@@ -1,16 +1,19 @@
 import { Badge } from "@/shared/ui/badge";
 
-import type { ContentClaim, ClaimSource } from "../contracts";
+import type { ClaimVerdict } from "../claimVerifier";
+import type { ClaimSource, ContentClaim } from "../contracts";
 
 /**
- * Every assertion the card makes, and what stands behind it.
+ * Every assertion the card makes, what stands behind it, and whether that
+ * still holds.
  *
  * This is the part of the screen with the most customer value and the least
  * visual interest. An owner's real risk is not an off-brand colour; it is
  * publishing "fully insured" or a price under their own name when it is not
- * true. So a claim with no source is shown as a problem rather than omitted,
- * and an owner-asserted claim says plainly that the owner is the only thing
- * backing it.
+ * true. So the verification state is the badge: verified says when it was
+ * checked, stale says the ground moved, unverified says nothing has checked
+ * it, manual says a person is the evidence, owner-signed says the owner's own
+ * signature is.
  */
 
 function sourceLabel(source: ClaimSource): string {
@@ -25,21 +28,76 @@ function sourceLabel(source: ClaimSource): string {
         .join(" ")
         .trim();
     case "owner":
-      return "You said so";
+      return `You said so, in event ${source.event.slice(0, 12)}…`;
   }
 }
 
-function sourceBadge(source: ClaimSource | null) {
-  if (!source) {
-    return <Badge variant="destructive">No source</Badge>;
+function checkedAtLabel(checkedAt: number): string {
+  const minutes = Math.max(0, Math.round((Date.now() - checkedAt) / 60_000));
+  if (minutes < 1) {
+    return "just now";
   }
-  if (source.type === "owner") {
-    return <Badge variant="warning">Your word</Badge>;
+  if (minutes < 60) {
+    return `${minutes}m ago`;
   }
-  return <Badge variant="secondary">{source.type}</Badge>;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  return new Date(checkedAt).toLocaleDateString();
 }
 
-export function ContentClaimsList({ claims }: { claims: ContentClaim[] }) {
+function verdictBadge(verdict: ClaimVerdict | undefined) {
+  if (!verdict) {
+    return <Badge variant="outline">Checking…</Badge>;
+  }
+  switch (verdict.state) {
+    case "verified":
+      return (
+        <Badge
+          title={`Checked ${checkedAtLabel(verdict.checkedAt)}`}
+          variant="success"
+        >
+          Verified {checkedAtLabel(verdict.checkedAt)}
+        </Badge>
+      );
+    case "stale":
+      return (
+        <Badge title={verdict.reason} variant="warning">
+          Stale
+        </Badge>
+      );
+    case "unverified":
+      return (
+        <Badge title={verdict.reason} variant="destructive">
+          Unverified
+        </Badge>
+      );
+    case "manual":
+      return (
+        <Badge title={verdict.reason} variant="secondary">
+          Manual
+        </Badge>
+      );
+    case "owner-signed":
+      return (
+        <Badge
+          title="The workspace owner signed this assertion."
+          variant="warning"
+        >
+          Owner signed
+        </Badge>
+      );
+  }
+}
+
+export function ContentClaimsList({
+  claims,
+  verdicts = {},
+}: {
+  claims: ContentClaim[];
+  verdicts?: Record<string, ClaimVerdict>;
+}) {
   if (claims.length === 0) {
     return (
       <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
@@ -56,22 +114,35 @@ export function ContentClaimsList({ claims }: { claims: ContentClaim[] }) {
     <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
       <p className="text-sm font-medium">What this card claims</p>
       <ul className="mt-2 space-y-2">
-        {claims.map((claim) => (
-          <li
-            className="border-b border-border/40 pb-2 last:border-b-0 last:pb-0"
-            key={claim.id}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <p className="min-w-0 text-sm">{claim.asserts}</p>
-              {sourceBadge(claim.source)}
-            </div>
-            <p className="mt-1 break-all text-xs text-muted-foreground">
-              {claim.source
-                ? sourceLabel(claim.source)
-                : "Nothing backs this. Do not publish it until something does."}
-            </p>
-          </li>
-        ))}
+        {claims.map((claim) => {
+          const verdict = verdicts[claim.id];
+          return (
+            <li
+              className="border-b border-border/40 pb-2 last:border-b-0 last:pb-0"
+              key={claim.id}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p className="min-w-0 text-sm">{claim.asserts}</p>
+                {claim.source ? (
+                  verdictBadge(verdict)
+                ) : (
+                  <Badge variant="destructive">No source</Badge>
+                )}
+              </div>
+              <p className="mt-1 break-all text-xs text-muted-foreground">
+                {claim.source
+                  ? sourceLabel(claim.source)
+                  : "Nothing backs this. Do not publish it until something does."}
+              </p>
+              {verdict &&
+              (verdict.state === "stale" || verdict.state === "unverified") ? (
+                <p className="mt-1 text-xs text-destructive">
+                  {verdict.reason}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

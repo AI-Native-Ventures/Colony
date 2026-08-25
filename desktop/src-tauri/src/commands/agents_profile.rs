@@ -33,6 +33,37 @@ pub(crate) struct ProfileReconcileData {
     pub(crate) role_id: Option<String>,
 }
 
+impl ProfileReconcileData {
+    /// Build the carrier for `record`, resolving the harness through the one
+    /// inheritance chain (override pin → record runtime → definition runtime
+    /// → global preferred runtime, via
+    /// `effective_config::resolve_effective_harness_command`) so avatar
+    /// fallbacks reflect what a spawn would actually run.
+    pub(crate) fn build(
+        app: &AppHandle,
+        record: &crate::managed_agents::ManagedAgentRecord,
+        personas: &[crate::managed_agents::AgentDefinition],
+    ) -> Self {
+        let global = crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
+        let agent_command =
+            crate::managed_agents::effective_config::resolve_effective_harness_command(
+                record, personas, &global,
+            )
+            .unwrap_or_else(|_| crate::managed_agents::record_agent_command(record, personas));
+        Self {
+            private_key_nsec: record.private_key_nsec.clone(),
+            name: record.name.clone(),
+            relay_url: record.relay_url.clone(),
+            avatar_url: record.avatar_url.clone(),
+            auth_tag: record.auth_tag.clone(),
+            pubkey: record.pubkey.clone(),
+            agent_command,
+            persona_id: record.persona_id.clone(),
+            role_id: record.role_id.clone(),
+        }
+    }
+}
+
 /// Resolve the avatar to backfill for a legacy agent record (pre-PR-921, no
 /// stored `avatar_url`).
 ///

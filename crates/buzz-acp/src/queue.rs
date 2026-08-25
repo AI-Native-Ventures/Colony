@@ -1597,6 +1597,12 @@ pub struct FormatPromptArgs<'a> {
     /// For modern agents (protocol_version >= 2) the section is delivered via
     /// the system role in session/new; omit here to avoid duplication.
     pub agent_canvas: Option<&'a str>,
+    /// Rendered `[Thread Canvas]` inline section for legacy agents.
+    ///
+    /// Same protocol split as [`FormatPromptArgs::agent_canvas`]: modern
+    /// agents receive it in the session/new system prompt only; legacy agents
+    /// in their first user message.
+    pub agent_thread_canvas: Option<&'a str>,
     /// Set once this session's standing context has already been delivered —
     /// see [`StandingContext`]. Only meaningful for legacy agents; modern
     /// agents are gated by `has_system_prompt_support` regardless.
@@ -1625,12 +1631,15 @@ pub(crate) struct StandingContext<'a> {
     pub team_instructions: Option<&'a str>,
     pub agent_core: Option<&'a str>,
     pub agent_canvas: Option<&'a str>,
+    /// `[Thread Canvas]` section with the thread's canvas content inline,
+    /// scoped to the session's originating thread.
+    pub agent_thread_canvas: Option<&'a str>,
 }
 
 impl StandingContext<'_> {
     /// Render the sections in the order legacy agents have always seen them.
     pub(crate) fn sections(&self) -> Vec<String> {
-        let mut sections = Vec::with_capacity(5);
+        let mut sections = Vec::with_capacity(6);
         if let Some(bp) = self.base_prompt {
             sections.push(base_section(bp));
         }
@@ -1650,6 +1659,9 @@ impl StandingContext<'_> {
         if let Some(canvas) = self.agent_canvas {
             sections.push(canvas.to_string());
         }
+        if let Some(thread_canvas) = self.agent_thread_canvas {
+            sections.push(thread_canvas.to_string());
+        }
         sections
     }
 }
@@ -1667,8 +1679,9 @@ pub(crate) fn base_section(base_prompt: &str) -> String {
 ///
 /// Produces a stable prompt with these sections (in order):
 /// 0. [`StandingContext`] — `[Base]`, `[System]`, `[Team Instructions]`,
-///    `[Agent Memory — core]`, `[Channel Canvas]`. Legacy agents only, and only
-///    on the session's first message (see `standing_context_sent`)
+///    `[Agent Memory — core]`, `[Channel Canvas]`, `[Thread Canvas]`. Legacy
+///    agents only, and only on the session's first message (see
+///    `standing_context_sent`)
 /// 1. `[Context]` — scope, channel name, and contextual hints for the agent
 /// 2. `[Thread Context]` or `[Conversation Context]` — if fetched
 /// 3. `[Event]` / `[Buzz events]` — the triggering event(s)
@@ -1716,6 +1729,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
                 team_instructions: args.team_instructions,
                 agent_core: args.agent_core,
                 agent_canvas: args.agent_canvas,
+                agent_thread_canvas: args.agent_thread_canvas,
             }
             .sections(),
         );
@@ -5144,6 +5158,85 @@ mod tests {
         assert!(
             !prompt.contains("[Channel Canvas]"),
             "no canvas section expected when agent_canvas is None; got: {prompt}"
+        );
+    }
+
+    // ── format_prompt: agent_thread_canvas ──────────────────────────────────
+
+    const TEST_THREAD_CANVAS: &str =
+        "[Thread Canvas]\nHero scroll approved. Refund figure pending.";
+
+    fn single_event_batch() -> FlushBatch {
+        FlushBatch {
+            channel_id: Uuid::new_v4(),
+            events: vec![BatchEvent {
+                event: make_event("hi"),
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        }
+    }
+
+    /// Positive control for the thread-canvas delivery split: a legacy agent's
+    /// first message carries the inline section.
+    #[test]
+    fn test_format_prompt_thread_canvas_injected_for_legacy_agent() {
+        let prompt = format_prompt(
+            &single_event_batch(),
+            &FormatPromptArgs {
+                agent_thread_canvas: Some(TEST_THREAD_CANVAS),
+                has_system_prompt_support: false,
+                standing_context_sent: false,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            prompt.contains("[Thread Canvas]") && prompt.contains("Refund figure pending."),
+            "legacy agent's first message must carry the thread canvas inline; got: {prompt}"
+        );
+    }
+
+    /// Modern agents hold the section in the session/new systemPrompt; the
+    /// user message must not repeat it. Positive control is the legacy case
+    /// above, so a blanket omission bug cannot pass this pair silently.
+    #[test]
+    fn test_format_prompt_thread_canvas_omitted_for_modern_agent() {
+        let prompt = format_prompt(
+            &single_event_batch(),
+            &FormatPromptArgs {
+                agent_thread_canvas: Some(TEST_THREAD_CANVAS),
+                agent_canvas: Some("[Channel Canvas]\npointer"),
+                has_system_prompt_support: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            !prompt.contains("[Thread Canvas]"),
+            "modern agent must get the thread canvas via systemPrompt only; got: {prompt}"
+        );
+    }
+
+    /// A legacy agent that already received standing context earlier in the
+    /// session must not get it again on later turns.
+    #[test]
+    fn test_format_prompt_thread_canvas_not_repeated_after_standing_sent() {
+        let prompt = format_prompt(
+            &single_event_batch(),
+            &FormatPromptArgs {
+                agent_thread_canvas: Some(TEST_THREAD_CANVAS),
+                has_system_prompt_support: false,
+                standing_context_sent: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+        assert!(
+            !prompt.contains("[Thread Canvas]"),
+            "standing context is delivered once per session; got: {prompt}"
         );
     }
 

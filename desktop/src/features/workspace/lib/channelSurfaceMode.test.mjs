@@ -40,15 +40,57 @@ test("an unknown channel starts on the timeline", async () => {
   });
 });
 
-test("mode is remembered per channel, not globally", async () => {
+test("workspace mode is channel-scoped and resettable", async () => {
   await withStorage(memoryStorage(), (mod) => {
-    mod.setChannelSurfaceMode("chan-a", "workspace");
-    assert.equal(mod.getChannelSurfaceMode("chan-a"), "workspace");
-    assert.equal(
-      mod.getChannelSurfaceMode("chan-b"),
-      "timeline",
-      "channel b must not inherit channel a's mode",
+    mod.setChannelSurfaceMode("alpha", "workspace");
+    assert.equal(mod.getChannelSurfaceMode("alpha"), "workspace");
+    assert.equal(mod.getChannelSurfaceMode("beta"), "timeline");
+
+    mod.resetChannelSurfaceModes();
+    assert.equal(mod.getChannelSurfaceMode("alpha"), "timeline");
+  });
+});
+
+test("surface transitions can capture state before the new layout renders", async () => {
+  await withStorage(memoryStorage(), (mod) => {
+    const transitions = [];
+    const unsubscribe = mod.subscribeBeforeChannelSurfaceModeChange(
+      (change) => {
+        transitions.push({
+          ...change,
+          observedMode: mod.getChannelSurfaceMode(change.channelId),
+        });
+      },
     );
+
+    mod.setChannelSurfaceMode("alpha", "workspace");
+    mod.setChannelSurfaceMode("alpha", "workspace");
+    mod.setChannelSurfaceMode("alpha", "timeline");
+    unsubscribe();
+    mod.setChannelSurfaceMode("alpha", "workspace");
+
+    assert.deepEqual(transitions, [
+      {
+        channelId: "alpha",
+        from: "timeline",
+        observedMode: "timeline",
+        to: "workspace",
+      },
+      {
+        channelId: "alpha",
+        from: "workspace",
+        observedMode: "workspace",
+        to: "timeline",
+      },
+    ]);
+  });
+});
+
+test("surface mode is the only exported workspace focus state", async () => {
+  await withStorage(memoryStorage(), (mod) => {
+    assert.equal(["get", "Workspace", "Expanded"].join("") in mod, false);
+    assert.equal(["set", "Workspace", "Expanded"].join("") in mod, false);
+    assert.equal(["use", "Workspace", "Expanded"].join("") in mod, false);
   });
 });
 
@@ -87,23 +129,4 @@ test("malformed and unreadable storage falls back to timeline", async () => {
       );
     },
   );
-});
-
-test("expanded state is tracked per channel and defaults false", async () => {
-  await withStorage(memoryStorage(), (mod) => {
-    assert.equal(mod.getWorkspaceExpanded("chan-a"), false);
-    mod.setWorkspaceExpanded("chan-a", true);
-    assert.equal(mod.getWorkspaceExpanded("chan-a"), true);
-    assert.equal(mod.getWorkspaceExpanded("chan-b"), false);
-  });
-});
-
-test("reset clears every channel back to the timeline", async () => {
-  await withStorage(memoryStorage(), (mod) => {
-    mod.setChannelSurfaceMode("chan-a", "workspace");
-    mod.setWorkspaceExpanded("chan-a", true);
-    mod.resetChannelSurfaceModes();
-    assert.equal(mod.getChannelSurfaceMode("chan-a"), "timeline");
-    assert.equal(mod.getWorkspaceExpanded("chan-a"), false);
-  });
 });

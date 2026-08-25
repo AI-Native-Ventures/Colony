@@ -54,8 +54,12 @@ import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useStableSendToChannel } from "./useStableSendToChannel";
 import { useAnchoredScroll } from "./useAnchoredScroll";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
-import { getActiveContinuationDepths } from "./MessageThreadPanel.helpers";
+import {
+  getActiveContinuationDepths,
+  summarizeThreadRoot,
+} from "./MessageThreadPanel.helpers";
 import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
+import { ThreadCanvasSlot } from "./ThreadCanvasSlot";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   channel: Channel | null;
@@ -86,6 +90,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   onExpandReplies: (message: TimelineMessage) => void;
   onScrollTargetResolved: () => void;
   onScrollTargetSettled?: (messageId: string) => void;
+  disableScrollTargetCenterPin?: boolean;
   scrollTargetHighlights?: boolean;
   onSelectReplyTarget: (message: TimelineMessage) => void;
   onSend: (
@@ -122,6 +127,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   activityAccessoryVisible: boolean;
   widthPx: number;
   isFollowingThread?: boolean;
+  showWorkspaceContext?: boolean;
   isMessageUnreadById?: (messageId: string) => boolean;
   onFollowThread?: () => void;
   onUnfollowThread?: () => void;
@@ -158,6 +164,7 @@ export function MessageThreadPanel({
   isFocusMode,
   isSinglePanelView = false,
   isFollowingThread,
+  showWorkspaceContext = false,
   isMessageUnreadById,
   onCancelEdit,
   onCancelReply,
@@ -172,6 +179,7 @@ export function MessageThreadPanel({
   onExpandReplies,
   onScrollTargetResolved,
   onScrollTargetSettled,
+  disableScrollTargetCenterPin = false,
   onSelectReplyTarget,
   onSend,
   onSendToChannel,
@@ -467,7 +475,7 @@ export function MessageThreadPanel({
     highlightTargetMessage: scrollTargetHighlights,
     onTargetReached: onScrollTargetResolved,
     onTargetSettled: onScrollTargetSettled,
-    pinTargetCentered: !scrollTargetHighlights,
+    pinTargetCentered: !scrollTargetHighlights && !disableScrollTargetCenterPin,
     scrollContainerRef: threadBodyRef,
     targetMessageId: scrollTargetId,
   });
@@ -529,6 +537,11 @@ export function MessageThreadPanel({
           hasConstrainedColumn ? { maxWidth: columnMaxWidthPx } : undefined
         }
       >
+        <ThreadCanvasSlot
+          canEdit={!disabled && !!channelId && channel?.archivedAt == null}
+          hidden={isHuddleTranscript || channel?.channelType === "dm"}
+          thread={{ channelId, rootId: threadHead.rootId ?? threadHead.id }}
+        />
         {isHuddleTranscript ? (
           <div className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS, "pb-2 pt-4")}>
             <HuddleTranscriptIntro />
@@ -920,6 +933,9 @@ export function MessageThreadPanel({
     </>
   );
 
+  const threadRootSummary = showWorkspaceContext
+    ? summarizeThreadRoot(threadHead.body)
+    : null;
   const threadHeaderContent = (
     <>
       <AuxiliaryPanelHeaderGroup
@@ -932,7 +948,21 @@ export function MessageThreadPanel({
         leading={headerLeading}
         onBack={isSinglePanelView && !isFocusMode ? onClose : undefined}
       >
-        <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        {showWorkspaceContext ? (
+          <div className="min-w-0 flex-1">
+            <AuxiliaryPanelTitle>{`#${channelName}`}</AuxiliaryPanelTitle>
+            {threadRootSummary ? (
+              <p
+                className="truncate text-xs text-muted-foreground"
+                title={threadRootSummary}
+              >
+                {threadRootSummary}
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        )}
       </AuxiliaryPanelHeaderGroup>
       <ThreadReadStateToggle
         isUnread={(threadUnreadCount ?? 0) > 0}

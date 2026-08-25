@@ -26,6 +26,9 @@ pub(crate) const NIP_RELAY_MEMBERSHIP: u32 = 43;
 /// whether this relay can serve Discovery ask the NIP-11 document, never a
 /// rejection message.
 pub(crate) const DISCOVERY_EXTENSION: &str = "colony-discovery";
+/// Hosted paid-Discovery capability. New clients require this token before
+/// offering Colony-funded Campaign runs.
+pub(crate) const HOSTED_DISCOVERY_EXTENSION: &str = "colony-discovery-hosted-v1";
 
 /// Relay information document served at `GET /` with `Accept: application/nostr+json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +257,11 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
         state.config.max_frame_bytes,
         state.config.pairing_relay_url.as_deref(),
     );
+    if state.discovery_gateway.get().is_some() {
+        info.supported_extensions
+            .get_or_insert_default()
+            .push(HOSTED_DISCOVERY_EXTENSION.to_string());
+    }
     let tenant_host = if state.config.push_gateway_delivery_url.is_some() {
         crate::tenant::bind_community(&state.db, raw_host)
             .await
@@ -396,11 +404,10 @@ mod tests {
         );
     }
 
-    /// Wire-contract pin: the NIP-11 document must advertise the Discovery
-    /// capability token. The literal is asserted, not the constant, so the
-    /// test fails if the token itself ever changes.
+    /// Released general Discovery support remains advertised independently of
+    /// the hosted paid-Discovery gateway.
     #[test]
-    fn supported_extensions_advertise_discovery_token() {
+    fn static_supported_extensions_advertise_general_but_not_hosted_discovery() {
         let info = RelayInfo::build(None, None, false, DEFAULT_MAX_FRAME_BYTES, None);
         let extensions = info
             .supported_extensions
@@ -410,7 +417,13 @@ mod tests {
             extensions
                 .iter()
                 .any(|extension| extension == "colony-discovery"),
-            "NIP-11 supported_extensions must advertise colony-discovery, got {extensions:?}"
+            "NIP-11 must preserve the released colony-discovery token, got {extensions:?}"
+        );
+        assert!(
+            !extensions
+                .iter()
+                .any(|extension| extension == "colony-discovery-hosted-v1"),
+            "static NIP-11 must not claim the hosted gateway, got {extensions:?}"
         );
     }
 

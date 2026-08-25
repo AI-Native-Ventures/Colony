@@ -120,13 +120,19 @@ impl<P: WorkerProtocol> ProductionSourceExecutor<'_, P> {
         if !self.heartbeat_once().await? {
             return Ok(SourceExecution::LostLease);
         }
+        let protocol_version = self.lease.lock().await.run.protocol_version;
         let fresh = state.status == DiscoveryRunSourceStatus::Pending;
         if fresh
+            && protocol_version
+                != buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION
             && !self
                 .source_progress(provider, DiscoveryRunSourceStatus::Active, None, 0, 0, None)
                 .await?
         {
             return Ok(SourceExecution::LostLease);
+        }
+        if protocol_version == buzz_core_pkg::discovery::DISCOVERY_HOSTED_GATEWAY_PROTOCOL_VERSION {
+            return self.execute_hosted_source(provider, remaining_target).await;
         }
         match provider {
             DiscoveryProvider::Outscraper => self.execute_outscraper(remaining_target).await,

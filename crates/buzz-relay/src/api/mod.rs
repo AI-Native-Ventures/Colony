@@ -1,5 +1,6 @@
 //! HTTP API — media, git, NIP-05, and the Nostr HTTP bridge.
 
+pub mod accounts;
 pub mod admin;
 pub mod bridge;
 pub mod events;
@@ -11,6 +12,7 @@ pub mod nip05;
 pub mod operator;
 pub mod operator_analytics;
 pub mod operator_auth;
+pub mod payments;
 pub mod self_provisioning;
 
 // Re-export imeta helpers used by ingest pipeline.

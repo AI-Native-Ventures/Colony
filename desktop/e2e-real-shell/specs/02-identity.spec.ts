@@ -147,7 +147,7 @@ async function checkOsKeychainItem(expectedPubkey: string): Promise<string> {
         "production item payload is not the expected JSON blob (payload withheld)",
       );
     }
-    const identityNsec = blob["identity"];
+    const identityNsec = blob.identity;
     if (typeof identityNsec !== "string") {
       return deferred(
         "production item has no identity entry (payload withheld)",

@@ -135,16 +135,9 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         provider_env_var: None,
         underlying_cli: None,
     },
-    PresetHarness {
-        id: "opencode",
-        label: "OpenCode",
-        command: "opencode",
-        args: &["acp"],
-        install_instructions_url: "https://opencode.ai/docs",
-        install_hint: "Buzz talks to OpenCode through its CLI's ACP mode (opencode acp).",
-        provider_env_var: None,
-        underlying_cli: None,
-    },
+    // `opencode` was promoted from this list into KNOWN_ACP_RUNTIMES
+    // (first-class runtime with provider/model metadata) — it must not
+    // reappear here, the id would be shadowed by the builtin.
     PresetHarness {
         id: "kimi",
         label: "Kimi Code",

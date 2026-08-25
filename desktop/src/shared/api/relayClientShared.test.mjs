@@ -24,9 +24,11 @@ test("sortEvents — same-second events sort by id, order-independent", () => {
   const shuffled = sortEvents([c, b, a]).map((e) => e.id);
 
   // Stable (created_at, id) order regardless of input order, matching the
-  // cache sort (sortMessages) and the relay's id-ASC same-second tiebreak.
-  assert.deepEqual(forward, ["aaa", "bbb", "ccc"]);
-  assert.deepEqual(shuffled, ["aaa", "bbb", "ccc"]);
+  // cache sort (sortMessages). The same-second tiebreak is id DESC because the
+  // relay's canonical order is (created_at DESC, id ASC): read chronologically,
+  // the smaller id is the newer event and comes last.
+  assert.deepEqual(forward, ["bbb", "aaa", "ccc"]);
+  assert.deepEqual(shuffled, ["bbb", "aaa", "ccc"]);
 });
 
 test("isRelayConnectionDegraded — healthy states are not degraded", () => {

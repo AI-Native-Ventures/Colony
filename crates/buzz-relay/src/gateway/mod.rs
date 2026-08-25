@@ -558,7 +558,9 @@ impl AdmissionController {
         &self,
         pool: &sqlx::PgPool,
         pubkey: &[u8],
-    ) -> Result<AdmissionPermit, AdmissionError> {
+        reference: &str,
+        model: &str,
+    ) -> Result<(AdmissionPermit, buzz_db::credits::GatewaySettlementIntent), AdmissionError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(AdmissionError::Rate {
                 message: "gateway is shutting down",
@@ -567,17 +569,31 @@ impl AdmissionController {
         }
         let entry = self.entry_for_admission(pubkey)?;
         let result = with_registered_gate(Arc::clone(&entry), async {
-            let account = buzz_db::credits::admission_account(pool, pubkey)
-                .await
-                .map_err(|error| AdmissionError::Database(error.to_string()))?;
+            let reservation = buzz_db::credits::create_gateway_settlement_intent(
+                pool,
+                pubkey,
+                reference,
+                model,
+                self.defaults.typical_call_cost_nanousd,
+                ADMISSION_FLOOR_NANOUSD,
+            )
+            .await
+            .map_err(|error| AdmissionError::Database(error.to_string()))?;
+            let (intent, account) = match reservation {
+                buzz_db::credits::GatewayIntentReservation::Reserved { intent, account } => {
+                    (*intent, account)
+                }
+                buzz_db::credits::GatewayIntentReservation::Insufficient {
+                    available_nanousd,
+                    required_nanousd,
+                } => {
+                    return Err(AdmissionError::Payment {
+                        balance_nanousd: available_nanousd,
+                        required_nanousd,
+                    })
+                }
+            };
             let now = self.clock.now();
-            let mut runtime = lock_runtime(&entry);
-            runtime.prune(now);
-            runtime.touch(now);
-
-            let typical = account
-                .typical_call_cost_nanousd
-                .unwrap_or(self.defaults.typical_call_cost_nanousd);
             let max_in_flight = account
                 .max_in_flight
                 .and_then(|value| u32::try_from(value).ok())
@@ -586,39 +602,44 @@ impl AdmissionController {
             let burn_cap = account
                 .hourly_burn_cap_nanousd
                 .unwrap_or(self.defaults.hourly_burn_cap_nanousd);
-            let balance_guard = i64::from(runtime.in_flight)
-                .saturating_mul(typical)
-                .max(ADMISSION_FLOOR_NANOUSD);
-            if account.balance < balance_guard {
-                return Err(AdmissionError::Payment {
-                    balance_nanousd: account.balance,
-                    required_nanousd: balance_guard,
-                });
+            let check = {
+                let mut runtime = lock_runtime(&entry);
+                runtime.prune(now);
+                runtime.touch(now);
+                if runtime.in_flight >= max_in_flight {
+                    Err(AdmissionError::Rate {
+                        message: "gateway concurrency limit reached",
+                        retry_after_secs: 1,
+                    })
+                } else if runtime.spend_nanousd >= burn_cap {
+                    Err(AdmissionError::Rate {
+                        message: "gateway hourly spend limit reached",
+                        retry_after_secs: runtime.retry_after_secs(burn_cap, now),
+                    })
+                } else {
+                    runtime.in_flight = runtime.in_flight.saturating_add(1);
+                    Ok(())
+                }
+            };
+            if let Err(error) = check {
+                buzz_db::credits::resolve_gateway_intent_no_charge(pool, intent.id, 0)
+                    .await
+                    .map_err(|close_error| AdmissionError::Database(close_error.to_string()))?;
+                return Err(error);
             }
-            if runtime.in_flight >= max_in_flight {
-                return Err(AdmissionError::Rate {
-                    message: "gateway concurrency limit reached",
-                    retry_after_secs: 1,
-                });
-            }
-            if runtime.spend_nanousd >= burn_cap {
-                return Err(AdmissionError::Rate {
-                    message: "gateway hourly spend limit reached",
-                    retry_after_secs: runtime.retry_after_secs(burn_cap, now),
-                });
-            }
-
-            runtime.in_flight = runtime.in_flight.saturating_add(1);
-            Ok(())
+            Ok(intent)
         })
         .await;
-        result?;
-        Ok(AdmissionPermit {
-            entry,
-            pubkey: pubkey.to_vec(),
-            released: false,
-            settlement_tasks: self.settlement_tasks.clone(),
-        })
+        let intent = result?;
+        Ok((
+            AdmissionPermit {
+                entry,
+                pubkey: pubkey.to_vec(),
+                released: false,
+                settlement_tasks: self.settlement_tasks.clone(),
+            },
+            intent,
+        ))
     }
 
     #[cfg(test)]
@@ -937,15 +958,27 @@ pub(crate) async fn account(
         false,
     )
     .await?;
-    let balance = buzz_db::credits::balance(state.app.db.pool(), &pubkey.to_bytes())
+    let account = buzz_db::credits::admission_account(state.app.db.pool(), &pubkey.to_bytes())
         .await
         .map_err(|error| {
             tracing::error!(%error, "gateway: account balance read failed");
             crate::api::internal_error("gateway account balance read failed")
         })?;
-    let status = if balance > 0 { "active" } else { "depleted" };
+    let available_balance = account
+        .balance
+        .saturating_sub(account.discovery_reserved_nanousd)
+        .saturating_sub(account.gateway_reserved_nanousd);
+    let status = if available_balance > 0 {
+        "active"
+    } else {
+        "depleted"
+    };
     let mut response = axum::Json(serde_json::json!({
-        "balance_nanousd": balance.to_string(),
+        "balance_nanousd": available_balance.to_string(),
+        "total_balance_nanousd": account.balance.to_string(),
+        "discovery_reserved_nanousd": account.discovery_reserved_nanousd.to_string(),
+        "gateway_reserved_nanousd": account.gateway_reserved_nanousd.to_string(),
+        "available_balance_nanousd": available_balance.to_string(),
         "currency": "USD",
         "status": status,
     }))
@@ -1050,10 +1083,11 @@ pub(crate) async fn chat_completions(
     // The per-account gate is acquired immediately before upstream spend and
     // moved into a relay-owned response worker. A downstream disconnect drops
     // only the output receiver; the worker drains and settles before release.
-    let permit = match state
+    let intent_reference = format!("gateway:{}", uuid::Uuid::new_v4());
+    let (permit, intent) = match state
         .upstream
         .admission
-        .admit(state.app.db.pool(), &pubkey)
+        .admit(state.app.db.pool(), &pubkey, &intent_reference, &model_id)
         .await
     {
         Ok(permit) => permit,
@@ -1071,25 +1105,6 @@ pub(crate) async fn chat_completions(
         }
     };
 
-    // Persist the exact account/reference attribution before the provider is
-    // contacted. This is not a funds reservation; it is the durable lookup
-    // key a later provider export can use if settlement loses the process.
-    let intent_reference = format!("gateway:{}", uuid::Uuid::new_v4());
-    let intent = match buzz_db::credits::create_gateway_settlement_intent(
-        state.app.db.pool(),
-        &pubkey,
-        &intent_reference,
-        &model_id,
-    )
-    .await
-    {
-        Ok(intent) => intent,
-        Err(error) => {
-            tracing::error!(%error, pubkey = %hex::encode(&pubkey), model = %model_id, "gateway: durable settlement intent failed");
-            permit.finish(None).await;
-            return crate::api::internal_error("gateway settlement intent failed").into_response();
-        }
-    };
     let reference_header = match HeaderValue::from_str(&intent.reference) {
         Ok(value) => value,
         Err(error) => {
@@ -1937,20 +1952,16 @@ async fn settle_one(
 
     match job.parsed.observed_cost_nanousd {
         Some(cost) => {
-            let result = buzz_db::credits::debit_observed_applied(
+            let result = buzz_db::credits::debit_observed_for_gateway_intent(
                 pool,
+                job.intent_id,
                 &job.pubkey,
                 cost,
                 reference,
-                Some(&job.model_id),
+                &job.model_id,
                 job.parsed.request_id.as_deref(),
             )
             .await?;
-            if let Err(error) =
-                buzz_db::credits::mark_gateway_intent_debited(pool, job.intent_id).await
-            {
-                tracing::error!(%error, intent_id = job.intent_id, "gateway: debit committed but intent state update failed; resolver can correlate the ledger row");
-            }
             tracing::info!(
                 cost_nanousd = cost,
                 pubkey = %hex::encode(&job.pubkey),
@@ -1975,20 +1986,16 @@ async fn settle_one(
                     Some(cost) => {
                         let cost = u64::try_from(cost)
                             .map_err(|_| anyhow::anyhow!("estimated cost {cost} exceeds u64"))?;
-                        let result = buzz_db::credits::debit_estimated_applied(
+                        let result = buzz_db::credits::debit_estimated_for_gateway_intent(
                             pool,
+                            job.intent_id,
                             &job.pubkey,
                             cost,
                             reference,
-                            Some(&job.model_id),
+                            &job.model_id,
                             job.parsed.request_id.as_deref(),
                         )
                         .await?;
-                        if let Err(error) =
-                            buzz_db::credits::mark_gateway_intent_debited(pool, job.intent_id).await
-                        {
-                            tracing::error!(%error, intent_id = job.intent_id, "gateway: estimated debit committed but intent state update failed; resolver can correlate the ledger row");
-                        }
                         tracing::warn!(
                             cost_nanousd = cost,
                             pubkey = %hex::encode(&job.pubkey),

@@ -46,6 +46,45 @@ type AgentProposalExecutionQueue = {
   tail: Promise<void>;
 };
 
+export type AgentProposalProcessOutcome = "complete" | "retry" | "ignored";
+
+const AGENT_PROPOSAL_RETRY_INITIAL_MS = 250;
+const AGENT_PROPOSAL_RETRY_MAX_MS = 5_000;
+
+function agentProposalRetryDelay(attempt: number) {
+  return Math.min(
+    AGENT_PROPOSAL_RETRY_INITIAL_MS * 2 ** attempt,
+    AGENT_PROPOSAL_RETRY_MAX_MS,
+  );
+}
+
+function waitForAgentProposalRetry(delayMs: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+export async function processAgentProposalActionUntilTerminal(input: {
+  isActive: () => boolean;
+  operation: () => Promise<AgentProposalProcessOutcome>;
+  wait?: (delayMs: number) => Promise<void>;
+}): Promise<AgentProposalProcessOutcome | "stopped"> {
+  const wait = input.wait ?? waitForAgentProposalRetry;
+  let attempt = 0;
+  while (input.isActive()) {
+    let outcome: AgentProposalProcessOutcome;
+    try {
+      outcome = await input.operation();
+    } catch {
+      outcome = "retry";
+    }
+    if (outcome !== "retry") return outcome;
+    await wait(agentProposalRetryDelay(attempt));
+    attempt += 1;
+  }
+  return "stopped";
+}
+
 type AgentProposalCommunityLease = {
   executionScope: string;
   relayUrl: string;
@@ -489,40 +528,40 @@ async function processAction(
   accepted: AcknowledgedAgentProposalAction,
   context: AgentProposalAuthorityContext,
   lease: AgentProposalCommunityLease,
-) {
-  if (!isCurrentAgentProposalCommunity(lease)) return false;
+): Promise<AgentProposalProcessOutcome> {
+  if (!isCurrentAgentProposalCommunity(lease)) return "retry";
   const existing = await existingReceiptForAction(accepted.event);
-  if (!isCurrentAgentProposalCommunity(lease)) return false;
-  if (existing) return true;
+  if (!isCurrentAgentProposalCommunity(lease)) return "retry";
+  if (existing) return "complete";
   const instanceEvent = await fetchProposalInstance(accepted.event);
-  if (!isCurrentAgentProposalCommunity(lease)) return false;
-  if (!instanceEvent) return false;
+  if (!isCurrentAgentProposalCommunity(lease)) return "retry";
+  if (!instanceEvent) return "retry";
   // A different valid action may have resolved the same proposal while this
   // acknowledgement was buffered. That is terminal for this local action too,
   // so allow the caller to discard it rather than retrying it forever.
   if (await proposalAlreadyResolved(instanceEvent, context.ownerPubkey)) {
-    return true;
+    return "complete";
   }
-  if (!isCurrentAgentProposalCommunity(lease)) return false;
+  if (!isCurrentAgentProposalCommunity(lease)) return "retry";
   const validated = validateAgentProposalActionContext({
     actionEvent: accepted.event,
     instanceEvent,
     context,
   });
-  if (!validated) return false;
+  if (!validated) return "ignored";
 
   let result: AgentProposalReceiptResult;
   if (validated.kind === "decline") {
     result = { outcome: "declined" };
   } else {
-    if (!isCurrentAgentProposalCommunity(lease)) return false;
+    if (!isCurrentAgentProposalCommunity(lease)) return "retry";
     try {
       const execution = await executeAgentProposal(
         validated.action,
         lease.relayUrl,
         accepted.backendConfig,
       );
-      if (!isCurrentAgentProposalCommunity(lease)) return false;
+      if (!isCurrentAgentProposalCommunity(lease)) return "retry";
       result =
         execution.status === "applied"
           ? {
@@ -542,7 +581,9 @@ async function processAction(
       };
     }
   }
-  return publishReceipt(accepted.event, validated, result, lease);
+  return (await publishReceipt(accepted.event, validated, result, lease))
+    ? "complete"
+    : "retry";
 }
 
 /** Owner-side broker for acknowledged and crash-replayed Agent Proposals. */
@@ -594,29 +635,38 @@ export function useAgentProposalBroker({
       return;
     let active = true;
     let unsubscribeLive: (() => void | Promise<void>) | undefined;
+    const processingActionIds = new Set<string>();
     const context = { ownerPubkey, managedAgents, channels, personas };
     const process = (accepted: AcknowledgedAgentProposalAction) => {
       if (!active || !isCurrentAgentProposalCommunity(lease)) return;
       const actionRef = parseBlockAction(accepted.event.tags);
       if (!actionRef.ok) return;
+      if (processingActionIds.has(accepted.event.id)) return;
+      processingActionIds.add(accepted.event.id);
       const proposalKey = agentProposalExecutionKey({
         ownerPubkey,
         communityExecutionScope: `${lease.executionScope}:${lease.generation}`,
         instanceEventId: actionRef.value.instanceEventId,
       });
-      void runAgentProposalActionOnce(
-        proposalKey,
-        accepted.event.id,
-        () => processAction(accepted, context, lease),
-        (receiptPublished) => receiptPublished,
-      )
-        .then((receiptPublished) => {
-          if (receiptPublished) {
+      void processAgentProposalActionUntilTerminal({
+        isActive: () => active && isCurrentAgentProposalCommunity(lease),
+        operation: async () => {
+          const outcome = await runAgentProposalActionOnce(
+            proposalKey,
+            accepted.event.id,
+            () => processAction(accepted, context, lease),
+            (result) => result === "complete",
+          );
+          return outcome ?? "complete";
+        },
+      })
+        .then((outcome) => {
+          if (outcome === "complete" || outcome === "ignored") {
             resolveAcknowledgedAgentProposalAction(accepted.event.id);
           }
         })
-        .catch(() => {
-          // Leave the acknowledgement buffered for the next broker replay.
+        .finally(() => {
+          processingActionIds.delete(accepted.event.id);
         });
     };
     const replay = () => {
