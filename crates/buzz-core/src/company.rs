@@ -12,6 +12,8 @@ pub const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
 /// Schema string every Cohort carries.
 pub const COHORT_SCHEMA: &str = "colony.cohort/v1";
+/// Schema string every pipeline Template carries.
+pub const TEMPLATE_SCHEMA: &str = "colony.template/v1";
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
 const MAX_SUMMARY_LEN: usize = 4_000;
@@ -25,6 +27,20 @@ const MAX_REASON_LEN: usize = 500;
 /// `MAX_DEPENDENCIES`): a real cap, not a guess at how large a real cohort
 /// gets. Widen once fan-out proves it too small rather than guessing now.
 const MAX_COHORT_MEMBERS: usize = 100;
+/// A pipeline is a human-authored plan, not a generated list — a template
+/// with more stages than this is almost certainly a modelling mistake, not a
+/// legitimate pipeline. Smaller than the 100-entry bound on flat id lists
+/// (`MAX_ASSIGNEES`, `MAX_DEPENDENCIES`) because each stage is a whole
+/// workflow step, not a single identifier.
+const MAX_TEMPLATE_STAGES: usize = 50;
+/// Bounds a stage's `prompt`. Same value as `MAX_SUMMARY_LEN`, named
+/// separately because a prompt and a summary are different fields that only
+/// coincidentally share a length budget today.
+const MAX_PROMPT_LEN: usize = 4_000;
+/// A stage's outcome vocabulary is a closed set of short words a doer picks
+/// from, not an open list — bounded well under `MAX_ASSIGNEES` so a template
+/// author notices before it turns into a pseudo-free-text field.
+const MAX_OUTCOME_REASONS: usize = 20;
 
 /// A service the company sells or delivers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,6 +390,92 @@ pub struct Cohort {
     pub updated_at: i64,
 }
 
+/// What a stage does when its doer's outcome is not one that advances the
+/// pipeline — a rejected review, a stale claim, or a doer explicitly saying
+/// it cannot proceed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StageFailureAction {
+    /// Send the work back to this stage's owning team for rework.
+    Bounce,
+    /// Stop running this pipeline for the current subject; other subjects
+    /// already in flight are unaffected.
+    AbandonSubject,
+    /// Interrupt the owner rather than resolve automatically.
+    AskOwner,
+}
+
+/// One step of a pipeline Template.
+///
+/// A stage names a pool that may claim its work (`owning_team_id`), not a
+/// persona — the same "who may do this" shape `CompanyTask.owning_team_id`
+/// already uses, kept consistent here rather than inventing a
+/// persona-scoped alternative.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TemplateStage {
+    /// Stable identifier for this stage within its template.
+    pub slug: String,
+    /// Human-readable stage name.
+    pub title: String,
+    /// Team whose members may claim this stage's work.
+    pub owning_team_id: String,
+    /// Channel where this stage's work thread is created.
+    pub channel_id: String,
+    /// Whether an agent or a human performs this stage.
+    pub doer_kind: DoerKind,
+    /// Team that must approve this stage's output before it advances, when
+    /// the stage requires review at all.
+    pub reviewer_team_id: Option<String>,
+    /// What the doer is told, with subject fields interpolated in.
+    pub prompt: String,
+    /// The closed set of outcome words a doer may report for this stage.
+    /// Fan-out will not exist to enforce this yet, but the vocabulary is
+    /// declared here so a later gate has something closed to check against
+    /// instead of accepting arbitrary text.
+    pub outcome_reasons: Vec<String>,
+    /// Maximum spend this stage may accrue before it must stop and ask,
+    /// `None` when this stage has no ceiling.
+    pub cost_ceiling: Option<f64>,
+    /// Seconds a claimed unit of this stage's work may sit untouched before
+    /// it is considered stale, `None` when this stage has no staleness
+    /// policy.
+    pub staleness_after_secs: Option<i64>,
+    /// What happens when this stage's outcome does not advance the pipeline.
+    pub on_fail: StageFailureAction,
+}
+
+/// A named, versioned, ordered pipeline that fan-out will run a Cohort's
+/// members through.
+///
+/// Inert on its own, exactly as Cohort was: nothing in this step reads a
+/// Template. `version` is bumped on every edit and is pinned by a run when
+/// one starts — a run must never follow a template's live head as it keeps
+/// changing underneath it. Nothing runs against a Template yet, so today
+/// that only means `validate_template_update` enforces `version` strictly
+/// increasing; there is no run yet to pin it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Template {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable template coordinate identifier.
+    pub id: String,
+    /// Company that owns the template.
+    pub company_id: String,
+    /// Human-readable template name.
+    pub name: String,
+    /// Monotonically increasing edit counter. A run pins the value current
+    /// when it starts rather than following later bumps.
+    pub version: i64,
+    /// The pipeline's stages, in run order.
+    pub stages: Vec<TemplateStage>,
+    /// Unix timestamp at which the template was created.
+    pub created_at: i64,
+    /// Unix timestamp at which the template was last updated.
+    pub updated_at: i64,
+}
+
 /// Deterministic accounting classification for an agent turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -495,6 +597,14 @@ pub enum CompanyContractError {
     /// A `completed -> ready` transition did not carry a real bounce.
     #[error("invalid bounce: {0}")]
     InvalidBounce(&'static str),
+    /// A template's edit-counter version is not a positive integer, or a
+    /// replacement did not advance it.
+    #[error("version must be a positive integer that strictly increases")]
+    InvalidVersion,
+    /// A numeric field outside its allowed range: negative, or (for a float
+    /// field) non-finite.
+    #[error("{0} must be finite and non-negative")]
+    InvalidNumber(&'static str),
 }
 
 /// Return whether a company lifecycle transition is allowed.
@@ -1039,6 +1149,141 @@ pub fn validate_cohort_update(
     Ok(())
 }
 
+/// Validate one stage in isolation against the company's known teams.
+///
+/// Cross-stage rules (duplicate slugs) stay in `validate_template`, same
+/// split `validate_team_ref` / `validate_teams` already uses.
+fn validate_template_stage(
+    stage: &TemplateStage,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_id(&stage.slug, "template.stages.slug")?;
+    validate_required_text(&stage.title, "template.stages.title", MAX_NAME_LEN)?;
+    validate_id(&stage.owning_team_id, "template.stages.owningTeamId")?;
+    validate_id(&stage.channel_id, "template.stages.channelId")?;
+    validate_optional_id(
+        stage.reviewer_team_id.as_deref(),
+        "template.stages.reviewerTeamId",
+    )?;
+    validate_required_text(&stage.prompt, "template.stages.prompt", MAX_PROMPT_LEN)?;
+    ensure_cardinality(
+        &stage.outcome_reasons,
+        "template.stages.outcomeReasons",
+        MAX_OUTCOME_REASONS,
+    )?;
+    let mut seen_reasons = HashSet::new();
+    for reason in &stage.outcome_reasons {
+        validate_required_text(reason, "template.stages.outcomeReasons", MAX_REASON_LEN)?;
+        if !seen_reasons.insert(reason.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "template.stages.outcomeReasons",
+            ));
+        }
+    }
+    if stage
+        .cost_ceiling
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
+        return Err(CompanyContractError::InvalidNumber(
+            "template.stages.costCeiling",
+        ));
+    }
+    if stage.staleness_after_secs.is_some_and(|secs| secs < 0) {
+        return Err(CompanyContractError::InvalidNumber(
+            "template.stages.stalenessAfterSecs",
+        ));
+    }
+
+    if !teams.iter().any(|team| team.id == stage.owning_team_id) {
+        return Err(CompanyContractError::MissingReference(
+            "template.stages.owningTeamId",
+        ));
+    }
+    if let Some(reviewer_team_id) = &stage.reviewer_team_id {
+        if !teams.iter().any(|team| team.id == *reviewer_team_id) {
+            return Err(CompanyContractError::MissingReference(
+                "template.stages.reviewerTeamId",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate one relay-authored canonical Template against its company and
+/// the teams its stages reference.
+pub fn validate_template(
+    template: &Template,
+    company: &CompanyProfile,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_company(company)?;
+    validate_teams(teams)?;
+    validate_schema(&template.schema, TEMPLATE_SCHEMA, "template")?;
+    validate_id(&template.id, "template.id")?;
+    validate_id(&template.company_id, "template.companyId")?;
+    validate_required_text(&template.name, "template.name", MAX_NAME_LEN)?;
+    if template.version < 1 {
+        return Err(CompanyContractError::InvalidVersion);
+    }
+    ensure_cardinality(&template.stages, "template.stages", MAX_TEMPLATE_STAGES)?;
+    if template.stages.is_empty() {
+        return Err(CompanyContractError::MissingReference("template.stages"));
+    }
+
+    let mut seen_slugs = HashSet::new();
+    for stage in &template.stages {
+        validate_template_stage(stage, teams)?;
+        if !seen_slugs.insert(stage.slug.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "template.stages.slug",
+            ));
+        }
+    }
+
+    if template.company_id != company.id {
+        return Err(CompanyContractError::MismatchedReference(
+            "template.companyId",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate immutable coordinates, monotonic timestamps, and the
+/// monotonically increasing `version` for a replacement Template head. No
+/// lifecycle status exists to check - a Template is inert data, not a state
+/// machine, the same as Cohort.
+///
+/// `version` is checked here rather than in `validate_template` because it
+/// is meaningless on a first publish: nothing precedes version 1 for it to
+/// have advanced past.
+pub fn validate_template_update(
+    previous: &Template,
+    replacement: &Template,
+    company: &CompanyProfile,
+    teams: &[CompanyTeamRef],
+) -> Result<(), CompanyContractError> {
+    validate_template(replacement, company, teams)?;
+    validate_immutable(&previous.schema, &replacement.schema, "template.schema")?;
+    validate_immutable(&previous.id, &replacement.id, "template.id")?;
+    validate_immutable(
+        &previous.company_id,
+        &replacement.company_id,
+        "template.companyId",
+    )?;
+    if replacement.version <= previous.version {
+        return Err(CompanyContractError::InvalidVersion);
+    }
+    validate_replacement_timestamps(
+        previous.created_at,
+        previous.updated_at,
+        replacement.created_at,
+        replacement.updated_at,
+    )?;
+    Ok(())
+}
+
 /// Validate one team reference in isolation.
 ///
 /// Exported so callers that must FILTER teams before validation — the relay
@@ -1398,6 +1643,35 @@ mod tests {
             ],
             created_at: 1_785_400_400,
             updated_at: 1_785_400_500,
+        }
+    }
+
+    fn template_stage_fixture() -> TemplateStage {
+        TemplateStage {
+            slug: "outreach".to_string(),
+            title: "Send outreach".to_string(),
+            owning_team_id: "web-team".to_string(),
+            channel_id: "sales".to_string(),
+            doer_kind: DoerKind::Human,
+            reviewer_team_id: Some("marketing-team".to_string()),
+            prompt: "Send a personalized outreach message to {{subject.name}}.".to_string(),
+            outcome_reasons: vec!["sent".to_string(), "replied".to_string()],
+            cost_ceiling: Some(25.0),
+            staleness_after_secs: Some(86_400),
+            on_fail: StageFailureAction::Bounce,
+        }
+    }
+
+    fn template_fixture() -> Template {
+        Template {
+            schema: TEMPLATE_SCHEMA.to_string(),
+            id: "outbound-sequence".to_string(),
+            company_id: "horizon-labs".to_string(),
+            name: "Outbound sequence".to_string(),
+            version: 1,
+            stages: vec![template_stage_fixture()],
+            created_at: 1_785_400_600,
+            updated_at: 1_785_400_700,
         }
     }
 
@@ -2264,6 +2538,209 @@ mod tests {
         assert_eq!(
             validate_cohort_update(&previous, &stale, &company),
             Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    #[test]
+    fn a_well_formed_template_is_accepted() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        assert!(validate_template(&template_fixture(), &company, &teams).is_ok());
+    }
+
+    #[test]
+    fn a_template_rejects_duplicate_stage_slugs() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages.push(template.stages[0].clone());
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::DuplicateIdentifier(
+                "template.stages.slug"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_template_rejects_duplicate_outcome_reasons_within_a_stage() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages[0].outcome_reasons = vec!["sent".to_string(), "sent".to_string()];
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::DuplicateIdentifier(
+                "template.stages.outcomeReasons"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_template_over_the_stage_cap_is_refused() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages = (0..MAX_TEMPLATE_STAGES + 1)
+            .map(|index| {
+                let mut stage = template_stage_fixture();
+                stage.slug = format!("stage-{index}");
+                stage
+            })
+            .collect();
+        assert!(matches!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::TooManyItems { .. })
+        ));
+    }
+
+    #[test]
+    fn a_template_over_the_outcome_reasons_cap_is_refused() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages[0].outcome_reasons = (0..MAX_OUTCOME_REASONS + 1)
+            .map(|index| format!("reason-{index}"))
+            .collect();
+        assert!(matches!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::TooManyItems { .. })
+        ));
+    }
+
+    #[test]
+    fn an_empty_template_is_refused() {
+        // A pipeline with zero stages does nothing; `ensure_cardinality` alone
+        // would accept it (0 is under any positive cap), so this is a
+        // dedicated check rather than folded into the cap test above.
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages = Vec::new();
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::MissingReference("template.stages"))
+        );
+    }
+
+    #[test]
+    fn a_template_stage_owning_team_must_exist() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages[0].owning_team_id = "no-such-team".to_string();
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::MissingReference(
+                "template.stages.owningTeamId"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_template_stage_reviewer_team_must_exist_when_named() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.stages[0].reviewer_team_id = Some("no-such-team".to_string());
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::MissingReference(
+                "template.stages.reviewerTeamId"
+            ))
+        );
+
+        // Review is optional per stage - `None` names no gate and must not
+        // itself be treated as a missing reference.
+        template.stages[0].reviewer_team_id = None;
+        assert!(validate_template(&template, &company, &teams).is_ok());
+    }
+
+    #[test]
+    fn a_template_stage_rejects_a_negative_cost_ceiling_and_staleness() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+
+        let mut negative_cost = template_fixture();
+        negative_cost.stages[0].cost_ceiling = Some(-1.0);
+        assert_eq!(
+            validate_template(&negative_cost, &company, &teams),
+            Err(CompanyContractError::InvalidNumber(
+                "template.stages.costCeiling"
+            ))
+        );
+
+        let mut negative_staleness = template_fixture();
+        negative_staleness.stages[0].staleness_after_secs = Some(-1);
+        assert_eq!(
+            validate_template(&negative_staleness, &company, &teams),
+            Err(CompanyContractError::InvalidNumber(
+                "template.stages.stalenessAfterSecs"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_template_for_another_company_is_refused() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.company_id = "someone-elses-company".to_string();
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::MismatchedReference(
+                "template.companyId"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_template_version_must_be_a_positive_integer() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let mut template = template_fixture();
+        template.version = 0;
+        assert_eq!(
+            validate_template(&template, &company, &teams),
+            Err(CompanyContractError::InvalidVersion)
+        );
+    }
+
+    #[test]
+    fn template_replacement_requires_immutable_identity_monotonic_time_and_version() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let previous = template_fixture();
+
+        let mut edited = previous.clone();
+        edited.name = "Outbound sequence, v2".to_string();
+        edited.version = 2;
+        edited.updated_at += 1;
+        assert!(validate_template_update(&previous, &edited, &company, &teams).is_ok());
+
+        let mut changed_id = edited.clone();
+        changed_id.id = "different-template".to_string();
+        assert_eq!(
+            validate_template_update(&previous, &changed_id, &company, &teams),
+            Err(CompanyContractError::ImmutableField("template.id"))
+        );
+
+        let mut stale_time = edited.clone();
+        stale_time.updated_at = previous.updated_at;
+        assert_eq!(
+            validate_template_update(&previous, &stale_time, &company, &teams),
+            Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+
+        // Editing a template must not mutate work in flight: a run pins the
+        // version it started with, so a replacement that does not advance
+        // the counter - even one that changes nothing else - is refused
+        // rather than silently treated as a no-op.
+        let mut stale_version = edited;
+        stale_version.version = previous.version;
+        assert_eq!(
+            validate_template_update(&previous, &stale_version, &company, &teams),
+            Err(CompanyContractError::InvalidVersion)
         );
     }
 

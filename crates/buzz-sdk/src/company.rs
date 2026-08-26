@@ -6,11 +6,11 @@ use buzz_core::{
     block::canonical_json,
     company::{
         serde_enum_slug, validate_company, Cohort, CompanyContractError, CompanyProfile,
-        CompanyTask, Initiative,
+        CompanyTask, Initiative, Template, TemplateStage,
     },
     kind::{
         KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
-        KIND_INITIATIVE, KIND_PERSONA, KIND_TASK, KIND_TEAM,
+        KIND_INITIATIVE, KIND_PERSONA, KIND_TASK, KIND_TEAM, KIND_TEMPLATE,
     },
 };
 use nostr::{Event, EventBuilder, EventId, Kind, PublicKey, Tag};
@@ -23,6 +23,7 @@ const RECEIPT_SCHEMA: &str = "colony.company-receipt/v1";
 const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
 const COHORT_SCHEMA: &str = "colony.cohort/v1";
+const TEMPLATE_SCHEMA: &str = "colony.template/v1";
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
 const MAX_SUMMARY_LEN: usize = 4_000;
@@ -31,6 +32,14 @@ const MAX_ASSIGNEES: usize = 100;
 const MAX_DEPENDENCIES: usize = 100;
 /// Matches `MAX_COHORT_MEMBERS` in the company contract.
 const MAX_COHORT_MEMBERS: usize = 100;
+/// Matches `MAX_TEMPLATE_STAGES` in the company contract.
+const MAX_TEMPLATE_STAGES: usize = 50;
+/// Matches `MAX_PROMPT_LEN` in the company contract.
+const MAX_PROMPT_LEN: usize = 4_000;
+/// Matches `MAX_OUTCOME_REASONS` in the company contract.
+const MAX_OUTCOME_REASONS: usize = 20;
+/// Matches `MAX_REASON_LEN` in the company contract.
+const MAX_REASON_LEN: usize = 500;
 
 /// Mutation requested by the current company owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +89,8 @@ pub enum CompanyActionPayload {
     Task(CompanyTask),
     /// A complete Cohort.
     Cohort(Cohort),
+    /// A complete pipeline Template.
+    Template(Template),
 }
 
 impl CompanyActionPayload {
@@ -89,6 +100,7 @@ impl CompanyActionPayload {
             Self::Initiative(_) => KIND_INITIATIVE,
             Self::Task(_) => KIND_TASK,
             Self::Cohort(_) => KIND_COHORT,
+            Self::Template(_) => KIND_TEMPLATE,
         }
     }
 
@@ -98,6 +110,7 @@ impl CompanyActionPayload {
             Self::Initiative(initiative) => &initiative.id,
             Self::Task(task) => &task.id,
             Self::Cohort(cohort) => &cohort.id,
+            Self::Template(template) => &template.id,
         }
     }
 
@@ -107,6 +120,7 @@ impl CompanyActionPayload {
             Self::Initiative(initiative) => &initiative.company_id,
             Self::Task(task) => &task.company_id,
             Self::Cohort(cohort) => &cohort.company_id,
+            Self::Template(template) => &template.company_id,
         }
     }
 }
@@ -496,6 +510,48 @@ pub fn parse_cohort_event(event: &Event) -> Result<Cohort, CompanySdkError> {
     Ok(cohort)
 }
 
+/// Parse a strict relay-authored pipeline Template head's self-contained
+/// contract.
+///
+/// The `g` tags mirror every distinct team a stage names (`owningTeamId` or
+/// `reviewerTeamId`) - the same team-mirror letter `CompanyTask` already
+/// uses on `owningTeamId`, reused here rather than picking a fresh one - so
+/// "which templates touch my team" is an indexed `#g` filter instead of a
+/// full scan. Verified as a set, the same reason `m` (Cohort member
+/// mirrors) is: a lying mirror would make that filter return heads the
+/// record does not warrant.
+pub fn parse_template_event(event: &Event) -> Result<Template, CompanySdkError> {
+    require_kind(event, KIND_TEMPLATE)?;
+    require_head_tag_names(event, &["d", "company"], &["c"], &["g"], "template head")?;
+    let coordinate = required_scalar_tag(event, "d")?;
+    let company_tag = required_scalar_tag(event, "company")?;
+    let template: Template = parse_canonical_content(&event.content, "template")?;
+    validate_template_content(&template)?;
+    ensure_matches(&template.id, coordinate, "template")?;
+    ensure_matches(&template.company_id, company_tag, "template")?;
+
+    let team_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("g"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    let observed_team_mirrors: HashSet<&str> = team_mirrors.iter().copied().collect();
+    let expected_team_mirrors: HashSet<&str> = template
+        .stages
+        .iter()
+        .flat_map(|stage| {
+            std::iter::once(stage.owning_team_id.as_str()).chain(stage.reviewer_team_id.as_deref())
+        })
+        .collect();
+    if observed_team_mirrors.len() != team_mirrors.len()
+        || observed_team_mirrors != expected_team_mirrors
+    {
+        return Err(CompanySdkError::TagContentMismatch("template"));
+    }
+    Ok(template)
+}
+
 /// Parse an exact, relay-authored Company Receipt without exposing payload data.
 ///
 /// The receipt must contain exactly four tags and canonical, non-confidential
@@ -601,6 +657,7 @@ fn validate_payload(payload: &CompanyActionPayload) -> Result<(), CompanySdkErro
         CompanyActionPayload::Initiative(initiative) => validate_initiative_content(initiative),
         CompanyActionPayload::Task(task) => validate_task_content(task),
         CompanyActionPayload::Cohort(cohort) => validate_cohort_content(cohort),
+        CompanyActionPayload::Template(template) => validate_template_content(template),
     }
 }
 
@@ -1012,6 +1069,56 @@ fn validate_cohort_content(cohort: &Cohort) -> Result<(), CompanySdkError> {
         if !seen_members.insert(key) {
             return Err(CompanySdkError::InvalidContent("cohort"));
         }
+    }
+    Ok(())
+}
+
+fn validate_template_content(template: &Template) -> Result<(), CompanySdkError> {
+    validate_schema(&template.schema, TEMPLATE_SCHEMA, "template")?;
+    validate_id(&template.id, "template")?;
+    validate_id(&template.company_id, "template")?;
+    validate_required_text(&template.name, MAX_NAME_LEN, "template")?;
+    if template.version < 1 {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    if template.stages.is_empty() || template.stages.len() > MAX_TEMPLATE_STAGES {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    let mut seen_slugs = HashSet::new();
+    for stage in &template.stages {
+        validate_template_stage_content(stage)?;
+        if !seen_slugs.insert(stage.slug.as_str()) {
+            return Err(CompanySdkError::InvalidContent("template"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_template_stage_content(stage: &TemplateStage) -> Result<(), CompanySdkError> {
+    validate_id(&stage.slug, "template")?;
+    validate_required_text(&stage.title, MAX_NAME_LEN, "template")?;
+    validate_id(&stage.owning_team_id, "template")?;
+    validate_id(&stage.channel_id, "template")?;
+    validate_optional_id(stage.reviewer_team_id.as_deref(), "template")?;
+    validate_required_text(&stage.prompt, MAX_PROMPT_LEN, "template")?;
+    if stage.outcome_reasons.len() > MAX_OUTCOME_REASONS {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    let mut seen_reasons = HashSet::new();
+    for reason in &stage.outcome_reasons {
+        validate_required_text(reason, MAX_REASON_LEN, "template")?;
+        if !seen_reasons.insert(reason.as_str()) {
+            return Err(CompanySdkError::InvalidContent("template"));
+        }
+    }
+    if stage
+        .cost_ceiling
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    if stage.staleness_after_secs.is_some_and(|secs| secs < 0) {
+        return Err(CompanySdkError::InvalidContent("template"));
     }
     Ok(())
 }

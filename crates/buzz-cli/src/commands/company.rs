@@ -13,6 +13,7 @@
 use buzz_core::company::{CompanyProfile, CompanyTask, Initiative, TaskStatus};
 use buzz_core::kind::{
     KIND_COHORT, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
+    KIND_TEMPLATE,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_event, parse_initiative_event, parse_task_event,
@@ -330,6 +331,7 @@ fn payload_kind(payload: &CompanyActionPayload) -> u32 {
         CompanyActionPayload::Initiative(_) => KIND_INITIATIVE,
         CompanyActionPayload::Task(_) => KIND_TASK,
         CompanyActionPayload::Cohort(_) => KIND_COHORT,
+        CompanyActionPayload::Template(_) => KIND_TEMPLATE,
     }
 }
 
@@ -339,6 +341,7 @@ fn payload_id(payload: &CompanyActionPayload) -> &str {
         CompanyActionPayload::Initiative(initiative) => &initiative.id,
         CompanyActionPayload::Task(task) => &task.id,
         CompanyActionPayload::Cohort(cohort) => &cohort.id,
+        CompanyActionPayload::Template(template) => &template.id,
     }
 }
 

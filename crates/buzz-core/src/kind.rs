@@ -235,6 +235,14 @@ pub const KIND_TASK: u32 = 30181;
 /// further out.
 pub const KIND_COHORT: u32 = 30201;
 
+/// Colony pipeline template: an ordered, versioned sequence of stages
+/// fan-out will run a Cohort's members through (parameterized replaceable,
+/// relay-authored canonical head).
+///
+/// 30202 is the next free slot, contiguous with the company/work cluster
+/// (30175–30201) rather than an arbitrary gap further out.
+pub const KIND_TEMPLATE: u32 = 30202;
+
 /// Canonical external Organization or Person, and the aliases retired handles
 /// leave behind (parameterized replaceable, relay-authored canonical head).
 ///
@@ -1002,6 +1010,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_INITIATIVE,
     KIND_TASK,
     KIND_COHORT,
+    KIND_TEMPLATE,
     KIND_BLOCK_ACTION,
     KIND_BLOCK_RECEIPT,
     KIND_BLOCK_MANIFEST,
@@ -1243,6 +1252,7 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_INITIATIVE
             | KIND_TASK
             | KIND_COHORT
+            | KIND_TEMPLATE
             | KIND_COMPANY_RECEIPT
             | KIND_PARTY
             | KIND_PARTY_RELATIONSHIP

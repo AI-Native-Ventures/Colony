@@ -24,18 +24,19 @@ use std::sync::Arc;
 use buzz_core::company::{
     is_task_status_transition_allowed, validate_cohort, validate_cohort_update, validate_company,
     validate_company_update, validate_initiative, validate_initiative_update, validate_task,
-    validate_task_update, CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, TaskStatus,
+    validate_task_update, validate_template, validate_template_update, CompanyProfile, CompanyTask,
+    CompanyTeamRef, DoerKind, TaskStatus,
 };
 use buzz_core::kind::{
     KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
-    KIND_SYSTEM_MESSAGE, KIND_TASK, KIND_TEAM,
+    KIND_SYSTEM_MESSAGE, KIND_TASK, KIND_TEAM, KIND_TEMPLATE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::CompanyActionApply;
 use buzz_sdk::company::{
     parse_cohort_event, parse_company_action, parse_company_event, parse_initiative_event,
-    parse_task_event, CompanyAction, CompanyActionOperation, CompanyActionPayload,
-    CompanyReceiptOutcome,
+    parse_task_event, parse_template_event, CompanyAction, CompanyActionOperation,
+    CompanyActionPayload, CompanyReceiptOutcome,
 };
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 use serde::Serialize;
@@ -190,6 +191,34 @@ pub(crate) fn build_head(
                 )?);
             }
             (KIND_COHORT, tags, serde_json::to_value(cohort))
+        }
+        CompanyActionPayload::Template(template) => {
+            let mut tags = vec![
+                scalar_tag("d", &template.id)?,
+                scalar_tag("c", &template.company_id)?,
+                scalar_tag("company", &template.company_id)?,
+            ];
+            // One team mirror per distinct team any stage names as owning or
+            // reviewing, the same `g` letter Task already mirrors
+            // `owningTeamId` onto — what makes "which templates touch my
+            // team" an indexed `#g` filter instead of a full scan. In
+            // first-seen order rather than a HashSet so two calls building
+            // the same content emit identical tags.
+            let mut team_ids: Vec<&str> = Vec::new();
+            for stage in &template.stages {
+                if !team_ids.contains(&stage.owning_team_id.as_str()) {
+                    team_ids.push(&stage.owning_team_id);
+                }
+                if let Some(reviewer) = stage.reviewer_team_id.as_deref() {
+                    if !team_ids.contains(&reviewer) {
+                        team_ids.push(reviewer);
+                    }
+                }
+            }
+            for team_id in team_ids {
+                tags.push(scalar_tag("g", team_id)?);
+            }
+            (KIND_TEMPLATE, tags, serde_json::to_value(template))
         }
     };
     let content =
@@ -756,6 +785,17 @@ async fn validate_payload_against_state(
                     .map_err(|error| error.to_string())?;
             }
         }
+        CompanyActionPayload::Template(template) => {
+            let company = load_company(tenant, state, &template.company_id).await?;
+            let teams = load_team_refs(tenant, state, &action_author).await?;
+            validate_template(template, &company, &teams).map_err(|error| error.to_string())?;
+            if let Some(previous) = previous_head {
+                let previous = parse_template_event(previous)
+                    .map_err(|error| format!("stored template head is unreadable: {error}"))?;
+                validate_template_update(&previous, template, &company, &teams)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
     }
     Ok(())
 }
@@ -853,12 +893,14 @@ pub(crate) async fn handle_company_action(
         CompanyActionPayload::Initiative(_) => KIND_INITIATIVE,
         CompanyActionPayload::Task(_) => KIND_TASK,
         CompanyActionPayload::Cohort(_) => KIND_COHORT,
+        CompanyActionPayload::Template(_) => KIND_TEMPLATE,
     };
     let entity_id = match &action.payload {
         CompanyActionPayload::Company(profile) => profile.id.clone(),
         CompanyActionPayload::Initiative(initiative) => initiative.id.clone(),
         CompanyActionPayload::Task(task) => task.id.clone(),
         CompanyActionPayload::Cohort(cohort) => cohort.id.clone(),
+        CompanyActionPayload::Template(template) => template.id.clone(),
     };
     let previous_head = load_head(tenant, state, payload_kind, &entity_id).await?;
 
@@ -1815,6 +1857,119 @@ mod tests {
         assert!(matches!(
             error,
             CompanySdkError::TagContentMismatch("cohort")
+        ));
+    }
+
+    fn sample_template_stage() -> buzz_core::company::TemplateStage {
+        buzz_core::company::TemplateStage {
+            slug: "outreach".to_string(),
+            title: "Send outreach".to_string(),
+            owning_team_id: "team-marketing".to_string(),
+            channel_id: "sales".to_string(),
+            doer_kind: buzz_core::company::DoerKind::Human,
+            reviewer_team_id: Some("team-sales".to_string()),
+            prompt: "Send a personalized outreach message.".to_string(),
+            outcome_reasons: vec!["sent".to_string(), "replied".to_string()],
+            cost_ceiling: Some(25.0),
+            staleness_after_secs: Some(86_400),
+            on_fail: buzz_core::company::StageFailureAction::Bounce,
+        }
+    }
+
+    fn sample_template() -> buzz_core::company::Template {
+        buzz_core::company::Template {
+            schema: "colony.template/v1".to_string(),
+            id: "outbound-sequence".to_string(),
+            company_id: "horizon-labs".to_string(),
+            name: "Outbound sequence".to_string(),
+            version: 1,
+            stages: vec![sample_template_stage()],
+            created_at: 1_000,
+            updated_at: 1_000,
+        }
+    }
+
+    /// One `g` tag per distinct team any stage names, owning or reviewing —
+    /// what makes "which templates touch my team" a filter later, the same
+    /// reason a Cohort's `m` and a Task's `v` mirrors exist.
+    #[test]
+    fn relay_authored_template_head_round_trips_through_the_strict_parser() {
+        let relay = Keys::generate();
+        let head = build_head(
+            &relay,
+            &CompanyActionPayload::Template(sample_template()),
+            None,
+        )
+        .expect("build template head");
+        assert_eq!(head.kind.as_u16() as u32, KIND_TEMPLATE);
+        assert!(!head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
+        let parsed = parse_template_event(&head).expect("parse template head");
+        assert_eq!(parsed.id, "outbound-sequence");
+        assert_eq!(parsed.version, 1);
+        assert_eq!(parsed.stages.len(), 1);
+
+        assert_eq!(tag_count(&head, "g"), 2);
+        for expected in ["team-marketing", "team-sales"] {
+            assert!(
+                scalar_tag_values(&head, "g").contains(&expected),
+                "team {expected} must have its own `g` tag"
+            );
+        }
+    }
+
+    /// Two stages sharing a team (one owning, one reviewing the same team a
+    /// third stage owns) must still emit exactly one `g` tag per distinct
+    /// team — a mirror per stage would let one popular team's templates
+    /// double-count in a `#g` filter.
+    #[test]
+    fn a_template_stage_sharing_its_teams_across_stages_mirrors_each_team_once() {
+        let relay = Keys::generate();
+        let mut template = sample_template();
+        let mut second_stage = sample_template_stage();
+        second_stage.slug = "follow-up".to_string();
+        second_stage.reviewer_team_id = None;
+        template.stages.push(second_stage);
+
+        let head = build_head(&relay, &CompanyActionPayload::Template(template), None)
+            .expect("build template head");
+        assert_eq!(
+            tag_count(&head, "g"),
+            2,
+            "team-marketing and team-sales each appear twice across stages \
+             but must mirror once"
+        );
+        parse_template_event(&head).expect("shared-team template head parses");
+    }
+
+    /// Same guarantee as `lying_dependency_edges_are_refused` and
+    /// `lying_cohort_member_mirrors_are_refused`, for a template's `g` team
+    /// mirrors.
+    #[test]
+    fn lying_template_team_mirrors_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(
+            &relay,
+            &CompanyActionPayload::Template(sample_template()),
+            None,
+        )
+        .expect("build template head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("g")
+                    && tag.as_slice().get(1).map(String::as_str) == Some("team-marketing")
+                {
+                    Tag::parse(["g", "team-not-in-any-stage"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_template_event(&head).expect_err("lying team mirror must be refused");
+        assert!(matches!(
+            error,
+            CompanySdkError::TagContentMismatch("template")
         ));
     }
 
