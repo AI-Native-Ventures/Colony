@@ -16,7 +16,6 @@ import {
 } from "@/features/sidebar/lib/useChannelSections";
 import { useActiveWorkingChannelsById } from "@/features/sidebar/lib/useActiveWorkingChannelsById";
 import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
-import { sortDmChannelsForSidebar } from "@/features/sidebar/lib/dmSidebarSort";
 import {
   sectionSortGroupKey,
   sortChannelsForSidebar,
@@ -39,7 +38,11 @@ import {
   AppSidebarPrimaryMenu,
   type AppSidebarPinnedHeaderProps,
 } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
-import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
+import {
+  SidebarUnreadAbovePill,
+  SidebarUnreadBelowPill,
+} from "@/features/sidebar/ui/SidebarUnreadPills";
+import { useUnreadDmPreviews } from "@/features/sidebar/lib/useUnreadDmPreviews";
 import { DirectMessageSection } from "@/features/sidebar/ui/DirectMessageSection";
 import {
   ProjectChannelSection,
@@ -464,15 +467,23 @@ export function AppSidebar({
       fallbackDisplayName,
       profileDisplayName: profile?.displayName,
     });
-  const sortedDirectMessages = React.useMemo(
-    () =>
-      sortDmChannelsForSidebar(
-        directMessages,
-        dmChannelLabels,
-        sortModeFor("dms"),
-      ),
-    [directMessages, dmChannelLabels, sortModeFor],
-  );
+  const {
+    scrollToChannel,
+    scrollToNextAbove,
+    scrollToNextBelow,
+    unreadAboveCount,
+    unreadBelowCount,
+    unreadBelowChannelIds,
+  } = useUnreadOverflow({ scrollRef, unreadChannelIds });
+
+  const { nextUnreadDmBelowId, sortedDirectMessages, unreadDmPreviewsBelow } =
+    useUnreadDmPreviews({
+      directMessages,
+      dmChannelLabels,
+      dmParticipantsByChannelId,
+      dmSortMode: sortModeFor("dms"),
+      unreadBelowChannelIds,
+    });
   const sidebarLoadingShape = useSidebarLoadingShape({
     activeCommunityId: activeCommunity?.id,
     currentPubkey,
@@ -485,12 +496,6 @@ export function AppSidebar({
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||
     "Current identity";
-  const {
-    scrollToNextAbove,
-    scrollToNextBelow,
-    unreadAboveCount,
-    unreadBelowCount,
-  } = useUnreadOverflow({ scrollRef, unreadChannelIds });
 
   const isCreatingAny =
     createDialogKind === "stream"
@@ -584,14 +589,10 @@ export function AppSidebar({
           data-sidebar-background
           data-testid="sidebar-channel-content"
         >
-          {unreadAboveCount > 0 ? (
-            <MoreUnreadButton
-              count={unreadAboveCount}
-              onClick={scrollToNextAbove}
-              position="top"
-              testId="sidebar-more-unread-above"
-            />
-          ) : null}
+          <SidebarUnreadAbovePill
+            count={unreadAboveCount}
+            onScrollToNextAbove={scrollToNextAbove}
+          />
           <SidebarContent
             className="buzz-sidebar-scrollbar overscroll-none"
             data-sidebar-background
@@ -848,15 +849,13 @@ export function AppSidebar({
         </div>
 
         <div className="relative z-30 shrink-0" data-buzz-glass-footer-wrap>
-          {unreadBelowCount > 0 ? (
-            <MoreUnreadButton
-              bottomClassName="bottom-full"
-              count={unreadBelowCount}
-              onClick={scrollToNextBelow}
-              position="bottom"
-              testId="sidebar-more-unread-below"
-            />
-          ) : null}
+          <SidebarUnreadBelowPill
+            count={unreadBelowCount}
+            dmPreviews={unreadDmPreviewsBelow}
+            nextUnreadDmId={nextUnreadDmBelowId}
+            onScrollToChannel={scrollToChannel}
+            onScrollToNextBelow={scrollToNextBelow}
+          />
 
           <SidebarFooter>
             <WorkspaceAnts />
