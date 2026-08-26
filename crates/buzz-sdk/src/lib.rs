@@ -20,6 +20,7 @@ pub mod discovery;
 pub mod discovery_worker;
 pub mod discovery_workspace;
 pub mod fan_out;
+pub mod fan_out_approval;
 pub mod implicit_task;
 pub mod initiative_activation;
 pub mod ledger;
