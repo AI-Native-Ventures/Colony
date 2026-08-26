@@ -1,0 +1,2846 @@
+[
+  {
+    "id": "fashion-apparel",
+    "label": "Fashion & Apparel",
+    "verticals": [
+      {
+        "id": "activewear-athleisure-ecommerce",
+        "label": "Activewear & Athleisure Ecommerce"
+      },
+      {
+        "id": "children-s-clothing-ecommerce",
+        "label": "Children's Clothing Ecommerce"
+      },
+      {
+        "id": "clothing-apparel-retailers",
+        "label": "Clothing & Apparel Retailers"
+      },
+      {
+        "id": "fashion-ecommerce",
+        "label": "Fashion Ecommerce"
+      },
+      {
+        "id": "footwear-ecommerce-stores",
+        "label": "Footwear Ecommerce Stores"
+      },
+      {
+        "id": "jewelry-accessories",
+        "label": "Jewelry & Accessories"
+      },
+      {
+        "id": "department-stores",
+        "label": "Department Stores",
+        "description": "Large-format multi-category retailers"
+      }
+    ]
+  },
+  {
+    "id": "home-living",
+    "label": "Home & Living",
+    "verticals": [
+      {
+        "id": "home-decor-gift-shops",
+        "label": "Home Decor & Gift Shops",
+        "description": "Home decor boutiques, gift shops, and specialty home goods retailers"
+      },
+      {
+        "id": "furniture-stores",
+        "label": "Furniture Stores",
+        "description": "Home furniture and furnishings retail"
+      }
+    ]
+  },
+  {
+    "id": "healthcare",
+    "label": "Healthcare",
+    "description": "Healthcare providers including hospitals, clinics, and medical practices",
+    "verticals": [
+      {
+        "id": "chiropractors",
+        "label": "Chiropractors",
+        "description": "Chiropractic practices and spinal care"
+      },
+      {
+        "id": "dentists",
+        "label": "Dental Practices",
+        "description": "Dental practices and oral healthcare providers"
+      },
+      {
+        "id": "dialysis-centers",
+        "label": "Dialysis Centers",
+        "description": "Dialysis treatment centers and renal care facilities"
+      },
+      {
+        "id": "general-practices",
+        "label": "General Practices",
+        "description": "General practitioners and family medicine practices"
+      },
+      {
+        "id": "home-healthcare",
+        "label": "Home Healthcare",
+        "description": "Home healthcare and in-home nursing services"
+      },
+      {
+        "id": "hospitals",
+        "label": "Hospitals",
+        "description": "Hospitals and medical centers"
+      },
+      {
+        "id": "medical-billing-coding-services",
+        "label": "Medical Billing & Coding Services",
+        "description": "Medical billing, coding, and revenue cycle management services"
+      },
+      {
+        "id": "medical-laboratories",
+        "label": "Medical Laboratories"
+      },
+      {
+        "id": "medical-specialists",
+        "label": "Medical Specialists",
+        "description": "Medical specialists and consultant doctors"
+      },
+      {
+        "id": "medical-staffing-agencies",
+        "label": "Medical Staffing Agencies",
+        "description": "Healthcare staffing and temporary medical personnel services"
+      },
+      {
+        "id": "mental-health",
+        "label": "Mental Health Clinics",
+        "description": "Mental health professionals and counseling services"
+      },
+      {
+        "id": "occupational-health",
+        "label": "Occupational Health"
+      },
+      {
+        "id": "optometrists",
+        "label": "Optometrists",
+        "description": "Optometry practices and vision care"
+      },
+      {
+        "id": "pharmacies",
+        "label": "Pharmacies",
+        "description": "Pharmacies and dispensaries"
+      },
+      {
+        "id": "pharmacy-health-products",
+        "label": "Pharmacy & Health Products",
+        "description": "Pharmacies, drugstores, and health product retailers"
+      },
+      {
+        "id": "physiotherapists",
+        "label": "Physiotherapy Practices",
+        "description": "Physiotherapy practices and rehabilitation services"
+      },
+      {
+        "id": "rehabilitation-centers",
+        "label": "Rehabilitation Centers"
+      },
+      {
+        "id": "senior-care-assisted-living",
+        "label": "Senior Care & Assisted Living",
+        "description": "Nursing homes, assisted living facilities, and memory care centers"
+      },
+      {
+        "id": "urgent-care-centers",
+        "label": "Urgent Care Centers",
+        "description": "Urgent care clinics and walk-in medical centers"
+      },
+      {
+        "id": "veterinarians",
+        "label": "Veterinarians",
+        "description": "Veterinary practices and animal healthcare"
+      }
+    ]
+  },
+  {
+    "id": "legal",
+    "label": "Legal",
+    "description": "Legal services including law firms, attorneys, and legal consultants",
+    "verticals": [
+      {
+        "id": "attorneys-law-firms",
+        "label": "Attorneys & Law Firms",
+        "description": "South Africa's legal practitioners who provide general legal services across multiple practice areas. Regulated by the Legal Practice Council, attorneys represent approximately 27,000+ professionals managing client matters across corporate, commercial, litigation, and transactional work."
+      },
+      {
+        "id": "compliance-regulatory",
+        "label": "Compliance & Regulatory",
+        "description": "Regulatory compliance, government relations, and administrative law"
+      },
+      {
+        "id": "conveyancers",
+        "label": "Conveyancers"
+      },
+      {
+        "id": "corporate-lawyers",
+        "label": "Corporate Lawyers",
+        "description": "Mid to large corporate law firms specializing in commercial, M&A, and corporate governance"
+      },
+      {
+        "id": "criminal-defense-lawyers",
+        "label": "Criminal Defense Lawyers",
+        "description": "Criminal defense attorneys"
+      },
+      {
+        "id": "debt-collectors",
+        "label": "Debt Collectors",
+        "description": "Legal practitioners specializing in debt collection, insolvency, and credit law working with the National Credit Regulator framework. This vertical manages consumer debt recovery, commercial debt, and credit-related disputes for corporate clients and financial institutions."
+      },
+      {
+        "id": "employment-labour-law",
+        "label": "Employment & Labour Law",
+        "description": "Employment law, labour disputes, and workplace legal services"
+      },
+      {
+        "id": "environmental-lawyers",
+        "label": "Environmental Lawyers",
+        "description": "Attorneys specializing in environmental law, regulatory compliance, and EIA processes under NEMA (National Environmental Management Act) and sector-specific environmental legislation. This vertical advises on waste management, pollution control, environmental impact assessments, and regulatory compliance for mining, energy, and development projects."
+      },
+      {
+        "id": "family-lawyers",
+        "label": "Family Lawyers",
+        "description": "Attorneys specializing in family law including divorce, maintenance, child custody, matrimonial property division, and family dispute resolution. Practitioners navigate the Divorce Act, Maintenance Act, Childrens Act, and Matrimonial Property Act while managing emotionally charged client relationships."
+      },
+      {
+        "id": "immigration-lawyers",
+        "label": "Immigration Lawyers",
+        "description": "Immigration and visa attorneys"
+      },
+      {
+        "id": "intellectual-property-lawyers",
+        "label": "Intellectual Property Lawyers",
+        "description": "Intellectual property and patent attorneys"
+      },
+      {
+        "id": "legal-aid",
+        "label": "Legal Aid"
+      },
+      {
+        "id": "litigation-dispute-resolution",
+        "label": "Litigation & Dispute Resolution",
+        "description": "Commercial litigation, arbitration, and mediation services"
+      },
+      {
+        "id": "mediators-arbitrators",
+        "label": "Mediators & Arbitrators",
+        "description": "Dispute resolution professionals offering mediation and arbitration services as alternative dispute resolution (ADR) methods. This vertical addresses court backlogs, provides confidential dispute resolution, and includes AFSA, CCMA, and private mediators."
+      },
+      {
+        "id": "notaries-public",
+        "label": "Notaries Public",
+        "description": "Notaries and conveyancing services"
+      },
+      {
+        "id": "personal-injury-lawyers",
+        "label": "Personal Injury Lawyers",
+        "description": "Personal injury and accident attorneys"
+      },
+      {
+        "id": "real-estate-property-law",
+        "label": "Real Estate & Property Law",
+        "description": "Property transactions, landlord-tenant law, and real estate attorneys"
+      },
+      {
+        "id": "tax-estate-planning",
+        "label": "Tax & Estate Planning",
+        "description": "Tax attorneys, estate planning, and trust services"
+      }
+    ]
+  },
+  {
+    "id": "financial-services",
+    "label": "Finance",
+    "description": "Financial institutions, banks, and financial advisory services",
+    "verticals": [
+      {
+        "id": "accounting-audit-firms",
+        "label": "Accounting & Audit Firms",
+        "description": "Chartered accountant firms, audit practices, and tax advisory services"
+      },
+      {
+        "id": "banks",
+        "label": "Banks & Credit Unions",
+        "description": "Commercial and retail banks"
+      },
+      {
+        "id": "credit-bureaus",
+        "label": "Credit Bureaus"
+      },
+      {
+        "id": "financial-advisors-wealth-managers",
+        "label": "Financial Advisors & Wealth Managers",
+        "description": "Financial advisors and wealth management"
+      },
+      {
+        "id": "fintech-companies",
+        "label": "Fintech Companies"
+      },
+      {
+        "id": "forex-brokers",
+        "label": "Forex Brokers",
+        "description": "Foreign exchange and currency trading"
+      },
+      {
+        "id": "insurance-brokers-agents",
+        "label": "Insurance Brokers & Agents",
+        "description": "Independent insurance brokers and agents"
+      },
+      {
+        "id": "insurance-companies",
+        "label": "Insurance Companies",
+        "description": "Life, health, property, and casualty insurance providers"
+      },
+      {
+        "id": "investment-advisors-asset-managers",
+        "label": "Investment Advisors & Asset Managers"
+      },
+      {
+        "id": "microfinance-lending-firms",
+        "label": "Microfinance & Lending Firms"
+      },
+      {
+        "id": "mortgage-brokers",
+        "label": "Mortgage Brokers",
+        "description": "Mortgage brokers and home loan specialists"
+      },
+      {
+        "id": "payment-processing-companies",
+        "label": "Payment Processing Companies",
+        "description": "Payment gateways, merchant services, and POS providers"
+      },
+      {
+        "id": "stock-brokers-trading-firms",
+        "label": "Stock Brokers & Trading Firms",
+        "description": "Securities brokers and trading platforms"
+      },
+      {
+        "id": "tax-consultants",
+        "label": "Tax Consultants",
+        "description": "Tax consulting and compliance services"
+      },
+      {
+        "id": "venture-capital-private-equity",
+        "label": "Venture Capital & Private Equity",
+        "description": "VC firms and private equity investment companies"
+      }
+    ]
+  },
+  {
+    "id": "real-estate",
+    "label": "Real Estate",
+    "description": "Real estate agencies, property management, and development",
+    "verticals": [
+      {
+        "id": "commercial-real-estate-office-retail-properties",
+        "label": "Commercial Real Estate (Office & Retail Properties)",
+        "description": "Commercial office and retail real estate in South Africa valued at $9.99 billion, growing 7.61% CAGR. Office segment leads with 38.65% revenue share. Cape Town office vacancy at 15-year low. Retail bifurcating: convenience centres thriving while regional malls face e-commerce disruption from R26bn+ online retail."
+      },
+      {
+        "id": "industrial-real-estate",
+        "label": "Industrial Real Estate"
+      },
+      {
+        "id": "property-development",
+        "label": "Property Development",
+        "description": "Property development in South Africa including residential, mixed-use, and commercial projects. Market driven by estate living growth (490,000 properties), mixed-use development demand, coastal migration from remote work, and green building requirements (70% of new developments). Key challenge: municipal approval delays of 6-12+ months."
+      },
+      {
+        "id": "property-management-commercial",
+        "label": "Property Management (Commercial)",
+        "description": "Commercial property management for office, retail, and industrial assets in South Africa. Market driven by smart building technology adoption, ESG reporting requirements, tenant retention criticality, and energy cost management during SA electricity crisis. Key challenges: multi-tenant coordination, energy optimization, and sustainability reporting."
+      },
+      {
+        "id": "property-management-residential",
+        "label": "Property Management (Residential)",
+        "description": "Residential property management in South Africa including body corporates, HOAs, estate management, and tenant relations. Market driven by estate living growth (490,000 properties), POPIA April 2025 compliance urgency, and digital transformation. Key regulations: Sectional Titles Schemes Management Act, POPIA Residential Communities Code."
+      },
+      {
+        "id": "property-valuations-appraisal-services",
+        "label": "Property Valuations & Appraisal Services",
+        "description": "Property valuation and appraisal services in South Africa for residential, commercial, and specialized assets. Market driven by IVSC compliance adoption, AVM technology integration, portfolio valuations for REITs and funds, and mortgage lending requirements. Key regulator: SACPVP (South African Council for Property Valuers Profession)."
+      },
+      {
+        "id": "proptech-real-estate-technology",
+        "label": "PropTech & Real Estate Technology",
+        "description": "Property technology (PropTech) in South Africa including digital platforms, marketplaces, property management software, smart building technology, and real estate fintech. Market driven by digital transformation, estate agent technology adoption, and tenant experience platforms. Key players: Property24, Private Property, Flow, PayProp, Prop Data."
+      },
+      {
+        "id": "real-estate-attorneys",
+        "label": "Real Estate Attorneys"
+      },
+      {
+        "id": "real-estate-financing-mortgage-services",
+        "label": "Real Estate Financing & Mortgage Services",
+        "description": "Property finance and mortgage services in South Africa including home loans, commercial property lending, and development finance. Market driven by interest rate cuts to 10.75% (predicted 10.50% by end-2025), First Home Finance subsidy expansion, and 86% estate agent confidence. Key players: Ooba, Standard Bank, Nedbank, FNB, ABSA."
+      },
+      {
+        "id": "real-estate-investment",
+        "label": "Real Estate Investment",
+        "description": "Real Estate Investment Trusts (REITs) and property funds in South Africa. Market features 23 REIT members on JSE, with $9.99B commercial market. SA REITs forecast as top pick for 2025 with 14.7-22.5% shareholder returns. Key players: Equites (logistics R28.3bn), Vukile (retail R54bn), Stor-Age (niche REIT). Cross-border investment emerging."
+      },
+      {
+        "id": "real-estate-marketing-photography",
+        "label": "Real Estate Marketing & Photography",
+        "description": "Specialized marketing services, virtual tours, and professional photography for property listings"
+      },
+      {
+        "id": "residential-real-estate-estate-agents-property-sales",
+        "label": "Residential Real Estate (Estate Agents & Property Sales)",
+        "description": "Estate agents and property sales in South Africa's residential market valued at R850 billion. Market recovering with 86% agent confidence, driven by interest rate cuts to 10.75%, first-time buyer subsidies, and coastal migration from remote work. Key regulations: EAAB licensing, POPIA April 2025 amendments, Sectional Titles Act."
+      },
+      {
+        "id": "title-escrow-services",
+        "label": "Title & Escrow Services",
+        "description": "Title insurance companies and escrow service providers for real estate transactions"
+      },
+      {
+        "id": "shopping-centers",
+        "label": "Shopping Centers",
+        "description": "Shopping malls, retail centers, and mixed-use retail complexes that house multiple retail tenants"
+      }
+    ]
+  },
+  {
+    "id": "technology",
+    "label": "Technology",
+    "description": "Technology companies including software, IT services, and digital products",
+    "verticals": [
+      {
+        "id": "ai-machine-learning",
+        "label": "AI & Machine Learning"
+      },
+      {
+        "id": "blockchain-cryptocurrency-companies",
+        "label": "Blockchain & Cryptocurrency Companies",
+        "description": "South Africa leads Africa crypto revolution with 300 FSCA-licensed crypto asset service providers as of Dec 2025, 13.9M crypto users, and 38% annual growth. Companies operate exchanges, payment on/off-ramps, DeFi platforms, and blockchain development services."
+      },
+      {
+        "id": "cloud-services",
+        "label": "Cloud Services",
+        "description": "South Africa cloud market commanded 69.3% of ICT spend in 2024 with 12.1% CAGR through 2030. Major providers (AWS, Azure, GCP) have local data centres in Johannesburg and Cape Town, enabling POPIA compliance. Market includes managed cloud services, migration consulting, and hybrid cloud specialists."
+      },
+      {
+        "id": "cybersecurity",
+        "label": "Cybersecurity",
+        "description": "Cybersecurity and information security services"
+      },
+      {
+        "id": "data-analytics",
+        "label": "Data Analytics",
+        "description": "Data analytics and business intelligence"
+      },
+      {
+        "id": "devops-infrastructure",
+        "label": "DevOps & Infrastructure",
+        "description": "DevOps tools, CI/CD platforms, and infrastructure automation services"
+      },
+      {
+        "id": "ecommerce-platforms",
+        "label": "E-commerce Platforms",
+        "description": "E-commerce software, payment gateways, and online marketplace technology"
+      },
+      {
+        "id": "enterprise-software-companies",
+        "label": "Enterprise Software Companies",
+        "description": "South Africa enterprise software market includes ERP systems, CRM platforms, and business management solutions from global vendors (SAP, Netsuite, Dynamics 365) and local developers (Orax SDI, Embrace ERP, AdvanceNet). BFSI, manufacturing, retail, and government are primary customers."
+      },
+      {
+        "id": "erp-systems",
+        "label": "ERP Systems",
+        "description": "ERP implementation and consulting"
+      },
+      {
+        "id": "fintech",
+        "label": "Fintech"
+      },
+      {
+        "id": "game-development-studios",
+        "label": "Game Development Studios",
+        "description": "South Africa game development sector includes 14+ studios creating games for mobile, console, and PC platforms. Based primarily in Johannesburg and Cape Town, studios like 24 Bit Games and Nyamakop develop indie games, AAA titles, and game development services."
+      },
+      {
+        "id": "hardware-electronics-companies",
+        "label": "Hardware & Electronics Companies",
+        "description": "South Africa hardware and electronics manufacturing sector includes 13,000+ IT companies and 3,000+ electronics companies, with major players like CZ Electronics, Jemstech, Hi-Q Electronics, and Omnigo. Businesses focus on electronics manufacturing, assembly, distribution, and custom solutions."
+      },
+      {
+        "id": "healthtech",
+        "label": "Healthtech"
+      },
+      {
+        "id": "iot-hardware",
+        "label": "IoT & Hardware",
+        "description": "Internet of Things devices, hardware manufacturers, and embedded systems"
+      },
+      {
+        "id": "it-services-consulting",
+        "label": "IT Services & Consulting",
+        "description": "South Africa IT consulting market includes global firms (Protiviti, HCLTech) and local specialists (Solid Systems, CyberPro Consulting, Mayura Consultancy). Firms provide digital transformation, cloud strategy, IT governance, enterprise architecture, and change management services."
+      },
+      {
+        "id": "mobile-app-developers",
+        "label": "Mobile App Developers"
+      },
+      {
+        "id": "saas-providers",
+        "label": "SaaS Providers",
+        "description": "Software-as-a-Service platforms and subscription-based software companies"
+      },
+      {
+        "id": "software-development",
+        "label": "Software Development",
+        "description": "Software development and custom applications"
+      },
+      {
+        "id": "telecommunications",
+        "label": "Telecommunications",
+        "description": "VoIP, UCaaS, telecom infrastructure and communication platforms"
+      },
+      {
+        "id": "web-design",
+        "label": "Web Design",
+        "description": "Web design and digital agencies"
+      },
+      {
+        "id": "electronics-stores",
+        "label": "Electronics Stores",
+        "description": "Consumer electronics retail"
+      }
+    ]
+  },
+  {
+    "id": "construction",
+    "label": "Construction",
+    "description": "Construction companies, contractors, and building services",
+    "verticals": [
+      {
+        "id": "architects",
+        "label": "Architects",
+        "description": "Architectural design firms"
+      },
+      {
+        "id": "civil-engineers",
+        "label": "Civil Engineers",
+        "description": "Civil and structural engineering firms"
+      },
+      {
+        "id": "cleaning-services",
+        "label": "Cleaning Services"
+      },
+      {
+        "id": "commercial-builders",
+        "label": "Commercial Builders"
+      },
+      {
+        "id": "concrete-masonry-contractors",
+        "label": "Concrete & Masonry Contractors",
+        "description": "Concrete pouring, foundation work, and masonry services"
+      },
+      {
+        "id": "construction-material-suppliers",
+        "label": "Construction Material Suppliers"
+      },
+      {
+        "id": "construction-project-management",
+        "label": "Construction Project Management",
+        "description": "Project management, estimating, and construction consulting"
+      },
+      {
+        "id": "demolition-contractors",
+        "label": "Demolition Contractors",
+        "description": "Demolition, site clearance, and structural teardown services"
+      },
+      {
+        "id": "electricians",
+        "label": "Electricians",
+        "description": "Electrical contractors and services"
+      },
+      {
+        "id": "general-contractors",
+        "label": "General Contractors",
+        "description": "General construction and building contractors"
+      },
+      {
+        "id": "hardware-building-materials",
+        "label": "Hardware & Building Materials"
+      },
+      {
+        "id": "heavy-equipment-rental",
+        "label": "Heavy Equipment Rental",
+        "description": "Construction equipment rental and leasing services"
+      },
+      {
+        "id": "hvac",
+        "label": "HVAC",
+        "description": "HVAC installation and maintenance"
+      },
+      {
+        "id": "interior-designers",
+        "label": "Interior Designers",
+        "description": "Interior design and decoration"
+      },
+      {
+        "id": "landscaping",
+        "label": "Landscaping",
+        "description": "Landscaping and garden design"
+      },
+      {
+        "id": "painting-services",
+        "label": "Painting Services"
+      },
+      {
+        "id": "plumbers",
+        "label": "Plumbers",
+        "description": "Plumbing services and contractors"
+      },
+      {
+        "id": "residential-builders",
+        "label": "Residential Builders"
+      },
+      {
+        "id": "roofing",
+        "label": "Roofing",
+        "description": "Roofing contractors and services"
+      },
+      {
+        "id": "specialty-trade-contractors",
+        "label": "Specialty Trade Contractors",
+        "description": "Drywall, flooring, tile, carpentry, and finishing contractors"
+      }
+    ]
+  },
+  {
+    "id": "education",
+    "label": "Education",
+    "description": "Educational institutions, training providers, and e-learning platforms",
+    "verticals": [
+      {
+        "id": "driving-schools",
+        "label": "Driving Schools"
+      },
+      {
+        "id": "early-childhood-education",
+        "label": "Early Childhood Education",
+        "description": "Preschools, nurseries, daycare centers, and kindergartens"
+      },
+      {
+        "id": "e-learning",
+        "label": "EdTech Companies",
+        "description": "E-learning platforms and online education"
+      },
+      {
+        "id": "education-consultancies",
+        "label": "Education Consultancies",
+        "description": "College admissions consulting and education advisory services"
+      },
+      {
+        "id": "language-schools",
+        "label": "Language Schools",
+        "description": "English as a Second Language (ESL) and foreign language instruction centers"
+      },
+      {
+        "id": "private-colleges",
+        "label": "Private Colleges"
+      },
+      {
+        "id": "private-schools",
+        "label": "Private Schools"
+      },
+      {
+        "id": "schools",
+        "label": "Schools",
+        "description": "Primary and secondary schools"
+      },
+      {
+        "id": "test-preparation-services",
+        "label": "Test Preparation Services",
+        "description": "SAT/ACT prep, professional certification exam preparation"
+      },
+      {
+        "id": "training-providers",
+        "label": "Training Providers",
+        "description": "Corporate and professional training providers"
+      },
+      {
+        "id": "tutoring",
+        "label": "Tutoring",
+        "description": "Private tutoring and academic support"
+      },
+      {
+        "id": "tvet-colleges",
+        "label": "TVET Colleges"
+      },
+      {
+        "id": "universities",
+        "label": "Universities",
+        "description": "Universities and higher education institutions"
+      },
+      {
+        "id": "vocational-training-centers",
+        "label": "Vocational Training Centers",
+        "description": "Trade schools and skills development centers for specific vocations"
+      }
+    ]
+  },
+  {
+    "id": "hospitality",
+    "label": "Tourism",
+    "description": "Hotels, restaurants, tourism, and hospitality services",
+    "verticals": [
+      {
+        "id": "adventure-tourism",
+        "label": "Adventure Tourism"
+      },
+      {
+        "id": "bed-breakfasts-guesthouses",
+        "label": "Bed & Breakfasts & Guesthouses"
+      },
+      {
+        "id": "catering",
+        "label": "Catering",
+        "description": "Catering and event food services"
+      },
+      {
+        "id": "conference-event-venues-mice",
+        "label": "Conference & Event Venues (MICE)"
+      },
+      {
+        "id": "cruise-lines",
+        "label": "Cruise Lines",
+        "description": "Maritime tourism and cruise operators"
+      },
+      {
+        "id": "cultural-heritage-tourism",
+        "label": "Cultural & Heritage Tourism",
+        "description": "Heritage sites, cultural museums, historical attractions, indigenous experiences, cultural performances, township tours. South Africa heritage monuments hosted 22M visitors in 2023. Key attractions: Robben Island, Apartheid Museum, Mandela House, Kruger, township tours. Growing experiential and community-based tourism trend."
+      },
+      {
+        "id": "hotels-resorts",
+        "label": "Hotels & Resorts",
+        "description": "Commercial accommodation establishments offering 17+ bedrooms with full-service amenities. South Africa's hotel sector achieved 61.7% average occupancy in 2025 with strong RevPAR growth of 10.8% YTD. Market driven by international visitors and corporate demand, with Cape Town and Kruger accounting for 69% of room nights. Post-COVID recovery strong but fragmented across regions."
+      },
+      {
+        "id": "online-travel-agencies-booking-platforms",
+        "label": "Online Travel Agencies & Booking Platforms",
+        "description": "OTA platforms listing accommodation and experiences. Global leaders: Booking.com (59% of SA hotel bookings), Airbnb, Expedia, Agoda. Regional players: SafariNow, Travelstart. 55% of safari bookings through platforms by 2025. Heavy commission reliance (15-25%) straining supplier margins."
+      },
+      {
+        "id": "restaurants",
+        "label": "Restaurants",
+        "description": "Restaurants and dining establishments"
+      },
+      {
+        "id": "safari-game-lodges",
+        "label": "Safari & Game Lodges",
+        "description": "Luxury and mid-range accommodation at wildlife reserves and game farms. Market size USD 2.9B (2024), projected USD 5.1B by 2030. Kruger National Park region drives 35% of safari tourism. Post-COVID recovery strong but dependent on international visitor volumes and wildlife conservation initiatives. Premium pricing with high margins (USD 250-1000+ per night)."
+      },
+      {
+        "id": "theme-parks-attractions",
+        "label": "Theme Parks & Attractions",
+        "description": "Entertainment venues and tourist attractions"
+      },
+      {
+        "id": "tourism-transportation",
+        "label": "Tourism Transportation",
+        "description": "Vehicle rental and tourist transport services"
+      },
+      {
+        "id": "travel-agencies-tour-operators",
+        "label": "Travel Agencies & Tour Operators"
+      },
+      {
+        "id": "vacation-rentals",
+        "label": "Vacation Rentals",
+        "description": "Short-term vacation property rentals and holiday homes"
+      },
+      {
+        "id": "wellness-spa-tourism",
+        "label": "Wellness & Spa Tourism",
+        "description": "Health retreats, spas, and wellness centers"
+      },
+      {
+        "id": "wine-tourism-culinary-tourism",
+        "label": "Wine Tourism & Culinary Tourism",
+        "description": "Wine estate experiences, vineyard tours, wine tastings, food-and-wine pairings, culinary classes, food tours. South Africa ranked #1 wine tourism destination globally for 2025. 279 wine tours available, 16,000+ searches for vineyard experiences in 12-month period. Winelands region (Stellenbosch, Franschhoek, Paarl) primary hub. Growing gourmet food tourism and farm-to-table experiences."
+      },
+      {
+        "id": "sporting-goods",
+        "label": "Sporting Goods",
+        "description": "Sports equipment and apparel retail"
+      }
+    ]
+  },
+  {
+    "id": "manufacturing",
+    "label": "Manufacturing",
+    "description": "Manufacturing companies and industrial production",
+    "verticals": [
+      {
+        "id": "aerospace-defense-manufacturing",
+        "label": "Aerospace & Defense Manufacturing",
+        "description": "Aircraft components, defense systems, and precision aerospace manufacturing"
+      },
+      {
+        "id": "automotive-parts-manufacturing",
+        "label": "Automotive Parts Manufacturing",
+        "description": "Automotive components, OEM suppliers, and aftermarket parts production"
+      },
+      {
+        "id": "building-materials-manufacturing",
+        "label": "Building Materials Manufacturing",
+        "description": "Concrete, lumber, insulation, roofing, and construction materials production"
+      },
+      {
+        "id": "industrial-automation-equipment",
+        "label": "Industrial Automation Equipment",
+        "description": "Robotics, control systems, sensors, and automation solutions manufacturing"
+      },
+      {
+        "id": "manufacturing-companies",
+        "label": "Manufacturing Companies",
+        "description": "Small to mid-sized manufacturing businesses across various sectors in South Africa"
+      },
+      {
+        "id": "medical-device-manufacturing",
+        "label": "Medical Device Manufacturing",
+        "description": "Medical equipment, devices, and diagnostic instruments production"
+      },
+      {
+        "id": "chemical-manufacturing",
+        "label": "Chemical Manufacturing",
+        "description": "Production of industrial and specialty chemicals"
+      },
+      {
+        "id": "electronics-manufacturing",
+        "label": "Electronics Manufacturing",
+        "description": "Electronic components and equipment production"
+      },
+      {
+        "id": "food-processing",
+        "label": "Food Processing",
+        "description": "Industrial food processing and preparation"
+      },
+      {
+        "id": "furniture-manufacturing",
+        "label": "Furniture Manufacturing",
+        "description": "Furniture and fixture production"
+      },
+      {
+        "id": "machinery-manufacturing",
+        "label": "Machinery Manufacturing",
+        "description": "Industrial machinery and equipment production"
+      },
+      {
+        "id": "metal-fabrication",
+        "label": "Metal Fabrication",
+        "description": "Metal working and fabrication services"
+      },
+      {
+        "id": "packaging-manufacturing",
+        "label": "Packaging Manufacturing",
+        "description": "Packaging materials and container production"
+      },
+      {
+        "id": "pharmaceutical-manufacturing",
+        "label": "Pharmaceutical Manufacturing",
+        "description": "Medicine and pharmaceutical production"
+      },
+      {
+        "id": "plastics-rubber",
+        "label": "Plastics & Rubber",
+        "description": "Plastic and rubber products manufacturing"
+      },
+      {
+        "id": "textile-manufacturing",
+        "label": "Textile Manufacturing",
+        "description": "Fabric and textile production"
+      }
+    ]
+  },
+  {
+    "id": "professional-services",
+    "label": "Professional Services",
+    "description": "Professional consulting, advisory, and business services",
+    "verticals": [
+      {
+        "id": "accounting-financial-advisory",
+        "label": "Accounting & Financial Advisory",
+        "description": "Accounting firms, CPAs, financial advisors, tax consultants, and audit services"
+      },
+      {
+        "id": "architectural-firms",
+        "label": "Architectural Firms"
+      },
+      {
+        "id": "audit-assurance-services",
+        "label": "Audit & Assurance Services",
+        "description": "External and internal audit services, financial statement assurance, regulatory compliance audits, and quality assurance reviews. Provided by Big 4 firms (Deloitte, PwC, EY, KPMG) and mid-tier firms."
+      },
+      {
+        "id": "construction-companies",
+        "label": "Construction Companies",
+        "description": "General contractors, construction firms, and building companies in South Africa"
+      },
+      {
+        "id": "corporate-finance-ma-advisory",
+        "label": "Corporate Finance & M&A Advisory",
+        "description": "Mergers and acquisitions advisory, transaction due diligence, valuation, deal structuring, financing advisory, and post-merger integration. Includes buy-side and sell-side transactions."
+      },
+      {
+        "id": "design-services",
+        "label": "Design Services",
+        "description": "Graphic design, UX/UI design, branding agencies, and creative design services"
+      },
+      {
+        "id": "engineering-consulting",
+        "label": "Engineering Consulting",
+        "description": "Engineering consulting and design"
+      },
+      {
+        "id": "environmental-sustainability-consulting",
+        "label": "Environmental & Sustainability Consulting",
+        "description": "ESG strategy, carbon management, environmental compliance, sustainability reporting, green building certification, and climate risk assessment. Includes TCFD reporting and Net Zero transition planning."
+      },
+      {
+        "id": "hr-consulting-executive-search",
+        "label": "HR Consulting & Executive Search",
+        "description": "Human resources consulting"
+      },
+      {
+        "id": "it-consulting-systems-integration",
+        "label": "IT Consulting & Systems Integration"
+      },
+      {
+        "id": "legal-services",
+        "label": "Legal Services",
+        "description": "Law firms, attorneys, legal consultants, and corporate legal services"
+      },
+      {
+        "id": "management-consulting",
+        "label": "Management Consulting",
+        "description": "Management and strategy consulting"
+      },
+      {
+        "id": "marketing-advertising-agencies",
+        "label": "Marketing & Advertising Agencies",
+        "description": "Digital marketing agencies, creative agencies, PR firms, and media buying services"
+      },
+      {
+        "id": "real-estate-agencies",
+        "label": "Real Estate Agencies",
+        "description": "Residential and commercial property agencies and brokerages"
+      },
+      {
+        "id": "recruitment-staffing-services",
+        "label": "Recruitment & Staffing Services",
+        "description": "Executive search, talent acquisition, staffing agencies, and HR outsourcing"
+      },
+      {
+        "id": "risk-compliance-consulting",
+        "label": "Risk & Compliance Consulting",
+        "description": "Governance, risk, and compliance (GRC) advisory including regulatory compliance, risk management, internal audit, fraud prevention, and compliance transformation. Includes cybersecurity risk assessment."
+      },
+      {
+        "id": "strategy-operations-consulting",
+        "label": "Strategy & Operations Consulting",
+        "description": "Business strategy development, operations optimization, process improvement, supply chain management, and organizational effectiveness. Includes lean transformation and process automation."
+      },
+      {
+        "id": "tax-advisory-services",
+        "label": "Tax Advisory Services",
+        "description": "Tax strategy, compliance, planning, transfer pricing, VAT, payroll, and dispute resolution services. Includes SARS compliance, expatriate taxation, and tax controversy representation."
+      }
+    ]
+  },
+  {
+    "id": "transportation",
+    "label": "Transportation",
+    "description": "Transportation, logistics, and shipping services",
+    "verticals": [
+      {
+        "id": "3pl-4pl-providers",
+        "label": "3PL/4PL Providers",
+        "description": "Third-party and fourth-party logistics outsourcing services"
+      },
+      {
+        "id": "cold-chain-logistics",
+        "label": "Cold Chain Logistics"
+      },
+      {
+        "id": "cross-border-logistics",
+        "label": "Cross-Border Logistics",
+        "description": "International shipping and customs clearance services"
+      },
+      {
+        "id": "fleet-management",
+        "label": "Fleet Management"
+      },
+      {
+        "id": "port-terminal-operations",
+        "label": "Port & Terminal Operations",
+        "description": "Container terminals, port logistics, and intermodal facilities"
+      },
+      {
+        "id": "public-transport-operators",
+        "label": "Public Transport Operators"
+      },
+      {
+        "id": "specialized-transport",
+        "label": "Specialized Transport",
+        "description": "Hazardous materials, oversized cargo, and specialized freight services"
+      },
+      {
+        "id": "air-cargo",
+        "label": "Air Cargo",
+        "description": "Air freight and cargo services"
+      },
+      {
+        "id": "bus-services",
+        "label": "Bus Services",
+        "description": "Passenger bus transportation"
+      },
+      {
+        "id": "last-mile-courier-services",
+        "label": "Last Mile & Courier Services",
+        "description": "Package delivery and courier services"
+      },
+      {
+        "id": "freight-trucking",
+        "label": "Freight Trucking",
+        "description": "Road freight and trucking services"
+      },
+      {
+        "id": "logistics-warehousing",
+        "label": "Logistics & Warehousing",
+        "description": "Warehousing and supply chain services"
+      },
+      {
+        "id": "maritime-shipping",
+        "label": "Maritime Shipping",
+        "description": "Ocean freight and shipping services"
+      },
+      {
+        "id": "moving-companies",
+        "label": "Moving Companies",
+        "description": "Residential and commercial moving services"
+      },
+      {
+        "id": "rail-transport",
+        "label": "Rail Transport",
+        "description": "Rail freight and passenger services"
+      },
+      {
+        "id": "taxi-rideshare",
+        "label": "Taxi & Rideshare",
+        "description": "Taxi and ride-hailing services"
+      },
+      {
+        "id": "vehicle-leasing",
+        "label": "Vehicle Leasing",
+        "description": "Fleet and vehicle leasing services"
+      }
+    ]
+  },
+  {
+    "id": "agriculture",
+    "label": "Agriculture",
+    "description": "Agricultural businesses, farming, and agribusiness",
+    "verticals": [
+      {
+        "id": "agri-coops-suppliers",
+        "label": "Agri-Coops & Suppliers"
+      },
+      {
+        "id": "agricultural-processing",
+        "label": "Agricultural Processing",
+        "description": "Post-harvest processing facilities including grain elevators, packing houses, and food processing plants"
+      },
+      {
+        "id": "agritech-companies",
+        "label": "Agritech Companies"
+      },
+      {
+        "id": "animal-feed-nutrition",
+        "label": "Animal Feed & Nutrition",
+        "description": "Manufacturers of livestock feed, supplements, and animal nutrition products"
+      },
+      {
+        "id": "commercial-farms",
+        "label": "Commercial Farms"
+      },
+      {
+        "id": "fertilizer-agrochemicals",
+        "label": "Fertilizer & Agrochemicals",
+        "description": "Manufacturers and distributors of fertilizers, pesticides, herbicides, and crop protection products"
+      },
+      {
+        "id": "irrigation-systems",
+        "label": "Irrigation Systems",
+        "description": "Providers of irrigation equipment, water management systems, and precision watering solutions"
+      },
+      {
+        "id": "seed-companies",
+        "label": "Seed Companies",
+        "description": "Producers and distributors of commercial seeds, hybrid varieties, and genetic material"
+      },
+      {
+        "id": "agricultural-equipment",
+        "label": "Agricultural Equipment",
+        "description": "Companies selling and servicing farm machinery and equipment"
+      },
+      {
+        "id": "aquaculture-fishing",
+        "label": "Aquaculture & Fishing",
+        "description": "Fish farming and commercial fishing operations"
+      },
+      {
+        "id": "crop-farming",
+        "label": "Crop Farming",
+        "description": "Agricultural operations focused on growing crops"
+      },
+      {
+        "id": "dairy-farming",
+        "label": "Dairy Farming",
+        "description": "Milk and dairy product production operations"
+      },
+      {
+        "id": "forestry-logging",
+        "label": "Forestry & Logging",
+        "description": "Timber production and forest management"
+      },
+      {
+        "id": "livestock-farming",
+        "label": "Livestock Farming",
+        "description": "Animal husbandry and meat production"
+      },
+      {
+        "id": "nurseries-greenhouses",
+        "label": "Nurseries & Greenhouses",
+        "description": "Plant cultivation and garden center operations"
+      },
+      {
+        "id": "poultry-farming",
+        "label": "Poultry Farming",
+        "description": "Chicken, turkey, and egg production operations"
+      },
+      {
+        "id": "pet-stores",
+        "label": "Pet Stores",
+        "description": "Pet supplies and services retail"
+      },
+      {
+        "id": "vineyards-wineries",
+        "label": "Vineyards & Wineries",
+        "description": "Grape growing and wine production"
+      }
+    ]
+  },
+  {
+    "id": "energy",
+    "label": "Energy",
+    "description": "Energy companies, utilities, and renewable energy providers",
+    "verticals": [
+      {
+        "id": "bioenergy-biomass",
+        "label": "Bioenergy & Biomass",
+        "description": "Biofuel production and biomass energy generation"
+      },
+      {
+        "id": "coal-power-plants-decommissioning",
+        "label": "Coal Power Plants & Decommissioning",
+        "description": "South Africa's 15 coal-fired power stations (36 GW capacity) provide 80% of electricity but face accelerated phase-out. IRP 2025 mandates 9.6 GW closure by 2035. Major challenges: reliability (60% EAF), Just-Transition requirements, repurposing sites, and managing workforce transition. Decommissioning market emerging as R50B+ opportunity."
+      },
+      {
+        "id": "commercial-industrial-energy-solutions",
+        "label": "Commercial & Industrial Energy Solutions",
+        "description": "Booming sector of commercial and industrial (C&I) companies adopting solar, storage, and efficiency solutions. Industry is now largest solar adopter with 4 GW installed capacity. Payback periods 2-3 years driving strong demand. Solutions include rooftop solar, energy storage, demand-side management (DSM), EV charging, and efficiency retrofits. Market growing 20%+ annually."
+      },
+      {
+        "id": "energy-consulting-services",
+        "label": "Energy Consulting & Services",
+        "description": "Rapidly growing consulting sector supporting energy transition. Services include feasibility studies, environmental assessments, NERSA approvals, grid studies, project development, and technical due diligence. Market driven by accelerating renewable capacity additions, DSO model adoption, and just-transition requirements. Demand for specialized expertise in grid integration, SCADA systems, and regulatory navigation."
+      },
+      {
+        "id": "energy-storage-systems",
+        "label": "Energy Storage Systems",
+        "description": "South Africa's BESS market is rapidly expanding with 1.4 GW capacity in 2023 growing to projected 2+ GW by 2026. IRP 2025 targets significant storage capacity. REIPPPP Bid Window 6 procured 500 MW BESS. Market driven by grid stability needs, renewable integration, and load-shedding mitigation. C&I storage adoption accelerating with 2-3 year payback economics."
+      },
+      {
+        "id": "grid-infrastructure-transmission",
+        "label": "Grid Infrastructure & Transmission",
+        "description": "Eskom's transmission assets separated into National Transmission Company South Africa (NTCSA) in 2024. Critical focus: grid upgrades to enable renewable integration, grid stabilization infrastructure, and regional interconnects. 6,000+ MW renewable capacity additions require massive transmission investment (R50B+). Congestion curtailment framework (NERSA approved Apr 2025) provides temporary relief but long-term expansion essential."
+      },
+      {
+        "id": "hydroelectric-power",
+        "label": "Hydroelectric Power",
+        "description": "Hydropower generation and dam operations"
+      },
+      {
+        "id": "just-energy-transition-workforce-development",
+        "label": "Just Energy Transition & Workforce Development",
+        "description": "Critical focus area supporting coal power phase-out and energy transition. Includes workforce retraining programs, community economic development, skills development, and social mitigation. Government Just-Transition Investment Program (JET-IP) allocating R131B. Major opportunity in skills training, vocational programs, and alternative employment generation in coal-dependent regions."
+      },
+      {
+        "id": "natural-gas-lng",
+        "label": "Natural Gas & LNG",
+        "description": "South Africa pursuing natural gas as transition fuel under IRP 2025 with 3,000 MW gas allocation. LNG import terminals under development (Richards Bay, Coega). ROMPCO pipeline from Mozambique supplies existing gas plants. Upstream Petroleum Bill pending. Market emerging with R30-50B investment pipeline for gas infrastructure and power plants."
+      },
+      {
+        "id": "nuclear-energy",
+        "label": "Nuclear Energy",
+        "description": "Nuclear power generation and related services"
+      },
+      {
+        "id": "vehicle-to-grid-v2g-ev-charging-infrastructure",
+        "label": "Vehicle-to-Grid (V2G) & EV Charging Infrastructure",
+        "description": "Emerging sector supporting electric vehicle (EV) transition and grid stability. V2G technology enables EV batteries to support grid (bidirectional charging). Charging infrastructure rapidly expanding with corporate EV adoption. Opportunities: public charging networks, workplace charging, fleet management, grid integration. Government pushing EV uptake (tax incentives, manufacturing support). Market emerging but explosive growth potential."
+      },
+      {
+        "id": "coal-mining",
+        "label": "Coal Mining",
+        "description": "Coal extraction and processing operations"
+      },
+      {
+        "id": "electric-utilities-distribution",
+        "label": "Electric Utilities & Distribution",
+        "description": "Electricity generation and distribution companies"
+      },
+      {
+        "id": "energy-equipment-manufacturing",
+        "label": "Energy Equipment & Manufacturing",
+        "description": "Manufacturers and suppliers of energy equipment"
+      },
+      {
+        "id": "gas-utilities",
+        "label": "Gas Utilities",
+        "description": "Natural gas distribution companies"
+      },
+      {
+        "id": "oil-gas",
+        "label": "Oil & Gas",
+        "description": "Upstream oil and gas exploration and production"
+      },
+      {
+        "id": "power-generation",
+        "label": "Power Generation",
+        "description": "Independent power producers and generation facilities"
+      },
+      {
+        "id": "renewable-energy",
+        "label": "Renewable Energy",
+        "description": "Clean energy development and operations"
+      },
+      {
+        "id": "solar-energy",
+        "label": "Solar Energy",
+        "description": "Solar panel installation and maintenance services"
+      },
+      {
+        "id": "wind-energy",
+        "label": "Wind Energy",
+        "description": "Wind farm development and operations"
+      }
+    ]
+  },
+  {
+    "id": "telecommunications",
+    "label": "Telecommunications",
+    "description": "Telecommunications providers and communication services",
+    "verticals": [
+      {
+        "id": "5g-network-services",
+        "label": "5G Network Services",
+        "description": "Next-generation mobile network technology and solutions"
+      },
+      {
+        "id": "cloud-communications-ucaas",
+        "label": "Cloud Communications & UCaaS",
+        "description": "Cloud-based communication platforms (UCaaS, CCaaS)"
+      },
+      {
+        "id": "data-centers-colocation",
+        "label": "Data Centers & Colocation",
+        "description": "Facilities providing server hosting, colocation, and cloud infrastructure services. South Africa market: 69 operational data centers (mostly Tier III standards), projected to grow to USD 843M by 2030 (12.76% CAGR). Major players: Teraco (Digital Realty), Vantage Data Centers, OADC, Digital Parks Africa, AWS, Microsoft Azure."
+      },
+      {
+        "id": "enterprise-connectivity-sd-wan",
+        "label": "Enterprise Connectivity & SD-WAN",
+        "description": "Providers delivering managed SD-WAN, MPLS replacement, and enterprise connectivity solutions to corporate and institutional customers. Market growing 3.84% CAGR with major players including Logicalis, Cisco, Verizon, and local operators (Telkom, Vodacom Business, MTN). Solutions bundling DIA (Dedicated Internet Access), SASE, SSE for security."
+      },
+      {
+        "id": "iot-connectivity",
+        "label": "IoT Connectivity",
+        "description": "Internet of Things network connectivity and platforms"
+      },
+      {
+        "id": "managed-network-services",
+        "label": "Managed Network Services",
+        "description": "Outsourced network management and monitoring"
+      },
+      {
+        "id": "satellite-communications-remote-connectivity",
+        "label": "Satellite Communications & Remote Connectivity",
+        "description": "Providers offering VSAT (Very Small Aperture Terminal), satellite backhaul, and remote connectivity solutions. Market serves oil/gas, mining, maritime, aviation, and rural telecom customers. Major providers: Hughes, GlobalTT, Telkom SA (SPACESTREAM), SEACOM, NTvsat. Growing demand for last-mile rural connectivity and disaster recovery."
+      },
+      {
+        "id": "telecom-consulting",
+        "label": "Telecom Consulting",
+        "description": "Strategic consulting for telecommunications infrastructure"
+      },
+      {
+        "id": "wireless-isps-fixed-wireless-access",
+        "label": "Wireless ISPs & Fixed Wireless Access",
+        "description": "Operators providing high-speed broadband using wireless technologies (LTE, 4G, 5G) as alternative to fixed fiber. Major players: Rain (most aggressive), Vodacom AirFibre (MTN subsidiary Supersonic), emerging operators using 700MHz. Market growing rapidly with FWA accessible to 78.9% of SA population in 2025."
+      },
+      {
+        "id": "cable-satellite",
+        "label": "Cable & Satellite",
+        "description": "Cable TV and satellite service providers"
+      },
+      {
+        "id": "fiber-network-operators",
+        "label": "Fiber Network Operators",
+        "description": "Fiber optic network installation and services"
+      },
+      {
+        "id": "internet-service-providers",
+        "label": "Internet Service Providers",
+        "description": "Internet connectivity services"
+      },
+      {
+        "id": "mobile-network-operators",
+        "label": "Mobile Network Operators",
+        "description": "Mobile network operators and carriers"
+      },
+      {
+        "id": "network-infrastructure",
+        "label": "Network Infrastructure",
+        "description": "Network equipment and infrastructure providers"
+      },
+      {
+        "id": "telecom-equipment-infrastructure",
+        "label": "Telecom Equipment & Infrastructure",
+        "description": "Telecommunications equipment sales and service"
+      },
+      {
+        "id": "tower-passive-infrastructure",
+        "label": "Tower & Passive Infrastructure",
+        "description": "Cell tower and infrastructure companies"
+      },
+      {
+        "id": "voip-services",
+        "label": "VoIP Services",
+        "description": "Voice over IP telephone services"
+      }
+    ]
+  },
+  {
+    "id": "media-entertainment",
+    "label": "Media & Entertainment",
+    "description": "Media companies, entertainment, and content creators",
+    "verticals": [
+      {
+        "id": "advertising-creative-services",
+        "label": "Advertising & Creative Services",
+        "description": "Creative advertising agencies, commercial production, and marketing content studios"
+      },
+      {
+        "id": "animation-visual-effects",
+        "label": "Animation & Visual Effects",
+        "description": "Animation studios, VFX production, and CGI services"
+      },
+      {
+        "id": "bookstores-media-retailers",
+        "label": "Bookstores & Media Retailers",
+        "description": "Book retailers, music stores, and media product shops"
+      },
+      {
+        "id": "digital-content-media",
+        "label": "Digital Content & Media",
+        "description": "South African influencers, content creators, YouTubers, TikTokers, and digital-first media platforms. Ecosystem includes 79,528 Instagram influencers (up to 500k followers), 500,000+ trained creators via theSalt, with 33.6% of social media users following influencers. Micro-influencer ROI averaging 600% (R6 per R1 spent). Creator economy growing rapidly with emerging platforms and direct sponsorship models."
+      },
+      {
+        "id": "film-video-production",
+        "label": "Film & Video Production",
+        "description": "South African film and video production industry serving international productions, local content creation, and streaming platforms. Market experiencing 50% contraction due to film rebate system delays, load shedding disruption, and streaming plateau. Gauteng and Western Cape are primary production hubs with €250M+ foreign investment (2023-2025)."
+      },
+      {
+        "id": "live-events-entertainment",
+        "label": "Live Events & Entertainment",
+        "description": "South African event management, live entertainment, and conference industry. Market growing with Cape Town ranked top African convention city and highest-ranked conference destination in Africa/Middle East. Major drivers include G20 summit hosting, 2027 Cricket World Cup co-hosting, Formula 1 aspirations, and destination festivals. Challenges include crime, visa processing delays, and load shedding impact on event reliability."
+      },
+      {
+        "id": "music-industry",
+        "label": "Music Industry",
+        "description": "South African music recording, publishing, live events, and streaming sector. Includes major record labels, independent artists, concert promotion companies, and streaming platform partnerships. Industry experiencing growth through streaming adoption, international festival presence (Jerk x Jollof in Cape Town), and SAMA awards ecosystem. 31st SAMA31 broadcast on YouTube and SABC1."
+      },
+      {
+        "id": "podcasting-audio-content",
+        "label": "Podcasting & Audio Content",
+        "description": "Podcast production, audio content creation, and distribution platforms"
+      },
+      {
+        "id": "print-media",
+        "label": "Print Media",
+        "description": "Newspapers, magazines, and print publications facing severe decline in South Africa. Print media is the only E&M segment forecast to shrink through 2028. Newspaper circulation dropped 17% year-on-year (Q2 2024). Major closures include Beeld, Rapport, City Press, Daily Sun. Limited success stories include Zululand Observer (24% growth) and TFG Club magazine (286,000 editions). Hybrid models combining targeted print with digital-first strategy showing promise."
+      },
+      {
+        "id": "theater-performing-arts",
+        "label": "Theater & Performing Arts",
+        "description": "Live theater companies, dance troupes, performance venues, and performing arts centers"
+      },
+      {
+        "id": "gaming-esports",
+        "label": "Gaming & Esports",
+        "description": "Video game development and esports organizations"
+      },
+      {
+        "id": "music-production",
+        "label": "Music Production",
+        "description": "Music recording, production, and labels"
+      },
+      {
+        "id": "news-media",
+        "label": "News Media",
+        "description": "News organizations and journalism"
+      },
+      {
+        "id": "publishing",
+        "label": "Publishing",
+        "description": "Book, magazine, and digital publishing"
+      },
+      {
+        "id": "radio-broadcasting",
+        "label": "Radio Broadcasting",
+        "description": "Radio stations and audio broadcasting"
+      },
+      {
+        "id": "sports-management",
+        "label": "Sports Management",
+        "description": "Sports teams, leagues, and athlete management"
+      },
+      {
+        "id": "streaming-services",
+        "label": "Streaming Services",
+        "description": "Digital streaming platforms and services"
+      },
+      {
+        "id": "television-broadcasting",
+        "label": "Television Broadcasting",
+        "description": "TV stations and broadcast networks"
+      }
+    ]
+  },
+  {
+    "id": "food-beverage",
+    "label": "Food & Beverage",
+    "description": "Food service, restaurants, catering, and beverage companies",
+    "verticals": [
+      {
+        "id": "agricultural-processing-value-add",
+        "label": "Agricultural Processing & Value-Add",
+        "description": "Agricultural processing and value-added production in South Africa including grain milling, fruit and vegetable processing, meat processing, and dairy. Links primary agriculture to food manufacturing. Challenges: raw material cost volatility, energy crisis, water constraints, and export market compliance."
+      },
+      {
+        "id": "alcoholic-beverages-manufacturing",
+        "label": "Alcoholic Beverages Manufacturing",
+        "description": "Alcoholic beverage manufacturing in South Africa with 52.91% of beverage market share. Market facing 6.75% excise duty increase (2025), progressive rates under consideration. Excise manufacturing warehouse (VM) registration mandatory. Key players: SAB (AB InBev), Distell, Heineken. Consumer moderation trends and craft beverage growth reshaping market."
+      },
+      {
+        "id": "bars-nightclubs",
+        "label": "Bars & Nightclubs",
+        "description": "Bars, pubs, lounges, and nightclub establishments"
+      },
+      {
+        "id": "cafes-coffee-shops",
+        "label": "Cafes & Coffee Shops",
+        "description": "Coffee shops, cafes, and tea houses"
+      },
+      {
+        "id": "catering-services",
+        "label": "Catering Services",
+        "description": "Event catering and food service providers"
+      },
+      {
+        "id": "food-manufacturing-processing",
+        "label": "Food Manufacturing & Processing",
+        "description": "Food manufacturing in South Africa with $19.8B market (2025) growing 5.06% CAGR. Market challenged by energy costs (450%+ increase from load shedding), 12.7% tariff increases, and Health Promotion Levy. Key players: Tiger Brands, Pioneer Foods, RCL Foods. NRCS food safety compliance mandatory. B-BBEE transformation required."
+      },
+      {
+        "id": "food-packaging-manufacturing",
+        "label": "Food Packaging Manufacturing",
+        "description": "Food packaging manufacturing in South Africa serving food and beverage producers. Market driven by Extended Producer Responsibility (EPR) with 8% recycled content mandate, sustainable packaging demand, and retailer requirements. Challenges: raw material costs, recycled content sourcing, energy costs, and design innovation pressure."
+      },
+      {
+        "id": "food-retail-supermarkets",
+        "label": "Food Retail & Supermarkets",
+        "description": "Food retail and supermarkets in South Africa with $42.69B forecast by 2029, growing 7.25% CAGR. Market led by Shoprite, Pick n Pay, Woolworths, SPAR. Independent wholesalers (Devland, Elite Star) gaining ground. Challenges: competition law scrutiny, cold chain breakdowns, e-commerce pressure, rising food prices 8-15% YoY."
+      },
+      {
+        "id": "food-safety-quality-testing",
+        "label": "Food Safety & Quality Testing",
+        "description": "Food safety testing, quality assurance, and certification services in South Africa. Market driven by NRCS compliance requirements, export certification, retailer audit demands, and consumer safety expectations. Key players: SGS, Intertek, Eurofins, SANAS-accredited labs. Growing demand for traceability and contaminant testing."
+      },
+      {
+        "id": "full-service-restaurants-casual-dining",
+        "label": "Full Service Restaurants & Casual Dining",
+        "description": "Full service and casual dining restaurants in South Africa, second largest foodservice segment. Market driven by experience-focused dining, premiumization, and delivery integration. Key players: Spur, Ocean Basket, Hussar Grill, Tasha's. Challenges: labor costs, energy crisis, consumer discretionary spending pressure, delivery economics."
+      },
+      {
+        "id": "non-alcoholic-beverage-manufacturing",
+        "label": "Non-Alcoholic Beverage Manufacturing",
+        "description": "Non-alcoholic beverage manufacturing in South Africa with 47.09% market share, growing 6.84% CAGR (outpacing alcoholic). Market reaching $25.34B by 2030. Key segments: sugar-free energy drinks, RTD teas, plant-based milks, functional beverages. Health Promotion Levy driving reformulation. >50% of products require warning labels."
+      },
+      {
+        "id": "quick-service-restaurants-qsr",
+        "label": "Quick Service Restaurants (QSR)",
+        "description": "Quick service restaurants (fast food) in South Africa with 39.22% of $10.16B foodservice market, growing 8.4% CAGR to $20.11B by 2030. Approximately 5,982 restaurants. Key players: KFC, McDonald's, Nando's, Pedros. Top 15 brands control 80%. Chicken Wars dominating competitive landscape. 9 of top 10 QSRs showing declining foot traffic despite growth."
+      },
+      {
+        "id": "specialty-food-beverage",
+        "label": "Specialty Food & Beverage",
+        "description": "Specialty food stores, wine shops, gourmet retailers, and organic food markets"
+      },
+      {
+        "id": "bakeries",
+        "label": "Bakeries",
+        "description": "Bread, pastry, and baked goods production"
+      },
+      {
+        "id": "beverage-distribution",
+        "label": "Beverage Distribution",
+        "description": "Wholesale distribution of beverages"
+      },
+      {
+        "id": "convenience-stores",
+        "label": "Convenience Stores",
+        "description": "Small-format convenience retail"
+      },
+      {
+        "id": "beverage-manufacturing",
+        "label": "Beverage Manufacturing",
+        "description": "Production of soft drinks and beverages"
+      },
+      {
+        "id": "breweries-distilleries",
+        "label": "Breweries & Distilleries",
+        "description": "Beer, spirits, and alcoholic beverage production"
+      },
+      {
+        "id": "butcheries",
+        "label": "Butcheries",
+        "description": "Meat processing and retail operations"
+      },
+      {
+        "id": "coffee-roasters",
+        "label": "Coffee Roasters",
+        "description": "Coffee roasting and specialty coffee production"
+      },
+      {
+        "id": "delis-specialty-foods",
+        "label": "Delis & Specialty Foods",
+        "description": "Specialty food shops and delicatessens"
+      },
+      {
+        "id": "grocery-stores",
+        "label": "Grocery Stores",
+        "description": "Food and grocery retail"
+      },
+      {
+        "id": "food-distribution-wholesale",
+        "label": "Food Distribution & Wholesale",
+        "description": "Wholesale food supply and distribution"
+      },
+      {
+        "id": "food-trucks",
+        "label": "Food Trucks",
+        "description": "Mobile food service operations"
+      }
+    ]
+  },
+  {
+    "id": "security",
+    "label": "Security",
+    "description": "Security services, protection, and safety companies",
+    "verticals": [
+      {
+        "id": "armed-response-monitoring",
+        "label": "Armed Response & Monitoring",
+        "description": "24/7 armed response teams, monitoring center operations, panic button response, and rapid emergency dispatch. Average armed response costs R700-800/month. Sub-5-minute response time targets. High demand due to crime rates in Gauteng, Western Cape, and KZN."
+      },
+      {
+        "id": "cash-in-transit-asset-protection",
+        "label": "Cash-in-Transit & Asset Protection",
+        "description": "Armored vehicle services and secure cash handling"
+      },
+      {
+        "id": "cybersecurity",
+        "label": "Cybersecurity",
+        "description": "Digital security, threat detection, and cyber defense services"
+      },
+      {
+        "id": "electronic-security-systems",
+        "label": "Electronic Security Systems",
+        "description": "Access control and biometric systems"
+      },
+      {
+        "id": "event-security",
+        "label": "Event Security",
+        "description": "Security services for events, venues, and temporary installations"
+      },
+      {
+        "id": "guarding-services",
+        "label": "Guarding Services",
+        "description": "Physical security personnel for residential, commercial, retail, and industrial facilities. South Africa has the largest private security industry globally relative to population with 4:1 personnel to police ratio. Market driven by SAPS capacity constraints, load shedding vulnerabilities, and high crime rates in Gauteng, Western Cape, and KwaZulu-Natal."
+      },
+      {
+        "id": "security-consulting-risk-assessment",
+        "label": "Security Consulting & Risk Assessment",
+        "description": "Security risk assessment, design, and consulting services"
+      },
+      {
+        "id": "security-technology-integration",
+        "label": "Security Technology & Integration",
+        "description": "Systems integration, platform development, AI/ML security solutions, IoT deployment, and security architecture consulting. South Africa leads African AI adoption with 60% data centre market share. Government implemented 23 AI tools in 2025. Strong demand for integrated security ecosystems."
+      },
+      {
+        "id": "security-training-compliance",
+        "label": "Security Training & Compliance",
+        "description": "PSIRA training, security officer certification, compliance training, advanced specialization courses, and professional development. Multiple PSIRA-accredited training centers. Certification levels from Grade E to Grade A. 7% mandated annual wage increase affects training budgets."
+      },
+      {
+        "id": "vip-protection-executive-security",
+        "label": "VIP Protection & Executive Security",
+        "description": "Close protection services, threat assessment, security detail deployment, secure transport, and dignitary protection. Government spends R1.5B annually on VIP protection. High-profile kidnapping risks in Gauteng and KZN. Corporate executive threat levels increasing."
+      }
+    ]
+  },
+  {
+    "id": "automotive",
+    "label": "Automotive",
+    "description": "Automotive dealerships, repair, and vehicle services",
+    "verticals": [
+      {
+        "id": "auto-manufacturing",
+        "label": "Auto Manufacturing",
+        "description": "Vehicle manufacturers and assembly plants"
+      },
+      {
+        "id": "auto-parts-stores",
+        "label": "Auto Parts Stores"
+      },
+      {
+        "id": "auto-parts-suppliers",
+        "label": "Auto Parts Suppliers",
+        "description": "Wholesale and retail automotive parts distributors"
+      },
+      {
+        "id": "auto-repair",
+        "label": "Auto Repair",
+        "description": "Automotive repair and maintenance"
+      },
+      {
+        "id": "car-dealerships",
+        "label": "Car Dealerships",
+        "description": "New and used car dealerships"
+      },
+      {
+        "id": "car-rentals",
+        "label": "Car Rentals",
+        "description": "Car rental and vehicle hire"
+      },
+      {
+        "id": "engine-repair-garages",
+        "label": "Engine Repair Garages"
+      },
+      {
+        "id": "fleet-vehicle-leasing-services",
+        "label": "Fleet & Vehicle Leasing Services",
+        "description": "Commercial fleet management and vehicle tracking services"
+      },
+      {
+        "id": "panel-beaters",
+        "label": "Panel Beaters",
+        "description": "Panel beating and collision repair"
+      },
+      {
+        "id": "petrol-stations",
+        "label": "Petrol Stations"
+      },
+      {
+        "id": "tyre-services",
+        "label": "Tyre Services",
+        "description": "Tyre sales and services"
+      }
+    ]
+  },
+  {
+    "id": "beauty-wellness",
+    "label": "Beauty & Wellness",
+    "description": "Beauty salons, spas, wellness centers, and personal care",
+    "verticals": [
+      {
+        "id": "beauty-cosmetics-retail",
+        "label": "Beauty & Cosmetics Retail",
+        "description": "South Africa's cosmetics retail market is valued at USD 2.94-3.97 billion (2025) with projected growth to USD 5.29 billion by 2030. Dominated by pharmacy retailers Clicks and Dis-Chem. Supermarkets and hypermarkets hold 40.34% market share, while specialty beauty stores are the fastest-growing channel at 8.21% CAGR. Online retail at 12.5% of sales with 8.34% projected growth."
+      },
+      {
+        "id": "beauty-training-academies",
+        "label": "Beauty Training & Academies",
+        "description": "South Africa's beauty education sector is regulated by Services SETA and offers pathways to careers in hairdressing, beauty therapy, nail technology, and aesthetic treatments. Key accredited institutions include Hydro International College, The Beauty Hub Academy, Face to Face Beauty School, Blush Academy, and Beautique Academy. Qualifications are recognized by Services SETA, QCTO, and international bodies like ITEC and CIDESCO. The sector serves both aspiring professionals and existing practitioners seeking upskilling, addressing significant skills gaps in the industry."
+      },
+      {
+        "id": "fitness-centers-gyms",
+        "label": "Fitness Centers & Gyms",
+        "description": "South Africa's fitness market generated approximately USD 400 million in 2022, projected to reach USD 600 million by 2030. Dominated by Virgin Active (60-70% market share, 137 branches) and Planet Fitness (50+ gyms, expanding 5 annually). The sector includes premium chains, budget gyms like Just Gym (R200-300/month), boutique studios, and CrossFit boxes. Gym fees increased 20.5% year-over-year through 2025."
+      },
+      {
+        "id": "hair-salons-barbershops",
+        "label": "Hair Salons & Barbershops",
+        "description": "Hair salons and barbershops"
+      },
+      {
+        "id": "makeup-studios",
+        "label": "Makeup Studios",
+        "description": "Professional makeup artists and studios"
+      },
+      {
+        "id": "massage-therapy-centers",
+        "label": "Massage Therapy Centers",
+        "description": "Massage therapy and bodywork centers"
+      },
+      {
+        "id": "medical-aesthetics-cosmetic-surgery",
+        "label": "Medical Aesthetics & Cosmetic Surgery",
+        "description": "Plastic surgery and cosmetic procedure clinics"
+      },
+      {
+        "id": "mobile-beauty-services",
+        "label": "Mobile Beauty Services",
+        "description": "Mobile beauty services represent a growing segment in South Africa, offering convenient at-home or on-location services including haircuts, nail treatments, makeup, and facials. The sector is driven by time-poor urban professionals and enabled by booking apps and social media marketing. Operators range from individual freelancers to organized mobile service platforms. The model benefits from low overhead costs but faces challenges in pricing, logistics, and establishing trust. Mobile services gained significant traction post-pandemic as clients sought safer, more convenient options."
+      },
+      {
+        "id": "nail-salons-beauty-bars",
+        "label": "Nail Salons & Beauty Bars",
+        "description": "Nail salons and nail bars"
+      },
+      {
+        "id": "personal-care-product-manufacturing",
+        "label": "Personal Care Product Manufacturing",
+        "description": "South Africa's personal care manufacturing sector is valued at approximately R20 billion at manufacturing level (R27 billion at retail), making it the largest in Africa. The industry includes multinational manufacturing (Unilever, P&G), local brand owners (Tiger Brands, Indigo Brands, Annique), contract manufacturers (Brunational, Alchem Labs, Customised Cosmetics, AIC), and SME/cottage industry producers."
+      },
+      {
+        "id": "skincare-aesthetics-clinics",
+        "label": "Skincare & Aesthetics Clinics",
+        "description": "South Africa's skincare products market is expected to reach USD 0.83 billion in 2025, growing at 7.06% CAGR. The aesthetic devices market is projected to reach USD 102.97 million in 2025, growing at 11.51% CAGR to USD 177.53 million by 2030. Leading clinic chains include Skin Renewal (20 clinics across 3 provinces), Laserderm, Natural Aesthetics, and Body360. The sector bridges medical and beauty services, with strict HPCSA regulations governing injectable treatments."
+      },
+      {
+        "id": "spas-wellness-centers",
+        "label": "Spas & Wellness Centers",
+        "description": "South Africa's spa market is projected to grow by USD 700 million from 2024-2029, with the broader Africa wellness tourism market expected to reach USD 94.04 billion by 2025. The sector ranges from luxury destination spas at safari lodges to urban day spas and township wellness centers. Key players include Africology, Mangwanani, Camelot Spa, and spa facilities at major hotel groups."
+      },
+      {
+        "id": "tanning-salons",
+        "label": "Tanning Salons",
+        "description": "Tanning and spray tan salons"
+      }
+    ]
+  },
+  {
+    "id": "insurance",
+    "label": "Insurance",
+    "description": "Insurance companies, brokers, and risk management services",
+    "verticals": [
+      {
+        "id": "claims-management-administration",
+        "label": "Claims Management & Administration",
+        "description": "Claims management, administration, and third-party administration (TPA) services in South Africa for life and non-life insurers. Market driven by efficiency demands, fraud detection, customer experience expectations, and climate-related claims surges. Key challenges: load shedding claims, motor theft, and weather events."
+      },
+      {
+        "id": "commercial-specialty-insurance",
+        "label": "Commercial & Specialty Insurance",
+        "description": "Commercial and specialty insurance in South Africa including D&O liability, professional indemnity, cyber insurance, marine, aviation, and engineering. Market driven by corporate governance requirements, cyber threat escalation, and specialized risk expertise. Key players: AIG, Chubb, Allianz, Zurich, local specialists."
+      },
+      {
+        "id": "funeral-insurance",
+        "label": "Funeral Insurance",
+        "description": "Funeral cover and burial insurance providers"
+      },
+      {
+        "id": "health-insurance-medical-schemes",
+        "label": "Health Insurance & Medical Schemes"
+      },
+      {
+        "id": "insurance-brokers-intermediaries",
+        "label": "Insurance Brokers & Intermediaries",
+        "description": "Insurance brokers, agents, and intermediaries in South Africa. Brokers handle ~45% of P&C insurance, agents ~20%, banks/direct ~35%. Market with 1000+ licensed brokers and 5000+ agents. Key players: Santam, Hollard, Zurich SA. FAIS Act primary regulatory framework. Digital disruption threatening traditional commission models."
+      },
+      {
+        "id": "insurance-technology-insurtech",
+        "label": "Insurance Technology (InsurTech)",
+        "description": "Digital insurance platforms and technology solutions"
+      },
+      {
+        "id": "life-insurance",
+        "label": "Life Insurance",
+        "description": "Life insurance providers"
+      },
+      {
+        "id": "reinsurance",
+        "label": "Reinsurance",
+        "description": "Insurance providers for insurance companies"
+      },
+      {
+        "id": "risk-management-actuarial-services",
+        "label": "Risk Management & Actuarial Services",
+        "description": "Professional actuarial consulting, risk modeling, valuation, and strategic advisory to insurers and pension funds in South Africa. Market with 500+ qualified actuaries. Key players: Insight Life Solutions, Directrix, QED Actuaries, Big 4 (PwC, EY, KPMG, Deloitte). IFRS 17 Feb 2025 deadline major demand driver. ASSA (Actuarial Society of SA) oversight."
+      },
+      {
+        "id": "short-term-insurance",
+        "label": "Short-Term Insurance",
+        "description": "Short-term and general insurance"
+      },
+      {
+        "id": "vehicle-insurance",
+        "label": "Vehicle Insurance",
+        "description": "Auto and vehicle insurance providers"
+      }
+    ]
+  },
+  {
+    "id": "marketing-advertising",
+    "label": "Marketing & Advertising",
+    "description": "Marketing agencies, advertising, and branding services",
+    "verticals": [
+      {
+        "id": "brand-strategy-consulting",
+        "label": "Brand Strategy & Consulting",
+        "description": "South Africa brand strategy and consulting market within ICT consulting projected at $49B+ by 2028 (6% CAGR). 92% of enterprises increased budgets in 2024. Services include brand positioning, market research, transformation execution, competitive intelligence, and go-to-market strategy with SA-specific expertise in B-BBEE, load shedding, and language diversity."
+      },
+      {
+        "id": "content-marketing-seo",
+        "label": "Content Marketing & SEO",
+        "description": "Content creation, copywriting, and content strategy services"
+      },
+      {
+        "id": "digital-marketing",
+        "label": "Digital Marketing",
+        "description": "Digital marketing and online advertising"
+      },
+      {
+        "id": "event-marketing",
+        "label": "Event Marketing",
+        "description": "Event planning, trade shows, and experiential marketing"
+      },
+      {
+        "id": "graphic-design",
+        "label": "Graphic Design",
+        "description": "Graphic design and branding"
+      },
+      {
+        "id": "influencer-marketing",
+        "label": "Influencer Marketing",
+        "description": "South Africa influencer advertising market projected at $44.28M by 2029 (10.29% CAGR 2024-2029). Microinfluencer ROI averages 600% (R6 per R1 spent). Services include creator discovery, fraud detection, campaign management, and ROI attribution. Growing focus on authenticity, ARB Code compliance, and long-tail creator relationships."
+      },
+      {
+        "id": "market-research-analytics",
+        "label": "Market Research & Analytics",
+        "description": "South Africa data analytics market projected at $2,758.9M by 2030 (17.3% CAGR 2025-2030). Enterprise ICT budgets up 92% in 2024. Services include consumer research, competitive intelligence, brand tracking, market sizing, and advanced analytics. Growing focus on AI/ML capabilities, real-time dashboards, and SA-specific data quality solutions."
+      },
+      {
+        "id": "marketing-automation",
+        "label": "Marketing Automation",
+        "description": "Marketing technology and automation platforms"
+      },
+      {
+        "id": "marketing-technology-martech",
+        "label": "Marketing Technology (MarTech)",
+        "description": "Global MarTech market projected at $215B+ by 2027 (13.3% CAGR). South Africa enterprise ICT budgets up 92% in 2024. Solutions include marketing automation, CRM, CDP, analytics, email platforms, and personalization tools. Key focus on POPIA compliance, integration complexity, and cost optimization."
+      },
+      {
+        "id": "out-of-home-ooh-advertising",
+        "label": "Out-of-Home (OOH) Advertising",
+        "description": "South Africa OOH and DOOH market valued at $249.94M in 2025, projected $293.70M by 2030 (3.28% CAGR). DOOH growing 7.4% annually. Services include billboard advertising, digital screens, transit advertising, and programmatic DOOH. Load shedding impact down 82% in 2025. Key focus on measurement, programmatic buying, and omnichannel integration."
+      },
+      {
+        "id": "public-relations-communications",
+        "label": "Public Relations & Communications",
+        "description": "Public relations and communications"
+      },
+      {
+        "id": "seo-sem-agencies",
+        "label": "SEO/SEM Agencies",
+        "description": "Search engine optimization and search engine marketing"
+      },
+      {
+        "id": "social-media-marketing",
+        "label": "Social Media Marketing",
+        "description": "Social media management and influencer marketing"
+      },
+      {
+        "id": "traditional-advertising-agencies",
+        "label": "Traditional Advertising Agencies",
+        "description": "Full-service agencies providing TV, radio, print, and outdoor advertising services including media planning, media buying, and creative production. TV & Video advertising largest segment ($742.65M in 2025), but digital expected to reach 74% of total ad spend by 2029. Major cities: Johannesburg (advertising capital), Cape Town, Durban."
+      },
+      {
+        "id": "video-production",
+        "label": "Video Production",
+        "description": "Video and film production"
+      }
+    ]
+  },
+  {
+    "id": "human-resources",
+    "label": "Human Resources",
+    "description": "HR services, staffing agencies, and recruitment firms",
+    "verticals": [
+      {
+        "id": "compensation-rewards-consulting",
+        "label": "Compensation & Rewards Consulting",
+        "description": "Salary benchmarking, incentive design, and total rewards strategy"
+      },
+      {
+        "id": "employee-engagement-culture",
+        "label": "Employee Engagement & Culture",
+        "description": "Employee satisfaction, culture consulting, and engagement platforms"
+      },
+      {
+        "id": "employee-wellness-eap",
+        "label": "Employee Wellness & EAP",
+        "description": "Employee Assistance Programs and corporate wellness services addressing mental health, lifestyle, and workplace wellbeing. Key providers include ICAS, Careways, and Company Wellness Solutions. Market estimated at R1-2 billion with growing demand driven by workplace stress (40%+ of workforce affected), mental health awareness, and productivity concerns."
+      },
+      {
+        "id": "employer-branding-talent-marketing",
+        "label": "Employer Branding & Talent Marketing",
+        "description": "Recruitment marketing, employer brand strategy, and candidate experience"
+      },
+      {
+        "id": "hr-consulting-compliance",
+        "label": "HR Consulting & Compliance",
+        "description": "Labor law compliance, HR policy development, and regulatory advisory"
+      },
+      {
+        "id": "labour-relations-ir-consulting",
+        "label": "Labour Relations & IR Consulting",
+        "description": "Industrial relations advisory services including CCMA representation, union negotiations, disciplinary hearings, and retrenchment consulting. Key players include Chamlabour, Cape Labour, and The GEO. Market driven by high CCMA case volumes (~190,000 annually), union activity, and complex SA labour legislation requiring specialist expertise."
+      },
+      {
+        "id": "payroll-benefits-administration",
+        "label": "Payroll & Benefits Administration",
+        "description": "Outsourced payroll processing, benefits administration, and related compliance services. Market led by Sage Payroll, PaySpace, and specialist providers like CRS and Payroll Hub. Strong growth in cloud-based solutions with market estimated at R2-4 billion. High demand driven by compliance complexity around UIF, PAYE, SDL, and COIDA."
+      },
+      {
+        "id": "performance-management-solutions",
+        "label": "Performance Management Solutions",
+        "description": "Performance review systems, goal tracking, and talent analytics"
+      },
+      {
+        "id": "permanent-recruitment-agencies",
+        "label": "Permanent Recruitment Agencies",
+        "description": "Specialized agencies placing permanent employees across all levels and sectors. Market dominated by Quest Staffing, Communicate Personnel, and specialist IT recruiters like OfferZen. Industry facing pressure from AI-driven platforms and in-house recruitment teams. Estimated R5-8 billion market with fees typically 15-20% of annual salary."
+      },
+      {
+        "id": "temporary-staffing-agencies-tes",
+        "label": "Temporary Staffing Agencies (TES)",
+        "description": "Labour brokers and Temporary Employment Services (TES) providing flexible workforce solutions across sectors. The market is heavily regulated under Section 198 of the LRA with the three-month deeming provision. Major players include Adcorp, MASA Outsourcing, and Quest Staffing. Market estimated at R15-20 billion, with manufacturing, retail, and logistics driving demand."
+      },
+      {
+        "id": "background-screening-verification",
+        "label": "Background Screening & Verification",
+        "description": "Employee verification and screening services"
+      },
+      {
+        "id": "benefits-administration",
+        "label": "Benefits Administration",
+        "description": "Employee benefits management and administration"
+      },
+      {
+        "id": "executive-search",
+        "label": "Executive Search",
+        "description": "Senior-level recruitment and headhunting"
+      },
+      {
+        "id": "hr-technology-hris-hcm",
+        "label": "HR Technology (HRIS/HCM)",
+        "description": "HR software and technology solutions"
+      },
+      {
+        "id": "outplacement-services",
+        "label": "Outplacement Services",
+        "description": "Career transition and outplacement support"
+      },
+      {
+        "id": "recruitment-agencies",
+        "label": "Recruitment Agencies",
+        "description": "Professional and permanent placement services"
+      },
+      {
+        "id": "training-development",
+        "label": "Training & Development",
+        "description": "Corporate training and skills development"
+      },
+      {
+        "id": "workforce-management",
+        "label": "Workforce Management",
+        "description": "Workforce planning and management solutions"
+      }
+    ]
+  },
+  {
+    "id": "environmental-services",
+    "label": "Environmental Services",
+    "description": "Environmental services, waste management, and sustainability consulting",
+    "verticals": [
+      {
+        "id": "asbestos-abatement",
+        "label": "Asbestos Abatement",
+        "description": "Safe removal and disposal of asbestos-containing materials"
+      },
+      {
+        "id": "conservation-biodiversity-services",
+        "label": "Conservation & Biodiversity Services",
+        "description": "South Africa is one of the world's most biodiverse countries, governed by NEMBA (2004) and the Protected Areas Act (2003). SANBI leads national biodiversity policy implementation. Key challenges include rhino poaching, habitat loss, and invasive species. A draft Biodiversity Bill (2024) proposes enhanced animal welfare provisions. The sector serves mining (biodiversity offsets), development (ecological assessments), and conservation organizations."
+      },
+      {
+        "id": "environmental-consulting-compliance",
+        "label": "Environmental Consulting & Compliance",
+        "description": "Environmental compliance in South Africa spans NEMA, the National Water Act, Waste Act, and Air Quality Act, requiring integrated management systems. ISO 14001 certification is widespread, with BSI Group authorized for SANAS accreditation. Regulation 34 audits are mandatory for EA holders, while 92% of surveyed organizations consider environmental compliance important. Key service providers include ENVASS, KCM Environmental, and major certification bodies."
+      },
+      {
+        "id": "environmental-monitoring-testing",
+        "label": "Environmental Monitoring & Testing",
+        "description": "South Africa's air quality sector is governed by the National Environmental Management: Air Quality Act (Act 39 of 2004), with three priority areas declared (Highveld, Vaal Triangle, Waterberg-Bojanala). Only 44 of 130 government monitoring stations meet minimum data requirements. The March 2025 Highveld Priority Area Plan introduced stringent emission reduction targets, while industries face Minimum Emission Standards (MES) compliance deadlines."
+      },
+      {
+        "id": "erosion-control",
+        "label": "Erosion Control",
+        "description": "Soil stabilization and erosion prevention services"
+      },
+      {
+        "id": "green-building-sustainable-construction",
+        "label": "Green Building & Sustainable Construction",
+        "description": "South Africa's green building sector is led by GBCSA, which has certified over 1,000 buildings since 2008. Green Star V2 launched in December 2024 introduces stricter requirements including climate resilience risk mapping. The 2025 Costs & Trends Report shows declining green premiums as efficient technologies become mainstream. Net Zero certification is available for new and existing buildings, with Johannesburg, Cape Town, and Durban leading adoption."
+      },
+      {
+        "id": "renewable-energy-services",
+        "label": "Renewable Energy Services",
+        "description": "South Africa's renewable energy sector is experiencing explosive growth, with 9.4+ GW of cumulative solar capacity by mid-2025 and 3,940 MW procured under REIPPPP Bid Window 7. The IRP 2025 targets 105 GW of additional capacity by 2039, unlocking R2.23 trillion in investment. Key opportunities include IPP development support, grid connection services, O&M, and the emerging BESS market with 1.7 GW/11 GWh secured."
+      },
+      {
+        "id": "site-remediation-rehabilitation",
+        "label": "Site Remediation & Rehabilitation",
+        "description": "South Africa's mining legacy has left extensive contaminated land requiring remediation, governed primarily by NEMA, MPRDA, and the National Water Act. Mining companies must set aside financial provision for rehabilitation before commencing operations. Key challenges include acid mine drainage, tailings dam management, and historical mine site rehabilitation. The sector serves mining, petroleum, industrial, and brownfield redevelopment markets."
+      },
+      {
+        "id": "stormwater-management",
+        "label": "Stormwater Management",
+        "description": "Stormwater system design, installation, and maintenance services"
+      },
+      {
+        "id": "sustainability-carbon-services",
+        "label": "Sustainability & Carbon Services",
+        "description": "South Africa's carbon tax increased to R236/tCO2e in 2025, rising to R308 in 2026 with reduced allowances creating a potential 386% effective rate increase. The EU CBAM threatens R52.4 billion of exports. Over 60% of SA corporations target net-zero by 2030. Key players include EY, Deloitte, PwC, Anthesis Group, and local specialists like Brundtland Consulting and Carbon Trust South Africa."
+      },
+      {
+        "id": "hazardous-waste-disposal",
+        "label": "Hazardous Waste Disposal",
+        "description": "Safe disposal of hazardous materials"
+      },
+      {
+        "id": "waste-management-recycling",
+        "label": "Waste Management & Recycling",
+        "description": "Material recovery and recycling operations"
+      },
+      {
+        "id": "water-treatment-management",
+        "label": "Water Treatment & Management",
+        "description": "Water and wastewater treatment services"
+      }
+    ]
+  },
+  {
+    "id": "non-profit",
+    "label": "Non-Profit",
+    "description": "Non-profit organizations, charities, and foundations",
+    "verticals": [
+      {
+        "id": "advocacy-organizations",
+        "label": "Advocacy Organizations",
+        "description": "South Africa has a robust human rights and advocacy sector with constitutional mandate from the Bill of Rights. Key organizations include the South African Human Rights Commission (statutory), Foundation for Human Rights, SERI, Centre for Environmental Rights, and numerous issue-specific advocates. The Open Society Foundation for South Africa (OSF-SA) celebrated 30 years in 2024. The sector addresses xenophobia (2,946 displaced in 2024), gender-based violence (top 6 femicide rate globally), land rights, environmental justice, and immigrant rights."
+      },
+      {
+        "id": "animal-welfare-protection",
+        "label": "Animal Welfare & Protection",
+        "description": "Animal rescue, shelters, and wildlife conservation organizations"
+      },
+      {
+        "id": "disaster-relief-emergency-services",
+        "label": "Disaster Relief & Emergency Services",
+        "description": "Emergency response and disaster preparedness organizations"
+      },
+      {
+        "id": "education-youth-development",
+        "label": "Education & Youth Development",
+        "description": "South Africa's education NGO sector spans Early Childhood Development (ECD), primary/secondary support, tertiary access, and youth employment programs. Government allocated R469 million to ECCE outcomes fund in late 2024, with R18.93 billion annual requirement projected by 2030. Over 28,000 ECD centers serve 3+ million children, but 61% lack adequate books and 50% of practitioners need training. Key players include Ntataise, Breadline Africa, Education Africa, and numerous youth development organizations targeting the 63% youth unemployment crisis."
+      },
+      {
+        "id": "environmental-conservation-organizations",
+        "label": "Environmental & Conservation Organizations",
+        "description": "South Africa's environmental NGO sector includes major players like WWF-SA, Endangered Wildlife Trust, WESSA, Conservation South Africa, and Peace Parks Foundation. The sector is mobilizing around the 30x30 target (conserving 30% of biodiversity by 2030), with WILDTRUST appointed as funding manager for a new collaboration. Conservation SA aims to create 30,000 nature-positive jobs by 2030 protecting 2 million hectares. Funding comes from international conservation donors, government, corporate sustainability programs, and tourism-linked revenue."
+      },
+      {
+        "id": "food-security-hunger-relief",
+        "label": "Food Security & Hunger Relief",
+        "description": "Food banks, meal programs, and hunger-fighting organizations"
+      },
+      {
+        "id": "health-medical-charities",
+        "label": "Health & Medical Charities",
+        "description": "South Africa's health NGO sector is dominated by HIV/AIDS organizations given the country's world-highest HIV burden (1 in 5 people living with virus). Major players include NACOSA, AIDS Foundation SA, MSF, and AHF, with PEPFAR historically providing 17% of HIV budget. The sector raised approximately R350 million through Fundnation alone from 2022-2024. Following 2025 USAID cuts, organizations are exploring social bonds, endowments, and resource pooling."
+      },
+      {
+        "id": "international-development-ngos",
+        "label": "International Development NGOs",
+        "description": "South Africa hosts major international development organizations managing significant foreign aid flows, with USAID providing approximately $581 million in FY2024 and EU programs supporting regional development. Key players include Pact, MSF, Christian Aid, and various UN agencies operating through PEPFAR, Global Fund, and bilateral programs. The sector faces major disruption following 2025 USAID funding cuts, with organizations pivoting to diversified funding and local resource mobilization."
+      },
+      {
+        "id": "religious-faith-based-organizations",
+        "label": "Religious & Faith-Based Organizations",
+        "description": "South Africa has a vibrant faith-based organization (FBO) sector with the South African Council of Churches (SACC) and Freedom of Religion SA (representing approximately 6 million people) as major umbrella bodies. FBOs often operate ECD centers from church halls, run soup kitchens and shelters, and provide disaster relief as first responders. Many congregations operate informally without NPO registration. Funding comes from congregational giving, international religious bodies, and some corporate/foundation grants."
+      },
+      {
+        "id": "veterans-military-support",
+        "label": "Veterans & Military Support",
+        "description": "Organizations serving veterans and military families"
+      },
+      {
+        "id": "youth-development",
+        "label": "Youth Development",
+        "description": "Youth programs, mentoring, and development organizations"
+      },
+      {
+        "id": "arts-culture",
+        "label": "Arts & Culture",
+        "description": "Museums, galleries, and cultural organizations"
+      },
+      {
+        "id": "charitable-foundations",
+        "label": "Charitable Foundations",
+        "description": "Grant-making and charitable foundations"
+      },
+      {
+        "id": "community-development",
+        "label": "Community Development",
+        "description": "Local community improvement organizations"
+      },
+      {
+        "id": "humanitarian-organizations",
+        "label": "Humanitarian Organizations",
+        "description": "International aid and disaster relief"
+      },
+      {
+        "id": "social-services",
+        "label": "Social Services",
+        "description": "Social welfare and support services"
+      }
+    ]
+  },
+  {
+    "id": "mining-resources",
+    "label": "Mining",
+    "description": "Extraction and processing of minerals, metals, and natural resources",
+    "verticals": [
+      {
+        "id": "chromite-mining",
+        "label": "Chromite Mining",
+        "description": "Chromite extraction for stainless steel and ferrochrome production"
+      },
+      {
+        "id": "chromium-ferrochrome-mining",
+        "label": "Chromium & Ferrochrome Mining",
+        "description": "South Africa controls 72% of world chromium reserves and is the largest ferrochrome producer, supplying 3.3 million tonnes annually. Chromite ore is essential for stainless steel production (85% of demand) and increasingly important for battery technology. The sector employs ~15,000 workers and faces cyclical demand tied to global steel production."
+      },
+      {
+        "id": "iron-ore-vanadium-mining",
+        "label": "Iron Ore & Vanadium Mining",
+        "description": "South Africa produces 64 million tonnes of iron ore annually (4% of global output) with 1 billion tonnes of reserves. The vanadium sector is significant for battery and steel applications. Iron ore is mined primarily in the Northern Cape (Sishen, Kolomela) and exported via Saldanha. Vanadium production (~2,000 tonnes) supports steel strengthening and emerging battery applications. Market is cyclical, tied to Chinese steel demand."
+      },
+      {
+        "id": "manganese-mining-processing",
+        "label": "Manganese Mining & Processing",
+        "description": "Manganese extraction for steel production and batteries"
+      },
+      {
+        "id": "mine-rehabilitation-services",
+        "label": "Mine Rehabilitation Services",
+        "description": "Environmental restoration and closure services for mining sites"
+      },
+      {
+        "id": "mining-consulting-technical-advisory",
+        "label": "Mining Consulting & Technical Advisory",
+        "description": "South Africa's mining consulting and technical advisory sector supports mining companies with strategic planning, operational optimization, feasibility studies, regulatory compliance, and specialized technical expertise. The sector includes major international firms (McKinsey, Boston Consulting, Deloitte, PwC) and local specialists. Total consulting spend represents 2-3% of mining capex (~R5-7 billion annually)."
+      },
+      {
+        "id": "mining-contractors",
+        "label": "Mining Contractors",
+        "description": "The mining services sector includes contract mining operations, maintenance services, automation, and specialized support. South African mining companies increasingly outsource non-core activities due to cost pressures and need for specialized expertise. Contract mining represents 15-20% of mining operations, with predictive maintenance (AI-driven) and automation services emerging as high-growth segments. The sector employs ~50,000 workers indirectly."
+      },
+      {
+        "id": "mining-equipment-machinery-supply",
+        "label": "Mining Equipment & Machinery Supply",
+        "description": "The South African mining equipment market is valued at USD 1.27 billion (2025) and growing to USD 1.67 billion by 2030 at 5.65% CAGR. The sector supplies underground haulage, surface fleets, processing equipment, and safety systems to all mining verticals. Global OEMs (Caterpillar, Komatsu, Sandvik) compete with local manufacturers through localization mandates."
+      },
+      {
+        "id": "mining-exploration-feasibility-studies",
+        "label": "Mining Exploration & Feasibility Studies",
+        "description": "South Africa's mining exploration and feasibility study sector is critical for pipeline development of new mines and expansions. Exploration represents 5-10% of mining capex and involves geological surveys, drilling, sampling, and environmental impact assessments. This sector employs ~3,000 professionals and faces increasing regulatory complexity from DMRE and environmental authorities. Success rates for exploration projects are low (1-2% become mines)."
+      },
+      {
+        "id": "platinum-group-metals-pgms-mining",
+        "label": "Platinum Group Metals (PGMs) Mining",
+        "description": "South Africa controls approximately 70% of world platinum reserves and 23% of mining production revenue (2025). The PGM sector, including platinum, palladium, rhodium, and ruthenium, employs nearly twice the workforce of gold mining (~180,000+ workers). Strong global demand from automotive catalytic converters, hydrogen fuel cells, and electronics drives sustained capex investment despite operational challenges."
+      },
+      {
+        "id": "precious-metals-refining-processing",
+        "label": "Precious Metals Refining & Processing",
+        "description": "South Africa hosts world-class precious metals refining facilities including Rand Refinery (gold, 33% of world output historically) and several PGM refineries (Anglo American, Impala, Sibanye). The refining sector processes locally mined ore and imports for refining. The sector is critical for value-addition and export earnings, employing ~5,000 workers directly."
+      },
+      {
+        "id": "uranium-mining",
+        "label": "Uranium Mining",
+        "description": "Uranium extraction for nuclear energy production"
+      },
+      {
+        "id": "zinc-lead-mining",
+        "label": "Zinc & Lead Mining",
+        "description": "Zinc and lead extraction for industrial applications"
+      },
+      {
+        "id": "gold-mining",
+        "label": "Gold Mining",
+        "description": "Gold extraction and processing operations"
+      },
+      {
+        "id": "diamond-mining",
+        "label": "Diamond Mining",
+        "description": "Diamond extraction and processing"
+      },
+      {
+        "id": "copper-mining",
+        "label": "Copper Mining",
+        "description": "Copper extraction and processing"
+      },
+      {
+        "id": "lithium-mining",
+        "label": "Lithium Mining",
+        "description": "Lithium extraction for battery production"
+      },
+      {
+        "id": "nickel-mining",
+        "label": "Nickel Mining",
+        "description": "Nickel extraction for batteries and steel"
+      },
+      {
+        "id": "cobalt-mining",
+        "label": "Cobalt Mining",
+        "description": "Cobalt extraction for battery production"
+      },
+      {
+        "id": "quarrying-aggregates",
+        "label": "Quarrying & Aggregates",
+        "description": "Stone, sand, and gravel extraction"
+      },
+      {
+        "id": "rare-earth-mining",
+        "label": "Rare Earth Mining",
+        "description": "Rare earth elements extraction"
+      }
+    ]
+  },
+  {
+    "id": "aerospace-defense",
+    "label": "Aerospace & Defense",
+    "description": "Aircraft manufacturing, defense systems, and space technology",
+    "verticals": [
+      {
+        "id": "avionics-electronics",
+        "label": "Avionics & Electronics",
+        "description": "Aircraft electronic systems and navigation equipment manufacturing"
+      },
+      {
+        "id": "cybersecurity-defense-tech",
+        "label": "Cybersecurity & Defense Tech",
+        "description": "Defense-grade cybersecurity, encryption, and secure communications technology"
+      },
+      {
+        "id": "ground-support-equipment",
+        "label": "Ground Support Equipment",
+        "description": "Aircraft ground handling equipment, launch support systems, and maintenance platforms"
+      },
+      {
+        "id": "mro-services",
+        "label": "MRO Services",
+        "description": "Maintenance, repair, and overhaul services for aircraft and defense systems"
+      },
+      {
+        "id": "simulation-training-systems",
+        "label": "Simulation & Training Systems",
+        "description": "Flight simulators, combat training systems, and defense personnel training solutions"
+      },
+      {
+        "id": "commercial-aircraft-manufacturing",
+        "label": "Commercial Aircraft Manufacturing",
+        "description": "Commercial airplane design and production"
+      },
+      {
+        "id": "military-aircraft",
+        "label": "Military Aircraft",
+        "description": "Military airplane and helicopter production"
+      },
+      {
+        "id": "space-systems",
+        "label": "Space Systems",
+        "description": "Satellites, launch vehicles, and spacecraft"
+      },
+      {
+        "id": "naval-shipbuilding",
+        "label": "Naval Shipbuilding",
+        "description": "Military vessel construction"
+      },
+      {
+        "id": "drones-uavs",
+        "label": "Drones & UAVs",
+        "description": "Unmanned aerial vehicle development"
+      },
+      {
+        "id": "aircraft-components",
+        "label": "Aircraft Components",
+        "description": "Aircraft parts and component manufacturing"
+      },
+      {
+        "id": "defense-contractors-systems",
+        "label": "Defense Contractors & Systems",
+        "description": "General defense services and contracting"
+      },
+      {
+        "id": "aerospace-engineering",
+        "label": "Aerospace Engineering",
+        "description": "Aerospace design and consulting services"
+      },
+      {
+        "id": "satellite-services",
+        "label": "Satellite Services",
+        "description": "Satellite operations and services"
+      }
+    ]
+  },
+  {
+    "id": "government-public-sector",
+    "label": "Government & Public Sector",
+    "description": "Government agencies and public administration at all levels",
+    "verticals": [
+      {
+        "id": "elections-voter-services",
+        "label": "Elections & Voter Services",
+        "description": "Electoral commissions, voter registration, and election management"
+      },
+      {
+        "id": "environmental-parks",
+        "label": "Environmental & Parks",
+        "description": "Environmental protection agencies, parks, and conservation services"
+      },
+      {
+        "id": "government-it-digital-services",
+        "label": "Government IT & Digital Services",
+        "description": "Government ICT is coordinated through SITA (State Information Technology Agency) but since June 2025 departments can procure outside SITA. Government is consolidating SOE fiber networks into a State Digital Infrastructure Company. Cybersecurity concerns are rising after multiple breaches. The e-Government Gateway aims to provide single-point citizen access. SITA faces challenges with outdated infrastructure and service delivery complaints."
+      },
+      {
+        "id": "judicial-courts",
+        "label": "Judicial & Courts",
+        "description": "Court systems, tribunals, and judicial services"
+      },
+      {
+        "id": "justice-correctional-services",
+        "label": "Justice & Correctional Services",
+        "description": "The Department of Justice and Constitutional Development (DOJCD) oversees 750+ courts while the Department of Correctional Services (DCS) manages 243 correctional facilities housing 150,000+ inmates. The Justice cluster faces massive backlogs with over 55,000 awaiting-trial detainees. ICT systems are described as dysfunctional with frequent outages affecting court operations and case management."
+      },
+      {
+        "id": "local-municipalities",
+        "label": "Local Municipalities",
+        "description": "South Africa has 257 municipalities: 8 metropolitan (Category A), 44 district (Category C), and 205 local (Category B). Metros like Johannesburg, Cape Town, and eThekwini manage budgets exceeding R50 billion each. Many municipalities face severe financial distress, with over 60% receiving qualified or adverse audits. The MFMA governs all municipal procurement."
+      },
+      {
+        "id": "provincial-government",
+        "label": "Provincial Government",
+        "description": "South Africa 9 provinces (Gauteng, Western Cape, KwaZulu-Natal, Eastern Cape, Limpopo, Mpumalanga, North West, Free State, Northern Cape) manage education, health, and roads. Provincial governments control approximately R750 billion in combined budgets. Post-2024 elections, coalition governments in Gauteng, KZN, and Northern Cape create complex decision-making environments."
+      },
+      {
+        "id": "public-housing-authorities",
+        "label": "Public Housing Authorities",
+        "description": "Government housing programs and public housing authorities"
+      },
+      {
+        "id": "public-infrastructure-works",
+        "label": "Public Infrastructure & Works",
+        "description": "The Department of Public Works and Infrastructure (DPWI) manages the government immovable asset portfolio valued at R200+ billion. The Infrastructure Investment Plan targets R322 billion in annual investment. New PPP regulations (2024) enable private participation. Major programs include ASIDI (schools), human settlements, and water infrastructure. Project delays and cost overruns remain endemic."
+      },
+      {
+        "id": "social-services",
+        "label": "Social Services",
+        "description": "Welfare programs, unemployment services, and community support"
+      },
+      {
+        "id": "state-owned-enterprises-soes",
+        "label": "State-Owned Enterprises (SOEs)",
+        "description": "South Africa major SOEs include Eskom (electricity), Transnet (freight rail, ports), PRASA (passenger rail), SAA, Denel (defense), ACSA (airports), and SANRAL (roads). After years of governance failures and bailouts exceeding R500 billion (2009-2023), SOEs are showing signs of recovery. Eskom recorded its first pre-tax profit in 8 years in 2025. Government consolidating SOE fiber into State Digital Infrastructure Company."
+      },
+      {
+        "id": "national-government",
+        "label": "National Government",
+        "description": "National government agencies and departments"
+      },
+      {
+        "id": "state-government",
+        "label": "State Government",
+        "description": "Provincial and state government agencies"
+      },
+      {
+        "id": "public-safety",
+        "label": "Public Safety",
+        "description": "Police, fire, and emergency services"
+      },
+      {
+        "id": "public-health",
+        "label": "Public Health",
+        "description": "Government health departments and agencies"
+      },
+      {
+        "id": "public-education",
+        "label": "Public Education",
+        "description": "Government-run educational institutions"
+      },
+      {
+        "id": "defense-military",
+        "label": "Defense & Military",
+        "description": "Armed forces and military organizations"
+      },
+      {
+        "id": "regulatory-agencies",
+        "label": "Regulatory Agencies",
+        "description": "Government regulatory and compliance bodies"
+      },
+      {
+        "id": "public-transportation",
+        "label": "Public Transportation",
+        "description": "Government-operated transit systems"
+      }
+    ]
+  },
+  {
+    "id": "chemicals",
+    "label": "Chemicals",
+    "description": "Production of industrial, specialty, and consumer chemicals",
+    "verticals": [
+      {
+        "id": "cosmetic-personal-care-chemicals",
+        "label": "Cosmetic & Personal Care Chemicals",
+        "description": "Ingredients for beauty and personal care products"
+      },
+      {
+        "id": "explosives-pyrotechnics",
+        "label": "Explosives & Pyrotechnics",
+        "description": "Mining explosives, fireworks, and safety devices"
+      },
+      {
+        "id": "food-beverage-chemicals",
+        "label": "Food & Beverage Chemicals",
+        "description": "Food additives, preservatives, and processing aids"
+      },
+      {
+        "id": "lubricants-greases",
+        "label": "Lubricants & Greases",
+        "description": "Industrial and automotive lubricant production"
+      },
+      {
+        "id": "specialty-chemicals",
+        "label": "Specialty Chemicals",
+        "description": "High-value specialty chemical products"
+      },
+      {
+        "id": "industrial-chemicals",
+        "label": "Industrial Chemicals",
+        "description": "Basic and commodity chemicals"
+      },
+      {
+        "id": "petrochemicals",
+        "label": "Petrochemicals",
+        "description": "Petroleum-derived chemical products"
+      },
+      {
+        "id": "agrochemicals",
+        "label": "Agrochemicals",
+        "description": "Agricultural chemicals and fertilizers"
+      },
+      {
+        "id": "paints-coatings",
+        "label": "Paints & Coatings",
+        "description": "Paint and industrial coating products"
+      },
+      {
+        "id": "adhesives-sealants",
+        "label": "Adhesives & Sealants",
+        "description": "Industrial bonding and sealing products"
+      },
+      {
+        "id": "cleaning-chemicals",
+        "label": "Cleaning Chemicals",
+        "description": "Industrial and commercial cleaning products"
+      },
+      {
+        "id": "water-treatment-chemicals",
+        "label": "Water Treatment Chemicals",
+        "description": "Chemicals for water purification and treatment"
+      },
+      {
+        "id": "pharmaceutical-chemicals",
+        "label": "Pharmaceutical Chemicals",
+        "description": "Active pharmaceutical ingredients and intermediates"
+      },
+      {
+        "id": "polymers-plastics",
+        "label": "Polymers & Plastics",
+        "description": "Polymer and plastic raw material production"
+      }
+    ]
+  },
+  {
+    "id": "pharmaceuticals-life-sciences",
+    "label": "Pharmaceuticals & Life Sciences",
+    "description": "Drug development, biotech research, and life sciences",
+    "verticals": [
+      {
+        "id": "active-pharmaceutical-ingredients-api",
+        "label": "Active Pharmaceutical Ingredients (API)",
+        "description": "API production and supply"
+      },
+      {
+        "id": "biopharmaceuticals",
+        "label": "Biopharmaceuticals",
+        "description": "Biological drug manufacturing and production"
+      },
+      {
+        "id": "biotechnology-companies",
+        "label": "Biotechnology Companies",
+        "description": "South Africa biotech sector expanding rapidly. Biopharmaceutical CAGR 12%+ (vs pharma 5%). mRNA vaccine hub established (WHO Cape Town 2023). Local players: Biovac Institute (vaccine production), Aspen biotech division, emerging diagnostic innovators. Market opportunity US$2.1B by 2030. Focus areas: biosimilars, mRNA vaccines, diagnostics, gene therapy."
+      },
+      {
+        "id": "contract-manufacturing-organizations",
+        "label": "Contract Manufacturing Organizations",
+        "description": "Contract manufacturing organizations for pharmaceuticals and biologics"
+      },
+      {
+        "id": "diagnostics-testing",
+        "label": "Diagnostics & Testing",
+        "description": "In-vitro diagnostics, genetic testing, and diagnostic tools"
+      },
+      {
+        "id": "healthcare-it-pharma-tech",
+        "label": "Healthcare IT & Pharma Tech",
+        "description": "Fast-growing digital health solutions sector (South Africa CAGR 21.8% 2025-2030). Solutions: pharmacy management systems, telemedicine platforms, EHR integration, supply chain visibility, AI diagnostics, pharmacovigilance software, POPIA-compliant data management. Key platforms: Helium Health, mPharma, Yodawy, Wella Health. Market opportunity: NHI digital infrastructure, load shedding resilience, e-commerce pharmacy."
+      },
+      {
+        "id": "medical-devices-equipment",
+        "label": "Medical Devices & Equipment",
+        "description": "South Africa medical device market evolving rapidly. SAHPRA announced MDSAP affiliate status (April 2025), ISO 13485:2016 mandatory from June 1, 2025. Device classification system (4 risk levels) being implemented. Global manufacturers operating in SA (diagnostics, surgical, imaging, cardiac). Market opportunity estimated US$2.5B+ (devices + IVDs combined). Local biotech innovation emerging."
+      },
+      {
+        "id": "pharmaceutical-manufacturing-generic-branded",
+        "label": "Pharmaceutical Manufacturing (Generic & Branded)",
+        "description": "South Africa local pharmaceutical manufacturing produces 60-70% of medicines locally. Home to Africas largest pharma company (Aspen). Faces critical API import dependency (98% from India/China), price regulation pressures, and capacity constraints. Key manufacturers: Aspen, Adcock Ingram, Cipla Medpro. Market valued at R50B. Strong SAHPRA regulatory oversight post-ICH acceptance (late 2025)."
+      },
+      {
+        "id": "pharmaceutical-packaging",
+        "label": "Pharmaceutical Packaging",
+        "description": "Pharmaceutical packaging sector supporting local and export manufacturing. Products: blister strips/packs (PVC, PVDC, aluminum), bottles (HDPE, glass), labels, secondary packaging. Key requirements: SAHPRA compliance, pharmaceutical stability, track-and-trace capability. Local manufacturing (60-70% drugs made locally) drives packaging demand. Emerging opportunity: serialization/anti-counterfeiting solutions."
+      },
+      {
+        "id": "pharmaceutical-retail-pharmacies-chains",
+        "label": "Pharmaceutical Retail (Pharmacies & Chains)",
+        "description": "South Africa retail pharmacy market dominated by two mega-chains: Clicks (R37B+ retail revenue, ~600 stores) and Dis-Chem (R33.6B retail revenue, ~180 stores). Combined control ~70% private sector market. Both expanding 40-50 stores annually. Fragmented independent pharmacies struggling. Growing online/e-commerce. Market driven by consumer affordability, medical aid coverage, chronic disease management."
+      },
+      {
+        "id": "pharmacy-services",
+        "label": "Pharmacy Services",
+        "description": "Retail and specialty pharmacy operations"
+      },
+      {
+        "id": "drug-development",
+        "label": "Drug Development",
+        "description": "Pharmaceutical research and development"
+      },
+      {
+        "id": "biotech-research",
+        "label": "Biotech Research",
+        "description": "Biotechnology research and development"
+      },
+      {
+        "id": "clinical-research-organizations",
+        "label": "Clinical Research Organizations",
+        "description": "Contract research and clinical trials"
+      },
+      {
+        "id": "laboratory-services",
+        "label": "Laboratory Services",
+        "description": "Testing and analytical laboratory services"
+      },
+      {
+        "id": "vaccine-development",
+        "label": "Vaccine Development",
+        "description": "Vaccine research and production"
+      },
+      {
+        "id": "generic-pharmaceuticals",
+        "label": "Generic Pharmaceuticals",
+        "description": "Generic drug manufacturing"
+      },
+      {
+        "id": "pharmaceutical-distribution",
+        "label": "Pharmaceutical Distribution",
+        "description": "Drug distribution and wholesaling"
+      },
+      {
+        "id": "regulatory-affairs",
+        "label": "Regulatory Affairs",
+        "description": "Pharmaceutical regulatory compliance"
+      },
+      {
+        "id": "life-sciences-consulting",
+        "label": "Life Sciences Consulting",
+        "description": "Strategy and consulting for life sciences"
+      }
+    ]
+  },
+  {
+    "id": "aviation-airlines",
+    "label": "Aviation & Airlines",
+    "description": "Commercial and private aviation, airports, and airline services",
+    "verticals": [
+      {
+        "id": "aircraft-leasing",
+        "label": "Aircraft Leasing",
+        "description": "Companies that lease aircraft to airlines and operators"
+      },
+      {
+        "id": "aviation-insurance",
+        "label": "Aviation Insurance",
+        "description": "Specialized insurance providers for aviation industry risks"
+      },
+      {
+        "id": "aviation-technology-software",
+        "label": "Aviation Technology & Software",
+        "description": "Flight planning, booking systems, and aviation software solutions"
+      },
+      {
+        "id": "cargo-airlines",
+        "label": "Cargo Airlines",
+        "description": "Freight and logistics air carriers"
+      },
+      {
+        "id": "helicopter-services",
+        "label": "Helicopter Services",
+        "description": "Helicopter operations including EMS, tourism, and charter"
+      },
+      {
+        "id": "commercial-airlines",
+        "label": "Commercial Airlines",
+        "description": "Passenger airline operations"
+      },
+      {
+        "id": "private-aviation",
+        "label": "Private Aviation",
+        "description": "Charter and private jet services"
+      },
+      {
+        "id": "ground-handling",
+        "label": "Ground Handling",
+        "description": "Airport ground support services"
+      },
+      {
+        "id": "aircraft-maintenance-mro",
+        "label": "Aircraft Maintenance (MRO)",
+        "description": "Aircraft maintenance, repair, and overhaul"
+      },
+      {
+        "id": "flight-training",
+        "label": "Flight Training",
+        "description": "Pilot training and aviation academies"
+      },
+      {
+        "id": "airline-catering",
+        "label": "Airline Catering",
+        "description": "In-flight food and catering services"
+      },
+      {
+        "id": "aviation-fuel",
+        "label": "Aviation Fuel",
+        "description": "Jet fuel supply and distribution"
+      },
+      {
+        "id": "airports-terminal-services",
+        "label": "Airports & Terminal Services",
+        "description": "Airport retail, parking, and ancillary services"
+      },
+      {
+        "id": "air-traffic-services",
+        "label": "Air Traffic Services",
+        "description": "Air traffic control and navigation"
+      }
+    ]
+  },
+  {
+    "id": "marine-ports",
+    "label": "Marine & Ports",
+    "description": "Maritime shipping, ports, shipbuilding, and marine services",
+    "verticals": [
+      {
+        "id": "marine-insurance-classification",
+        "label": "Marine Insurance & Classification",
+        "description": "Marine insurance providers, classification societies, and risk assessment"
+      },
+      {
+        "id": "marine-technology-navigation",
+        "label": "Marine Technology & Navigation",
+        "description": "Navigation systems, maritime software, automation, and IoT solutions"
+      },
+      {
+        "id": "ports-terminal-operations",
+        "label": "Ports & Terminal Operations",
+        "description": "Container terminals, cargo handling, stevedoring, and port warehousing"
+      },
+      {
+        "id": "yacht-recreational-marine",
+        "label": "Yacht & Recreational Marine",
+        "description": "Yacht building, marina operations, recreational vessels, and boating services"
+      },
+      {
+        "id": "ship-building",
+        "label": "Ship Building",
+        "description": "Commercial vessel construction"
+      },
+      {
+        "id": "ship-repair-maintenance",
+        "label": "Ship Repair & Maintenance",
+        "description": "Vessel repair and dry dock services"
+      },
+      {
+        "id": "maritime-shipping-freight",
+        "label": "Maritime Shipping & Freight",
+        "description": "Tugboats, pilotage, and port services"
+      },
+      {
+        "id": "offshore-services",
+        "label": "Offshore Services",
+        "description": "Offshore oil and gas support services"
+      },
+      {
+        "id": "cruise-lines",
+        "label": "Cruise Lines",
+        "description": "Cruise ship operators"
+      },
+      {
+        "id": "ferries",
+        "label": "Ferries",
+        "description": "Ferry and passenger vessel operations"
+      },
+      {
+        "id": "marine-equipment",
+        "label": "Marine Equipment",
+        "description": "Marine equipment and supplies"
+      },
+      {
+        "id": "maritime-training",
+        "label": "Maritime Training",
+        "description": "Seafarer training and certification"
+      },
+      {
+        "id": "ship-brokerage",
+        "label": "Ship Brokerage",
+        "description": "Ship buying, selling, and chartering"
+      }
+    ]
+  },
+  {
+    "id": "gambling-casinos",
+    "label": "Gambling & Casinos",
+    "description": "Gaming, betting, casinos, and lottery operations",
+    "verticals": [
+      {
+        "id": "bingo-operations",
+        "label": "Bingo Operations",
+        "description": "Route-based Limited Payout Machine (LPM) operations and bingo hall operators providing legal slot-style gaming outside casinos, with over 30,000 licensed LPMs across South Africa. Maximum stake R5, maximum payout R500 per game. Route operators like Vukani Gaming and Galaxy Bingo manage machines across taverns, restaurants, service stations, and entertainment venues."
+      },
+      {
+        "id": "casinos-gaming-venues",
+        "label": "Casinos & Gaming Venues",
+        "description": "Integrated resort operations encompassing hotels, restaurants, entertainment venues, and convention facilities attached to licensed casino properties. Dominated by Sun International (Sun City, GrandWest) and Tsogo Sun (Montecasino, Emperors Palace). Non-gaming revenue 30-40% of total; 50,000+ direct employees across casino-hospitality complexes."
+      },
+      {
+        "id": "esports-betting",
+        "label": "Esports Betting",
+        "description": "Esports wagering and competitive gaming betting"
+      },
+      {
+        "id": "fantasy-sports",
+        "label": "Fantasy Sports",
+        "description": "Daily fantasy sports platforms and contests"
+      },
+      {
+        "id": "gaming-compliance-testing",
+        "label": "Gaming Compliance & Testing",
+        "description": "Gaming compliance, licensing, and regulatory services"
+      },
+      {
+        "id": "payment-processing",
+        "label": "Payment Processing",
+        "description": "Gambling-specific payment gateways and processing"
+      },
+      {
+        "id": "responsible-gambling-services",
+        "label": "Responsible Gambling Services",
+        "description": "Providers of responsible gambling tools, player protection programs, treatment services, and regulatory compliance solutions. South African Responsible Gambling Foundation (SARGF) as primary industry body. Estimated 2-3% of adult population shows problem gambling symptoms. National exclusions register managed by NGB."
+      },
+      {
+        "id": "online-gambling-platforms",
+        "label": "Online Gambling Platforms",
+        "description": "Internet gambling and iGaming"
+      },
+      {
+        "id": "sports-betting-bookmakers",
+        "label": "Sports Betting & Bookmakers",
+        "description": "Sports wagering and bookmaking"
+      },
+      {
+        "id": "lottery-operations",
+        "label": "Lottery Operations",
+        "description": "National and state lottery services"
+      },
+      {
+        "id": "gaming-technology-equipment",
+        "label": "Gaming Technology & Equipment",
+        "description": "Slot machines and gaming technology"
+      },
+      {
+        "id": "horse-racing-wagering",
+        "label": "Horse Racing & Wagering",
+        "description": "Horse racing and breeding industry"
+      },
+      {
+        "id": "poker-rooms",
+        "label": "Poker Rooms",
+        "description": "Card rooms and poker operations"
+      }
+    ]
+  }
+]
