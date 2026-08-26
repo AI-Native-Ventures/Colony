@@ -31,7 +31,11 @@ import type {
   VerticalDetail,
 } from "../types";
 import { PIPELINE_COLUMN_STATUSES } from "../types";
-import type { DiscoveryDataSource } from "./DiscoveryDataSource";
+import type {
+  DiscoveryDataSource,
+  DiscoveryEntitySummary,
+} from "./DiscoveryDataSource";
+import { BUSINESS_TAXONOMY } from "./businessTaxonomy/index";
 import {
   CAMPAIGN_FIXTURE,
   FIXTURE_CAMPAIGN_LEADS,
@@ -258,6 +262,47 @@ export class FixtureDiscoveryDataSource implements DiscoveryDataSource {
       servicesCampaign.id,
       seedConversations(servicesCampaign, FIXTURE_PRO_SERVICES_LEADS),
     );
+  }
+
+  /**
+   * Deterministic taxonomy candidates for the composer mention search. The
+   * fixture build has no relay, so only Industry and Vertical rows appear;
+   * Campaign/Lead/run rows come from live Discovery workspaces.
+   */
+  async searchEntities(
+    query: string,
+    limit = 10,
+  ): Promise<DiscoveryEntitySummary[]> {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return [];
+    const matches: DiscoveryEntitySummary[] = [];
+    for (const industry of BUSINESS_TAXONOMY) {
+      for (const vertical of industry.verticals) {
+        if (
+          vertical.label.toLowerCase().includes(needle) ||
+          vertical.id.includes(needle)
+        ) {
+          matches.push({
+            kind: "vertical",
+            id: `${industry.id}/${vertical.id}`,
+            label: vertical.label,
+            context_id: industry.id,
+          });
+        }
+      }
+      if (
+        industry.label.toLowerCase().includes(needle) ||
+        industry.id.includes(needle)
+      ) {
+        matches.push({
+          kind: "industry",
+          id: industry.id,
+          label: industry.label,
+        });
+      }
+      if (matches.length >= limit * 4) break;
+    }
+    return matches.slice(0, limit);
   }
 
   async getEntitlement(): Promise<DiscoveryEntitlement> {

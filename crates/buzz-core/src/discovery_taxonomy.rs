@@ -113,11 +113,15 @@ impl MatchRank {
 /// One searchable taxonomy row: an Industry or a Vertical.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaxonomySearchRow {
+    /// Parent industry identifier.
     pub industry_id: String,
+    /// Parent industry label.
     pub industry_label: String,
     /// Present when this row is a vertical.
     pub vertical_id: Option<String>,
+    /// Vertical label; absent when this row is an industry.
     pub vertical_label: Option<String>,
+    /// Canonical description, when present.
     pub description: Option<String>,
 }
 
