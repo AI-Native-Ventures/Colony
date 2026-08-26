@@ -11,7 +11,10 @@
 //! owner authorizes it.
 
 use buzz_core::company::{CompanyProfile, CompanyTask, Initiative, TaskStatus};
-use buzz_core::kind::{KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK};
+use buzz_core::kind::{
+    KIND_COHORT, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
+    KIND_TEMPLATE,
+};
 use buzz_sdk::company::{
     build_company_action, parse_company_event, parse_initiative_event, parse_task_event,
     CompanyAction, CompanyActionOperation, CompanyActionPayload,
@@ -29,6 +32,32 @@ pub async fn dispatch_company(command: CompanyCmd, client: &BuzzClient) -> Resul
     match command {
         CompanyCmd::Get { id } => get_company(client, &id).await,
         CompanyCmd::Put { file } => put_from_file(client, &file).await,
+        CompanyCmd::FanOutPropose {
+            cohort,
+            template,
+            channel,
+            cost_centre,
+            purpose,
+            owner_persona,
+            trigger_event,
+            client_org,
+            to,
+        } => {
+            super::fan_out::cmd_propose(
+                client,
+                &cohort,
+                &template,
+                &channel,
+                &cost_centre,
+                &purpose,
+                &owner_persona,
+                &trigger_event,
+                client_org.as_deref(),
+                to.as_deref(),
+            )
+            .await
+        }
+        CompanyCmd::FanOutExecute { ask } => super::fan_out::cmd_execute(client, &ask).await,
         // Routed before auth in `run`; unreachable here.
         CompanyCmd::Scan { url, max_pages } => scan_public_site(&url, max_pages).await,
         // Routed before auth in `run`; unreachable here.
@@ -128,7 +157,7 @@ pub async fn dispatch_tasks(command: TasksCmd, client: &BuzzClient) -> Result<()
 }
 
 /// The tenant relay pubkey, which authors every canonical head.
-async fn relay_self(client: &BuzzClient) -> Result<PublicKey, CliError> {
+pub(crate) async fn relay_self(client: &BuzzClient) -> Result<PublicKey, CliError> {
     let raw = client.get_public("/").await?;
     let document: Value = serde_json::from_str(&raw)
         .map_err(|error| CliError::Other(format!("relay info is malformed: {error}")))?;
@@ -144,7 +173,7 @@ async fn relay_self(client: &BuzzClient) -> Result<PublicKey, CliError> {
 ///
 /// Scoped to the relay signer: a head authored by anyone else is not canonical,
 /// and reading one would defeat the single-author guarantee.
-async fn fetch_head(
+pub(crate) async fn fetch_head(
     client: &BuzzClient,
     kind: u32,
     id: &str,
@@ -322,19 +351,23 @@ fn read_payload(file: &str) -> Result<CompanyActionPayload, CliError> {
     }
 }
 
-fn payload_kind(payload: &CompanyActionPayload) -> u32 {
+pub(crate) fn payload_kind(payload: &CompanyActionPayload) -> u32 {
     match payload {
         CompanyActionPayload::Company(_) => KIND_COMPANY_PROFILE,
         CompanyActionPayload::Initiative(_) => KIND_INITIATIVE,
         CompanyActionPayload::Task(_) => KIND_TASK,
+        CompanyActionPayload::Cohort(_) => KIND_COHORT,
+        CompanyActionPayload::Template(_) => KIND_TEMPLATE,
     }
 }
 
-fn payload_id(payload: &CompanyActionPayload) -> &str {
+pub(crate) fn payload_id(payload: &CompanyActionPayload) -> &str {
     match payload {
         CompanyActionPayload::Company(profile) => &profile.id,
         CompanyActionPayload::Initiative(initiative) => &initiative.id,
         CompanyActionPayload::Task(task) => &task.id,
+        CompanyActionPayload::Cohort(cohort) => &cohort.id,
+        CompanyActionPayload::Template(template) => &template.id,
     }
 }
 
@@ -508,14 +541,14 @@ async fn publish_action(
     }
 }
 
-fn response_accepted(response: &str) -> bool {
+pub(crate) fn response_accepted(response: &str) -> bool {
     serde_json::from_str::<Value>(response)
         .ok()
         .and_then(|value| value.get("accepted").and_then(Value::as_bool))
         .unwrap_or(false)
 }
 
-fn response_message(response: &str) -> String {
+pub(crate) fn response_message(response: &str) -> String {
     serde_json::from_str::<Value>(response)
         .ok()
         .and_then(|value| {

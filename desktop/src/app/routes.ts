@@ -11,6 +11,7 @@ export const routes = rootRoute("root.tsx", [
   route("/settings", "settings.tsx"),
   route("/credits", "credits.tsx"),
   route("/spend", "spend.tsx"),
+  route("/work", "work.tsx"),
   route("/workflows", "workflows.tsx"),
   route("/workflows/$workflowId", "workflows.$workflowId.tsx"),
   route("/projects", "projects.tsx"),

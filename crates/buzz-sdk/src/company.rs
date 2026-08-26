@@ -4,10 +4,13 @@ use std::{collections::HashSet, str::FromStr};
 
 use buzz_core::{
     block::canonical_json,
-    company::{validate_company, CompanyContractError, CompanyProfile, CompanyTask, Initiative},
+    company::{
+        serde_enum_slug, validate_company, Cohort, CompanyContractError, CompanyProfile,
+        CompanyTask, Initiative, Template, TemplateStage,
+    },
     kind::{
-        KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
-        KIND_PERSONA, KIND_TASK, KIND_TEAM,
+        KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
+        KIND_INITIATIVE, KIND_PERSONA, KIND_TASK, KIND_TEAM, KIND_TEMPLATE,
     },
 };
 use nostr::{Event, EventBuilder, EventId, Kind, PublicKey, Tag};
@@ -19,10 +22,24 @@ const ACTION_SCHEMA: &str = "colony.company-action/v1";
 const RECEIPT_SCHEMA: &str = "colony.company-receipt/v1";
 const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
+const COHORT_SCHEMA: &str = "colony.cohort/v1";
+const TEMPLATE_SCHEMA: &str = "colony.template/v1";
 const MAX_ID_LEN: usize = 128;
 const MAX_NAME_LEN: usize = 200;
 const MAX_SUMMARY_LEN: usize = 4_000;
 const MAX_ASSIGNEES: usize = 100;
+/// Matches `MAX_DEPENDENCIES` in the company contract.
+const MAX_DEPENDENCIES: usize = 100;
+/// Matches `MAX_COHORT_MEMBERS` in the company contract.
+pub(crate) const MAX_COHORT_MEMBERS: usize = 500;
+/// Matches `MAX_TEMPLATE_STAGES` in the company contract.
+const MAX_TEMPLATE_STAGES: usize = 50;
+/// Matches `MAX_PROMPT_LEN` in the company contract.
+const MAX_PROMPT_LEN: usize = 4_000;
+/// Matches `MAX_OUTCOME_REASONS` in the company contract.
+const MAX_OUTCOME_REASONS: usize = 20;
+/// Matches `MAX_REASON_LEN` in the company contract.
+const MAX_REASON_LEN: usize = 500;
 
 /// Mutation requested by the current company owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +87,10 @@ pub enum CompanyActionPayload {
     Initiative(Initiative),
     /// A complete Company Task.
     Task(CompanyTask),
+    /// A complete Cohort.
+    Cohort(Cohort),
+    /// A complete pipeline Template.
+    Template(Template),
 }
 
 impl CompanyActionPayload {
@@ -78,6 +99,8 @@ impl CompanyActionPayload {
             Self::Company(_) => KIND_COMPANY_PROFILE,
             Self::Initiative(_) => KIND_INITIATIVE,
             Self::Task(_) => KIND_TASK,
+            Self::Cohort(_) => KIND_COHORT,
+            Self::Template(_) => KIND_TEMPLATE,
         }
     }
 
@@ -86,6 +109,8 @@ impl CompanyActionPayload {
             Self::Company(profile) => &profile.id,
             Self::Initiative(initiative) => &initiative.id,
             Self::Task(task) => &task.id,
+            Self::Cohort(cohort) => &cohort.id,
+            Self::Template(template) => &template.id,
         }
     }
 
@@ -94,6 +119,8 @@ impl CompanyActionPayload {
             Self::Company(profile) => &profile.id,
             Self::Initiative(initiative) => &initiative.company_id,
             Self::Task(task) => &task.company_id,
+            Self::Cohort(cohort) => &cohort.company_id,
+            Self::Template(template) => &template.company_id,
         }
     }
 }
@@ -324,7 +351,7 @@ pub fn parse_company_action(event: &Event) -> Result<CompanyAction, CompanySdkEr
 /// Relay authorship must be checked by the caller against its tenant relay key.
 pub fn parse_company_event(event: &Event) -> Result<CompanyProfile, CompanySdkError> {
     require_kind(event, KIND_COMPANY_PROFILE)?;
-    require_head_tag_names(event, &["d", "company"], &["c"], "company head")?;
+    require_head_tag_names(event, &["d", "company"], &["c"], &[], "company head")?;
     let coordinate = required_scalar_tag(event, "d")?;
     let company_tag = required_scalar_tag(event, "company")?;
     let profile: CompanyProfile = parse_canonical_content(&event.content, "company")?;
@@ -342,13 +369,17 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
     require_head_tag_names(
         event,
         &["d", "company", "cost-centre"],
-        &["c", "client"],
+        &["c", "client", "w"],
+        &[],
         "initiative head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
     let company_tag = required_scalar_tag(event, "company")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
+    // `w` is the single-letter mirror of the status in the content. Only
+    // single-letter tags are indexed, so this is the spelling filters see.
+    let status_mirror = optional_scalar_tag(event, "w")?;
     let initiative: Initiative = parse_canonical_content(&event.content, "initiative")?;
     validate_initiative_content(&initiative)?;
     ensure_matches(&initiative.id, coordinate, "initiative")?;
@@ -359,6 +390,11 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
         client_tag,
         "initiative",
     )?;
+    ensure_mirror_matches(
+        serde_enum_slug(&initiative.status),
+        status_mirror,
+        "initiative",
+    )?;
     Ok(initiative)
 }
 
@@ -366,12 +402,21 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
 ///
 /// Cross-record Company, Initiative, cost-centre, and Team validation remains
 /// a relay concern.
+///
+/// The single-letter mirrors (`g` team, `w` status, `i` initiative, `s` stage,
+/// `u` subject as `kind:ref`) are optional so heads written before the mirrors
+/// existed still parse, and verified against the content when present so an
+/// index a client filters on can never disagree with the record it indexes.
+/// The `v` tags are the dependency edges, one per `dependsOn` entry; they are
+/// verified as a set, because "which tasks wait on X" is answered by filtering
+/// them and a lying edge would return heads the record does not warrant.
 pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_kind(event, KIND_TASK)?;
     require_head_tag_names(
         event,
         &["d", "company", "team", "cost-centre"],
-        &["c", "initiative", "client"],
+        &["c", "initiative", "client", "i", "s", "u", "w"],
+        &["g", "v"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
@@ -380,6 +425,10 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     let initiative_tag = optional_scalar_tag(event, "initiative")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
+    let initiative_mirror = optional_scalar_tag(event, "i")?;
+    let stage_mirror = optional_scalar_tag(event, "s")?;
+    let subject_mirror = optional_scalar_tag(event, "u")?;
+    let status_mirror = optional_scalar_tag(event, "w")?;
     let task: CompanyTask = parse_canonical_content(&event.content, "task")?;
     validate_task_content(&task)?;
     ensure_matches(&task.id, coordinate, "task")?;
@@ -388,7 +437,145 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     ensure_optional_matches(task.initiative_id.as_deref(), initiative_tag, "task")?;
     ensure_matches(&task.cost_centre_id, cost_centre_tag, "task")?;
     ensure_optional_matches(task.client_organization_id.as_deref(), client_tag, "task")?;
+    ensure_mirror_matches(task.initiative_id.clone(), initiative_mirror, "task")?;
+    ensure_mirror_matches(task.stage.clone(), stage_mirror, "task")?;
+    let subject_ref = task.subject.as_ref().and_then(|subject| {
+        let kind = serde_enum_slug(&subject.kind)?;
+        Some(format!("{kind}:{}", subject.r#ref))
+    });
+    ensure_mirror_matches(subject_ref, subject_mirror, "task")?;
+    ensure_mirror_matches(serde_enum_slug(&task.status), status_mirror, "task")?;
+    // Team mirrors are a set, not a scalar: a task with a `reviewerTeamId`
+    // touches two teams, and "which tasks touch my team" must find it under
+    // both. Same letter and same set shape a Template head already uses for
+    // the stage teams it names. Verified as a set for the same reason `v` is:
+    // a lying mirror would make that filter return heads the record does not
+    // warrant.
+    let team_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("g"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    let observed_team_mirrors: HashSet<&str> = team_mirrors.iter().copied().collect();
+    let expected_team_mirrors: HashSet<&str> = std::iter::once(task.owning_team_id.as_str())
+        .chain(task.reviewer_team_id.as_deref())
+        .collect();
+    // Absent entirely is tolerated, the same posture the scalar mirrors
+    // (`i`, `s`, `u`, `w`) already take: they are an index accelerator the
+    // relay always writes, not a field of the record. Present but partial is
+    // not tolerated - a head carrying only the owning team's `g` when the
+    // record names a reviewer would make "#g = my team" quietly miss the
+    // reviews that team owes.
+    if !team_mirrors.is_empty()
+        && (observed_team_mirrors.len() != team_mirrors.len()
+            || observed_team_mirrors != expected_team_mirrors)
+    {
+        return Err(CompanySdkError::TagContentMismatch("task"));
+    }
+    // Dependency edges are a set mirror: exactly one `v` per dependsOn entry,
+    // each naming an entry the content actually declares. A head whose edges
+    // and list disagree would make "tasks waiting on X" return wrong answers.
+    let dependency_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("v"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    if dependency_mirrors.len() != task.depends_on.len()
+        || !dependency_mirrors
+            .iter()
+            .all(|mirror| task.depends_on.iter().any(|dep| dep == *mirror))
+    {
+        return Err(CompanySdkError::TagContentMismatch("task"));
+    }
     Ok(task)
+}
+
+/// Parse a strict relay-authored Cohort head's self-contained contract.
+///
+/// The `m` tags are the member mirrors, one per `members` entry, spelled
+/// `kind:ref` exactly like a task's `u` subject mirror — that is what makes
+/// "which cohorts contain this party" an indexed `#m` filter instead of a
+/// full scan. Verified as a set, the same reason `v` (task dependency
+/// edges) is: a lying edge would make that filter return heads the record
+/// does not warrant.
+pub fn parse_cohort_event(event: &Event) -> Result<Cohort, CompanySdkError> {
+    require_kind(event, KIND_COHORT)?;
+    require_head_tag_names(event, &["d", "company"], &["c"], &["m"], "cohort head")?;
+    let coordinate = required_scalar_tag(event, "d")?;
+    let company_tag = required_scalar_tag(event, "company")?;
+    let cohort: Cohort = parse_canonical_content(&event.content, "cohort")?;
+    validate_cohort_content(&cohort)?;
+    ensure_matches(&cohort.id, coordinate, "cohort")?;
+    ensure_matches(&cohort.company_id, company_tag, "cohort")?;
+
+    let member_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("m"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    let expected_member_mirrors: Vec<String> = cohort
+        .members
+        .iter()
+        .filter_map(|member| {
+            let kind = serde_enum_slug(&member.kind)?;
+            Some(format!("{kind}:{}", member.r#ref))
+        })
+        .collect();
+    if member_mirrors.len() != expected_member_mirrors.len()
+        || !member_mirrors.iter().all(|mirror| {
+            expected_member_mirrors
+                .iter()
+                .any(|expected| expected == mirror)
+        })
+    {
+        return Err(CompanySdkError::TagContentMismatch("cohort"));
+    }
+    Ok(cohort)
+}
+
+/// Parse a strict relay-authored pipeline Template head's self-contained
+/// contract.
+///
+/// The `g` tags mirror every distinct team a stage names (`owningTeamId` or
+/// `reviewerTeamId`) - the same team-mirror letter `CompanyTask` already
+/// uses on `owningTeamId`, reused here rather than picking a fresh one - so
+/// "which templates touch my team" is an indexed `#g` filter instead of a
+/// full scan. Verified as a set, the same reason `m` (Cohort member
+/// mirrors) is: a lying mirror would make that filter return heads the
+/// record does not warrant.
+pub fn parse_template_event(event: &Event) -> Result<Template, CompanySdkError> {
+    require_kind(event, KIND_TEMPLATE)?;
+    require_head_tag_names(event, &["d", "company"], &["c"], &["g"], "template head")?;
+    let coordinate = required_scalar_tag(event, "d")?;
+    let company_tag = required_scalar_tag(event, "company")?;
+    let template: Template = parse_canonical_content(&event.content, "template")?;
+    validate_template_content(&template)?;
+    ensure_matches(&template.id, coordinate, "template")?;
+    ensure_matches(&template.company_id, company_tag, "template")?;
+
+    let team_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("g"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    let observed_team_mirrors: HashSet<&str> = team_mirrors.iter().copied().collect();
+    let expected_team_mirrors: HashSet<&str> = template
+        .stages
+        .iter()
+        .flat_map(|stage| {
+            std::iter::once(stage.owning_team_id.as_str()).chain(stage.reviewer_team_id.as_deref())
+        })
+        .collect();
+    if observed_team_mirrors.len() != team_mirrors.len()
+        || observed_team_mirrors != expected_team_mirrors
+    {
+        return Err(CompanySdkError::TagContentMismatch("template"));
+    }
+    Ok(template)
 }
 
 /// Parse an exact, relay-authored Company Receipt without exposing payload data.
@@ -495,6 +682,8 @@ fn validate_payload(payload: &CompanyActionPayload) -> Result<(), CompanySdkErro
         CompanyActionPayload::Company(profile) => validate_company(profile).map_err(Into::into),
         CompanyActionPayload::Initiative(initiative) => validate_initiative_content(initiative),
         CompanyActionPayload::Task(task) => validate_task_content(task),
+        CompanyActionPayload::Cohort(cohort) => validate_cohort_content(cohort),
+        CompanyActionPayload::Template(template) => validate_template_content(template),
     }
 }
 
@@ -682,6 +871,7 @@ fn require_head_tag_names(
     event: &Event,
     required: &[&str],
     optional: &[&str],
+    repeated: &[&str],
     entity: &'static str,
 ) -> Result<(), CompanySdkError> {
     for name in required {
@@ -706,9 +896,22 @@ fn require_head_tag_names(
             return Err(CompanySdkError::InvalidTag("company head"));
         }
     }
+    // Repeated tag names carry one value per content entry (a task's `v`
+    // dependency edges); each occurrence must still be a scalar pair.
+    for tag in event.tags.iter().filter(|tag| {
+        tag.as_slice()
+            .first()
+            .is_some_and(|name| repeated.contains(&name.as_str()))
+    }) {
+        if tag.as_slice().len() != 2 {
+            return Err(CompanySdkError::InvalidTag("company head"));
+        }
+    }
     if event.tags.iter().any(|tag| {
         tag.as_slice().first().is_none_or(|name| {
-            !required.contains(&name.as_str()) && !optional.contains(&name.as_str())
+            !required.contains(&name.as_str())
+                && !optional.contains(&name.as_str())
+                && !repeated.contains(&name.as_str())
         })
     }) {
         return Err(CompanySdkError::UnexpectedTag(entity));
@@ -782,6 +985,24 @@ fn ensure_optional_matches(
     }
 }
 
+/// Verify a single-letter mirror against the content it indexes.
+///
+/// Unlike `ensure_optional_matches`, an absent tag beside a set field is
+/// accepted: heads written before the mirrors existed carry no tag at all,
+/// and their content stays authoritative. A mirror that IS present must
+/// agree exactly, because a client filters on it instead of the content.
+fn ensure_mirror_matches(
+    expected: Option<String>,
+    tag_value: Option<&str>,
+    entity: &'static str,
+) -> Result<(), CompanySdkError> {
+    match (expected, tag_value) {
+        (Some(expected), Some(tag)) if expected == tag => Ok(()),
+        (_, None) => Ok(()),
+        _ => Err(CompanySdkError::TagContentMismatch(entity)),
+    }
+}
+
 fn validate_initiative_content(initiative: &Initiative) -> Result<(), CompanySdkError> {
     validate_schema(&initiative.schema, INITIATIVE_SCHEMA, "initiative")?;
     validate_id(&initiative.id, "initiative")?;
@@ -810,6 +1031,7 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
     validate_required_text(&task.title, MAX_NAME_LEN, "task")?;
     validate_id(&task.owning_team_id, "task")?;
     validate_id(&task.qa_persona_id, "task")?;
+    validate_optional_id(task.reviewer_team_id.as_deref(), "task")?;
     validate_id(&task.cost_centre_id, "task")?;
     validate_optional_id(task.client_organization_id.as_deref(), "task")?;
     validate_id(&task.source_channel_id, "task")?;
@@ -823,6 +1045,107 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
         if !assignees.insert(assignee.as_str()) {
             return Err(CompanySdkError::InvalidContent("task"));
         }
+    }
+    // Chain and identity fields: the same rules the core contract enforces at
+    // ingest, restated here so a client-side parse cannot accept content the
+    // relay would have refused.
+    if task.depends_on.len() > MAX_DEPENDENCIES {
+        return Err(CompanySdkError::InvalidContent("task"));
+    }
+    let mut dependencies = HashSet::new();
+    for dependency in &task.depends_on {
+        validate_id(dependency, "task")?;
+        if !dependencies.insert(dependency.as_str()) {
+            return Err(CompanySdkError::InvalidContent("task"));
+        }
+    }
+    if let Some(subject) = &task.subject {
+        if subject.r#ref.trim().is_empty() || subject.r#ref.len() > MAX_ID_LEN {
+            return Err(CompanySdkError::InvalidContent("task"));
+        }
+    }
+    if task
+        .stage
+        .as_deref()
+        .is_some_and(|stage| stage.len() > MAX_NAME_LEN)
+    {
+        return Err(CompanySdkError::InvalidContent("task"));
+    }
+    validate_optional_id(task.thread_root.as_deref(), "task")?;
+    Ok(())
+}
+
+fn validate_cohort_content(cohort: &Cohort) -> Result<(), CompanySdkError> {
+    validate_schema(&cohort.schema, COHORT_SCHEMA, "cohort")?;
+    validate_id(&cohort.id, "cohort")?;
+    validate_id(&cohort.company_id, "cohort")?;
+    validate_required_text(&cohort.name, MAX_NAME_LEN, "cohort")?;
+    if cohort.members.len() > MAX_COHORT_MEMBERS {
+        return Err(CompanySdkError::InvalidContent("cohort"));
+    }
+    let mut seen_members = HashSet::new();
+    for member in &cohort.members {
+        if member.r#ref.trim().is_empty() || member.r#ref.len() > MAX_ID_LEN {
+            return Err(CompanySdkError::InvalidContent("cohort"));
+        }
+        let key = format!(
+            "{}:{}",
+            serde_enum_slug(&member.kind).unwrap_or_default(),
+            member.r#ref
+        );
+        if !seen_members.insert(key) {
+            return Err(CompanySdkError::InvalidContent("cohort"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_template_content(template: &Template) -> Result<(), CompanySdkError> {
+    validate_schema(&template.schema, TEMPLATE_SCHEMA, "template")?;
+    validate_id(&template.id, "template")?;
+    validate_id(&template.company_id, "template")?;
+    validate_required_text(&template.name, MAX_NAME_LEN, "template")?;
+    if template.version < 1 {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    if template.stages.is_empty() || template.stages.len() > MAX_TEMPLATE_STAGES {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    let mut seen_slugs = HashSet::new();
+    for stage in &template.stages {
+        validate_template_stage_content(stage)?;
+        if !seen_slugs.insert(stage.slug.as_str()) {
+            return Err(CompanySdkError::InvalidContent("template"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_template_stage_content(stage: &TemplateStage) -> Result<(), CompanySdkError> {
+    validate_id(&stage.slug, "template")?;
+    validate_required_text(&stage.title, MAX_NAME_LEN, "template")?;
+    validate_id(&stage.owning_team_id, "template")?;
+    validate_id(&stage.channel_id, "template")?;
+    validate_optional_id(stage.reviewer_team_id.as_deref(), "template")?;
+    validate_required_text(&stage.prompt, MAX_PROMPT_LEN, "template")?;
+    if stage.outcome_reasons.len() > MAX_OUTCOME_REASONS {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    let mut seen_reasons = HashSet::new();
+    for reason in &stage.outcome_reasons {
+        validate_required_text(reason, MAX_REASON_LEN, "template")?;
+        if !seen_reasons.insert(reason.as_str()) {
+            return Err(CompanySdkError::InvalidContent("template"));
+        }
+    }
+    if stage
+        .cost_ceiling
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
+        return Err(CompanySdkError::InvalidContent("template"));
+    }
+    if stage.staleness_after_secs.is_some_and(|secs| secs < 0) {
+        return Err(CompanySdkError::InvalidContent("template"));
     }
     Ok(())
 }
@@ -887,8 +1210,8 @@ fn validate_text(value: &str, max: usize, entity: &'static str) -> Result<(), Co
 #[cfg(test)]
 mod tests {
     use buzz_core::company::{
-        CommercialPurpose, CompanyOnboardingStatus, CostCentre, CostCentreKind, InitiativeStatus,
-        TaskStatus,
+        CommercialPurpose, CompanyOnboardingStatus, CostCentre, CostCentreKind, DoerKind,
+        InitiativeStatus, TaskStatus,
     };
     use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 
@@ -933,6 +1256,9 @@ mod tests {
             expected_cost_usd: Some(42.5),
             source_channel_id: "general".to_owned(),
             source_event_id: None,
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }
@@ -949,12 +1275,22 @@ mod tests {
             owning_team_id: "engineering-team".to_owned(),
             assignee_persona_ids: vec!["frontend-engineer".to_owned()],
             qa_persona_id: "cto".to_owned(),
+            reviewer_team_id: None,
             cost_centre_id: "web-delivery".to_owned(),
             commercial_purpose: CommercialPurpose::ClientDelivery,
             client_organization_id: Some("tennant-group".to_owned()),
             source_channel_id: "general".to_owned(),
             source_event_id: None,
             implicit: false,
+            depends_on: Vec::new(),
+            subject: None,
+            stage: None,
+            thread_root: None,
+            doer_kind: DoerKind::Agent,
+            wake_at: None,
+            outcome_reason: None,
+            bounce_reason: None,
+            bounce_count: 0,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }

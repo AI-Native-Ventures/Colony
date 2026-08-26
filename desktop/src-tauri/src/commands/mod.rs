@@ -73,6 +73,7 @@ mod relay_members;
 mod relay_reconnect;
 mod social;
 mod task_artifacts;
+pub mod task_transition;
 mod team_snapshot;
 mod teams;
 mod terminal;

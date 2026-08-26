@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use buzz_core::company::{CommercialPurpose, CompanyTask, TaskStatus};
+use buzz_core::company::{CommercialPurpose, CompanyTask, DoerKind, TaskStatus};
 use buzz_core::kind::{
     KIND_ASK, KIND_ASK_RESOLUTION, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE, KIND_TASK,
 };
@@ -288,12 +288,22 @@ fn default_task(
         owning_team_id: "web-team".to_string(),
         assignee_persona_ids: vec!["builtin:content".to_string()],
         qa_persona_id: qa_persona_id.to_string(),
+        reviewer_team_id: None,
         cost_centre_id: "cc-1".to_string(),
         commercial_purpose: CommercialPurpose::Uncertain,
         client_organization_id: None,
         source_channel_id: source_channel_id.to_string(),
         source_event_id: None,
         implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: created_at_secs,
         updated_at: created_at_secs,
     }

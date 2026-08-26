@@ -83,18 +83,21 @@
 
 use std::sync::Arc;
 
-use buzz_core::company::CompanyTask;
+use buzz_core::company::{is_task_status_transition_allowed, CompanyTask, TaskStatus};
 use buzz_core::interrupt::{parse_ask, AgentTier, AskType};
 use buzz_core::kind::{
-    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT, KIND_TEAM,
+    KIND_ASK, KIND_ASK_RESOLUTION, KIND_ASK_WITHDRAWAL, KIND_MANAGED_AGENT, KIND_TASK, KIND_TEAM,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::CommunityId;
 use buzz_db::asks::AskRow;
+use buzz_sdk::company::{parse_task_event, CompanyActionPayload};
 use nostr::{EventBuilder, Kind, PublicKey, Tag};
 use sha2::{Digest, Sha256};
 
 use crate::ask_broker::{emit_ask_receipt, handle_ask_event, AskBrokerOutcome};
+use crate::company_broker::{build_head, emit_task_transition, load_head};
+use crate::handlers::event::dispatch_persistent_event;
 use crate::interrupt_gate::agent_tier;
 use crate::state::AppState;
 
@@ -1817,5 +1820,238 @@ async fn reopen_orphaned_promotions(state: &Arc<AppState>, now_secs: i64, stall_
                 );
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Snooze-wake sweep
+// ---------------------------------------------------------------------
+
+/// Upper bound on due snoozed task heads processed per one
+/// [`run_snooze_wake_tick`] pass. Mirrors [`MAX_STALL_CANDIDATES`]: a
+/// single-pass write-volume bound, not something the sweep needs to absorb
+/// all at once -- the next tick picks up whatever did not fit, and the
+/// candidate query is already ordered oldest-`wakeAt`-first so the
+/// longest-overdue wakes are never starved behind newer ones.
+const MAX_SNOOZE_WAKE_CANDIDATES: i64 = 200;
+
+/// Wake every snoozed task whose `wakeAt` has passed: transition it back to
+/// `ready` and emit a `task_woke` system row in its thread.
+///
+/// `wakeAt` is an absolute timestamp the owner (or `plan_task_snooze`)
+/// already chose, unlike stall detection's or job-lease expiry's relative
+/// "after N seconds" thresholds -- due-ness is exactly `wake_at <= now_secs`
+/// with nothing to configure. So this rides the same shared sweep interval
+/// every other Colony sweep in `main.rs` already runs on
+/// (`BUZZ_INTERRUPT_SWEEP_SECS`) rather than inventing a redundant dedicated
+/// one; the one new tunable this sweep owns is [`MAX_SNOOZE_WAKE_CANDIDATES`].
+///
+/// Two-relay-instance safety is `task_wake_claims` (migration 0068), not
+/// `expire_due_leases`'s `FOR UPDATE SKIP LOCKED`: task heads are
+/// append-only NIP-33 events with no mutable lease column a row lock could
+/// hold across the sweep's own write, so there is no row to lock the way a
+/// `jobs` row can be. An atomic `INSERT ... ON CONFLICT DO NOTHING` claim on
+/// `(community_id, task_id, wake_at)` is the analogous safe-write for this
+/// data shape -- the same idempotency-key-insert principle
+/// `company_action_claims` already uses for owner-signed actions, applied to
+/// this sweep's own autonomous ones. Winning the claim is necessary but not
+/// sufficient: the current head is re-read and re-checked afterward
+/// ([`snoozed_task_should_wake`]), the same defence
+/// `wake_dependent_if_ready`/`block_dependent_if_live` use, so a task
+/// cancelled while snoozed -- no longer `snoozed` on re-read -- is left
+/// alone rather than woken. (`snoozed -> completed` is not a transition the
+/// company contract allows at all, so that combination cannot arise.)
+///
+/// Never fails the caller: like every other sweep here, a hiccup on one
+/// candidate is logged and the pass continues with any siblings.
+///
+/// Returns the number of tasks actually woken.
+pub async fn run_snooze_wake_tick(state: &Arc<AppState>, now_secs: i64) -> Result<u32, String> {
+    if state.config.relay_private_key.is_none() {
+        return Err(
+            "snooze-wake sweep requires a durable relay signing key (set BUZZ_RELAY_PRIVATE_KEY)"
+                .to_string(),
+        );
+    }
+
+    let candidates = state
+        .db
+        .query_due_snoozed_task_heads(now_secs, MAX_SNOOZE_WAKE_CANDIDATES)
+        .await
+        .map_err(|error| format!("database error scanning snoozed task heads: {error}"))?;
+
+    let mut woken = 0u32;
+    for candidate in &candidates {
+        match process_snooze_wake_candidate(state, candidate, now_secs).await {
+            Ok(true) => woken += 1,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(
+                    task_head_event_id = %hex::encode(&candidate.task_head_id),
+                    community_id = %candidate.community_id,
+                    %error,
+                    "snooze-wake sweep: failed to process one candidate task, continuing with \
+                     any siblings"
+                );
+            }
+        }
+    }
+    Ok(woken)
+}
+
+/// Whether a re-read task head, still claiming to be due at `claimed_wake_at`,
+/// should actually be woken. `false` covers every way a stale scan snapshot
+/// can have diverged from the current truth by the time the claim was won:
+/// cancelled since the scan (no longer `snoozed`), or re-snoozed to a
+/// different `wakeAt` (still `snoozed`, but not the wake this claim is for).
+fn snoozed_task_should_wake(
+    current_status: TaskStatus,
+    current_wake_at: Option<i64>,
+    claimed_wake_at: i64,
+) -> bool {
+    current_status == TaskStatus::Snoozed && current_wake_at == Some(claimed_wake_at)
+}
+
+/// Process one due-snoozed candidate: claim its wake, re-verify it is still
+/// due, and if so, publish the `ready` head and emit the `task_woke` row.
+///
+/// Returns `Ok(true)` if this call woke the task; `Ok(false)` if another
+/// instance already claimed this exact wake, the re-read found the task no
+/// longer due (see [`snoozed_task_should_wake`]), or the candidate content
+/// was unreadable; `Err` for a database or signing failure worth logging.
+async fn process_snooze_wake_candidate(
+    state: &Arc<AppState>,
+    candidate: &buzz_db::event::SnoozedCandidateTask,
+    now_secs: i64,
+) -> Result<bool, String> {
+    let task: CompanyTask = match serde_json::from_str(&candidate.content) {
+        Ok(task) => task,
+        Err(error) => {
+            // Invariant: a relay-authored canonical head always parses
+            // (every write goes through `buzz_core::company::validate_task`
+            // first). Not something this sweep can repair -- log and move on.
+            tracing::warn!(
+                task_head_event_id = %hex::encode(&candidate.task_head_id),
+                community_id = %candidate.community_id,
+                %error,
+                "snooze-wake sweep: task head content failed to parse, skipping"
+            );
+            return Ok(false);
+        }
+    };
+    let Some(wake_at) = task.wake_at else {
+        // The candidate query's own predicate already requires a wakeAt on
+        // the content this row was selected from; only a stale snapshot
+        // reaches this branch.
+        return Ok(false);
+    };
+
+    if !state
+        .db
+        .claim_task_wake(candidate.community_id, &task.id, wake_at)
+        .await
+        .map_err(|error| format!("database error claiming task wake: {error}"))?
+    {
+        return Ok(false);
+    }
+
+    let tenant = TenantContext::resolved(candidate.community_id, candidate.host.clone());
+
+    // Re-read rather than trust the query snapshot: winning the claim only
+    // proves no one else is ALSO waking this exact (task, wakeAt) pair, not
+    // that the task is still in a wakeable state right now.
+    let previous_event = load_head(&tenant, state, KIND_TASK, &task.id)
+        .await?
+        .ok_or_else(|| format!("task {} vanished before wake", task.id))?;
+    let previous = parse_task_event(&previous_event)
+        .map_err(|error| format!("task head does not parse on re-read: {error}"))?;
+    if !snoozed_task_should_wake(previous.status, previous.wake_at, wake_at) {
+        return Ok(false);
+    }
+
+    let mut replacement = previous.clone();
+    replacement.status = TaskStatus::Ready;
+    replacement.wake_at = None;
+    // Monotonic against both the head this is pinned to and the sweep's own
+    // clock, never regressing either -- same guard `wake_dependent_if_ready`
+    // uses.
+    replacement.updated_at = replacement
+        .updated_at
+        .max(now_secs)
+        .max(previous.updated_at + 1);
+    if !is_task_status_transition_allowed(previous.status, replacement.status, previous.doer_kind) {
+        // Unreachable given the re-check above (`snoozed -> ready` is always
+        // allowed), kept as a hard stop rather than trusting that invariant
+        // silently forever.
+        return Ok(false);
+    }
+
+    let head = build_head(
+        &state.relay_keypair,
+        &CompanyActionPayload::Task(replacement.clone()),
+        Some(&previous_event),
+    )?;
+    let (stored_head, inserted) = state
+        .db
+        .insert_event(tenant.community(), &head, None)
+        .await
+        .map_err(|error| format!("failed to store woken task head: {error}"))?;
+    if inserted {
+        dispatch_persistent_event(
+            &tenant,
+            state,
+            &stored_head,
+            KIND_TASK,
+            &state.relay_keypair.public_key().to_hex(),
+            None,
+        )
+        .await;
+        emit_task_transition(&tenant, state, "task_woke", &replacement).await;
+    }
+    Ok(inserted)
+}
+
+#[cfg(test)]
+mod snooze_wake_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_still_snoozed_head_at_the_exact_claimed_wake_is_woken() {
+        assert!(snoozed_task_should_wake(
+            TaskStatus::Snoozed,
+            Some(1_800_000_000),
+            1_800_000_000
+        ));
+    }
+
+    #[test]
+    fn a_task_cancelled_while_snoozed_is_not_woken() {
+        assert!(!snoozed_task_should_wake(
+            TaskStatus::Cancelled,
+            None,
+            1_800_000_000
+        ));
+    }
+
+    #[test]
+    fn a_task_re_snoozed_to_a_different_wake_is_not_woken_by_the_stale_claim() {
+        // Still snoozed, but the wakeAt this claim was won for is not the
+        // current one -- the owner pushed it out again after the scan ran.
+        assert!(!snoozed_task_should_wake(
+            TaskStatus::Snoozed,
+            Some(1_800_050_000),
+            1_800_000_000
+        ));
+    }
+
+    #[test]
+    fn a_task_already_woken_by_a_racing_instance_is_not_woken_twice() {
+        // The race this whole sweep is built to survive: by the time this
+        // call re-reads, the OTHER instance's write already landed.
+        assert!(!snoozed_task_should_wake(
+            TaskStatus::Ready,
+            None,
+            1_800_000_000
+        ));
     }
 }

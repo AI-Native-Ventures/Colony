@@ -79,14 +79,41 @@ const TASK = {
   owningTeamId: "relay1:horizonlabs:sales",
   assigneePersonaIds: ["relay1:horizonlabs:sales-lead"],
   qaPersonaId: "relay1:horizonlabs:sales-lead",
+  reviewerTeamId: null,
   costCentreId: "cc-internal",
   commercialPurpose: "sales",
   clientOrganizationId: null,
   sourceChannelId: "welcome",
   sourceEventId: null,
   implicit: false,
+  dependsOn: ["horizonlabs:launch-outbound:build-site"],
+  subject: { kind: "party", ref: "acme-lead" },
+  stage: "draft-list",
+  threadRoot:
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  doerKind: "human",
+  wakeAt: null,
   createdAt: 1_780_000_000,
   updatedAt: 1_780_000_000,
+};
+
+/** The six chain-and-identity fields serde defaults when absent, which is
+ * exactly what heads written before Phase 1a lack. */
+const CHAIN_FIELDS = [
+  "dependsOn",
+  "subject",
+  "stage",
+  "threadRoot",
+  "doerKind",
+  "wakeAt",
+];
+const CHAIN_FIELD_DEFAULTS = {
+  dependsOn: [],
+  subject: null,
+  stage: null,
+  threadRoot: null,
+  doerKind: "agent",
+  wakeAt: null,
 };
 
 /** Build the exact head the relay broker signs, so the parser is tested
@@ -140,6 +167,9 @@ function initiativeHead(overrides = {}, options = {}) {
   );
 }
 
+/** The exact tags company_broker's build_head derives from validated
+ * content, mirrors included, so queries are tested against heads that look
+ * like what a real relay signs rather than a convenient subset. */
 function taskHead(overrides = {}, options = {}) {
   const record = { ...TASK, ...overrides };
   const tags = [
@@ -147,9 +177,19 @@ function taskHead(overrides = {}, options = {}) {
     ["c", record.companyId],
     ["company", record.companyId],
     ["team", record.owningTeamId],
+    ["g", record.owningTeamId],
     ["cost-centre", record.costCentreId],
+    ["w", record.status],
   ];
-  if (record.initiativeId) tags.push(["initiative", record.initiativeId]);
+  for (const dependency of record.dependsOn) tags.push(["v", dependency]);
+  if (record.initiativeId) {
+    tags.push(["initiative", record.initiativeId]);
+    tags.push(["i", record.initiativeId]);
+  }
+  if (record.stage) tags.push(["s", record.stage]);
+  if (record.subject) {
+    tags.push(["u", `${record.subject.kind}:${record.subject.ref}`]);
+  }
   return head(30181, record, tags, options.secret, options.createdAt);
 }
 
@@ -166,7 +206,80 @@ test("initiative and task heads parse into their exact records", () => {
 
   const task = parseTaskHead(taskHead(), RELAY_PUBKEY);
   assert.equal(task.ok, true);
+  // The subject key is literally `ref` because the Rust field is the raw
+  // identifier `r#ref`; deepEqual proves the JSON spelling survived.
   assert.deepEqual(task.value, TASK);
+  assert.equal("ref" in task.value.subject, true);
+});
+
+/** Heads written before the chain-and-identity fields existed are still on
+ * real relays and still deserialize in Rust to the serde defaults. Desktop
+ * must accept them too: refusing them would blank every existing community's
+ * task board on upgrade. The injected defaults mirror Rust field for field,
+ * while unknown keys stay rejected — only these six may be absent. */
+test("a task head written before the chain fields existed still parses", () => {
+  const record = { ...TASK };
+  for (const name of CHAIN_FIELDS) delete record[name];
+  // Built raw rather than through taskHead(): that helper merges onto the
+  // full TASK fixture, which would quietly hand the six fields back.
+  const event = finalizeEvent(
+    {
+      kind: 30181,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", record.id],
+        ["c", record.companyId],
+        ["company", record.companyId],
+        ["team", record.owningTeamId],
+        ["cost-centre", record.costCentreId],
+        ["initiative", record.initiativeId],
+      ],
+      content: canonicalCompanyJson(record),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.value, { ...TASK, ...CHAIN_FIELD_DEFAULTS });
+});
+
+test("an explicit null or wrong-typed chain field is still refused", () => {
+  // An explicit `doerKind: null` in content fails in Rust (not an Option) and
+  // must fail here: the injection only covers ABSENT keys.
+  const nulled = parseTaskHead(
+    taskHead({ ...TASK, doerKind: null }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(nulled.ok, false);
+  assert.equal(nulled.code, "invalid-record");
+
+  const badDoer = parseTaskHead(
+    taskHead({ ...TASK, doerKind: "robot" }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(badDoer.ok, false);
+
+  // wakeAt is i64: a fractional timestamp is not an integer.
+  const fractional = parseTaskHead(
+    taskHead({ ...TASK, wakeAt: 1_800_000_000.5 }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(fractional.ok, false);
+
+  const incompleteSubject = parseTaskHead(
+    taskHead({ ...TASK, subject: { kind: "party" } }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(incompleteSubject.ok, false);
+});
+
+test("snoozed is a valid task status", () => {
+  const parsed = parseTaskHead(
+    taskHead({ ...TASK, status: "snoozed", wakeAt: 1_800_000_000 }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.status, "snoozed");
 });
 
 // The whole point of relay-authored heads is that nobody else can mint one. A
@@ -341,7 +454,166 @@ test("every read query names its kinds and scopes to the tenant relay", async ()
   }
   assert.deepEqual(filters[0]["#d"], ["horizonlabs"]);
   assert.deepEqual(filters[1]["#c"], ["horizonlabs"]);
-  assert.deepEqual(filters[2]["#initiative"], ["horizonlabs:launch-outbound"]);
+  // Single-letter mirror only. `#initiative` is dropped by the nostr filter
+  // type before it reaches a relay, so querying it would silently match
+  // nothing useful.
+  assert.deepEqual(filters[2]["#i"], ["horizonlabs:launch-outbound"]);
+});
+
+test("work-surface narrows compile to single-letter tag filters", async () => {
+  resetCompanyRepositoryState();
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      return [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  await repository.listTasks({
+    companyId: "horizonlabs",
+    initiativeId: "horizonlabs:launch-outbound",
+    status: "inProgress",
+    teamId: "relay1:horizonlabs:sales",
+    stage: "outreach-pack",
+    subject: { kind: "party", ref: "acme-lead" },
+  });
+
+  assert.equal(filters.length, 1);
+  const filter = filters[0];
+  assert.ok(Array.isArray(filter.kinds) && filter.kinds.length > 0);
+  assert.deepEqual(filter.authors, [RELAY_PUBKEY]);
+  assert.deepEqual(filter["#c"], ["horizonlabs"]);
+  assert.deepEqual(filter["#i"], ["horizonlabs:launch-outbound"]);
+  assert.deepEqual(filter["#w"], ["inProgress"]);
+  assert.deepEqual(filter["#g"], ["relay1:horizonlabs:sales"]);
+  assert.deepEqual(filter["#s"], ["outreach-pack"]);
+  // Spelled exactly as build_head mirrors the subject.
+  assert.deepEqual(filter["#u"], ["party:acme-lead"]);
+});
+
+// The relay ANDs tag names, but a head that slipped past the wire filter (an
+// older relay, a race with a replacement) must not surface as a wrong result:
+// results are re-checked against signed content.
+test("results are narrowed again against content after parsing", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [
+      taskHead(),
+      taskHead({
+        id: "horizonlabs:launch-outbound:blocked-row",
+        title: "Blocked sibling",
+        status: "blocked",
+        updatedAt: 1_780_000_300,
+      }),
+    ],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+  const result = await repository.listTasks({
+    companyId: "horizonlabs",
+    status: "blocked",
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.value.map((task) => task.id),
+    ["horizonlabs:launch-outbound:blocked-row"],
+  );
+});
+
+test("a thread's tasks come back live-first, newest within each band", async () => {
+  resetCompanyRepositoryState();
+  const THREAD =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const OTHER_THREAD = "f".repeat(64);
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [
+      // Terminal, oldest update — belongs last.
+      taskHead({
+        id: "horizonlabs:t:build",
+        status: "completed",
+        threadRoot: THREAD,
+        updatedAt: 1_780_001_000,
+      }),
+      // Live but older than the snoozed one below.
+      taskHead({
+        id: "horizonlabs:t:pack",
+        status: "inProgress",
+        threadRoot: THREAD,
+        updatedAt: 1_780_002_000,
+      }),
+      taskHead({
+        id: "horizonlabs:t:run",
+        status: "snoozed",
+        wakeAt: 1_800_000_000,
+        threadRoot: THREAD,
+        updatedAt: 1_780_003_000,
+      }),
+      // Same company, different thread.
+      taskHead({
+        id: "horizonlabs:t:elsewhere",
+        status: "inProgress",
+        threadRoot: OTHER_THREAD,
+        updatedAt: 1_780_004_000,
+      }),
+      // Chat-spawned tasks can have no thread at all.
+      taskHead({ id: "horizonlabs:t:orphan", threadRoot: null }),
+    ],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  const result = await repository.listThreadTasks({
+    companyId: "horizonlabs",
+    threadRoot: THREAD.toUpperCase(),
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.value.map((task) => [task.id, task.status]),
+    [
+      ["horizonlabs:t:run", "snoozed"],
+      ["horizonlabs:t:pack", "inProgress"],
+      ["horizonlabs:t:build", "completed"],
+    ],
+  );
+});
+
+test("listing a thread's tasks pins kinds, author, and the company index", async () => {
+  resetCompanyRepositoryState();
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      return [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+  await repository.listThreadTasks({
+    companyId: "horizonlabs",
+    threadRoot: "a".repeat(64),
+  });
+  assert.equal(filters.length, 1);
+  assert.deepEqual(filters[0].kinds, [30181]);
+  assert.deepEqual(filters[0].authors, [RELAY_PUBKEY]);
+  assert.deepEqual(filters[0]["#c"], ["horizonlabs"]);
+});
+
+test("thread and list queries refuse to run without their required input", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  const noThread = await repository.listThreadTasks({
+    companyId: "horizonlabs",
+    threadRoot: "   ",
+  });
+  assert.equal(noThread.ok, false);
+  assert.equal(noThread.code, "invalid-record");
+
+  const noScope = await repository.listTasks({ status: "ready" });
+  assert.equal(noScope.ok, false);
+  assert.equal(noScope.code, "invalid-record");
 });
 
 test("listing initiatives keeps only the newest head per coordinate", async () => {

@@ -1440,6 +1440,11 @@ struct RespawnResult {
 /// `event_id` is the hex id of the single event the steer carried.
 struct SteerAckEvent {
     channel_id: Uuid,
+    /// Level-1 thread root of the steered event, matching
+    /// [`pool::TaskMeta::thread_root`] of the task the steer targeted. Scopes
+    /// ack handling (delivery ledger, fallback signal) to that conversation so
+    /// a sibling thread's turn is never disturbed.
+    thread_root: Option<String>,
     event_id: String,
     /// `Ok` if the read loop sent any of the locked `SteerAck` variants.
     /// `Err` if the oneshot was dropped without a send — should not happen
@@ -3231,6 +3236,22 @@ async fn tokio_main() -> Result<()> {
                                     owner_cache.get(),
                                 );
                                 if let Some(signal) = signal {
+                                    // Conversation gate: a steer (native OR
+                                    // cancel+merge) injects into the IN-FLIGHT
+                                    // turn's session. Sessions are keyed per
+                                    // thread, so an event from a different
+                                    // thread — including top-level vs thread
+                                    // — must not disturb the running
+                                    // conversation at all. It stays queued and
+                                    // gets its own turn (and its own session)
+                                    // when the current one completes.
+                                    let incoming_thread_root =
+                                        queue::parse_thread_tags(&event_for_steer).root_event_id;
+                                    let in_flight_matches = pool
+                                        .in_flight_thread_root(buzz_event.channel_id)
+                                        .is_some_and(|task_root| {
+                                            task_root == incoming_thread_root
+                                        });
                                     // Non-cancelling fork: when the mode
                                     // wants a Steer, attempt the
                                     // non-cancelling path first. On accept,
@@ -3244,15 +3265,28 @@ async fn tokio_main() -> Result<()> {
                                     // signal so the event still reaches the
                                     // agent.
                                     let native_attempted = matches!(signal, ControlSignal::Steer)
+                                        && in_flight_matches
                                         && try_native_steer(
                                             &mut pool,
                                             &mut queue,
                                             buzz_event.channel_id,
+                                            incoming_thread_root.clone(),
                                             event_for_steer,
                                             prompt_tag_for_steer,
                                             &steer_ack_tx,
                                         );
-                                    if !native_attempted {
+                                    if native_attempted {
+                                        // handled above
+                                    } else if matches!(signal, ControlSignal::Steer)
+                                        && !in_flight_matches
+                                    {
+                                        tracing::info!(
+                                            channel = %buzz_event.channel_id,
+                                            incoming_thread = ?incoming_thread_root,
+                                            "event for a different conversation arrived mid-turn \
+                                             — leaving it queued for its own turn"
+                                        );
+                                    } else {
                                         signal_in_flight_task(
                                             &mut pool,
                                             buzz_event.channel_id,
@@ -3499,6 +3533,7 @@ async fn tokio_main() -> Result<()> {
             }
             Some(PoolEvent::SteerAck(SteerAckEvent {
                 channel_id,
+                thread_root: steer_thread_root,
                 event_id,
                 ack,
             })) => {
@@ -3615,6 +3650,7 @@ async fn tokio_main() -> Result<()> {
                     queue.extend_in_flight_deadline(channel_id, config.max_turn_duration_secs);
                     if !pool.record_successful_steer(
                         channel_id,
+                        steer_thread_root.as_deref(),
                         event_id.clone(),
                         session_id.clone(),
                     ) {
@@ -3636,8 +3672,16 @@ async fn tokio_main() -> Result<()> {
                     // queued event has already been released to the
                     // front of `queues[channel_id]`, so the cancel
                     // will pick it up as part of the merged batch and
-                    // re-prompt the agent.
-                    signal_in_flight_task(&mut pool, channel_id, ControlSignal::Steer);
+                    // re-prompt the agent. Scoped to the steered
+                    // conversation: if that turn already ended and a
+                    // sibling thread's turn started, do NOT merge into
+                    // it — the released event dispatches normally.
+                    signal_in_flight_task_for_conversation(
+                        &mut pool,
+                        channel_id,
+                        steer_thread_root.as_deref(),
+                        ControlSignal::Steer,
+                    );
                 }
                 // After releasing a withheld event, give dispatch a chance
                 // to re-flush. If the prompt is still in flight, the
@@ -3937,6 +3981,39 @@ fn signal_in_flight_task(
     false
 }
 
+/// Send a control signal to the in-flight task for the conversation
+/// `(channel_id, thread_root)` ONLY. Unlike [`signal_in_flight_task`] — which
+/// targets whatever turn the channel is running, for operator-intent signals —
+/// this is used by steer fallbacks, where landing a merge on a sibling
+/// thread's session would contaminate the wrong conversation. Returns `false`
+/// (no signal, event stays queued for its own turn) when the running task
+/// belongs to a different thread or nothing is in flight.
+fn signal_in_flight_task_for_conversation(
+    pool: &mut AgentPool,
+    channel_id: uuid::Uuid,
+    thread_root: Option<&str>,
+    mode: ControlSignal,
+) -> bool {
+    let entry = pool
+        .task_map_mut()
+        .values_mut()
+        .find(|m| m.channel_id == Some(channel_id) && m.thread_root.as_deref() == thread_root);
+
+    if let Some(meta) = entry {
+        if let Some(tx) = meta.control_tx.take() {
+            tracing::info!(
+                channel = %channel_id,
+                thread = ?thread_root,
+                ?mode,
+                "control signal sent to in-flight conversation"
+            );
+            let _ = tx.send(mode);
+            return true;
+        }
+    }
+    false
+}
+
 /// Attempt the non-cancelling (ACP) steer for a freshly-queued event.
 ///
 /// Caller invariants:
@@ -3953,7 +4030,8 @@ fn signal_in_flight_task(
 /// universal cancel+merge `ControlSignal::Steer` fallback — the watcher
 /// will issue it from the ack arm if the native attempt fails.
 ///
-/// Returns `false` if `pool.send_steer` failed (no in-flight task,
+/// Returns `false` if `pool.send_steer` failed (no in-flight task for THIS
+/// conversation,
 /// `steer_tx` already full from a prior in-flight steer, or read loop
 /// torn down). The caller MUST fall through to
 /// `signal_in_flight_task(channel_id, ControlSignal::Steer)` so the
@@ -3965,6 +4043,7 @@ fn try_native_steer(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     channel_id: uuid::Uuid,
+    thread_root: Option<String>,
     event: nostr::Event,
     prompt_tag: String,
     steer_ack_tx: &mpsc::UnboundedSender<SteerAckEvent>,
@@ -3998,7 +4077,7 @@ fn try_native_steer(
         ack_tx,
     };
 
-    match pool.send_steer(channel_id, request) {
+    match pool.send_steer(channel_id, thread_root.as_deref(), request) {
         Ok(()) => {
             // Withhold the queued event synchronously BEFORE spawning
             // the watcher: this closes the race where `mark_complete`
@@ -4027,6 +4106,7 @@ fn try_native_steer(
                 let ack = ack_rx.await;
                 let _ = ack_tx_clone.send(SteerAckEvent {
                     channel_id,
+                    thread_root,
                     event_id: event_id_for_watcher,
                     ack,
                 });
@@ -4065,8 +4145,12 @@ fn dispatch_pending(
             .last()
             .map(|event| queue::parse_thread_tags(&event.event))
             .unwrap_or_default();
+        // One conversation per turn: the batch's level-1 thread root scopes
+        // agent affinity AND the in-flight TaskMeta, so steering and delivery
+        // ledgers stay scoped to the thread this batch belongs to.
+        let turn_thread_root = typing_scope.root_event_id.clone();
         let affinity_hit = pool.has_session_for(channel_id);
-        let mut agent = match pool.try_claim(Some(channel_id)) {
+        let mut agent = match pool.try_claim(Some(channel_id), turn_thread_root.as_deref()) {
             Some(a) => a,
             None => {
                 let pending = queue.pending_channels();
@@ -4125,6 +4209,7 @@ fn dispatch_pending(
             pool::TaskMeta {
                 agent_index,
                 channel_id: Some(channel_id),
+                thread_root: turn_thread_root,
                 turn_id,
                 recoverable_batch,
                 control_tx: Some(control_tx),
@@ -4268,11 +4353,16 @@ fn handle_prompt_result(
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
-    let successful_steer_deliveries = pool
+    let (successful_steer_deliveries, task_thread_root) = pool
         .task_map()
         .values()
         .find(|meta| meta.agent_index == agent_index)
-        .map(|meta| meta.successful_steer_deliveries.clone())
+        .map(|meta| {
+            (
+                meta.successful_steer_deliveries.clone(),
+                meta.thread_root.clone(),
+            )
+        })
         .unwrap_or_default();
     pool.task_map_mut()
         .retain(|_, meta| meta.agent_index != agent_index);
@@ -4280,16 +4370,21 @@ fn handle_prompt_result(
     if let PromptSource::Channel(channel_id) = &result.source {
         // The task may have invalidated this session before returning. Never
         // resurrect delivery state for a dead session; its replacement must
-        // receive fresh standing context and history.
-        if let Some(live_session_id) = result.agent.state.sessions.get(channel_id).cloned() {
+        // receive fresh standing context and history. Scoped to the exact
+        // conversation the task ran — a sibling thread's session must not
+        // receive these steer-delivered event ids.
+        let conversation_key = (*channel_id, task_thread_root.clone());
+        if let Some(live_session_id) = result.agent.state.sessions.get(&conversation_key).cloned() {
             let event_ids = successful_steer_deliveries
                 .into_iter()
                 .filter(|delivery| delivery.session_id == live_session_id)
                 .map(|delivery| delivery.event_id);
-            result
-                .agent
-                .state
-                .mark_channel_delivery_success(*channel_id, false, event_ids);
+            result.agent.state.mark_channel_delivery_success(
+                *channel_id,
+                task_thread_root.as_deref(),
+                false,
+                event_ids,
+            );
         }
     }
 
@@ -4827,7 +4922,7 @@ fn dispatch_heartbeat(
     if *heartbeat_in_flight {
         return;
     }
-    let agent = match pool.try_claim(None) {
+    let agent = match pool.try_claim(None, None) {
         Some(a) => a,
         None => return,
     };
@@ -4861,6 +4956,7 @@ fn dispatch_heartbeat(
         pool::TaskMeta {
             agent_index,
             channel_id: None,
+            thread_root: None,
             turn_id,
             recoverable_batch: None,
             control_tx: None,
@@ -4909,7 +5005,7 @@ fn dispatch_ask(
     if *heartbeat_in_flight {
         return false;
     }
-    let Some(agent) = pool.try_claim(None) else {
+    let Some(agent) = pool.try_claim(None, None) else {
         return false;
     };
 
@@ -4942,6 +5038,7 @@ fn dispatch_ask(
         pool::TaskMeta {
             agent_index,
             channel_id: None,
+            thread_root: None,
             turn_id,
             recoverable_batch: None,
             control_tx: None,
@@ -6074,6 +6171,7 @@ mod owner_control_command_tests {
             pool::TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: Some(control_tx),
@@ -8063,11 +8161,11 @@ mod error_outcome_emission_tests {
         agent
             .state
             .sessions
-            .insert(channel_id, "live-session".into());
+            .insert((channel_id, None), "live-session".into());
         agent
             .state
             .deliveries
-            .insert(channel_id, Default::default());
+            .insert((channel_id, None), Default::default());
 
         let mut pool = AgentPool::from_slots(vec![None]);
         let task_id = pool.join_set.spawn(async {}).id();
@@ -8076,6 +8174,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
+                thread_root: None,
                 turn_id: "test-turn-id".into(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8123,7 +8222,7 @@ mod error_outcome_emission_tests {
         );
 
         let returned = pool.agents_mut()[0].as_ref().expect("returned agent");
-        assert!(returned.state.deliveries[&channel_id]
+        assert!(returned.state.deliveries[&(channel_id, None)]
             .delivered_event_ids
             .contains(steer_event_id));
     }
@@ -8135,11 +8234,11 @@ mod error_outcome_emission_tests {
         agent
             .state
             .sessions
-            .insert(channel_id, "replacement-session".into());
+            .insert((channel_id, None), "replacement-session".into());
         agent
             .state
             .deliveries
-            .insert(channel_id, Default::default());
+            .insert((channel_id, None), Default::default());
 
         let mut pool = AgentPool::from_slots(vec![None]);
         let task_id = pool.join_set.spawn(async {}).id();
@@ -8148,6 +8247,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
+                thread_root: None,
                 turn_id: "test-turn-id".into(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8195,7 +8295,7 @@ mod error_outcome_emission_tests {
         );
 
         let returned = pool.agents_mut()[0].as_ref().expect("returned agent");
-        assert!(returned.state.deliveries[&channel_id]
+        assert!(returned.state.deliveries[&(channel_id, None)]
             .delivered_event_ids
             .is_empty());
     }
@@ -8208,20 +8308,21 @@ mod error_outcome_emission_tests {
         agent
             .state
             .sessions
-            .insert(channel_id, "live-session".into());
+            .insert((channel_id, None), "live-session".into());
         agent
             .state
             .deliveries
-            .insert(channel_id, Default::default());
+            .insert((channel_id, None), Default::default());
         let mut pool = AgentPool::from_slots(vec![Some(agent)]);
 
         assert!(pool.record_successful_steer(
             channel_id,
+            None,
             steer_event_id.into(),
             "live-session".into(),
         ));
         let returned = pool.agents_mut()[0].as_ref().expect("idle returned agent");
-        assert!(returned.state.deliveries[&channel_id]
+        assert!(returned.state.deliveries[&(channel_id, None)]
             .delivered_event_ids
             .contains(steer_event_id));
     }
@@ -8233,20 +8334,21 @@ mod error_outcome_emission_tests {
         agent
             .state
             .sessions
-            .insert(channel_id, "replacement-session".into());
+            .insert((channel_id, None), "replacement-session".into());
         agent
             .state
             .deliveries
-            .insert(channel_id, Default::default());
+            .insert((channel_id, None), Default::default());
         let mut pool = AgentPool::from_slots(vec![Some(agent)]);
 
         assert!(!pool.record_successful_steer(
             channel_id,
+            None,
             "stale-event".into(),
             "old-session".into(),
         ));
         let returned = pool.agents_mut()[0].as_ref().expect("replacement agent");
-        assert!(returned.state.deliveries[&channel_id]
+        assert!(returned.state.deliveries[&(channel_id, None)]
             .delivered_event_ids
             .is_empty());
     }
@@ -8263,6 +8365,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
+                thread_root: None,
                 turn_id: "test-turn-id".into(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8309,7 +8412,7 @@ mod error_outcome_emission_tests {
         );
 
         let returned = pool.agents_mut()[0].as_ref().expect("returned agent");
-        assert!(!returned.state.deliveries.contains_key(&channel_id));
+        assert!(!returned.state.deliveries.contains_key(&(channel_id, None)));
     }
 
     /// Drive one error outcome through `handle_prompt_result` and return how
@@ -8328,6 +8431,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8405,6 +8509,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
+                thread_root: None,
                 turn_id: "panic-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8498,6 +8603,7 @@ mod error_outcome_emission_tests {
                 crate::pool::TaskMeta {
                     agent_index: 0,
                     channel_id: None,
+                    thread_root: None,
                     turn_id: "test-turn-id".to_string(),
                     recoverable_batch: None,
                     control_tx: None,
@@ -8590,6 +8696,7 @@ mod error_outcome_emission_tests {
                 crate::pool::TaskMeta {
                     agent_index: 0,
                     channel_id: None,
+                    thread_root: None,
                     turn_id: "test-turn-id".to_string(),
                     recoverable_batch: None,
                     control_tx: None,
@@ -8696,6 +8803,7 @@ mod error_outcome_emission_tests {
                 crate::pool::TaskMeta {
                     agent_index: 0,
                     channel_id: None,
+                    thread_root: None,
                     turn_id: "test-turn-id".to_string(),
                     recoverable_batch: None,
                     control_tx: None,
@@ -8773,6 +8881,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8868,6 +8977,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -8985,6 +9095,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -9125,6 +9236,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -9363,6 +9475,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -9467,6 +9580,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
@@ -9553,6 +9667,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                thread_root: None,
                 turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,

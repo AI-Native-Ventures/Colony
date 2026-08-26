@@ -1231,6 +1231,14 @@ jobs:
         run: |
           chmod +x ./target/ci/buzz-relay ./target/ci/git-credential-nostr
           ./scripts/start-relay-for-tests.sh --no-build
+        env:
+          # Employee key sealing is a no-op without a KEK, so a hire request is
+          # accepted and then quietly produces no employee. e2e_company_work
+          # hires one, and failed with "employee was not created for hire
+          # request" the first time that suite ever ran in CI. Test-only value
+          # sealing ephemeral rows in a throwaway database, same standing as the
+          # hardcoded BUZZ_TEST_POSTGRES_PASSWORD in this workflow.
+          BUZZ_EMPLOYEE_KEK: "0000000000000000000000000000000000000000000000000000000000000001"
       - name: Relay E2E tests
         run: |
           # e2e_ask_chain must run first. Its absorption gate asserts on the deadline sweep, and interrupt_runtime::find_unique_executive refuses to promote when the community holds more than one executive. Every suite in this job shares one host-bound community and one database, so any suite that seeds a ladder before this one silently disables the sweep's promotion hop and the gate's positive control times out.
@@ -1252,8 +1260,14 @@ jobs:
           # needs DATABASE_URL as well as RELAY_URL; start-relay-for-tests.sh
           # brings up the same docker postgres the relay is pointed at.
           cargo test -p buzz-test-client --test e2e_interrupts -- --ignored --nocapture
+          # Company/Initiative/Task heads: owner-signed actions, relay-authored
+          # heads, and blocked-to-ready dependency derivation against the live
+          # relay. Like e2e_interrupts it seeds its owner fixture directly in
+          # Postgres (DATABASE_URL), and RELAY_HTTP_URL feeds its NIP-11 lookup.
+          cargo test -p buzz-test-client --test e2e_company_work -- --ignored --nocapture --test-threads 1
         env:
           RELAY_URL: ws://localhost:3000
+          RELAY_HTTP_URL: http://localhost:3000
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
           GIT_CREDENTIAL_NOSTR_BIN: ${{ github.workspace }}/target/ci/git-credential-nostr
       - name: Upload relay logs

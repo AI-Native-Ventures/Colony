@@ -78,6 +78,13 @@ test("action center route derives the Action Center sidebar selection", () => {
   });
 });
 
+test("work route derives the Work sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/work"), {
+    selectedChannelId: null,
+    selectedView: "work",
+  });
+});
+
 test("agents route derives the Agents sidebar selection", () => {
   assert.deepEqual(deriveShellRoute("/agents"), {
     selectedChannelId: null,

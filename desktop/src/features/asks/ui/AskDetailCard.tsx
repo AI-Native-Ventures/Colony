@@ -4,6 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import type { OpenAsk } from "@/features/asks/lib/askEvent";
 import { readAsk } from "@/features/asks/lib/askEvent";
 import {
+  askStatesFromEvents,
+  describeAskExpiry,
+} from "@/features/asks/lib/askState";
+import {
   classifyAskRouting,
   effectiveFilerPubkey,
 } from "@/features/asks/lib/askRouting";
@@ -11,7 +15,8 @@ import { useReportingLineLookup } from "@/features/agents/reportingLine";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { relayClient } from "@/shared/api/relayClient";
-import { KIND_ASK } from "@/shared/constants/kinds";
+import { useRelaySelfQuery } from "@/features/moderation/hooks";
+import { KIND_ASK, KIND_ASK_STATE } from "@/shared/constants/kinds";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 type AskDetailCardProps = {
@@ -95,6 +100,73 @@ function AskRoutingNote({ ask }: { ask: OpenAsk }): React.JSX.Element | null {
   );
 }
 
+/** Wall-clock seconds, re-read on a coarse tick so a countdown does not stall. */
+function useNowSeconds(intervalMs = 30_000): number {
+  const [now, setNow] = React.useState(() => Math.floor(Date.now() / 1_000));
+  React.useEffect(() => {
+    const timer = setInterval(
+      () => setNow(Math.floor(Date.now() / 1_000)),
+      intervalMs,
+    );
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+/**
+ * What the relay will do about this ask when its deadline passes, read from
+ * the relay-signed ask-state head (kind 30200).
+ *
+ * This exists mainly for the asks it CANNOT decide. NIP-IQ's hard list
+ * forbids a default answer on `spend`, `hiring`, `legal` and the rest, so a
+ * fan-out approval expires to a re-arm: the relay pushes the deadline out and
+ * waits again, indefinitely. That is the correct behaviour and it is not
+ * going to change, which is exactly why it has to be on screen — otherwise a
+ * campaign sits parked behind an ask the owner assumes will time out into a
+ * decision, and nothing anywhere says it will not.
+ *
+ * Renders nothing at all when the head is missing, unreadable, or not signed
+ * by this relay: an absent countdown is honest, an invented one is not.
+ */
+function AskExpiryNote({ ask }: { ask: OpenAsk }): React.JSX.Element | null {
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
+  const relaySelfPubkey = useRelaySelfQuery().data;
+  const nowSeconds = useNowSeconds();
+
+  const stateQuery = useQuery({
+    enabled: communityId !== "",
+    queryKey: ["ask-state-head", communityId, ask.id],
+    queryFn: () =>
+      relayClient.fetchEvents({
+        kinds: [KIND_ASK_STATE],
+        "#d": [ask.id],
+        limit: 4,
+      }),
+    staleTime: 15_000,
+  });
+
+  const state = React.useMemo(
+    () =>
+      askStatesFromEvents(stateQuery.data ?? [], relaySelfPubkey).get(ask.id) ??
+      null,
+    [ask.id, relaySelfPubkey, stateQuery.data],
+  );
+  if (state === null) return null;
+
+  const sentence = describeAskExpiry(state, ask.createdAt, nowSeconds);
+  if (sentence === null) return null;
+
+  return (
+    <p
+      className="text-xs leading-4 text-muted-foreground"
+      data-testid="ask-expiry-note"
+    >
+      {sentence}
+    </p>
+  );
+}
+
 /**
  * The card the founder answers an ask from.
  *
@@ -126,6 +198,7 @@ export function AskDetailCard({
           </p>
         ) : null}
         <AskRoutingNote ask={ask} />
+        <AskExpiryNote ask={ask} />
       </div>
 
       <label className="flex flex-col gap-1">

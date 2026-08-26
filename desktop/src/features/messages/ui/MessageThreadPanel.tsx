@@ -25,7 +25,7 @@ import type { ThreadPanelLayoutProps } from "@/features/channels/lib/threadPanel
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { extractCanonicalTaskId } from "@/features/company/taskThreadModel";
-import { TaskThreadContext } from "@/features/company/ui/TaskThreadContext";
+import { ThreadWorkSurface } from "@/features/company/ui/ThreadWorkSurface";
 import { VideoReviewNavigationProvider } from "@/shared/ui/VideoReviewNavigation";
 import { cn } from "@/shared/lib/cn";
 import { AuxiliaryPanel } from "@/shared/layout/AuxiliaryPanel";
@@ -613,16 +613,16 @@ export function MessageThreadPanel({
           </div>
         ) : null}
 
-        {canonicalTaskId && channelId ? (
-          <div className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS)}>
-            <TaskThreadContext
-              channelId={channelId}
-              channelName={channelName}
-              profiles={profiles}
-              taskId={canonicalTaskId}
-              threadId={threadHead.id}
-            />
-          </div>
+        {channelId ? (
+          <ThreadWorkSurface
+            className={THREAD_PANEL_MESSAGE_GUTTER_CLASS}
+            canonicalTaskId={canonicalTaskId}
+            channelId={channelId}
+            channelName={channelName}
+            profiles={profiles}
+            threadId={threadHead.id}
+            threadRoot={threadHead.rootId ?? threadHead.id}
+          />
         ) : null}
 
         <div

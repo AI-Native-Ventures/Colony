@@ -49,12 +49,14 @@ async function waitForMockLiveSubscription(page: Page, channelName: string) {
     .toBe(true);
 }
 
+type MockMessageEvent = { id: string };
+
 function emitMockMessage(
   page: Page,
   channelName: string,
   content: string,
   options: { extraTags?: string[][]; parentEventId?: string } = {},
-) {
+): Promise<MockMessageEvent> {
   return page.evaluate(
     ({ channelName, content, extraTags, parentEventId }) => {
       const emit = (
@@ -64,7 +66,7 @@ function emitMockMessage(
             content: string;
             extraTags?: string[][];
             parentEventId?: string;
-          }) => unknown;
+          }) => MockMessageEvent;
         }
       ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) {
@@ -841,18 +843,37 @@ test("inline video hover reveals a timeline without a second play control", asyn
     )
     .toBe("50%");
 
-  const restingControlsBox = await controls.boundingBox();
+  // Sample the controls' offset relative to the player surface atomically
+  // (one evaluate per sample). The reveal animation is opacity-only, so the
+  // invariant here is "hover must not slide the timeline vertically within
+  // the player". Comparing viewport-absolute boxes across two instants also
+  // captured unrelated timeline scroll settling from the virtualized list,
+  // which is not this test's subject and flaked CI with exactly-1px deltas.
+  const readRevealGeometry = () =>
+    surface.evaluate((surfaceEl) => {
+      const controlsEl = surfaceEl.querySelector<HTMLElement>(
+        "[data-testid='video-inline-controls']",
+      );
+      if (!controlsEl) {
+        return null;
+      }
+      return (
+        controlsEl.getBoundingClientRect().top -
+        surfaceEl.getBoundingClientRect().top
+      );
+    });
+  const restingTopOffset = await readRevealGeometry();
   const restingIconTransform = await centerIcon.evaluate(
     (element) => window.getComputedStyle(element).transform,
   );
-  expect(restingControlsBox).not.toBeNull();
+  expect(restingTopOffset).not.toBeNull();
   await expect(controls).toHaveCSS("opacity", "0");
   await surface.hover();
   await expect(controls).toHaveCSS("opacity", "1");
-  const hoveredControlsBox = await controls.boundingBox();
-  expect(hoveredControlsBox).not.toBeNull();
+  const hoveredTopOffset = await readRevealGeometry();
+  expect(hoveredTopOffset).not.toBeNull();
   expect(
-    Math.abs((hoveredControlsBox?.y ?? 0) - (restingControlsBox?.y ?? 0)),
+    Math.abs((hoveredTopOffset ?? 0) - (restingTopOffset ?? 0)),
   ).toBeLessThan(0.5);
   await expect
     .poll(() =>
@@ -1286,12 +1307,19 @@ test("right-click menus expose distinct selectors for links, relay video, and of
 
   // ── Relay video menu: Download video + Copy link, appearing only once the
   // relay origin resolves (the reactivity fix) ─────────────────────────────
-  await emitVideoMessage(page, {
+  const relayVideoEvent = await emitVideoMessage(page, {
     url: MENU_RELAY_VIDEO_URL,
     sha: MENU_RELAY_VIDEO_SHA,
     filename: "relay-clip.mp4",
   });
-  const relayPlayer = page.getByTestId("video-player").last();
+  // Bind the probe to the message that was just emitted rather than to
+  // `getByTestId("video-player").last()`. `.last()` resolves against whatever
+  // is in the DOM at that instant, so before the new row renders it still
+  // names the *previous* video, and a right-click on it opens the wrong
+  // menu. See the off-relay probe below for the failure that caused.
+  const relayPlayer = page
+    .locator(`[data-message-id="${relayVideoEvent.id}"]`)
+    .getByTestId("video-player");
   await expect(relayPlayer).toBeVisible();
   // Right-click the player surface. `force` skips the actionability guard: the
   // Play-button overlay sits above the video, but the contextmenu event still
@@ -1332,12 +1360,20 @@ test("right-click menus expose distinct selectors for links, relay video, and of
   await expect(page.locator("[data-video-context-menu]")).toHaveCount(0);
 
   // ── Off-relay video control: renders and offers Copy link, never Download ─
-  await emitVideoMessage(page, {
+  const offRelayVideoEvent = await emitVideoMessage(page, {
     url: MENU_OFF_RELAY_VIDEO_URL,
     sha: MENU_OFF_RELAY_VIDEO_SHA,
     filename: "external-clip.mp4",
   });
-  const offRelayPlayer = page.getByTestId("video-player").last();
+  // `.last()` here was the flake: with the relay video still the newest row
+  // in the DOM, the right-click landed on *it*, so `[data-video-context-menu]`
+  // was the relay video's menu and the Download-absent assertion below saw
+  // Download present (CI run 32857086381, smoke shard 6: "Expected: 0,
+  // Received: 1", 34 polls all resolving to 1). Scoping to the emitted
+  // message id makes the target unambiguous.
+  const offRelayPlayer = page
+    .locator(`[data-message-id="${offRelayVideoEvent.id}"]`)
+    .getByTestId("video-player");
   await expect(offRelayPlayer).toBeVisible();
   await offRelayPlayer.click({ button: "right", force: true });
 

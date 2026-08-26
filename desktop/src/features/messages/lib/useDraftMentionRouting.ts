@@ -5,6 +5,7 @@ import type { DraftMentionRef } from "./useDrafts";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import {
   type BlockMentionReference,
+  type CohortMentionReference,
   replaceWithDraftMentionRefs,
   snapshotDraftMentionRefs,
 } from "./draftMentionRefs";
@@ -14,6 +15,9 @@ export function useDraftMentionRouting(params: {
   personaMentionMapRef: React.MutableRefObject<Map<string, string>>;
   blockMentionMapRef: React.MutableRefObject<
     Map<string, BlockMentionReference>
+  >;
+  cohortMentionMapRef: React.MutableRefObject<
+    Map<string, CohortMentionReference>
   >;
   selectedAgentNamesRef: React.MutableRefObject<string[]>;
   cancelAutocomplete: () => void;
@@ -30,9 +34,11 @@ export function useDraftMentionRouting(params: {
         params.mentionMapRef.current,
         params.selectedAgentNamesRef.current,
         params.blockMentionMapRef.current,
+        params.cohortMentionMapRef.current,
       ),
     [
       params.blockMentionMapRef,
+      params.cohortMentionMapRef,
       params.mentionMapRef,
       params.selectedAgentNamesRef,
     ],
@@ -45,9 +51,11 @@ export function useDraftMentionRouting(params: {
         params.mentionMapRef.current,
         params.personaMentionMapRef.current,
         params.blockMentionMapRef.current,
+        params.cohortMentionMapRef.current,
       );
       trimMapToSize(params.mentionMapRef.current, 200);
       trimMapToSize(params.blockMentionMapRef.current, 200);
+      trimMapToSize(params.cohortMentionMapRef.current, 200);
       params.selectedAgentNamesRef.current = agentNames;
       params.setSelectedNames(names);
       params.setSelectedAgentNames(agentNames);

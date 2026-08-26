@@ -67,7 +67,11 @@ fn company_team_refs(
 }
 
 /// Read a relay-signed head, refusing anything the tenant relay did not write.
-fn relay_head(json: &str, relay_pubkey: &str, what: &str) -> Result<nostr::Event, String> {
+pub(crate) fn relay_head(
+    json: &str,
+    relay_pubkey: &str,
+    what: &str,
+) -> Result<nostr::Event, String> {
     let event =
         nostr::Event::from_json(json).map_err(|_| format!("the {what} head is not an event"))?;
     // Signature first: everything downstream reads this event's content as

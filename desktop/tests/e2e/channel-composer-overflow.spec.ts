@@ -31,19 +31,34 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
+/**
+ * Emits one mock message. `createdAt` defaults to the emitter's own "now".
+ *
+ * Only pass `createdAt` when the test depends on the *order* of a burst. The
+ * emitter stamps whole seconds, so a loop of emits all land in the same second
+ * and `compareEventOrder` (formatTimelineMessages.ts) falls through to
+ * `id.localeCompare`, which is random per run: the rendered order becomes a
+ * shuffle of the emit order.
+ *
+ * Do not backdate this by default. The thread test derives a typing
+ * indicator's timestamp from the root message it emitted, and a typing
+ * indicator that old is correctly treated as expired and never rendered.
+ */
 async function emit(
   page: import("@playwright/test").Page,
   content: string,
   parentEventId: string | null = null,
+  createdAt?: number,
 ) {
   const event = await page.evaluate(
     (payload) =>
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: payload.channel,
         content: payload.content,
+        createdAt: payload.createdAt,
         parentEventId: payload.parentEventId,
       }),
-    { channel: CHANNEL, content, parentEventId },
+    { channel: CHANNEL, content, createdAt, parentEventId },
   );
   if (!event) throw new Error("mock message emitter is not installed");
   return event as { created_at: number; id: string };
@@ -221,9 +236,21 @@ test.describe("composer overlays mask scrolled content", () => {
     await expect(page.getByTestId("message-timeline")).toBeVisible();
     await waitForMockLiveSubscription(page, CHANNEL);
 
+    // This test asserts that the message it emitted *last* clears the grown
+    // composer, so the emit order has to be the rendered order. Stamp a
+    // strictly increasing second per emit, ending at the current second, so
+    // nothing lands in the future and nothing is old enough to read as stale.
+    const emitBaseSeconds = Math.floor(Date.now() / 1000) - 20;
     let newestMessageId = "";
     for (let i = 0; i < 20; i++) {
-      newestMessageId = (await emit(page, `Bottom-clearance message ${i}`)).id;
+      newestMessageId = (
+        await emit(
+          page,
+          `Bottom-clearance message ${i}`,
+          null,
+          emitBaseSeconds + i,
+        )
+      ).id;
     }
     await page.waitForTimeout(300);
     await page.evaluate(() => {

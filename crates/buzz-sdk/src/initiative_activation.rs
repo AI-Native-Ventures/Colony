@@ -15,8 +15,8 @@
 
 use buzz_core::{
     company::{
-        CompanyProfile, CompanyTask, CompanyTeamRef, Initiative, InitiativeStatus, TaskStatus,
-        INITIATIVE_SCHEMA,
+        CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, Initiative, InitiativeStatus,
+        TaskStatus, INITIATIVE_SCHEMA,
     },
     company_roster::step_idempotency_key,
     kind::{KIND_INITIATIVE, KIND_TASK},
@@ -169,6 +169,7 @@ fn kickoff_action(
         // The lead reviews the team's work. It is always a member, which is
         // what the Task contract requires of a QA persona.
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id: initiative.cost_centre_id.clone(),
         commercial_purpose: initiative.commercial_purpose,
         client_organization_id: initiative.client_organization_id.clone(),
@@ -176,6 +177,15 @@ fn kickoff_action(
         source_event_id: initiative.source_event_id.clone(),
         // The owner started this deliberately; it was not inferred from chat.
         implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: initiative.updated_at,
         updated_at: initiative.updated_at,
     };
@@ -352,6 +362,9 @@ mod tests {
             expected_cost_usd: None,
             source_channel_id: "welcome".to_string(),
             source_event_id: None,
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_050,
         }

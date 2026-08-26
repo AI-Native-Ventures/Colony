@@ -32,6 +32,7 @@ function task(overrides = {}) {
     owningTeamId: "company-team:abc:horizonlabs:engineering",
     assigneePersonaIds: ["company-role:abc:horizonlabs:cto"],
     qaPersonaId: "company-role:abc:horizonlabs:cto",
+    reviewerTeamId: null,
     costCentreId: "cc-coordination",
     commercialPurpose: "administration",
     clientOrganizationId: null,

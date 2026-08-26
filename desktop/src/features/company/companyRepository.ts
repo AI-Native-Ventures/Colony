@@ -3,20 +3,27 @@ import { relayClient } from "@/shared/api/relayClient";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
 import {
+  KIND_COHORT,
   KIND_COMPANY_PROFILE,
   KIND_INITIATIVE,
   KIND_TASK,
 } from "@/shared/constants/kinds";
 
 import type {
+  Cohort,
   CompanyParseResult,
   CompanyProfile,
   CompanyTask,
   Initiative,
+  SubjectRef,
+  TaskStatus,
 } from "./contracts";
 import {
   companyFailure,
+  isTerminalTaskStatus,
   newestHead,
+  normalizeHex,
+  parseCohortHead,
   parseCompanyHead,
   parseInitiativeHead,
   parseTaskHead,
@@ -45,10 +52,81 @@ export type CompanyRepositoryDependencies = {
   relaySelf: () => Promise<string | null>;
 };
 
+/**
+ * How the Work surfaces narrow a task list.
+ *
+ * Every field here has an indexed single-letter mirror on the head (`c`
+ * company, `i` initiative, `w` status, `g` team, `s` stage, `u` subject), so
+ * each narrow compiles to a tag filter the relay can answer from its index.
+ * The readable multi-letter tags (`initiative`, `team`, `cost-centre`) are
+ * dropped by the nostr filter type before they reach a relay and must never
+ * be queried.
+ */
 export type TaskQuery = {
   companyId?: string;
   initiativeId?: string;
+  status?: TaskStatus;
+  teamId?: string;
+  stage?: string;
+  subject?: SubjectRef;
 };
+
+export type ThreadTaskQuery = {
+  /** Optional but recommended: scopes the scan through the company index. */
+  companyId?: string;
+  threadRoot: string;
+};
+
+/** The exact string build_head mirrors the subject into its `u` tag. */
+function subjectMirrorKey(subject: SubjectRef): string {
+  return `${subject.kind}:${subject.ref}`;
+}
+
+/**
+ * The wire half of a task query: one indexed single-letter tag filter per
+ * named narrow. Nostr ANDs distinct tag names, so combined narrows stay one
+ * request.
+ */
+function taskQueryTagFilters(
+  query: TaskQuery,
+): Partial<Record<`#${string}`, string[]>> {
+  const filters: Partial<Record<`#${string}`, string[]>> = {};
+  if (query.companyId) filters["#c"] = [query.companyId];
+  if (query.initiativeId) filters["#i"] = [query.initiativeId];
+  if (query.status) filters["#w"] = [query.status];
+  if (query.teamId) filters["#g"] = [query.teamId];
+  if (query.stage) filters["#s"] = [query.stage];
+  if (query.subject) filters["#u"] = [subjectMirrorKey(query.subject)];
+  return filters;
+}
+
+/**
+ * The result half of a task query, applied after parsing. A relay that
+ * ignored (or predates) a mirror must not turn into silently wrong results:
+ * what comes back is filtered again against the signed content itself.
+ */
+function taskMatchesQuery(task: CompanyTask, query: TaskQuery): boolean {
+  return (
+    (!query.companyId || task.companyId === query.companyId) &&
+    (!query.initiativeId || task.initiativeId === query.initiativeId) &&
+    (!query.status || task.status === query.status) &&
+    (!query.teamId || task.owningTeamId === query.teamId) &&
+    (!query.stage || task.stage === query.stage) &&
+    (!query.subject ||
+      (task.subject !== null &&
+        task.subject.kind === query.subject.kind &&
+        task.subject.ref === query.subject.ref))
+  );
+}
+
+/** Live work above terminal work, newest update first within each band. */
+function threadHistoryOrder(left: CompanyTask, right: CompanyTask): number {
+  const liveDelta =
+    Number(isTerminalTaskStatus(left.status)) -
+    Number(isTerminalTaskStatus(right.status));
+  if (liveDelta !== 0) return liveDelta;
+  return right.updatedAt - left.updatedAt || left.id.localeCompare(right.id);
+}
 
 function unavailable<T>(error: unknown): CompanyParseResult<T> {
   return companyFailure<T>(
@@ -246,9 +324,46 @@ export function createCompanyRepository(
         (relaySelfPubkey) => ({
           kinds: [KIND_TASK],
           authors: [relaySelfPubkey],
-          ...(query.initiativeId
-            ? { "#initiative": [query.initiativeId] }
-            : { "#c": [query.companyId as string] }),
+          ...taskQueryTagFilters(query),
+          limit: MAX_RECORDS,
+        }),
+        (events, relaySelfPubkey) => ({
+          ok: true,
+          value: collectHeads(events, relaySelfPubkey, parseTaskHead)
+            .filter((task) => taskMatchesQuery(task, query))
+            .sort((left, right) => left.id.localeCompare(right.id)),
+        }),
+      );
+    },
+
+    /**
+     * One thread's task history: newest live task first, earlier (terminal)
+     * tasks after.
+     *
+     * `thread_root` is signed content, not a tag, so no indexed filter can
+     * select it over the wire. The narrow happens here instead: this reads
+     * task heads through the indexed `#c` mirror (or every head the tenant
+     * relay authored when no company is named) and keeps those whose content
+     * names the thread. Bounded by MAX_RECORDS — the 500 newest head events
+     * are fetched, so in a company with more churn than that the oldest
+     * tasks of quiet threads can fall off this view. A single-letter thread
+     * mirror tag would move the narrow server-side; until one exists this is
+     * the honest ceiling.
+     */
+    async listThreadTasks(
+      query: ThreadTaskQuery,
+    ): Promise<CompanyParseResult<CompanyTask[]>> {
+      if (query.threadRoot.trim() === "") {
+        return companyFailure<CompanyTask[]>(
+          "invalid-record",
+          "Listing a thread's tasks requires the thread root event id.",
+        );
+      }
+      return read<CompanyTask[]>(
+        (relaySelfPubkey) => ({
+          kinds: [KIND_TASK],
+          authors: [relaySelfPubkey],
+          ...(query.companyId ? { "#c": [query.companyId] } : {}),
           limit: MAX_RECORDS,
         }),
         (events, relaySelfPubkey) => ({
@@ -256,10 +371,30 @@ export function createCompanyRepository(
           value: collectHeads(events, relaySelfPubkey, parseTaskHead)
             .filter(
               (task) =>
-                (!query.companyId || task.companyId === query.companyId) &&
-                (!query.initiativeId ||
-                  task.initiativeId === query.initiativeId),
+                task.threadRoot !== null &&
+                normalizeHex(task.threadRoot) ===
+                  normalizeHex(query.threadRoot),
             )
+            .sort(threadHistoryOrder),
+        }),
+      );
+    },
+
+    /** Cohorts are inert data: no status narrow, sorted by id like initiatives. */
+    async listCohorts(
+      companyId: string,
+    ): Promise<CompanyParseResult<Cohort[]>> {
+      return read<Cohort[]>(
+        (relaySelfPubkey) => ({
+          kinds: [KIND_COHORT],
+          authors: [relaySelfPubkey],
+          "#c": [companyId],
+          limit: MAX_RECORDS,
+        }),
+        (events, relaySelfPubkey) => ({
+          ok: true,
+          value: collectHeads(events, relaySelfPubkey, parseCohortHead)
+            .filter((cohort) => cohort.companyId === companyId)
             .sort((left, right) => left.id.localeCompare(right.id)),
         }),
       );

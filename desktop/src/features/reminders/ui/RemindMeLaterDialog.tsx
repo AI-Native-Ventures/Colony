@@ -7,7 +7,7 @@ import {
   parseCustomDateTime,
   TIME_PRESETS,
   todayDateString,
-} from "@/features/reminders/lib/timePresets";
+} from "@/shared/lib/timePresets";
 import type { ReminderTarget } from "@/features/reminders/lib/reminderTypes";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { Button } from "@/shared/ui/button";
