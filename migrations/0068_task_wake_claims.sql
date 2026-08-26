@@ -15,3 +15,10 @@ CREATE TABLE task_wake_claims (
     claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (community_id, task_id, wake_at)
 );
+
+-- Community-scoped tables must carry the write fence, or a write can outlive
+-- the community it belongs to. schema.sql (which CI provisions from) declares
+-- this separately, so a fence added there and not here leaves a
+-- migration-built database unfenced - which is exactly how this was caught:
+-- "community deletion write-fence drift (missing=task_wake_claims)".
+SELECT attach_community_write_fence('task_wake_claims'::REGCLASS);
