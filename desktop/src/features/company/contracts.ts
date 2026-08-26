@@ -442,6 +442,11 @@ const TASK_FIELD_DEFAULTS: Record<string, unknown> = {
   threadRoot: null,
   doerKind: "agent",
   wakeAt: null,
+  // The relay omits this one rather than writing it as null, because desktop
+  // builds shipped before the field existed match on an EXACT field set and
+  // would reject every head carrying it. So an absent key is the ordinary
+  // case here, not only a legacy one.
+  reviewerTeamId: null,
 };
 
 function scalarTags(event: RelayEvent, name: string): string[] {

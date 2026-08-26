@@ -243,6 +243,43 @@ test("a task head written before the chain fields existed still parses", () => {
   assert.deepEqual(parsed.value, { ...TASK, ...CHAIN_FIELD_DEFAULTS });
 });
 
+/** The relay OMITS `reviewerTeamId` rather than nulling it, so an absent key
+ * is the ordinary case for this field, not only a legacy one. Desktop builds
+ * shipped before it existed match on an exact field set, so writing it as
+ * null would have made every task head unparseable on all of them. */
+test("a task head omitting reviewerTeamId parses with a null reviewer", () => {
+  const record = { ...TASK };
+  delete record.reviewerTeamId;
+  const event = finalizeEvent(
+    {
+      kind: 30181,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", record.id],
+        ["c", record.companyId],
+        ["company", record.companyId],
+        ["team", record.owningTeamId],
+        ["cost-centre", record.costCentreId],
+        ["initiative", record.initiativeId],
+      ],
+      content: canonicalCompanyJson(record),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.reviewerTeamId, null);
+});
+
+test("a task head naming a reviewer team keeps it", () => {
+  const parsed = parseTaskHead(
+    taskHead({ ...TASK, reviewerTeamId: "relay1:horizonlabs:qa" }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.reviewerTeamId, "relay1:horizonlabs:qa");
+});
+
 test("an explicit null or wrong-typed chain field is still refused", () => {
   // An explicit `doerKind: null` in content fails in Rust (not an Option) and
   // must fail here: the injection only covers ABSENT keys.

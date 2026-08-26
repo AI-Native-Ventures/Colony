@@ -346,7 +346,16 @@ pub struct CompanyTask {
     /// of it, which is a different question — a pipeline stage that declares
     /// a `reviewerTeamId` is saying exactly that the team doing the work
     /// must not be the team that signs it off.
-    #[serde(default)]
+    ///
+    /// Skipped on serialize when `None`, unlike every other optional field
+    /// here, which all write an explicit `null`. Not a style choice: desktop
+    /// builds shipped before this field existed match a Task head against an
+    /// EXACT field set, so a head that carries `"reviewerTeamId": null`
+    /// fails to parse on every one of them. Omitting it keeps the common
+    /// case byte-identical to what those builds already read, and confines
+    /// the incompatibility to tasks that genuinely name a reviewer — which
+    /// is new behaviour those builds could not have rendered anyway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer_team_id: Option<String>,
     /// Company cost centre charged for the task.
     pub cost_centre_id: String,
@@ -1905,6 +1914,17 @@ mod tests {
         assert_eq!(task_value["owningTeamId"], "web-team");
         assert_eq!(task_value["assigneePersonaIds"][0], "frontend-engineer");
         assert_eq!(task_value["qaPersonaId"], "cto");
+        // COMPATIBILITY PIN, not a style preference. Desktop builds already
+        // in the wild match a task head against an exact field set, so a
+        // head carrying `"reviewerTeamId": null` fails to parse on every one
+        // of them. Omitting it keeps an ordinary task head byte-identical to
+        // what those builds already read. A later pass that "makes the
+        // optional fields consistent" by dropping `skip_serializing_if`
+        // breaks every shipped client, silently, and this is what stops it.
+        assert!(
+            task_value.get("reviewerTeamId").is_none(),
+            "a task with no reviewer team must omit the key, not null it"
+        );
         assert_eq!(task_value["costCentreId"], "web-delivery");
         assert_eq!(task_value["commercialPurpose"], "clientDelivery");
         assert_eq!(task_value["clientOrganizationId"], "tennant-group");
@@ -2098,6 +2118,20 @@ mod tests {
             validate_task(&task, &company, Some(&initiative), &teams),
             Err(CompanyContractError::QaNotReviewerTeamMember)
         ));
+    }
+
+    /// The other side of the compatibility pin: when a reviewer IS named the
+    /// key must appear, or the field would be unwritable rather than merely
+    /// omitted.
+    #[test]
+    fn a_named_reviewer_team_is_serialized() {
+        let mut task = task_fixtures().remove(0);
+        task.reviewer_team_id = Some("marketing-team".to_string());
+        let value = serde_json::to_value(&task).expect("task serializes");
+        assert_eq!(value["reviewerTeamId"], "marketing-team");
+
+        let round_tripped: CompanyTask = serde_json::from_value(value).expect("task round-trips");
+        assert_eq!(round_tripped, task);
     }
 
     #[test]

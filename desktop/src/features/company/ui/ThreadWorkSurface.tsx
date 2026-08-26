@@ -76,9 +76,7 @@ function ThreadTaskChip({
         ownerLabel={shortIdLabel(task.owningTeamId)}
         qaLabel={task.qaPersonaId}
         reviewerLabel={
-          task.reviewerTeamId === null
-            ? null
-            : shortIdLabel(task.reviewerTeamId)
+          task.reviewerTeamId ? shortIdLabel(task.reviewerTeamId) : null
         }
         run={runsByTaskId.get(task.id) ?? null}
         task={task}
