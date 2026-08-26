@@ -86,6 +86,7 @@
     "emoji-mart": "^5.6.0",
     "fflate": "0.8.2",
     "jdenticon": "^3.3.0",
+    "linkifyjs": "^4.3.2",
     "lucide-react": "^1.0.0",
     "mermaid": "11.17.2",
     "motion": "^12.38.0",
