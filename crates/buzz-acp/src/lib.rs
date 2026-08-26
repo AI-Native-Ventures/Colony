@@ -5067,37 +5067,28 @@ pub const COMPANY_ONBOARDING_PROMPT: &str = include_str!("company_onboarding_pro
 ///
 /// Takes the status rather than querying, so the rule is testable on its own
 /// and the caller owns the lookup.
-pub fn should_inject_company_onboarding(
-    company_status: Option<buzz_core::company::CompanyOnboardingStatus>,
-) -> bool {
-    !matches!(
-        company_status,
-        Some(buzz_core::company::CompanyOnboardingStatus::Approved)
-    )
+pub fn should_inject_company_onboarding(community_profile_exists: bool) -> bool {
+    !community_profile_exists
 }
 
 #[cfg(test)]
 mod company_onboarding_injection_tests {
     use super::*;
-    use buzz_core::company::CompanyOnboardingStatus;
 
     #[test]
-    fn onboarding_is_injected_until_a_company_is_approved() {
-        // No company yet: this is exactly the conversation the protocol is for.
-        assert!(should_inject_company_onboarding(None));
-        // Drafted but not approved: onboarding is still in progress.
-        assert!(should_inject_company_onboarding(Some(
-            CompanyOnboardingStatus::Draft
-        )));
+    fn onboarding_is_injected_until_the_community_has_a_profile() {
+        // No profile yet: this is exactly the conversation the protocol is for.
+        assert!(should_inject_company_onboarding(false));
     }
 
-    /// Once approved, re-injecting would tell the agent to re-run an interview
-    /// the owner has already finished.
+    /// Once the profile exists, re-injecting would tell the agent to re-run an
+    /// interview the owner has already finished. There is no longer a
+    /// "drafted but not approved" middle state: the profile either exists or
+    /// it does not, because approving a separate Company record is not a step
+    /// any more.
     #[test]
-    fn onboarding_stops_being_injected_once_approved() {
-        assert!(!should_inject_company_onboarding(Some(
-            CompanyOnboardingStatus::Approved
-        )));
+    fn onboarding_stops_once_the_profile_exists() {
+        assert!(!should_inject_company_onboarding(true));
     }
 
     /// It is long on purpose, and that is precisely why it must not live in

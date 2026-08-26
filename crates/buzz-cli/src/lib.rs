@@ -661,8 +661,6 @@ pub enum LedgerCmd {
         #[arg(long)]
         match_agent: Option<String>,
         #[arg(long)]
-        company: String,
-        #[arg(long)]
         cost_centre: String,
         #[arg(long)]
         team: String,
@@ -679,8 +677,6 @@ pub enum LedgerCmd {
         /// Hex event id of the kind 44210 record
         #[arg(long)]
         record: String,
-        #[arg(long)]
-        company: String,
         #[arg(long)]
         cost_centre: String,
         #[arg(long)]
@@ -759,11 +755,8 @@ pub enum LedgerCmd {
 
 #[derive(Subcommand)]
 pub enum PartiesCmd {
-    /// List a company's parties, and separately the handles merges retired
-    List {
-        #[arg(long)]
-        company: String,
-    },
+    /// List this community's parties, and separately the handles merges retired
+    List,
     /// Get one party with its views, following any merges that retired the handle
     Get {
         #[arg(long)]
@@ -785,8 +778,6 @@ pub enum PartiesCmd {
     /// never evidence, and more than one candidate is reported as a decision
     /// for a human rather than resolved automatically.
     Resolve {
-        #[arg(long)]
-        company: String,
         /// Path to a JSON array of observed identifiers.
         #[arg(long)]
         file: String,

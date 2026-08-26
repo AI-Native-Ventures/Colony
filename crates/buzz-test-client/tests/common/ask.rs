@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
-    CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyService, CompanyTask,
-    CompanyTeamRef, CostCentre, CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus,
-    COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+    CommercialPurpose, CompanyProfile, CompanyService, CompanyTask, CompanyTeamRef, CostCentre,
+    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMPANY_SCHEMA,
+    INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
@@ -273,10 +273,9 @@ async fn head(
     events.into_iter().next()
 }
 
-fn company_profile(id: &str, stamp: i64) -> CompanyProfile {
+fn company_profile(stamp: i64) -> CompanyProfile {
     CompanyProfile {
         schema: COMPANY_SCHEMA.to_string(),
-        id: id.to_string(),
         trading_name: "Horizon Labs".to_string(),
         legal_name: None,
         website: None,
@@ -295,22 +294,15 @@ fn company_profile(id: &str, stamp: i64) -> CompanyProfile {
             service_id: None,
         }],
         source_report_event_id: None,
-        onboarding_status: CompanyOnboardingStatus::Approved,
         created_at: stamp,
         updated_at: stamp,
     }
 }
 
-fn proposed_initiative(
-    company_id: &str,
-    id: &str,
-    owner_persona_id: &str,
-    stamp: i64,
-) -> Initiative {
+fn proposed_initiative(id: &str, owner_persona_id: &str, stamp: i64) -> Initiative {
     Initiative {
         schema: INITIATIVE_SCHEMA.to_string(),
         id: id.to_string(),
-        company_id: company_id.to_string(),
         title: "Tennant premium site".to_string(),
         summary: "Ship the premium build.".to_string(),
         status: InitiativeStatus::Proposed,
@@ -331,11 +323,10 @@ fn proposed_initiative(
 
 /// A Task with no initiative -- the shape Colony creates for any instruction
 /// that arrives in chat.
-fn chat_task(company_id: &str, id: &str, team: &CompanyTeamRef, stamp: i64) -> CompanyTask {
+fn chat_task(id: &str, team: &CompanyTeamRef, stamp: i64) -> CompanyTask {
     CompanyTask {
         schema: TASK_SCHEMA.to_string(),
         id: id.to_string(),
-        company_id: company_id.to_string(),
         initiative_id: None,
         title: "Take a look at the failing deploy".to_string(),
         status: TaskStatus::InProgress,
@@ -398,7 +389,7 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
     };
     publish_team(client, &owner, &team).await;
 
-    let company = company_profile(&company_id, now());
+    let company = company_profile(now());
     let outcome = broker(
         client,
         &owner,
@@ -429,13 +420,8 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
 /// produces.
 #[allow(dead_code)]
 pub async fn start_initiative(client: &mut BuzzTestClient, ws: &Workspace) -> (String, String) {
-    let initiative_id = format!("{}:tennant-premium", ws.company.id);
-    let proposed = proposed_initiative(
-        &ws.company.id,
-        &initiative_id,
-        &ws.team.lead_persona_id,
-        now(),
-    );
+    let initiative_id = "tennant-premium".to_string();
+    let proposed = proposed_initiative(&initiative_id, &ws.team.lead_persona_id, now());
     let outcome = broker(
         client,
         &ws.owner,
@@ -466,7 +452,6 @@ pub async fn start_initiative(client: &mut BuzzTestClient, ws: &Workspace) -> (S
         let step = next_step(
             &record,
             &current.id.to_hex(),
-            &ws.company,
             &teams,
             &ws.relay,
             InitiativeIntent::Start,
@@ -511,8 +496,8 @@ pub async fn start_initiative(client: &mut BuzzTestClient, ws: &Workspace) -> (S
 
 /// Create the relay-authored Task an ask about chat work hangs off.
 pub async fn create_chat_task(client: &mut BuzzTestClient, ws: &Workspace) -> String {
-    let task_id = format!("{}:chat:{}", ws.company.id, Uuid::new_v4().simple());
-    let record = chat_task(&ws.company.id, &task_id, &ws.team, now());
+    let task_id = format!("chat:{}", Uuid::new_v4().simple());
+    let record = chat_task(&task_id, &ws.team, now());
     assert_eq!(
         broker(
             client,

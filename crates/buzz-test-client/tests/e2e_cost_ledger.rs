@@ -312,7 +312,6 @@ fn wire_record(
 
 fn work_context(purpose: CommercialPurpose, client_org: Option<&str>) -> AgentWorkContext {
     AgentWorkContext {
-        company_id: "horizon-labs".to_string(),
         task_id: "task-1".to_string(),
         initiative_id: None,
         owning_team_id: "web-team".to_string(),
@@ -732,7 +731,6 @@ async fn a_correction_moves_a_record_without_erasing_what_it_said() {
         id: Uuid::new_v4().to_string(),
         usage_record_event_id: record_id.clone(),
         assign: RuleAssignment {
-            company_id: "horizon-labs".to_string(),
             cost_centre_id: "web-delivery".to_string(),
             owning_team_id: "web-team".to_string(),
             commercial_purpose: CommercialPurpose::ClientDelivery,
@@ -834,7 +832,6 @@ async fn a_rule_attributes_a_record_that_named_no_work() {
         match_channel_id: None,
         match_model: None,
         assign: RuleAssignment {
-            company_id: "horizon-labs".to_string(),
             cost_centre_id: "internal-ops".to_string(),
             owning_team_id: "web-team".to_string(),
             commercial_purpose: CommercialPurpose::Marketing,

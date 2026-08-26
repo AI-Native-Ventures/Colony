@@ -14,7 +14,7 @@
 //! `execute` re-plans against current state rather than trusting the plan
 //! frozen into the Ask at proposal time — see its doc comment for why.
 
-use buzz_core::company::{CompanyTask, CompanyTeamRef};
+use buzz_core::company::{CompanyTask, CompanyTeamRef, COMMUNITY_PROFILE_ID};
 use buzz_core::interrupt::parse_ask;
 use buzz_core::kind::{
     KIND_ASK_RESOLUTION, KIND_COHORT, KIND_COMPANY_PROFILE, KIND_TASK, KIND_TEAM, KIND_TEMPLATE,
@@ -65,12 +65,17 @@ pub async fn cmd_propose(
     let template_event = fetch_head(client, KIND_TEMPLATE, template_id, "template").await?;
     let template = parse_template_event(&template_event)
         .map_err(|error| CliError::Other(format!("template head is unreadable: {error}")))?;
-    let company_event =
-        fetch_head(client, KIND_COMPANY_PROFILE, &cohort.company_id, "company").await?;
+    let company_event = fetch_head(
+        client,
+        KIND_COMPANY_PROFILE,
+        COMMUNITY_PROFILE_ID,
+        "community profile",
+    )
+    .await?;
     let company = parse_company_event(&company_event)
         .map_err(|error| CliError::Other(format!("company head is unreadable: {error}")))?;
-    let teams = fetch_teams(client, &company.id).await?;
-    let existing_tasks = fetch_existing_tasks(client, &company.id).await?;
+    let teams = fetch_teams(client).await?;
+    let existing_tasks = fetch_existing_tasks(client).await?;
 
     let relay = relay_self(client).await?.to_hex();
     let now = chrono::Utc::now().timestamp();
@@ -224,12 +229,17 @@ pub async fn cmd_execute(client: &BuzzClient, ask_hex: &str) -> Result<(), CliEr
             seed.template_id, template.version, seed.template_version
         )));
     }
-    let company_event =
-        fetch_head(client, KIND_COMPANY_PROFILE, &seed.company_id, "company").await?;
+    let company_event = fetch_head(
+        client,
+        KIND_COMPANY_PROFILE,
+        COMMUNITY_PROFILE_ID,
+        "community profile",
+    )
+    .await?;
     let company = parse_company_event(&company_event)
         .map_err(|error| CliError::Other(format!("company head is unreadable: {error}")))?;
-    let teams = fetch_teams(client, &seed.company_id).await?;
-    let existing_tasks = fetch_existing_tasks(client, &seed.company_id).await?;
+    let teams = fetch_teams(client).await?;
+    let existing_tasks = fetch_existing_tasks(client).await?;
 
     let relay = relay_self(client).await?.to_hex();
     let now = chrono::Utc::now().timestamp();
@@ -421,10 +431,7 @@ async fn find_resolution(
 /// canonical-head convention. Same validity filter as the relay
 /// (`validate_team_ref`), so a team this client would skip cannot silently
 /// diverge from one the relay would also refuse.
-async fn fetch_teams(
-    client: &BuzzClient,
-    _company_id: &str,
-) -> Result<Vec<CompanyTeamRef>, CliError> {
+async fn fetch_teams(client: &BuzzClient) -> Result<Vec<CompanyTeamRef>, CliError> {
     let my_pubkey = client.keys().public_key().to_hex();
     let events = client
         .query_all(json!({ "kinds": [KIND_TEAM], "authors": [my_pubkey] }))
@@ -486,16 +493,12 @@ async fn fetch_teams(
 
 /// Every Task the company currently has, of any status. `plan_fan_out`
 /// itself decides which of these are "open" for dedupe purposes.
-async fn fetch_existing_tasks(
-    client: &BuzzClient,
-    company_id: &str,
-) -> Result<Vec<CompanyTask>, CliError> {
+async fn fetch_existing_tasks(client: &BuzzClient) -> Result<Vec<CompanyTask>, CliError> {
     let relay = relay_self(client).await?;
     let events = client
         .query_all(json!({
             "kinds": [KIND_TASK],
             "authors": [relay.to_hex()],
-            "#c": [company_id],
         }))
         .await?;
     let mut tasks = Vec::new();
@@ -505,9 +508,7 @@ async fn fetch_existing_tasks(
             Err(_) => continue,
         };
         if let Ok(task) = parse_task_event(&event) {
-            if task.company_id == company_id {
-                tasks.push(task);
-            }
+            tasks.push(task);
         }
     }
     Ok(tasks)
