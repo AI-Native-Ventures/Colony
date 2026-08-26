@@ -15,7 +15,7 @@ const DOES = [
 export function MeetScout() {
   return (
     <section className="bg-colony-canvas px-6 py-24 sm:px-10 sm:py-32 lg:px-24">
-      <div className="mx-auto grid max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-20">
+      <div className="mx-auto grid max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-16 xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-20">
         <div>
           <h2 className="max-w-[15ch] text-4xl font-bold leading-[0.96] tracking-[-0.04em] text-colony-ink sm:text-6xl lg:text-[76px]">
             Your first agent is a chief of staff.

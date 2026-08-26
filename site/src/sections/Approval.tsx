@@ -5,7 +5,7 @@
 export function Approval() {
   return (
     <section className="bg-white px-6 py-20 sm:px-10 sm:py-28 lg:px-24">
-      <div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-[440px_minmax(0,1fr)] lg:gap-16">
+      <div className="mx-auto grid max-w-6xl items-center gap-12 xl:grid-cols-[minmax(0,440px)_minmax(0,1fr)] xl:gap-16">
         <div>
           <h2 className="text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-5xl lg:text-[60px]">
             Nothing goes out in your name unread.

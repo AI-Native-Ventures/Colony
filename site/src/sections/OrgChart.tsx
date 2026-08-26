@@ -101,7 +101,7 @@ export function OrgChart({ scoutArt }: { scoutArt: string }) {
             </div>
           </div>
 
-          <div className="absolute inset-x-0 top-[400px] grid grid-cols-3 gap-[74px]">
+          <div className="absolute inset-x-0 top-[400px] grid grid-cols-3 gap-[6%]">
             {TEAMS.map((team) => (
               <TeamNode key={team.name} team={team} />
             ))}
@@ -133,20 +133,13 @@ export function OrgChart({ scoutArt }: { scoutArt: string }) {
           ))}
         </div>
 
-        <div className="mt-14 grid items-center gap-12 border-t border-white/25 pt-12 lg:grid-cols-[minmax(0,1fr)_672px] lg:gap-16">
+        <div className="mt-14 grid items-center gap-12 border-t border-white/25 pt-12 xl:grid-cols-[minmax(0,1fr)_minmax(0,672px)] xl:gap-16">
           <div>
-            <p className="text-base leading-relaxed text-white/80 sm:text-lg">
-              <strong className="text-white">
-                Solid means it already exists. Dashed means it doesn't yet.
-              </strong>{" "}
-              Scout can propose a team all day; it cannot create one. That takes
-              your approval, and it comes to you as a plain document you can
-              read in a minute.
+            <p className="text-2xl font-semibold leading-tight tracking-[-0.02em] text-white sm:text-3xl">
+              Solid exists. Dashed waits for your yes.
             </p>
-            <p className="mt-5 text-base leading-relaxed text-white/80 sm:text-lg">
-              Once they exist, they report to their lead, and the lead reports
-              to Scout. A copywriter cannot message you directly. That is built
-              into the system, not left to the agents' manners.
+            <p className="mt-4 max-w-[32ch] text-lg leading-snug text-white/80">
+              Scout can propose a team. Only you can hire one.
             </p>
           </div>
 
