@@ -244,6 +244,7 @@ export function useNavigationCommands(
       goAgents,
       goBlocksSettings,
       goContent,
+      goCredits,
       goDiscovery,
       goHome,
       goNewMessage,
