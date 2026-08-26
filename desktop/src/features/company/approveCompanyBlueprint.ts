@@ -74,7 +74,6 @@ export async function approveCompanyBlueprint(
   // that something went wrong with an approval that fully succeeded.
   try {
     await postInitiativeCards({
-      companyId: outcome.companyId,
       channelId: input.channelId,
     });
   } catch {

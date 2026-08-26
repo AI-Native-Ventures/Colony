@@ -19,20 +19,16 @@ export function activeCompanyQueryKey(communityId: string) {
   return [COMPANY_ROOT, communityId, "active-profile"] as const;
 }
 
-export function companyQueryKey(communityId: string, companyId: string) {
-  return [COMPANY_ROOT, communityId, "profile", companyId] as const;
-}
-
-export function initiativesQueryKey(communityId: string, companyId: string) {
-  return [COMPANY_ROOT, communityId, "initiatives", companyId] as const;
+export function initiativesQueryKey(communityId: string) {
+  return [COMPANY_ROOT, communityId, "initiatives"] as const;
 }
 
 export function initiativeQueryKey(communityId: string, initiativeId: string) {
   return [COMPANY_ROOT, communityId, "initiative", initiativeId] as const;
 }
 
-export function cohortsQueryKey(communityId: string, companyId: string) {
-  return [COMPANY_ROOT, communityId, "cohorts", companyId] as const;
+export function cohortsQueryKey(communityId: string) {
+  return [COMPANY_ROOT, communityId, "cohorts"] as const;
 }
 
 export function tasksQueryKey(communityId: string, scope: TaskQuery) {
@@ -40,7 +36,6 @@ export function tasksQueryKey(communityId: string, scope: TaskQuery) {
     COMPANY_ROOT,
     communityId,
     "tasks",
-    scope.companyId ?? "",
     scope.initiativeId ?? "",
     scope.status ?? "",
     scope.teamId ?? "",
@@ -80,32 +75,12 @@ export function useActiveCompany(communityId: string, enabled = true) {
   });
 }
 
-export function useCompany(
-  communityId: string,
-  companyId: string | null,
-  enabled = true,
-) {
+export function useInitiatives(communityId: string, enabled = true) {
   return useQuery({
-    queryKey: companyQueryKey(communityId, companyId ?? ""),
+    queryKey: initiativesQueryKey(communityId),
     queryFn: async () =>
-      requireAvailable(await companyRepository.getCompany(companyId as string)),
-    enabled: enabled && communityId !== "" && !!companyId,
-    staleTime: 30_000,
-  });
-}
-
-export function useInitiatives(
-  communityId: string,
-  companyId: string | null,
-  enabled = true,
-) {
-  return useQuery({
-    queryKey: initiativesQueryKey(communityId, companyId ?? ""),
-    queryFn: async () =>
-      requireAvailable(
-        await companyRepository.listInitiatives(companyId as string),
-      ),
-    enabled: enabled && communityId !== "" && !!companyId,
+      requireAvailable(await companyRepository.listInitiatives()),
+    enabled: enabled && communityId !== "",
     staleTime: 15_000,
   });
 }
@@ -127,18 +102,12 @@ export function useInitiative(
 }
 
 /** Cohorts are inert data: one read, no live-status refetch pressure. */
-export function useCohorts(
-  communityId: string,
-  companyId: string | null,
-  enabled = true,
-) {
+export function useCohorts(communityId: string, enabled = true) {
   return useQuery({
-    queryKey: cohortsQueryKey(communityId, companyId ?? ""),
+    queryKey: cohortsQueryKey(communityId),
     queryFn: async () =>
-      requireAvailable(
-        await companyRepository.listCohorts(companyId as string),
-      ),
-    enabled: enabled && communityId !== "" && !!companyId,
+      requireAvailable(await companyRepository.listCohorts()),
+    enabled: enabled && communityId !== "",
     staleTime: 30_000,
   });
 }
@@ -148,12 +117,11 @@ export function useCompanyTasks(
   scope: TaskQuery,
   enabled = true,
 ) {
-  const scoped = !!scope.companyId || !!scope.initiativeId;
   return useQuery({
     queryKey: tasksQueryKey(communityId, scope),
     queryFn: async () =>
       requireAvailable(await companyRepository.listTasks(scope)),
-    enabled: enabled && communityId !== "" && scoped,
+    enabled: enabled && communityId !== "",
     staleTime: 15_000,
   });
 }

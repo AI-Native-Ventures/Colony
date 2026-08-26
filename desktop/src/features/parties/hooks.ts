@@ -13,8 +13,8 @@ import { partyRepository } from "./partyRepository";
 
 const PARTY_ROOT = "colony-party" as const;
 
-export function partiesQueryKey(communityId: string, companyId: string) {
-  return [PARTY_ROOT, communityId, "parties", companyId] as const;
+export function partiesQueryKey(communityId: string) {
+  return [PARTY_ROOT, communityId, "parties"] as const;
 }
 
 /**
@@ -23,26 +23,12 @@ export function partiesQueryKey(communityId: string, companyId: string) {
  * A retired handle and its survivor are different questions with the same
  * answer, and the caller's own handle is what it will ask again with.
  */
-export function partyQueryKey(
-  communityId: string,
-  companyId: string,
-  handle: string,
-) {
-  return [PARTY_ROOT, communityId, "party", companyId, handle] as const;
+export function partyQueryKey(communityId: string, handle: string) {
+  return [PARTY_ROOT, communityId, "party", handle] as const;
 }
 
-export function relationshipsQueryKey(
-  communityId: string,
-  companyId: string,
-  partyId: string,
-) {
-  return [
-    PARTY_ROOT,
-    communityId,
-    "relationships",
-    companyId,
-    partyId,
-  ] as const;
+export function relationshipsQueryKey(communityId: string, partyId: string) {
+  return [PARTY_ROOT, communityId, "relationships", partyId] as const;
 }
 
 /**
@@ -56,16 +42,11 @@ function requireAvailable<T>(result: PartyParseResult<T>): PartyParseResult<T> {
   return result;
 }
 
-export function useParties(
-  communityId: string,
-  companyId: string | null,
-  enabled = true,
-) {
+export function useParties(communityId: string, enabled = true) {
   return useQuery({
-    queryKey: partiesQueryKey(communityId, companyId ?? ""),
-    queryFn: async () =>
-      requireAvailable(await partyRepository.listParties(companyId as string)),
-    enabled: enabled && communityId !== "" && !!companyId,
+    queryKey: partiesQueryKey(communityId),
+    queryFn: async () => requireAvailable(await partyRepository.listParties()),
+    enabled: enabled && communityId !== "",
     staleTime: 15_000,
   });
 }
@@ -76,44 +57,32 @@ export function useParties(
  */
 export function useParty(
   communityId: string,
-  companyId: string | null,
   handle: string | null,
   enabled = true,
 ) {
   return useQuery({
-    queryKey: partyQueryKey(communityId, companyId ?? "", handle ?? ""),
+    queryKey: partyQueryKey(communityId, handle ?? ""),
     queryFn: async () =>
       requireAvailable(
-        await partyRepository.getPartyWithViews(
-          companyId as string,
-          handle as string,
-        ),
+        await partyRepository.getPartyWithViews(handle as string),
       ),
-    enabled: enabled && communityId !== "" && !!companyId && !!handle,
+    enabled: enabled && communityId !== "" && !!handle,
     staleTime: 15_000,
   });
 }
 
 export function usePartyRelationships(
   communityId: string,
-  companyId: string | null,
   partyId: string | null,
   enabled = true,
 ) {
   return useQuery({
-    queryKey: relationshipsQueryKey(
-      communityId,
-      companyId ?? "",
-      partyId ?? "",
-    ),
+    queryKey: relationshipsQueryKey(communityId, partyId ?? ""),
     queryFn: async () =>
       requireAvailable(
-        await partyRepository.listRelationships(
-          companyId as string,
-          partyId as string,
-        ),
+        await partyRepository.listRelationships(partyId as string),
       ),
-    enabled: enabled && communityId !== "" && !!companyId && !!partyId,
+    enabled: enabled && communityId !== "" && !!partyId,
     staleTime: 15_000,
   });
 }
@@ -127,12 +96,11 @@ export function usePartyRelationships(
  */
 export function usePartyRelationship(
   communityId: string,
-  companyId: string | null,
   partyId: string | null,
   kind: RelationshipKind,
   enabled = true,
 ) {
-  const views = usePartyRelationships(communityId, companyId, partyId, enabled);
+  const views = usePartyRelationships(communityId, partyId, enabled);
   const result = views.data;
   const relationship =
     result?.ok === true

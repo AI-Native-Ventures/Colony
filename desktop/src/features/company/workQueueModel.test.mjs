@@ -16,7 +16,6 @@ function task(overrides = {}) {
   return {
     schema: "colony.task/v1",
     id: "horizonlabs:task",
-    companyId: "horizonlabs",
     initiativeId: null,
     title: "Run outreach",
     status: "inProgress",

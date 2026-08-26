@@ -23,12 +23,9 @@ const RELAY_SECRET = generateSecretKey();
 const RELAY_PUBKEY = getPublicKey(RELAY_SECRET);
 const IMPOSTOR_SECRET = generateSecretKey();
 
-const COMPANY_ID = "horizonlabs";
-
 const PARTY = {
   schema: "colony.party/v1",
   id: "acme-industries",
-  companyId: COMPANY_ID,
   kind: "organization",
   displayName: "Acme Industries",
   legalName: null,
@@ -52,7 +49,6 @@ const PARTY = {
 const LEAD = {
   schema: "colony.party-relationship/v1",
   id: "acme-industries:lead",
-  companyId: COMPANY_ID,
   partyId: "acme-industries",
   relationship: "lead",
   status: "qualified",
@@ -84,7 +80,6 @@ function partyHead(overrides = {}, options = {}) {
   const record = { ...PARTY, ...overrides };
   const tags = [
     ["d", record.id],
-    ["c", record.companyId],
     ["party-kind", record.kind],
     ...record.identifiers.map((identifier) => [
       "identifier",
@@ -98,7 +93,6 @@ function aliasHead(id, resolvesTo, options = {}) {
   const record = {
     schema: "colony.party-alias/v1",
     id,
-    companyId: COMPANY_ID,
     resolvesTo,
     mergedAt: 1_785_369_600,
     mergeActionEventId: "a".repeat(64),
@@ -108,7 +102,6 @@ function aliasHead(id, resolvesTo, options = {}) {
     record,
     [
       ["d", record.id],
-      ["c", record.companyId],
       ["alias", record.resolvesTo],
     ],
     options.secret,
@@ -123,7 +116,6 @@ function relationshipHead(overrides = {}, options = {}) {
     record,
     [
       ["d", record.id],
-      ["c", record.companyId],
       ["party", record.partyId],
     ],
     options.secret,
@@ -208,7 +200,6 @@ test("identifier tags must match the claims in the record", () => {
   const record = { ...PARTY };
   const event = head(30182, record, [
     ["d", record.id],
-    ["c", record.companyId],
     ["party-kind", record.kind],
     ["identifier", "domain:not-acme.example"],
   ]);
@@ -229,7 +220,6 @@ test("a relationship id that is not derived from its coordinate is refused", () 
   const record = { ...LEAD, id: "acme-industries:prospect" };
   const event = head(30183, record, [
     ["d", record.id],
-    ["c", record.companyId],
     ["party", record.partyId],
   ]);
   const parsed = parsePartyRelationshipHead(event, RELAY_PUBKEY);
@@ -253,15 +243,16 @@ test("every read query names its kinds and scopes to the tenant relay", async ()
     return filter.kinds[0] === 30182 ? [partyHead()] : [relationshipHead()];
   });
 
-  await repo.listParties(COMPANY_ID);
-  await repo.listRelationships(COMPANY_ID, "acme-industries");
+  await repo.listParties();
+  await repo.listRelationships("acme-industries");
 
   assert.equal(filters.length, 2);
   for (const filter of filters) {
     assert.ok(Array.isArray(filter.kinds) && filter.kinds.length > 0);
     assert.deepEqual(filter.authors, [RELAY_PUBKEY]);
   }
-  assert.deepEqual(filters[0]["#c"], [COMPANY_ID]);
+  // No company narrow: the relay answers for one community.
+  assert.equal(filters[0]["#c"], undefined);
   assert.deepEqual(filters[1]["#d"], [
     "acme-industries:lead",
     "acme-industries:client",
@@ -275,7 +266,7 @@ test("listing keeps retired handles out of the party list", async () => {
     partyHead(),
     aliasHead("acme-old", "acme-industries"),
   ]);
-  const result = await repo.listParties(COMPANY_ID);
+  const result = await repo.listParties();
   assert.equal(result.ok, true);
   assert.equal(result.value.parties.length, 1);
   assert.equal(result.value.parties[0].id, "acme-industries");
@@ -290,7 +281,7 @@ test("a retired handle resolves to the party that absorbed it", async () => {
     partyHead(),
     aliasHead("acme-old", "acme-industries"),
   ]);
-  const result = await repo.resolveHandle(COMPANY_ID, "acme-old");
+  const result = await repo.resolveHandle("acme-old");
   assert.equal(result.ok, true);
   assert.deepEqual(result.value, {
     handle: "acme-industries",
@@ -315,7 +306,7 @@ test("resolving a handle reads one coordinate per hop, not the party set", async
     ];
   });
 
-  const result = await repo.resolveHandle(COMPANY_ID, "acme-oldest");
+  const result = await repo.resolveHandle("acme-oldest");
   assert.equal(result.ok, true);
   assert.deepEqual(result.value, {
     handle: "acme-industries",
@@ -332,7 +323,7 @@ test("resolving a handle reads one coordinate per hop, not the party set", async
 
 test("a live handle resolves to itself having followed nothing", async () => {
   const repo = repository(async () => [partyHead()]);
-  const result = await repo.resolveHandle(COMPANY_ID, "acme-industries");
+  const result = await repo.resolveHandle("acme-industries");
   assert.equal(result.ok, true);
   assert.deepEqual(result.value, {
     handle: "acme-industries",
@@ -346,7 +337,7 @@ test("merges chain and the oldest handle still arrives", async () => {
     aliasHead("acme-oldest", "acme-old"),
     aliasHead("acme-old", "acme-industries"),
   ]);
-  const result = await repo.resolveHandle(COMPANY_ID, "acme-oldest");
+  const result = await repo.resolveHandle("acme-oldest");
   assert.equal(result.ok, true);
   assert.deepEqual(result.value, {
     handle: "acme-industries",
@@ -361,7 +352,7 @@ test("a cycle is reported rather than followed", async () => {
     aliasHead("acme-a", "acme-b"),
     aliasHead("acme-b", "acme-a"),
   ]);
-  const result = await repo.resolveHandle(COMPANY_ID, "acme-a");
+  const result = await repo.resolveHandle("acme-a");
   assert.equal(result.ok, false);
   assert.equal(result.code, "invalid-record");
   assert.match(result.message, /loops back/);
@@ -373,14 +364,14 @@ test("a chain longer than the cap is refused rather than chased", async () => {
     links.push(aliasHead(`link-${index}`, `link-${index + 1}`));
   }
   const repo = repository(async () => links);
-  const result = await repo.resolveHandle(COMPANY_ID, "link-0");
+  const result = await repo.resolveHandle("link-0");
   assert.equal(result.ok, false);
   assert.equal(result.code, "invalid-record");
 });
 
 test("an unknown handle is missing, not broken", async () => {
   const repo = repository(async () => [partyHead()]);
-  const result = await repo.resolveHandle(COMPANY_ID, "nobody");
+  const result = await repo.resolveHandle("nobody");
   assert.equal(result.ok, false);
   assert.equal(result.code, "missing-head");
 });
@@ -401,7 +392,7 @@ test("one party carries a lead and a client view at once", async () => {
           }),
         ],
   );
-  const result = await repo.getPartyWithViews(COMPANY_ID, "acme-industries");
+  const result = await repo.getPartyWithViews("acme-industries");
   assert.equal(result.ok, true);
   assert.equal(result.value.relationships.length, 2);
   const lead = result.value.relationships.find(
@@ -421,7 +412,7 @@ test("reading a party through a retired handle reports the merge it followed", a
       ? [partyHead(), aliasHead("acme-old", "acme-industries")]
       : [relationshipHead()],
   );
-  const result = await repo.getPartyWithViews(COMPANY_ID, "acme-old");
+  const result = await repo.getPartyWithViews("acme-old");
   assert.equal(result.ok, true);
   assert.equal(result.value.requested, "acme-old");
   assert.equal(result.value.handle, "acme-industries");
@@ -437,7 +428,7 @@ test("the newest head per coordinate wins", async () => {
       { createdAt: 1_785_369_800 },
     ),
   ]);
-  const result = await repo.listParties(COMPANY_ID);
+  const result = await repo.listParties();
   assert.equal(result.ok, true);
   assert.equal(result.value.parties.length, 1);
   assert.equal(result.value.parties[0].displayName, "Acme Industries Ltd");
@@ -450,7 +441,7 @@ test("a read in flight across a community switch is cancelled, not delivered", a
     resetPartyRepositoryState();
     return [partyHead()];
   });
-  const result = await repo.listParties(COMPANY_ID);
+  const result = await repo.listParties();
   assert.equal(result.ok, false);
   assert.equal(result.code, "cancelled");
 });
@@ -462,7 +453,7 @@ test("a party from another company is dropped even if the relay returns it", asy
     partyHead(),
     partyHead({ id: "other-corp", companyId: "someone-else" }),
   ]);
-  const result = await repo.listParties(COMPANY_ID);
+  const result = await repo.listParties();
   assert.equal(result.ok, true);
   assert.equal(result.value.parties.length, 1);
   assert.equal(result.value.parties[0].id, "acme-industries");

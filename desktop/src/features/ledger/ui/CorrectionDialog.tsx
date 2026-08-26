@@ -94,7 +94,6 @@ export function CorrectionDialog({
   React.useEffect(() => {
     if (!eventId) return;
     const existing = entry?.effectiveAssignment ?? null;
-    setCompanyId(existing?.companyId ?? "");
     setCostCentreId(existing?.costCentreId ?? "");
     setOwningTeamId(existing?.owningTeamId ?? "");
     setCommercialPurpose(existing?.commercialPurpose ?? "internalProduct");
@@ -108,7 +107,6 @@ export function CorrectionDialog({
   const request: CorrectionRequest = {
     clientOrganizationId: clientOrganizationId || null,
     commercialPurpose,
-    companyId,
     costCentreId,
     owningTeamId,
     reason,

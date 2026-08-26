@@ -10,7 +10,6 @@ import {
 function request(overrides = {}) {
   return {
     usageRecordEventId: "a".repeat(64),
-    companyId: "horizon-labs",
     costCentreId: "web-delivery",
     owningTeamId: "web-team",
     commercialPurpose: "internalProduct",
@@ -65,8 +64,7 @@ test("the record must be named by a real event id", () => {
   }
 });
 
-test("company, cost centre and team are each required", () => {
-  assert.match(correctionProblem(request({ companyId: " " })), /company/);
+test("cost centre and team are each required", () => {
   assert.match(
     correctionProblem(request({ costCentreId: " " })),
     /cost centre/,

@@ -68,7 +68,6 @@ export interface PriceBook {
 }
 
 export interface RuleAssignment {
-  companyId: string;
   costCentreId: string;
   owningTeamId: string;
   commercialPurpose: CommercialPurpose;
@@ -318,7 +317,6 @@ function parseAssignment(value: unknown, label: string): RuleAssignment {
   requireExactKeys(
     raw,
     [
-      "companyId",
       "costCentreId",
       "owningTeamId",
       "commercialPurpose",
@@ -332,7 +330,6 @@ function parseAssignment(value: unknown, label: string): RuleAssignment {
     fail(`${label}.commercialPurpose is unknown: ${purpose}`);
   }
   return {
-    companyId: requireString(raw, "companyId", label),
     costCentreId: requireString(raw, "costCentreId", label),
     owningTeamId: requireString(raw, "owningTeamId", label),
     commercialPurpose: purpose as CommercialPurpose,

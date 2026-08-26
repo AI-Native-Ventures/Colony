@@ -25,7 +25,6 @@ function task(overrides = {}) {
   return {
     schema: "colony.task/v1",
     id: TASK_ID,
-    companyId: "horizonlabs",
     initiativeId: null,
     title: "Take a look at the failing deploy",
     status: "inProgress",
@@ -46,7 +45,6 @@ function task(overrides = {}) {
 }
 
 const REQUEST = {
-  companyId: "horizonlabs",
   channelId: "engineering",
   sendId: "send-0001",
   agentPubkey: AGENT,
@@ -196,10 +194,10 @@ test("a task that cannot be read back stops the send", async () => {
   await assert.rejects(() => resolve(REQUEST), /has not been sent/i);
 });
 
-test("no company and no relay identity both stop the send", async () => {
+test("no profile and no relay identity both stop the send", async () => {
   await assert.rejects(
     () => resolver({ companyHead: null }).resolve(REQUEST),
-    /no company/i,
+    /has not described its business/i,
   );
 
   const withoutRelay = createWorkContextResolver({
