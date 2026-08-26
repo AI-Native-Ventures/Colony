@@ -316,6 +316,17 @@ export function ChannelMenuButton({
     (hasSidebarUnreadProjections
       ? unreadThreadChannelIds.has(channel.id)
       : hasUnread);
+  // Colony renders a solid dot rather than a count on channel rows (#1253),
+  // so the "a higher-priority unread status is showing" signal upstream reads
+  // off the count comes from the top-level unread projection here.
+  const showsUnreadCount =
+    !isActive && channel.channelType !== "dm" && hasTopLevelUnread;
+  const showsEphemeralBadge =
+    Boolean(ephemeralDisplay) &&
+    !activeWorking &&
+    !isMuted &&
+    !showsUnreadCount &&
+    !hasThreadUnread;
   const inactiveContentOpacity = cn(
     !isActive && !hasTopLevelUnread && !isMuted && "opacity-80",
     !isActive &&
@@ -384,7 +395,7 @@ export function ChannelMenuButton({
           {trailingMeta}
         </span>
       ) : null}
-      {ephemeralDisplay ? (
+      {showsEphemeralBadge && ephemeralDisplay ? (
         <EphemeralChannelBadge
           display={ephemeralDisplay}
           testId={`channel-ephemeral-${channel.name}`}
