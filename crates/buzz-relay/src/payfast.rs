@@ -165,9 +165,38 @@ fn form_encode(value: &str) -> String {
 /// skips them), and the passphrase appended raw-last when configured. The
 /// signature is MD5 over exactly this string.
 fn parameter_string(pairs: &[(String, String)], passphrase: &str) -> String {
+    parameter_string_with(pairs, passphrase, EmptyFields::Skip)
+}
+
+/// Whether empty values belong in the signed string.
+///
+/// PayFast's two directions do NOT share this rule, and getting it wrong is
+/// invisible until real money moves:
+///
+/// - **Outgoing** (building a checkout URL) skips empty values, matching
+///   PayFast's own generation sample.
+/// - **Incoming** (validating an ITN) includes every field received except
+///   `signature`, empty ones included, because PayFast signed the string it
+///   sent and that string contains them.
+///
+/// Applying the outgoing rule to an ITN rejects every real callback: live
+/// payloads always carry empty fields (`name_last`, `custom_str2`, …). It
+/// presents as "invalid signature" with correct credentials, so it reads as a
+/// passphrase problem rather than a string-building one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EmptyFields {
+    Skip,
+    Keep,
+}
+
+fn parameter_string_with(
+    pairs: &[(String, String)],
+    passphrase: &str,
+    empty: EmptyFields,
+) -> String {
     let mut joined = String::new();
     for (name, value) in pairs {
-        if value.is_empty() {
+        if value.is_empty() && empty == EmptyFields::Skip {
             continue;
         }
         if !joined.is_empty() {
@@ -395,7 +424,13 @@ impl crate::payments_provider::PaymentProvider for PayFast {
             .iter()
             .map(|(name, value)| (name.clone(), form_encode(value)))
             .collect();
-        let computed = md5_hex(&parameter_string(&encoded, &self.credentials.passphrase));
+        // Keep empty fields: PayFast signed what it sent, and a real ITN
+        // always contains some. See EmptyFields.
+        let computed = md5_hex(&parameter_string_with(
+            &encoded,
+            &self.credentials.passphrase,
+            EmptyFields::Keep,
+        ));
         if !signatures_match(&computed, &submitted) {
             return Err(ProviderError::RejectedCallback("invalid signature"));
         }
@@ -572,11 +607,11 @@ mod tests {
             }
             out
         }
+        // Signs the way PayFast signs an ITN: every field it sent, empty ones
+        // included. This helper used to skip empties, mirroring the bug in the
+        // verifier, so both sides agreed and the fixture could never catch it.
         let mut param = String::new();
         for (name, value) in pairs {
-            if value.is_empty() {
-                continue;
-            }
             if !param.is_empty() {
                 param.push('&');
             }
@@ -611,6 +646,8 @@ mod tests {
             ("payment_status", "COMPLETE"),
             ("amount_gross", "5.00"),
             ("email_address", "founder@example.com"),
+            ("name_last", ""),
+            ("custom_str2", ""),
             ("merchant_id", TEST_MERCHANT_ID),
         ];
         let signature = payfast_signature(&pairs, TEST_PASSPHRASE);
@@ -977,9 +1014,34 @@ mod tests {
     }
 
     #[test]
-    fn empty_values_are_skipped_in_the_parameter_string() {
-        // Mirrors PayFast's own sample, which skips empty values when
-        // building the signature string.
+    fn an_itn_signature_keeps_empty_fields() {
+        // The bug this pins: a live R119 payment succeeded at PayFast and was
+        // rejected here with "invalid signature" while the passphrase was
+        // correct, because the ITN carried empty fields (name_last,
+        // custom_str2) and the signed string dropped them. PayFast signs what
+        // it sends, so validation must include them.
+        let pairs = vec![
+            ("m_payment_id".to_string(), "ref-1".to_string()),
+            ("name_last".to_string(), String::new()),
+            ("amount_gross".to_string(), "119.00".to_string()),
+        ];
+        let keeping = parameter_string_with(&pairs, "pass", EmptyFields::Keep);
+        assert_eq!(
+            keeping, "m_payment_id=ref-1&name_last=&amount_gross=119.00&passphrase=pass",
+            "an ITN string carries every field PayFast sent, empty ones included"
+        );
+        assert_ne!(
+            keeping,
+            parameter_string_with(&pairs, "pass", EmptyFields::Skip),
+            "the two directions must not agree, or the split means nothing"
+        );
+    }
+
+    #[test]
+    fn empty_values_are_skipped_when_generating_a_payment() {
+        // Outgoing only. Mirrors PayFast's generation sample, which skips
+        // empty values. The ITN direction deliberately does not: see
+        // an_itn_signature_keeps_empty_fields.
         let pairs = vec![
             ("a".to_string(), "1".to_string()),
             ("empty".to_string(), String::new()),
