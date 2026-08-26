@@ -7,8 +7,10 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
+import { applySiteShotAccent, siteShotSuffix } from "../helpers/siteShotAccent";
 
 const SCREENSHOT_DIR = path.resolve("test-results/discovery-parity");
+const SUFFIX = siteShotSuffix();
 const SCREENSHOTS = [
   "discovery-industries.png",
   "discovery-verticals.png",
@@ -45,13 +47,16 @@ async function capture(locator: Locator, page: Page, filename: string) {
   await waitForAnimations(page);
   await locator.screenshot({
     animations: "disabled",
-    path: path.join(SCREENSHOT_DIR, filename),
+    path: path.join(
+      SCREENSHOT_DIR,
+      filename.replace(/\.png$/, `${SUFFIX}.png`),
+    ),
   });
 }
 
 function assertDistinctScreenshots() {
   const paths = SCREENSHOTS.map((filename) =>
-    path.join(SCREENSHOT_DIR, filename),
+    path.join(SCREENSHOT_DIR, filename.replace(/\.png$/, `${SUFFIX}.png`)),
   );
   expect(
     paths.filter((screenshot) => !existsSync(screenshot)),
@@ -90,6 +95,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
 
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
+  await applySiteShotAccent(page);
   await page.goto("/");
 
   await page.getByTestId("open-discovery-view").click();
@@ -338,6 +344,7 @@ test("Discovery defaults to the Leads tab with an empty state and Discover more"
   });
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
+  await applySiteShotAccent(page);
   await page.goto("/");
   await page.getByTestId("open-discovery-view").click();
 
