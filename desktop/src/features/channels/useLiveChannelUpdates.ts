@@ -8,11 +8,15 @@ import {
   getChannelIdFromTags,
   isThreadReply,
 } from "@/features/messages/lib/threading";
-import { shouldNotifyForEvent } from "@/features/notifications/lib/shouldNotify";
+import {
+  hasMentionForEvent,
+  shouldNotifyForEvent,
+} from "@/features/notifications/lib/shouldNotify";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   CHANNEL_EVENT_KINDS,
   CHANNEL_MESSAGE_EVENT_KINDS,
+  HOME_MENTION_EVENT_KINDS,
 } from "@/shared/constants/kinds";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import {
@@ -80,6 +84,10 @@ const CHANNELS_INVALIDATE_DEBOUNCE_MS = 500;
 // catch-up query in useUnreadChannels so the two paths stay in lockstep.
 const UNREAD_TRIGGER_KINDS = new Set<number>(CHANNEL_MESSAGE_EVENT_KINDS);
 
+// The kind half of `buildChannelMentionFilter`. Kept as a Set so the
+// channel-subscription mention check below is a lookup rather than a scan.
+const HOME_MENTION_KINDS = new Set<number>(HOME_MENTION_EVENT_KINDS);
+
 export const EMPTY_SET: ReadonlySet<string> = new Set();
 
 export function isChannelUnreadTriggerKind(kind: number, isDmChannel: boolean) {
@@ -107,6 +115,31 @@ export function withChannelTagFallback(
 function isExternalMentionEvent(event: RelayEvent, currentPubkey: string) {
   return (
     currentPubkey.length > 0 && event.pubkey.toLowerCase() !== currentPubkey
+  );
+}
+
+/**
+ * Whether an event is one the live-mention repair should be told about.
+ *
+ * Mirrors `buildChannelMentionFilter` in the client: its kind set, its `#p`
+ * tag for the current user, and an external author. The `#h` half is implicit,
+ * because both subscriptions that reach this are per channel.
+ *
+ * Exists so the channel subscription can dispatch the repair too. The mention
+ * subscription is live-only (`since: now`, no backfill), so a mention
+ * broadcast before it opens reaches the desktop notification, which rides the
+ * channel subscription, and never reaches the Inbox. Pair every call with
+ * `trackSeenEvent` on the shared mention guard so the two paths dispatch
+ * exactly once between them.
+ */
+export function isLiveMentionCandidate(
+  event: RelayEvent,
+  currentPubkey: string,
+): boolean {
+  return (
+    HOME_MENTION_KINDS.has(event.kind) &&
+    isExternalMentionEvent(event, currentPubkey) &&
+    hasMentionForEvent(event, currentPubkey)
   );
 }
 
@@ -239,6 +272,27 @@ export function useLiveChannelUpdates(
         invalidateChannelsDebounced();
       }
       return;
+    }
+
+    // Second delivery path for the live-mention repair. The per-channel
+    // mention subscription is live-only (`buildChannelMentionFilter` sets
+    // `since: now` with no backfill), so a mention broadcast before that
+    // subscription opens never reaches `onLiveMention` and the Inbox waits for
+    // the 30-second poll while the desktop notification, which rides this
+    // subscription instead, has already fired.
+    //
+    // This subscription already carries every event in every member channel,
+    // so re-deriving the mention filter here costs nothing and closes that
+    // window. The conditions mirror `buildChannelMentionFilter` exactly: the
+    // mention kind set, a `p` tag for the current user, and an external
+    // author. `seenMentionEventIdsRef` is the same guard `handleMentionEvent`
+    // takes, so whichever subscription arrives first dispatches and the other
+    // is a no-op. See docs/tickets/live-forum-mention-inbox-gap.md.
+    if (
+      isLiveMentionCandidate(event, normalizedCurrentPubkey) &&
+      trackSeenEvent(seenMentionEventIdsRef.current, event.id)
+    ) {
+      options.onLiveMention?.(event);
     }
 
     const isDmChannel = dmChannelMap.has(channelId);
