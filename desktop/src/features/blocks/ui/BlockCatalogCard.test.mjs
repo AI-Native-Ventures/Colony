@@ -96,7 +96,7 @@ function catalogItem() {
   };
 }
 
-test("catalog card presents governance metadata without operational controls", () => {
+test("catalog row shows the block and its capability ask, nothing else", () => {
   const html = renderToStaticMarkup(
     React.createElement(BlockCatalogCard, {
       item: catalogItem(),
@@ -106,45 +106,13 @@ test("catalog card presents governance metadata without operational controls", (
 
   assert.match(html, /Lead Card/);
   assert.match(html, /@lead-card/);
-  assert.match(html, /AI Native Office/);
-  assert.match(html, /v1\.0\.0/);
   assert.match(html, /lead\.read/);
-  assert.match(html, /desktop/);
   assert.match(html, /Review evidence/);
   assert.equal(html.match(/<button/g)?.length, 1);
   assert.doesNotMatch(html, />Create</);
   assert.doesNotMatch(html, />Edit</);
-});
-
-test("catalog card labels incomplete and unavailable usage honestly", () => {
-  const partialHtml = renderToStaticMarkup(
-    React.createElement(BlockCatalogCard, {
-      item: {
-        ...catalogItem(),
-        recentUsage: {
-          complete: false,
-          count: 500,
-          lastUsedAt: 1_700_000_000,
-        },
-      },
-      onSelect() {},
-    }),
-  );
-  assert.match(partialHtml, /At least 500 in recent sample/);
-  assert.doesNotMatch(partialHtml, /500 in 30 days/);
-
-  const unavailableHtml = renderToStaticMarkup(
-    React.createElement(BlockCatalogCard, {
-      item: {
-        ...catalogItem(),
-        recentUsage: {
-          complete: false,
-          count: null,
-          lastUsedAt: null,
-        },
-      },
-      onSelect() {},
-    }),
-  );
-  assert.match(unavailableHtml, /Usage unavailable/);
+  assert.doesNotMatch(html, /Active version/);
+  assert.doesNotMatch(html, /Recent use/);
+  assert.doesNotMatch(html, /Compatible clients/);
+  assert.doesNotMatch(html, /Primitive contract/);
 });
