@@ -335,11 +335,11 @@ test("the visible Blocks catalog hands a typed Block reference into chat", async
   const catalogCard = page.getByTestId("block-catalog-card-lead-card");
   await expect(catalogPage).toBeVisible();
   await expect(catalogCard).toContainText("@lead-card");
-  await expect(catalogCard).toContainText("Active version");
-  await expect(catalogCard).toContainText("Publisher");
-  await expect(catalogCard).toContainText("Permissions");
-  await expect(catalogCard).toContainText("Compatible clients");
-  await expect(catalogCard).toContainText("At least 1 in recent sample");
+  await expect(catalogCard).toContainText("Requires lead.read");
+  await expect(catalogCard).not.toContainText("Active version");
+  await expect(catalogCard).not.toContainText("Publisher");
+  await expect(catalogCard).not.toContainText("Compatible clients");
+  await expect(catalogCard).not.toContainText("At least 1 in recent sample");
   await expect(
     catalogCard.getByRole("figure", {
       name: `${manifest.name} read-only preview`,
