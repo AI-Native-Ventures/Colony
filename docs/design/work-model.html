@@ -238,6 +238,7 @@ kbd{font-family:ui-monospace,monospace;font-size:.75rem;background:var(--surface
   <li><a href="#scenarios">Scenarios</a></li>
   <li><a href="#loopholes">Loopholes</a></li>
   <li><a href="#lands">Where it lands</a></li>
+  <li><a href="#built">What changed</a></li>
   <li><a href="#build">Build order</a></li>
 </ul></div></nav>
 
@@ -1386,42 +1387,109 @@ kbd{font-family:ui-monospace,monospace;font-size:.75rem;background:var(--surface
 </section>
 
 <!-- ================= BUILD ================= -->
+<section id="built">
+  <div class="wrap">
+    <h2><span class="num">7c</span> What changed once it was built</h2>
+    <p class="lede">This document was written before the code. Everything below is a place the code
+      disagreed with it, and the code won. Read this section before trusting any ruling above it.</p>
+
+    <div class="tablewrap" style="margin-top:22px"><table>
+      <thead><tr><th style="width:26%">The doc said</th><th style="width:37%">What was actually true</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>System rows appear in the thread for seven task transitions.</td>
+          <td><b>The relay emitted no task transition events at all.</b> Zero
+            <code>emit_system_message</code> calls for tasks or initiatives anywhere. The rows were
+            specified against a publisher that did not exist.</td>
+          <td>Relay now emits five reachable transitions (created, review handoff, review rejected,
+            completed, cancelled). Bounce and escalated stay dormant with their copy paths intact,
+            because neither operation exists yet.</td></tr>
+        <tr><td>Fan-out shows an estimated cost.</td>
+          <td><b>Colony cannot forecast cost.</b> The price book is strictly post-hoc, and nothing
+            records historical turns-per-task to regress from.</td>
+          <td>The Ask states a <b>declared ceiling</b> summed from the stages, or explicit
+            <code>null</code> when no stage declares one — never a fabricated zero.</td></tr>
+        <tr><td>Every board dimension needs a new single-letter mirror tag.</td>
+          <td>Entity mentions already had a mechanism: Block mentions use the standard NIP-01
+            <code>a</code> tag with a marker.</td>
+          <td>Cohort mentions write <code>["a", "30201:…", "", "cohort"]</code> through the same path,
+            parameterized by kind. No parallel mechanism.</td></tr>
+        <tr><td>A cancelled dependency is an open question.</td>
+          <td>Settled, and the reasoning is the ruling: work whose premise was deliberately killed must
+            not become assignable while the owner believes the branch is dead.</td>
+          <td>Only <code>Completed</code> satisfies an edge. A cancelled upstream leaves the dependent
+            visibly <code>blocked</code> — falling out of the transition table itself, since
+            <code>Cancelled</code> simply has no arm to <code>Ready</code>.</td></tr>
+        <tr><td>Fan-out is something an agent does.</td>
+          <td><b>Company actions must be signed by the current human owner</b>
+            (<code>authorize_company_actor</code>) — not a managed agent, not the relay. Otherwise
+            transferring ownership would transfer the ability to rewrite history.</td>
+          <td>Fan-out cannot be fully autonomous. An agent proposes; a human executes. The executor
+            lives in <code>buzz-cli</code> for exactly this reason.</td></tr>
+        <tr><td>A cost Ask could be auto-approved under a grant.</td>
+          <td><code>category: "spend"</code> is on NIP-IQ's <b>immutable hard list</b>, so
+            <code>parse_ask</code> structurally refuses a <code>default_option</code>.</td>
+          <td>A spend Ask can never auto-execute by default. The overdue sweep resolves Asks by
+            executing their stated default; this one cannot carry one, so it waits for a person
+            indefinitely rather than timing out into "yes".</td></tr>
+        <tr><td>Adding a table means writing a migration.</td>
+          <td>A community-scoped table needs <b>five</b> registrations: the migration, the table in
+            <code>schema/schema.sql</code>, the write fence in <em>both</em> places, and both deletion
+            catalog lists.</td>
+          <td>Miss the fence in the migration and the relay does not degrade — it refuses to boot,
+            because it validates its deletion inventory at startup.</td></tr>
+        <tr><td>Dedupe skips a member at one stage.</td>
+          <td>A skip has to cascade. Later stages for that member would depend on a task the run
+            never created.</td>
+          <td>A skip at stage N skips every later stage for that subject, and each skip is reported
+            rather than silently dropped.</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note good" style="margin-top:20px"><b>The pattern.</b> Six of these eight were found by
+      running something rather than reasoning about it, and three were found only because a test suite
+      that had never executed was wired into CI. The design was directionally right and specifically
+      wrong in exactly the places nobody had checked.</div>
+  </div>
+</section>
+
 <section id="build">
   <div class="wrap">
     <h2><span class="num">08</span> Build order</h2>
-    <p class="lede">Each phase is usable on its own. Nothing here needs the phase after it to be worth shipping.</p>
+    <p class="lede">Each phase is usable on its own. Nothing here needs the phase after it to be worth shipping.
+      <b>Phases 0 through 5 are built and CI-green</b> on <code>feat/work-model</code>; the status of each is
+      marked below.</p>
 
     <div class="grid g2" style="margin-top:20px">
-      <div class="card"><div class="eyebrow">Phase 0 · gate</div>
+      <div class="card"><div class="eyebrow">Phase 0 · done</div>
         <h3 style="margin-top:6px">Thread-scoped agent sessions</h3>
         <p style="font-size:.86rem;color:var(--subtext)">Session key <code>(channel, thread_root)</code>, affinity
           and eviction updated. <b>Blocks everything else</b> — fan-out into one channel is unsafe until this lands.</p></div>
 
-      <div class="card"><div class="eyebrow">Phase 1 · schema</div>
+      <div class="card"><div class="eyebrow">Phase 1 · done</div>
         <h3 style="margin-top:6px">Edges and index</h3>
         <p style="font-size:.86rem;color:var(--subtext)"><code>depends_on</code>, <code>subject</code>,
           <code>stage</code>, <code>thread_root</code>, <code>doer_kind</code>, <code>snoozed</code>,
           <code>outcome_reason</code>. Relay emits indexed tags. Blocked-state derivation on the relay.</p></div>
 
-      <div class="card"><div class="eyebrow">Phase 2 · see it</div>
+      <div class="card"><div class="eyebrow">Phase 2 · done</div>
         <h3 style="margin-top:6px">Work surfaces</h3>
         <p style="font-size:.86rem;color:var(--subtext)">Board (stage columns), list with group/sort/filter,
           thread task chip + history, deep links both directions. <b>This is the phase that pays for itself</b> —
           it works on today's tasks before any fan-out exists.</p></div>
 
-      <div class="card"><div class="eyebrow">Phase 3 · doers</div>
+      <div class="card"><div class="eyebrow">Phase 3 · done</div>
         <h3 style="margin-top:6px">Human queue + bounce</h3>
         <p style="font-size:.86rem;color:var(--subtext)">Queue view, outcome reasons, bounce transition,
           staleness clock → Ask. Makes the last mile of the chain real instead of a card nobody opens.</p></div>
 
-      <div class="card"><div class="eyebrow">Phase 4 · targets</div>
+      <div class="card"><div class="eyebrow">Phase 4 · done</div>
         <h3 style="margin-top:6px">Cohorts + entity mentions</h3>
         <p style="font-size:.86rem;color:var(--subtext)">Cohort kind, typed mentions so
           <code>@premium-q3</code> and <code>@build-websites</code> resolve to something other than a person.
           Composer, ingest, and agent prompt context.</p></div>
 
       <div class="card" style="border-color:color-mix(in srgb,var(--blue) 40%,transparent)">
-        <div class="eyebrow" style="color:var(--blue)">Phase 5 · the ask you started with</div>
+        <div class="eyebrow" style="color:var(--blue)">Phase 5 · done — the ask you started with</div>
         <h3 style="margin-top:6px">Templates + fan-out</h3>
         <p style="font-size:.86rem;color:var(--subtext)">Template kind, planner, dedupe check, cost estimate,
           approval Ask, eager graph write. The sentence
