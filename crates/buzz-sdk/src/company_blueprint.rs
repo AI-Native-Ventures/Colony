@@ -12,8 +12,8 @@ use crate::company::{
 };
 use buzz_core::{
     company::{
-        CompanyOnboardingStatus, CompanyProfile, CompanyService, CostCentre, Initiative,
-        InitiativeStatus, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+        CompanyProfile, CompanyService, CostCentre, Initiative, InitiativeStatus, COMPANY_SCHEMA,
+        INITIATIVE_SCHEMA,
     },
     company_roster::ValidatedBlueprint,
     kind::{KIND_COMPANY_PROFILE, KIND_INITIATIVE},
@@ -38,7 +38,6 @@ pub fn company_action(
 ) -> Result<CompanyAction, String> {
     let profile = CompanyProfile {
         schema: COMPANY_SCHEMA.to_string(),
-        id: blueprint.company.id.clone(),
         trading_name: blueprint.company.trading_name.clone(),
         legal_name: blueprint.company.legal_name.clone(),
         website: blueprint.company.website.clone(),
@@ -67,7 +66,6 @@ pub fn company_action(
             .collect(),
         source_report_event_id: None,
         // The owner approved it; that is what this action records.
-        onboarding_status: CompanyOnboardingStatus::Approved,
         created_at: now,
         updated_at: now,
     };
@@ -107,7 +105,6 @@ pub fn initiative_actions(
         let initiative = Initiative {
             schema: INITIATIVE_SCHEMA.to_string(),
             id: id.clone(),
-            company_id: blueprint.company.id.clone(),
             title: proposed.title.clone(),
             summary: proposed.summary.clone(),
             status: InitiativeStatus::Proposed,

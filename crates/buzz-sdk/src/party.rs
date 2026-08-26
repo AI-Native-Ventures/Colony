@@ -104,17 +104,6 @@ impl PartyActionPayload {
             Self::Merge { survivor, .. } => &survivor.id,
         }
     }
-
-    /// The company every record in this payload must belong to.
-    ///
-    /// The relay checks it against the tenant before writing anything.
-    pub fn company_id(&self) -> &str {
-        match self {
-            Self::Party(party) => &party.company_id,
-            Self::Relationship(relationship) => &relationship.company_id,
-            Self::Merge { survivor, .. } => &survivor.company_id,
-        }
-    }
 }
 
 /// Compare-and-set reference that must still resolve to one exact event.
@@ -387,9 +376,6 @@ fn validate_action(action: &PartyAction) -> Result<(), PartySdkError> {
             if alias.resolves_to != survivor.id {
                 return Err(PartySdkError::TagContentMismatch("party merge"));
             }
-            if alias.company_id != survivor.company_id {
-                return Err(PartySdkError::TagContentMismatch("party merge"));
-            }
             if !survivor.retired_handles.contains(&alias.id) {
                 return Err(PartySdkError::TagContentMismatch("party merge"));
             }
@@ -514,7 +500,6 @@ pub fn parse_party_action(event: &Event) -> Result<PartyAction, PartySdkError> {
 pub fn party_head_tags(party: &Party) -> Result<Vec<Tag>, PartySdkError> {
     let mut tags = vec![
         tag(&["d", &party.id], "d")?,
-        tag(&["c", &party.company_id], "c")?,
         tag(
             &[
                 "party-kind",
@@ -545,7 +530,6 @@ pub fn party_head_tags(party: &Party) -> Result<Vec<Tag>, PartySdkError> {
 pub fn alias_head_tags(alias: &PartyAlias) -> Result<Vec<Tag>, PartySdkError> {
     Ok(vec![
         tag(&["d", &alias.id], "d")?,
-        tag(&["c", &alias.company_id], "c")?,
         tag(&["alias", &alias.resolves_to], "alias")?,
     ])
 }
@@ -554,7 +538,6 @@ pub fn alias_head_tags(alias: &PartyAlias) -> Result<Vec<Tag>, PartySdkError> {
 pub fn relationship_head_tags(relationship: &PartyRelationship) -> Result<Vec<Tag>, PartySdkError> {
     Ok(vec![
         tag(&["d", &relationship.id], "d")?,
-        tag(&["c", &relationship.company_id], "c")?,
         tag(&["party", &relationship.party_id], "party")?,
     ])
 }
@@ -574,20 +557,10 @@ pub fn parse_party_event(event: &Event) -> Result<PartyHead, PartySdkError> {
 
     match schema.as_str() {
         PARTY_SCHEMA => {
-            require_head_tags(
-                event,
-                &["d", "c", "party-kind"],
-                &["identifier"],
-                "party head",
-            )?;
+            require_head_tags(event, &["d", "party-kind"], &["identifier"], "party head")?;
             let party: Party = decode(&event.content, "party")?;
             validate_party(&party)?;
             ensure_matches(&party.id, required_scalar(event, "d", "d")?, "party")?;
-            ensure_matches(
-                &party.company_id,
-                required_scalar(event, "c", "c")?,
-                "party",
-            )?;
 
             // Tags are what queries match on. A head whose identifier tags
             // disagree with its claims is findable under a claim it never made.
@@ -608,15 +581,10 @@ pub fn parse_party_event(event: &Event) -> Result<PartyHead, PartySdkError> {
             Ok(PartyHead::Party(party))
         }
         PARTY_ALIAS_SCHEMA => {
-            require_head_tags(event, &["d", "c", "alias"], &[], "party alias head")?;
+            require_head_tags(event, &["d", "alias"], &[], "party alias head")?;
             let alias: PartyAlias = decode(&event.content, "party alias")?;
             validate_alias(&alias)?;
             ensure_matches(&alias.id, required_scalar(event, "d", "d")?, "party alias")?;
-            ensure_matches(
-                &alias.company_id,
-                required_scalar(event, "c", "c")?,
-                "party alias",
-            )?;
             ensure_matches(
                 &alias.resolves_to,
                 required_scalar(event, "alias", "alias")?,
@@ -633,16 +601,11 @@ pub fn parse_party_event(event: &Event) -> Result<PartyHead, PartySdkError> {
 /// Cross-record validation against the party remains a relay concern.
 pub fn parse_party_relationship_event(event: &Event) -> Result<PartyRelationship, PartySdkError> {
     require_kind(event, KIND_PARTY_RELATIONSHIP)?;
-    require_head_tags(event, &["d", "c", "party"], &[], "party relationship head")?;
+    require_head_tags(event, &["d", "party"], &[], "party relationship head")?;
     let relationship: PartyRelationship = decode(&event.content, "party relationship")?;
     ensure_matches(
         &relationship.id,
         required_scalar(event, "d", "d")?,
-        "party relationship",
-    )?;
-    ensure_matches(
-        &relationship.company_id,
-        required_scalar(event, "c", "c")?,
         "party relationship",
     )?;
     ensure_matches(
@@ -772,7 +735,6 @@ mod tests {
         Party {
             schema: PARTY_SCHEMA.to_string(),
             id: id.to_string(),
-            company_id: "horizonlabs".to_string(),
             kind: PartyKind::Organization,
             display_name: "Acme Industries".to_string(),
             legal_name: None,
@@ -868,7 +830,6 @@ mod tests {
         let alias = PartyAlias {
             schema: PARTY_ALIAS_SCHEMA.to_string(),
             id: "acme-inc".to_string(),
-            company_id: "horizonlabs".to_string(),
             resolves_to: "acme-industries".to_string(),
             merged_at: 1_785_370_000,
             merge_action_event_id: "a".repeat(64),
@@ -959,7 +920,6 @@ mod tests {
         let alias = PartyAlias {
             schema: PARTY_ALIAS_SCHEMA.to_string(),
             id: "acme-inc".to_string(),
-            company_id: "horizonlabs".to_string(),
             resolves_to: "acme-industries".to_string(),
             merged_at: 1_785_370_000,
             merge_action_event_id: "a".repeat(64),
@@ -980,7 +940,6 @@ mod tests {
         let relationship = PartyRelationship {
             schema: PARTY_RELATIONSHIP_SCHEMA.to_string(),
             id: "acme-industries:lead".to_string(),
-            company_id: "horizonlabs".to_string(),
             party_id: "acme-industries".to_string(),
             relationship: RelationshipKind::Lead,
             status: RelationshipStatus::Qualified,
@@ -1005,7 +964,6 @@ mod tests {
         let mut confused = PartyRelationship {
             schema: PARTY_RELATIONSHIP_SCHEMA.to_string(),
             id: "acme-industries:lead".to_string(),
-            company_id: "horizonlabs".to_string(),
             party_id: "acme-industries".to_string(),
             relationship: RelationshipKind::Lead,
             status: RelationshipStatus::Qualified,

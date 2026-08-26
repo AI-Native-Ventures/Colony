@@ -126,11 +126,7 @@ impl LedgerActionPayload {
                 if rule.id.trim().is_empty() {
                     return Err(LedgerSdkError::Refused("rule id must be non-empty"));
                 }
-                validate_assignment_ids(
-                    &rule.assign.company_id,
-                    &rule.assign.cost_centre_id,
-                    &rule.assign.owning_team_id,
-                )?;
+                validate_assignment_ids(&rule.assign.cost_centre_id, &rule.assign.owning_team_id)?;
             }
             Self::Correction(correction) => {
                 if correction.id.trim().is_empty() {
@@ -145,7 +141,6 @@ impl LedgerActionPayload {
                     return Err(LedgerSdkError::Refused("correction must state a reason"));
                 }
                 validate_assignment_ids(
-                    &correction.assign.company_id,
                     &correction.assign.cost_centre_id,
                     &correction.assign.owning_team_id,
                 )?;
@@ -171,13 +166,12 @@ pub fn budget_d_tag(cost_centre_id: &str, period: &str) -> String {
 }
 
 fn validate_assignment_ids(
-    company_id: &str,
     cost_centre_id: &str,
     owning_team_id: &str,
 ) -> Result<(), LedgerSdkError> {
-    if company_id.trim().is_empty() || cost_centre_id.trim().is_empty() {
+    if cost_centre_id.trim().is_empty() {
         return Err(LedgerSdkError::Refused(
-            "assignment company and cost centre must be non-empty",
+            "assignment cost centre must be non-empty",
         ));
     }
     if owning_team_id.trim().is_empty() {
@@ -626,7 +620,6 @@ mod tests {
 
     fn assignment() -> RuleAssignment {
         RuleAssignment {
-            company_id: "horizon-labs".to_string(),
             cost_centre_id: "web-delivery".to_string(),
             owning_team_id: "web-team".to_string(),
             commercial_purpose: CommercialPurpose::ClientDelivery,

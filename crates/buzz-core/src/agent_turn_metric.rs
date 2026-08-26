@@ -244,7 +244,6 @@ mod tests {
 
     fn sample_work_context() -> AgentWorkContext {
         AgentWorkContext {
-            company_id: "horizon-labs".to_string(),
             task_id: "build-tennant-site".to_string(),
             initiative_id: Some("tennant-premium-site".to_string()),
             owning_team_id: "web-team".to_string(),
@@ -368,7 +367,6 @@ mod tests {
             "harness": "goose",
             "timestamp": "2026-07-01T20:11:03Z",
             "workContext": {
-                "companyId": "horizon-labs",
                 "taskId": "build-tennant-site",
                 "initiativeId": "tennant-premium-site",
                 "owningTeamId": "web-team",

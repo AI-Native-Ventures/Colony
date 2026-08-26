@@ -85,9 +85,9 @@ pub fn internal_cost_centre(company: &CompanyProfile) -> Result<&str, String> {
 /// Derived from the company, the channel, and the send, so the same send always
 /// asks for the same Task no matter how many times it is retried or which
 /// device retries it.
-pub fn chat_task_id(company_id: &str, channel_id: &str, send_id: &str) -> String {
-    let derived = step_idempotency_key(company_id, &format!("chat-task:{channel_id}:{send_id}"));
-    format!("{company_id}:chat:{derived}")
+pub fn chat_task_id(channel_id: &str, send_id: &str) -> String {
+    let derived = step_idempotency_key("chat-task", &format!("{channel_id}:{send_id}"));
+    format!("chat:{derived}")
 }
 
 fn clamp_title(value: &str) -> String {
@@ -124,7 +124,7 @@ pub fn plan_implicit_task(
     }
     let team = owning_team_for_chat(teams, agent_persona_id)?;
     let cost_centre_id = internal_cost_centre(company)?.to_owned();
-    let task_id = chat_task_id(&company.id, channel_id, send_id);
+    let task_id = chat_task_id(channel_id, send_id);
 
     let commercial_purpose = match client_organization_id {
         Some(id) if !id.trim().is_empty() => CommercialPurpose::ClientDelivery,
@@ -139,7 +139,6 @@ pub fn plan_implicit_task(
     let task = CompanyTask {
         schema: TASK_SCHEMA.to_string(),
         id: task_id.clone(),
-        company_id: company.id.clone(),
         // Chat work belongs to no initiative until someone puts it in one.
         initiative_id: None,
         title: clamp_title(title),
@@ -195,7 +194,7 @@ pub fn plan_implicit_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::company::{CompanyOnboardingStatus, CostCentre, CostCentreKind, COMPANY_SCHEMA};
+    use buzz_core::company::{CostCentre, CostCentreKind, COMPANY_SCHEMA};
 
     const RELAY: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
     const AGENT: &str = "company-role:abc:horizonlabs:cto";
@@ -203,7 +202,6 @@ mod tests {
     fn company() -> CompanyProfile {
         CompanyProfile {
             schema: COMPANY_SCHEMA.to_string(),
-            id: "horizonlabs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
@@ -230,7 +228,6 @@ mod tests {
                 },
             ],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Approved,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_000,
         }
@@ -354,12 +351,12 @@ mod tests {
         let second = plan(&[engineering()], None);
         assert_eq!(first, second);
         assert_ne!(
-            chat_task_id("horizonlabs", "engineering", "send-0001"),
-            chat_task_id("horizonlabs", "engineering", "send-0002"),
+            chat_task_id("engineering", "send-0001"),
+            chat_task_id("engineering", "send-0002"),
         );
         assert_ne!(
-            chat_task_id("horizonlabs", "engineering", "send-0001"),
-            chat_task_id("horizonlabs", "general", "send-0001"),
+            chat_task_id("engineering", "send-0001"),
+            chat_task_id("general", "send-0001"),
         );
     }
 

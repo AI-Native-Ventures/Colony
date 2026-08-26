@@ -392,7 +392,6 @@ pub fn compute_ledger(
                     context.client_organization_id.as_deref(),
                 ),
                 Some(RuleAssignment {
-                    company_id: context.company_id.clone(),
                     cost_centre_id: context.cost_centre_id.clone(),
                     owning_team_id: context.owning_team_id.clone(),
                     commercial_purpose: context.commercial_purpose,
@@ -572,7 +571,6 @@ mod tests {
         client: Option<&str>,
     ) -> RuleAssignment {
         RuleAssignment {
-            company_id: "horizon-labs".to_string(),
             cost_centre_id: centre.to_string(),
             owning_team_id: "web-team".to_string(),
             commercial_purpose: purpose,
@@ -583,7 +581,6 @@ mod tests {
 
     fn context(purpose: CommercialPurpose, client: Option<&str>) -> AgentWorkContext {
         AgentWorkContext {
-            company_id: "horizon-labs".to_string(),
             task_id: "task-1".to_string(),
             initiative_id: None,
             owning_team_id: "web-team".to_string(),

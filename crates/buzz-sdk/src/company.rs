@@ -6,7 +6,7 @@ use buzz_core::{
     block::canonical_json,
     company::{
         serde_enum_slug, validate_company, Cohort, CompanyContractError, CompanyProfile,
-        CompanyTask, Initiative, Template, TemplateStage,
+        CompanyTask, Initiative, Template, TemplateStage, COMMUNITY_PROFILE_ID,
     },
     kind::{
         KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
@@ -106,21 +106,13 @@ impl CompanyActionPayload {
 
     fn entity_id(&self) -> &str {
         match self {
-            Self::Company(profile) => &profile.id,
+            // The community profile has no id of its own; it lives at one
+            // fixed coordinate because there is exactly one per community.
+            Self::Company(_) => COMMUNITY_PROFILE_ID,
             Self::Initiative(initiative) => &initiative.id,
             Self::Task(task) => &task.id,
             Self::Cohort(cohort) => &cohort.id,
             Self::Template(template) => &template.id,
-        }
-    }
-
-    fn company_id(&self) -> &str {
-        match self {
-            Self::Company(profile) => &profile.id,
-            Self::Initiative(initiative) => &initiative.company_id,
-            Self::Task(task) => &task.company_id,
-            Self::Cohort(cohort) => &cohort.company_id,
-            Self::Template(template) => &template.company_id,
         }
     }
 }
@@ -351,13 +343,11 @@ pub fn parse_company_action(event: &Event) -> Result<CompanyAction, CompanySdkEr
 /// Relay authorship must be checked by the caller against its tenant relay key.
 pub fn parse_company_event(event: &Event) -> Result<CompanyProfile, CompanySdkError> {
     require_kind(event, KIND_COMPANY_PROFILE)?;
-    require_head_tag_names(event, &["d", "company"], &["c"], &[], "company head")?;
+    require_head_tag_names(event, &["d"], &[], &[], "community profile head")?;
     let coordinate = required_scalar_tag(event, "d")?;
-    let company_tag = required_scalar_tag(event, "company")?;
     let profile: CompanyProfile = parse_canonical_content(&event.content, "company")?;
     validate_company(&profile)?;
-    ensure_matches(&profile.id, coordinate, "company")?;
-    ensure_matches(&profile.id, company_tag, "company")?;
+    ensure_matches(COMMUNITY_PROFILE_ID, coordinate, "community profile")?;
     Ok(profile)
 }
 
@@ -368,13 +358,12 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
     require_kind(event, KIND_INITIATIVE)?;
     require_head_tag_names(
         event,
-        &["d", "company", "cost-centre"],
-        &["c", "client", "w"],
+        &["d", "cost-centre"],
+        &["client", "w"],
         &[],
         "initiative head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
-    let company_tag = required_scalar_tag(event, "company")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
     // `w` is the single-letter mirror of the status in the content. Only
@@ -383,7 +372,6 @@ pub fn parse_initiative_event(event: &Event) -> Result<Initiative, CompanySdkErr
     let initiative: Initiative = parse_canonical_content(&event.content, "initiative")?;
     validate_initiative_content(&initiative)?;
     ensure_matches(&initiative.id, coordinate, "initiative")?;
-    ensure_matches(&initiative.company_id, company_tag, "initiative")?;
     ensure_matches(&initiative.cost_centre_id, cost_centre_tag, "initiative")?;
     ensure_optional_matches(
         initiative.client_organization_id.as_deref(),
@@ -414,13 +402,12 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_kind(event, KIND_TASK)?;
     require_head_tag_names(
         event,
-        &["d", "company", "team", "cost-centre"],
-        &["c", "initiative", "client", "i", "s", "u", "w"],
+        &["d", "team", "cost-centre"],
+        &["initiative", "client", "i", "s", "u", "w"],
         &["g", "v"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
-    let company_tag = required_scalar_tag(event, "company")?;
     let team_tag = required_scalar_tag(event, "team")?;
     let initiative_tag = optional_scalar_tag(event, "initiative")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
@@ -432,7 +419,6 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     let task: CompanyTask = parse_canonical_content(&event.content, "task")?;
     validate_task_content(&task)?;
     ensure_matches(&task.id, coordinate, "task")?;
-    ensure_matches(&task.company_id, company_tag, "task")?;
     ensure_matches(&task.owning_team_id, team_tag, "task")?;
     ensure_optional_matches(task.initiative_id.as_deref(), initiative_tag, "task")?;
     ensure_matches(&task.cost_centre_id, cost_centre_tag, "task")?;
@@ -502,13 +488,11 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
 /// does not warrant.
 pub fn parse_cohort_event(event: &Event) -> Result<Cohort, CompanySdkError> {
     require_kind(event, KIND_COHORT)?;
-    require_head_tag_names(event, &["d", "company"], &["c"], &["m"], "cohort head")?;
+    require_head_tag_names(event, &["d"], &[], &["m"], "cohort head")?;
     let coordinate = required_scalar_tag(event, "d")?;
-    let company_tag = required_scalar_tag(event, "company")?;
     let cohort: Cohort = parse_canonical_content(&event.content, "cohort")?;
     validate_cohort_content(&cohort)?;
     ensure_matches(&cohort.id, coordinate, "cohort")?;
-    ensure_matches(&cohort.company_id, company_tag, "cohort")?;
 
     let member_mirrors: Vec<&str> = event
         .tags
@@ -548,13 +532,11 @@ pub fn parse_cohort_event(event: &Event) -> Result<Cohort, CompanySdkError> {
 /// record does not warrant.
 pub fn parse_template_event(event: &Event) -> Result<Template, CompanySdkError> {
     require_kind(event, KIND_TEMPLATE)?;
-    require_head_tag_names(event, &["d", "company"], &["c"], &["g"], "template head")?;
+    require_head_tag_names(event, &["d"], &[], &["g"], "template head")?;
     let coordinate = required_scalar_tag(event, "d")?;
-    let company_tag = required_scalar_tag(event, "company")?;
     let template: Template = parse_canonical_content(&event.content, "template")?;
     validate_template_content(&template)?;
     ensure_matches(&template.id, coordinate, "template")?;
-    ensure_matches(&template.company_id, company_tag, "template")?;
 
     let team_mirrors: Vec<&str> = event
         .tags
@@ -677,7 +659,6 @@ fn validate_action(action: &CompanyAction) -> Result<(), CompanySdkError> {
 }
 
 fn validate_payload(payload: &CompanyActionPayload) -> Result<(), CompanySdkError> {
-    validate_id(payload.company_id(), "company action")?;
     match payload {
         CompanyActionPayload::Company(profile) => validate_company(profile).map_err(Into::into),
         CompanyActionPayload::Initiative(initiative) => validate_initiative_content(initiative),
@@ -1006,7 +987,6 @@ fn ensure_mirror_matches(
 fn validate_initiative_content(initiative: &Initiative) -> Result<(), CompanySdkError> {
     validate_schema(&initiative.schema, INITIATIVE_SCHEMA, "initiative")?;
     validate_id(&initiative.id, "initiative")?;
-    validate_id(&initiative.company_id, "initiative")?;
     validate_required_text(&initiative.title, MAX_NAME_LEN, "initiative")?;
     validate_text(&initiative.summary, MAX_SUMMARY_LEN, "initiative")?;
     validate_id(&initiative.owner_persona_id, "initiative")?;
@@ -1026,7 +1006,6 @@ fn validate_initiative_content(initiative: &Initiative) -> Result<(), CompanySdk
 fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
     validate_schema(&task.schema, TASK_SCHEMA, "task")?;
     validate_id(&task.id, "task")?;
-    validate_id(&task.company_id, "task")?;
     validate_optional_id(task.initiative_id.as_deref(), "task")?;
     validate_required_text(&task.title, MAX_NAME_LEN, "task")?;
     validate_id(&task.owning_team_id, "task")?;
@@ -1078,7 +1057,6 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
 fn validate_cohort_content(cohort: &Cohort) -> Result<(), CompanySdkError> {
     validate_schema(&cohort.schema, COHORT_SCHEMA, "cohort")?;
     validate_id(&cohort.id, "cohort")?;
-    validate_id(&cohort.company_id, "cohort")?;
     validate_required_text(&cohort.name, MAX_NAME_LEN, "cohort")?;
     if cohort.members.len() > MAX_COHORT_MEMBERS {
         return Err(CompanySdkError::InvalidContent("cohort"));
@@ -1103,7 +1081,6 @@ fn validate_cohort_content(cohort: &Cohort) -> Result<(), CompanySdkError> {
 fn validate_template_content(template: &Template) -> Result<(), CompanySdkError> {
     validate_schema(&template.schema, TEMPLATE_SCHEMA, "template")?;
     validate_id(&template.id, "template")?;
-    validate_id(&template.company_id, "template")?;
     validate_required_text(&template.name, MAX_NAME_LEN, "template")?;
     if template.version < 1 {
         return Err(CompanySdkError::InvalidContent("template"));
@@ -1210,8 +1187,7 @@ fn validate_text(value: &str, max: usize, entity: &'static str) -> Result<(), Co
 #[cfg(test)]
 mod tests {
     use buzz_core::company::{
-        CommercialPurpose, CompanyOnboardingStatus, CostCentre, CostCentreKind, DoerKind,
-        InitiativeStatus, TaskStatus,
+        CommercialPurpose, CostCentre, CostCentreKind, DoerKind, InitiativeStatus, TaskStatus,
     };
     use nostr::{Event, EventBuilder, Keys, Kind, Tag};
 
@@ -1220,7 +1196,6 @@ mod tests {
     fn company_fixture() -> CompanyProfile {
         CompanyProfile {
             schema: "colony.company/v1".to_owned(),
-            id: "horizon-labs".to_owned(),
             trading_name: "Horizon Labs".to_owned(),
             legal_name: None,
             website: Some("https://horizonlabs.co.za".to_owned()),
@@ -1235,7 +1210,6 @@ mod tests {
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Draft,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }
@@ -1245,7 +1219,6 @@ mod tests {
         Initiative {
             schema: "colony.initiative/v1".to_owned(),
             id: "premium-site".to_owned(),
-            company_id: "horizon-labs".to_owned(),
             title: "Premium website".to_owned(),
             summary: "Rebuild the client's website.".to_owned(),
             status: InitiativeStatus::Active,
@@ -1268,7 +1241,6 @@ mod tests {
         CompanyTask {
             schema: "colony.task/v1".to_owned(),
             id: "premium-site-frontend".to_owned(),
-            company_id: "horizon-labs".to_owned(),
             initiative_id: Some("premium-site".to_owned()),
             title: "Build premium website".to_owned(),
             status: TaskStatus::Ready,
@@ -1340,7 +1312,7 @@ mod tests {
                 .expect("request UUID"),
             idempotency_key: Uuid::parse_str("017f22e2-79b0-7cc3-98c4-dc0c0c073990")
                 .expect("idempotency UUID"),
-            target: format!("30179:{relay_pubkey}:horizon-labs"),
+            target: format!("30179:{relay_pubkey}:profile"),
             expected_head,
             expected_references: Vec::new(),
             payload: CompanyActionPayload::Company(company_fixture()),
@@ -1508,7 +1480,7 @@ mod tests {
         let company_event = raw_event(
             KIND_COMPANY_PROFILE,
             canonical(&company),
-            &[&["d", "horizon-labs"], &["company", "horizon-labs"]],
+            &[&["d", "profile"]],
         );
         assert_eq!(
             parse_company_event(&company_event).expect("company"),
@@ -1521,7 +1493,6 @@ mod tests {
             canonical(&initiative),
             &[
                 &["d", "premium-site"],
-                &["company", "horizon-labs"],
                 &["cost-centre", "web-delivery"],
                 &["client", "tennant-group"],
             ],
@@ -1536,11 +1507,7 @@ mod tests {
         let initiative_event = raw_event(
             KIND_INITIATIVE,
             canonical(&initiative_without_client),
-            &[
-                &["d", "premium-site"],
-                &["company", "horizon-labs"],
-                &["cost-centre", "web-delivery"],
-            ],
+            &[&["d", "premium-site"], &["cost-centre", "web-delivery"]],
         );
         assert_eq!(
             parse_initiative_event(&initiative_event).expect("initiative without client"),
@@ -1553,7 +1520,6 @@ mod tests {
             canonical(&task),
             &[
                 &["d", "premium-site-frontend"],
-                &["company", "horizon-labs"],
                 &["team", "engineering-team"],
                 &["initiative", "premium-site"],
                 &["cost-centre", "web-delivery"],
@@ -1570,7 +1536,6 @@ mod tests {
             canonical(&standalone_task),
             &[
                 &["d", "premium-site-frontend"],
-                &["company", "horizon-labs"],
                 &["team", "engineering-team"],
                 &["cost-centre", "web-delivery"],
             ],
@@ -1587,27 +1552,19 @@ mod tests {
         let noncanonical = raw_event(
             KIND_COMPANY_PROFILE,
             serde_json::to_string(&company).expect("json"),
-            &[&["d", "horizon-labs"], &["company", "horizon-labs"]],
+            &[&["d", "profile"]],
         );
         assert!(parse_company_event(&noncanonical).is_err());
         let duplicate = raw_event(
             KIND_COMPANY_PROFILE,
             canonical(&company),
-            &[
-                &["d", "horizon-labs"],
-                &["d", "horizon-labs"],
-                &["company", "horizon-labs"],
-            ],
+            &[&["d", "horizon-labs"], &["d", "horizon-labs"]],
         );
         assert!(parse_company_event(&duplicate).is_err());
         let stray = raw_event(
             KIND_COMPANY_PROFILE,
             canonical(&company),
-            &[
-                &["d", "horizon-labs"],
-                &["company", "horizon-labs"],
-                &["h", "general"],
-            ],
+            &[&["d", "horizon-labs"], &["h", "general"]],
         );
         assert!(parse_company_event(&stray).is_err());
         let mismatched = raw_event(
@@ -1623,7 +1580,6 @@ mod tests {
             canonical(&task),
             &[
                 &["d", "premium-site-frontend"],
-                &["company", "horizon-labs"],
                 &["team", "marketing-team"],
                 &["initiative", "premium-site"],
                 &["cost-centre", "web-delivery"],
