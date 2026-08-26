@@ -31,24 +31,25 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
-// The mock emitter defaults `created_at` to whole seconds, so a loop of emits
-// all land in the same second. `compareEventOrder` (formatTimelineMessages.ts)
-// then falls through to `id.localeCompare`, and the ids are random per run,
-// so the rendered order is a shuffle of the emit order, and "the last message
-// I emitted" is not the bottom row. Stamp a strictly increasing second per
-// emit so the timeline order is the emit order. Backdated so nothing renders
-// with a future timestamp; the window comfortably exceeds this file's ~63
-// total emits.
-const EMIT_BACKDATE_SECONDS = 600;
-let emitSequence = 0;
-
+/**
+ * Emits one mock message. `createdAt` defaults to the emitter's own "now".
+ *
+ * Only pass `createdAt` when the test depends on the *order* of a burst. The
+ * emitter stamps whole seconds, so a loop of emits all land in the same second
+ * and `compareEventOrder` (formatTimelineMessages.ts) falls through to
+ * `id.localeCompare`, which is random per run: the rendered order becomes a
+ * shuffle of the emit order.
+ *
+ * Do not backdate this by default. The thread test derives a typing
+ * indicator's timestamp from the root message it emitted, and a typing
+ * indicator that old is correctly treated as expired and never rendered.
+ */
 async function emit(
   page: import("@playwright/test").Page,
   content: string,
   parentEventId: string | null = null,
+  createdAt?: number,
 ) {
-  const createdAt =
-    Math.floor(Date.now() / 1000) - EMIT_BACKDATE_SECONDS + emitSequence++;
   const event = await page.evaluate(
     (payload) =>
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
@@ -235,9 +236,21 @@ test.describe("composer overlays mask scrolled content", () => {
     await expect(page.getByTestId("message-timeline")).toBeVisible();
     await waitForMockLiveSubscription(page, CHANNEL);
 
+    // This test asserts that the message it emitted *last* clears the grown
+    // composer, so the emit order has to be the rendered order. Stamp a
+    // strictly increasing second per emit, ending at the current second, so
+    // nothing lands in the future and nothing is old enough to read as stale.
+    const emitBaseSeconds = Math.floor(Date.now() / 1000) - 20;
     let newestMessageId = "";
     for (let i = 0; i < 20; i++) {
-      newestMessageId = (await emit(page, `Bottom-clearance message ${i}`)).id;
+      newestMessageId = (
+        await emit(
+          page,
+          `Bottom-clearance message ${i}`,
+          null,
+          emitBaseSeconds + i,
+        )
+      ).id;
     }
     await page.waitForTimeout(300);
     await page.evaluate(() => {
