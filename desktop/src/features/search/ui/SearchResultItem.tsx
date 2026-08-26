@@ -6,6 +6,7 @@ import {
   Bot,
   CalendarRange,
   Compass,
+  CreditCard,
   FileText,
   FolderGit2,
   Hash,
@@ -47,6 +48,7 @@ export type SearchCommandId =
   | "open-pulse"
   | "open-settings"
   | "open-spend"
+  | "open-credits"
   | "open-workflows";
 
 export type SearchCommand = {
@@ -132,6 +134,8 @@ export function resultIcon(
         return Settings;
       case "open-spend":
         return Receipt;
+      case "open-credits":
+        return CreditCard;
       case "open-workflows":
         return Zap;
     }

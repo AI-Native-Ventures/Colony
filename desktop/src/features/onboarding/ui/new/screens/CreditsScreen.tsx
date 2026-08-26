@@ -7,6 +7,7 @@ import type {
   OnboardingServices,
 } from "../../../contracts";
 import type { OnboardingTrack } from "../../../flow/steps";
+import { isEmail } from "../../../flow/validation";
 
 export type CheckoutState = "idle" | "leaving" | "abandoned";
 
@@ -55,21 +56,66 @@ export function defaultPack(packs: CreditPack[]): CreditPack | null {
   return packs.find((pack) => pack.id === DEFAULT_PACK_ID) ?? packs[0] ?? null;
 }
 
+/**
+ * The note under the packs, which depends on where the buyer came from.
+ *
+ * The website-reading sentence only makes sense on a first purchase during
+ * onboarding: that is the one payment the scrape spend can come off. A
+ * returning buyer topping up has no website in the story.
+ */
+export function checkoutNote(
+  currency: ChargeCurrency | null,
+  state: CheckoutState,
+  unconfirmed: boolean,
+  isFirstPurchase: boolean,
+): string {
+  if (unconfirmed) {
+    return "We could not reach Colony to confirm that payment. If you paid, your credits land automatically.";
+  }
+  if (state === "abandoned") {
+    return "That payment was not completed. Nothing has been charged.";
+  }
+  if (currency !== "ZAR") {
+    return isFirstPurchase
+      ? "Anything we spent reading your website comes off this first payment."
+      : "This checkout bills in dollars, the same currency your credits are denominated in.";
+  }
+  return isFirstPurchase
+    ? "Credits are priced in dollars because that is what the thinking costs. You pay in rands, and your bank handles the rest. Anything we spent reading your website comes off this first payment."
+    : "Credits are priced in dollars because that is what the thinking costs. You pay in rands, and your bank handles the rest.";
+}
+
 type Props = {
-  track: OnboardingTrack;
-  email: string;
-  pubkey: string;
-  services: OnboardingServices;
-  onPaid: () => void;
-  onSkip: () => void;
-  onBack: () => void;
+  /** The payments half of the onboarding services; nothing else is used. */
+  payments: OnboardingServices["payments"];
+  /**
+   * Onboarding pitch selection. Omitted outside onboarding: the screen then
+   * speaks as a plain top-up, with no first-purchase promises.
+   */
+  track?: OnboardingTrack;
+  /**
+   * Receipt email when the caller already knows it (onboarding collects one
+   * at account creation). When omitted the screen asks for one at checkout:
+   * an existing user has no stored account email to reuse.
+   */
+  email?: string;
+  /** Viewer pubkey, when known: enables the current-balance line. */
+  pubkey?: string;
+  /** Single-column layout for hosts narrower than onboarding's canvas. */
+  wide?: boolean;
+  /** Advances the onboarding flow. Outside onboarding there is no next
+   * step: the screen stays put and refreshes the balance instead. */
+  onPaid?: () => void;
+  onSkip?: () => void;
+  onBack?: () => void;
 };
 
 export function CreditsScreen({
   track,
   email,
   pubkey,
-  services,
+  payments,
+  wide,
   onPaid,
   onSkip,
   onBack,
@@ -79,12 +125,24 @@ export function CreditsScreen({
   const [currency, setCurrency] = useState<ChargeCurrency | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // Set when a started checkout could not be confirmed. Unlike `abandoned`,
+  // nothing here knows the payment failed, so the wording never claims a
+  // charge did not happen.
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  // Receipt email for buyers without one on file. Pay stays disabled until
+  // what is typed here could reach the relay.
+  const [receiptEmail, setReceiptEmail] = useState("");
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [balanceCents, setBalanceCents] = useState<number | null>(null);
+
+  const effectiveEmail = (email ?? receiptEmail).trim();
+  const emailReady = effectiveEmail.length > 0 && isEmail(effectiveEmail);
 
   // Prices come from the relay so a change reaches users without a new
   // desktop build, and so the client never holds a price it could send back.
   useEffect(() => {
     let live = true;
-    services.payments
+    payments
       .packs()
       .then((list) => {
         if (!live) return;
@@ -100,46 +158,114 @@ export function CreditsScreen({
     return () => {
       live = false;
     };
-  }, [services]);
+  }, [payments]);
+
+  // What the workspace already holds. Someone choosing between packs needs
+  // to know what they have; a failed read hides the line rather than
+  // inventing a zero.
+  useEffect(() => {
+    if (!pubkey) return undefined;
+    let live = true;
+    payments
+      .balance(pubkey)
+      .then((current) => {
+        if (live) setBalanceCents(current.usdCents);
+      })
+      .catch(() => {
+        if (live) setBalanceCents(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [payments, pubkey]);
 
   const chosen = packs?.find((pack) => pack.id === selected) ?? null;
 
-  const pay = async () => {
-    if (!chosen) return;
-    setState("leaving");
-    // The pack id goes to the relay, never a price. The relay prices it.
-    const started = await services.payments.createTransaction(chosen.id, email);
-    await openUrl(started.authorizationUrl);
-
-    // The webhook is the source of truth, not the browser coming back. Poll
-    // the balance so a paid customer is never stranded on the payment screen
-    // because a callback went missing.
-    const verified = await services.payments.verify(started.reference);
-    if (verified.paid) {
-      onPaid();
-      return;
-    }
-    const balance = await services.payments.balance(pubkey);
-    if (balance.usdCents > 0) {
-      onPaid();
-      return;
-    }
-    setState("abandoned");
+  const refreshBalance = () => {
+    if (!pubkey) return;
+    payments
+      .balance(pubkey)
+      .then((current) => setBalanceCents(current.usdCents))
+      .catch(() => setBalanceCents(null));
   };
 
+  /** Payment confirmed somewhere in the pipeline: land well either way. */
+  const finishPaid = () => {
+    onPaid?.();
+    refreshBalance();
+    setState("idle");
+  };
+
+  const pay = async () => {
+    if (!chosen || !emailReady || state === "leaving") return;
+    setState("leaving");
+    setUnconfirmed(false);
+    let authorizationUrl: string;
+    let reference: string;
+    try {
+      // The pack id goes to the relay, never a price. The relay prices it.
+      const started = await payments.createTransaction(
+        chosen.id,
+        effectiveEmail,
+      );
+      authorizationUrl = started.authorizationUrl;
+      reference = started.reference;
+    } catch {
+      // Checkout never opened, so nothing can have been charged.
+      setState("abandoned");
+      return;
+    }
+    try {
+      await openUrl(authorizationUrl);
+    } catch {
+      // The browser handoff failed, but the charge attempt already exists
+      // at the relay. Fall through to verification rather than losing it.
+    }
+    try {
+      // The webhook is the source of truth, not the browser coming back.
+      // Poll the balance so a paid customer is never stranded on the payment
+      // screen because a callback went missing.
+      const verified = await payments.verify(reference);
+      if (verified.paid) {
+        finishPaid();
+        return;
+      }
+      if (pubkey) {
+        const balance = await payments.balance(pubkey);
+        if (balance.usdCents > 0) {
+          finishPaid();
+          return;
+        }
+      }
+      setState("abandoned");
+    } catch {
+      setUnconfirmed(true);
+      setState("idle");
+    }
+  };
+
+  const sub =
+    track === "colony"
+      ? "Finding customers, reaching out, research: work that carries on while you sleep. Your helpers run on Colony, and credits are what they run on."
+      : track === "byo"
+        ? "You picked a tool you already pay for, so it covers your helpers' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."
+        : "Your helpers run on Colony, and Colony runs on credits: model calls, searches, sends. Top up whenever the tin runs low.";
+
   return (
-    <div className="onb-screen">
+    <div className="onb-screen" data-wide={wide ? "true" : undefined}>
       <div className="onb-col-head">
         <h1 className="onb-headline">
           Put something in the <em>tin</em>.
         </h1>
-        <p className="onb-sub">
-          {track === "colony"
-            ? "Finding customers, reaching out, research: work that carries on while you sleep. Your helpers run on Colony, and credits are what they run on."
-            : "You picked a tool you already pay for, so it covers your helpers' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."}
-        </p>
+        <p className="onb-sub">{sub}</p>
       </div>
       <div className="onb-packs">
+        {balanceCents !== null ? (
+          <p className="onb-balance">
+            Current balance:{" "}
+            <strong>{formatPrice(balanceCents, "USD")} of credits</strong>
+          </p>
+        ) : null}
         {packs === null ? (
           <p className="onb-note">
             {loadFailed
@@ -168,6 +294,27 @@ export function CreditsScreen({
         )}
       </div>
       <div className="onb-panel">
+        {!email ? (
+          <label className="onb-field" htmlFor="credits-receipt-email">
+            <span className="onb-label">Receipt email</span>
+            <input
+              id="credits-receipt-email"
+              type="email"
+              value={receiptEmail}
+              onChange={(event) => {
+                setReceiptEmail(event.target.value);
+                setUnconfirmed(false);
+              }}
+              onBlur={() => setEmailTouched(true)}
+              placeholder="you@yourbusiness.co.za"
+            />
+            {emailTouched && !emailReady ? (
+              <p className="onb-note">
+                That does not look like an email address.
+              </p>
+            ) : null}
+          </label>
+        ) : null}
         <div className="onb-handoff">
           <p className="onb-handoff-title">
             Payment opens in your browser, then you come straight back here.
@@ -177,37 +324,35 @@ export function CreditsScreen({
           </p>
         </div>
         <p
-          className={`onb-note${state === "abandoned" ? " onb-note-warn" : ""}`}
+          className={`onb-note${
+            state === "abandoned" || unconfirmed ? " onb-note-warn" : ""
+          }`}
         >
-          {state === "abandoned"
-            ? "That payment was not completed. Nothing has been charged."
-            : currency === "ZAR"
-              ? "Credits are priced in dollars because that is what the thinking costs. You pay in rands, and your bank handles the rest. Anything we spent reading your website comes off this first payment."
-              : "Anything we spent reading your website comes off this first payment."}
+          {checkoutNote(currency, state, unconfirmed, track !== undefined)}
         </p>
       </div>
       <div className="onb-actions">
         <Button
           size="lg"
-          disabled={!chosen || state === "leaving"}
-          onClick={pay}
+          disabled={!chosen || !emailReady || state === "leaving"}
+          onClick={() => void pay()}
         >
           {state === "leaving"
             ? "Opening checkout"
-            : state === "abandoned"
-              ? "Try again"
-              : chosen && currency
-                ? `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
-                : "Pay"}
+            : chosen && currency
+              ? `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
+              : "Pay"}
         </Button>
-        {track === "byo" ? (
+        {track === "byo" && onSkip ? (
           <button type="button" className="onb-quiet-action" onClick={onSkip}>
             I will run my own helpers for now
           </button>
         ) : null}
-        <button type="button" className="onb-quiet-action" onClick={onBack}>
-          Back
-        </button>
+        {onBack ? (
+          <button type="button" className="onb-quiet-action" onClick={onBack}>
+            Back
+          </button>
+        ) : null}
       </div>
     </div>
   );

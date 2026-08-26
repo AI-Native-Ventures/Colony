@@ -161,6 +161,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goCredits = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/credits",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goDiscovery = React.useCallback(
     (options?: DiscoveryNavigationOptions) =>
       commitNavigation(
@@ -454,6 +465,7 @@ export function useAppNavigation() {
     goPulse,
     goProfile,
     goSettings,
+    goCredits,
     goSpend,
     goWorkflow,
     goWorkflows,

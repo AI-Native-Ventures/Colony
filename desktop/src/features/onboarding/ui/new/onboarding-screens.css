@@ -829,6 +829,15 @@
      African gateway may charge in USD, so an arbitrary dollar figure could
      only reach the gateway through an exchange rate. Each card therefore
      carries two independent numbers — what it grants, and what it costs. */
+  /* Balance sits above the packs on both hosts. Unscoped on purpose: the
+     Credits route renders this screen outside .onb-canvas, and a
+     canvas-scoped rule would leave it unstyled there. */
+  .onb-balance {
+    margin: 0 0 1rem;
+    font-size: 0.875rem;
+    color: var(--muted-foreground);
+  }
+
   :where(.onb-canvas) .onb-packs {
     display: flex;
     gap: 0.625rem;
