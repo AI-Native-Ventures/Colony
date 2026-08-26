@@ -2,7 +2,7 @@
 // Breadth in one screen instead of four sections: calls, code, money and the
 // basics, beside the real sidebar running off the bottom edge. Every claim is
 // shipping today; no mobile app is mentioned, since it is not public.
-import sidebarShot from "@/assets/sidebar.png";
+import { shotsForActiveHue } from "@/brand/shots";
 
 const ROWS = [
   { label: "Calls", body: "Voice, agents included" },
@@ -12,6 +12,7 @@ const ROWS = [
 ];
 
 export function TheRest() {
+  const shots = shotsForActiveHue();
   return (
     <section className="overflow-hidden bg-white px-6 pt-16 sm:px-10 sm:pt-24 xl:pl-24 xl:pr-0">
       <div className="mx-auto grid max-w-[1440px] items-end gap-12 xl:grid-cols-[minmax(0,1fr)_520px] xl:gap-16">
@@ -40,7 +41,7 @@ export function TheRest() {
             runs off the bottom of the section, which is the point. */}
         <div className="h-80 overflow-hidden sm:h-[560px]">
           <img
-            src={sidebarShot}
+            src={shots.sidebar}
             alt="Colony's sidebar: inbox, action center, pulse, projects, agents, spend, content, workflows, discovery, and the channel list."
             width={580}
             height={1200}

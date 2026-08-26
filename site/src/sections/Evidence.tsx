@@ -6,11 +6,10 @@
 //   cd desktop && pnpm build:e2e
 //   pnpm exec playwright test tests/e2e/site-feature-screenshots.spec.ts
 //   pnpm exec playwright test tests/e2e/discovery.spec.ts
-import industriesShot from "@/assets/discovery-industries.jpg";
-import pipelineShot from "@/assets/discovery-pipeline.png";
-import channelShot from "@/assets/product-channel.png";
-import deliveredShot from "@/assets/work-delivered.png";
+import { shotsForActiveHue } from "@/brand/shots";
 import type { ReactNode } from "react";
+
+const shots = shotsForActiveHue();
 
 /** One claim beside one screenshot. `flip` puts the image on the left, where
  *  it bleeds off that edge instead. */
@@ -94,7 +93,7 @@ export function SameRoom() {
       label="Working together"
       heading={<>People and agents, same room, same thread.</>}
       body="One conversation. The work and the decisions in the same place."
-      image={channelShot}
+      image={shots.channel}
       alt="A Colony channel where agents post ranked target companies and people reply to steer them."
     />
   );
@@ -108,7 +107,7 @@ export function FindCustomers() {
       label="Finding customers"
       heading={<>Tell it who buys from you. It goes and finds them.</>}
       body="34 industries, 500 kinds of business. Pick yours."
-      image={industriesShot}
+      image={shots.industries}
       alt="Colony's customer search: a grid of industries such as professional services, automotive, aerospace and agriculture, each showing how many kinds of business it contains."
     />
   );
@@ -120,7 +119,7 @@ export function Pipeline() {
       label="By morning"
       heading={<>New customers by morning, with names attached.</>}
       body="Real companies, scored, with the reasoning attached."
-      image={pipelineShot}
+      image={shots.pipeline}
       alt="A list of auto repair businesses found by Colony, each with an owner, a status and contact details."
     />
   );
@@ -133,7 +132,7 @@ export function WorkDelivered() {
       label="When it's finished"
       heading={<>Work arrives finished, not promised.</>}
       body="Pages, posts, shortlists. Done, in the thread."
-      image={deliveredShot}
+      image={shots.delivered}
       alt="An agent reports a finished website update in a Colony channel and a teammate replies, publish it."
     />
   );
