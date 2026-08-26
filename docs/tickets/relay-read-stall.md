@@ -81,6 +81,75 @@ Two occurrences on the same write-then-read-same-connection shape is
 enough to call this recurring. It is not enough to call the cause
 confirmed without that relay-side log evidence for the exact window.
 
+## Occurrence 3: the same silence on a write acknowledgement, not a read
+
+The two occurrences above are reads going unanswered. This one is the
+acknowledgement of a write, on a desktop client rather than the Rust test
+client, which widens the shape: it is not the subscription path specifically,
+it is the connection.
+
+Test `Blocks live Gate C > persists the chat-native Blocks loop with signed
+relay evidence` (`desktop/tests/e2e/blocks-live.spec.ts:123`), CI run
+`32952360214`, Blocks Live Gate job, on branch `feat/work-model`.
+
+```
+expect(locator).toBeHidden() failed
+Locator:  getByTestId('persona-dialog')
+Expected: hidden
+Received: visible
+Timeout:  30000ms
+63 x locator resolved to <div role="dialog" ... data-state="open" ...>
+blocks-live.spec.ts:698
+```
+
+The accessibility snapshot taken at failure has the answer the DOM assertion
+does not:
+
+```yaml
+- dialog "Create agent":
+  ...
+  - paragraph: Timed out while submitting the Block action.
+  - button "Decline"
+```
+
+That paragraph is reachable only through the catch branch of `submitOnce` in
+`useAgentProposalReview.ts`, so the sequence is settled: the Decline click
+landed, `submitBlockAction` signed and published a kind:40010, the relay never
+sent `OK` for that event id within `PUBLISH_TIMEOUT_MS` (25s,
+`relayClientTimings.ts`), `publishRelayEvent` rejected on its own timer, and
+the dialog stayed open showing the error. `closeReview()` runs only on
+success, which is correct: dismissing a dialog whose action failed would throw
+the action away silently.
+
+So the client behaved correctly throughout. **Nothing in Block proposal
+dismissal is broken.** What failed is that an open, NIP-42-authenticated
+socket that had just carried a long series of accepted writes (the same test
+had already driven an approval to `Completed.` moments earlier) stopped
+answering one more.
+
+Same shape as occurrences 1 and 2: writes succeed on a connection, then the
+relay goes silent on that connection rather than erroring, closing, or
+delaying. The difference is only which frame never arrives, `EVENT`/`OK` here
+against `REQ`/`EOSE` there.
+
+### Not worked around, deliberately
+
+`blocks-live.spec.ts` was left untouched. Its assertion is correct, and a
+retry in the spec would hide a transport problem that reaches real clients:
+the desktop publish path has no retry of its own, so a user in this state sees
+the action fail and has to click again.
+
+Two notes for whoever picks this up:
+
+- The relay's own output is not captured in the Blocks Live Gate job. Only its
+  startup line (`buzz-relay TCP listening`) reaches the job log, so this
+  occurrence has no relay-side evidence for the silent window either, exactly
+  as "What would confirm it" above asks for.
+- The assertion allows 30s and the client gives up at 25s, so this spec can
+  only ever observe the timed-out state and never a slow success. Widening the
+  client timeout would change what the test can see; that is a reason to fix
+  the stall rather than tune either number.
+
 ## Workaround in place, not a fix
 
 As of commits `1d580e4a84` (initial fix, `broker()`'s receipt poll) and
