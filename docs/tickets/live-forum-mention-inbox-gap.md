@@ -2,11 +2,26 @@
 
 ## Status
 
-Diagnosed, not fixed, and the test that exposes it is deliberately left
-untouched. The honest fix needs a readiness signal for the relay-bridge live
-subscriptions that does not exist yet. Editing the spec to make it pass
-without that signal would make it green for a reason nobody can defend, so it
-was not done.
+**Candidate fix 2 was applied and did NOT close it.** `8efee72438` made
+`handleIncomingMessage` dispatch `onLiveMention` as well, so both
+subscriptions now drive the Inbox repair. The flake recurred on 2026-08-26
+(run 32997225536, `Desktop E2E Integration (1/2)`) with the same signature:
+attempt 0 times out at 30.1s, retry #1 passes in 5.1s.
+
+So the mention-subscription race was either not the cause, or not the only
+one. The original diagnosis below is left intact because it is still the best
+account of what the artifacts show, but its central inference is now
+disproven as a complete explanation. Do not treat it as settled.
+
+What is still missing is the same thing that was missing the first time: the
+name of the assertion that hangs. `trace: "on-first-retry"` records nothing
+for an attempt-0 failure that passes on retry, which is every occurrence of
+this flake. That has now been changed to `retain-on-failure` **scoped to the
+`integration` project only** — applied globally it pushed four `smoke` shards
+over budget and had to be reverted. The next occurrence will carry a trace.
+
+The test itself is still deliberately untouched. Editing it to pass without
+understanding the hang would make it green for a reason nobody can defend.
 
 This file exists so the cause is on record rather than living in one agent's
 context.
