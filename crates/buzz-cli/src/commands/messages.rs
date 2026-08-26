@@ -1106,13 +1106,16 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        event_mention_pubkeys, find_root_from_tags, format_attachment_markdown,
-        match_profiles_by_name, merge_message_mentions, missing_members,
+        cmd_get_thread, event_mention_pubkeys, find_root_from_tags, format_attachment_markdown,
+        format_events, match_profiles_by_name, merge_message_mentions, missing_members,
         normalize_explicit_mentions, parse_member_pubkeys, resolve_names_to_pubkeys,
     };
+    use crate::client::BuzzClient;
+    use crate::error::CliError;
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
     };
+    use nostr::Keys;
     use serde_json::json;
 
     const ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1138,6 +1141,54 @@ mod tests {
             duration: None,
             filename: Some("Q3 [final].pdf".into()),
         }
+    }
+
+    #[test]
+    fn compact_event_format_remains_the_three_key_contract() {
+        let normalized = serde_json::json!([{
+            "id": ID_A,
+            "pubkey": PUBKEY,
+            "kind": 9,
+            "content": "compact content",
+            "created_at": 1_787_754_972_u64,
+            "tags": [["h", "channel-id"]],
+            "sig": "d".repeat(128),
+        }])
+        .to_string();
+
+        let output: Vec<serde_json::Value> =
+            serde_json::from_str(&format_events(&normalized, &crate::OutputFormat::Compact))
+                .unwrap();
+
+        assert_eq!(
+            output[0],
+            serde_json::json!({
+                "id": ID_A,
+                "content": "compact content",
+                "created_at": 1_787_754_972_u64,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_channel_is_rejected_before_thread_fetch() {
+        let client =
+            BuzzClient::new("http://127.0.0.1:1".into(), Keys::generate(), None, None).unwrap();
+        // Colony's `cmd_get_thread` has no separate `thread` parameter:
+        // the root is resolved from the event id alone.
+        let error = cmd_get_thread(
+            &client,
+            "not-a-uuid",
+            ID_A,
+            None,
+            None,
+            &crate::OutputFormat::Json,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, CliError::Usage(_)));
+        assert!(error.to_string().contains("invalid UUID"));
     }
 
     #[test]
