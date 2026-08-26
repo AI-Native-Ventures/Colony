@@ -9,27 +9,15 @@
 // connectors at lg and up, and a stacked column below that, where a
 // three-across chart would be unreadable.
 const TEAMS = [
-  {
-    name: "Sales",
-    roles: "A lead, a researcher, a writer",
-    owns: "Finds new customers and writes to them",
-  },
-  {
-    name: "Marketing",
-    roles: "A lead, a designer, a copywriter",
-    owns: "Keeps the site and the posts going out",
-  },
-  {
-    name: "Ops",
-    roles: "A lead, a scheduler, a bookkeeper",
-    owns: "Handles the diary, the invoices, the books",
-  },
+  { name: "Sales", owns: "Finds and writes to customers" },
+  { name: "Marketing", owns: "Site, posts, campaigns" },
+  { name: "Ops", owns: "Diary, invoices, books" },
 ];
 
 const FIRST_JOBS = [
-  "Build a list of fifty businesses worth calling",
-  "Write the first round of emails for you to approve",
-  "Rewrite the homepage so it matches what you sell",
+  "Fifty businesses worth calling",
+  "A first round of emails to approve",
+  "A homepage that matches what you sell",
 ];
 
 function TeamNode({ team }: { team: (typeof TEAMS)[number] }) {
@@ -41,12 +29,7 @@ function TeamNode({ team }: { team: (typeof TEAMS)[number] }) {
       <p className="mt-2.5 text-xl font-semibold tracking-[-0.02em] sm:text-2xl">
         {team.name}
       </p>
-      <p className="mt-2 text-sm leading-relaxed text-white/80 sm:text-[15px]">
-        {team.roles}
-      </p>
-      <p className="mt-2.5 text-sm leading-relaxed text-white/80 sm:text-[15px]">
-        {team.owns}
-      </p>
+      <p className="mt-2 text-[15px] leading-snug text-white/80">{team.owns}</p>
     </div>
   );
 }
@@ -55,18 +38,9 @@ export function OrgChart({ scoutArt }: { scoutArt: string }) {
   return (
     <section className="bg-colony-ink px-6 py-20 text-white sm:px-10 sm:py-28 lg:px-24">
       <div className="mx-auto max-w-6xl">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-colony-canvas sm:text-[13px]">
-          The staffing plan
-        </p>
-        <h2 className="mt-5 max-w-[22ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] sm:text-6xl lg:text-[68px]">
+        <h2 className="max-w-[22ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] sm:text-6xl lg:text-[68px]">
           Your org chart, drafted in week one.
         </h2>
-        <p className="mt-5 max-w-[54ch] text-base leading-relaxed text-white/80 sm:text-lg">
-          Three teams, who leads each one, and what each one is on the hook for.
-          You sit at the top. Read it over coffee, move things around, approve
-          it.
-        </p>
-
         {/* Drawn chart: connectors run solid from you to Scout, dashed on to the
             teams that do not exist yet. */}
         <div className="relative mt-14 hidden h-[600px] w-full lg:block">
