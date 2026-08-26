@@ -11,11 +11,9 @@ export const WIDGET_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "media",
 ]);
 
-// Layout nodes are traversed (never frame on their own); card-list is a widget
-// that also carries a single nested `card`. Everything else in the union is
-// passive typography.
+// Layout nodes are traversed and never frame on their own. Everything else in
+// the union is passive typography.
 const LAYOUT_BLOCK_TYPES = new Set(["stack", "grid"]);
-const CARD_LIST_KIND = "card-list";
 const PASSIVE_BLOCK_TYPES = new Set(["section", "metric", "details", "status"]);
 
 // Wire trees are capped at contracts BLOCK_MAX_DEPTH (12); 64 is a fail-safe
@@ -35,17 +33,9 @@ function treeContainsWidget(node: unknown, depth: number): boolean {
   const type = node.type;
   if (typeof type !== "string") return false;
 
-  // Fail safe: anything that is not a known node shape cannot be classified as
-  // passive, so it keeps its frame.
-  if (
-    !WIDGET_BLOCK_TYPES.has(type) &&
-    !LAYOUT_BLOCK_TYPES.has(type) &&
-    type !== CARD_LIST_KIND &&
-    !PASSIVE_BLOCK_TYPES.has(type)
-  ) {
-    return true;
-  }
-
+  // A widget anywhere in the tree frames the whole block. `card-list` is itself
+  // a widget type, so its nested `card` never has to be traversed to reach this
+  // answer.
   if (WIDGET_BLOCK_TYPES.has(type)) return true;
 
   if (LAYOUT_BLOCK_TYPES.has(type)) {
@@ -55,11 +45,12 @@ function treeContainsWidget(node: unknown, depth: number): boolean {
         if (treeContainsWidget(child, depth + 1)) return true;
       }
     }
-  } else if (type === CARD_LIST_KIND) {
-    if (treeContainsWidget(node.card, depth + 1)) return true;
+    return false;
   }
 
-  return false;
+  // Fail safe: anything that is not a known node shape cannot be classified as
+  // passive, so it keeps its frame.
+  return !PASSIVE_BLOCK_TYPES.has(type);
 }
 
 /**
