@@ -30,7 +30,7 @@ export function Blocks() {
           whoever asked.
         </p>
 
-        <div className="mt-14 grid items-center gap-12 lg:grid-cols-[560px_minmax(0,1fr)] lg:gap-16">
+        <div className="mt-14 grid items-center gap-12 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)] xl:gap-16">
           {/* A lead card as an owner sees it: the company, the person, and how
               well it fits, with the evidence one click away. */}
           <div className="bg-white px-7 py-7 text-colony-ink sm:px-8">

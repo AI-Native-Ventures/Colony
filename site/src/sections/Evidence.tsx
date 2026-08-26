@@ -32,7 +32,7 @@ function Split({
   tone?: "canvas" | "white";
 }) {
   const copy = (
-    <div className={flip ? "lg:order-2" : undefined}>
+    <div className={flip ? "xl:order-2" : undefined}>
       <p
         className={`text-xs font-semibold uppercase tracking-[0.2em] sm:text-[13px] ${
           tone === "white" ? "text-colony-ink/70" : "text-colony-ink/85"
@@ -53,24 +53,24 @@ function Split({
     <section
       className={`overflow-hidden px-6 py-16 sm:px-10 sm:py-24 lg:py-26 ${
         tone === "white" ? "bg-white" : "bg-colony-canvas"
-      } ${flip ? "lg:pl-0 lg:pr-24" : "lg:pl-24 lg:pr-0"}`}
+      } ${flip ? "xl:pl-0 xl:pr-24" : "xl:pl-24 xl:pr-0"}`}
     >
       <div
         className={`mx-auto grid max-w-[1440px] items-center gap-10 lg:gap-16 ${
           flip
-            ? "lg:grid-cols-[minmax(0,1fr)_460px]"
-            : "lg:grid-cols-[460px_minmax(0,1fr)]"
+            ? "xl:grid-cols-[minmax(0,1fr)_460px]"
+            : "xl:grid-cols-[460px_minmax(0,1fr)]"
         }`}
       >
         {copy}
         <div
-          className={`overflow-hidden ${flip ? "lg:order-1 lg:flex lg:justify-end" : ""}`}
+          className={`overflow-hidden ${flip ? "xl:order-1 xl:flex xl:justify-end" : ""}`}
         >
           <img
             src={image}
             alt={alt}
             loading="lazy"
-            className="block w-full max-w-none shrink-0 lg:w-[900px]"
+            className="block w-full max-w-none shrink-0 xl:w-[900px]"
           />
         </div>
       </div>
