@@ -35,14 +35,7 @@ export default defineConfig({
   use: {
     baseURL: previewUrl,
     screenshot: "only-on-failure",
-    // retain-on-failure, not on-first-retry: a flaky test fails on attempt 0
-    // and passes on retry, so on-first-retry records a trace for the attempt
-    // that succeeded and none for the one that failed. The hung assertion then
-    // never appears anywhere - the reported stack is whatever the `finally`
-    // block touched. That cost a full investigation on the live-forum-mention
-    // flake (docs/tickets/live-forum-mention-inbox-gap.md), which had three CI
-    // occurrences and not one trace between them.
-    trace: "retain-on-failure",
+    trace: "on-first-retry",
     video: "retain-on-failure",
   },
   projects: [
