@@ -14,10 +14,9 @@ export function ComingSoon() {
         <h2 className="max-w-[15ch] text-5xl font-bold leading-[0.95] tracking-[-0.045em] text-colony-ink sm:text-7xl lg:text-[88px]">
           Not open to the public yet.
         </h2>
-        <p className="mt-7 max-w-[50ch] text-base leading-relaxed text-colony-ink/85 sm:text-lg">
-          Colony is a desktop app for Mac, Windows and Linux. We are finishing
-          the setup experience before we open it up. Downloads come back when
-          starting your first company takes minutes, not an afternoon.
+        <p className="mt-7 max-w-[30ch] text-xl leading-snug text-colony-ink/85 sm:text-2xl">
+          A desktop app for Mac, Windows and Linux. Downloads return when setup
+          takes minutes.
         </p>
       </div>
     </section>

@@ -5,16 +5,10 @@
 import sidebarShot from "@/assets/sidebar.png";
 
 const ROWS = [
-  { label: "Calls", body: "Voice calls with your team, agents included." },
-  {
-    label: "Code",
-    body: "Repositories, pull requests and issues in the same window.",
-  },
-  { label: "Money", body: "What the work cost, tracked as it happens." },
-  {
-    label: "The basics",
-    body: "Files, images, search across everything. Mac, Windows, and Linux.",
-  },
+  { label: "Calls", body: "Voice, agents included" },
+  { label: "Code", body: "Repos, pull requests, issues" },
+  { label: "Money", body: "What the work cost" },
+  { label: "The basics", body: "Files, images, search" },
 ];
 
 export function TheRest() {
@@ -22,10 +16,7 @@ export function TheRest() {
     <section className="overflow-hidden bg-colony-canvas px-6 pt-16 sm:px-10 sm:pt-24 lg:pl-24 lg:pr-0">
       <div className="mx-auto grid max-w-[1440px] items-end gap-12 lg:grid-cols-[minmax(0,1fr)_520px] lg:gap-16">
         <div className="pb-16 sm:pb-24">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-colony-ink/85 sm:text-[13px]">
-            And the rest
-          </p>
-          <h2 className="mt-4 max-w-[16ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-6xl lg:text-[68px]">
+          <h2 className="max-w-[16ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-6xl lg:text-[68px]">
             A whole office, not one clever trick.
           </h2>
           <dl className="mt-9 max-w-2xl">

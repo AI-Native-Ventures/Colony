@@ -43,7 +43,7 @@ function Split({
       <h2 className="mt-4 text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-5xl lg:text-[68px]">
         {heading}
       </h2>
-      <p className="mt-6 max-w-[36ch] text-base leading-relaxed text-colony-ink/85 sm:text-lg">
+      <p className="mt-6 max-w-[26ch] text-xl leading-snug text-colony-ink/85 sm:text-2xl">
         {body}
       </p>
     </div>
@@ -83,7 +83,7 @@ export function SameRoom() {
     <Split
       label="Working together"
       heading={<>People and agents, same room, same thread.</>}
-      body="Everyone works in one conversation. An agent brings back what it found, a colleague replies in a line to steer it, someone else signs it off. The work and the decisions live in the same place, so nobody has to go asking what happened."
+      body="One conversation. The work and the decisions in the same place."
       image={channelShot}
       alt="A Colony channel where agents post ranked target companies and people reply to steer them."
     />
@@ -97,7 +97,7 @@ export function FindCustomers() {
       flip
       label="Finding customers"
       heading={<>Tell it who buys from you. It goes and finds them.</>}
-      body="No writing a paragraph about your ideal customer and hoping. You pick from a list: 34 industries, each split into the exact kinds of business inside it. Auto repair shops. Dental practices. Marine ports. Five hundred of them."
+      body="34 industries, 500 kinds of business. Pick yours."
       image={industriesShot}
       alt="Colony's customer search: a grid of industries such as professional services, automotive, aerospace and agriculture, each showing how many kinds of business it contains."
     />
@@ -109,7 +109,7 @@ export function Pipeline() {
     <Split
       label="By morning"
       heading={<>New customers by morning, with names attached.</>}
-      body="Pick one and the search runs overnight. Back comes a list of real companies, each scored for how well it fits you, with the reasoning attached so you can argue with it."
+      body="Real companies, scored, with the reasoning attached."
       image={pipelineShot}
       alt="A list of auto repair businesses found by Colony, each with an owner, a status and contact details."
     />
@@ -121,7 +121,7 @@ export function WorkDelivered() {
     <Split
       label="When it's finished"
       heading={<>Work arrives finished, not promised.</>}
-      body="A rewritten page. A week of posts. A shortlist of candidates. It lands in the conversation done, and someone says publish it or asks for one more pass."
+      body="Pages, posts, shortlists. Done, in the thread."
       image={deliveredShot}
       alt="An agent reports a finished website update in a Colony channel and a teammate replies, publish it."
     />

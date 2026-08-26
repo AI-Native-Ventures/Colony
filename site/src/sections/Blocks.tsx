@@ -8,22 +8,19 @@
 // The word "blocks" only appears here, after the reader has already been shown
 // two of them (the staffing plan and the approval).
 const KINDS = [
-  { name: "A customer found", body: "Worth calling, and why" },
-  { name: "Something to approve", body: "Read it, then yes or no" },
-  { name: "A finished report", body: "What happened, in one place" },
-  { name: "A receipt to file", body: "What it cost, logged" },
-  { name: "A few questions", body: "When it needs your side of it" },
-  { name: "A plan to sign off", body: "Like the staffing plan above" },
+  "A customer found",
+  "Something to approve",
+  "A finished report",
+  "A receipt to file",
+  "A few questions",
+  "A plan to sign off",
 ];
 
 export function Blocks() {
   return (
     <section className="bg-colony-ink px-6 py-20 text-white sm:px-10 sm:py-28 lg:px-24">
       <div className="mx-auto max-w-6xl">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-colony-canvas sm:text-[13px]">
-          Why it isn't just chat
-        </p>
-        <h2 className="mt-5 max-w-[20ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] sm:text-6xl lg:text-[68px]">
+        <h2 className="max-w-[20ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] sm:text-6xl lg:text-[68px]">
           It asks with a button, not a paragraph.
         </h2>
         <p className="mt-5 max-w-[54ch] text-base leading-relaxed text-white/80 sm:text-lg">
@@ -45,9 +42,6 @@ export function Blocks() {
                 Qualified
               </span>
             </div>
-            <p className="mt-2 text-base leading-relaxed text-colony-ink/75">
-              An established shop whose website undersells what it does.
-            </p>
             <dl className="mt-5">
               <div className="grid gap-1 border-t border-colony-ink/10 py-3 sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-4">
                 <dt className="text-base text-colony-ink/60">Owner</dt>
@@ -76,19 +70,12 @@ export function Blocks() {
           </div>
 
           <div>
-            <p className="text-base leading-relaxed text-white/80 sm:text-lg">
-              Every one of these arrives as a panel you can act on, not a
-              paragraph you have to answer:
-            </p>
             {/* The 2px gaps are the ink background showing through, so the
                 tiles share edges instead of floating as cards. */}
-            <div className="mt-6 grid gap-0.5 bg-white/25 sm:grid-cols-2">
+            <div className="grid gap-0.5 bg-white/25 sm:grid-cols-2">
               {KINDS.map((kind) => (
-                <div key={kind.name} className="bg-colony-ink px-5 py-4.5">
-                  <p className="text-[17px] font-semibold">{kind.name}</p>
-                  <p className="mt-1.5 text-[15px] text-white/75">
-                    {kind.body}
-                  </p>
+                <div key={kind} className="bg-colony-ink px-5 py-5">
+                  <p className="text-lg font-semibold">{kind}</p>
                 </div>
               ))}
             </div>
