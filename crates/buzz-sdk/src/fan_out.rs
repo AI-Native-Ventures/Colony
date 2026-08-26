@@ -256,6 +256,18 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
                 stage.slug, stage.owning_team_id
             ));
         }
+        // Checked here for the same reason the owning team is: planning
+        // resolves the reviewer team's lead into every Task it emits, and a
+        // reviewer team that does not exist would otherwise surface as a
+        // contract rejection on submission, after the plan was approved.
+        if let Some(reviewer_team_id) = stage.reviewer_team_id.as_deref() {
+            if !request.teams.iter().any(|team| team.id == reviewer_team_id) {
+                return Err(format!(
+                    "stage `{}` names a reviewer team that does not exist: {reviewer_team_id}",
+                    stage.slug
+                ));
+            }
+        }
     }
 
     let initiative_id = fan_out_initiative_id(
@@ -309,6 +321,16 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
                 .iter()
                 .find(|team| team.id == stage.owning_team_id)
                 .expect("owning team existence checked above");
+            // Checked to exist above, in the same pre-flight loop that
+            // checked the owning team.
+            let reviewing_team = match stage.reviewer_team_id.as_deref() {
+                Some(reviewer_team_id) => request
+                    .teams
+                    .iter()
+                    .find(|team| team.id == reviewer_team_id)
+                    .expect("reviewer team existence checked above"),
+                None => owning_team,
+            };
 
             let task = CompanyTask {
                 schema: TASK_SCHEMA.to_string(),
@@ -326,14 +348,13 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
                 },
                 owning_team_id: stage.owning_team_id.clone(),
                 assignee_persona_ids: Vec::new(),
-                // `reviewerTeamId` does not route here yet: `CompanyTask`
-                // requires QA to be an owning-team member, and a stage's
-                // reviewer is a separate team. Defaulting to the owning
-                // team's lead mirrors the same call `kickoff_action` already
-                // makes ("the lead reviews the team's work") rather than
-                // loosening a validated invariant this step was not asked
-                // to touch.
-                qa_persona_id: owning_team.lead_persona_id.clone(),
+                // QA is the lead of whichever team holds the gate. With no
+                // reviewer team that is the owning team's lead, the same
+                // call `kickoff_action` makes ("the lead reviews the team's
+                // work"); with one, it is the reviewer team's lead, which is
+                // the entire point of a stage declaring a separate reviewer.
+                qa_persona_id: reviewing_team.lead_persona_id.clone(),
+                reviewer_team_id: stage.reviewer_team_id.clone(),
                 cost_centre_id: request.cost_centre_id.to_string(),
                 commercial_purpose: request.commercial_purpose,
                 client_organization_id: request.client_organization_id.map(str::to_owned),
@@ -666,6 +687,7 @@ mod tests {
             owning_team_id: "team-sales".to_string(),
             assignee_persona_ids: Vec::new(),
             qa_persona_id: "sales-lead".to_string(),
+            reviewer_team_id: None,
             cost_centre_id: "cc-sales".to_string(),
             commercial_purpose: CommercialPurpose::Sales,
             client_organization_id: None,
@@ -736,6 +758,7 @@ mod tests {
             owning_team_id: "team-sales".to_string(),
             assignee_persona_ids: Vec::new(),
             qa_persona_id: "sales-lead".to_string(),
+            reviewer_team_id: None,
             cost_centre_id: "cc-sales".to_string(),
             commercial_purpose: CommercialPurpose::Sales,
             client_organization_id: None,
@@ -879,5 +902,78 @@ mod tests {
         let plan = plan_fan_out(&request(&cohort, &template, &company, &teams, &[]))
             .expect("exactly the cap must be allowed");
         assert_eq!(plan.task_actions.len(), MAX_FAN_OUT_TASKS);
+    }
+
+    fn teams_with_reviewer() -> Vec<CompanyTeamRef> {
+        let mut teams = teams();
+        teams.push(CompanyTeamRef {
+            id: "team-qa".to_string(),
+            lead_persona_id: "qa-lead".to_string(),
+            persona_ids: vec!["qa-lead".to_string(), "qa-1".to_string()],
+        });
+        teams
+    }
+
+    /// A stage naming a reviewer team must put that team on the Task and
+    /// hand QA to its lead. Before this routed, every fanned-out Task got
+    /// the owning team's own lead as QA no matter what the template said,
+    /// which quietly turned a declared cross-team gate into self-review.
+    #[test]
+    fn a_stage_reviewer_team_routes_onto_the_task_and_its_qa() {
+        let company = company();
+        let teams = teams_with_reviewer();
+        let cohort = cohort(1);
+        let mut reviewed = stage("build", None);
+        reviewed.reviewer_team_id = Some("team-qa".to_string());
+        let template = template(vec![reviewed, stage("send", None)]);
+
+        let plan = plan_fan_out(&request(&cohort, &template, &company, &teams, &[]))
+            .expect("a reviewer team that exists must plan");
+
+        let tasks: Vec<&CompanyTask> = plan
+            .task_actions
+            .iter()
+            .filter_map(|action| match &action.payload {
+                CompanyActionPayload::Task(task) => Some(task),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tasks.len(), 2);
+
+        let build = tasks
+            .iter()
+            .find(|task| task.stage.as_deref() == Some("build"))
+            .expect("build task");
+        assert_eq!(build.owning_team_id, "team-sales");
+        assert_eq!(build.reviewer_team_id.as_deref(), Some("team-qa"));
+        assert_eq!(build.qa_persona_id, "qa-lead");
+
+        // The unreviewed stage is untouched: no reviewer team, and QA stays
+        // the owning team's lead.
+        let send = tasks
+            .iter()
+            .find(|task| task.stage.as_deref() == Some("send"))
+            .expect("send task");
+        assert_eq!(send.reviewer_team_id, None);
+        assert_eq!(send.qa_persona_id, "sales-lead");
+    }
+
+    /// Caught while planning rather than on submission: the Tasks a plan
+    /// emits already carry the reviewer's lead as QA, so an unknown reviewer
+    /// team would otherwise surface as a contract rejection after an owner
+    /// had already approved the fan-out.
+    #[test]
+    fn a_stage_reviewer_team_that_does_not_exist_is_refused() {
+        let company = company();
+        let teams = teams();
+        let cohort = cohort(1);
+        let mut reviewed = stage("build", None);
+        reviewed.reviewer_team_id = Some("team-that-does-not-exist".to_string());
+        let template = template(vec![reviewed]);
+
+        let error = plan_fan_out(&request(&cohort, &template, &company, &teams, &[]))
+            .expect_err("an unknown reviewer team must be refused");
+        assert!(error.contains("reviewer team"), "{error}");
+        assert!(error.contains("team-that-does-not-exist"), "{error}");
     }
 }

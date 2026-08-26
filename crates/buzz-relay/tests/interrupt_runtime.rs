@@ -288,6 +288,7 @@ fn default_task(
         owning_team_id: "web-team".to_string(),
         assignee_persona_ids: vec!["builtin:content".to_string()],
         qa_persona_id: qa_persona_id.to_string(),
+        reviewer_team_id: None,
         cost_centre_id: "cc-1".to_string(),
         commercial_purpose: CommercialPurpose::Uncertain,
         client_organization_id: None,

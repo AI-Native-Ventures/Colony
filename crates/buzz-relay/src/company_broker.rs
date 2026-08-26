@@ -142,12 +142,23 @@ pub(crate) fn build_head(
                 scalar_tag("c", &task.company_id)?,
                 scalar_tag("company", &task.company_id)?,
                 scalar_tag("team", &task.owning_team_id)?,
-                // Mirror of `team`.
-                scalar_tag("g", &task.owning_team_id)?,
                 scalar_tag("cost-centre", &task.cost_centre_id)?,
                 // Mirror of the status in the signed content.
                 scalar_tag("w", &serialized_slug(&task.status)?)?,
             ];
+            // Team mirrors: `team` stays the scalar "who is accountable", `g`
+            // is the set of every team this task touches. They differ only
+            // when a reviewer team is named, and that is exactly the case
+            // where a reviewer asking "what needs my team?" would otherwise
+            // find nothing.
+            tags.push(scalar_tag("g", &task.owning_team_id)?);
+            if let Some(reviewer_team_id) = task
+                .reviewer_team_id
+                .as_deref()
+                .filter(|reviewer| *reviewer != task.owning_team_id)
+            {
+                tags.push(scalar_tag("g", reviewer_team_id)?);
+            }
             // One dependency edge per dependsOn entry. Repeated tags are how
             // "which tasks wait on X" becomes a single indexed filter instead
             // of a scan of every task head in the company.
@@ -1555,6 +1566,7 @@ mod tests {
             owning_team_id: "team-marketing".to_string(),
             assignee_persona_ids: vec!["builtin:content".to_string()],
             qa_persona_id: "builtin:marketing-lead".to_string(),
+            reviewer_team_id: None,
             cost_centre_id: "internal".to_string(),
             commercial_purpose: buzz_core::company::CommercialPurpose::Marketing,
             client_organization_id: Some("acme-corp".to_string()),
@@ -1649,6 +1661,43 @@ mod tests {
                 "mirror `{name}` must match the signed content"
             );
         }
+    }
+
+    /// A task naming a reviewer team carries both teams under `g` and only
+    /// the accountable one under `team`. Without the second mirror, a
+    /// reviewer asking `#g = my-team` finds nothing it owes a review on.
+    #[test]
+    fn a_reviewer_team_emits_a_second_team_mirror() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.reviewer_team_id = Some("team-qa".to_string());
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+
+        assert_eq!(tag_count(&head, "g"), 2);
+        let mut mirrors = scalar_tag_values(&head, "g");
+        mirrors.sort_unstable();
+        assert_eq!(mirrors, vec!["team-marketing", "team-qa"]);
+        // `team` stays the scalar "who is accountable" - the reviewer is not
+        // accountable for delivery and must not appear there.
+        assert_eq!(tag_count(&head, "team"), 1);
+        assert_eq!(scalar_tag_value(&head, "team"), Some("team-marketing"));
+        parse_task_event(&head).expect("a two-team mirror set must parse");
+    }
+
+    /// A reviewer team equal to the owning team says nothing the owning team
+    /// does not already say, and must not double the mirror: a duplicate `g`
+    /// is a set violation the strict parser refuses outright.
+    #[test]
+    fn a_reviewer_team_equal_to_the_owning_team_emits_one_mirror() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.reviewer_team_id = Some("team-marketing".to_string());
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+
+        assert_eq!(tag_count(&head, "g"), 1);
+        parse_task_event(&head).expect("a single mirror must parse");
     }
 
     /// One `v` tag per dependency entry: two edges on the content, two tags
@@ -1835,6 +1884,29 @@ mod tests {
             })
             .collect();
         let error = parse_task_event(&head).expect_err("lying edge must be refused");
+        assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// A `g` set that is present but incomplete is refused, not tolerated.
+    /// Absent mirrors are fine (heads predate them), but a head carrying
+    /// only the owning team's `g` while the record names a reviewer would
+    /// make `#g = reviewer-team` silently miss the reviews it owes - a
+    /// wrong answer from an index is worse than no index.
+    #[test]
+    fn a_partial_team_mirror_set_is_refused() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.reviewer_team_id = Some("team-qa".to_string());
+        let mut head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        assert_eq!(tag_count(&head, "g"), 2);
+        head.tags.retain(|tag| {
+            tag.as_slice().first().map(String::as_str) != Some("g")
+                || tag.as_slice()[1] == "team-marketing"
+        });
+        assert_eq!(tag_count(&head, "g"), 1);
+
+        let error = parse_task_event(&head).expect_err("a partial mirror set must be refused");
         assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
     }
 

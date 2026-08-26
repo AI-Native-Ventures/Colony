@@ -104,6 +104,13 @@ export function TaskThreadContext({
   const qaLabel =
     personasQuery.data?.find((persona) => persona.id === task.qaPersonaId)
       ?.displayName ?? task.qaPersonaId;
+  // Null when the owning team reviews its own work, which is the common
+  // case and says nothing "Accountable owner" has not already said.
+  const reviewerLabel =
+    task.reviewerTeamId === null
+      ? null
+      : (teamsQuery.data?.find((team) => team.id === task.reviewerTeamId)
+          ?.name ?? task.reviewerTeamId);
   const workerLabel = run?.leaseHolderPubkey
     ? (profiles?.[run.leaseHolderPubkey]?.displayName ??
       truncatePubkey(run.leaseHolderPubkey))
@@ -153,6 +160,7 @@ export function TaskThreadContext({
           execution={execution}
           ownerLabel={ownerLabel}
           qaLabel={qaLabel}
+          reviewerLabel={reviewerLabel}
           run={run}
           task={task}
           threadId={threadId}

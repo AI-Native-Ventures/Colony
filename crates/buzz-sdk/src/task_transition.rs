@@ -170,6 +170,7 @@ mod tests {
             owning_team_id: "company-team:abc:horizonlabs:sales".to_string(),
             assignee_persona_ids: vec!["company-role:abc:horizonlabs:sdr".to_string()],
             qa_persona_id: "company-role:abc:horizonlabs:sales-lead".to_string(),
+            reviewer_team_id: None,
             cost_centre_id: "cc-sales".to_string(),
             commercial_purpose: CommercialPurpose::Sales,
             client_organization_id: None,

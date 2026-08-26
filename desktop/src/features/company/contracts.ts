@@ -154,6 +154,8 @@ export type CompanyTask = {
   owningTeamId: string;
   assigneePersonaIds: string[];
   qaPersonaId: string;
+  /** Team that reviews this task, when the owning team does not review itself. */
+  reviewerTeamId: string | null;
   costCentreId: string;
   commercialPurpose: CommercialPurpose;
   clientOrganizationId: string | null;
@@ -409,6 +411,7 @@ const TASK_FIELDS: Record<string, FieldKind> = {
   owningTeamId: { type: "string" },
   assigneePersonaIds: { type: "stringArray" },
   qaPersonaId: { type: "string" },
+  reviewerTeamId: { type: "optionalString" },
   costCentreId: { type: "string" },
   commercialPurpose: { type: "enum", values: COMMERCIAL_PURPOSES },
   clientOrganizationId: { type: "optionalString" },

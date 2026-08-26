@@ -68,6 +68,7 @@ export function TaskDetailSheet({
   execution,
   ownerLabel,
   qaLabel,
+  reviewerLabel,
   run,
   task,
   threadId,
@@ -78,6 +79,8 @@ export function TaskDetailSheet({
   execution: TaskExecutionState;
   ownerLabel: string;
   qaLabel: string;
+  /** Reviewing team, when a team other than the owner holds the gate. */
+  reviewerLabel: string | null;
   run: TaskRunHead | null;
   task: CompanyTask;
   threadId: string;
@@ -102,6 +105,9 @@ export function TaskDetailSheet({
         <dl className="mt-5">
           <DetailRow label="Accountable owner" value={ownerLabel} />
           <DetailRow label="QA owner" value={qaLabel} />
+          {reviewerLabel === null ? null : (
+            <DetailRow label="Reviewing team" value={reviewerLabel} />
+          )}
           <DetailRow label="Task state" value={task.status} />
           <DetailRow label="Execution" value={execution.label} />
           <DetailRow

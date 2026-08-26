@@ -149,6 +149,7 @@ pub fn plan_implicit_task(
         owning_team_id: team.id.clone(),
         assignee_persona_ids: assignees,
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id,
         commercial_purpose,
         client_organization_id: client_organization_id

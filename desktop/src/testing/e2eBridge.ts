@@ -3391,6 +3391,7 @@ function mockTaskRecord(config: CompanyWorkContextConfig, title: string) {
     owningTeamId: config.owningTeamId,
     assigneePersonaIds: [],
     qaPersonaId: config.qaPersonaId,
+    reviewerTeamId: null,
     costCentreId: config.costCentreId,
     commercialPurpose: "administration",
     clientOrganizationId: null,

@@ -169,6 +169,7 @@ fn kickoff_action(
         // The lead reviews the team's work. It is always a member, which is
         // what the Task contract requires of a QA persona.
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id: initiative.cost_centre_id.clone(),
         commercial_purpose: initiative.commercial_purpose,
         client_organization_id: initiative.client_organization_id.clone(),

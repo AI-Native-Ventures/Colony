@@ -415,8 +415,8 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     require_head_tag_names(
         event,
         &["d", "company", "team", "cost-centre"],
-        &["c", "initiative", "client", "g", "i", "s", "u", "w"],
-        &["v"],
+        &["c", "initiative", "client", "i", "s", "u", "w"],
+        &["g", "v"],
         "task head",
     )?;
     let coordinate = required_scalar_tag(event, "d")?;
@@ -425,7 +425,6 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     let initiative_tag = optional_scalar_tag(event, "initiative")?;
     let cost_centre_tag = required_scalar_tag(event, "cost-centre")?;
     let client_tag = optional_scalar_tag(event, "client")?;
-    let team_mirror = optional_scalar_tag(event, "g")?;
     let initiative_mirror = optional_scalar_tag(event, "i")?;
     let stage_mirror = optional_scalar_tag(event, "s")?;
     let subject_mirror = optional_scalar_tag(event, "u")?;
@@ -438,7 +437,6 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     ensure_optional_matches(task.initiative_id.as_deref(), initiative_tag, "task")?;
     ensure_matches(&task.cost_centre_id, cost_centre_tag, "task")?;
     ensure_optional_matches(task.client_organization_id.as_deref(), client_tag, "task")?;
-    ensure_mirror_matches(Some(task.owning_team_id.clone()), team_mirror, "task")?;
     ensure_mirror_matches(task.initiative_id.clone(), initiative_mirror, "task")?;
     ensure_mirror_matches(task.stage.clone(), stage_mirror, "task")?;
     let subject_ref = task.subject.as_ref().and_then(|subject| {
@@ -447,6 +445,34 @@ pub fn parse_task_event(event: &Event) -> Result<CompanyTask, CompanySdkError> {
     });
     ensure_mirror_matches(subject_ref, subject_mirror, "task")?;
     ensure_mirror_matches(serde_enum_slug(&task.status), status_mirror, "task")?;
+    // Team mirrors are a set, not a scalar: a task with a `reviewerTeamId`
+    // touches two teams, and "which tasks touch my team" must find it under
+    // both. Same letter and same set shape a Template head already uses for
+    // the stage teams it names. Verified as a set for the same reason `v` is:
+    // a lying mirror would make that filter return heads the record does not
+    // warrant.
+    let team_mirrors: Vec<&str> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("g"))
+        .map(|tag| tag.as_slice()[1].as_str())
+        .collect();
+    let observed_team_mirrors: HashSet<&str> = team_mirrors.iter().copied().collect();
+    let expected_team_mirrors: HashSet<&str> = std::iter::once(task.owning_team_id.as_str())
+        .chain(task.reviewer_team_id.as_deref())
+        .collect();
+    // Absent entirely is tolerated, the same posture the scalar mirrors
+    // (`i`, `s`, `u`, `w`) already take: they are an index accelerator the
+    // relay always writes, not a field of the record. Present but partial is
+    // not tolerated - a head carrying only the owning team's `g` when the
+    // record names a reviewer would make "#g = my team" quietly miss the
+    // reviews that team owes.
+    if !team_mirrors.is_empty()
+        && (observed_team_mirrors.len() != team_mirrors.len()
+            || observed_team_mirrors != expected_team_mirrors)
+    {
+        return Err(CompanySdkError::TagContentMismatch("task"));
+    }
     // Dependency edges are a set mirror: exactly one `v` per dependsOn entry,
     // each naming an entry the content actually declares. A head whose edges
     // and list disagree would make "tasks waiting on X" return wrong answers.
@@ -1005,6 +1031,7 @@ fn validate_task_content(task: &CompanyTask) -> Result<(), CompanySdkError> {
     validate_required_text(&task.title, MAX_NAME_LEN, "task")?;
     validate_id(&task.owning_team_id, "task")?;
     validate_id(&task.qa_persona_id, "task")?;
+    validate_optional_id(task.reviewer_team_id.as_deref(), "task")?;
     validate_id(&task.cost_centre_id, "task")?;
     validate_optional_id(task.client_organization_id.as_deref(), "task")?;
     validate_id(&task.source_channel_id, "task")?;
@@ -1248,6 +1275,7 @@ mod tests {
             owning_team_id: "engineering-team".to_owned(),
             assignee_persona_ids: vec!["frontend-engineer".to_owned()],
             qa_persona_id: "cto".to_owned(),
+            reviewer_team_id: None,
             cost_centre_id: "web-delivery".to_owned(),
             commercial_purpose: CommercialPurpose::ClientDelivery,
             client_organization_id: Some("tennant-group".to_owned()),

@@ -342,6 +342,7 @@ fn chat_task(company_id: &str, id: &str, team: &CompanyTeamRef, stamp: i64) -> C
         owning_team_id: team.id.clone(),
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id: "cc-coordination".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
         client_organization_id: None,

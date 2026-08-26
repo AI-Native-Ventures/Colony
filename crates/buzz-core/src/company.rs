@@ -337,6 +337,17 @@ pub struct CompanyTask {
     pub assignee_persona_ids: Vec<String>,
     /// Persona responsible for quality review.
     pub qa_persona_id: String,
+    /// Team that reviews this task's output, when review is not the owning
+    /// team's own job. `None` means the owning team reviews itself, which is
+    /// the only thing this contract could express before this field existed.
+    ///
+    /// Accountability is unchanged: `owning_team_id` still names the single
+    /// team accountable for delivery. This names who holds the gate in front
+    /// of it, which is a different question — a pipeline stage that declares
+    /// a `reviewerTeamId` is saying exactly that the team doing the work
+    /// must not be the team that signs it off.
+    #[serde(default)]
+    pub reviewer_team_id: Option<String>,
     /// Company cost centre charged for the task.
     pub cost_centre_id: String,
     /// Commercial reason for the task.
@@ -597,9 +608,15 @@ pub enum CompanyContractError {
     /// The owning team's lead is not included in that team.
     #[error("owning team lead must be a team member")]
     TeamLeadNotMember,
-    /// The task QA persona is not included in the owning team.
+    /// The task QA persona is not included in the owning team, on a task
+    /// that names no separate reviewer team.
     #[error("task QA persona must be an owning-team member")]
     QaNotOwningTeamMember,
+    /// The task QA persona is not included in the reviewer team the task
+    /// names. Distinct from [`Self::QaNotOwningTeamMember`] so the message
+    /// names the team an operator should actually go and look at.
+    #[error("task QA persona must be a member of the reviewer team")]
+    QaNotReviewerTeamMember,
     /// A task lists one assignee more than once.
     #[error("task assignee persona identifiers must be unique")]
     DuplicateAssignee,
@@ -1129,8 +1146,30 @@ pub fn validate_task(
         .iter()
         .find(|team| team.id == task.owning_team_id)
         .ok_or(CompanyContractError::MissingReference("task.owningTeamId"))?;
-    if !owning_team.persona_ids.contains(&task.qa_persona_id) {
-        return Err(CompanyContractError::QaNotOwningTeamMember);
+    // QA must belong to whichever team actually reviews. The rule was never
+    // "QA is an owning-team member" for its own sake — it is "QA is someone
+    // in the pool that holds the gate", and before `reviewerTeamId` existed
+    // those were necessarily the same team. Checking the reviewer team when
+    // one is named keeps the real invariant and stops a cross-team review
+    // from being unexpressible, rather than dropping the check to allow it.
+    match task.reviewer_team_id.as_deref() {
+        Some(reviewer_team_id) => {
+            validate_id(reviewer_team_id, "task.reviewerTeamId")?;
+            let reviewer_team = teams
+                .iter()
+                .find(|team| team.id == reviewer_team_id)
+                .ok_or(CompanyContractError::MissingReference(
+                    "task.reviewerTeamId",
+                ))?;
+            if !reviewer_team.persona_ids.contains(&task.qa_persona_id) {
+                return Err(CompanyContractError::QaNotReviewerTeamMember);
+            }
+        }
+        None => {
+            if !owning_team.persona_ids.contains(&task.qa_persona_id) {
+                return Err(CompanyContractError::QaNotOwningTeamMember);
+            }
+        }
     }
 
     let mut assignees = HashSet::new();
@@ -1753,6 +1792,7 @@ mod tests {
                     "content-specialist".to_string(),
                 ],
                 qa_persona_id: "cto".to_string(),
+                reviewer_team_id: None,
                 cost_centre_id: "web-delivery".to_string(),
                 commercial_purpose: CommercialPurpose::ClientDelivery,
                 client_organization_id: Some("tennant-group".to_string()),
@@ -1784,6 +1824,7 @@ mod tests {
                 owning_team_id: "marketing-team".to_string(),
                 assignee_persona_ids: vec!["content-specialist".to_string()],
                 qa_persona_id: "marketing-lead".to_string(),
+                reviewer_team_id: None,
                 cost_centre_id: "web-delivery".to_string(),
                 commercial_purpose: CommercialPurpose::ClientDelivery,
                 client_organization_id: Some("tennant-group".to_string()),
@@ -2016,6 +2057,63 @@ mod tests {
             .assignee_persona_ids
             .push("frontend-engineer".to_string());
         assert!(validate_task(&duplicate_assignee, &company, Some(&initiative), &teams).is_err());
+    }
+
+    /// `marketing-lead` belongs to `marketing-team` and not to `web-team`,
+    /// so before `reviewerTeamId` existed this exact task was rejected as
+    /// `QaNotOwningTeamMember` - a cross-team review gate was unexpressible.
+    /// Naming the reviewer team makes the same QA persona legitimate,
+    /// because the invariant was always "QA belongs to the team that holds
+    /// the gate", not "QA belongs to the team doing the work".
+    #[test]
+    fn a_qa_persona_from_a_named_reviewer_team_is_accepted() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let mut task = task_fixtures().remove(0);
+        task.qa_persona_id = "marketing-lead".to_string();
+
+        assert!(matches!(
+            validate_task(&task, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::QaNotOwningTeamMember)
+        ));
+
+        task.reviewer_team_id = Some("marketing-team".to_string());
+        validate_task(&task, &company, Some(&initiative), &teams)
+            .expect("a reviewer-team QA persona must be accepted");
+    }
+
+    /// Naming a reviewer team must not become a way to escape the check
+    /// altogether: QA still has to be a member of the team it names.
+    #[test]
+    fn a_qa_persona_in_neither_team_is_still_refused_with_a_reviewer_team() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let mut task = task_fixtures().remove(0);
+        task.reviewer_team_id = Some("marketing-team".to_string());
+        task.qa_persona_id = "cto".to_string();
+
+        assert!(matches!(
+            validate_task(&task, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::QaNotReviewerTeamMember)
+        ));
+    }
+
+    #[test]
+    fn a_reviewer_team_that_does_not_exist_is_refused() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let mut task = task_fixtures().remove(0);
+        task.reviewer_team_id = Some("no-such-team".to_string());
+
+        assert!(matches!(
+            validate_task(&task, &company, Some(&initiative), &teams),
+            Err(CompanyContractError::MissingReference(
+                "task.reviewerTeamId"
+            ))
+        ));
     }
 
     #[test]

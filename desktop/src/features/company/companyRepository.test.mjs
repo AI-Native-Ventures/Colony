@@ -79,6 +79,7 @@ const TASK = {
   owningTeamId: "relay1:horizonlabs:sales",
   assigneePersonaIds: ["relay1:horizonlabs:sales-lead"],
   qaPersonaId: "relay1:horizonlabs:sales-lead",
+  reviewerTeamId: null,
   costCentreId: "cc-internal",
   commercialPurpose: "sales",
   clientOrganizationId: null,
