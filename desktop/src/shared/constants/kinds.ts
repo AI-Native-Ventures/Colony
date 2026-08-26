@@ -89,6 +89,9 @@ export const KIND_MANAGED_AGENT = 30177;
 export const KIND_COMPANY_PROFILE = 30179;
 export const KIND_INITIATIVE = 30180;
 export const KIND_TASK = 30181;
+/** A named, bounded set of typed SubjectRef members. Inert data: no lifecycle
+ * status, nothing consumes it yet. Mirror of buzz-core's KIND_COHORT. */
+export const KIND_COHORT = 30201;
 /** Colony interrupt Ask (NIP-IQ). Filed by an agent, addressed to one tier up. */
 export const KIND_ASK = 44300;
 /** Resolution of an open ask: the answer that closes it. */

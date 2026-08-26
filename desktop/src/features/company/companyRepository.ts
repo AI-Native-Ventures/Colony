@@ -3,12 +3,14 @@ import { relayClient } from "@/shared/api/relayClient";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
 import {
+  KIND_COHORT,
   KIND_COMPANY_PROFILE,
   KIND_INITIATIVE,
   KIND_TASK,
 } from "@/shared/constants/kinds";
 
 import type {
+  Cohort,
   CompanyParseResult,
   CompanyProfile,
   CompanyTask,
@@ -21,6 +23,7 @@ import {
   isTerminalTaskStatus,
   newestHead,
   normalizeHex,
+  parseCohortHead,
   parseCompanyHead,
   parseInitiativeHead,
   parseTaskHead,
@@ -373,6 +376,26 @@ export function createCompanyRepository(
                   normalizeHex(query.threadRoot),
             )
             .sort(threadHistoryOrder),
+        }),
+      );
+    },
+
+    /** Cohorts are inert data: no status narrow, sorted by id like initiatives. */
+    async listCohorts(
+      companyId: string,
+    ): Promise<CompanyParseResult<Cohort[]>> {
+      return read<Cohort[]>(
+        (relaySelfPubkey) => ({
+          kinds: [KIND_COHORT],
+          authors: [relaySelfPubkey],
+          "#c": [companyId],
+          limit: MAX_RECORDS,
+        }),
+        (events, relaySelfPubkey) => ({
+          ok: true,
+          value: collectHeads(events, relaySelfPubkey, parseCohortHead)
+            .filter((cohort) => cohort.companyId === companyId)
+            .sort((left, right) => left.id.localeCompare(right.id)),
         }),
       );
     },

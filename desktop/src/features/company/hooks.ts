@@ -31,6 +31,10 @@ export function initiativeQueryKey(communityId: string, initiativeId: string) {
   return [COMPANY_ROOT, communityId, "initiative", initiativeId] as const;
 }
 
+export function cohortsQueryKey(communityId: string, companyId: string) {
+  return [COMPANY_ROOT, communityId, "cohorts", companyId] as const;
+}
+
 export function tasksQueryKey(communityId: string, scope: TaskQuery) {
   return [
     COMPANY_ROOT,
@@ -119,6 +123,23 @@ export function useInitiative(
       ),
     enabled: enabled && communityId !== "" && !!initiativeId,
     staleTime: 15_000,
+  });
+}
+
+/** Cohorts are inert data: one read, no live-status refetch pressure. */
+export function useCohorts(
+  communityId: string,
+  companyId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: cohortsQueryKey(communityId, companyId ?? ""),
+    queryFn: async () =>
+      requireAvailable(
+        await companyRepository.listCohorts(companyId as string),
+      ),
+    enabled: enabled && communityId !== "" && !!companyId,
+    staleTime: 30_000,
   });
 }
 

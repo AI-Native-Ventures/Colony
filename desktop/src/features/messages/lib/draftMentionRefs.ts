@@ -112,8 +112,18 @@ export type BlockMentionReference = {
   manifestId: string;
 };
 
+export type CohortMentionReference = {
+  cohortAddress: string;
+};
+
 const BLOCK_ADDRESS_RE = /^30178:[0-9a-f]{64}:[a-z][a-z0-9-]{0,63}$/;
 const EVENT_ID_RE = /^[0-9a-f]{64}$/;
+// Cohort ids follow buzz-core's generic `validate_id` charset (not a slug
+// like a block handle): lowercase alnum plus `. _ : -`, up to MAX_ID_LEN 128.
+// Unlike a block handle, a cohort's d-tag is not required to equal its
+// display name (that invariant is `name`, a separate field), so
+// `normalizeCohortReference` below checks structural shape only.
+const COHORT_ADDRESS_RE = /^30201:[0-9a-f]{64}:[a-z0-9][a-z0-9._:-]{0,127}$/;
 
 function normalizeMentionName(displayName: string): string {
   return displayName.trim().toLowerCase();
@@ -149,35 +159,56 @@ function normalizeBlockReference(
   return { displayName: normalizedName, blockAddress, manifestId };
 }
 
+function normalizeCohortReference(
+  displayName: string,
+  reference: CohortMentionReference,
+): DraftMentionRef | null {
+  const normalizedName = normalizeMentionName(displayName);
+  const cohortAddress = reference.cohortAddress.trim().toLowerCase();
+  if (!normalizedName || !COHORT_ADDRESS_RE.test(cohortAddress)) {
+    return null;
+  }
+  return { displayName: normalizedName, cohortAddress };
+}
+
 export function snapshotDraftMentionRefs(
   content: string,
   mentions: ReadonlyMap<string, string>,
   selectedAgentNames: readonly string[],
   blockMentions: ReadonlyMap<string, BlockMentionReference> = new Map(),
+  cohortMentions: ReadonlyMap<string, CohortMentionReference> = new Map(),
 ): DraftMentionRef[] {
   const agentNames = new Set(selectedAgentNames.map(normalizeMentionName));
-  const blockRefs: DraftMentionRef[] = [];
-  const blockOwnedNames = new Set<string>();
+  const entityRefs: DraftMentionRef[] = [];
+  const entityOwnedNames = new Set<string>();
   for (const [displayName, reference] of blockMentions) {
     if (!hasMention(content, displayName)) continue;
     const normalized = normalizeBlockReference(displayName, reference);
     if (normalized) {
-      blockRefs.push(normalized);
-      blockOwnedNames.add(normalizeMentionName(normalized.displayName));
+      entityRefs.push(normalized);
+      entityOwnedNames.add(normalizeMentionName(normalized.displayName));
+    }
+  }
+  for (const [displayName, reference] of cohortMentions) {
+    if (!hasMention(content, displayName)) continue;
+    const normalized = normalizeCohortReference(displayName, reference);
+    if (normalized) {
+      entityRefs.push(normalized);
+      entityOwnedNames.add(normalizeMentionName(normalized.displayName));
     }
   }
   const actorRefs: DraftMentionRef[] = [...mentions.entries()]
     .filter(
       ([displayName]) =>
         hasMention(content, displayName) &&
-        !blockOwnedNames.has(normalizeMentionName(displayName)),
+        !entityOwnedNames.has(normalizeMentionName(displayName)),
     )
     .map(([displayName, pubkey]) => ({
       displayName,
       pubkey: normalizePubkey(pubkey),
       isAgent: agentNames.has(normalizeMentionName(displayName)),
     }));
-  return [...actorRefs, ...blockRefs];
+  return [...actorRefs, ...entityRefs];
 }
 
 function normalizeDraftMentionRefs(
@@ -188,6 +219,11 @@ function normalizeDraftMentionRefs(
     if ("blockAddress" in ref) {
       const blockRef = normalizeBlockReference(ref.displayName, ref);
       if (blockRef) normalized.push(blockRef);
+      continue;
+    }
+    if ("cohortAddress" in ref) {
+      const cohortRef = normalizeCohortReference(ref.displayName, ref);
+      if (cohortRef) normalized.push(cohortRef);
       continue;
     }
     const displayName = ref.displayName.trim();
@@ -204,10 +240,12 @@ export function replaceWithDraftMentionRefs(
   mentions: Map<string, string>,
   personaMentions: Map<string, string>,
   blockMentions: Map<string, BlockMentionReference> = new Map(),
+  cohortMentions: Map<string, CohortMentionReference> = new Map(),
 ): { names: string[]; agentNames: string[] } {
   mentions.clear();
   personaMentions.clear();
   blockMentions.clear();
+  cohortMentions.clear();
   const normalized = normalizeDraftMentionRefs(refs);
   const winningRefs = new Map<string, DraftMentionRef>();
   for (const ref of normalized) {
@@ -218,6 +256,10 @@ export function replaceWithDraftMentionRefs(
       blockMentions.set(ref.displayName, {
         blockAddress: ref.blockAddress,
         manifestId: ref.manifestId,
+      });
+    } else if ("cohortAddress" in ref) {
+      cohortMentions.set(ref.displayName, {
+        cohortAddress: ref.cohortAddress,
       });
     } else {
       mentions.set(ref.displayName, ref.pubkey);
@@ -242,27 +284,36 @@ export function extractTypedActorPubkeys(
   candidates: readonly ActorMentionCandidate[],
   blockMentions: ReadonlyMap<string, BlockMentionReference>,
   reservedActorNames: Iterable<string> = [],
+  cohortMentions: ReadonlyMap<string, CohortMentionReference> = new Map(),
 ): string[] {
-  const blockOwnedNames = new Set<string>();
+  const entityOwnedNames = new Set<string>();
   for (const [displayName, reference] of blockMentions) {
     if (
       hasMention(content, displayName) &&
       normalizeBlockReference(displayName, reference)
     ) {
-      blockOwnedNames.add(normalizeMentionName(displayName));
+      entityOwnedNames.add(normalizeMentionName(displayName));
+    }
+  }
+  for (const [displayName, reference] of cohortMentions) {
+    if (
+      hasMention(content, displayName) &&
+      normalizeCohortReference(displayName, reference)
+    ) {
+      entityOwnedNames.add(normalizeMentionName(displayName));
     }
   }
   const selectedDisplayNames = new Set(
     [...mentions.keys(), ...reservedActorNames].map(normalizeMentionName),
   );
-  for (const blockName of blockOwnedNames) {
-    selectedDisplayNames.add(blockName);
+  for (const entityName of entityOwnedNames) {
+    selectedDisplayNames.add(entityName);
   }
 
   const pubkeys: string[] = [];
   for (const [displayName, pubkey] of mentions) {
     if (
-      !blockOwnedNames.has(normalizeMentionName(displayName)) &&
+      !entityOwnedNames.has(normalizeMentionName(displayName)) &&
       hasMention(content, displayName)
     ) {
       pubkeys.push(pubkey);
@@ -305,13 +356,45 @@ export function extractBlockReferenceTags(
   return tags;
 }
 
+/**
+ * A cohort mention writes the same `["a", coordinate, "", <kind>]` shape as a
+ * block mention (the standard NIP-01 addressable-event reference, marked with
+ * a 4th-element entity kind) — adding a third entity kind here is one more
+ * `extractXReferenceTags` call, not a new wire format.
+ */
+export function extractCohortReferenceTags(
+  content: string,
+  cohortMentions: ReadonlyMap<string, CohortMentionReference>,
+): string[][] {
+  const seen = new Set<string>();
+  const tags: string[][] = [];
+  for (const [displayName, reference] of cohortMentions) {
+    if (!hasMention(content, displayName)) continue;
+    const normalized = normalizeCohortReference(displayName, reference);
+    if (
+      !normalized ||
+      !("cohortAddress" in normalized) ||
+      seen.has(normalized.cohortAddress)
+    ) {
+      continue;
+    }
+    seen.add(normalized.cohortAddress);
+    tags.push(["a", normalized.cohortAddress, "", "cohort"]);
+  }
+  return tags;
+}
+
 export function routeTypedMentionReferences(
   content: string,
   actorPubkeys: readonly string[],
   blockMentions: ReadonlyMap<string, BlockMentionReference>,
+  cohortMentions: ReadonlyMap<string, CohortMentionReference> = new Map(),
 ): { actorPubkeys: string[]; referenceTags: string[][] } {
   return {
     actorPubkeys: [...actorPubkeys],
-    referenceTags: extractBlockReferenceTags(content, blockMentions),
+    referenceTags: [
+      ...extractBlockReferenceTags(content, blockMentions),
+      ...extractCohortReferenceTags(content, cohortMentions),
+    ],
   };
 }

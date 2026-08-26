@@ -2,6 +2,7 @@ import { verifyEvent } from "nostr-tools/pure";
 
 import type { RelayEvent } from "@/shared/api/types";
 import {
+  KIND_COHORT,
   KIND_COMPANY_PROFILE,
   KIND_INITIATIVE,
   KIND_TASK,
@@ -21,6 +22,7 @@ import {
 export const COMPANY_SCHEMA = "colony.company/v1";
 export const INITIATIVE_SCHEMA = "colony.initiative/v1";
 export const TASK_SCHEMA = "colony.task/v1";
+export const COHORT_SCHEMA = "colony.cohort/v1";
 export const COMPANY_RECEIPT_SCHEMA = "colony.company-receipt/v1";
 
 export const COMMERCIAL_PURPOSES = [
@@ -164,6 +166,17 @@ export type CompanyTask = {
   threadRoot: string | null;
   doerKind: DoerKind;
   wakeAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** Inert data, no lifecycle: mirror of buzz-core's `Cohort`. */
+export type Cohort = {
+  schema: string;
+  id: string;
+  companyId: string;
+  name: string;
+  members: SubjectRef[];
   createdAt: number;
   updatedAt: number;
 };
@@ -376,6 +389,16 @@ const SUBJECT_REF_FIELDS: Record<string, FieldKind> = {
   ref: { type: "string" },
 };
 
+const COHORT_FIELDS: Record<string, FieldKind> = {
+  schema: { type: "string" },
+  id: { type: "string" },
+  companyId: { type: "string" },
+  name: { type: "string" },
+  members: { type: "objectArray", fields: SUBJECT_REF_FIELDS },
+  createdAt: { type: "integer" },
+  updatedAt: { type: "integer" },
+};
+
 const TASK_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
@@ -559,6 +582,42 @@ export function parseTaskHead(
     );
   }
   return { ok: true, value: task };
+}
+
+export function parseCohortHead(
+  event: RelayEvent,
+  relaySelfPubkey: string,
+): CompanyParseResult<Cohort> {
+  const head = readHead(event, relaySelfPubkey, KIND_COHORT);
+  if (!head.ok) return head;
+  const record = head.value;
+  if (!matchesShape(record, COHORT_FIELDS)) {
+    return companyFailure("invalid-record", "cohort record shape is invalid");
+  }
+  const cohort = record as unknown as Cohort;
+  if (cohort.schema !== COHORT_SCHEMA) {
+    return companyFailure("invalid-record", "unsupported cohort schema");
+  }
+  // The `m` mirror is one tag per member, so it is checked as a set against
+  // the content rather than with `exactlyOneTag`: a relay-authored head must
+  // carry exactly the mirrors its members imply, no more and no fewer.
+  const memberMirrors = [...scalarTags(event, "m")].sort();
+  const expectedMirrors = cohort.members
+    .map((member) => `${member.kind}:${member.ref}`)
+    .sort();
+  if (
+    exactlyOneTag(event, "d") !== cohort.id ||
+    exactlyOneTag(event, "c") !== cohort.companyId ||
+    exactlyOneTag(event, "company") !== cohort.companyId ||
+    memberMirrors.length !== expectedMirrors.length ||
+    memberMirrors.some((value, index) => value !== expectedMirrors[index])
+  ) {
+    return companyFailure(
+      "invalid-head",
+      "cohort head tags do not match its content",
+    );
+  }
+  return { ok: true, value: cohort };
 }
 
 /**

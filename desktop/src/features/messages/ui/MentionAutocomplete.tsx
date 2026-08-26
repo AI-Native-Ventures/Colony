@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Blocks, Bot, Users } from "lucide-react";
+import { Blocks, Bot, Layers, Users } from "lucide-react";
 import type { TeamMentionMember } from "@/features/messages/lib/mentionCandidates";
 
 import { Badge } from "@/shared/ui/badge";
@@ -21,7 +21,9 @@ export type MentionSuggestion = {
   blockHandle?: string;
   blockAddress?: string;
   manifestId?: string;
-  kind?: "identity" | "persona" | "team" | "block";
+  cohortId?: string;
+  cohortAddress?: string;
+  kind?: "identity" | "persona" | "team" | "block" | "cohort";
   /** The token inserted into the draft and used to key the mention maps. */
   displayName: string;
   /** The alias not being inserted (role title, or personal name for a role match). */
@@ -105,6 +107,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
         {suggestions.map((suggestion, index) => {
           const suggestionKey =
             suggestion.blockAddress ??
+            suggestion.cohortAddress ??
             suggestion.pubkey ??
             (suggestion.personaId ? `persona-${suggestion.personaId}` : null) ??
             (suggestion.teamId ? `team-${suggestion.teamId}` : null) ??
@@ -142,6 +145,14 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                     data-testid="mention-block-icon"
                   />
                 </span>
+              ) : suggestion.kind === "cohort" ? (
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Layers
+                    aria-hidden="true"
+                    className="h-4 w-4"
+                    data-testid="mention-cohort-icon"
+                  />
+                </span>
               ) : suggestion.kind === "team" ? (
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <Users aria-hidden="true" className="h-4 w-4" />
@@ -162,6 +173,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                   {suggestion.displayName}
                 </span>
                 {suggestion.kind === "block" ||
+                suggestion.kind === "cohort" ||
                 suggestion.kind === "team" ||
                 suggestion.isAgent ||
                 suggestion.role ||
@@ -180,6 +192,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                       <span className="inline-flex shrink-0 items-center gap-1">
                         <Blocks aria-hidden="true" className="h-3.5 w-3.5" />
                         Block
+                      </span>
+                    ) : suggestion.kind === "cohort" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1">
+                        <Layers aria-hidden="true" className="h-3.5 w-3.5" />
+                        Cohort
                       </span>
                     ) : suggestion.kind === "team" ? (
                       <span className="inline-flex shrink-0 items-center gap-1">

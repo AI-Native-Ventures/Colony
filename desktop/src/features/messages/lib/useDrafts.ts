@@ -52,7 +52,15 @@ export type DraftBlockMentionRef = {
   manifestId: string;
 };
 
-export type DraftMentionRef = DraftActorMentionRef | DraftBlockMentionRef;
+export type DraftCohortMentionRef = {
+  displayName: string;
+  cohortAddress: string;
+};
+
+export type DraftMentionRef =
+  | DraftActorMentionRef
+  | DraftBlockMentionRef
+  | DraftCohortMentionRef;
 
 export type DraftState = {
   content: string;
@@ -253,6 +261,9 @@ function isValidDraftState(v: unknown): v is DraftState {
 
 const BLOCK_ADDRESS_RE = /^30178:[0-9a-f]{64}:[a-z][a-z0-9-]{0,63}$/;
 const EVENT_ID_RE = /^[0-9a-f]{64}$/;
+// Cohort ids follow buzz-core's generic `validate_id` charset (not a slug
+// like a block handle): lowercase alnum plus `. _ : -`, up to MAX_ID_LEN 128.
+const COHORT_ADDRESS_RE = /^30201:[0-9a-f]{64}:[a-z0-9][a-z0-9._:-]{0,127}$/;
 
 function isInvalidRef(ref: unknown): boolean {
   if (
@@ -273,13 +284,20 @@ function isInvalidRef(ref: unknown): boolean {
       typeof ref.isAgent !== "boolean"
     );
   }
+  if ("blockAddress" in ref || "manifestId" in ref) {
+    return (
+      !("blockAddress" in ref) ||
+      typeof ref.blockAddress !== "string" ||
+      !BLOCK_ADDRESS_RE.test(ref.blockAddress) ||
+      !("manifestId" in ref) ||
+      typeof ref.manifestId !== "string" ||
+      !EVENT_ID_RE.test(ref.manifestId)
+    );
+  }
   return (
-    !("blockAddress" in ref) ||
-    typeof ref.blockAddress !== "string" ||
-    !BLOCK_ADDRESS_RE.test(ref.blockAddress) ||
-    !("manifestId" in ref) ||
-    typeof ref.manifestId !== "string" ||
-    !EVENT_ID_RE.test(ref.manifestId)
+    !("cohortAddress" in ref) ||
+    typeof ref.cohortAddress !== "string" ||
+    !COHORT_ADDRESS_RE.test(ref.cohortAddress)
   );
 }
 
@@ -400,10 +418,17 @@ function draftStatesEqual(a: DraftState, b: DraftState): boolean {
       ) {
         return false;
       }
+    } else if ("blockAddress" in ar) {
+      if (
+        !("blockAddress" in br) ||
+        ar.blockAddress !== br.blockAddress ||
+        ar.manifestId !== br.manifestId
+      ) {
+        return false;
+      }
     } else if (
-      "pubkey" in br ||
-      ar.blockAddress !== br.blockAddress ||
-      ar.manifestId !== br.manifestId
+      !("cohortAddress" in br) ||
+      ar.cohortAddress !== br.cohortAddress
     ) {
       return false;
     }

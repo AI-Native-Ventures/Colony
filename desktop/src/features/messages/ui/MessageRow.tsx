@@ -44,7 +44,7 @@ import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
 import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
-import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
+import { useMessageMentionNames } from "@/features/messages/lib/useMessageMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
@@ -243,9 +243,9 @@ export const MessageRow = React.memo(
       },
       [currentPubkey, onSendToChannel, profiles],
     );
-    const { mentionNames, mentionPubkeysByName } = React.useMemo(
-      () => resolveMentionProps(message.tags, profiles),
-      [profiles, message.tags],
+    const { mentionNames, mentionPubkeysByName } = useMessageMentionNames(
+      message.tags,
+      profiles,
     );
     // "Is this pubkey an agent" = the community-scoped baseline every surface
     // shares (managed ∪ relay) plus the pubkey's own profile `isAgent` flag from this surface's lookup. Both are per-pubkey

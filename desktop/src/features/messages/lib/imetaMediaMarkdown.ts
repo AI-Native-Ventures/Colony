@@ -350,10 +350,10 @@ export function mergeOutgoingTags(
 /**
  * Inverse of `mergeOutgoingTags`: split a merged outgoing tag set back into
  * imeta media tags, NIP-30 `["emoji", ...]` tags, reference-only mention tags,
- * link-preview snapshot tags (`["link-preview", ...]`), and typed Block
- * address tags, so the send path can route each to its own validated Tauri
- * arg. Any other prefix stays with `mediaTags`; the imeta guard will reject
- * it, which is the intended injection defense.
+ * link-preview snapshot tags (`["link-preview", ...]`), and typed addressable
+ * entity reference tags (Block, Cohort, ...), so the send path can route each
+ * to its own validated Tauri arg. Any other prefix stays with `mediaTags`;
+ * the imeta guard will reject it, which is the intended injection defense.
  */
 export function splitOutgoingTags(tags: string[][] | undefined): {
   mediaTags: string[][];
@@ -374,7 +374,7 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
       mentionTags.push(tag);
     } else if (tag[0] === "link-preview") {
       linkPreviewTags.push(tag);
-    } else if (tag[0] === "a" && tag[3] === "block") {
+    } else if (tag[0] === "a" && (tag[3] === "block" || tag[3] === "cohort")) {
       referenceTags.push(tag);
     } else {
       mediaTags.push(tag);
