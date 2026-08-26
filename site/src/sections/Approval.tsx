@@ -4,18 +4,18 @@
 // fixture addresses and a raw epoch expiry, which read as debug output.
 export function Approval() {
   return (
-    <section className="bg-white px-6 py-20 sm:px-10 sm:py-28 lg:px-24">
+    <section className="bg-colony-ink px-6 py-20 text-white sm:px-10 sm:py-28 lg:px-24">
       <div className="mx-auto grid max-w-6xl items-center gap-12 xl:grid-cols-[minmax(0,440px)_minmax(0,1fr)] xl:gap-16">
         <div>
-          <h2 className="text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-5xl lg:text-[60px]">
+          <h2 className="text-4xl font-bold leading-[0.98] tracking-[-0.04em] sm:text-5xl lg:text-[60px]">
             Nothing goes out in your name unread.
           </h2>
-          <p className="mt-6 max-w-[28ch] text-xl leading-snug text-colony-ink/80 sm:text-2xl">
+          <p className="mt-6 max-w-[28ch] text-xl leading-snug text-white/80 sm:text-2xl">
             The address, the exact words, two buttons.
           </p>
         </div>
 
-        <div className="border border-colony-ink/15 px-7 py-7 sm:px-8">
+        <div className="bg-white px-7 py-7 text-colony-ink sm:px-8">
           <div className="flex items-baseline justify-between gap-4">
             <p className="text-lg font-bold tracking-[-0.02em] text-colony-ink sm:text-xl">
               Approve before this sends

@@ -21,7 +21,7 @@ function Split({
   image,
   alt,
   flip = false,
-  tone = "canvas",
+  tone = "white",
 }: {
   label: string;
   heading: ReactNode;
@@ -29,21 +29,29 @@ function Split({
   image: string;
   alt: string;
   flip?: boolean;
-  tone?: "canvas" | "white";
+  tone?: "white" | "ink";
 }) {
   const copy = (
     <div className={flip ? "xl:order-2" : undefined}>
       <p
         className={`text-xs font-semibold uppercase tracking-[0.2em] sm:text-[13px] ${
-          tone === "white" ? "text-colony-ink/70" : "text-colony-ink/85"
+          tone === "ink" ? "text-white/70" : "text-colony-ink/70"
         }`}
       >
         {label}
       </p>
-      <h2 className="mt-4 text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-5xl lg:text-[68px]">
+      <h2
+        className={`mt-4 text-4xl font-bold leading-[0.98] tracking-[-0.04em] sm:text-5xl lg:text-[68px] ${
+          tone === "ink" ? "text-white" : "text-colony-ink"
+        }`}
+      >
         {heading}
       </h2>
-      <p className="mt-6 max-w-[26ch] text-xl leading-snug text-colony-ink/85 sm:text-2xl">
+      <p
+        className={`mt-6 max-w-[26ch] text-xl leading-snug sm:text-2xl ${
+          tone === "ink" ? "text-white/80" : "text-colony-ink/85"
+        }`}
+      >
         {body}
       </p>
     </div>
@@ -52,7 +60,7 @@ function Split({
   return (
     <section
       className={`overflow-hidden px-6 py-16 sm:px-10 sm:py-24 lg:py-26 ${
-        tone === "white" ? "bg-white" : "bg-colony-canvas"
+        tone === "ink" ? "bg-colony-ink" : "bg-white"
       } ${flip ? "xl:pl-0 xl:pr-24" : "xl:pl-24 xl:pr-0"}`}
     >
       <div
@@ -70,7 +78,9 @@ function Split({
             src={image}
             alt={alt}
             loading="lazy"
-            className="block w-full max-w-none shrink-0 xl:w-[900px]"
+            className={`block w-full max-w-none shrink-0 xl:w-[900px] ${
+              tone === "ink" ? "" : "ring-1 ring-colony-ink/10"
+            }`}
           />
         </div>
       </div>
@@ -93,7 +103,7 @@ export function SameRoom() {
 export function FindCustomers() {
   return (
     <Split
-      tone="white"
+      tone="ink"
       flip
       label="Finding customers"
       heading={<>Tell it who buys from you. It goes and finds them.</>}
@@ -119,6 +129,7 @@ export function Pipeline() {
 export function WorkDelivered() {
   return (
     <Split
+      tone="ink"
       label="When it's finished"
       heading={<>Work arrives finished, not promised.</>}
       body="Pages, posts, shortlists. Done, in the thread."

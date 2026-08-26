@@ -13,7 +13,7 @@ const ROWS = [
 
 export function TheRest() {
   return (
-    <section className="overflow-hidden bg-colony-canvas px-6 pt-16 sm:px-10 sm:pt-24 xl:pl-24 xl:pr-0">
+    <section className="overflow-hidden bg-white px-6 pt-16 sm:px-10 sm:pt-24 xl:pl-24 xl:pr-0">
       <div className="mx-auto grid max-w-[1440px] items-end gap-12 xl:grid-cols-[minmax(0,1fr)_520px] xl:gap-16">
         <div className="pb-16 sm:pb-24">
           <h2 className="max-w-[16ch] text-4xl font-bold leading-[0.98] tracking-[-0.04em] text-colony-ink sm:text-6xl lg:text-[68px]">
@@ -23,14 +23,14 @@ export function TheRest() {
             {ROWS.map((row, index) => (
               <div
                 key={row.label}
-                className={`flex flex-col gap-1 border-t border-colony-ink/30 py-4 text-base leading-snug sm:flex-row sm:gap-5 sm:text-lg ${
+                className={`flex flex-col gap-1 border-t border-colony-ink/20 py-4 text-base leading-snug sm:flex-row sm:gap-5 sm:text-lg ${
                   index === ROWS.length - 1 ? "border-b" : ""
                 }`}
               >
                 <dt className="font-semibold text-colony-ink sm:w-40 sm:shrink-0">
                   {row.label}
                 </dt>
-                <dd className="text-colony-ink/85">{row.body}</dd>
+                <dd className="text-colony-ink/80">{row.body}</dd>
               </div>
             ))}
           </dl>
@@ -45,7 +45,7 @@ export function TheRest() {
             width={580}
             height={1200}
             loading="lazy"
-            className="block w-full max-w-none xl:w-[520px]"
+            className="block w-full max-w-none ring-1 ring-colony-ink/10 xl:w-[520px]"
           />
         </div>
       </div>
