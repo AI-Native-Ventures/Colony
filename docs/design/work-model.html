@@ -239,6 +239,7 @@ kbd{font-family:ui-monospace,monospace;font-size:.75rem;background:var(--surface
   <li><a href="#loopholes">Loopholes</a></li>
   <li><a href="#lands">Where it lands</a></li>
   <li><a href="#built">What changed</a></li>
+  <li><a href="#gaps">Gaps closed</a></li>
   <li><a href="#build">Build order</a></li>
 </ul></div></nav>
 
@@ -1449,6 +1450,73 @@ kbd{font-family:ui-monospace,monospace;font-size:.75rem;background:var(--surface
       running something rather than reasoning about it, and three were found only because a test suite
       that had never executed was wired into CI. The design was directionally right and specifically
       wrong in exactly the places nobody had checked.</div>
+  </div>
+</section>
+
+<section id="gaps">
+  <div class="wrap">
+    <h2><span class="num">7d</span> The four gaps, closed</h2>
+    <p class="lede">The build shipped with four things flagged rather than hidden. Three were bounds
+      chosen to get something landed. The fourth was not a gap at all, and saying so is the fix.</p>
+
+    <div class="tablewrap" style="margin-top:22px"><table>
+      <thead><tr><th style="width:22%">Gap</th><th style="width:39%">What was actually wrong</th><th>Resolution</th></tr></thead>
+      <tbody>
+        <tr><td><b><code>reviewerTeamId</code> did not route</b></td>
+          <td>The field existed on <code>TemplateStage</code> and never reached a Task. Fan-out gave every
+            task the <em>owning</em> team's own lead as QA regardless, so a template declaring "the build
+            team builds it, the QA team signs it off" produced self-review and looked identical to a
+            template that asked for nothing. The blocker was a contract rule: QA had to be an owning-team
+            member.</td>
+          <td>The rule was never about the owning team for its own sake. It says QA belongs to the pool
+            that <em>holds the gate</em>, and before a reviewer could be named those were necessarily the
+            same pool. So the check widened rather than loosened: with no reviewer team it is unchanged,
+            with one the QA persona must belong to the team the task names. Tasks carry
+            <code>reviewerTeamId</code>; <code>g</code> becomes a <em>set</em> of every team a task touches
+            so a reviewer's <code>#g</code> filter finds the reviews it owes, while <code>team</code> stays
+            the scalar "who is accountable". Accountability did not move.</td></tr>
+
+        <tr><td><b>Snooze had no picker</b></td>
+          <td>The queue card parked a task for a fixed 24 hours. Nothing about the relay required that —
+            <code>plan_task_snooze</code> always took an arbitrary <code>wake_at</code> and the wake sweep
+            always read it from content. A working picker already existed one directory away, in reminders,
+            answering the identical question.</td>
+          <td><code>SnoozeMenu</code> and its presets moved to <code>shared/</code> unchanged and gained a
+            <code>label</code> prop, so the same component is a clock icon in the reminders list and a
+            labelled button in the queue's action row. Feature-scoped only because reminders needed it
+            first.</td></tr>
+
+        <tr><td><b>A cohort could not hold a campaign</b></td>
+          <td><code>MAX_COHORT_MEMBERS</code> was 100 and said so provisionally: "widen once fan-out proves
+            it too small." It did. But widening one input exposed a product nobody had bounded — 500 members
+            against the 50-stage template cap permits <b>25,000 tasks from one sentence in chat</b>, and
+            neither input cap can catch that, because neither is wrong on its own.</td>
+          <td>500 members, bounded by the relay's 256 KB frame rather than by taste: a cohort head carries
+            every member twice, in content and as an indexed <code>m</code> mirror, so 500 worst-case members
+            occupy about 150 KB. Plus a new <code>MAX_FAN_OUT_TASKS</code> of 2,000 — a full cohort through a
+            four-stage pipeline — checked <em>while planning</em>, which is the only cheap place to refuse
+            it. After submission those tasks exist, and undoing 25,000 of them is not an operation this
+            system has.</td></tr>
+
+        <tr><td><b>Grant auto-approval "deferred"</b></td>
+          <td>Not deferred. <b>Structurally impossible, and correctly so.</b> NIP-IQ's hard list rejects a
+            hard-list category on a delegation grant outright, so no grant can ever carry <code>spend</code>,
+            and with no such grant no decision log can cite one either. Both doors are shut, from both sides,
+            on purpose. A spend decision reaches a human or it does not happen.</td>
+          <td>Recorded as settled rather than pending, and pinned by two tests so the tempting shortcut —
+            quietly moving fan-out approval off the hard list — fails loudly. The <em>real</em> cost of the
+            rule was never the waiting; it was the waiting being invisible. The relay already publishes
+            <code>on_expiry: "rearms"</code> on its ask-state head (kind 30200) and the desktop read nothing
+            at all. It now does, and says so on the ask card: <em>"This will not resolve on its own: nothing
+            happens until you answer. Waiting 11 days so far."</em></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note good" style="margin-top:20px"><b>The pattern, again.</b> Three of the four were fixed by
+      widening a rule to what it actually meant, rather than by dropping it — the QA check, the cohort bound,
+      the snooze duration. The fourth was fixed by refusing to widen anything and building the visibility the
+      constraint costs instead. A gap is not always a missing feature; sometimes it is a correct answer nobody
+      had written down.</div>
   </div>
 </section>
 
