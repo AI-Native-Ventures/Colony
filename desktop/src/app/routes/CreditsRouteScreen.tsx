@@ -30,12 +30,6 @@ function rememberEmail(email: string): void {
   }
 }
 
-/** Format a nanoUSD-free cents balance the way the packs screen formats grants. */
-function formatBalance(usdCents: number): string {
-  const dollars = usdCents / 100;
-  return dollars % 1 === 0 ? `$${dollars}` : `$${dollars.toFixed(2)}`;
-}
-
 /**
  * Buying Credits from inside the app.
  *
@@ -66,15 +60,14 @@ export function CreditsRouteScreen() {
   const [email, setEmail] = React.useState(readRememberedEmail);
   const [confirmedEmail, setConfirmedEmail] =
     React.useState(readRememberedEmail);
-  const [balance, setBalance] = React.useState<number | null>(null);
 
   // What you already hold, so the decision to top up is an informed one.
   const loadBalance = React.useCallback(() => {
     if (!pubkey) return;
-    services.payments
-      .balance(pubkey)
-      .then((result) => setBalance(result.usdCents))
-      .catch(() => setBalance(null));
+    services.payments.balance(pubkey).catch(() => {
+      // CreditsScreen renders its own balance line and its own failure
+      // state; this call only warms the value it reads.
+    });
   }, [pubkey, services]);
 
   React.useEffect(loadBalance, [loadBalance]);
@@ -100,17 +93,6 @@ export function CreditsRouteScreen() {
         <p className="mt-1 text-sm text-muted-foreground">
           Colony Credits pay for model usage. Balances are held in US dollars
           because model providers bill in dollars.
-        </p>
-
-        <p className="mt-4 text-sm" data-testid="credits-balance">
-          {balance === null ? (
-            <span className="text-muted-foreground">Balance unavailable</span>
-          ) : (
-            <>
-              <span className="text-muted-foreground">Current balance: </span>
-              <span className="font-medium">{formatBalance(balance)}</span>
-            </>
-          )}
         </p>
 
         {confirmedEmail && emailLooksUsable ? (
