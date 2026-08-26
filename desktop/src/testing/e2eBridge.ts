@@ -498,6 +498,13 @@ type E2eConfig = {
     /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
      *  deliver live reply/aux events while an older response is in flight. */
     threadRepliesDelayMs?: number;
+    /** Hold every `get_thread_replies` response until
+     *  `__BUZZ_E2E_RELEASE_THREAD_REPLIES__()` is called. Unlike
+     *  `threadRepliesDelayMs` (a timer that self-heals inside Playwright's
+     *  auto-retry window), this is a manual gate: the thread-aux backfill
+     *  provably never lands until the test releases it, so a spec can assert
+     *  the panel's head state before any backfill can heal it. */
+    deferThreadReplies?: boolean;
     usersBatchDelayMs?: number;
     /** Delay (ms) applied to continuation channel-window requests so e2e
      *  tests can observe the in-flight prepend window. 0/undefined = instant. */
@@ -1630,6 +1637,12 @@ declare global {
     __BUZZ_E2E_RELEASE_INSTALL__?: (runtimeId: string) => number;
     /** Number of installs currently held, keyed by runtime id. */
     __BUZZ_E2E_INSTALL_PENDING__?: Record<string, number>;
+    /** Flush every `get_thread_replies` call held by `deferThreadReplies`.
+     *  Returns the number of held requests released. */
+    __BUZZ_E2E_RELEASE_THREAD_REPLIES__?: () => number;
+    /** Number of `get_thread_replies` calls currently held by
+     *  `deferThreadReplies`. */
+    __BUZZ_E2E_THREAD_REPLIES_PENDING__?: () => number;
   }
 }
 
@@ -1754,6 +1767,7 @@ type DeferredGetEvent = {
   run: () => Promise<string>;
 };
 let deferredGetEventQueue: DeferredGetEvent[] = [];
+let deferredThreadRepliesQueue: Array<() => void> = [];
 let deferNextChannelsRead = false;
 let deferredChannelsReadResolve: (() => void) | null = null;
 
@@ -5949,6 +5963,11 @@ async function handleGetThreadReplies(
   const delayMs = config?.mock?.threadRepliesDelayMs ?? 0;
   if (delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+  if (config?.mock?.deferThreadReplies) {
+    await new Promise<void>((resolve) => {
+      deferredThreadRepliesQueue.push(resolve);
+    });
   }
 
   return { events: page, next_cursor: nextCursor };
@@ -11622,6 +11641,14 @@ export function maybeInstallE2eTauriMocks() {
   }
   setGlobalAgentConfigCallCount = 0;
   mockAuthSigningAttempts = 0;
+  deferredThreadRepliesQueue = [];
+  window.__BUZZ_E2E_RELEASE_THREAD_REPLIES__ = () => {
+    const queued = deferredThreadRepliesQueue.splice(0);
+    for (const release of queued) release();
+    return queued.length;
+  };
+  window.__BUZZ_E2E_THREAD_REPLIES_PENDING__ = () =>
+    deferredThreadRepliesQueue.length;
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? {
         ...config.mock.globalAgentConfig,
