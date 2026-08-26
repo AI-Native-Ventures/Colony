@@ -92,6 +92,13 @@ test("agents route derives the Agents sidebar selection", () => {
   });
 });
 
+test("credits route derives the Credits sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/credits"), {
+    selectedChannelId: null,
+    selectedView: "credits",
+  });
+});
+
 test("people anchor derives a distinct People sidebar selection", () => {
   assert.deepEqual(deriveShellRoute("/agents", { section: "people" }), {
     selectedChannelId: null,

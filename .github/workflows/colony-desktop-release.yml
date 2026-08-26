@@ -213,9 +213,20 @@ jobs:
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
+          # Publish the resolved target directory for every later step. Those
+          # steps do NOT source hermit, so `cargo` is not on their PATH and a
+          # per-step `cargo metadata` there silently falls back to the wrong
+          # path — which is exactly how v0.11.3 failed at "Verify the bundle"
+          # with the dmg built and correct in the shared directory. Resolve it
+          # once, here, where cargo exists.
+          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
+          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
+          echo "TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT" >> "$GITHUB_ENV"
+          echo "resolved TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT"
+
       - name: Verify the bundle
         run: |
-          BUNDLE=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+          BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
           APP="$BUNDLE/macos/Colony.app"
           DMG="$BUNDLE/dmg/Colony_${VERSION}_aarch64.dmg"
           test -d "$APP" || { echo "::error::Missing $APP"; exit 1; }
@@ -233,7 +244,7 @@ jobs:
         # about a release can be correct while the app cannot update itself.
         run: |
           set -euo pipefail
-          BIN=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop
+          BIN="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop"
           # `grep -c`, not `grep -q`: -q exits at the first match, which sends
           # SIGPIPE to `strings` mid-stream on a 130MB binary, and under
           # `pipefail` that failure becomes the pipeline's result. The gate
@@ -259,7 +270,7 @@ jobs:
         # artifacts reveals the difference, so pin it here.
         run: |
           set -euo pipefail
-          BIN=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop
+          BIN="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos/Colony.app/Contents/MacOS/buzz-desktop"
           # `grep -c`, not `grep -q` — see the updater gate above for why.
           FOUND=$(strings -a "$BIN" | grep -c "$COLONY_PRODUCTION_RELAY_WS_URL" || true)
           LOOPBACK=$(strings -a "$BIN" | grep -c "ws://localhost:3000" || true)
@@ -281,7 +292,7 @@ jobs:
         # client can verify, so fail here rather than ship it.
         run: |
           set -euo pipefail
-          BUNDLE=desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
+          BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
           ARCHIVE=$(find "$BUNDLE/macos" -name '*.app.tar.gz' ! -name '*.sig' -type f | head -1)
           if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE" ]; then
             echo "::error::No updater archive in $BUNDLE/macos — is createUpdaterArtifacts on?"

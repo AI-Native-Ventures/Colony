@@ -519,7 +519,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             track={canvasTrack}
             email={answers.account?.email ?? ""}
             pubkey={pubkey}
-            services={effectiveServices}
+            payments={effectiveServices.payments}
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}
             onBack={goBack}

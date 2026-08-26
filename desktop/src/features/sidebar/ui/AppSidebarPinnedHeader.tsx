@@ -6,6 +6,7 @@ import {
   FolderGit2,
   Inbox,
   ListChecks,
+  CreditCard,
   Receipt,
   Users,
   Zap,
@@ -53,6 +54,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectProjects: () => void;
   onSelectContent: () => void;
   onSelectPulse: () => void;
+  onSelectCredits: () => void;
   onSelectSpend: () => void;
   onSelectWorkflows: () => void;
   selectedView: SidebarSelectedView;
@@ -110,6 +112,7 @@ export function AppSidebarPrimaryMenu({
   onSelectProjects,
   onSelectContent,
   onSelectPulse,
+  onSelectCredits,
   onSelectSpend,
   onSelectWorkflows,
   selectedView,
@@ -240,6 +243,18 @@ export function AppSidebarPrimaryMenu({
           >
             <Receipt className="h-4 w-4" />
             <SidebarMenuLabel>Spend</SidebarMenuLabel>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            data-testid="open-credits-view"
+            isActive={selectedView === "credits"}
+            onClick={onSelectCredits}
+            tooltip="Credits"
+            type="button"
+          >
+            <CreditCard className="h-4 w-4" />
+            <SidebarMenuLabel>Credits</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <FeatureGate feature="contentCalendar">

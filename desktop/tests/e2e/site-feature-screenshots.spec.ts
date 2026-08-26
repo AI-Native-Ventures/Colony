@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
+import { applySiteShotAccent, siteShotSuffix } from "../helpers/siteShotAccent";
 
 // Source of the marketing site's feature imagery (site/public/feature-*.png).
 //
@@ -19,6 +20,7 @@ import { seedActiveIdentity } from "../helpers/onboarding";
 // Each capture is scoped to a locator rather than a pixel clip, so message
 // ordering or layout shifts reframe the shot instead of slicing content.
 const SHOTS = "test-results/site-features";
+const SUFFIX = siteShotSuffix();
 
 // Messages are dropped silently without a live subscription for the channel.
 async function waitForMockLiveSubscription(
@@ -99,6 +101,7 @@ const RELEASE_BOT = {
 
 test("capture: channel list", async ({ page }) => {
   await installMockBridge(page);
+  await applySiteShotAccent(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("channel-general")).toBeVisible();
   await waitForAnimations(page);
@@ -107,7 +110,7 @@ test("capture: channel list", async ({ page }) => {
   // an old mock fixture, so the shot stops above it rather than shipping a
   // Buzz-era glyph on a Colony page.
   await page.screenshot({
-    path: `${SHOTS}/feature-channels.png`,
+    path: `${SHOTS}/feature-channels${SUFFIX}.png`,
     clip: { x: 0, y: 0, width: 290, height: 600 },
   });
 });
@@ -119,6 +122,7 @@ test("capture: agent teams", async ({ page }) => {
       { ...RELEASE_BOT, channelNames: ["engineering"] },
     ],
   });
+  await applySiteShotAccent(page);
   // Taller window: the agent cards sit low enough that a 720px viewport
   // clipped their names against the fold.
   await page.setViewportSize({ width: 1280, height: 1000 });
@@ -143,7 +147,7 @@ test("capture: agent teams", async ({ page }) => {
   // measured box, and a tight crop sheared them off.
   const pad = 20;
   await page.screenshot({
-    path: `${SHOTS}/feature-agents.png`,
+    path: `${SHOTS}/feature-agents${SUFFIX}.png`,
     clip: {
       x: Math.min(a.x, b.x) - pad,
       y: Math.min(a.y, b.y) - pad,
@@ -159,6 +163,7 @@ test("capture: workflow run reported in a channel", async ({ page }) => {
   await installMockBridge(page, {
     managedAgents: [{ ...RELEASE_BOT, channelNames: ["engineering"] }],
   });
+  await applySiteShotAccent(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("channel-engineering").click();
   await expect(page.getByTestId("chat-title")).toHaveText("engineering");
@@ -191,7 +196,7 @@ test("capture: workflow run reported in a channel", async ({ page }) => {
   // Frame the message with the composer beneath it, not the empty-channel
   // onboarding cards above it — those belong to a different story.
   await page.screenshot({
-    path: `${SHOTS}/feature-workflow.png`,
+    path: `${SHOTS}/feature-workflow${SUFFIX}.png`,
     clip: {
       x: 290,
       y: Math.max(0, box.y - 30),
@@ -223,6 +228,7 @@ test("capture: the company channel hero shot", async ({ page }) => {
       },
     ],
   });
+  await applySiteShotAccent(page);
   // Taller than the shared 720: the site renders this shot as the page's
   // largest element, and a short window wastes that space on chrome.
   await page.setViewportSize({ width: 1280, height: 820 });
@@ -445,11 +451,12 @@ test("capture: the company channel hero shot", async ({ page }) => {
     page.getByTestId("message-avatar-fallback").first(),
   ).toBeVisible();
   await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOTS}/product-channel.png` });
+  await page.screenshot({ path: `${SHOTS}/product-channel${SUFFIX}.png` });
 });
 
 test("capture: git built in", async ({ page }) => {
   await installMockBridge(page);
+  await applySiteShotAccent(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("open-projects-view").click();
   await waitForAnimations(page);
@@ -457,7 +464,7 @@ test("capture: git built in", async ({ page }) => {
   // Stops above the commit feed: its top row is a push to a repo the mock
   // names "buzz", and a Buzz-era repo name has no place in Colony imagery.
   await page.screenshot({
-    path: `${SHOTS}/feature-git.png`,
+    path: `${SHOTS}/feature-git${SUFFIX}.png`,
     clip: { x: 290, y: 0, width: 990, height: 350 },
   });
 });
@@ -469,6 +476,7 @@ test("capture: git built in", async ({ page }) => {
 test("capture: discovery pipeline", async ({ page }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
+  await applySiteShotAccent(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(
     "/#/discovery?surface=campaign&industryId=automotive" +
@@ -488,12 +496,13 @@ test("capture: discovery pipeline", async ({ page }) => {
   await waitForAnimations(page);
   // Full window, sidebar included: the client's call. The shot shows the
   // whole product surface, not a crop of one panel.
-  await page.screenshot({ path: `${SHOTS}/discovery-pipeline.png` });
+  await page.screenshot({ path: `${SHOTS}/discovery-pipeline${SUFFIX}.png` });
 });
 
 test("capture: outreach approval queue", async ({ page }) => {
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
+  await applySiteShotAccent(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(
     "/#/discovery?surface=campaign&entity=people&fieldId=marketing" +
@@ -517,7 +526,7 @@ test("capture: outreach approval queue", async ({ page }) => {
   await expect(draftCard).toBeVisible();
   await waitForAnimations(page);
   // Full window, sidebar included: the client's call.
-  await page.screenshot({ path: `${SHOTS}/outreach-approval.png` });
+  await page.screenshot({ path: `${SHOTS}/outreach-approval${SUFFIX}.png` });
 });
 
 // The delivered-work shot reuses the hero-shot channel machinery: build a
@@ -544,6 +553,7 @@ test("capture: work delivered in a channel", async ({ page }) => {
       },
     ],
   });
+  await applySiteShotAccent(page);
   // 1280x820, same as the hero shot: with the seeded history this fills the
   // scrollback and keeps the empty-channel onboarding cards out of frame.
   await page.setViewportSize({ width: 1280, height: 820 });
@@ -722,5 +732,5 @@ test("capture: work delivered in a channel", async ({ page }) => {
 
   // Full window, sidebar included: the client's call. Same framing as the
   // hero product shot, just a different channel and story.
-  await page.screenshot({ path: `${SHOTS}/work-delivered.png` });
+  await page.screenshot({ path: `${SHOTS}/work-delivered${SUFFIX}.png` });
 });

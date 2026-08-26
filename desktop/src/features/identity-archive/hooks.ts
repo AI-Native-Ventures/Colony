@@ -2,6 +2,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { ARCHIVED_IDENTITIES_QUERY_ROOT } from "@/features/identity-archive/archivedSnapshot";
 import { useMyRelayMembershipQuery } from "@/features/community-members/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import {
@@ -14,7 +15,9 @@ import {
   type IdentityUnarchiveRequest,
 } from "@/shared/api/tauriIdentityArchive";
 
-export const archivedIdentitiesQueryKey = ["archivedIdentities"] as const;
+export const archivedIdentitiesQueryKey = [
+  ARCHIVED_IDENTITIES_QUERY_ROOT,
+] as const;
 
 /** Cache the relay's `kind:13535` snapshot. Drives the "Archived" flair. */
 export function useArchivedIdentitiesQuery(enabled = true) {

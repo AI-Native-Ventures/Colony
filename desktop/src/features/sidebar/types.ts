@@ -20,5 +20,6 @@ export type SidebarSelectedView =
   | "pulse"
   | "projects"
   | "spend"
+  | "credits"
   | "content"
   | "work";

@@ -152,6 +152,7 @@ export function AppShell() {
     goProjects,
     goPulse,
     goSettings,
+    goCredits,
     goSpend,
     goWork,
     goWorkflows,
@@ -649,6 +650,7 @@ export function AppShell() {
     goProjects,
     goPulse,
     goSettings: handleOpenSettings,
+    goCredits,
     goSpend,
     goWorkflows,
     openBrowseChannels: handleOpenBrowseChannels,
@@ -877,6 +879,7 @@ export function AppShell() {
                           onSelectContent={() => void goContent()}
                           onSelectPulse={() => void goPulse()}
                           onSelectSettings={handleOpenSettings}
+                          onSelectCredits={() => void goCredits()}
                           onSelectSpend={() => void goSpend()}
                           onSelectWork={() => void goWork()}
                           onSelectWorkflows={() => void goWorkflows()}

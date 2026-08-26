@@ -348,11 +348,14 @@ test("the visible Blocks catalog hands a typed Block reference into chat", async
   const catalogCard = page.getByTestId("block-catalog-card-lead-card");
   await expect(catalogPage).toBeVisible();
   await expect(catalogCard).toContainText("@lead-card");
-  await expect(catalogCard).toContainText("Active version");
-  await expect(catalogCard).toContainText("Publisher");
-  await expect(catalogCard).toContainText("Permissions");
-  await expect(catalogCard).toContainText("Compatible clients");
-  await expect(catalogCard).toContainText("At least 1 in recent sample");
+  // lead-card declares no permissions, so the row surfaces no capability ask.
+  await expect(catalogCard).not.toContainText("Requires");
+  await expect(catalogCard).not.toContainText("Active version");
+  await expect(catalogCard).not.toContainText("Publisher");
+  await expect(catalogCard).not.toContainText("Compatible clients");
+  await expect(catalogCard).not.toContainText("At least 1 in recent sample");
+  // The block itself is on screen: the preview renders its title.
+  await expect(catalogCard).toContainText("Tennant Group");
   await expect(
     catalogCard.getByRole("figure", {
       name: `${manifest.name} read-only preview`,

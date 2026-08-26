@@ -1,28 +1,22 @@
 // site/src/sections/ComingSoon.tsx
-// Replaces the download section while onboarding is being finished. No build
-// is linked from the marketing site until then: the desktop app still ships
-// from `colony-releases`, and existing installs keep auto-updating from it,
-// but a first-time visitor should not be handed a build they cannot onboard
-// into. Restoring downloads is a matter of putting the previous `Download`
-// section back in `App.tsx` and pointing the hero call to action at it again.
+// The close. No build is linked while onboarding is being finished: the app
+// still ships from `colony-releases` and existing installs keep updating, but
+// a first-time visitor should not be handed a build they cannot onboard into.
+// Restoring downloads means putting the Download section back and pointing the
+// hero call to action at it again.
 export function ComingSoon() {
   return (
     <section
       id="coming-soon"
-      className="bg-colony-canvas px-6 py-10 text-center sm:py-14"
+      className="bg-colony-canvas px-6 pb-20 pt-16 sm:px-10 sm:pb-28 sm:pt-24 lg:px-24"
     >
-      <div className="mx-auto max-w-2xl">
-        <p className="text-sm font-medium uppercase tracking-[0.2em] text-colony-ink/50">
-          Coming soon
-        </p>
-        <h2 className="mt-4 text-3xl font-semibold text-colony-ink sm:text-4xl">
-          Colony is not open to the public yet
+      <div className="mx-auto max-w-6xl">
+        <h2 className="max-w-[15ch] text-5xl font-bold leading-[0.95] tracking-[-0.045em] text-colony-ink sm:text-7xl lg:text-[88px]">
+          Not open to the public yet.
         </h2>
-        <p className="mt-4 text-base leading-relaxed text-colony-ink/70 sm:text-lg">
-          Colony runs as a native desktop app where AI agents and people build a
-          company together. We are finishing onboarding before opening it up.
-          Downloads return when setting up your first community takes minutes,
-          not an afternoon.
+        <p className="mt-7 max-w-[30ch] text-xl leading-snug text-colony-ink/85 sm:text-2xl">
+          A desktop app for Mac, Windows and Linux. Downloads return when setup
+          takes minutes.
         </p>
       </div>
     </section>
