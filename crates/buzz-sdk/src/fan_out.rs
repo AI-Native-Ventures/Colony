@@ -29,6 +29,23 @@ const TASK_SCHEMA: &str = "colony.task/v1";
 /// Matches `MAX_NAME_LEN` in the company contract.
 const MAX_TITLE_LEN: usize = 200;
 
+/// Upper bound on the Tasks one fan-out may plan, i.e. `members × stages`.
+///
+/// The cohort cap (`MAX_COHORT_MEMBERS`, 500) and the template cap
+/// (`MAX_TEMPLATE_STAGES`, 50) bound each input on its own, but their
+/// product does not: multiplied out they permit 25,000 Tasks from a single
+/// sentence in chat. Neither input cap can be the one that catches that,
+/// because neither is wrong on its own — a 500-member cohort is legitimate
+/// and a 50-stage template is legitimate; only pointing one at the other is
+/// not.
+///
+/// 2,000 is the largest fan-out with a plausible reading: a full 500-member
+/// campaign through a four-stage pipeline. Past that the request is a
+/// modelling mistake, and refusing it while planning is the only cheap place
+/// to say so — after submission the Tasks exist, and undoing 25,000 of them
+/// is not an operation this system has.
+const MAX_FAN_OUT_TASKS: usize = 2_000;
+
 fn clamp_title(value: &str) -> String {
     if value.chars().count() <= MAX_TITLE_LEN {
         return value.to_owned();
@@ -203,6 +220,22 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
     }
     if request.template.stages.is_empty() {
         return Err("template has no stages to run".to_string());
+    }
+    // Checked on the requested product, not on what survives skipping: the
+    // answer must not depend on how much duplicate work happens to already
+    // exist, or the same request would be legal one minute and refused the
+    // next.
+    let planned_tasks = request
+        .cohort
+        .members
+        .len()
+        .saturating_mul(request.template.stages.len());
+    if planned_tasks > MAX_FAN_OUT_TASKS {
+        return Err(format!(
+            "fan-out would plan {planned_tasks} tasks ({} members x {} stages),              over the {MAX_FAN_OUT_TASKS} limit",
+            request.cohort.members.len(),
+            request.template.stages.len()
+        ));
     }
     if !request
         .company
@@ -809,5 +842,42 @@ mod tests {
         let error = plan_fan_out(&request(&cohort, &template, &company, &teams, &[]))
             .expect_err("an unknown owning team must be refused");
         assert!(error.contains("team-that-does-not-exist"));
+    }
+
+    /// The cohort cap and the stage cap are each individually satisfied here
+    /// — 500 members is legal, 5 stages is legal — and their product is not.
+    /// Without `MAX_FAN_OUT_TASKS` nothing rejects this, which is the whole
+    /// reason that constant exists.
+    #[test]
+    fn a_fan_out_over_the_task_product_cap_is_refused() {
+        let company = company();
+        let teams = teams();
+        let cohort = cohort(500);
+        let template = template(
+            (0..5)
+                .map(|index| stage(&format!("stage-{index}"), None))
+                .collect(),
+        );
+        let error = plan_fan_out(&request(&cohort, &template, &company, &teams, &[]))
+            .expect_err("2500 planned tasks must be refused");
+        assert!(error.contains("2500"), "{error}");
+        assert!(error.contains("500 members x 5 stages"), "{error}");
+    }
+
+    /// The boundary itself must plan, not merely "something under it": a cap
+    /// that is off by one silently costs a whole stage of a real campaign.
+    #[test]
+    fn a_fan_out_exactly_at_the_task_product_cap_is_planned() {
+        let company = company();
+        let teams = teams();
+        let cohort = cohort(crate::company::MAX_COHORT_MEMBERS);
+        let template = template(
+            (0..4)
+                .map(|index| stage(&format!("stage-{index}"), None))
+                .collect(),
+        );
+        let plan = plan_fan_out(&request(&cohort, &template, &company, &teams, &[]))
+            .expect("exactly the cap must be allowed");
+        assert_eq!(plan.task_actions.len(), MAX_FAN_OUT_TASKS);
     }
 }

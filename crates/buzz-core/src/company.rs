@@ -23,10 +23,20 @@ const MAX_ASSIGNEES: usize = 100;
 const MAX_DEPENDENCIES: usize = 100;
 /// Bounds an `outcomeReason` or a bounce's free-text reason.
 const MAX_REASON_LEN: usize = 500;
-/// Matches the neighbouring bounded-list constants (`MAX_ASSIGNEES`,
-/// `MAX_DEPENDENCIES`): a real cap, not a guess at how large a real cohort
-/// gets. Widen once fan-out proves it too small rather than guessing now.
-const MAX_COHORT_MEMBERS: usize = 100;
+/// Bounded by the relay's frame limit, not by taste. A Cohort head carries
+/// every member twice: once in `content`, and once as an indexed `m` tag
+/// mirror. At the worst legal member size (a `MAX_ID_LEN` ref plus its kind
+/// slug) that is roughly 300 bytes per member across both, so 500 members
+/// occupy about 150 KB of the relay's 256 KB frame and still leave real
+/// headroom for the rest of the event.
+///
+/// Raised from 100, which was explicitly provisional ("widen once fan-out
+/// proves it too small"). It did: a campaign-sized cohort is the shape this
+/// primitive exists for, and 100 could not hold one. Deliberately not
+/// matching the neighbouring 100-entry id-list bounds (`MAX_ASSIGNEES`,
+/// `MAX_DEPENDENCIES`) any more — those bound a hand-written list, this
+/// bounds a generated set, and the two have no reason to agree.
+const MAX_COHORT_MEMBERS: usize = 500;
 /// A pipeline is a human-authored plan, not a generated list — a template
 /// with more stages than this is almost certainly a modelling mistake, not a
 /// legitimate pipeline. Smaller than the 100-entry bound on flat id lists

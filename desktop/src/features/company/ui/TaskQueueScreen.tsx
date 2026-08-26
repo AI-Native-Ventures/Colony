@@ -20,6 +20,7 @@ import {
 } from "@/shared/ui/dialog";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { SnoozeMenu } from "@/shared/ui/SnoozeMenu";
 import { Textarea } from "@/shared/ui/textarea";
 
 /**
@@ -119,7 +120,7 @@ function QueueCard({
   nowSeconds: number;
   onBounce: (reason: string) => Promise<void>;
   onComplete: (outcomeReason: string) => Promise<void>;
-  onSnooze: () => Promise<void>;
+  onSnooze: (wakeAt: number) => Promise<void>;
   pendingAction: string | null;
   task: CompanyTask;
 }) {
@@ -169,15 +170,14 @@ function QueueCard({
               </Button>
             ))
           : null}
-        <Button
-          data-testid="queue-snooze"
+        <SnoozeMenu
           disabled={anyPending}
-          onClick={() => onSnooze()}
-          size="sm"
-          variant="outline"
-        >
-          Snooze
-        </Button>
+          label="Snooze"
+          onSnooze={(wakeAt) => {
+            void onSnooze(wakeAt);
+          }}
+          testId="queue-snooze"
+        />
         <BounceDialog
           disabled={!canBounce || anyPending}
           onBounce={onBounce}
@@ -231,7 +231,7 @@ export function TaskQueueScreen({
   isLoading: boolean;
   onBounce: (taskId: string, reason: string) => Promise<void>;
   onComplete: (taskId: string, outcomeReason: string) => Promise<void>;
-  onSnooze: (taskId: string) => Promise<void>;
+  onSnooze: (taskId: string, wakeAt: number) => Promise<void>;
   pendingTaskId: string | null;
   queue: readonly CompanyTask[];
 }) {
@@ -288,7 +288,7 @@ export function TaskQueueScreen({
               onComplete={(outcomeReason) =>
                 onComplete(active.id, outcomeReason)
               }
-              onSnooze={() => onSnooze(active.id)}
+              onSnooze={(wakeAt) => onSnooze(active.id, wakeAt)}
               pendingAction={pendingTaskId === active.id ? active.id : null}
               task={active}
             />

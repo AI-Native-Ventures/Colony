@@ -31,7 +31,7 @@ const MAX_ASSIGNEES: usize = 100;
 /// Matches `MAX_DEPENDENCIES` in the company contract.
 const MAX_DEPENDENCIES: usize = 100;
 /// Matches `MAX_COHORT_MEMBERS` in the company contract.
-const MAX_COHORT_MEMBERS: usize = 100;
+pub(crate) const MAX_COHORT_MEMBERS: usize = 500;
 /// Matches `MAX_TEMPLATE_STAGES` in the company contract.
 const MAX_TEMPLATE_STAGES: usize = 50;
 /// Matches `MAX_PROMPT_LEN` in the company contract.

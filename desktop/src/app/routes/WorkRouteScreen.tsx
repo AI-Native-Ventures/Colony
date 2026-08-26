@@ -31,8 +31,6 @@ import { KIND_JOB_HEAD } from "@/shared/constants/kinds";
 import { Route as WorkRoute } from "./work";
 
 const NO_EVENTS: RelayEvent[] = [];
-/** A queue snooze has no picker yet - it parks the card for a day. */
-const DEFAULT_SNOOZE_SECONDS = 24 * 60 * 60;
 
 export function WorkRouteScreen() {
   const search = WorkRoute.useSearch();
@@ -163,13 +161,10 @@ export function WorkRouteScreen() {
     [runQueueAction],
   );
   const handleQueueSnooze = React.useCallback(
-    (taskId: string) =>
-      runQueueAction(taskId, () =>
-        queueActioner.snoozeTask(
-          taskId,
-          Math.floor(Date.now() / 1000) + DEFAULT_SNOOZE_SECONDS,
-        ),
-      ),
+    // `wakeAt` comes from the queue card's picker, which shares its presets
+    // and its "must be in the future" guard with the reminders snooze.
+    (taskId: string, wakeAt: number) =>
+      runQueueAction(taskId, () => queueActioner.snoozeTask(taskId, wakeAt)),
     [runQueueAction],
   );
   const handleQueueBounce = React.useCallback(
