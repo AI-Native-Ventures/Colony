@@ -2,6 +2,10 @@ import { SmilePlus } from "lucide-react";
 import * as React from "react";
 
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
+import {
+  describeTaskTransition,
+  isTaskTransitionType,
+} from "@/features/company/taskThreadEvents";
 import type {
   TimelineMessage,
   TimelineReaction,
@@ -610,8 +614,24 @@ function describeSystemEvent(
         action: "removed a message",
       };
     }
-    default:
+    default: {
+      // Task lifecycle rows are relay-authored kind 40099 events too; their
+      // payload contract and copy live with the company feature.
+      if (
+        payload.type.startsWith("task_") &&
+        isTaskTransitionType(payload.type)
+      ) {
+        const described = describeTaskTransition(payload, (pubkey) => (
+          <ProfileName pubkey={pubkey} underlineOnHover>
+            {resolveInlineDisplayLabel(pubkey, currentPubkey, profiles)}
+          </ProfileName>
+        ));
+        if (described) {
+          return { title: described.author, action: described.action };
+        }
+      }
       return null;
+    }
   }
 }
 

@@ -10,7 +10,7 @@ use std::time::Duration;
 use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
     CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyService, CompanyTask,
-    CompanyTeamRef, CostCentre, CostCentreKind, Initiative, InitiativeStatus, TaskStatus,
+    CompanyTeamRef, CostCentre, CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus,
     COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
@@ -321,6 +321,9 @@ fn proposed_initiative(
         expected_cost_usd: None,
         source_channel_id: "welcome".to_string(),
         source_event_id: None,
+        template_id: None,
+        template_version: None,
+        cohort_id: None,
         created_at: stamp,
         updated_at: stamp,
     }
@@ -339,12 +342,22 @@ fn chat_task(company_id: &str, id: &str, team: &CompanyTeamRef, stamp: i64) -> C
         owning_team_id: team.id.clone(),
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id: "cc-coordination".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
         client_organization_id: None,
         source_channel_id: "engineering".to_string(),
         source_event_id: None,
         implicit: true,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: stamp,
         updated_at: stamp,
     }

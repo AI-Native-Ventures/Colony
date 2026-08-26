@@ -1,3 +1,5 @@
+import type { CompanyTask } from "./contracts";
+import { isTerminalTaskStatus } from "./contracts";
 import type { TaskArtifact, TaskRunHead } from "./taskRunContracts";
 
 export type TaskExecutionStateKey =
@@ -75,4 +77,22 @@ export function splitDeliveryArtifacts(
     primary: run.artifacts[0] ?? null,
     supporting: run.artifacts.slice(1),
   };
+}
+
+/**
+ * Split a thread's task history (already ordered live-first by
+ * `listThreadTasks`) into what is happening and what already ended. Usually
+ * one live task, occasionally two; the UI renders every live task rather
+ * than pretending there is only ever one.
+ */
+export function splitThreadTasks(tasks: readonly CompanyTask[]): {
+  live: CompanyTask[];
+  earlier: CompanyTask[];
+} {
+  const live: CompanyTask[] = [];
+  const earlier: CompanyTask[] = [];
+  for (const task of tasks) {
+    (isTerminalTaskStatus(task.status) ? earlier : live).push(task);
+  }
+  return { live, earlier };
 }

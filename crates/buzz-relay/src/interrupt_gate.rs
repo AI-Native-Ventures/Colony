@@ -797,3 +797,31 @@ pub async fn enforce_decision_log_authority(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::extract_p_tags;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    /// A cohort mention writes `["a", "30201:<relay-pubkey>:<id>", "", "cohort"]`
+    /// (see `desktop/src/features/messages/lib/draftMentionRefs.ts`), never a
+    /// `p` tag — a cohort has no pubkey to gate on in the first place. This
+    /// pins that `extract_p_tags` (and so `enforce_owner_contact`, which reads
+    /// nothing else) cannot mistake the reference for an owner-contact target,
+    /// even when it sits on a message alongside a real `p` tag.
+    #[test]
+    fn a_cohort_reference_tag_is_never_read_as_a_p_tag() {
+        let author = Keys::generate();
+        let owner_hex = "a".repeat(64);
+        let cohort_coordinate = format!("30201:{}:acme-leads", "b".repeat(64));
+        let event = EventBuilder::new(Kind::Custom(9), "check with @acme-leads")
+            .tags(vec![
+                Tag::parse(["a", &cohort_coordinate, "", "cohort"]).expect("valid a tag"),
+                Tag::parse(["p", &owner_hex]).expect("valid p tag"),
+            ])
+            .sign_with_keys(&author)
+            .expect("signed");
+
+        assert_eq!(extract_p_tags(&event), vec![owner_hex]);
+    }
+}

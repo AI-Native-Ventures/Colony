@@ -19,6 +19,11 @@ export type MentionCandidateForRanking =
       blockHandle: string;
       displayName: string;
       kind: "block";
+    }
+  | {
+      cohortId: string;
+      displayName: string;
+      kind: "cohort";
     };
 
 export type RankedMentionCandidate<T extends MentionCandidateForRanking> = {
@@ -45,7 +50,7 @@ function getMentionCandidateGroupRank(
   candidate: MentionCandidateForRanking,
   activePersonaIds: ReadonlySet<string>,
 ) {
-  if (candidate.kind === "block") return 2;
+  if (candidate.kind === "block" || candidate.kind === "cohort") return 2;
   if (candidate.isMember) return 0;
 
   const isRunnablePersona =
@@ -57,6 +62,18 @@ function getMentionCandidateGroupRank(
   if (!candidate.isAgent) return 2;
 
   return 3;
+}
+
+/** True for actor candidates (identity/persona/team) — the only variants
+ * carrying a pubkey, role, or persona-name field. Block and cohort
+ * candidates are reference-only entities and never match here. */
+function isActorCandidate(
+  candidate: MentionCandidateForRanking,
+): candidate is Extract<
+  MentionCandidateForRanking,
+  { kind: "identity" | "persona" | "team" }
+> {
+  return candidate.kind !== "block" && candidate.kind !== "cohort";
 }
 
 function scoreMentionCandidateLabel(
@@ -84,12 +101,12 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
   const ranked = candidates
     .map((candidate, order) => {
       const pubkeyLower =
-        candidate.kind !== "block" && candidate.pubkey
+        isActorCandidate(candidate) && candidate.pubkey
           ? normalizePubkey(candidate.pubkey)
           : "";
       const label =
         candidate.displayName ??
-        (candidate.kind !== "block" && candidate.pubkey
+        (isActorCandidate(candidate) && candidate.pubkey
           ? truncatePubkey(candidate.pubkey)
           : "agent");
       const groupRank = getMentionCandidateGroupRank(
@@ -97,15 +114,19 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
         activePersonaIds,
       );
 
-      const roleId = candidate.kind === "block" ? null : candidate.roleId;
-      const roleTitle = candidate.kind === "block" ? null : candidate.roleTitle;
+      const roleId = isActorCandidate(candidate) ? candidate.roleId : null;
+      const roleTitle = isActorCandidate(candidate)
+        ? candidate.roleTitle
+        : null;
 
       const personalScores = [
         candidate.displayName,
         candidate.kind === "block"
           ? candidate.blockHandle
-          : candidate.personaName,
-        candidate.kind === "block" ? null : candidate.secondaryLabel,
+          : isActorCandidate(candidate)
+            ? candidate.personaName
+            : null,
+        isActorCandidate(candidate) ? candidate.secondaryLabel : null,
       ]
         .map((value) =>
           value ? scoreMentionCandidateLabel(value, lowerQuery) : null,
@@ -139,7 +160,7 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
           : (personalScore ?? roleScore);
 
       const pubkeyScore =
-        candidate.kind !== "block" && candidate.pubkey
+        isActorCandidate(candidate) && candidate.pubkey
           ? pubkeyLower.startsWith(lowerQuery)
             ? 4
             : pubkeyLower.includes(lowerQuery)

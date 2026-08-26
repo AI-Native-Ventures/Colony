@@ -124,6 +124,10 @@ pub fn initiative_actions(
             expected_cost_usd: None,
             source_channel_id: source_channel_id.to_string(),
             source_event_id: None,
+            // A blueprint-proposed initiative is never a fan-out run.
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: now,
             updated_at: now,
         };

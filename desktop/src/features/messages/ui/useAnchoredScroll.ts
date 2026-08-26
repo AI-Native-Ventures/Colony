@@ -1,5 +1,9 @@
 import * as React from "react";
 
+import {
+  resolveAnchoredBottomReport,
+  type TimelineAtBottomReason,
+} from "@/features/messages/lib/semanticBottomTransition";
 import { classifyTimelineMessageDelta } from "@/features/messages/lib/timelineSnapshot";
 import {
   type AnchorState,
@@ -77,8 +81,17 @@ type UseAnchoredScrollResult = {
     messageId: string,
     options?: { highlight?: boolean; behavior?: ScrollBehavior },
   ) => boolean;
-  /** Syncs the hook's bottom affordances from a virtualizer-owned scroller. */
-  onVirtualizerAtBottomStateChange: (atBottom: boolean) => void;
+  /** Syncs the hook's bottom affordances from a virtualizer-owned scroller.
+   *
+   *  `reason` distinguishes the reader moving (`"scroll"`) from the scroller's
+   *  box changing under a stationary reader (`"resize"`), exactly as
+   *  `resolveSemanticBottomTransition` does. A resize is a fresh reading of the
+   *  box, so it may correct a stale not-at-bottom latch, but it is never the
+   *  reader catching up, so it leaves the unread counters alone. */
+  onVirtualizerAtBottomStateChange: (
+    atBottom: boolean,
+    reason?: TimelineAtBottomReason,
+  ) => void;
 };
 
 export function useAnchoredScroll({
@@ -930,12 +943,17 @@ export function useAnchoredScroll({
   }, []);
 
   const onVirtualizerAtBottomStateChange = React.useCallback(
-    (atBottom: boolean) => {
+    (atBottom: boolean, reason: TimelineAtBottomReason = "scroll") => {
       if (!virtualizerOwnsPrependAnchoring) return;
+      const { apply, readerCaughtUp } = resolveAnchoredBottomReport({
+        atBottom,
+        reason,
+      });
+      if (!apply) return;
       virtualizerAtBottomRef.current = atBottom;
       if (atBottom) {
         anchorRef.current = { kind: "at-bottom" };
-        setNewMessageCount(0);
+        if (readerCaughtUp) setNewMessageCount(0);
       }
       setIsAtBottom(atBottom);
     },

@@ -5,7 +5,7 @@ import {
   parseCustomDateTime,
   TIME_PRESETS,
   todayDateString,
-} from "@/features/reminders/lib/timePresets";
+} from "@/shared/lib/timePresets";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -18,17 +18,28 @@ import { Input } from "@/shared/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 
 /**
- * Clock-icon dropdown of snooze presets plus a "Custom…" popover with a native
- * date/time picker. Calls `onSnooze` with a future Unix timestamp (seconds).
- * The custom surface uses the shared {@link parseCustomDateTime} guard so a
- * past time is rejected rather than firing immediately.
+ * Dropdown of snooze presets plus a "Custom…" popover with a native date/time
+ * picker. Calls `onSnooze` with a future Unix timestamp (seconds). The custom
+ * surface uses the shared {@link parseCustomDateTime} guard so a past time is
+ * rejected rather than firing immediately.
+ *
+ * Shared rather than reminder-scoped: the work queue parks a Task on exactly
+ * the same question ("until when?") and had shipped a fixed 24 hours because
+ * this picker was one directory too deep to reach.
+ *
+ * `label` picks the trigger: absent, the compact clock icon the reminders
+ * list uses; present, a labelled button that sits in a row of other actions.
  */
 export function SnoozeMenu({
   disabled,
+  label,
   onSnooze,
+  testId,
 }: {
   disabled?: boolean;
+  label?: string;
   onSnooze: (notBefore: number) => void;
+  testId?: string;
 }) {
   const [customOpen, setCustomOpen] = React.useState(false);
   const [customDate, setCustomDate] = React.useState(todayDateString);
@@ -39,16 +50,29 @@ export function SnoozeMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          className="h-7 w-7 p-0"
-          disabled={disabled}
-          size="sm"
-          title="Snooze"
-          type="button"
-          variant="ghost"
-        >
-          <Clock className="h-4 w-4" />
-        </Button>
+        {label === undefined ? (
+          <Button
+            className="h-7 w-7 p-0"
+            data-testid={testId}
+            disabled={disabled}
+            size="sm"
+            title="Snooze"
+            type="button"
+            variant="ghost"
+          >
+            <Clock className="h-4 w-4" />
+          </Button>
+        ) : (
+          <Button
+            data-testid={testId}
+            disabled={disabled}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {label}
+          </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
         {TIME_PRESETS.map((preset) => (

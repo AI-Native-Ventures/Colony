@@ -5,6 +5,7 @@ import type { ChannelRole, ChannelType } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   BlockMentionCandidate,
+  CohortMentionCandidate,
   TeamMentionMember,
 } from "./mentionCandidates";
 
@@ -26,7 +27,8 @@ type ActorMentionSuggestionCandidate = {
 
 export type MentionSuggestionCandidate =
   | ActorMentionSuggestionCandidate
-  | BlockMentionCandidate;
+  | BlockMentionCandidate
+  | CohortMentionCandidate;
 
 export function mapMentionCandidateToSuggestion(opts: {
   candidate: MentionSuggestionCandidate;
@@ -53,6 +55,15 @@ export function mapMentionCandidateToSuggestion(opts: {
       blockHandle: candidate.blockHandle,
       blockAddress: candidate.blockAddress,
       manifestId: candidate.manifestId,
+      displayName: candidate.displayName,
+    };
+  }
+
+  if (candidate.kind === "cohort") {
+    return {
+      kind: "cohort",
+      cohortId: candidate.cohortId,
+      cohortAddress: candidate.cohortAddress,
       displayName: candidate.displayName,
     };
   }

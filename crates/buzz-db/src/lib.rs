@@ -4052,6 +4052,27 @@ impl Db {
         event::query_in_progress_task_heads(&self.pool, batch_limit).await
     }
 
+    /// Query the latest snoozed task heads due to wake, across every
+    /// non-archived community. See [`event::query_due_snoozed_task_heads`].
+    pub async fn query_due_snoozed_task_heads(
+        &self,
+        now: i64,
+        batch_limit: i64,
+    ) -> Result<Vec<event::SnoozedCandidateTask>> {
+        event::query_due_snoozed_task_heads(&self.pool, now, batch_limit).await
+    }
+
+    /// Atomically claim one task's wake at one specific `wake_at` (cross-relay
+    /// dedup for the snooze-wake sweep). See [`event::claim_task_wake`].
+    pub async fn claim_task_wake(
+        &self,
+        community_id: CommunityId,
+        task_id: &str,
+        wake_at: i64,
+    ) -> Result<bool> {
+        event::claim_task_wake(&self.pool, community_id, task_id, wake_at).await
+    }
+
     /// Atomically claim a due reminder for delivery (cross-pod dedup).
     pub async fn claim_due_reminder(
         &self,

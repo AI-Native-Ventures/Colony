@@ -12,7 +12,8 @@
 
 use buzz_core::{
     company::{
-        CommercialPurpose, CompanyProfile, CompanyTask, CompanyTeamRef, CostCentreKind, TaskStatus,
+        CommercialPurpose, CompanyProfile, CompanyTask, CompanyTeamRef, CostCentreKind, DoerKind,
+        TaskStatus,
     },
     company_roster::step_idempotency_key,
     kind::KIND_TASK,
@@ -148,6 +149,7 @@ pub fn plan_implicit_task(
         owning_team_id: team.id.clone(),
         assignee_persona_ids: assignees,
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id,
         commercial_purpose,
         client_organization_id: client_organization_id
@@ -157,6 +159,15 @@ pub fn plan_implicit_task(
         source_event_id: None,
         // Colony created this, the owner did not ask for it by name.
         implicit: true,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: now,
         updated_at: now,
     };

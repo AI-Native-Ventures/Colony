@@ -1,5 +1,7 @@
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
+import type { Cohort } from "@/features/company/contracts";
 import type { AgentPersona, AgentTeam, ChannelRole } from "@/shared/api/types";
+import { KIND_COHORT } from "@/shared/constants/kinds";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 export type TeamMentionMember = {
@@ -9,7 +11,7 @@ export type TeamMentionMember = {
   pubkey?: string;
 };
 
-export type MentionKind = "identity" | "persona" | "team" | "block";
+export type MentionKind = "identity" | "persona" | "team" | "block" | "cohort";
 
 export type ActorMentionCandidate = {
   kind: "identity" | "persona" | "team";
@@ -44,7 +46,17 @@ export type BlockMentionCandidate = {
   displayName: string;
 };
 
-export type MentionCandidate = ActorMentionCandidate | BlockMentionCandidate;
+export type CohortMentionCandidate = {
+  kind: "cohort";
+  cohortId: string;
+  cohortAddress: string;
+  displayName: string;
+};
+
+export type MentionCandidate =
+  | ActorMentionCandidate
+  | BlockMentionCandidate
+  | CohortMentionCandidate;
 
 export type BlockCatalogMentionSource = {
   handle: string;
@@ -56,9 +68,11 @@ export type BlockCatalogMentionSource = {
 
 const BLOCK_HANDLE_RE = /^[a-z][a-z0-9-]{0,63}$/;
 const LOWER_HEX_64_RE = /^[0-9a-f]{64}$/;
+// Mirrors buzz-core's generic `validate_id` charset (see draftMentionRefs.ts).
+const COHORT_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 
 export function mentionCandidateLabel(candidate: MentionCandidate) {
-  if (candidate.kind === "block") {
+  if (candidate.kind === "block" || candidate.kind === "cohort") {
     return candidate.displayName;
   }
   return (
@@ -70,6 +84,7 @@ export function mentionCandidateLabel(candidate: MentionCandidate) {
 export function globalSearchIdentityKey(candidate: MentionCandidate) {
   if (
     candidate.kind === "block" ||
+    candidate.kind === "cohort" ||
     !candidate.isGlobalSearchResult ||
     candidate.isMember ||
     candidate.isAgent
@@ -116,6 +131,43 @@ export function buildBlockMentionCandidates(
     });
   }
   return [...byAddress.values()];
+}
+
+/**
+ * Build strict, deduplicated Cohort entries from a company's cohort list.
+ *
+ * Unlike a block handle, a cohort's display text (`name`) is not baked into
+ * its `d` tag, so there is no third-segment-equals-name check here — only
+ * the coordinate's own shape and the relay-self pubkey are validated.
+ */
+export function buildCohortMentionCandidates(
+  cohorts: readonly Cohort[],
+  relaySelfPubkey: string,
+): CohortMentionCandidate[] {
+  const normalizedRelaySelf = relaySelfPubkey.trim().toLowerCase();
+  if (!LOWER_HEX_64_RE.test(normalizedRelaySelf)) {
+    return [];
+  }
+  const byAddress = new Map<string, CohortMentionCandidate>();
+  for (const cohort of cohorts) {
+    const cohortId = cohort.id.trim();
+    const displayName = cohort.name.trim();
+    if (!COHORT_ID_RE.test(cohortId) || !displayName) {
+      continue;
+    }
+    const cohortAddress = `${KIND_COHORT}:${normalizedRelaySelf}:${cohortId}`;
+    byAddress.set(cohortAddress, {
+      kind: "cohort",
+      cohortId,
+      cohortAddress,
+      displayName,
+    });
+  }
+  return [...byAddress.values()];
+}
+
+export function formatCohortMention(displayName: string) {
+  return `@${displayName} `;
 }
 
 function findTeamMemberTarget(

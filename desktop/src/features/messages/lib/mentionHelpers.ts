@@ -48,6 +48,7 @@ export function extractPersonaMentionTargets(
 /** A candidate's alias fields, as far as name collection cares. */
 export type MentionAliasSource =
   | { kind: "block"; blockHandle: string; displayName: string }
+  | { kind: "cohort"; displayName: string }
   | {
       kind: "identity" | "persona" | "team";
       displayName: string | null;
@@ -90,13 +91,15 @@ export function collectSearchableMentionNames(
     candidates.flatMap((candidate) =>
       candidate.kind === "block"
         ? [candidate.displayName, candidate.blockHandle]
-        : [
-            candidate.displayName,
-            candidate.personaName,
-            candidate.roleId,
-            candidate.roleTitle,
-            candidate.secondaryLabel,
-          ],
+        : candidate.kind === "cohort"
+          ? [candidate.displayName]
+          : [
+              candidate.displayName,
+              candidate.personaName,
+              candidate.roleId,
+              candidate.roleTitle,
+              candidate.secondaryLabel,
+            ],
     ),
   );
 }

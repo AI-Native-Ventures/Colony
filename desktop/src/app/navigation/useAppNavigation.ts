@@ -263,6 +263,43 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goWork = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goWorkBoard = React.useCallback(
+    (initiativeId?: string, behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+          search: initiativeId
+            ? { initiativeId, view: "board" }
+            : { view: "board" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goWorkQueue = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+          search: { view: "queue" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goWorkflows = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -468,6 +505,9 @@ export function useAppNavigation() {
     goCredits,
     goSpend,
     goWorkflow,
+    goWork,
+    goWorkBoard,
+    goWorkQueue,
     goWorkflows,
     openSearchHit,
   };

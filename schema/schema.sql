@@ -2646,6 +2646,18 @@ CREATE TABLE IF NOT EXISTS company_action_claims (
     PRIMARY KEY (community_id, idempotency_key)
 );
 
+-- One claim per (task, wakeAt) so two relay instances sweeping the same due
+-- snoozed task converge on a single wake. Task heads are append-only NIP-33
+-- events, so there is no mutable row to lock across the write the way a job
+-- lease can be; the claim insert is what makes the sweep idempotent instead.
+CREATE TABLE task_wake_claims (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    wake_at BIGINT NOT NULL,
+    claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, task_id, wake_at)
+);
+
 -- Durable idempotency claims for relay-brokered Colony party actions.
 -- Merge actions retain both the surviving head and the retired-handle alias.
 CREATE TABLE party_action_claims (
@@ -3696,6 +3708,7 @@ SELECT attach_community_write_fence('relay_invites');
 SELECT attach_community_write_fence('relay_members');
 SELECT attach_community_write_fence('scheduled_workflow_fires');
 SELECT attach_community_write_fence('subscriptions');
+SELECT attach_community_write_fence('task_wake_claims');
 SELECT attach_community_write_fence('thread_metadata');
 SELECT attach_community_write_fence('users');
 SELECT attach_community_write_fence('workflow_approvals');

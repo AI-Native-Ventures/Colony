@@ -164,6 +164,19 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
     manifestId: cardListManifestEvent.id,
   });
 
+  // Release the tail before asserting on the rows. The timeline freezes its
+  // logical tail whenever the scroller is reported off the bottom, and live
+  // arrivals then queue behind the "N new messages" pill instead of entering
+  // the DOM at all. A burst of appends can trip that on its own, and this test
+  // emits ten in a row without ever establishing that the timeline is pinned.
+  // CI run 32666875841, Desktop Smoke E2E shard 1, caught it exactly there:
+  // `[data-block-handle="report"]` (index 3) reported "element(s) not found"
+  // for the full 15s, and the failure screenshot shows a "7 new messages" pill
+  // with only lead-card, approval and agent-proposal rendered. 3 + 7 = the ten
+  // that were emitted. `settleTimelineAtLatest` scrolls to the floor and
+  // clicks that pill, which is what puts the withheld rows into the DOM.
+  await settleTimelineAtLatest(page);
+
   for (let index = 0; index < CORE_HANDLES.length; index += 1) {
     const handle = CORE_HANDLES[index];
     const row = page.locator(`[data-message-id="${events[index].id}"]`);

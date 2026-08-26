@@ -974,6 +974,30 @@ test("persist_draft_retains_typed_block_manifest_refs_across_restart", () => {
   assert.deepEqual(loadDraftEntry("chan-block")?.mentionRefs, mentionRefs);
 });
 
+test("persist_draft_retains_typed_cohort_refs_across_restart", () => {
+  setup("cohort-mention-owner");
+  const relayPubkey = "a".repeat(64);
+  const mentionRefs = [
+    {
+      displayName: "premium q3",
+      cohortAddress: `30201:${relayPubkey}:q3-leads`,
+    },
+  ];
+
+  persistDraftEntry(
+    "chan-cohort",
+    "Work the @Premium Q3 leads",
+    "chan-cohort",
+    [],
+    [],
+    mentionRefs,
+  );
+  clearAllDrafts();
+  initDraftStore("cohort-mention-owner");
+
+  assert.deepEqual(loadDraftEntry("chan-cohort")?.mentionRefs, mentionRefs);
+});
+
 test("legacy_draft_without_mention_refs_migrates_to_empty_refs", () => {
   const storage = installFreshLocalStorage();
   clearAllDrafts();
@@ -1054,6 +1078,38 @@ test("invalid_block_mention_ref_rejects_corrupt_draft", () => {
   );
 
   initDraftStore("corrupt-block-owner");
+  assert.equal(loadDraftEntry("chan-corrupt"), undefined);
+});
+
+test("invalid_cohort_mention_ref_rejects_corrupt_draft", () => {
+  const storage = installFreshLocalStorage();
+  clearAllDrafts();
+  const now = new Date().toISOString();
+  storage.setItem(
+    "buzz-drafts.v1:corrupt-cohort-owner",
+    JSON.stringify({
+      "chan-corrupt": {
+        content: "bad ref",
+        selectionStart: 7,
+        selectionEnd: 7,
+        channelId: "chan-corrupt",
+        createdAt: now,
+        updatedAt: now,
+        pendingImeta: [],
+        mentionRefs: [
+          {
+            displayName: "premium q3",
+            // Uppercase hex fails the lowercase-only coordinate check.
+            cohortAddress: `30201:${"A".repeat(64)}:q3-leads`,
+          },
+        ],
+        spoileredAttachmentUrls: [],
+        status: "active",
+      },
+    }),
+  );
+
+  initDraftStore("corrupt-cohort-owner");
   assert.equal(loadDraftEntry("chan-corrupt"), undefined);
 });
 

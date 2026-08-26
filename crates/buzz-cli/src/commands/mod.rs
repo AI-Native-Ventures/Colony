@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod dms;
 pub mod emoji;
 pub mod employees;
+pub mod fan_out;
 pub mod feed;
 pub mod grants;
 pub mod issues;

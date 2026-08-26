@@ -1106,6 +1106,28 @@ async fn main() -> anyhow::Result<()> {
                         error!("Job escalation sweep tick failed: {e}");
                     }
                 }
+
+                // The snooze-wake sweep rides the same loop for the same
+                // reason as the job sweeps above: a snoozed task announces
+                // nothing on its own, so only a timer brings it back. Unlike
+                // the others it has no relative threshold of its own to
+                // configure -- `wakeAt` is the absolute time the owner
+                // already chose (see `run_snooze_wake_tick`'s doc comment).
+                match buzz_relay::interrupt_runtime::run_snooze_wake_tick(
+                    &interrupt_state,
+                    now_secs,
+                )
+                .await
+                {
+                    Ok(woken) => {
+                        if woken > 0 {
+                            info!(woken, "Snooze-wake sweep: snoozed tasks woken");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Snooze-wake sweep tick failed: {e}");
+                    }
+                }
             }
         });
     }
