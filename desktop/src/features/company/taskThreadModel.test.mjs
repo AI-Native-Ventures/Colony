@@ -5,9 +5,41 @@ import {
   deriveTaskExecutionState,
   extractCanonicalTaskId,
   splitDeliveryArtifacts,
+  splitThreadTasks,
 } from "./taskThreadModel.ts";
 
 const HEX = "a".repeat(64);
+
+function task(overrides = {}) {
+  return {
+    id: "company:task",
+    status: "inProgress",
+    updatedAt: 1_800_000_000,
+    ...overrides,
+  };
+}
+
+test("splits a thread's history into live tasks and earlier ones", () => {
+  const ordered = [
+    task({ id: "t:run", status: "snoozed" }),
+    task({ id: "t:pack", status: "inProgress" }),
+    task({ id: "t:build", status: "completed" }),
+    task({ id: "t:else", status: "cancelled" }),
+  ];
+  const { live, earlier } = splitThreadTasks(ordered);
+  assert.deepEqual(
+    live.map((entry) => entry.id),
+    ["t:run", "t:pack"],
+  );
+  assert.deepEqual(
+    earlier.map((entry) => entry.id),
+    ["t:build", "t:else"],
+  );
+});
+
+test("a thread with no history has neither live nor earlier tasks", () => {
+  assert.deepEqual(splitThreadTasks([]), { live: [], earlier: [] });
+});
 
 test("extracts exactly one non-empty task association", () => {
   assert.equal(

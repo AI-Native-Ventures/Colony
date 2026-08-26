@@ -651,8 +651,8 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
 mod tests {
     use super::*;
     use buzz_core::company::{
-        CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind, InitiativeStatus,
-        TaskStatus, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+        CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind, DoerKind,
+        InitiativeStatus, TaskStatus, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
     };
     use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 
@@ -709,6 +709,9 @@ mod tests {
             expected_cost_usd: None,
             source_channel_id: "welcome".to_string(),
             source_event_id: None,
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_000,
         }
@@ -725,12 +728,22 @@ mod tests {
             owning_team_id: "company-team:abc:horizonlabs:engineering".to_string(),
             assignee_persona_ids: vec!["company-role:abc:horizonlabs:cto".to_string()],
             qa_persona_id: "company-role:abc:horizonlabs:cto".to_string(),
+            reviewer_team_id: None,
             cost_centre_id: "cc-coordination".to_string(),
             commercial_purpose: CommercialPurpose::Administration,
             client_organization_id: None,
             source_channel_id: "engineering".to_string(),
             source_event_id: None,
             implicit: true,
+            depends_on: Vec::new(),
+            subject: None,
+            stage: None,
+            thread_root: None,
+            doer_kind: DoerKind::Agent,
+            wake_at: None,
+            outcome_reason: None,
+            bounce_reason: None,
+            bounce_count: 0,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_000,
         }

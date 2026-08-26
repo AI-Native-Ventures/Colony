@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  resolveAnchoredBottomReport,
   resolveSemanticBottomTransition,
   shouldReleaseWithheldTail,
 } from "./semanticBottomTransition.ts";
@@ -140,5 +141,43 @@ test("an unmounted scroller proves nothing, so it releases nothing", () => {
       semanticAtBottom: false,
     }),
     false,
+  );
+});
+
+// The anchored-scroll bottom flag is what the "jump to latest" pill renders
+// from. Before the fix, resize reports were dropped before reaching it, so a
+// mid-resize non-bottom `"scroll"` report could latch it false with nothing
+// left to correct it. CI run 32851211991, Desktop E2E Integration shard 2:
+// stream.spec.ts measured distanceFromBottom < 8 while
+// `message-scroll-to-latest` stayed mounted for all 34 polls of a 15s
+// assertion.
+test("a resize that lands at the bottom corrects the anchored bottom flag", () => {
+  assert.deepEqual(
+    resolveAnchoredBottomReport({ atBottom: true, reason: "resize" }),
+    { apply: true, readerCaughtUp: false },
+  );
+});
+
+test("a resize never reports the reader off the bottom", () => {
+  assert.deepEqual(
+    resolveAnchoredBottomReport({ atBottom: false, reason: "resize" }),
+    { apply: false, readerCaughtUp: false },
+  );
+});
+
+// The reason resize reports were dropped in the first place: the unread pill
+// and the "N new messages" count clear on the reader reaching the bottom, and
+// geometry moving under a stationary reader is not that.
+test("only a scroll to the bottom counts as the reader catching up", () => {
+  assert.deepEqual(
+    resolveAnchoredBottomReport({ atBottom: true, reason: "scroll" }),
+    { apply: true, readerCaughtUp: true },
+  );
+});
+
+test("a reader scrolling away from the bottom still reports it", () => {
+  assert.deepEqual(
+    resolveAnchoredBottomReport({ atBottom: false, reason: "scroll" }),
+    { apply: true, readerCaughtUp: false },
   );
 });

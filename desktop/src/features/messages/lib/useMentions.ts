@@ -31,10 +31,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
-import {
-  deleteMentionName,
-  extractTypedActorPubkeys,
-} from "./draftMentionRefs";
+import { extractTypedActorPubkeys } from "./draftMentionRefs";
 import { flushMentionDebounce } from "./flushMentionDebounce";
 import {
   buildPersonaNameByPubkey,
@@ -61,7 +58,7 @@ import {
   mentionCandidateLabel,
   mergeMentionCandidate,
 } from "./mentionCandidates";
-import { useBlockMentions } from "./useBlockMentions";
+import { useEntityMentions } from "./useEntityMentions";
 const MENTION_DEBOUNCE_MS = 120;
 const MENTION_SUGGESTION_LIMIT = 50;
 export type { PersonaMentionTarget } from "./mentionHelpers";
@@ -100,22 +97,13 @@ export function useMentions(
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
   const channelsQuery = useChannelsQuery();
-  const claimBlockMentionName = React.useCallback((displayName: string) => {
-    deleteMentionName(mentionMapRef.current, displayName);
-    deleteMentionName(personaMentionMapRef.current, displayName);
-    setSelectedAgentMentionNames((current) => {
-      const normalizedName = displayName.trim().toLowerCase();
-      const next = current.filter(
-        (name) => name.trim().toLowerCase() !== normalizedName,
-      );
-      selectedAgentMentionNamesRef.current = next;
-      return next;
-    });
-  }, []);
-  const blockMentions = useBlockMentions({
+  const entityMentions = useEntityMentions({
     channels: channelsQuery.data,
-    onSelectBlockName: claimBlockMentionName,
-    setSelectedNames: setSelectedMentionNames,
+    mentionMapRef,
+    personaMentionMapRef,
+    selectedAgentMentionNamesRef,
+    setSelectedAgentMentionNames,
+    setSelectedMentionNames,
   });
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
@@ -452,10 +440,10 @@ export function useMentions(
         personasQuery.data ?? [],
         mentionCandidates,
       ),
-      ...blockMentions.candidates,
+      ...entityMentions.candidates,
     ],
     [
-      blockMentions.candidates,
+      entityMentions.candidates,
       mentionCandidates,
       personasQuery.data,
       teamsQuery.data,
@@ -602,14 +590,14 @@ export function useMentions(
       const startIndex =
         flushedMentionStartIndexRef.current ?? mentionStartIndex;
       flushedMentionStartIndexRef.current = null;
-      const blockInsertion = blockMentions.insertSuggestion(suggestion);
-      if (blockInsertion.isBlock) {
+      const entityInsertion = entityMentions.insertSuggestion(suggestion);
+      if (entityInsertion.matched) {
         setMentionQuery(null);
         setMentionSelectedIndex(0);
         return {
           replaceFromOffset: startIndex,
           replaceToOffset: selectionEnd,
-          insertText: blockInsertion.insertText,
+          insertText: entityInsertion.insertText,
         };
       }
       const teamMembers =
@@ -641,10 +629,7 @@ export function useMentions(
 
       const selectedMentions = rebindsTarget ? (teamMembers ?? [resolved]) : [];
       for (const selected of selectedMentions) {
-        deleteMentionName(
-          blockMentions.blockMentionMapRef.current,
-          selected.displayName,
-        );
+        entityMentions.reclaimName(selected.displayName);
         if (selected.kind === "persona" && selected.personaId) {
           personaMentions.set(selected.displayName, selected.personaId);
           mentions.delete(selected.displayName);
@@ -694,8 +679,8 @@ export function useMentions(
       };
     },
     [
-      blockMentions.blockMentionMapRef,
-      blockMentions.insertSuggestion,
+      entityMentions.reclaimName,
+      entityMentions.insertSuggestion,
       knownAgentPubkeys,
       mentionStartIndex,
     ],
@@ -708,7 +693,7 @@ export function useMentions(
         return;
       }
 
-      deleteMentionName(blockMentions.blockMentionMapRef.current, trimmedName);
+      entityMentions.reclaimName(trimmedName);
       mentionMapRef.current.set(trimmedName, pubkey);
       personaMentionMapRef.current.delete(trimmedName);
       trimMapToSize(mentionMapRef.current, 200);
@@ -725,7 +710,7 @@ export function useMentions(
         });
       }
     },
-    [blockMentions.blockMentionMapRef],
+    [entityMentions.reclaimName],
   );
 
   const insertResolvedMention = React.useCallback(
@@ -820,10 +805,15 @@ export function useMentions(
         text,
         mentionMapRef.current,
         mentionCandidates,
-        blockMentions.blockMentionMapRef.current,
+        entityMentions.blockMentionMapRef.current,
         personaMentionMapRef.current.keys(),
+        entityMentions.cohortMentionMapRef.current,
       ),
-    [blockMentions.blockMentionMapRef, mentionCandidates],
+    [
+      entityMentions.blockMentionMapRef,
+      entityMentions.cohortMentionMapRef,
+      mentionCandidates,
+    ],
   );
 
   const extractMentionPersonas = React.useCallback(
@@ -851,17 +841,18 @@ export function useMentions(
     cancelMentionAutocomplete();
     mentionMapRef.current.clear();
     personaMentionMapRef.current.clear();
-    blockMentions.clear();
+    entityMentions.clear();
     selectedAgentMentionNamesRef.current = [];
     setSelectedMentionNames([]);
     setSelectedAgentMentionNames([]);
-  }, [blockMentions.clear, cancelMentionAutocomplete]);
+  }, [entityMentions.clear, cancelMentionAutocomplete]);
 
   const { getDraftMentionRefs, restoreDraftMentionRefs } =
     useDraftMentionRouting({
       mentionMapRef,
       personaMentionMapRef,
-      blockMentionMapRef: blockMentions.blockMentionMapRef,
+      blockMentionMapRef: entityMentions.blockMentionMapRef,
+      cohortMentionMapRef: entityMentions.cohortMentionMapRef,
       selectedAgentNamesRef: selectedAgentMentionNamesRef,
       cancelAutocomplete: cancelMentionAutocomplete,
       setSelectedNames: setSelectedMentionNames,
@@ -954,8 +945,9 @@ export function useMentions(
   return {
     cancelMentionAutocomplete,
     clearMentions,
-    extractBlockReferenceTags: blockMentions.extractReferenceTags,
-    routeTypedMentionReferences: blockMentions.routeReferences,
+    extractBlockReferenceTags: entityMentions.extractBlockReferenceTags,
+    extractCohortReferenceTags: entityMentions.extractCohortReferenceTags,
+    routeTypedMentionReferences: entityMentions.route,
     extractMentionPersonas,
     extractMentionPubkeys,
     getDraftMentionRefs,

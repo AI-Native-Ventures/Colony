@@ -22,20 +22,24 @@
 use std::sync::Arc;
 
 use buzz_core::company::{
-    validate_company, validate_company_update, validate_initiative, validate_initiative_update,
-    validate_task, validate_task_update, CompanyProfile, CompanyTeamRef,
+    is_task_status_transition_allowed, validate_cohort, validate_cohort_update, validate_company,
+    validate_company_update, validate_initiative, validate_initiative_update, validate_task,
+    validate_task_update, validate_template, validate_template_update, CompanyProfile, CompanyTask,
+    CompanyTeamRef, DoerKind, TaskStatus,
 };
 use buzz_core::kind::{
-    KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
-    KIND_TEAM,
+    KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
+    KIND_SYSTEM_MESSAGE, KIND_TASK, KIND_TEAM, KIND_TEMPLATE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_db::CompanyActionApply;
 use buzz_sdk::company::{
-    parse_company_action, parse_company_event, parse_initiative_event, parse_task_event,
-    CompanyAction, CompanyActionOperation, CompanyActionPayload, CompanyReceiptOutcome,
+    parse_cohort_event, parse_company_action, parse_company_event, parse_initiative_event,
+    parse_task_event, parse_template_event, CompanyAction, CompanyActionOperation,
+    CompanyActionPayload, CompanyReceiptOutcome,
 };
 use nostr::{Event, EventBuilder, Keys, Kind, Tag};
+use serde::Serialize;
 use serde_json::json;
 
 use crate::handlers::event::dispatch_persistent_event;
@@ -97,16 +101,17 @@ fn head_timestamp(previous_head: Option<&Event>) -> nostr::Timestamp {
 ///
 /// The action carries a target coordinate, but trusting its tags would let a
 /// requester point a validated payload at someone else's coordinate.
-fn build_head(
+pub(crate) fn build_head(
     relay: &Keys,
     payload: &CompanyActionPayload,
     previous_head: Option<&Event>,
 ) -> Result<Event, String> {
-    // Every head carries `c` alongside the readable `company` tag. Only
-    // single-letter tags are indexed, so `#company` is a filter the relay
-    // never receives: the nostr filter type drops it before parsing, and a
-    // client asking for one company's records gets every company's. `c` is
-    // what makes that question answerable where the records are.
+    // Every board dimension carries a single-letter mirror of its readable
+    // tag (`c` company, `g` team, `w` status, `i` initiative, `s` stage, `u`
+    // subject). Only single-letter tags are indexed — the nostr filter type
+    // drops multi-letter keys before parsing — so without a mirror a value is
+    // readable once you already have the event but unfilterable over the
+    // wire, and "this run's tasks" is a question the relay cannot answer.
     let (kind, tags, content) = match payload {
         CompanyActionPayload::Company(profile) => {
             let tags = vec![
@@ -122,6 +127,9 @@ fn build_head(
                 scalar_tag("c", &initiative.company_id)?,
                 scalar_tag("company", &initiative.company_id)?,
                 scalar_tag("cost-centre", &initiative.cost_centre_id)?,
+                // Mirror of the status in the signed content, spelled exactly
+                // as it serialises there.
+                scalar_tag("w", &serialized_slug(&initiative.status)?)?,
             ];
             if let Some(client) = initiative.client_organization_id.as_deref() {
                 tags.push(scalar_tag("client", client)?);
@@ -135,14 +143,93 @@ fn build_head(
                 scalar_tag("company", &task.company_id)?,
                 scalar_tag("team", &task.owning_team_id)?,
                 scalar_tag("cost-centre", &task.cost_centre_id)?,
+                // Mirror of the status in the signed content.
+                scalar_tag("w", &serialized_slug(&task.status)?)?,
             ];
+            // Team mirrors: `team` stays the scalar "who is accountable", `g`
+            // is the set of every team this task touches. They differ only
+            // when a reviewer team is named, and that is exactly the case
+            // where a reviewer asking "what needs my team?" would otherwise
+            // find nothing.
+            tags.push(scalar_tag("g", &task.owning_team_id)?);
+            if let Some(reviewer_team_id) = task
+                .reviewer_team_id
+                .as_deref()
+                .filter(|reviewer| *reviewer != task.owning_team_id)
+            {
+                tags.push(scalar_tag("g", reviewer_team_id)?);
+            }
+            // One dependency edge per dependsOn entry. Repeated tags are how
+            // "which tasks wait on X" becomes a single indexed filter instead
+            // of a scan of every task head in the company.
+            for dependency in &task.depends_on {
+                tags.push(scalar_tag("v", dependency)?);
+            }
             if let Some(initiative_id) = task.initiative_id.as_deref() {
                 tags.push(scalar_tag("initiative", initiative_id)?);
+                // Mirror of `initiative`.
+                tags.push(scalar_tag("i", initiative_id)?);
             }
             if let Some(client) = task.client_organization_id.as_deref() {
                 tags.push(scalar_tag("client", client)?);
             }
+            if let Some(stage) = task.stage.as_deref() {
+                // Mirror of the template stage slug: the kanban column key.
+                tags.push(scalar_tag("s", stage)?);
+            }
+            if let Some(subject) = &task.subject {
+                // Mirror of the subject as its `kind:ref` swimlane key.
+                tags.push(scalar_tag(
+                    "u",
+                    &format!("{}:{}", serialized_slug(&subject.kind)?, subject.r#ref),
+                )?);
+            }
             (KIND_TASK, tags, serde_json::to_value(task))
+        }
+        CompanyActionPayload::Cohort(cohort) => {
+            let mut tags = vec![
+                scalar_tag("d", &cohort.id)?,
+                scalar_tag("c", &cohort.company_id)?,
+                scalar_tag("company", &cohort.company_id)?,
+            ];
+            // One member mirror per entry, spelled exactly like a task's `u`
+            // subject mirror (`kind:ref`) — what makes "which cohorts contain
+            // this party" an indexed `#m` filter instead of a full scan.
+            for member in &cohort.members {
+                tags.push(scalar_tag(
+                    "m",
+                    &format!("{}:{}", serialized_slug(&member.kind)?, member.r#ref),
+                )?);
+            }
+            (KIND_COHORT, tags, serde_json::to_value(cohort))
+        }
+        CompanyActionPayload::Template(template) => {
+            let mut tags = vec![
+                scalar_tag("d", &template.id)?,
+                scalar_tag("c", &template.company_id)?,
+                scalar_tag("company", &template.company_id)?,
+            ];
+            // One team mirror per distinct team any stage names as owning or
+            // reviewing, the same `g` letter Task already mirrors
+            // `owningTeamId` onto — what makes "which templates touch my
+            // team" an indexed `#g` filter instead of a full scan. In
+            // first-seen order rather than a HashSet so two calls building
+            // the same content emit identical tags.
+            let mut team_ids: Vec<&str> = Vec::new();
+            for stage in &template.stages {
+                if !team_ids.contains(&stage.owning_team_id.as_str()) {
+                    team_ids.push(&stage.owning_team_id);
+                }
+                if let Some(reviewer) = stage.reviewer_team_id.as_deref() {
+                    if !team_ids.contains(&reviewer) {
+                        team_ids.push(reviewer);
+                    }
+                }
+            }
+            for team_id in team_ids {
+                tags.push(scalar_tag("g", team_id)?);
+            }
+            (KIND_TEMPLATE, tags, serde_json::to_value(template))
         }
     };
     let content =
@@ -152,6 +239,16 @@ fn build_head(
         .custom_created_at(head_timestamp(previous_head))
         .sign_with_keys(relay)
         .map_err(|error| format!("failed to sign company head: {error}"))
+}
+
+/// The exact string a validated enum serialises to in head content.
+///
+/// Mirrors must spell statuses and subject kinds exactly as the signed
+/// content does, or a filter for one status would match heads carrying
+/// another. Deriving them through serde keeps that from drifting.
+fn serialized_slug<T: Serialize>(value: &T) -> Result<String, String> {
+    buzz_core::company::serde_enum_slug(value)
+        .ok_or_else(|| "failed to derive single-letter tag value".to_string())
 }
 
 /// Build the exact four-tag relay-signed receipt the SDK parser accepts.
@@ -186,6 +283,317 @@ fn build_receipt(
         .map_err(|error| format!("failed to sign company receipt: {error}"))
 }
 
+/// Upper bound on dependent heads examined for a single completion.
+const MAX_READY_DERIVATION_CANDIDATES: usize = 1_000;
+
+/// Decide whether one blocked task may wake given its dependencies' current
+/// statuses, parallel to its `dependsOn` list. Pure so the diamond, replay,
+/// and cancellation rules are testable without a database.
+///
+/// Ruling on terminal-bad dependencies: only `Completed` satisfies an edge.
+/// A cancelled dependency leaves the dependent blocked rather than silently
+/// claimable — work whose premise was deliberately killed must not become
+/// assignable while the owner believes the branch is dead, and a blocked card
+/// on the board is the visible prompt to resolve the branch by hand. Cascade
+/// cancellation is a later phase.
+fn dependent_is_ready_to_wake(
+    dependent_status: TaskStatus,
+    dependency_statuses: &[Option<TaskStatus>],
+) -> bool {
+    // No edges means nothing for completion to derive from: tasks without
+    // dependencies reach ready the ordinary way and are never woken here.
+    !dependency_statuses.is_empty()
+        && dependent_status == TaskStatus::Blocked
+        && dependency_statuses
+            .iter()
+            .all(|status| *status == Some(TaskStatus::Completed))
+}
+
+/// Current status of one relay-authored task head, if it exists.
+async fn task_head_status(
+    tenant: &TenantContext,
+    state: &AppState,
+    task_id: &str,
+) -> Result<Option<TaskStatus>, String> {
+    let Some(head) = load_head(tenant, state, KIND_TASK, task_id).await? else {
+        return Ok(None);
+    };
+    parse_task_event(&head)
+        .map(|task| Some(task.status))
+        .map_err(|error| format!("stored task head {task_id} does not parse: {error}"))
+}
+
+/// Derive `blocked -> ready` for tasks waiting on a completed dependency.
+///
+/// Spec section 04: a blocked task becomes ready when EVERY task in its
+/// `dependsOn` has reached a terminal-good state. Never fails the caller:
+/// the owner's action already committed, so a hiccup here is logged and the
+/// chain waits for the next completion instead of surfacing an error for a
+/// write that did succeed.
+async fn derive_ready_dependents(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    completed_task_id: &str,
+) {
+    if let Err(error) = derive_ready_dependents_inner(tenant, state, completed_task_id).await {
+        tracing::warn!(completed_task_id, %error, "blocked-to-ready derivation failed");
+    }
+}
+
+async fn derive_ready_dependents_inner(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    completed_task_id: &str,
+) -> Result<(), String> {
+    // Reachability: every head carries one `v` tag per dependsOn entry, so
+    // the dependents of one completed task are exactly the heads carrying
+    // that value — a GIN-served JSONB containment pushdown, not a scan of
+    // every task head in the company.
+    let candidates = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_TASK as i32]),
+            global_only: true,
+            tag_contains: Some(("v".to_string(), completed_task_id.to_string())),
+            limit: Some(MAX_READY_DERIVATION_CANDIDATES as i64),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("database error finding dependents: {error}"))?;
+    if candidates.len() == MAX_READY_DERIVATION_CANDIDATES {
+        tracing::warn!(
+            completed_task_id,
+            candidates = candidates.len(),
+            "dependency fan-in reached the derivation candidate bound"
+        );
+    }
+
+    for stored in candidates {
+        if let Err(error) =
+            wake_dependent_if_ready(tenant, state, completed_task_id, &stored.event).await
+        {
+            tracing::warn!(
+                dependent = %stored.event.id.to_hex(),
+                %error,
+                "skipped a dependent during blocked-to-ready derivation"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Attempt to wake ONE dependent candidate. `Ok(None)` means no wake was due
+/// (already awake, dependencies unsatisfied); `Ok(Some(_))` means published;
+/// `Err` means the candidate was unreadable or unwritable and was skipped.
+async fn wake_dependent_if_ready(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    completed_task_id: &str,
+    candidate_head: &Event,
+) -> Result<Option<Event>, String> {
+    let dependent = parse_task_event(candidate_head)
+        .map_err(|error| format!("dependent head does not parse: {error}"))?;
+    if !dependent
+        .depends_on
+        .contains(&completed_task_id.to_string())
+    {
+        // Stale snapshot: the candidate replaced this edge since the query ran.
+        return Ok(None);
+    }
+
+    let mut dependency_statuses = Vec::with_capacity(dependent.depends_on.len());
+    for dependency in &dependent.depends_on {
+        dependency_statuses.push(task_head_status(tenant, state, dependency).await?);
+    }
+    if !dependent_is_ready_to_wake(dependent.status, &dependency_statuses) {
+        return Ok(None);
+    }
+
+    // Re-read the current head instead of trusting the query snapshot: a
+    // concurrent writer may have moved this coordinate since the filter ran.
+    // Finding anything but Blocked means someone got there first, which is
+    // what makes replays and racing diamonds converge to one wake.
+    let previous_event = load_head(tenant, state, KIND_TASK, &dependent.id)
+        .await?
+        .ok_or_else(|| format!("dependent {} vanished before wake", dependent.id))?;
+    let previous = parse_task_event(&previous_event)
+        .map_err(|error| format!("dependent head does not parse on re-read: {error}"))?;
+    if previous.status != TaskStatus::Blocked {
+        return Ok(None);
+    }
+
+    let mut replacement = previous.clone();
+    replacement.status = TaskStatus::Ready;
+    // Only status and updatedAt differ from a head that passed full contract
+    // validation when it was written; identity fields are untouched, so the
+    // checks re-run here are exactly the ones the change could violate.
+    replacement.updated_at = replacement
+        .updated_at
+        .max(chrono::Utc::now().timestamp())
+        .max(previous.updated_at + 1);
+    if !is_task_status_transition_allowed(
+        previous.status,
+        replacement.status,
+        replacement.doer_kind,
+    ) {
+        return Ok(None);
+    }
+
+    // build_head re-derives every mirror (`w` becomes ready, `v` edges stay
+    // identical) from the validated content, so the derived head is filtered
+    // exactly like a hand-written one.
+    let head = build_head(
+        &state.relay_keypair,
+        &CompanyActionPayload::Task(replacement),
+        Some(&previous_event),
+    )?;
+    let (stored_head, inserted) = state
+        .db
+        .insert_event(tenant.community(), &head, None)
+        .await
+        .map_err(|error| format!("failed to store derived ready head: {error}"))?;
+    if inserted {
+        dispatch_persistent_event(
+            tenant,
+            state,
+            &stored_head,
+            KIND_TASK,
+            &state.relay_keypair.public_key().to_hex(),
+            None,
+        )
+        .await;
+    }
+    Ok(Some(head))
+}
+
+/// Derive `<live> -> blocked` for tasks depending on a task that just bounced.
+///
+/// The mirror image of `derive_ready_dependents`: a bounce moves a task back
+/// from `completed` to `ready` because its delivered output was rejected, so
+/// everything depending on that output is now depending on something that
+/// isn't actually done. Same reachability query (the reverse `v`-tag index),
+/// same never-fails-the-caller contract - the owner's bounce already
+/// committed, so a hiccup here is logged and a dependent stays live until the
+/// next pass instead of surfacing an error for a write that did succeed.
+async fn derive_blocked_dependents(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    bounced_task_id: &str,
+) {
+    if let Err(error) = derive_blocked_dependents_inner(tenant, state, bounced_task_id).await {
+        tracing::warn!(bounced_task_id, %error, "live-to-blocked derivation failed");
+    }
+}
+
+async fn derive_blocked_dependents_inner(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    bounced_task_id: &str,
+) -> Result<(), String> {
+    let candidates = state
+        .db
+        .query_events(&buzz_db::event::EventQuery {
+            kinds: Some(vec![KIND_TASK as i32]),
+            global_only: true,
+            tag_contains: Some(("v".to_string(), bounced_task_id.to_string())),
+            limit: Some(MAX_READY_DERIVATION_CANDIDATES as i64),
+            ..buzz_db::event::EventQuery::for_community(tenant.community())
+        })
+        .await
+        .map_err(|error| format!("database error finding dependents: {error}"))?;
+    if candidates.len() == MAX_READY_DERIVATION_CANDIDATES {
+        tracing::warn!(
+            bounced_task_id,
+            candidates = candidates.len(),
+            "dependency fan-in reached the derivation candidate bound"
+        );
+    }
+
+    for stored in candidates {
+        if let Err(error) =
+            block_dependent_if_live(tenant, state, bounced_task_id, &stored.event).await
+        {
+            tracing::warn!(
+                dependent = %stored.event.id.to_hex(),
+                %error,
+                "skipped a dependent during live-to-blocked derivation"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Whether a dependent currently in `dependent_status` should be blocked
+/// because a task it depends on just bounced back to ready. Already blocked
+/// has nothing to change, and a terminal dependent (completed or cancelled)
+/// has already said its final word - the general transition table would
+/// refuse `Blocked` from either anyway, so this is that check made explicit
+/// and testable on its own.
+fn dependent_should_block(dependent_status: TaskStatus, doer_kind: DoerKind) -> bool {
+    dependent_status != TaskStatus::Blocked
+        && is_task_status_transition_allowed(dependent_status, TaskStatus::Blocked, doer_kind)
+}
+
+/// Attempt to block ONE dependent candidate. `Ok(None)` means no block was
+/// due (already blocked, terminal, or the dependency edge was stale);
+/// `Ok(Some(_))` means published; `Err` means the candidate was unreadable or
+/// unwritable and was skipped.
+async fn block_dependent_if_live(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    bounced_task_id: &str,
+    candidate_head: &Event,
+) -> Result<Option<Event>, String> {
+    let dependent = parse_task_event(candidate_head)
+        .map_err(|error| format!("dependent head does not parse: {error}"))?;
+    if !dependent.depends_on.contains(&bounced_task_id.to_string()) {
+        // Stale snapshot: the candidate replaced this edge since the query ran.
+        return Ok(None);
+    }
+
+    // Re-read the current head instead of trusting the query snapshot, same
+    // as the ready-derivation path: a concurrent writer may have moved this
+    // coordinate since the filter ran.
+    let previous_event = load_head(tenant, state, KIND_TASK, &dependent.id)
+        .await?
+        .ok_or_else(|| format!("dependent {} vanished before block", dependent.id))?;
+    let previous = parse_task_event(&previous_event)
+        .map_err(|error| format!("dependent head does not parse on re-read: {error}"))?;
+    if !dependent_should_block(previous.status, previous.doer_kind) {
+        return Ok(None);
+    }
+
+    let mut replacement = previous.clone();
+    replacement.status = TaskStatus::Blocked;
+    replacement.updated_at = replacement
+        .updated_at
+        .max(chrono::Utc::now().timestamp())
+        .max(previous.updated_at + 1);
+
+    let head = build_head(
+        &state.relay_keypair,
+        &CompanyActionPayload::Task(replacement),
+        Some(&previous_event),
+    )?;
+    let (stored_head, inserted) = state
+        .db
+        .insert_event(tenant.community(), &head, None)
+        .await
+        .map_err(|error| format!("failed to store derived blocked head: {error}"))?;
+    if inserted {
+        dispatch_persistent_event(
+            tenant,
+            state,
+            &stored_head,
+            KIND_TASK,
+            &state.relay_keypair.public_key().to_hex(),
+            None,
+        )
+        .await;
+    }
+    Ok(Some(head))
+}
+
 /// Load one head by coordinate under an explicit author.
 async fn load_head_authored_by(
     tenant: &TenantContext,
@@ -217,7 +625,7 @@ async fn load_head_authored_by(
 }
 
 /// Load one relay-authored canonical head by coordinate, if it exists.
-async fn load_head(
+pub(crate) async fn load_head(
     tenant: &TenantContext,
     state: &AppState,
     kind: u32,
@@ -378,6 +786,27 @@ async fn validate_payload_against_state(
                     .map_err(|error| error.to_string())?;
             }
         }
+        CompanyActionPayload::Cohort(cohort) => {
+            let company = load_company(tenant, state, &cohort.company_id).await?;
+            validate_cohort(cohort, &company).map_err(|error| error.to_string())?;
+            if let Some(previous) = previous_head {
+                let previous = parse_cohort_event(previous)
+                    .map_err(|error| format!("stored cohort head is unreadable: {error}"))?;
+                validate_cohort_update(&previous, cohort, &company)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        CompanyActionPayload::Template(template) => {
+            let company = load_company(tenant, state, &template.company_id).await?;
+            let teams = load_team_refs(tenant, state, &action_author).await?;
+            validate_template(template, &company, &teams).map_err(|error| error.to_string())?;
+            if let Some(previous) = previous_head {
+                let previous = parse_template_event(previous)
+                    .map_err(|error| format!("stored template head is unreadable: {error}"))?;
+                validate_template_update(&previous, template, &company, &teams)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
     }
     Ok(())
 }
@@ -474,11 +903,15 @@ pub(crate) async fn handle_company_action(
         CompanyActionPayload::Company(_) => KIND_COMPANY_PROFILE,
         CompanyActionPayload::Initiative(_) => KIND_INITIATIVE,
         CompanyActionPayload::Task(_) => KIND_TASK,
+        CompanyActionPayload::Cohort(_) => KIND_COHORT,
+        CompanyActionPayload::Template(_) => KIND_TEMPLATE,
     };
     let entity_id = match &action.payload {
         CompanyActionPayload::Company(profile) => profile.id.clone(),
         CompanyActionPayload::Initiative(initiative) => initiative.id.clone(),
         CompanyActionPayload::Task(task) => task.id.clone(),
+        CompanyActionPayload::Cohort(cohort) => cohort.id.clone(),
+        CompanyActionPayload::Template(template) => template.id.clone(),
     };
     let previous_head = load_head(tenant, state, payload_kind, &entity_id).await?;
 
@@ -583,6 +1016,41 @@ pub(crate) async fn handle_company_action(
                 None,
             )
             .await;
+            // A committed task transition earns its thread row, a task
+            // reaching Completed may unblock downstream work, and a bounce
+            // (Completed -> Ready) blocks it again. All three derive after
+            // the commit and after dispatch so the completing write is never
+            // delayed or failed by any of them; see `emit_task_transition`,
+            // `derive_ready_dependents`, and `derive_blocked_dependents` for
+            // the reachability and idempotency stories.
+            if let CompanyActionPayload::Task(task) = &action.payload {
+                let previous_status = match previous_head.as_ref() {
+                    Some(head) => match parse_task_event(head) {
+                        Ok(previous) => Some(previous.status),
+                        Err(error) => {
+                            tracing::warn!(
+                                task_id = %task.id,
+                                %error,
+                                "previous task head unreadable; no transition row emitted"
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                if let Some(transition) =
+                    task_transition_event(action.operation, previous_status, task)
+                {
+                    emit_task_transition(tenant, state, transition, task).await;
+                }
+                if task.status == TaskStatus::Completed {
+                    derive_ready_dependents(tenant, state, &task.id).await;
+                } else if task.status == TaskStatus::Ready
+                    && previous_status == Some(TaskStatus::Completed)
+                {
+                    derive_blocked_dependents(tenant, state, &task.id).await;
+                }
+            }
             Ok(CompanyBrokerOutcome::Applied)
         }
         CompanyActionApply::Duplicate {
@@ -708,8 +1176,161 @@ async fn refuse(
     Ok(CompanyBrokerOutcome::Refused { message })
 }
 
-/// Company mutations require the community's current human OWNER.
+/// Which committed OWNER-SIGNED task actions earn a thread system row, and
+/// which kind. Autonomous relay-authored transitions this broker derives on
+/// its own — the ready-derivation and blocked-derivation sweeps, and the
+/// snooze-wake sweep in `interrupt_runtime::run_snooze_wake_tick` — do not
+/// go through `handle_company_action` at all, so they are not decided here;
+/// the wake sweep calls `emit_task_transition` directly with `"task_woke"`.
 ///
+/// Of owner-signed transitions, seven moments are news to the thread:
+/// created, review handoff, review rejected, bounce, completed, escalated,
+/// cancelled. Everything else is board churn a status column already shows
+/// — a caption for `ready -> inProgress` turns the thread into a status log
+/// and buries the conversation under it. Escalation has no operation yet, so
+/// it stays deliberately absent from this decision rather than emitted
+/// never; its desktop copy path stays dormant until the model carries it.
+/// Bounce is live: `completed -> ready` only ever means a bounce
+/// (`validate_bounce_delta` guards that), so the state delta alone is
+/// enough to name it.
+///
+/// The decision keys off the ACTUAL state delta (`previous_status` versus
+/// the replacement), not the action's declared verb: an Update that moves
+/// status is a transition in effect. A replacement that changes no status is
+/// a field edit and earns nothing.
+fn task_transition_event(
+    operation: CompanyActionOperation,
+    previous_status: Option<TaskStatus>,
+    replacement: &CompanyTask,
+) -> Option<&'static str> {
+    match (operation, previous_status) {
+        (CompanyActionOperation::Create, None) => Some("task_created"),
+        (_, Some(previous)) if previous != replacement.status => match replacement.status {
+            TaskStatus::Completed => Some("task_completed"),
+            TaskStatus::Cancelled => Some("task_cancelled"),
+            TaskStatus::InReview if previous == TaskStatus::InProgress => {
+                Some("task_review_handoff")
+            }
+            TaskStatus::InProgress if previous == TaskStatus::InReview => {
+                Some("task_review_rejected")
+            }
+            TaskStatus::Ready if previous == TaskStatus::Completed => Some("task_bounced"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The exact payload `describeTaskTransition` on desktop parses. Optional
+/// fields stay absent until a truthful source exists: nothing in the task
+/// contract names a reviewer pubkey or an issue count today, and a row that
+/// invents one would be wrong in the exact place people look for who did
+/// what. A bounce is the one transition with a truthful `reason` today, so
+/// it is the one case that gets one.
+fn task_transition_payload(event_type: &str, task: &CompanyTask) -> serde_json::Value {
+    let mut payload = json!({
+        "type": event_type,
+        "task": task.id,
+        "title": task.title,
+        "team": task.owning_team_id,
+    });
+    if event_type == "task_bounced" {
+        if let Some(reason) = &task.bounce_reason {
+            payload["reason"] = json!(reason.text());
+        }
+    }
+    payload
+}
+
+/// Emit one kind 40099 system row for a committed task transition.
+///
+/// Scoped to where the work happens: the task's source channel, tagged into
+/// its own thread with an `e` root marker when it has one — the same shape
+/// ask receipts use — so a row never lands in a channel the task does not
+/// belong to.
+///
+/// Best-effort exactly like every other post-commit side effect: the owner's
+/// action is already durable when this runs, so any failure here is logged
+/// and swallowed rather than surfaced against a write that succeeded.
+///
+/// Exactly-once comes from placement, not bookkeeping: this runs only inside
+/// the `Applied` arm of one committed action, and a replayed idempotency key
+/// short-circuits at the claim lookup long before any emission happens.
+pub(crate) async fn emit_task_transition(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    event_type: &str,
+    task: &CompanyTask,
+) {
+    let content = match canonical_content(&task_transition_payload(event_type, task)) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, %error, "task transition payload build failed");
+            return;
+        }
+    };
+    let Ok(channel_id) = uuid::Uuid::parse_str(&task.source_channel_id) else {
+        tracing::warn!(
+            task_id = %task.id,
+            channel = %task.source_channel_id,
+            "task transition skipped: source channel is not a channel id"
+        );
+        return;
+    };
+
+    let mut tags = Vec::with_capacity(2);
+    match Tag::parse(["h", channel_id.to_string().as_str()]) {
+        Ok(tag) => tags.push(tag),
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, %error, "task transition `h` tag build failed");
+            return;
+        }
+    }
+    if let Some(thread_root) = task.thread_root.as_deref() {
+        match Tag::parse(["e", thread_root, "", "root"]) {
+            Ok(tag) => tags.push(tag),
+            Err(error) => {
+                // The row still lands in the right channel; only the thread
+                // scoping is lost, which the channel timeline renders anyway.
+                tracing::warn!(
+                    task_id = %task.id,
+                    thread_root,
+                    %error,
+                    "task transition thread scope dropped"
+                );
+            }
+        }
+    }
+
+    let event = match EventBuilder::new(Kind::Custom(KIND_SYSTEM_MESSAGE as u16), content)
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+    {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, %error, "task transition sign failed");
+            return;
+        }
+    };
+
+    if let Err(error) = state
+        .db
+        .insert_event(tenant.community(), &event, Some(channel_id))
+        .await
+    {
+        tracing::warn!(%error, channel_id = %channel_id, "task transition row store failed");
+        return;
+    }
+    if let Err(error) = state
+        .pubsub
+        .publish_event(tenant, buzz_pubsub::EventTopic::Channel(channel_id), &event)
+        .await
+    {
+        tracing::warn!(%error, "task transition row fan-out failed");
+    }
+}
+
+/// Company mutations require the community's current human OWNER.///
 /// Deliberately stricter than the Block catalog broker, which also accepts
 /// admins: company state carries commercial and accounting authority, and the
 /// corrected design makes owner identity the single authorization anchor.
@@ -744,6 +1365,30 @@ async fn authorize_company_actor(
 mod tests {
     use super::*;
     use buzz_core::company::{CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind};
+    use buzz_sdk::company::CompanySdkError;
+
+    fn scalar_tag_value<'a>(head: &'a Event, name: &str) -> Option<&'a str> {
+        head.tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
+            .map(|tag| tag.as_slice()[1].as_str())
+            .next()
+    }
+
+    fn scalar_tag_values<'a>(head: &'a Event, name: &str) -> Vec<&'a str> {
+        head.tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
+            .map(|tag| tag.as_slice()[1].as_str())
+            .collect()
+    }
+
+    fn tag_count(head: &Event, name: &str) -> usize {
+        head.tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(name))
+            .count()
+    }
 
     fn sample_company() -> CompanyProfile {
         CompanyProfile {
@@ -902,6 +1547,9 @@ mod tests {
             expected_cost_usd: Some(120.0),
             source_channel_id: "general".to_string(),
             source_event_id: None,
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_000,
             updated_at: 1_000,
         }
@@ -914,16 +1562,29 @@ mod tests {
             company_id: "horizon-labs".to_string(),
             initiative_id: Some("init-homepage".to_string()),
             title: "Write homepage copy".to_string(),
-            status: buzz_core::company::TaskStatus::Proposed,
+            status: buzz_core::company::TaskStatus::InProgress,
             owning_team_id: "team-marketing".to_string(),
             assignee_persona_ids: vec!["builtin:content".to_string()],
             qa_persona_id: "builtin:marketing-lead".to_string(),
+            reviewer_team_id: None,
             cost_centre_id: "internal".to_string(),
             commercial_purpose: buzz_core::company::CommercialPurpose::Marketing,
             client_organization_id: Some("acme-corp".to_string()),
             source_channel_id: "general".to_string(),
             source_event_id: None,
             implicit: false,
+            depends_on: vec!["write-homepage-brief".to_string()],
+            subject: Some(buzz_core::company::SubjectRef {
+                kind: buzz_core::company::SubjectKind::Party,
+                r#ref: "acme-lead".to_string(),
+            }),
+            stage: Some("build-site".to_string()),
+            thread_root: None,
+            doer_kind: buzz_core::company::DoerKind::Agent,
+            wake_at: None,
+            outcome_reason: None,
+            bounce_reason: None,
+            bounce_count: 0,
             created_at: 1_000,
             updated_at: 1_000,
         }
@@ -955,6 +1616,10 @@ mod tests {
             .tags
             .iter()
             .any(|tag| tag.as_slice()[0] == "client"));
+        // The status mirror is present exactly once and spells the status
+        // exactly as the signed content does.
+        assert_eq!(tag_count(&initiative_head, "w"), 1);
+        assert_eq!(scalar_tag_value(&initiative_head, "w"), Some("proposed"));
 
         let task_head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
             .expect("build task head");
@@ -977,28 +1642,483 @@ mod tests {
                 "task head must carry exactly one `{name}` tag"
             );
         }
+
+        // Single-letter mirrors: exactly one each, spelled as the content
+        // spells them. `inProgress` proves the mirror is serde-derived rather
+        // than lowercased by hand.
+        for (name, expected) in [
+            ("g", "team-marketing"),
+            ("i", "init-homepage"),
+            ("s", "build-site"),
+            ("u", "party:acme-lead"),
+            ("w", "inProgress"),
+            ("v", "write-homepage-brief"),
+        ] {
+            assert_eq!(tag_count(&task_head, name), 1);
+            assert_eq!(
+                scalar_tag_value(&task_head, name),
+                Some(expected),
+                "mirror `{name}` must match the signed content"
+            );
+        }
+    }
+
+    /// A task naming a reviewer team carries both teams under `g` and only
+    /// the accountable one under `team`. Without the second mirror, a
+    /// reviewer asking `#g = my-team` finds nothing it owes a review on.
+    #[test]
+    fn a_reviewer_team_emits_a_second_team_mirror() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.reviewer_team_id = Some("team-qa".to_string());
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+
+        assert_eq!(tag_count(&head, "g"), 2);
+        let mut mirrors = scalar_tag_values(&head, "g");
+        mirrors.sort_unstable();
+        assert_eq!(mirrors, vec!["team-marketing", "team-qa"]);
+        // `team` stays the scalar "who is accountable" - the reviewer is not
+        // accountable for delivery and must not appear there.
+        assert_eq!(tag_count(&head, "team"), 1);
+        assert_eq!(scalar_tag_value(&head, "team"), Some("team-marketing"));
+        parse_task_event(&head).expect("a two-team mirror set must parse");
+    }
+
+    /// A reviewer team equal to the owning team says nothing the owning team
+    /// does not already say, and must not double the mirror: a duplicate `g`
+    /// is a set violation the strict parser refuses outright.
+    #[test]
+    fn a_reviewer_team_equal_to_the_owning_team_emits_one_mirror() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.reviewer_team_id = Some("team-marketing".to_string());
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+
+        assert_eq!(tag_count(&head, "g"), 1);
+        parse_task_event(&head).expect("a single mirror must parse");
+    }
+
+    /// One `v` tag per dependency entry: two edges on the content, two tags
+    /// on the head, each naming a declared dependency. This repetition is
+    /// what makes "dependents of X" an indexed filter later.
+    #[test]
+    fn every_dependency_emits_its_own_edge_tag() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.depends_on = vec![
+            "write-homepage-brief".to_string(),
+            "approve-budget".to_string(),
+        ];
+        let head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        assert_eq!(tag_count(&head, "v"), 2);
+        assert_eq!(scalar_tag_values(&head, "v").len(), 2);
+        for edge in ["write-homepage-brief", "approve-budget"] {
+            assert!(
+                scalar_tag_values(&head, "v").contains(&edge),
+                "dependency {edge} must have its own `v` tag"
+            );
+        }
+        parse_task_event(&head).expect("multi-edge head parses");
+    }
+
+    fn sample_cohort() -> buzz_core::company::Cohort {
+        buzz_core::company::Cohort {
+            schema: "colony.cohort/v1".to_string(),
+            id: "q3-outbound-leads".to_string(),
+            company_id: "horizon-labs".to_string(),
+            name: "Q3 outbound leads".to_string(),
+            members: vec![
+                buzz_core::company::SubjectRef {
+                    kind: buzz_core::company::SubjectKind::Party,
+                    r#ref: "acme-lead".to_string(),
+                },
+                buzz_core::company::SubjectRef {
+                    kind: buzz_core::company::SubjectKind::Party,
+                    r#ref: "globex-lead".to_string(),
+                },
+            ],
+            created_at: 1_000,
+            updated_at: 1_000,
+        }
+    }
+
+    /// One `m` tag per member, spelled `kind:ref` exactly like a task's `u`
+    /// subject mirror — what makes "which cohorts contain this party" an
+    /// indexed filter later.
+    #[test]
+    fn relay_authored_cohort_head_round_trips_through_the_strict_parser() {
+        let relay = Keys::generate();
+        let head = build_head(&relay, &CompanyActionPayload::Cohort(sample_cohort()), None)
+            .expect("build cohort head");
+        assert_eq!(head.kind.as_u16() as u32, KIND_COHORT);
+        assert!(!head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
+        let parsed = parse_cohort_event(&head).expect("parse cohort head");
+        assert_eq!(parsed.id, "q3-outbound-leads");
+        assert_eq!(parsed.members.len(), 2);
+
+        assert_eq!(tag_count(&head, "m"), 2);
+        for expected in ["party:acme-lead", "party:globex-lead"] {
+            assert!(
+                scalar_tag_values(&head, "m").contains(&expected),
+                "member {expected} must have its own `m` tag"
+            );
+        }
+    }
+
+    /// A cohort must express any subject kind, not just party ids — the same
+    /// mistake `task.subject` itself made once and had to undo.
+    #[test]
+    fn a_cohort_mixing_subject_kinds_mirrors_each_kind_correctly() {
+        let relay = Keys::generate();
+        let mut cohort = sample_cohort();
+        cohort.members.push(buzz_core::company::SubjectRef {
+            kind: buzz_core::company::SubjectKind::External,
+            r#ref: "crm-9".to_string(),
+        });
+        let head = build_head(&relay, &CompanyActionPayload::Cohort(cohort), None)
+            .expect("build cohort head");
+        assert!(scalar_tag_values(&head, "m").contains(&"external:crm-9"));
+        parse_cohort_event(&head).expect("mixed-kind cohort head parses");
     }
 
     /// A Task with no initiative and no client must omit both optional tags;
-    /// emitting them empty would fail the strict parser.
+    /// emitting them empty would fail the strict parser. The same discipline
+    /// applies to the optional mirrors `i`, `s` and `u`, while the mirrors of
+    /// required fields (`g` team, `w` status) stay present. An empty
+    /// dependsOn emits no `v` edges at all.
     #[test]
     fn task_head_omits_absent_optional_coordinates() {
         let relay = Keys::generate();
         let mut task = sample_task();
         task.initiative_id = None;
         task.client_organization_id = None;
+        task.stage = None;
+        task.subject = None;
+        task.depends_on = Vec::new();
 
         let head =
             build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
-        for name in ["initiative", "client"] {
+        for name in ["initiative", "client", "i", "s", "u", "v"] {
             assert!(
                 !head.tags.iter().any(|tag| tag.as_slice()[0] == name),
                 "absent `{name}` must not produce a tag"
             );
         }
+        assert_eq!(tag_count(&head, "g"), 1);
+        assert_eq!(tag_count(&head, "w"), 1);
         let parsed = parse_task_event(&head).expect("parse task head");
         assert_eq!(parsed.initiative_id, None);
         assert_eq!(parsed.client_organization_id, None);
+        assert_eq!(parsed.stage, None);
+        assert_eq!(parsed.subject, None);
+        assert_eq!(parsed.depends_on, Vec::<String>::new());
+    }
+
+    /// A mirror that disagrees with the signed content must be refused: the
+    /// whole point of an index is that clients filter on it instead of the
+    /// content, so it may never say something the content does not.
+    #[test]
+    fn lying_single_letter_mirrors_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
+            .expect("build task head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("w") {
+                    Tag::parse(["w", "completed"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_task_event(&head).expect_err("lying status mirror must be refused");
+        assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// Heads written before the mirrors existed carry none of them and must
+    /// still parse: absent mirrors mean the content stays authoritative, not
+    /// that the head is broken. The content is also rolled back to the
+    /// pre-chain shape (empty dependsOn) so edges and list agree the way a
+    /// genuinely old head's would.
+    #[test]
+    fn heads_written_before_mirrors_existed_still_parse() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.depends_on = Vec::new();
+        let mut head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        head.tags.retain(|tag| {
+            !matches!(
+                tag.as_slice().first().map(String::as_str),
+                Some("g" | "i" | "s" | "u" | "w" | "v")
+            )
+        });
+        let parsed = parse_task_event(&head).expect("pre-mirror head parses");
+        assert_eq!(parsed.owning_team_id, "team-marketing");
+        assert_eq!(parsed.status, buzz_core::company::TaskStatus::InProgress);
+        assert_eq!(parsed.initiative_id.as_deref(), Some("init-homepage"));
+    }
+
+    /// A dependency edge the content does not declare must be refused with
+    /// the same force as a lying status: dependents of a task are found by
+    /// filtering `v`, so an invented edge would wake work that never waited.
+    #[test]
+    fn lying_dependency_edges_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
+            .expect("build task head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("v") {
+                    Tag::parse(["v", "some-other-task"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_task_event(&head).expect_err("lying edge must be refused");
+        assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// A `g` set that is present but incomplete is refused, not tolerated.
+    /// Absent mirrors are fine (heads predate them), but a head carrying
+    /// only the owning team's `g` while the record names a reviewer would
+    /// make `#g = reviewer-team` silently miss the reviews it owes - a
+    /// wrong answer from an index is worse than no index.
+    #[test]
+    fn a_partial_team_mirror_set_is_refused() {
+        let relay = Keys::generate();
+        let mut task = sample_task();
+        task.reviewer_team_id = Some("team-qa".to_string());
+        let mut head =
+            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        assert_eq!(tag_count(&head, "g"), 2);
+        head.tags.retain(|tag| {
+            tag.as_slice().first().map(String::as_str) != Some("g")
+                || tag.as_slice()[1] == "team-marketing"
+        });
+        assert_eq!(tag_count(&head, "g"), 1);
+
+        let error = parse_task_event(&head).expect_err("a partial mirror set must be refused");
+        assert!(matches!(error, CompanySdkError::TagContentMismatch("task")));
+    }
+
+    /// Same guarantee as `lying_dependency_edges_are_refused`, for a
+    /// cohort's `m` member mirrors.
+    #[test]
+    fn lying_cohort_member_mirrors_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(&relay, &CompanyActionPayload::Cohort(sample_cohort()), None)
+            .expect("build cohort head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("m") {
+                    Tag::parse(["m", "party:someone-not-a-member"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_cohort_event(&head).expect_err("lying member mirror must be refused");
+        assert!(matches!(
+            error,
+            CompanySdkError::TagContentMismatch("cohort")
+        ));
+    }
+
+    fn sample_template_stage() -> buzz_core::company::TemplateStage {
+        buzz_core::company::TemplateStage {
+            slug: "outreach".to_string(),
+            title: "Send outreach".to_string(),
+            owning_team_id: "team-marketing".to_string(),
+            channel_id: "sales".to_string(),
+            doer_kind: buzz_core::company::DoerKind::Human,
+            reviewer_team_id: Some("team-sales".to_string()),
+            prompt: "Send a personalized outreach message.".to_string(),
+            outcome_reasons: vec!["sent".to_string(), "replied".to_string()],
+            cost_ceiling: Some(25.0),
+            staleness_after_secs: Some(86_400),
+            on_fail: buzz_core::company::StageFailureAction::Bounce,
+        }
+    }
+
+    fn sample_template() -> buzz_core::company::Template {
+        buzz_core::company::Template {
+            schema: "colony.template/v1".to_string(),
+            id: "outbound-sequence".to_string(),
+            company_id: "horizon-labs".to_string(),
+            name: "Outbound sequence".to_string(),
+            version: 1,
+            stages: vec![sample_template_stage()],
+            created_at: 1_000,
+            updated_at: 1_000,
+        }
+    }
+
+    /// One `g` tag per distinct team any stage names, owning or reviewing —
+    /// what makes "which templates touch my team" a filter later, the same
+    /// reason a Cohort's `m` and a Task's `v` mirrors exist.
+    #[test]
+    fn relay_authored_template_head_round_trips_through_the_strict_parser() {
+        let relay = Keys::generate();
+        let head = build_head(
+            &relay,
+            &CompanyActionPayload::Template(sample_template()),
+            None,
+        )
+        .expect("build template head");
+        assert_eq!(head.kind.as_u16() as u32, KIND_TEMPLATE);
+        assert!(!head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
+        let parsed = parse_template_event(&head).expect("parse template head");
+        assert_eq!(parsed.id, "outbound-sequence");
+        assert_eq!(parsed.version, 1);
+        assert_eq!(parsed.stages.len(), 1);
+
+        assert_eq!(tag_count(&head, "g"), 2);
+        for expected in ["team-marketing", "team-sales"] {
+            assert!(
+                scalar_tag_values(&head, "g").contains(&expected),
+                "team {expected} must have its own `g` tag"
+            );
+        }
+    }
+
+    /// Two stages sharing a team (one owning, one reviewing the same team a
+    /// third stage owns) must still emit exactly one `g` tag per distinct
+    /// team — a mirror per stage would let one popular team's templates
+    /// double-count in a `#g` filter.
+    #[test]
+    fn a_template_stage_sharing_its_teams_across_stages_mirrors_each_team_once() {
+        let relay = Keys::generate();
+        let mut template = sample_template();
+        let mut second_stage = sample_template_stage();
+        second_stage.slug = "follow-up".to_string();
+        second_stage.reviewer_team_id = None;
+        template.stages.push(second_stage);
+
+        let head = build_head(&relay, &CompanyActionPayload::Template(template), None)
+            .expect("build template head");
+        assert_eq!(
+            tag_count(&head, "g"),
+            2,
+            "team-marketing and team-sales each appear twice across stages \
+             but must mirror once"
+        );
+        parse_template_event(&head).expect("shared-team template head parses");
+    }
+
+    /// Same guarantee as `lying_dependency_edges_are_refused` and
+    /// `lying_cohort_member_mirrors_are_refused`, for a template's `g` team
+    /// mirrors.
+    #[test]
+    fn lying_template_team_mirrors_are_refused() {
+        let relay = Keys::generate();
+        let mut head = build_head(
+            &relay,
+            &CompanyActionPayload::Template(sample_template()),
+            None,
+        )
+        .expect("build template head");
+        head.tags = head
+            .tags
+            .into_iter()
+            .map(|tag| {
+                if tag.as_slice().first().map(String::as_str) == Some("g")
+                    && tag.as_slice().get(1).map(String::as_str) == Some("team-marketing")
+                {
+                    Tag::parse(["g", "team-not-in-any-stage"]).expect("tag parses")
+                } else {
+                    tag
+                }
+            })
+            .collect();
+        let error = parse_template_event(&head).expect_err("lying team mirror must be refused");
+        assert!(matches!(
+            error,
+            CompanySdkError::TagContentMismatch("template")
+        ));
+    }
+
+    /// Diamond: D waits on B and C, both complete in sequence. After B only,
+    /// D must stay blocked; after C, exactly the one remaining check passes.
+    /// A replay or racing duplicate finds D no longer Blocked and does
+    /// nothing — the status guard IS the once-only guarantee.
+    #[test]
+    fn diamond_wakes_exactly_when_the_last_dependency_completes() {
+        // After B completes: C still running, D stays blocked.
+        let after_b = [Some(TaskStatus::Completed), Some(TaskStatus::InProgress)];
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Blocked, &after_b));
+        // After C completes: every edge terminal-good, D wakes.
+        let after_c = [Some(TaskStatus::Completed), Some(TaskStatus::Completed)];
+        assert!(dependent_is_ready_to_wake(TaskStatus::Blocked, &after_c));
+        // A second derivation pass against an already-woken D does nothing.
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Ready, &after_c));
+    }
+
+    /// Terminal-bad dependencies never manufacture claimable work: a
+    /// cancelled upstream leaves the dependent visibly blocked for the owner
+    /// to resolve, and an unresolvable dependency blocks just the same.
+    #[test]
+    fn cancelled_and_missing_dependencies_never_wake_a_task() {
+        let cancelled = [Some(TaskStatus::Completed), Some(TaskStatus::Cancelled)];
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Blocked, &cancelled));
+        let missing_upstream = [Some(TaskStatus::Completed), None];
+        assert!(!dependent_is_ready_to_wake(
+            TaskStatus::Blocked,
+            &missing_upstream
+        ));
+        assert!(!dependent_is_ready_to_wake(TaskStatus::Blocked, &[]));
+    }
+
+    #[test]
+    fn a_bounce_blocks_live_dependents_and_leaves_finished_ones_alone() {
+        // The general transition table only reaches `Blocked` from Ready,
+        // InProgress, or InReview - active work a bounce should interrupt.
+        for status in [
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+        ] {
+            assert!(
+                dependent_should_block(status, DoerKind::Agent),
+                "{status:?} should block"
+            );
+        }
+        // Already blocked: nothing to change.
+        assert!(!dependent_should_block(
+            TaskStatus::Blocked,
+            DoerKind::Agent
+        ));
+        // Terminal: already said its final word, and re-blocking a completed
+        // or cancelled dependent would misreport work that already finished.
+        assert!(!dependent_should_block(
+            TaskStatus::Completed,
+            DoerKind::Agent
+        ));
+        assert!(!dependent_should_block(
+            TaskStatus::Cancelled,
+            DoerKind::Agent
+        ));
+        // Proposed (not yet accepted) and Snoozed (already parked) have no
+        // arm into Blocked at all - dependency status isn't why they aren't
+        // moving, so a bounce leaves them exactly where they are.
+        assert!(!dependent_should_block(
+            TaskStatus::Proposed,
+            DoerKind::Agent
+        ));
+        assert!(!dependent_should_block(
+            TaskStatus::Snoozed,
+            DoerKind::Agent
+        ));
     }
 
     #[test]
@@ -1057,5 +2177,167 @@ mod tests {
         let parsed = buzz_sdk::company::parse_company_receipt(&conflict).expect("parse receipt");
         assert_eq!(parsed.outcome, CompanyReceiptOutcome::Conflict);
         assert_eq!(parsed.head_event_id, None);
+    }
+
+    /// The seven thread moments and nothing else. Every edge here is
+    /// reachable through `is_task_status_transition_allowed`, so the rows the
+    /// decision emits are exactly the ones that can happen today.
+    #[test]
+    fn only_the_seven_thread_moments_produce_a_transition_row() {
+        use buzz_core::company::{DoerKind, TaskStatus};
+
+        // Creation is news.
+        assert_eq!(
+            task_transition_event(CompanyActionOperation::Create, None, &sample_task()),
+            Some("task_created")
+        );
+
+        let handoff = sample_task();
+        let mut rejected = handoff.clone();
+        rejected.status = TaskStatus::InReview;
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InProgress),
+                &rejected,
+            ),
+            Some("task_review_handoff")
+        );
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InReview),
+                &handoff,
+            ),
+            Some("task_review_rejected")
+        );
+
+        let mut completed = handoff.clone();
+        completed.status = TaskStatus::Completed;
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InReview),
+                &completed,
+            ),
+            Some("task_completed")
+        );
+        // A human finishing their own work completes from inProgress too.
+        let mut human_done = completed.clone();
+        human_done.doer_kind = DoerKind::Human;
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::InProgress),
+                &human_done,
+            ),
+            Some("task_completed")
+        );
+
+        let mut cancelled = handoff.clone();
+        cancelled.status = TaskStatus::Cancelled;
+        for previous in [
+            TaskStatus::Proposed,
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::Blocked,
+            TaskStatus::Snoozed,
+        ] {
+            assert_eq!(
+                task_transition_event(
+                    CompanyActionOperation::Transition,
+                    Some(previous),
+                    &cancelled,
+                ),
+                Some("task_cancelled"),
+                "cancellation from {previous:?} is thread news"
+            );
+        }
+
+        // A bounce is news: completed -> ready is the one status delta that
+        // always means "rejected, redo it" - never board churn.
+        let mut bounced = handoff.clone();
+        bounced.status = TaskStatus::Ready;
+        bounced.bounce_count = 1;
+        bounced.bounce_reason = Some(buzz_core::company::BounceReason::FreeText(
+            "missed the brief".to_string(),
+        ));
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Transition,
+                Some(TaskStatus::Completed),
+                &bounced,
+            ),
+            Some("task_bounced")
+        );
+
+        // Board churn earns nothing: ordinary claiming, blocking, parking,
+        // waking, and field edits on a live task.
+        let mut churned = handoff.clone();
+        for (from, to) in [
+            (TaskStatus::Proposed, TaskStatus::Ready),
+            (TaskStatus::Ready, TaskStatus::InProgress),
+            (TaskStatus::Ready, TaskStatus::Blocked),
+            (TaskStatus::InProgress, TaskStatus::Blocked),
+            (TaskStatus::Blocked, TaskStatus::Ready),
+            (TaskStatus::Snoozed, TaskStatus::Ready),
+        ] {
+            churned.status = to;
+            assert_eq!(
+                task_transition_event(CompanyActionOperation::Update, Some(from), &churned,),
+                None,
+                "{from:?} -> {to:?} is board churn, not thread news"
+            );
+        }
+
+        // A replacement that changes no status is a field edit.
+        let mut untouched = handoff.clone();
+        untouched.title = "Renamed".to_string();
+        assert_eq!(
+            task_transition_event(
+                CompanyActionOperation::Update,
+                Some(handoff.status),
+                &untouched,
+            ),
+            None
+        );
+    }
+
+    /// The payload is the exact contract `describeTaskTransition` parses:
+    /// required keys always present, optional keys honestly absent until a
+    /// truthful source exists.
+    #[test]
+    fn transition_payload_matches_the_desktop_contract() {
+        let payload = task_transition_payload("task_completed", &sample_task());
+        assert_eq!(payload["type"], "task_completed");
+        assert_eq!(payload["task"], "task-copy");
+        assert_eq!(payload["title"], "Write homepage copy");
+        assert_eq!(payload["team"], "team-marketing");
+        // No reviewer pubkey or issue count exists on the task contract yet;
+        // absent beats invented. The desktop parser treats both as optional
+        // and renders without them (its tests cover the absent paths).
+        assert!(payload.get("reviewer").is_none());
+        assert!(payload.get("issues").is_none());
+        assert!(payload.get("reason").is_none());
+
+        // A bounce is the one transition with a truthful reason - it carries
+        // it; anything without one stays honestly absent, not a placeholder.
+        let mut bounced = sample_task();
+        bounced.bounce_reason = Some(buzz_core::company::BounceReason::FreeText(
+            "missed the brief".to_string(),
+        ));
+        let bounced_payload = task_transition_payload("task_bounced", &bounced);
+        assert_eq!(bounced_payload["reason"], "missed the brief");
+
+        let reasonless_bounce_payload = task_transition_payload("task_bounced", &sample_task());
+        assert!(reasonless_bounce_payload.get("reason").is_none());
+
+        // And it survives canonicalization, which is what gets signed into
+        // the system message content.
+        let content = canonical_content(&task_transition_payload("task_created", &sample_task()))
+            .expect("canonicalize transition payload");
+        let round: serde_json::Value =
+            serde_json::from_str(&content).expect("canonical content is JSON");
+        assert_eq!(round["type"], "task_created");
     }
 }

@@ -217,7 +217,7 @@ fn extract_manager_tag(event: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn resolve_default_audience(client: &BuzzClient) -> Result<String, CliError> {
+pub(crate) async fn resolve_default_audience(client: &BuzzClient) -> Result<String, CliError> {
     let my_pubkey = client.keys().public_key().to_hex();
 
     // 1. Employee heads are relay-signed; NIP-33 latest-wins means only the

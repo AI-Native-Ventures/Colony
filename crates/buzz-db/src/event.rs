@@ -2073,6 +2073,123 @@ pub async fn query_in_progress_task_heads(
         .collect())
 }
 
+/// A candidate task for the snooze-wake sweep
+/// (`buzz-relay`'s `interrupt_runtime::run_snooze_wake_tick`): the latest
+/// kind:30181 (`KIND_TASK`) head at some `(community_id, d_tag)` coordinate,
+/// across every non-archived community, whose content `status` is currently
+/// `"snoozed"` and whose content `wakeAt` is at or before the sweep's `now`.
+#[derive(Debug)]
+pub struct SnoozedCandidateTask {
+    /// Community this task head belongs to.
+    pub community_id: CommunityId,
+    /// Normalized host mapped to that community.
+    pub host: String,
+    /// The task head event's raw ID bytes.
+    pub task_head_id: Vec<u8>,
+    /// The task head event's JSON content (a `buzz_core::company::CompanyTask`).
+    pub content: String,
+}
+
+/// Query the latest snoozed task heads due to wake, across every non-archived
+/// community.
+///
+/// `wakeAt` is content, not a mirrored tag (spec section 3b: only `c g i s u
+/// w v` are indexed), so this reads it out of the JSONB content the same way
+/// `query_in_progress_task_heads` already reads `status` and `id` -- no new
+/// mirror tag needed for a field the relay itself derives the due-ness of.
+///
+/// Ordered oldest-`wakeAt`-first so a sweep that cannot fit every due task in
+/// one `batch_limit` wakes the longest-overdue ones first rather than
+/// starving them behind newer wakes on every tick.
+///
+/// The `wakeAt` cast is guarded by a numeric-format `CASE` (same reason
+/// `query_in_progress_task_heads` guards its `sourceChannelId` cast): it is
+/// content, not a validated column, and an unguarded `::bigint` cast on one
+/// malformed row would fail the whole query for every community's
+/// candidates, not just that one row.
+pub async fn query_due_snoozed_task_heads(
+    pool: &PgPool,
+    now: i64,
+    batch_limit: i64,
+) -> Result<Vec<SnoozedCandidateTask>> {
+    let kind_i32 = KIND_TASK as i32;
+    let rows = sqlx::query(
+        r#"
+        WITH latest_task_heads AS (
+            SELECT DISTINCT ON (e.community_id, e.d_tag)
+                e.community_id, c.host, e.id, e.content
+            FROM events AS e
+            JOIN communities AS c ON c.id = e.community_id
+            WHERE e.kind = $1
+              AND e.deleted_at IS NULL
+              AND e.d_tag IS NOT NULL
+              AND c.archived_at IS NULL
+            ORDER BY e.community_id, e.d_tag, e.created_at DESC, e.id ASC
+        )
+        SELECT t.community_id, t.host, t.id, t.content
+        FROM latest_task_heads AS t
+        WHERE t.content::jsonb ->> 'status' = 'snoozed'
+          AND CASE
+                WHEN t.content::jsonb ->> 'wakeAt' ~ '^-?[0-9]+$'
+                THEN (t.content::jsonb ->> 'wakeAt')::bigint <= $2
+                ELSE FALSE
+              END
+        ORDER BY CASE
+                   WHEN t.content::jsonb ->> 'wakeAt' ~ '^-?[0-9]+$'
+                   THEN (t.content::jsonb ->> 'wakeAt')::bigint
+                 END ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(kind_i32)
+    .bind(now)
+    .bind(batch_limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| SnoozedCandidateTask {
+            community_id: CommunityId::from_uuid(row.get("community_id")),
+            host: row.get("host"),
+            task_head_id: row.get("id"),
+            content: row.get("content"),
+        })
+        .collect())
+}
+
+/// Atomically claim one task's wake at one specific `wake_at`. Returns `true`
+/// if this caller won the claim, `false` if another relay instance (or an
+/// earlier tick on this same one) already claimed it.
+///
+/// Keyed on `(community_id, task_id, wake_at)` rather than just
+/// `(community_id, task_id)`: a task re-snoozed to a new `wakeAt` after a
+/// claim was taken is a genuinely new wake to honour, and must not be
+/// permanently blocked by a claim row from a previous, already-honoured one.
+/// The claims table is never cleaned up -- one row per wake actually
+/// processed is a low, bounded volume, not worth a reaper for.
+pub async fn claim_task_wake(
+    pool: &PgPool,
+    community_id: CommunityId,
+    task_id: &str,
+    wake_at: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO task_wake_claims (community_id, task_id, wake_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(task_id)
+    .bind(wake_at)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Atomically claim a due reminder for delivery. Returns `Some(id)` if this
 /// caller won the claim (set `delivered_at`), or `None` if another pod already
 /// claimed it. Mirrors the reaper's `archived_at IS NULL` guard for cross-pod

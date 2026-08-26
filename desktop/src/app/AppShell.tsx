@@ -154,6 +154,7 @@ export function AppShell() {
     goSettings,
     goCredits,
     goSpend,
+    goWork,
     goWorkflows,
     closeSettings,
     openSearchHit,
@@ -880,6 +881,7 @@ export function AppShell() {
                           onSelectSettings={handleOpenSettings}
                           onSelectCredits={() => void goCredits()}
                           onSelectSpend={() => void goSpend()}
+                          onSelectWork={() => void goWork()}
                           onSelectWorkflows={() => void goWorkflows()}
                           onSetPresenceStatus={(status) =>
                             presenceSession.setStatus(status)

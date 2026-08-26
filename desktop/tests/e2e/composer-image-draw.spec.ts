@@ -193,7 +193,21 @@ test("spoiler marking survives drawing on the attachment", async ({ page }) => {
   await composer.getByTestId("composer-media-attachment").hover();
   await page.getByTestId("composer-attachment-annotate").click();
   await page.getByTestId("composer-attachment-spoiler").click();
-  await page.keyboard.press("Escape");
+  // Dismiss with the lightbox's own Close control rather than Escape. The
+  // spoiler toggle is wrapped in a Radix Tooltip, and the pointer is resting on
+  // it after the click. Radix routes Escape to the *highest* dismissable layer
+  // only, so once that tooltip has opened it consumes the keypress and the
+  // dialog stays mounted. Nothing re-presses, so the wait below then burns its
+  // full 15s. Normally the press lands inside the tooltip's open delay and the
+  // dialog closes, which is why this read as a flake: CI run 32709251287, smoke
+  // shard 2, `getByRole('dialog')` expected 0, received 1, 34 polls, with the
+  // failure snapshot showing a healthy open dialog focused on "Remove spoiler".
+  // `DialogPrimitive.Close` carries no tooltip, so it cannot be intercepted.
+  // Escape-closes-the-lightbox is still covered by the revert test above.
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
   // Wait for the lightbox to actually go before touching the composer again.
   // The spoiler assertion below does NOT establish that: toBeVisible ignores
   // occlusion, so it passes while the dialog still covers the composer. When

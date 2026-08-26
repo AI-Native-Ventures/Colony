@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use buzz_core::company::{
     CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyService, CompanyTask,
-    CompanyTeamRef, CostCentre, CostCentreKind, Initiative, InitiativeStatus, TaskStatus,
+    CompanyTeamRef, CostCentre, CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus,
     COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
 use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint};
@@ -34,8 +34,8 @@ use buzz_core::kind::{
     KIND_JOB_HEAD, KIND_JOB_OUTCOME, KIND_STREAM_MESSAGE_V2, KIND_TASK, KIND_TEAM,
 };
 use buzz_sdk::company::{
-    build_company_action, parse_company_receipt, CompanyAction, CompanyActionOperation,
-    CompanyActionPayload, CompanyReceiptOutcome,
+    build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
+    CompanyActionOperation, CompanyActionPayload, CompanyReceiptOutcome,
 };
 use buzz_sdk::implicit_task::plan_implicit_task;
 use buzz_sdk::initiative_activation::{next_step, InitiativeIntent, InitiativeStep};
@@ -131,6 +131,9 @@ fn initiative(company_id: &str, id: &str, owner_persona_id: &str, now: i64) -> I
         expected_cost_usd: None,
         source_channel_id: "welcome".to_string(),
         source_event_id: None,
+        template_id: None,
+        template_version: None,
+        cohort_id: None,
         created_at: now,
         updated_at: now,
     }
@@ -147,12 +150,22 @@ fn task(company_id: &str, id: &str, team: &CompanyTeamRef, now: i64) -> CompanyT
         owning_team_id: team.id.clone(),
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
         qa_persona_id: team.lead_persona_id.clone(),
+        reviewer_team_id: None,
         cost_centre_id: "cc-coordination".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
         client_organization_id: None,
         source_channel_id: "welcome".to_string(),
         source_event_id: None,
         implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
         created_at: now,
         updated_at: now,
     }
@@ -210,7 +223,7 @@ async fn broker(
 
     // The receipt is authored by the relay after it processes the action, so
     // this polls rather than assuming it is already stored.
-    for _ in 0..40 {
+    for attempt in 0..40 {
         let id = sub_id("receipt");
         let filter = Filter::new()
             .kind(Kind::Custom(KIND_COMPANY_RECEIPT as u16))
@@ -221,10 +234,20 @@ async fn broker(
             .subscribe(&id, vec![filter])
             .await
             .expect("subscribe");
-        let events = client
-            .collect_until_eose(&id, Duration::from_secs(5))
-            .await
-            .expect("collect");
+        // A single silent window (no EOSE inside the timeout) is a transport
+        // hiccup, not an answer: the loop below exists to poll, so a timed
+        //-out window is retried like an empty one instead of failing the
+        // whole suite. The final panic stays strict — 40 windows with no
+        // receipt at all IS an answer, a wrong one.
+        let events = match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => events,
+            Err(error) => {
+                eprintln!("receipt poll {attempt} for {action_id} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+        };
         let _ = client.close_subscription(&id).await;
         if let Some(event) = events.first() {
             let receipt = parse_company_receipt(event).expect("receipt parses");
@@ -240,28 +263,45 @@ async fn broker(
 }
 
 /// Read one relay-authored head by coordinate.
+///
+/// A single silent window (`collect_until_eose` errors before EOSE) is the
+/// same relay-side transport stall `broker`'s receipt poll retries past, not
+/// an absent record — every occurrence observed so far had already ingested
+/// its write with `accepted=true` before the read connection went quiet. An
+/// `Ok` result, even empty, is a real answer: "no head yet" is a legitimate
+/// outcome for a caller checking one does not exist, and returns immediately
+/// without retrying. Only a transport ERROR is retried; the final panic
+/// stays strict.
 async fn head(
     client: &mut BuzzTestClient,
     relay: &str,
     kind: u32,
     d_tag: &str,
 ) -> Option<nostr::Event> {
-    let id = sub_id("head");
-    let filter = Filter::new()
-        .kind(Kind::Custom(kind as u16))
-        .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
-        .identifier(d_tag)
-        .limit(1);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(5))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
-    events.into_iter().next()
+    for attempt in 0..10 {
+        let id = sub_id("head");
+        let filter = Filter::new()
+            .kind(Kind::Custom(kind as u16))
+            .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
+            .identifier(d_tag)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => {
+                let _ = client.close_subscription(&id).await;
+                return events.into_iter().next();
+            }
+            Err(error) => {
+                eprintln!("head poll {attempt} for {d_tag} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+    panic!("the relay never answered a head read for {d_tag}");
 }
 
 /// Publish the Team the relay validates Task ownership against.
@@ -285,6 +325,99 @@ fn now() -> i64 {
     Timestamp::now().as_secs() as i64
 }
 
+async fn e2e_db_pool() -> sqlx::Pool<sqlx::Postgres> {
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .expect("connect to e2e Postgres")
+}
+
+/// The company broker requires the acting key to be a human community
+/// owner: a relay_members row with role 'owner' plus a users row without an
+/// agent_owner_pubkey. Owner assignment has no Nostr-event form in this
+/// codebase, so this is a DB fixture on the same pattern as
+/// `e2e_interrupts::seed_relay_owner`, not a protocol step under test.
+async fn seed_company_owner(keys: &Keys) {
+    let pool = e2e_db_pool().await;
+    let host = relay_url().replace("wss://", "").replace("ws://", "");
+    let community_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM communities WHERE lower(host) = lower($1)")
+            .bind(&host)
+            .fetch_optional(&pool)
+            .await
+            .expect("query the deployment community")
+            .unwrap_or_else(|| {
+                panic!("community for host {host} must exist; start-relay-for-tests.sh seeds it")
+            });
+
+    // users.pubkey is BYTEA; relay_members.pubkey is TEXT hex.
+    sqlx::query("INSERT INTO users (community_id, pubkey) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        .bind(community_id)
+        .bind(keys.public_key().to_bytes())
+        .execute(&pool)
+        .await
+        .expect("seed the owner as a user");
+    sqlx::query(
+        "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+         VALUES ($1, $2, 'owner', NULL) \
+         ON CONFLICT (community_id, pubkey) DO UPDATE SET role = 'owner'",
+    )
+    .bind(community_id)
+    .bind(keys.public_key().to_hex())
+    .execute(&pool)
+    .await
+    .expect("seed the owner member role");
+}
+
+/// Provision a real channel the owner may post into, via the same signed
+/// kind:9007 event `e2e_relay::create_test_channel` uses.
+///
+/// Nothing in the CI relay seed (start-relay-for-tests.sh) creates channels
+/// or grants membership: it seeds only the deployment community row and
+/// bootstraps the configured owner. A test that needs a channel must create
+/// one, or it only ever passes against an environment that happens to have a
+/// channel pre-seeded — which is exactly how this suite rotted unnoticed.
+async fn create_task_channel(keys: &Keys) -> String {
+    let client = reqwest::Client::new();
+    let pubkey_hex = keys.public_key().to_hex();
+    let channel_uuid = Uuid::new_v4();
+
+    let event = EventBuilder::new(Kind::Custom(9007), "")
+        .tags(vec![
+            Tag::parse(["h", channel_uuid.to_string().as_str()]).expect("h tag"),
+            Tag::parse(["name", format!("company-e2e-{}", channel_uuid).as_str()])
+                .expect("name tag"),
+            Tag::parse(["channel_type", "stream"]).expect("type tag"),
+            Tag::parse(["visibility", "open"]).expect("visibility tag"),
+        ])
+        .sign_with_keys(keys)
+        .expect("create-channel event signs");
+
+    let response = client
+        .post(format!("{}/events", http_url()))
+        .header("X-Pubkey", pubkey_hex)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&event).expect("event serializes"))
+        .send()
+        .await
+        .expect("submit create-channel event");
+    assert!(
+        response.status().is_success(),
+        "channel creation event failed: {}",
+        response.status()
+    );
+    let body: serde_json::Value = response.json().await.expect("event response is JSON");
+    assert!(
+        body["accepted"].as_bool().unwrap_or(false),
+        "channel creation not accepted: {body}"
+    );
+
+    channel_uuid.to_string()
+}
+
 async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
     let role = format!("task-runner-{}", Uuid::new_v4().simple());
     let request = EventBuilder::new(Kind::Custom(KIND_HIRE_REQUEST as u16), "")
@@ -306,7 +439,12 @@ async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
         accepted.message
     );
 
-    for _ in 0..40 {
+    // This loop already existed to wait for the employee to be created; the
+    // `.expect("collect")` it used to carry defeated that purpose against a
+    // transport error, since a panic never lets a `for` loop retry. A
+    // silent window is retried like an empty one, same as `broker`'s
+    // receipt poll; the final panic stays strict.
+    for attempt in 0..40 {
         let id = sub_id("employee");
         let filter = Filter::new()
             .kind(Kind::Custom(KIND_EMPLOYEE as u16))
@@ -316,10 +454,15 @@ async fn hire_employee(client: &mut BuzzTestClient, owner: &Keys) -> String {
             .subscribe(&id, vec![filter])
             .await
             .expect("subscribe");
-        let events = client
-            .collect_until_eose(&id, Duration::from_secs(5))
-            .await
-            .expect("collect");
+        let events = match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => events,
+            Err(error) => {
+                eprintln!("employee poll {attempt} for {request_id} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+        };
         let _ = client.close_subscription(&id).await;
         if let Some(event) = events.first() {
             return event.pubkey.to_hex();
@@ -341,22 +484,35 @@ fn job_event(keys: &Keys, kind: u32, content: &str, tags: Vec<Vec<String>>) -> n
         .expect("job event signs")
 }
 
+/// Read the current job head, retrying past a silent transport window the
+/// same way `head` does — see its doc comment. `await_job_head`'s own retry
+/// loop depends on this NOT panicking on a transient error, since a panic
+/// here would kill that outer loop on the first hiccup rather than let it
+/// retry.
 async fn current_job_head(client: &mut BuzzTestClient, job_id: &str) -> Option<nostr::Event> {
-    let id = sub_id("job-head");
-    let filter = Filter::new()
-        .kind(Kind::Custom(KIND_JOB_HEAD as u16))
-        .identifier(job_id)
-        .limit(1);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(5))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
-    events.into_iter().next()
+    for attempt in 0..10 {
+        let id = sub_id("job-head");
+        let filter = Filter::new()
+            .kind(Kind::Custom(KIND_JOB_HEAD as u16))
+            .identifier(job_id)
+            .limit(1);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        match client.collect_until_eose(&id, Duration::from_secs(5)).await {
+            Ok(events) => {
+                let _ = client.close_subscription(&id).await;
+                return events.into_iter().next();
+            }
+            Err(error) => {
+                eprintln!("job head poll {attempt} for {job_id} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
+    panic!("the relay never answered a job head read for {job_id}");
 }
 
 async fn await_job_head(
@@ -437,6 +593,7 @@ async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
 #[ignore = "requires a running relay with Postgres and BUZZ_EMPLOYEE_KEK"]
 async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_delivery() {
     let owner = owner_keys();
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
@@ -458,10 +615,11 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
         CompanyReceiptOutcome::Applied
     );
 
-    // The isolated relay seed makes the fixed owner a member of `general`.
-    // A random UUID would exercise the membership refusal rather than the
-    // Task-run protocol this scenario is proving.
-    let channel_id = "9f28288a-d724-587a-9709-92dc7f967110".to_string();
+    // The chat thread lives in a channel this test provisions itself. The
+    // old hardcoded UUID only existed in the abandoned isolated harness's
+    // seed, so on any other relay the membership refusal fired here instead
+    // of the Task-run protocol this scenario proves.
+    let channel_id = create_task_channel(&fixture.owner).await;
     let chat_root_event = job_event(
         &fixture.owner,
         KIND_STREAM_MESSAGE_V2,
@@ -1157,6 +1315,205 @@ async fn nobody_but_the_owner_can_change_company_state() {
     client.disconnect().await.ok();
 }
 
+/// A chain actually advances: B depends on A and sits blocked; completing A
+/// through the ordinary owner-signed action path wakes B, asserted by
+/// reading B's head back from the relay rather than by calling any
+/// derivation function. A replayed completion must not produce a second
+/// wake, proven by B's head event id staying identical.
+///
+/// This is the end-to-end half of blocked-to-ready derivation: the unit
+/// tests in `buzz-relay` prove the decision logic against snapshots, and
+/// this proves the relay actually finds dependents through stored `v` tags,
+/// republishes them, and stays idempotent against real Postgres.
+///
+/// Needs no `BUZZ_EMPLOYEE_KEK`: nothing here hires an employee. It does
+/// need `DATABASE_URL` to seed the owner fixture.
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres (DATABASE_URL for owner seeding)"]
+async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
+    let owner = owner_keys();
+    seed_company_owner(&owner).await;
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut client, owner.clone()).await;
+    let stamp = now();
+
+    // --- Company and two tasks: A human-doer InProgress, B Blocked on A ----
+    let profile = company(&fixture.company_id, stamp);
+    assert_eq!(
+        broker(
+            &mut client,
+            &fixture.owner,
+            &fixture.relay,
+            &action(
+                &fixture.relay,
+                CompanyActionOperation::Create,
+                CompanyActionPayload::Company(profile),
+                coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+                None,
+            ),
+        )
+        .await
+        .0,
+        CompanyReceiptOutcome::Applied
+    );
+
+    let task_a_id = format!("{}:call-the-client", fixture.company_id);
+    let task_b_id = format!("{}:send-the-followup", fixture.company_id);
+
+    // A is a phone call: doerKind human, so it completes without review.
+    let mut task_a = task(&fixture.company_id, &task_a_id, &fixture.team, stamp);
+    task_a.status = TaskStatus::InProgress;
+    task_a.doer_kind = DoerKind::Human;
+    let (a_outcome, a_head_id) = broker(
+        &mut client,
+        &fixture.owner,
+        &fixture.relay,
+        &action(
+            &fixture.relay,
+            CompanyActionOperation::Create,
+            CompanyActionPayload::Task(task_a.clone()),
+            coordinate(KIND_TASK, &fixture.relay, &task_a_id),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(a_outcome, CompanyReceiptOutcome::Applied);
+    let a_head_id = a_head_id.expect("an applied receipt names its head");
+
+    // B starts blocked on A, exactly the eager fan-out shape: the whole
+    // graph exists up front and downstream work waits.
+    let mut task_b = task(&fixture.company_id, &task_b_id, &fixture.team, stamp);
+    task_b.status = TaskStatus::Blocked;
+    task_b.depends_on = vec![task_a_id.clone()];
+    assert_eq!(
+        broker(
+            &mut client,
+            &fixture.owner,
+            &fixture.relay,
+            &action(
+                &fixture.relay,
+                CompanyActionOperation::Create,
+                CompanyActionPayload::Task(task_b.clone()),
+                coordinate(KIND_TASK, &fixture.relay, &task_b_id),
+                None,
+            ),
+        )
+        .await
+        .0,
+        CompanyReceiptOutcome::Applied
+    );
+
+    async fn dependent_head(
+        client: &mut BuzzTestClient,
+        relay: &str,
+        d_tag: &str,
+    ) -> buzz_core::company::CompanyTask {
+        let event = head(client, relay, KIND_TASK, d_tag)
+            .await
+            .unwrap_or_else(|| panic!("head for {d_tag} must exist"));
+        parse_task_event(&event).expect("the relay's own head parses")
+    }
+
+    // Before anything completes, B is blocked. Reading from the relay, not
+    // trusting local state.
+    let before = dependent_head(&mut client, &fixture.relay, &task_b_id).await;
+    assert_eq!(
+        before.status,
+        TaskStatus::Blocked,
+        "the dependent must start blocked"
+    );
+
+    // --- Complete A through the ordinary owner-signed action path ---------
+    let mut completed_a = task_a.clone();
+    completed_a.status = TaskStatus::Completed;
+    // A human doer must say what actually happened: there is no bare "done"
+    // for a person, because "40 completed" is worthless and the reason is the
+    // only funnel data the chain ever produces. The stage supplies the real
+    // vocabulary once pipeline templates exist.
+    completed_a.outcome_reason = Some("reached-and-agreed".to_string());
+    completed_a.updated_at += 1;
+    assert_eq!(
+        broker(
+            &mut client,
+            &fixture.owner,
+            &fixture.relay,
+            &action(
+                &fixture.relay,
+                CompanyActionOperation::Update,
+                CompanyActionPayload::Task(completed_a),
+                coordinate(KIND_TASK, &fixture.relay, &task_a_id),
+                Some(a_head_id.clone()),
+            ),
+        )
+        .await
+        .0,
+        CompanyReceiptOutcome::Applied,
+        "a human phone call completes without review"
+    );
+
+    // The wake is derived after the commit, so poll rather than assume.
+    let mut woken_head_id = None;
+    for _ in 0..40 {
+        let event = head(&mut client, &fixture.relay, KIND_TASK, &task_b_id)
+            .await
+            .expect("B head exists");
+        if parse_task_event(&event)
+            .expect("the relay's own head parses")
+            .status
+            == TaskStatus::Ready
+        {
+            woken_head_id = Some(event.id.to_hex());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let woken_head_id =
+        woken_head_id.expect("the dependent must become ready after its dependency completed");
+
+    // --- Replay the same completion; nothing may wake twice ---------------
+    // A second completion action carries a stale compare-and-set head (B's
+    // wake did not touch A, but A moved when it completed), so the relay
+    // refuses it rather than applying anything. The assertion that matters
+    // is downstream: B's head event id is unchanged, meaning no second wake
+    // was ever published even though the completion was attempted twice.
+    let mut completed_again = task_a.clone();
+    completed_again.status = TaskStatus::Completed;
+    completed_again.updated_at += 1;
+    let (replay_outcome, _) = broker(
+        &mut client,
+        &fixture.owner,
+        &fixture.relay,
+        &action(
+            &fixture.relay,
+            CompanyActionOperation::Update,
+            CompanyActionPayload::Task(completed_again),
+            coordinate(KIND_TASK, &fixture.relay, &task_a_id),
+            Some(a_head_id),
+        ),
+    )
+    .await;
+    assert_eq!(
+        replay_outcome,
+        CompanyReceiptOutcome::Conflict,
+        "completing an already-completed head must lose compare-and-set"
+    );
+
+    let after_replay = dependent_head(&mut client, &fixture.relay, &task_b_id).await;
+    let after_replay_head = head(&mut client, &fixture.relay, KIND_TASK, &task_b_id)
+        .await
+        .expect("B head exists");
+    assert_eq!(after_replay.status, TaskStatus::Ready, "B stays ready");
+    assert_eq!(
+        after_replay_head.id.to_hex(),
+        woken_head_id,
+        "no second wake: B's head is byte-for-byte the one the first completion produced"
+    );
+
+    client.disconnect().await.ok();
+}
+
 /// The activation ladder the desktop drives, run against a real relay.
 ///
 /// The step function decides transitions in `buzz-sdk` with no relay in sight.
@@ -1166,6 +1523,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
 #[ignore = "requires a running relay whose community owner is this test's key"]
 async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
     let owner = owner_keys();
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
@@ -1407,21 +1765,40 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
         .expect("the relay answers the metric");
     assert!(ok.accepted, "the relay refused the metric: {}", ok.message);
 
-    // Read it back the way the owner would: by kind, addressed to them.
-    let id = sub_id("metric");
-    let filter = Filter::new()
-        .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
-        .pubkey(owner.public_key())
-        .limit(20);
-    client
-        .subscribe(&id, vec![filter])
-        .await
-        .expect("subscribe");
-    let events = client
-        .collect_until_eose(&id, Duration::from_secs(10))
-        .await
-        .expect("collect");
-    let _ = client.close_subscription(&id).await;
+    // Read it back the way the owner would: by kind, addressed to them. The
+    // metric was JUST sent, so this races relay propagation the same way
+    // `head`'s read-after-write does; a silent window is retried the same
+    // way, with the final panic strict.
+    let mut events = Vec::new();
+    for attempt in 0..10 {
+        let id = sub_id("metric");
+        let filter = Filter::new()
+            .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))
+            .pubkey(owner.public_key())
+            .limit(20);
+        client
+            .subscribe(&id, vec![filter])
+            .await
+            .expect("subscribe");
+        match client
+            .collect_until_eose(&id, Duration::from_secs(10))
+            .await
+        {
+            Ok(found) => {
+                let _ = client.close_subscription(&id).await;
+                events = found;
+                break;
+            }
+            Err(error) => {
+                eprintln!("metric read-back poll {attempt} errored, retrying: {error}");
+                let _ = client.close_subscription(&id).await;
+                if attempt == 9 {
+                    panic!("the relay never answered the metric read-back: {error}");
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+    }
 
     let stored = events
         .iter()
@@ -1578,6 +1955,12 @@ async fn inspect_live_turn_metrics() {
         .await
         .expect("connect as owner");
 
+    // Deliberately left strict, unlike the CI-run polls above: this is a
+    // human-invoked inspection command ("run after a live agent turn"), not
+    // a correctness assertion racing a just-written record. If the read
+    // fails, that is exactly as informative to the person running it as a
+    // retried success would be, and retry machinery would only obscure
+    // what a live, one-off inspection actually saw.
     let id = sub_id("inspect");
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_AGENT_TURN_METRIC as u16))

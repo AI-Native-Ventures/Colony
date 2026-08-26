@@ -98,6 +98,41 @@ export function resolveSemanticBottomTransition(
 }
 
 /**
+ * How a virtualizer at-bottom report should move the *anchored-scroll* bottom
+ * state, which is a separate flag from the semantic tail above and is what the
+ * "jump to latest" pill renders from.
+ *
+ * The same scroll/resize distinction applies, for the same reason, but the
+ * consequences differ:
+ *
+ * - `apply` - a resize may only ever move this state towards bottom. Letting a
+ *   resize report "not at bottom" would claim a reader movement that never
+ *   happened, exactly as freezing the tail on one would.
+ * - `readerCaughtUp` - only a reader arriving at the bottom has read anything.
+ *   A resize corrects geometry, so it must not clear the "N new messages"
+ *   count or dismiss the unread pill.
+ *
+ * Dropping resize reports entirely (the previous rule) leaves this flag able to
+ * latch false with nothing to correct it. Observed on CI run 32851211991,
+ * Desktop E2E Integration shard 2: the composer grew, a mid-resize `"scroll"`
+ * report computed a non-bottom distance from a half-applied box, the settled
+ * resize report that followed was discarded, and with the reader stationary no
+ * further scroll report arrived. `stream.spec.ts` measured
+ * `distanceFromBottom < 8` while `message-scroll-to-latest` stayed mounted for
+ * all 34 polls of a 15s assertion: "Jump to latest" offered over a scroller
+ * already sitting on the floor, clearable only by clicking it.
+ */
+export function resolveAnchoredBottomReport(report: {
+  atBottom: boolean;
+  reason: TimelineAtBottomReason;
+}): { apply: boolean; readerCaughtUp: boolean } {
+  if (report.reason === "resize") {
+    return { apply: report.atBottom, readerCaughtUp: false };
+  }
+  return { apply: true, readerCaughtUp: report.atBottom };
+}
+
+/**
  * Whether a frozen tail should be released because it is withholding output at
  * a scroller that is already at the bottom.
  *

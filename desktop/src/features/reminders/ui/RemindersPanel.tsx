@@ -20,7 +20,7 @@ import {
   resolveReminderDestination,
 } from "@/features/reminders/lib/reminderNavigation";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
-import { SnoozeMenu } from "@/features/reminders/ui/SnoozeMenu";
+import { SnoozeMenu } from "@/shared/ui/SnoozeMenu";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel } from "@/shared/api/types";

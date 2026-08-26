@@ -55,6 +55,7 @@ import type {
   CreateChannelKind,
 } from "@/features/sidebar/ui/AppSidebar.types";
 import { SidebarRelayConnectionCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
+import { WorkSidebarSection } from "@/features/sidebar/ui/WorkSidebarSection";
 import type { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import {
   SidebarLoadingContent,
@@ -145,6 +146,7 @@ type AppSidebarProps = {
   onSelectPulse: () => void;
   onSelectCredits: () => void;
   onSelectSpend: () => void;
+  onSelectWork: () => void;
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -223,6 +225,7 @@ export function AppSidebar({
   onSelectPulse,
   onSelectCredits,
   onSelectSpend,
+  onSelectWork,
   onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
@@ -296,6 +299,7 @@ export function AppSidebar({
     channels: false,
     forums: false,
     directMessages: false,
+    work: false,
   });
 
   const toggleCollapsedGroup = React.useCallback(
@@ -607,6 +611,12 @@ export function AppSidebar({
 
               {!isLoading ? (
                 <>
+                  <WorkSidebarSection
+                    isActive={selectedView === "work"}
+                    isCollapsed={collapsedGroups.work}
+                    onSelect={onSelectWork}
+                    onToggleCollapsed={() => toggleCollapsedGroup("work")}
+                  />
                   {starredChannels.length > 0 ? (
                     <ChannelGroupSection
                       hasUnread={starredChannels.some((c) =>

@@ -1,0 +1,1738 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Colony Work Model — initiatives, tasks, chains, surfaces</title>
+<style>
+:root{
+  --base:#eff1f5; --mantle:#e6e9ef; --crust:#dce0e8;
+  --surface0:#ccd0da; --surface1:#bcc0cc; --surface2:#acb0be;
+  --text:#4c4f69; --subtext:#6c6f85; --overlay:#8c8fa1;
+  --blue:#1e66f5; --green:#40a02b; --yellow:#df8e1d; --red:#d20f39; --red-deep:#8c0726;
+  --mauve:#8839ef; --peach:#fe640b; --teal:#179299; --lavender:#7287fd;
+  --shadow:0 1px 2px rgba(76,79,105,.08), 0 8px 24px rgba(76,79,105,.06);
+  --r:10px; --r-sm:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --base:#24273a; --mantle:#1e2030; --crust:#181926;
+    --surface0:#363a4f; --surface1:#494d64; --surface2:#5b6078;
+    --text:#cad3f5; --subtext:#a5adcb; --overlay:#6e738d;
+    --blue:#8aadf4; --green:#a6da95; --yellow:#eed49f; --red:#ed8796; --red-deep:#a34a58;
+    --mauve:#c6a0f6; --peach:#f5a97f; --teal:#8bd5ca; --lavender:#b7bdf8;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  }
+}
+*{box-sizing:border-box}
+html{font-size:16px}
+body{
+  margin:0; background:var(--mantle); color:var(--text);
+  font-family:ui-sans-serif,-apple-system,"Inter","Segoe UI",system-ui,sans-serif;
+  line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+code,pre,.mono{font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace}
+code{background:var(--surface0);padding:.1em .35em;border-radius:4px;font-size:.85em}
+a{color:var(--blue)}
+h1,h2,h3,h4{line-height:1.25;margin:0}
+h1{font-size:2.1rem;letter-spacing:-.02em}
+h2{font-size:1.5rem;letter-spacing:-.015em}
+h3{font-size:1.05rem}
+p{margin:.6em 0}
+
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+header.hero{padding:64px 0 40px;border-bottom:1px solid var(--surface0);background:var(--base)}
+.eyebrow{font-size:.75rem;text-transform:uppercase;letter-spacing:.12em;color:var(--overlay);font-weight:600}
+.thesis{font-size:1.15rem;color:var(--subtext);max-width:66ch;margin-top:14px}
+.thesis strong{color:var(--text)}
+
+nav.toc{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--base) 92%,transparent);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--surface0);}
+nav.toc ul{display:flex;gap:2px;list-style:none;margin:0;padding:0;overflow-x:auto}
+nav.toc a{display:block;padding:12px 12px;font-size:.8rem;color:var(--subtext);text-decoration:none;white-space:nowrap;border-bottom:2px solid transparent}
+nav.toc a:hover{color:var(--text)}
+nav.toc a.on{color:var(--text);border-bottom-color:var(--mauve)}
+
+section{padding:56px 0;border-bottom:1px solid var(--surface0)}
+section>.wrap>h2{display:flex;align-items:baseline;gap:12px}
+section>.wrap>h2 .num{font-size:.8rem;color:var(--overlay);font-weight:600;letter-spacing:.08em}
+.lede{color:var(--subtext);max-width:70ch;margin-top:6px}
+
+.card{background:var(--base);border:1px solid var(--surface0);border-radius:var(--r);padding:18px;box-shadow:var(--shadow)}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:820px){.g2,.g3{grid-template-columns:1fr}}
+
+.rule{background:var(--base);border:1px solid var(--surface0);border-left:3px solid var(--mauve);border-radius:var(--r);padding:16px 18px}
+.rule h3{font-size:.95rem;display:flex;gap:10px;align-items:baseline}
+.rule h3 .tag{font-size:.7rem;font-weight:700;color:var(--mauve);letter-spacing:.06em}
+.rule p{font-size:.9rem;color:var(--subtext);margin:.4em 0 0}
+.rule .why{font-size:.82rem;color:var(--overlay);margin-top:8px;padding-top:8px;border-top:1px dashed var(--surface0)}
+
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+.tablewrap{overflow-x:auto;border:1px solid var(--surface0);border-radius:var(--r);background:var(--base)}
+th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--overlay);
+  padding:10px 12px;border-bottom:1px solid var(--surface0);white-space:nowrap;font-weight:600}
+td{padding:10px 12px;border-bottom:1px solid var(--surface0);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:.68rem;font-weight:700;letter-spacing:.04em;
+  padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.pill.exists{background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--green)}
+.pill.new{background:color-mix(in srgb,var(--peach) 20%,transparent);color:var(--peach)}
+.pill.change{background:color-mix(in srgb,var(--yellow) 20%,transparent);color:var(--yellow)}
+.pill.kill{background:color-mix(in srgb,var(--red) 18%,transparent);color:var(--red)}
+
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+.dot.live{background:var(--green);box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 22%,transparent)}
+.dot.idle{background:var(--overlay)}
+.dot.dead{background:var(--red);box-shadow:0 0 0 3px color-mix(in srgb,var(--red) 22%,transparent)}
+.dot.wait{background:var(--yellow)}
+.dot.recover{background:var(--peach);box-shadow:0 0 0 3px color-mix(in srgb,var(--peach) 22%,transparent)}
+.dot.aband{background:var(--red-deep);box-shadow:0 0 0 3px color-mix(in srgb,var(--red-deep) 26%,transparent)}
+
+/* ---------- app mockup chrome ---------- */
+.app{border:1px solid var(--surface0);border-radius:12px;overflow:hidden;background:var(--base);box-shadow:var(--shadow)}
+.app .titlebar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--crust);border-bottom:1px solid var(--surface0)}
+.app .titlebar .tl{display:flex;gap:6px}
+.app .titlebar .tl i{width:10px;height:10px;border-radius:50%;display:block;background:var(--surface2)}
+.app .titlebar .path{font-size:.72rem;color:var(--overlay)}
+.app .body{display:grid;grid-template-columns:190px 1fr;min-height:420px}
+.app .side{background:var(--mantle);border-right:1px solid var(--surface0);padding:10px 8px;font-size:.8rem}
+.app .side .grp{font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;color:var(--overlay);padding:10px 8px 4px;font-weight:700}
+.app .side .it{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r-sm);color:var(--subtext);cursor:default}
+.app .side .it.on{background:var(--surface0);color:var(--text);font-weight:600}
+.app .side .it .n{margin-left:auto;font-size:.66rem;color:var(--overlay);background:var(--surface0);border-radius:999px;padding:0 6px}
+.app .main{padding:0;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.app .topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--surface0);flex-wrap:wrap}
+.app .topbar h4{font-size:.92rem}
+.app .content{padding:14px;overflow:auto;flex:1;min-width:0}
+
+.ctrl{display:inline-flex;align-items:center;gap:6px;font-size:.74rem;color:var(--subtext);
+  border:1px solid var(--surface0);background:var(--mantle);border-radius:var(--r-sm);padding:3px 9px}
+.ctrl b{color:var(--text);font-weight:600}
+.btn{display:inline-flex;align-items:center;gap:6px;font-size:.76rem;font-weight:600;border-radius:var(--r-sm);
+  padding:5px 11px;border:1px solid transparent;cursor:default}
+.btn.pri{background:var(--mauve);color:var(--base)}
+.btn.sec{background:var(--surface0);color:var(--text)}
+.btn.dan{background:color-mix(in srgb,var(--red) 16%,transparent);color:var(--red);border-color:color-mix(in srgb,var(--red) 32%,transparent)}
+.btn.ok{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green);border-color:color-mix(in srgb,var(--green) 32%,transparent)}
+
+/* task chip */
+.chip{display:inline-flex;align-items:center;gap:7px;font-size:.74rem;border:1px solid var(--surface0);
+  background:var(--mantle);border-radius:999px;padding:3px 10px;color:var(--subtext)}
+.chip b{color:var(--text);font-weight:600}
+.chip.ghost{border-style:dashed;opacity:.85}
+
+/* message timeline */
+.msg{display:flex;gap:10px;padding:7px 0}
+.av{width:26px;height:26px;border-radius:7px;flex:none;display:grid;place-items:center;font-size:.7rem;font-weight:700;color:var(--crust)}
+.msg .who{font-size:.82rem;font-weight:600}
+.msg .ts{font-size:.68rem;color:var(--overlay);margin-left:6px;font-weight:400}
+.msg .txt{font-size:.85rem;color:var(--subtext)}
+.sysrow{display:flex;align-items:center;gap:9px;font-size:.76rem;color:var(--overlay);
+  padding:7px 10px;margin:6px 0;border:1px solid var(--surface0);border-radius:var(--r-sm);background:var(--mantle)}
+.sysrow b{color:var(--text);font-weight:600}
+.sysrow .lnk{color:var(--blue);margin-left:auto;font-size:.72rem}
+.mention{color:var(--blue);background:color-mix(in srgb,var(--blue) 14%,transparent);border-radius:4px;padding:0 3px}
+.mention.ent{color:var(--mauve);background:color-mix(in srgb,var(--mauve) 14%,transparent)}
+.mention.tpl{color:var(--teal);background:color-mix(in srgb,var(--teal) 14%,transparent)}
+
+/* kanban */
+.kan{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:10px;min-width:min-content}
+.col{background:var(--mantle);border:1px solid var(--surface0);border-radius:var(--r);padding:8px;min-width:0}
+.col .h{display:flex;align-items:center;gap:7px;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--overlay);font-weight:700;padding:2px 4px 8px}
+.col .h .n{margin-left:auto;background:var(--surface0);border-radius:999px;padding:0 6px;color:var(--subtext)}
+.tk{background:var(--base);border:1px solid var(--surface0);border-radius:var(--r-sm);padding:8px 9px;margin-bottom:7px}
+.tk .t{font-size:.8rem;font-weight:600;display:flex;align-items:center;gap:6px}
+.tk .m{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:.68rem;color:var(--overlay);flex-wrap:wrap}
+.tk.alert{border-color:color-mix(in srgb,var(--red) 45%,transparent);background:color-mix(in srgb,var(--red) 7%,transparent)}
+.tk.warn{border-color:color-mix(in srgb,var(--yellow) 45%,transparent);background:color-mix(in srgb,var(--yellow) 7%,transparent)}
+
+.st{font-size:.64rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:1px 6px;border-radius:4px;white-space:nowrap}
+.st.ready{background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
+.st.prog{background:color-mix(in srgb,var(--mauve) 16%,transparent);color:var(--mauve)}
+.st.review{background:color-mix(in srgb,var(--teal) 16%,transparent);color:var(--teal)}
+.st.block{background:color-mix(in srgb,var(--overlay) 22%,transparent);color:var(--overlay)}
+.st.done{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)}
+.st.snooze{background:color-mix(in srgb,var(--yellow) 18%,transparent);color:var(--yellow)}
+.st.fail{background:color-mix(in srgb,var(--red) 16%,transparent);color:var(--red)}
+
+/* tabs */
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px}
+.tabs button{font:inherit;font-size:.8rem;font-weight:600;color:var(--subtext);background:var(--base);
+  border:1px solid var(--surface0);border-radius:999px;padding:6px 14px;cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--text);color:var(--base);border-color:var(--text)}
+[role=tabpanel][hidden]{display:none}
+
+/* scenario */
+.scn{background:var(--base);border:1px solid var(--surface0);border-radius:var(--r);overflow:hidden;margin-bottom:16px}
+.scn>summary{list-style:none;cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:12px}
+.scn>summary::-webkit-details-marker{display:none}
+.scn>summary .idx{font-size:.7rem;font-weight:700;color:var(--overlay);width:22px}
+.scn>summary h3{font-size:.98rem;flex:1}
+.scn>summary .sub{font-size:.78rem;color:var(--overlay)}
+.scn>summary::after{content:"+";color:var(--overlay);font-size:1.1rem;line-height:1}
+.scn[open]>summary::after{content:"–"}
+.scn[open]>summary{border-bottom:1px solid var(--surface0);background:var(--mantle)}
+.scn .inner{padding:18px}
+.steps{list-style:none;margin:0 0 16px;padding:0;counter-reset:s}
+.steps li{counter-increment:s;position:relative;padding:0 0 14px 34px;font-size:.87rem;color:var(--subtext)}
+.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:22px;height:22px;border-radius:50%;
+  background:var(--surface0);color:var(--text);font-size:.7rem;font-weight:700;display:grid;place-items:center}
+.steps li::after{content:"";position:absolute;left:11px;top:24px;bottom:0;width:1px;background:var(--surface0)}
+.steps li:last-child::after{display:none}
+.steps li b{color:var(--text)}
+.steps li .ev{display:inline-block;font-size:.7rem;color:var(--overlay);background:var(--mantle);
+  border:1px solid var(--surface0);border-radius:4px;padding:1px 6px;margin-left:6px;font-family:ui-monospace,monospace}
+
+.note{border-left:3px solid var(--peach);background:color-mix(in srgb,var(--peach) 8%,transparent);
+  padding:12px 14px;border-radius:0 var(--r-sm) var(--r-sm) 0;font-size:.85rem;margin:14px 0}
+.note b{color:var(--peach)}
+.note.danger{border-color:var(--red);background:color-mix(in srgb,var(--red) 8%,transparent)}
+.note.danger b{color:var(--red)}
+.note.good{border-color:var(--green);background:color-mix(in srgb,var(--green) 8%,transparent)}
+.note.good b{color:var(--green)}
+
+.flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding:4px 0}
+.flow .n{background:var(--base);border:1px solid var(--surface0);border-radius:var(--r-sm);padding:9px 12px;min-width:132px}
+.flow .n .k{font-size:.64rem;text-transform:uppercase;letter-spacing:.08em;color:var(--overlay);font-weight:700}
+.flow .n .v{font-size:.82rem;font-weight:600;margin-top:2px}
+.flow .n .s{font-size:.7rem;color:var(--overlay);margin-top:3px}
+.flow .ar{display:grid;place-items:center;color:var(--surface2);padding:0 8px;font-size:1rem;flex:none}
+
+footer{padding:44px 0 72px;color:var(--overlay);font-size:.82rem}
+kbd{font-family:ui-monospace,monospace;font-size:.75rem;background:var(--surface0);border-radius:4px;padding:1px 5px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Colony · product design · v1</div>
+    <h1 style="margin-top:10px">The Work Model</h1>
+    <p class="thesis">
+      Threads are where work is <strong>discussed</strong>. Tasks are what work <strong>is</strong>.
+      Two levels of work, never three. Chains are flat siblings, not nested children.
+      Everything you can group by is a real domain field, never a label someone typed.
+    </p>
+    <p style="font-size:.88rem;color:var(--overlay);max-width:66ch;margin-top:14px">
+      Examples throughout are a website agency because that is the business in hand. The primitives are not.
+      <a href="#shapes">Section 3c</a> runs the same model against a recruitment firm and a social agency,
+      names the four places it was leaking sales vocabulary, and names the one shape it still does not cover.
+    </p>
+  </div>
+</header>
+
+<nav class="toc"><div class="wrap"><ul>
+  <li><a href="#model">Model</a></li>
+  <li><a href="#canon">Canon</a></li>
+  <li><a href="#entities">Entities</a></li>
+  <li><a href="#contract">Task contract</a></li>
+  <li><a href="#shapes">Shape test</a></li>
+  <li><a href="#states">Lifecycle</a></li>
+  <li><a href="#claiming">Claiming</a></li>
+  <li><a href="#surfaces">Surfaces</a></li>
+  <li><a href="#scenarios">Scenarios</a></li>
+  <li><a href="#loopholes">Loopholes</a></li>
+  <li><a href="#lands">Where it lands</a></li>
+  <li><a href="#built">What changed</a></li>
+  <li><a href="#gaps">Gaps closed</a></li>
+  <li><a href="#build">Build order</a></li>
+</ul></div></nav>
+
+<!-- ================= MODEL ================= -->
+<section id="model">
+  <div class="wrap">
+    <h2><span class="num">01</span> The model</h2>
+    <p class="lede">Three nouns. One of them is not work.</p>
+
+    <div class="grid g3" style="margin-top:20px">
+      <div class="card">
+        <div class="eyebrow" style="color:var(--mauve)">Grouping · not work</div>
+        <h3 style="margin-top:6px">Cohort</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">A named set of Parties. <code>@premium-q3</code>.
+        Built by lead discovery or by hand. Mentionable. Has no status, does nothing on its own.</p>
+      </div>
+      <div class="card">
+        <div class="eyebrow" style="color:var(--teal)">Recipe · not work</div>
+        <h3 style="margin-top:6px">Pipeline template</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Ordered stages. Each stage declares owning team,
+        channel, doer kind, reviewer, prompt, cost ceiling. <code>@build-websites</code>. Versioned.</p>
+      </div>
+      <div class="card" style="border-color:color-mix(in srgb,var(--blue) 40%,transparent)">
+        <div class="eyebrow" style="color:var(--blue)">Work</div>
+        <h3 style="margin-top:6px">Initiative → Task</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Cohort × template, fired, produces one Initiative
+        and a flat set of Tasks. This is the only thing that has status, cost, and a neck to blame.</p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:34px">One run, in one picture</h3>
+    <div class="card" style="margin-top:12px;overflow-x:auto">
+      <div class="flow">
+        <div class="n"><div class="k">Cohort</div><div class="v">@premium-q3</div><div class="s">38 parties</div></div>
+        <div class="ar">×</div>
+        <div class="n"><div class="k">Template</div><div class="v">@build-websites</div><div class="s">v3 · 3 stages</div></div>
+        <div class="ar">→</div>
+        <div class="n" style="border-color:color-mix(in srgb,var(--blue) 45%,transparent)">
+          <div class="k">Initiative</div><div class="v">Premium Q3 run</div><div class="s">114 tasks · budget $480</div></div>
+      </div>
+      <div style="height:14px"></div>
+      <div class="flow">
+        <div class="n" style="min-width:150px"><div class="k">Task · stage 1</div><div class="v">Build site · Ridgeway</div>
+          <div class="s">web-dev · #websites</div></div>
+        <div class="ar">→</div>
+        <div class="n" style="min-width:150px"><div class="k">Task · stage 2</div><div class="v">Outreach pack · Ridgeway</div>
+          <div class="s">sales · #sales</div></div>
+        <div class="ar">→</div>
+        <div class="n" style="min-width:150px"><div class="k">Task · stage 3</div><div class="v">Run outreach · Ridgeway</div>
+          <div class="s">sales · human</div></div>
+      </div>
+      <p style="font-size:.8rem;color:var(--overlay);margin-top:14px">
+        That chain repeats once per party, all sharing one <code>initiative_id</code> and their own <code>subject</code>.
+        Three stages × 38 parties = 114 tasks. Flat. No nesting anywhere.
+      </p>
+    </div>
+
+    <div class="note"><b>Why no third level.</b> Every task system that allows subtasks eventually answers
+      "how deep?" with "however deep somebody clicked." Rollup percentages stop meaning anything, boards
+      cannot render, and cost double-counts because every level charges a cost centre. Depth here is bought,
+      not free: a task that turns out to be a project <em>escalates</em> into a child Initiative, which costs
+      an approval and shows up on the board as an event.</div>
+  </div>
+</section>
+
+<!-- ================= CANON ================= -->
+<section id="canon">
+  <div class="wrap">
+    <h2><span class="num">02</span> Canon</h2>
+    <p class="lede">Ten rules. Each one is a decision that closes an argument.</p>
+
+    <div class="grid g2" style="margin-top:20px">
+
+      <div class="rule"><h3><span class="tag">R1</span> Two levels of work. Never three.</h3>
+        <p>Initiative groups Tasks. Task has no children. Ever.</p>
+        <div class="why">Depth arrives only through escalation (R9), which is gated and visible.</div></div>
+
+      <div class="rule"><h3><span class="tag">R2</span> A Task is one deliverable.</h3>
+        <p>Something is one task if and only if: exactly one team can be blamed, it has a single
+          definition-of-done, and it lives in one channel. Break any one → split it.</p>
+        <div class="why">This is the test that settles "is QA a task?" and "is this two things?"</div></div>
+
+      <div class="rule"><h3><span class="tag">R3</span> Review is a gate, not a task.</h3>
+        <p>A reviewer is a second agent on the same deliverable. <code>inProgress → inReview → completed</code>.
+          Accountability never moves off the owning team.</p>
+        <div class="why">Splitting review into its own task creates two necks for one outcome, which means none.</div></div>
+
+      <div class="rule"><h3><span class="tag">R4</span> Task points at thread. Thread never points back.</h3>
+        <p>Task carries <code>thread_root</code>. A thread's task list is a query, never a tag on the
+          thread root event.</p>
+        <div class="why">A tag would have to be rewritten every time the active task changes: signed-event edits,
+          LWW conflicts, lost history. A query gives you full history free and ordered.</div></div>
+
+      <div class="rule"><h3><span class="tag">R5</span> Two truths, never one badge.</h3>
+        <p>Business state (<code>status</code>) and execution state (<code>runStatus</code>) disagree constantly
+          and both are correct. Every card shows a status pill <em>and</em> a live dot.</p>
+        <div class="why">Collapse them and you get cards reading "in progress" whose agent died 40 minutes ago.
+          The dot going grey is the dead-chain detector.</div></div>
+
+      <div class="rule"><h3><span class="tag">R6</span> No custom fields. No free-text labels.</h3>
+        <p>If you want to group by something and no field exists, that is a missing domain concept.
+          Add the concept.</p>
+        <div class="why">Labels cannot drive automation, so chains would depend on humans typing strings
+          correctly. This is the single rule that keeps this from becoming Jira.</div></div>
+
+      <div class="rule"><h3><span class="tag">R7</span> Eager tasks, lazy threads.</h3>
+        <p>Fan-out writes the whole graph immediately, downstream tasks <code>blocked</code>. Threads are
+          created only when a task becomes <code>ready</code>.</p>
+        <div class="why">You see 114 tasks of committed work before it costs money, and a crashed agent
+          cannot silently delete the rest of the pipeline. Channels stay clean because dead threads never appear.</div></div>
+
+      <div class="rule"><h3><span class="tag">R8</span> Rejection is a bounce, not a new task.</h3>
+        <p>A downstream task bounces upstream with a reason: upstream returns to <code>ready</code> with the
+          reason attached, downstream returns to <code>blocked</code>. Bounce count is a quality metric.</p>
+        <div class="why">Cancel-and-recreate destroys the link between the complaint and the work, which is the
+          only data that tells you which agent produces garbage.</div></div>
+
+      <div class="rule"><h3><span class="tag">R9</span> Depth is bought with an approval.</h3>
+        <p>A task too big for one deliverable spawns a child Initiative
+          (<code>spawned_from_task_id</code>). Parent task sits <code>blocked</code> until it completes.</p>
+        <div class="why">Escalation, not recursion. One hop, cost-estimated, owner-approved, visible.</div></div>
+
+      <div class="rule"><h3><span class="tag">R10</span> Templates are pinned at fire time.</h3>
+        <p>An Initiative records the template version it ran. Editing a template never mutates a run in flight.</p>
+        <div class="why">Otherwise a typo fix silently changes what 38 leads are getting halfway through.</div></div>
+
+      <div class="rule"><h3><span class="tag">R11</span> The agent writes its own contract.</h3>
+        <p>An agent starting ambient work fills in the whole brief — title, description, inputs, acceptance,
+          expected outputs — and updates it when scope changes. Every task gets a real title, including the
+          throwaway ones.</p>
+        <div class="why">The agent knows what it is doing better than any heuristic. Fan-out gets its contract
+          from the template stage instead; both paths produce the same record. Nothing is ever hidden — the
+          <code>implicit</code> flag is a filter, not a verdict.</div></div>
+
+      <div class="rule" style="border-left-color:var(--peach)"><h3><span class="tag" style="color:var(--peach)">R12</span> A task must survive being handed to a stranger.</h3>
+        <p>A pooled agent claims it having never seen the thread. Everything needed is on the task, typed and
+          resolvable, or the task is broken.</p>
+        <div class="why">This is the test that forces inputs, acceptance and declared outputs to exist.
+          A title and a sentence fail it instantly, and they fail it silently — you get bad work, not an error.</div></div>
+
+    </div>
+
+    <h3 style="margin-top:34px">The naming contract</h3>
+    <p class="lede">Left to itself a model writes "Working on the Ridgeway Dental website rebuild task in
+      #building-premium-websites". Caps are mechanical; examples do the rest.</p>
+
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <div class="eyebrow">Enforced at ingest</div>
+        <div style="margin-top:10px;font-size:.86rem;color:var(--subtext);display:flex;flex-direction:column;gap:9px">
+          <div><b style="color:var(--text)">title</b> — ≤60 chars, imperative, names the <b>deliverable</b> not the
+            activity, no trailing period.</div>
+          <div><b style="color:var(--text)">description</b> — exactly one sentence, ≤200 chars, states the
+            done-condition.</div>
+          <div><b style="color:var(--text)">neither</b> may restate company, channel, agent, lead or date.
+            Those are columns.</div>
+          <div><b style="color:var(--text)">kind</b> — <code>work</code> or <code>chore</code>. A chore is charged
+            and never boarded.</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="eyebrow" style="color:var(--red)">Rejected</div>
+        <p style="font-size:.86rem;margin-top:6px">
+          <code style="color:var(--red)">Working on the Ridgeway Dental website rebuild task in
+          #building-premium-websites</code></p>
+        <div class="eyebrow" style="color:var(--green);margin-top:14px">Accepted</div>
+        <p style="font-size:.86rem;margin-top:6px">
+          <b>Rebuild Ridgeway Dental site</b><br>
+          <span style="color:var(--subtext)">Replace the 2011 WordPress theme with a Horizon build, live on
+          staging with their real phone number.</span></p>
+        <div style="font-size:.78rem;color:var(--overlay);margin-top:12px;padding-top:10px;border-top:1px dashed var(--surface0)">
+          Rename is ordinary. Scope changed → rename. <code>CompanyActionOperation::Update</code> already carries
+          it with an <code>expected_head</code> CAS.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ENTITIES ================= -->
+<section id="entities">
+  <div class="wrap">
+    <h2><span class="num">03</span> Entities</h2>
+    <p class="lede">What exists in the repo today, what changes, what is new.
+      <span class="pill exists">exists</span> <span class="pill change">changes</span> <span class="pill new">new</span></p>
+
+    <h3 style="margin-top:26px">Task <span class="mono" style="font-size:.8rem;color:var(--overlay)">kind 30181</span></h3>
+    <div class="tablewrap" style="margin-top:10px"><table>
+      <thead><tr><th>Field</th><th>Meaning</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">id, company_id, title</td><td>identity</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">initiative_id</td><td>the run it belongs to. optional (ambient work has none)</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">owning_team_id</td><td><b>the neck.</b> exactly one team</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">assignee_persona_ids</td><td>current doer(s). empty until claimed</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">qa_persona_id</td><td>reviewer for the inReview gate</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">cost_centre_id, commercial_purpose, client_organization_id</td><td>accounting</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">source_channel_id, source_event_id</td><td>provenance</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">implicit</td><td><b>the filter that carries the whole flood problem.</b> Colony created it from chat vs somebody asked for it. Board and list default to <code>implicit = false</code>; one toggle shows everything</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">status</td><td>business state — <b>gains <code>snoozed</code></b></td><td><span class="pill change">changes</span></td></tr>
+        <tr><td class="mono">description</td><td>one sentence, ≤200 chars, states the done-condition (R11).
+          <b>Task has no description field at all today</b> — no summary, no body (<code>company.rs:186</code>).
+          Initiative has <code>summary</code>; Task was never given one.</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">instruction</td><td>what to do. From the stage prompt, subject-interpolated</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">inputs</td><td><code>[{role, kind, ref, required}]</code> — typed refs. <code>task-artifact</code> kind is how a chain carries payload</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">acceptance</td><td><code>[{id, text}]</code> — checkable, graded by the reviewer, named by a bounce</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">expects</td><td><code>[{kind, format, label, cardinality}]</code> — outputs declared before work starts</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">cost_ceiling, due_at, staleness_after, tool_scope</td><td>constraints on the doer</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">artifacts</td><td>delivered outputs. Already exists on the job head, already rendered</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">thread_root</td><td>the thread this task is worked in (R4)</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">depends_on: [TaskId]</td><td>upstream siblings. all must be terminal-good before ready</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">subject</td><td><code>{kind, ref}</code> — what the work is <i>about</i>, and the swimlane key.
+          <code>kind</code> ∈ <code>party</code> (a lead, a candidate, a client) · <code>task</code> ·
+          <code>initiative</code> · <code>external</code> (a job req, a property, an invoice) · <code>none</code>.
+          <b>Not a party id</b> — that would hardcode one industry into the primitive.</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">stage</td><td>template stage slug. the kanban column</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">doer_kind</td><td><code>agent</code> | <code>human</code>. changes lease + completion rules</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">outcome_reason</td><td>required to complete a human task</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">wake_at</td><td>when a snoozed task returns</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">bounce_count, last_bounce_reason</td><td>quality signal</td><td><span class="pill new">new</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note danger"><b>Index constraint — worse than it looks, and half solved already.</b>
+      The relay does emit tags on task heads today (<code>company_broker.rs:132</code>):
+      <code>d</code>, <code>c</code>, <code>company</code>, <code>team</code>, <code>cost-centre</code>, and
+      optionally <code>initiative</code> and <code>client</code>. But its own comment
+      (<code>company_broker.rs:105</code>) states the trap plainly:
+      <em>"Only single-letter tags are indexed, so <code>#company</code> is a filter the relay never receives —
+      the nostr filter type drops it before parsing, and a client asking for one company's records gets every
+      company's."</em> That is why <code>c</code> exists as a single-letter mirror of <code>company</code>.
+      <br><br>
+      So right now <b><code>team</code>, <code>cost-centre</code> and <code>initiative</code> are decorative</b> —
+      readable once you have the event, unfilterable over the wire. "Show me this run's 114 tasks" cannot be
+      asked. Every new board dimension (<code>subject</code>, <code>stage</code>, <code>status</code>,
+      <code>assignee</code>) needs a single-letter mirror on the same pattern, and the existing three need one too.
+      Content stays the truth; single-letter tags are the only index that exists.</div>
+
+    <h3 style="margin-top:30px">Initiative <span class="mono" style="font-size:.8rem;color:var(--overlay)">kind 30180</span></h3>
+    <div class="tablewrap" style="margin-top:10px"><table>
+      <thead><tr><th>Field</th><th>Meaning</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">id, company_id, title, status</td><td>proposed → approved → active → completed</td><td><span class="pill exists">exists</span></td></tr>
+        <tr><td class="mono">cohort_id</td><td>the party set this ran over</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">template_id + template_version</td><td>pinned recipe (R10)</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">budget_ceiling</td><td>hard stop for the whole run, tree-wide</td><td><span class="pill new">new</span></td></tr>
+        <tr><td class="mono">spawned_from_task_id</td><td>set when this is an escalation (R9)</td><td><span class="pill new">new</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 style="margin-top:30px">Cohort <span class="pill new">new kind</span> &nbsp; Pipeline template <span class="pill new">new kind</span></h3>
+    <div class="grid g2" style="margin-top:10px">
+      <div class="card">
+        <div class="mono" style="font-size:.78rem;color:var(--overlay)">cohort</div>
+        <p style="font-size:.85rem;color:var(--subtext)">Named, mentionable set of <b>subject refs</b> — same
+          <code>{kind, ref}</code> shape as a task's subject, so a cohort can be 38 leads, 12 candidates,
+          6 job requisitions, or 4 client accounts. Static list or saved filter. Owned by a company.
+          Zero behaviour.</p>
+      </div>
+      <div class="card">
+        <div class="mono" style="font-size:.78rem;color:var(--overlay)">pipeline template · per stage</div>
+        <ul style="font-size:.85rem;color:var(--subtext);margin:.3em 0;padding-left:18px">
+          <li><code>slug</code>, <code>title</code></li>
+          <li><code>owning_team</code> — the pool that may claim</li>
+          <li><code>channel</code> — where its thread is created</li>
+          <li><code>doer_kind</code> — agent or human</li>
+          <li><code>reviewer_team</code> — optional, drives the inReview gate</li>
+          <li><code>prompt</code> — what the agent is told, with subject interpolation</li>
+          <li><code>cost_ceiling</code>, <code>staleness_after</code> — per task</li>
+          <li><code>inputs</code> / <code>acceptance</code> / <code>expects</code> — the contract this stage stamps</li>
+          <li><code>outcome_reasons</code> — the closed set this stage's doer picks from</li>
+          <li><code>on_outcome</code> — optional writeback per reason</li>
+          <li><code>fan_out</code> — when true, this stage's outputs become the subjects of a child run</li>
+          <li><code>on_fail</code> — <code>bounce</code> | <code>abandon-subject</code> | <code>ask-owner</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="contract">
+  <div class="wrap">
+    <h2><span class="num">3b</span> The task contract</h2>
+    <p class="lede">The test a task has to pass: <b>a pooled agent claims it having never seen the thread.</b>
+      Everything it needs is on the task or the task is broken. A title and a sentence fail that test instantly.</p>
+
+    <div class="grid g2" style="margin-top:22px">
+      <div class="card">
+        <div class="eyebrow" style="color:var(--mauve)">1 · Brief</div>
+        <div style="margin-top:8px;font-size:.86rem;color:var(--subtext);display:flex;flex-direction:column;gap:6px">
+          <div><code>title</code> — ≤60 chars, the deliverable</div>
+          <div><code>description</code> — one sentence, the done-condition</div>
+          <div><code>instruction</code> — what to actually do. From the template stage, interpolated with the
+            subject. Bounded (the job queue already caps instructions at 8,000 chars).</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow" style="color:var(--teal)">2 · Inputs</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">
+          <code>inputs: [{role, kind, ref, required}]</code> — typed references, never prose.
+          <code>kind</code> reuses the artifact union: <code>event · url · path · text</code>, plus
+          <code>party</code> and <code>task-artifact</code>.</p>
+        <div class="note danger" style="margin:10px 0 0;font-size:.82rem"><b>The edge I missed.</b>
+          <code>depends_on</code> is ordering only — it carries no payload. The outreach writer needs the
+          <em>built site URL</em>, and ordering does not hand it over. So a chain has <b>two</b> edges:
+          <code>depends_on</code> for sequence, and an input of kind <code>task-artifact</code> pointing at the
+          upstream task's output for data. Templates wire the second one per stage.</div>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow" style="color:var(--green)">3 · Acceptance</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">
+          <code>acceptance: [{id, text}]</code> — a short checkable list, not a paragraph. The reviewer grades
+          against these. A bounce names a <b>failed criterion id</b>, not free text.</p>
+        <div style="font-size:.8rem;color:var(--overlay);margin-top:10px">
+          Turns "the pack was wrong" into "criterion <code>industry-fit</code> failed, 6 times this week, always
+          from writer-2". Free-text reasons never aggregate.</div>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow" style="color:var(--peach)">4 · Outputs, declared before work starts</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">
+          <code>expects: [{kind, format, label, cardinality}]</code> — the same union as artifacts, declared up
+          front. "One <code>url</code> labelled staging site" · "One <code>text</code> in markdown, ≤2,000 chars".</p>
+        <div class="note good" style="margin:10px 0 0;font-size:.82rem"><b>This one is enforceable today.</b>
+          The relay already refuses a task-linked <code>done</code> outcome with no artifacts
+          (<code>job.rs:583</code>) and already fences event artifacts to the exact channel, thread, job, task and
+          attempt (<code>job_broker.rs:554</code>). Adding "and it must match what the task declared" extends a
+          check that exists rather than inventing one.</div>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow" style="color:var(--yellow)">5 · Constraints</div>
+        <div style="margin-top:8px;font-size:.86rem;color:var(--subtext);display:flex;flex-direction:column;gap:6px">
+          <div><code>cost_ceiling</code> — hard stop for this task</div>
+          <div><code>due_at</code> / <code>staleness_after</code> — hours for an agent, days for a person</div>
+          <div><code>tool_scope</code> / <code>permission_mode</code> — what the doer may touch</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow" style="color:var(--blue)">6 · Delivered</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">
+          <code>artifacts: [TaskArtifact]</code> — <b>already exists</b> (<code>taskRunContracts.ts:39</code>),
+          with a primary-deliverable distinction already rendered in <code>TaskDetailSheet.tsx</code>.</p>
+        <div style="font-size:.8rem;color:var(--overlay);margin-top:10px">
+          Declared and delivered are the same shape, so the detail sheet shows them as two columns and a missing
+          output is visible before anyone reviews anything.</div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:34px">Same contract, six renderings</h3>
+    <p class="lede">A task is not a page. It is a record that renders differently depending on who is looking and
+      why. The last row is the one people forget.</p>
+    <div class="tablewrap" style="margin-top:14px"><table>
+      <thead><tr><th style="width:16%">Surface</th><th style="width:44%">Shows</th><th>Deliberately hides</th></tr></thead>
+      <tbody>
+        <tr><td><b>Board card</b></td>
+          <td>title · subject · status pill · run dot · blocked-by count · <b>missing-output warning</b></td>
+          <td>everything else. Eight words, scannable at 114 cards.</td></tr>
+        <tr><td><b>List row</b></td>
+          <td>the above plus team, assignee, age, bounce count</td>
+          <td>instruction, inputs, acceptance</td></tr>
+        <tr><td><b>Thread chip</b></td>
+          <td>title · status · dot</td><td>all of it — the thread is the conversation, not the record</td></tr>
+        <tr><td><b>Task detail sheet</b></td>
+          <td>the whole contract: inputs as resolvable links, instruction, acceptance as a checklist,
+            <b>expected vs delivered side by side</b>, constraints, bounce history</td>
+          <td>nothing. This is the one place the full record lives.</td></tr>
+        <tr><td><b>Human queue card</b></td>
+          <td>description, and inputs <b>rendered as content</b> — the site opened, the pack readable, the phone
+            number tappable — plus outcome buttons</td>
+          <td>acceptance criteria, tool scope, cost ceiling, refs-as-refs. She needs the material, not the spec.</td></tr>
+        <tr><td><b>Agent prompt</b></td>
+          <td>the contract serialised to text: instruction, resolved inputs, acceptance criteria, declared
+            outputs, cost ceiling</td>
+          <td>board metadata, history, anything it cannot act on</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note"><b>The prompt is a surface.</b> A task that renders beautifully in the sheet and vaguely in
+      the prompt is a broken task, and it fails invisibly — you get bad work rather than an error. Every field
+      added to this contract has to answer "how does this serialise into the brief the agent actually reads".</div>
+  </div>
+</section>
+
+<section id="shapes">
+  <div class="wrap">
+    <h2><span class="num">3c</span> Shape test</h2>
+    <p class="lede">Every example in this document is a website agency because that is the business in front of us.
+      The model has to hold for a recruitment firm and a social agency without a line of code changing.
+      Here is that test, honestly run — including the parts that failed it.</p>
+
+    <div class="tablewrap" style="margin-top:22px"><table>
+      <thead><tr><th style="width:16%"></th><th style="width:28%">Website agency</th><th style="width:28%">Recruitment firm</th><th>Social media agency</th></tr></thead>
+      <tbody>
+        <tr><td><b>Cohort</b></td><td>38 leads<br><span style="color:var(--overlay)">party</span></td>
+          <td>6 open roles<br><span style="color:var(--overlay)">external ref</span></td>
+          <td>4 client accounts<br><span style="color:var(--overlay)">party</span></td></tr>
+        <tr><td><b>Subject</b></td><td>one lead</td><td>one candidate</td><td>one account · one month</td></tr>
+        <tr><td><b>Stages</b></td><td>build → pack → outreach</td>
+          <td>source → screen → submit → interview → place</td>
+          <td>plan → draft → client approve → schedule → report</td></tr>
+        <tr><td><b>Human stage</b></td><td>run outreach</td><td>interview</td><td>client approval</td></tr>
+        <tr><td><b>Outcomes</b></td><td>sent · replied · booked · disqualified</td>
+          <td>screened · submitted · placed · withdrew</td>
+          <td>approved · revisions · published</td></tr>
+        <tr><td><b>Bounce</b></td><td>pack has wrong angle</td><td>CV fails the brief</td><td>client rejects a draft</td></tr>
+        <tr><td><b>Snooze</b></td><td>revisit after summer</td><td>candidate re-engage in 6 months</td><td>post scheduled for next month</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="grid g2" style="margin-top:22px">
+      <div class="card" style="border-color:color-mix(in srgb,var(--green) 40%,transparent)">
+        <div class="eyebrow" style="color:var(--green)">Held without changes</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">
+          Initiative/Task split · <code>depends_on</code> chains · stage columns · review gate · bounce ·
+          snooze · two truths · eager tasks, lazy threads · cost ceiling · queue vs board ·
+          the whole task contract. None of it knows what industry it is in.</p>
+      </div>
+      <div class="card" style="border-color:color-mix(in srgb,var(--red) 40%,transparent)">
+        <div class="eyebrow" style="color:var(--red)">Failed, and is now fixed above</div>
+        <div style="font-size:.86rem;color:var(--subtext);margin-top:6px;display:flex;flex-direction:column;gap:7px">
+          <div><b>Outcome reasons were built in.</b> "sent · replied · booked" is a sales vocabulary. Now the
+            stage declares its own closed set.</div>
+          <div><b>Writeback was implicit.</b> Disqualify → <code>PartyRelationship.Disqualified</code> assumed the
+            subject is a sales lead. Now the stage declares the mapping, or declares none.</div>
+          <div><b><code>subject</code> was a party id.</b> A job requisition is not a party. Now
+            <code>{kind, ref}</code>.</div>
+          <div><b>Cohort was a set of parties.</b> Same fix — a set of subject refs.</div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:34px">One shape difference that needed a new mechanism</h3>
+    <div class="card" style="margin-top:12px">
+      <p style="font-size:.88rem;margin:0">
+        A website run is <b>1 : 1</b> — one lead, one chain, count known before firing. Recruitment is
+        <b>1 : N and the N is discovered mid-run</b>: sourcing one role produces 40 candidates, and each needs its
+        own screen chain that nobody could have planned for.</p>
+      <div class="flow" style="margin-top:14px">
+        <div class="n"><div class="k">Run · roles</div><div class="v">6 requisitions</div><div class="s">cohort</div></div>
+        <div class="ar">→</div>
+        <div class="n" style="border-color:color-mix(in srgb,var(--peach) 45%,transparent)">
+          <div class="k">Stage · fan_out</div><div class="v">Source candidates</div><div class="s">outputs become subjects</div></div>
+        <div class="ar">→</div>
+        <div class="n"><div class="k">Child run</div><div class="v">40 candidates</div><div class="s">screen → submit → interview</div></div>
+      </div>
+      <p style="font-size:.86rem;color:var(--subtext);margin-top:14px">
+        A stage marked <code>fan_out</code> turns its declared outputs into the subjects of a <b>child run</b>.
+        That is R9's escalation path, automated: still one hop, still budget drawn from the parent, still visible
+        as an event on the board. Two levels of work survive intact — what grew is the number of runs, not the
+        depth of a task.</p>
+    </div>
+
+    <div class="note danger" style="margin-top:22px"><b>One shape this model does not cover yet, stated plainly.</b>
+      A social agency's work is <b>recurring</b> — the same five stages, every account, every month, forever.
+      Nothing here schedules a run. Everything is fired by a person or an agent saying so. Retainer and
+      account-management work is also not a run at all: it has no end, so "initiative completed" never happens
+      and a board built around finishing has nothing to show. That is a real gap, not a detail, and it wants a
+      recurring-run concept (template + cohort + schedule) that this document does not attempt.
+      Better to name it than to pretend the fan-out covers it.</div>
+  </div>
+</section>
+
+<!-- ================= STATES ================= -->
+<section id="states">
+  <div class="wrap">
+    <h2><span class="num">04</span> Lifecycle</h2>
+    <p class="lede">One state machine for business truth, one for execution truth. They are not the same machine.</p>
+
+    <div class="grid g2" style="margin-top:20px">
+      <div class="card">
+        <h3>Business state <span class="mono" style="font-size:.75rem;color:var(--overlay)">CompanyTask.status</span></h3>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;font-size:.83rem">
+          <div><span class="st block">blocked</span> → <span class="st ready">ready</span>
+            <span style="color:var(--overlay)">— every <code>depends_on</code> completed</span></div>
+          <div><span class="st ready">ready</span> → <span class="st prog">inProgress</span>
+            <span style="color:var(--overlay)">— claimed by a member of the owning team</span></div>
+          <div><span class="st prog">inProgress</span> → <span class="st review">inReview</span>
+            <span style="color:var(--overlay)">— doer submits, reviewer_team set</span></div>
+          <div><span class="st review">inReview</span> → <span class="st done">completed</span>
+            <span style="color:var(--overlay)">— reviewer accepts</span></div>
+          <div><span class="st review">inReview</span> → <span class="st prog">inProgress</span>
+            <span style="color:var(--overlay)">— reviewer rejects, same task, same neck</span></div>
+          <div><span class="st ready">any</span> → <span class="st snooze">snoozed</span>
+            <span style="color:var(--overlay)">— <code>wake_at</code> set, returns automatically</span></div>
+          <div><span class="st prog">downstream</span> ⇢ <span class="st ready">upstream ready</span>
+            <span style="color:var(--overlay)">— <b>bounce</b>, carries a reason (R8)</span></div>
+          <div><span class="st ready">any</span> → <span class="st fail">cancelled</span>
+            <span style="color:var(--overlay)">— owner or cascade</span></div>
+        </div>
+        <div class="note danger" style="margin-bottom:0"><b>Today completion is only reachable through review.</b>
+          <code>company.rs:396</code> permits no <code>Ready→Completed</code> and no
+          <code>InProgress→Completed</code>: every task must pass <code>inReview</code>, and
+          <code>qa_persona_id</code> is a required <code>String</code>, not an option. That is correct for agent
+          work and wrong for Sarah — nobody reviews a phone call.
+          <b>Ruling: <code>InProgress→Completed</code> is permitted when <code>doer_kind: human</code> and the
+          stage declares no reviewer.</b> Agent tasks keep the mandatory gate.</div>
+      </div>
+
+      <div class="card">
+        <h3>Execution state <span class="mono" style="font-size:.75rem;color:var(--overlay)">TaskRunHead.runStatus</span></h3>
+        <p style="font-size:.84rem;color:var(--subtext)">Already exists. Driven by the job broker's
+          lease + heartbeat. Nobody sets it by hand.</p>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:7px;font-size:.83rem">
+          <div><span class="dot wait"></span> <b>queued</b> — filed, no worker has claimed it</div>
+          <div><span class="dot live"></span> <b>executing</b> — lease held (120s), heartbeat every 30s</div>
+          <div><span class="dot recover"></span> <b>recoverable</b> — lease lapsed, attempts remain (max 3)</div>
+          <div><span class="dot idle"></span> <b>delivered</b> — outcome accepted with evidence</div>
+          <div><span class="dot dead"></span> <b>failed</b> — worker reported failure</div>
+          <div><span class="dot aband"></span> <b>abandoned</b> — lapsed on the last attempt, never re-offered</div>
+        </div>
+        <p style="font-size:.78rem;color:var(--overlay);margin-top:8px">
+          Exact values from <code>taskRunContracts.ts:7</code> and <code>job.rs:326</code>. The parser refuses any
+          head whose job <code>status</code> and <code>run-status</code> disagree, so the two truths can differ
+          but never contradict.</p>
+        <div class="note danger" style="margin-bottom:0"><b>Human tasks have no lease.</b> A person does not
+          heartbeat, and rerouting their work to someone else is not allowed anyway. Instead a
+          <b>staleness clock</b>: <code>inProgress</code> with no activity for N days raises an Ask to the owner.
+          Nudge, never reroute.</div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:30px">Completion means two different things</h3>
+    <div class="tablewrap" style="margin-top:10px"><table>
+      <thead><tr><th></th><th>Agent task</th><th>Human task</th></tr></thead>
+      <tbody>
+        <tr><td><b>Claim</b></td><td>CAS on the job head, lease held</td><td>Assignment, no lease</td></tr>
+        <tr><td><b>Liveness</b></td><td>heartbeat; expiry → requeue</td><td>staleness clock → Ask to owner</td></tr>
+        <tr><td><b>Completion</b></td><td>outcome event with delivery evidence, relay-validated</td><td>explicit <code>outcome_reason</code></td></tr>
+        <tr><td><b>Reasons</b></td><td>delivered / failed</td>
+          <td><b>declared by the stage, never built in.</b> Sales: sent · replied · booked · disqualified.
+            Recruitment: screened · submitted · placed · withdrew. Content: drafted · client-approved · published.
+            The system supplies the mechanism (a closed set, one required on completion), the template supplies
+            the words.</td></tr>
+        <tr><td><b>Side effect</b></td><td>artifacts recorded on the job head</td>
+          <td>optional writeback, <b>also declared by the stage</b>:
+            <code>on_outcome: {disqualified: "party.relationship.status=Disqualified"}</code>. Colony happens to
+            ship Lead/Client states that fit sales (<code>party.rs:190</code>); a business whose subject is not a
+            party declares no writeback and loses nothing.</td></tr>
+        <tr><td><b>Retry</b></td><td>automatic to <code>MAX_JOB_ATTEMPTS</code></td><td>never automatic</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note good"><b>Free funnel data.</b> Forcing a reason on human completion is not bureaucracy —
+      it is the only place conversion data can come from. "40 completed" is worthless; "18 sent, 9 replied,
+      3 booked, 10 disqualified" is the business.</div>
+  </div>
+</section>
+
+<section id="claiming">
+  <div class="wrap">
+    <h2><span class="num">4b</span> How a task finds a doer</h2>
+    <p class="lede">A stage names a <b>team</b>, not a persona, so several agents are eligible for every task.
+      Nobody assigns. The relay pushes awareness; the agent pushes commitment.</p>
+
+    <div class="grid g2" style="margin-top:22px">
+      <div class="card">
+        <h3>Machines claim</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Because they are interchangeable and can prove liveness
+          with a heartbeat. Racing is correct here.</p>
+      </div>
+      <div class="card">
+        <h3>People are assigned</h3>
+        <p style="font-size:.86rem;color:var(--subtext)"><code>doer_kind: human</code> → direct assignment, no
+          lease, no CAS. Sarah does not race for work and cannot heartbeat. Staleness clock instead.</p>
+      </div>
+    </div>
+
+    <div class="note" style="margin-top:18px"><b>Why the relay does not assign.</b> To assign well it would need
+      to know which agents are alive, free and capable. It knows none of them: presence says <em>connected</em>,
+      not <em>able</em>, and the real constraint — free ACP slots against <code>parallelism</code> — lives in the
+      desktop process where the relay cannot see it. Assign to a sleeping laptop and the task is orphaned until
+      some timeout, so you add a timeout, a reclaim, and a lease — and you have rebuilt claiming with worse
+      information, plus a second source of truth that can disagree with the lease.</div>
+
+    <h3 style="margin-top:30px">Five eligible, three idle</h3>
+    <div class="tablewrap" style="margin-top:12px"><table>
+      <thead><tr><th style="width:12%">t</th><th style="width:26%">Who</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">0</td><td>relay</td>
+          <td>Upstream completes → task <code>blocked</code> → <code>ready</code> → job filed <code>open</code> →
+            head published to every sales agent's live subscription. <b>Nobody is chosen.</b></td></tr>
+        <tr><td class="mono">0</td><td>writer-3, writer-4</td>
+          <td>No free ACP slot. They drop out <b>publishing nothing</b>. The relay never learns they existed —
+            busy-ness is knowledge only the agent has.</td></tr>
+        <tr><td class="mono">0</td><td>writer-2</td>
+          <td>Warm session on this subject, free slots, cheap model → computes delay <b>0 ms</b>, claims
+            immediately (kind 43011, <code>job</code> + <code>nonce</code>).</td></tr>
+        <tr><td class="mono">~40ms</td><td>relay</td>
+          <td>Originator check passes, CAS lands: <code>leased</code>, holder writer-2, expires +120s,
+            attempts 1. Head republished.</td></tr>
+        <tr><td class="mono">~60ms</td><td>writer-5, writer-1</td>
+          <td>Their delays were 400 ms and 900 ms. They see the new head, lease fresh, and
+            <b>cancel their timers</b>. Zero wasted events.</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="grid g2" style="margin-top:18px">
+      <div class="card">
+        <div class="eyebrow">The only new code</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">A local delay function. Inputs: warm
+          session for this subject, free slots against <code>parallelism</code>, cost tier against the task's
+          ceiling, recent bounce rate on this stage. Capability is a hard filter, never a delay.</p>
+        <div style="font-size:.8rem;color:var(--overlay);margin-top:10px">Best fit waits least. CAS stays the sole
+          arbiter, so no new consistency problem is introduced — ties simply degrade to a plain race.</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Claim storms</div>
+        <p style="font-size:.86rem;color:var(--subtext);margin-top:6px">38 tasks go <code>ready</code> at once and
+          every agent sees all 38. Unshaped, they all fight over task 1, then task 2, then task 3.</p>
+        <div style="font-size:.8rem;color:var(--overlay);margin-top:10px">Each agent walks its queue in an order
+          shuffled by its own pubkey. They spread with zero coordination and no shared state.</div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:30px">Every way it can go wrong, and what catches it</h3>
+    <div class="tablewrap" style="margin-top:12px"><table>
+      <thead><tr><th style="width:30%">Failure</th><th style="width:36%">Caught by</th><th>Already exists?</th></tr></thead>
+      <tbody>
+        <tr><td>Best-fit agent is hung but subscribed</td>
+          <td>No claim at 0 ms; the next tier fires at 400 ms and wins. No health check, no liveness table.</td>
+          <td><span class="pill new">new — the delay</span></td></tr>
+        <tr><td>Genuine tie, all three claim at once</td>
+          <td>One CAS wins, two read the head and stop. Two wasted events, bounded.</td>
+          <td><span class="pill exists">exists</span></td></tr>
+        <tr><td>Agent dies mid-work</td>
+          <td>Heartbeat 30s, lease 120s. Lapse → back to <code>open</code>, up to 3 attempts, then
+            <code>abandoned</code>.</td>
+          <td><span class="pill exists">exists</span></td></tr>
+        <tr><td><b>Nobody claims at all</b></td>
+          <td>Escalation sweep raises one Ask to a human and stamps it so it asks once:
+            <code>WHERE escalated_ask IS NULL AND (status='abandoned' OR (status='open' AND created_at &lt;
+            unclaimed_before))</code> (<code>jobs.rs:522</code>). Board also shows unclaimed age.</td>
+          <td><span class="pill exists">exists</span></td></tr>
+        <tr><td>Duplicate claim inside one second</td>
+          <td>The <code>nonce</code> tag. <code>created_at</code> has 1-second resolution, so two identical
+            claims would hash to the same event id and be discarded as a replay
+            (<code>job.rs:530</code>).</td>
+          <td><span class="pill exists">exists</span></td></tr>
+        <tr><td>Agents on different members' machines</td>
+          <td>Not solvable, and deliberately so: the claim gate is an equality check against the job's originator
+            (<code>job_broker.rs:328</code>). A pool spans one seat, because spanning seats is vendor account
+            sharing however it is dressed up.</td>
+          <td><span class="pill exists">by design</span></td></tr>
+        <tr><td>Idle agent never hears about the task</td>
+          <td>Live subscription filtered to its team. <b>This is the piece that does not exist yet</b> — agents
+            discover work through channel membership and mentions today, not a work queue.</td>
+          <td><span class="pill new">new</span></td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ================= SURFACES ================= -->
+<section id="surfaces">
+  <div class="wrap">
+    <h2><span class="num">05</span> Surfaces</h2>
+    <p class="lede">Four views. One place to <em>do</em> work (the thread), three places to <em>see</em> it.</p>
+
+    <div class="tabs" role="tablist" style="margin-top:20px">
+      <button role="tab" aria-selected="true" data-t="v-thread">In the thread</button>
+      <button role="tab" aria-selected="false" data-t="v-board">Board · stage kanban</button>
+      <button role="tab" aria-selected="false" data-t="v-list">List · group by anything</button>
+      <button role="tab" aria-selected="false" data-t="v-detail">Task detail · the contract</button>
+      <button role="tab" aria-selected="false" data-t="v-queue">Queue · the doer's view</button>
+    </div>
+
+    <div role="tabpanel" id="v-detail" hidden>
+      <div class="app">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div>
+          <div class="path mono">horizon · task · outreach-pack · Iris Interiors</div></div>
+        <div class="body" style="grid-template-columns:1fr">
+          <div class="main">
+            <div class="topbar">
+              <h4>Write outreach pack · Iris Interiors</h4>
+              <span class="st ready">ready</span><span class="dot idle"></span>
+              <span class="ctrl">↩ bounced ×1</span>
+              <span style="margin-left:auto"></span>
+              <span class="ctrl">sales · #sales · stage 2 of 3</span>
+            </div>
+            <div class="content">
+              <p style="font-size:.88rem;margin:0 0 16px">Produce a cold-outreach pack Iris can be contacted with,
+                built from their new site.</p>
+
+              <div class="grid g2">
+                <div>
+                  <div class="eyebrow" style="color:var(--teal)">Inputs</div>
+                  <div class="tablewrap" style="margin-top:8px"><table><tbody>
+                    <tr><td style="width:34%"><b>lead</b></td><td><span class="chip">party · Iris Interiors</span></td></tr>
+                    <tr><td><b>site</b></td><td><span class="chip">task-artifact · <b>url</b> from Build site ✓</span></td></tr>
+                    <tr><td><b>brand kit</b></td><td><span class="chip">event · kind 30198</span></td></tr>
+                    <tr><td><b>bounce</b></td><td><span class="chip" style="border-color:color-mix(in srgb,var(--yellow) 50%,transparent)">
+                      criterion <b>industry-fit</b> failed</span></td></tr>
+                  </tbody></table></div>
+
+                  <div class="eyebrow" style="color:var(--green);margin-top:18px">Acceptance</div>
+                  <div style="margin-top:8px;font-size:.85rem;color:var(--subtext);display:flex;flex-direction:column;gap:6px">
+                    <div>☐ <code>industry-fit</code> — angle matches trade-only, not retail</div>
+                    <div>☐ <code>site-ref</code> — email links the built site</div>
+                    <div>☐ <code>objections</code> — at least three, each with a response</div>
+                    <div>☐ <code>no-claims</code> — no metric Horizon cannot evidence</div>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="eyebrow" style="color:var(--peach)">Expected → delivered</div>
+                  <div class="tablewrap" style="margin-top:8px"><table>
+                    <thead><tr><th>Declared</th><th>Delivered</th></tr></thead>
+                    <tbody>
+                      <tr><td>email draft · <span class="mono">text/markdown</span> ≤2k</td>
+                        <td style="color:var(--overlay)">—</td></tr>
+                      <tr><td>call script · <span class="mono">text/markdown</span></td>
+                        <td style="color:var(--overlay)">—</td></tr>
+                      <tr><td>objections · <span class="mono">text</span> ×3</td>
+                        <td style="color:var(--overlay)">—</td></tr>
+                    </tbody></table></div>
+                  <div class="note danger" style="font-size:.8rem">Completion is refused until every declared
+                    output is present. The relay already refuses a task-linked <code>done</code> with no
+                    artifacts at all — this narrows that to "and of the declared shape".</div>
+
+                  <div class="eyebrow" style="color:var(--yellow);margin-top:14px">Constraints</div>
+                  <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+                    <span class="ctrl">ceiling <b>$1.20</b></span>
+                    <span class="ctrl">stale after <b>4h</b></span>
+                    <span class="ctrl">tools <b>read-only</b></span>
+                  </div>
+                </div>
+              </div>
+
+              <div style="font-size:.74rem;color:var(--overlay);margin-top:18px;padding-top:12px;border-top:1px dashed var(--surface0)">
+                Open thread in #sales ↗ · Upstream: Build site · Iris Interiors ✓ · Downstream: Run outreach (blocked)
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:14px"><b>This is the whole record and the only place it lives whole.</b>
+        A pooled agent that never saw the thread can claim this and start. That is the bar. If the sheet cannot
+        show a field usefully, the field probably should not exist.</div>
+    </div>
+
+    <!-- thread -->
+    <div role="tabpanel" id="v-thread">
+      <div class="app">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div>
+          <div class="path mono">horizon · #building-premium-websites · thread</div></div>
+        <div class="body">
+          <div class="side">
+            <div class="grp">Horizon</div>
+            <div class="it">＃ general</div>
+            <div class="it on">＃ building-premium-websites <span class="n">3</span></div>
+            <div class="it">＃ sales</div>
+            <div class="grp">Work</div>
+            <div class="it">▦ Board</div>
+            <div class="it">☰ All tasks</div>
+            <div class="it">◔ My queue <span class="n">12</span></div>
+          </div>
+          <div class="main">
+            <div class="topbar">
+              <h4>Ridgeway Dental rebuild</h4>
+              <span class="chip"><span class="dot live"></span> <b>Build site · Ridgeway</b>
+                <span class="st prog">inProgress</span></span>
+              <span style="margin-left:auto"></span>
+              <span class="ctrl">2 earlier tasks ▾</span>
+            </div>
+            <div class="content">
+              <div class="msg"><div class="av" style="background:var(--peach)">B</div>
+                <div><div class="who">Basheer <span class="ts">09:14</span></div>
+                <div class="txt"><span class="mention">@mark</span> rebuild ridgeway dental, they are on a 2011 wordpress theme</div></div></div>
+
+              <div class="sysrow"><span class="dot idle"></span>
+                Task created <b>Build site · Ridgeway Dental</b> · web-dev · from this message
+                <span class="lnk">Open task ↗</span></div>
+
+              <div class="msg"><div class="av" style="background:var(--blue)">M</div>
+                <div><div class="who">Mark <span class="ts">09:14</span></div>
+                <div class="txt">On it. Crawling the current site and pulling brand assets.</div></div></div>
+
+              <div class="msg"><div class="av" style="background:var(--blue)">M</div>
+                <div><div class="who">Mark <span class="ts">10:02</span></div>
+                <div class="txt">Draft is up. Handing to QA.</div></div></div>
+
+              <div class="sysrow"><span class="st review">inReview</span>
+                <b>Build site · Ridgeway Dental</b> → reviewer <b>@qa-vera</b>
+                <span class="lnk">Open task ↗</span></div>
+
+              <div class="msg"><div class="av" style="background:var(--teal)">V</div>
+                <div><div class="who">Vera <span class="ts">10:20</span></div>
+                <div class="txt">Contrast fails on the hero CTA and the phone number is the old one. Sending back.</div></div></div>
+
+              <div class="sysrow" style="border-color:color-mix(in srgb,var(--yellow) 45%,transparent)">
+                <span class="st prog">inProgress</span> Review rejected · <b>2 issues</b> · same task, same owner
+                <span class="lnk">Open task ↗</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="grid g2" style="margin-top:14px">
+        <div class="note good" style="margin:0"><b>Nothing is hidden, anywhere.</b> Every task is created, boarded
+        and countable. <code>implicit</code> separates "Colony made this from a chat line" from "somebody asked
+        for this", and board and list default to the second. Toggle it off and you see what your company actually
+        spent its turns on — which is a report worth having, not noise to suppress.</div>
+      <div class="note" style="margin:0"><b>What gets a system row.</b> Only created, review handoff,
+          review rejected, bounce, completed, escalated, cancelled. <em>Not</em> every status change —
+          otherwise the thread becomes a status log and the conversation disappears under it.</div>
+        <div class="note good" style="margin:0"><b>History, free.</b> "2 earlier tasks ▾" is a query on
+          <code>thread_root</code> (R4). Nothing on the thread event was ever rewritten to produce it.</div>
+      </div>
+    </div>
+
+    <!-- board -->
+    <div role="tabpanel" id="v-board" hidden>
+      <div class="app">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div>
+          <div class="path mono">horizon · Work · Board · Premium Q3 run</div></div>
+        <div class="body">
+          <div class="side">
+            <div class="grp">Work</div>
+            <div class="it on">▦ Board</div>
+            <div class="it">☰ All tasks</div>
+            <div class="it">◔ My queue <span class="n">12</span></div>
+            <div class="grp">Initiatives</div>
+            <div class="it on">Premium Q3 run <span class="n">114</span></div>
+            <div class="it">Brand refresh <span class="n">8</span></div>
+            <div class="it">Ridgeway site v2 <span class="n">5</span></div>
+          </div>
+          <div class="main">
+            <div class="topbar">
+              <h4>Premium Q3 run</h4>
+              <span class="ctrl">columns <b>stage</b></span>
+              <span class="ctrl">rows <b>none</b></span>
+              <span class="ctrl">filter <b>all</b></span>
+              <span style="margin-left:auto"></span>
+              <span class="ctrl"><span class="dot dead"></span> <b>4 stalled</b></span>
+              <span class="ctrl">spend <b>$212 / $480</b></span>
+            </div>
+            <div class="content">
+              <div class="kan">
+                <div class="col"><div class="h">Build site <span class="n">38</span></div>
+                  <div class="tk"><div class="t"><span class="dot live"></span> Ridgeway Dental</div>
+                    <div class="m"><span class="st prog">inProgress</span> web-1 · 12m</div></div>
+                  <div class="tk"><div class="t"><span class="dot live"></span> Kalahari Safaris</div>
+                    <div class="m"><span class="st review">inReview</span> vera</div></div>
+                  <div class="tk alert"><div class="t"><span class="dot recover"></span> Cove Coffee</div>
+                    <div class="m"><span class="st prog">inProgress</span> recoverable · 2 of 3 attempts</div></div>
+                  <div class="tk"><div class="t"><span class="dot wait"></span> Meridian Roofing</div>
+                    <div class="m"><span class="st ready">ready</span> unclaimed</div></div>
+                  <div class="tk"><div class="t"><span class="dot idle"></span> +34 more</div></div>
+                </div>
+                <div class="col"><div class="h">Outreach pack <span class="n">12</span></div>
+                  <div class="tk"><div class="t"><span class="dot live"></span> Zeta Legal</div>
+                    <div class="m"><span class="st prog">inProgress</span> writer-2</div></div>
+                  <div class="tk warn"><div class="t"><span class="dot idle"></span> Iris Interiors</div>
+                    <div class="m"><span class="st ready">ready</span> ↩ bounced ×1</div></div>
+                  <div class="tk"><div class="t"><span class="dot idle"></span> +10 more</div></div>
+                </div>
+                <div class="col"><div class="h">Run outreach <span class="n">9</span></div>
+                  <div class="tk"><div class="t">Nova Fitness</div>
+                    <div class="m"><span class="st prog">inProgress</span> 👤 sarah · 2d</div></div>
+                  <div class="tk warn"><div class="t">Lumen Optics</div>
+                    <div class="m"><span class="st prog">inProgress</span> 👤 sarah · <b>9d stale</b></div></div>
+                  <div class="tk"><div class="t">Cove Coffee</div>
+                    <div class="m"><span class="st snooze">snoozed</span> wakes 12 Oct</div></div>
+                  <div class="tk"><div class="t">Bolt Fabrication</div>
+                    <div class="m"><span class="st done">completed</span> ✓ replied</div></div>
+                </div>
+                <div class="col" style="opacity:.75"><div class="h">Done <span class="n">55</span></div>
+                  <div class="tk"><div class="t">Ferro Steel</div><div class="m"><span class="st done">completed</span> ✓ booked</div></div>
+                  <div class="tk"><div class="t">Vale Dental</div><div class="m"><span class="st fail">cancelled</span> disqualified</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="grid g2" style="margin-top:14px">
+        <div class="note" style="margin:0"><b>Columns are stages, not statuses.</b> Jira uses status columns
+          because Jira has no stage concept. You have one. Stage columns give you a funnel: where are 38 leads
+          stuck. Status columns give you "40 in progress", which tells you nothing.
+          Status is the pill on the card. The group-by control can still swap columns to status, team, or assignee.</div>
+        <div class="note danger" style="margin:0"><b>The dot is the point.</b> Cove Coffee reads
+          <code>inProgress</code> and is dead. Without the execution dot that card looks identical to Ridgeway
+          for as long as nobody opens it. With it, "4 stalled" is in the toolbar and you find it in one glance.</div>
+      </div>
+    </div>
+
+    <!-- list -->
+    <div role="tabpanel" id="v-list" hidden>
+      <div class="app">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div>
+          <div class="path mono">horizon · Work · All tasks</div></div>
+        <div class="body">
+          <div class="side">
+            <div class="grp">Work</div>
+            <div class="it">▦ Board</div>
+            <div class="it on">☰ All tasks</div>
+            <div class="it">◔ My queue <span class="n">12</span></div>
+            <div class="grp">Saved</div>
+            <div class="it">Stalled everywhere</div>
+            <div class="it">Bounced ≥1</div>
+            <div class="it">Unclaimed &gt; 1h</div>
+            <div class="it">Chat work, all of it</div>
+          </div>
+          <div class="main">
+            <div class="topbar">
+              <span class="ctrl">group <b>lead</b></span>
+              <span class="ctrl">sort <b>stalled first</b></span>
+              <span class="ctrl">filter <b>initiative = Premium Q3</b></span>
+              <span class="ctrl">☑ <b>assigned work only</b></span>
+              <span style="margin-left:auto"></span>
+              <span class="ctrl">114 tasks</span>
+            </div>
+            <div class="content">
+              <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--overlay);font-weight:700;padding:4px 0 6px">
+                Cove Coffee · 3 tasks · <span style="color:var(--red)">stalled</span></div>
+              <div class="tablewrap" style="margin-bottom:16px"><table>
+                <tbody>
+                  <tr><td style="width:30px"><span class="dot recover"></span></td>
+                    <td><b>Build site</b></td><td><span class="st prog">inProgress</span></td>
+                    <td>web-dev</td><td>web-3</td><td style="color:var(--peach)">recoverable · 2 of 3</td>
+                    <td class="mono" style="color:var(--overlay)">#websites</td></tr>
+                  <tr><td><span class="dot idle"></span></td>
+                    <td>Outreach pack</td><td><span class="st block">blocked</span></td>
+                    <td>sales</td><td>—</td><td style="color:var(--overlay)">waits on build</td>
+                    <td class="mono" style="color:var(--overlay)">#sales</td></tr>
+                  <tr><td><span class="dot idle"></span></td>
+                    <td>Run outreach</td><td><span class="st snooze">snoozed</span></td>
+                    <td>sales</td><td>👤 sarah</td><td style="color:var(--overlay)">wakes 12 Oct</td>
+                    <td class="mono" style="color:var(--overlay)">#sales</td></tr>
+                </tbody></table></div>
+
+              <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--overlay);font-weight:700;padding:4px 0 6px">
+                Iris Interiors · 3 tasks · bounced ×1</div>
+              <div class="tablewrap"><table>
+                <tbody>
+                  <tr><td style="width:30px"><span class="dot idle"></span></td>
+                    <td>Build site</td><td><span class="st done">completed</span></td>
+                    <td>web-dev</td><td>web-1</td><td style="color:var(--overlay)">2d ago</td>
+                    <td class="mono" style="color:var(--overlay)">#websites</td></tr>
+                  <tr><td><span class="dot idle"></span></td>
+                    <td><b>Outreach pack</b></td><td><span class="st ready">ready</span></td>
+                    <td>sales</td><td>—</td><td style="color:var(--yellow)">↩ "wrong industry angle"</td>
+                    <td class="mono" style="color:var(--overlay)">#sales</td></tr>
+                  <tr><td><span class="dot idle"></span></td>
+                    <td>Run outreach</td><td><span class="st block">blocked</span></td>
+                    <td>sales</td><td>👤 sarah</td><td style="color:var(--overlay)">bounced back</td>
+                    <td class="mono" style="color:var(--overlay)">#sales</td></tr>
+                </tbody></table></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:14px"><b>Every group-by is a real field.</b>
+        lead (<code>subject</code>) · stage · status · team · assignee · initiative · channel · client ·
+        cost centre · commercial purpose. No labels, no custom fields (R6). Saved views are just
+        filter + group + sort, stored per person.</div>
+    </div>
+
+    <!-- queue -->
+    <div role="tabpanel" id="v-queue" hidden>
+      <div class="app">
+        <div class="titlebar"><div class="tl"><i></i><i></i><i></i></div>
+          <div class="path mono">horizon · My queue · sarah</div></div>
+        <div class="body">
+          <div class="side">
+            <div class="grp">Work</div>
+            <div class="it">▦ Board</div>
+            <div class="it">☰ All tasks</div>
+            <div class="it on">◔ My queue <span class="n">12</span></div>
+          </div>
+          <div class="main">
+            <div class="topbar"><h4>Up next</h4>
+              <span class="ctrl">12 waiting</span>
+              <span class="ctrl">1 stale</span>
+              <span style="margin-left:auto"></span>
+              <span class="ctrl">sort <b>oldest first</b></span></div>
+            <div class="content">
+              <div class="card" style="max-width:520px">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <div class="av" style="background:var(--teal);width:34px;height:34px">NF</div>
+                  <div><h3 style="font-size:1rem">Nova Fitness</h3>
+                    <div style="font-size:.76rem;color:var(--overlay)">Run outreach · stage 3 of 3 · Premium Q3 run</div></div>
+                  <span style="margin-left:auto" class="st prog">inProgress</span>
+                </div>
+                <div style="margin-top:14px;display:flex;flex-direction:column;gap:7px;font-size:.84rem">
+                  <div>🌐 <b>Site built</b> — nova-fitness.horizonlabs.site
+                    <span style="color:var(--overlay)">· approved by vera</span></div>
+                  <div>📄 <b>Outreach pack</b> — email draft, call script, 3 objections
+                    <span style="color:var(--overlay)">· by writer-2</span></div>
+                  <div>☎️ <b>Contact</b> — Thandi M · +27 82 ••• ••34 · owner</div>
+                </div>
+                <div style="display:flex;gap:7px;margin-top:16px;flex-wrap:wrap">
+                  <span class="btn ok">✓ Sent</span>
+                  <span class="btn ok">✓ Replied</span>
+                  <span class="btn ok">✓ Meeting booked</span>
+                  <span class="btn sec">💤 Snooze</span>
+                  <span class="btn dan">✕ Disqualify</span>
+                  <span class="btn sec" style="margin-left:auto">↩ Bounce pack</span>
+                </div>
+                <div style="font-size:.72rem;color:var(--overlay);margin-top:12px;padding-top:10px;border-top:1px dashed var(--surface0)">
+                  Open thread in #sales ↗ &nbsp;·&nbsp; Open task ↗ &nbsp;·&nbsp; buzz://task?id=…
+                </div>
+              </div>
+              <div style="font-size:.76rem;color:var(--overlay);margin-top:14px">Then: Lumen Optics ·
+                Zeta Legal · Bolt Fabrication · +9</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note good" style="margin-top:14px"><b>Same data, different job.</b> The board is for
+        watching 114 tasks. The queue is for finishing one. The person whose output is revenue does not get
+        handed an ops dashboard — she gets one card, the context already assembled, and buttons that are the
+        <code>outcome_reason</code> values. Every button press is a funnel datapoint.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SCENARIOS ================= -->
+<section id="scenarios">
+  <div class="wrap">
+    <h2><span class="num">06</span> Scenarios, end to end</h2>
+    <p class="lede">Nine. The first three are the happy path. The other six are why this design is shaped the way it is.</p>
+    <div style="margin-top:20px" id="scnlist"></div>
+  </div>
+</section>
+
+<!-- ================= LOOPHOLES ================= -->
+<section id="loopholes">
+  <div class="wrap">
+    <h2><span class="num">07</span> Loopholes, and the ruling on each</h2>
+    <p class="lede">Every one of these is a way the model gets gamed, silently rots, or lies to you.</p>
+    <div class="tablewrap" style="margin-top:20px"><table>
+      <thead><tr><th style="width:30%">Hole</th><th style="width:34%">What goes wrong</th><th>Ruling</th></tr></thead>
+      <tbody>
+        <tr><td><b>Cap evasion by escalation</b><br><span class="pill new">bigger than it looks</span></td>
+          <td>Agent hits its grant cap, spawns a child Initiative, child kicks off tasks, spending continues.
+            <b>And today there is nothing to evade:</b> the grant cap is checked <em>per decision</em>, with no
+            running total, no grant balance, and no link at all to the cost ledger
+            (<code>interrupt_gate.rs:778</code>). Budgets are reporting-only —
+            <code>BudgetStatus</code> has no path back into filing, claiming, or running a job
+            (<code>ledger/engine.rs:172</code>). Nothing stops spend anywhere.</td>
+          <td>Cap becomes <b>cumulative over an initiative tree</b>: a child initiative draws from the parent's
+            remaining budget and cannot mint its own. Requires new machinery — a spend total joined to the
+            initiative via <code>AgentWorkContext</code>, and a pre-claim check. Treat this as its own phase,
+            not a field.</td></tr>
+        <tr><td><b>Implicit task flood</b><br><span class="pill kill">not a loophole</span></td>
+          <td>Every thread mints a task for cost attribution, so chat volume lands on the board.</td>
+          <td><b>Not a problem to solve, a filter to provide.</b> Every task is created, boarded, and countable.
+            Board and list default to <code>implicit = false</code> — genuinely assigned work. One toggle shows
+            everything, and "everything" is the honest view of what your company actually spent its turns on.
+            Hiding rows, classifying them as chores, or gating on turn counts were all ways of deciding for the
+            reader what counts as work. The reader decides, per view.</td></tr>
+        <tr><td><b>Duplicate work</b></td>
+          <td>Same party sits in two cohorts. Two initiatives each build a site. Two sites, double spend, client
+            gets two emails.</td>
+          <td>Fan-out planner checks for an open task with the same <code>(subject, stage)</code> anywhere in the
+            company. Collisions are surfaced in the approval Ask as a skip-list, defaulting to skip.</td></tr>
+        <tr><td><b>Accountability laundering</b></td>
+          <td>An agent from another team claims a task, so the failure lands on a team that never took the work.</td>
+          <td>Claim gate checks membership of <code>owning_team_id</code>. Also inherits the relay's existing
+            hard rule: only the job's own human may claim it — no cross-seat rerouting, ever.</td></tr>
+        <tr><td><b>Human task rots forever</b><br><span class="pill exists">half built</span></td>
+          <td>Sarah goes on leave. Twelve leads sit <code>inProgress</code> and nobody notices for a month.
+            The stall sweep already exists (<code>interrupt_runtime.rs:1326</code>) and fires on any in-progress
+            task with no event activity for <code>BUZZ_STALL_AFTER_SECS</code>, <b>default 6 hours</b>. A human
+            task has no event activity by nature, so today it would page you every six hours, forever.</td>
+          <td>Staleness threshold becomes <b>per stage</b>, set by the template — hours for an agent, days for a
+            person. The existing sweep, dedupe key, and Ask plumbing are reused as-is. This is a parameter,
+            not a system.</td></tr>
+        <tr><td><b>"Completed" means nothing</b></td>
+          <td>Board says 40 completed. Twelve of them were closed to clear the queue.</td>
+          <td>Human completion requires an <code>outcome_reason</code>. There is no bare "done" button.</td></tr>
+        <tr><td><b>Template drift mid-run</b></td>
+          <td>Template edited on Tuesday; leads 1–20 got one thing, 21–38 get another, nothing records it.</td>
+          <td>Version pinned on the Initiative at fire time (R10). Editing offers "apply to future runs only".</td></tr>
+        <tr><td><b>Board cannot filter at all</b></td>
+          <td>Multi-letter tags are silently dropped by the nostr filter type. <code>team</code>,
+            <code>cost-centre</code> and <code>initiative</code> are already on task heads and already
+            unfilterable — a client asking for one run gets every task in the company.</td>
+          <td>Single-letter mirrors, same pattern the relay already uses for <code>c</code> ↔ <code>company</code>
+            (<code>company_broker.rs:105</code>). Needed for the three that exist plus every new dimension.
+            Cheap now; a data migration once there are runs in flight.</td></tr>
+        <tr><td><b>Runaway fan-out</b></td>
+          <td>A mention resolves to 4,000 parties and starts 12,000 tasks before anyone reads the message.</td>
+          <td>Fan-out always plans first, then raises a cost Ask with count and estimate. Auto-approval only under
+            an explicit grant, and only below its cap. Planning is free; creating is gated.</td></tr>
+        <tr><td><b>Cancel leaves spend running</b></td>
+          <td>Owner kills a campaign; agents mid-turn keep burning tokens and publish work into dead tasks.</td>
+          <td>Cancel is a two-phase cascade: unstarted tasks → <code>cancelled</code> immediately; in-flight ones
+            get a stop signal and are marked <code>cancelling</code> until their turn ends. Board reports both counts.</td></tr>
+        <tr><td><b>Naming collision — worse, it is taken</b></td>
+          <td>"Campaign" is <b>already a Colony concept</b>: Discovery campaigns are lead-<em>acquisition</em> runs
+            with their own id, plan and cap, stored in private Postgres
+            (<code>discovery_workspace.rs:53</code>). If a group of leads is also called a campaign, two different
+            objects share one word and the one people mean is the one that does not exist yet.</td>
+          <td>User-facing words: <b>Cohort</b> (who), <b>Template</b> (how), <b>Run</b> (this time).
+            Campaign stays Discovery's. "Initiative" stays the internal kind name and is never shown.</td></tr>
+        <tr><td><b>Outcomes die on the task</b></td>
+          <td>Sarah disqualifies a lead. The task closes. The <em>lead</em> still reads Qualified, so the next
+            cohort picks it up again and pays to build another site.</td>
+          <td><code>outcome_reason</code> writes through to <code>PartyRelationship.status</code>, which already
+            has exactly the right five values (<code>party.rs:190</code>): Candidate, Accepted, Qualified,
+            <b>Disqualified</b>, <b>Dormant</b>. Disqualify → Disqualified. Snooze → Dormant. The task records
+            what happened; the relationship records what is now true about the lead.</td></tr>
+        <tr><td><b>Thread context bleed</b></td>
+          <td>ACP sessions are keyed by channel. 38 leads in one channel share sessions — the agent mixes
+            Ridgeway's brand into Kalahari's site and it looks like model error.</td>
+          <td>Session key becomes <code>(channel, thread_root)</code>. Already decided. This gates fan-out —
+            without it, the whole design produces confidently wrong work.</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<section id="lands">
+  <div class="wrap">
+    <h2><span class="num">7b</span> Where this lands in the app that exists</h2>
+    <p class="lede">None of the four surfaces starts from nothing.</p>
+    <div class="tablewrap" style="margin-top:20px"><table>
+      <thead><tr><th style="width:24%">Surface</th><th style="width:38%">What is already there</th><th>What it needs</th></tr></thead>
+      <tbody>
+        <tr><td><b>Work nav section</b></td>
+          <td><code>SidebarSection title="…"</code> composed in <code>AppSidebar.tsx</code> — Starred, Channels,
+            Forums, Direct messages are each one of these. Collapse state is keyed off the
+            <code>CollapsibleSidebarGroup</code> union in <code>AppSidebar.types.ts</code>.</td>
+          <td>One more <code>SidebarSection</code> plus a member on that union. A section that skips the union
+            renders but never collapses and reads as broken.</td></tr>
+        <tr><td><b>Task detail</b></td>
+          <td><code>TaskDetailSheet.tsx</code> — 158 lines, already built. Radix <code>Sheet</code> from
+            <code>@/shared/ui/sheet</code>, label/value <code>DetailRow</code>s, artifact list with a
+            "Primary deliverable" distinction, and <code>buildMessageLink</code> for the jump back to the
+            originating message.</td>
+          <td>New fields (stage, subject, depends_on, bounce reason) and the outcome buttons. The
+            thread → task direction of the deep link already works.</td></tr>
+        <tr><td><b>System rows in the thread</b></td>
+          <td><code>SystemMessageRow.tsx</code>, <code>SystemMessageAvatars.tsx</code>,
+            <code>TimelineRowShell.tsx</code> — relay-authored non-message rows already render in the timeline.</td>
+          <td>A task-event variant. Not a new rendering path.</td></tr>
+        <tr><td><b>Board and list</b></td>
+          <td>Nothing. These are genuinely new.</td>
+          <td>And they are blocked on the single-letter tag index — without it neither view can ask the relay
+            a question narrower than "every task in the company".</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ================= BUILD ================= -->
+<section id="built">
+  <div class="wrap">
+    <h2><span class="num">7c</span> What changed once it was built</h2>
+    <p class="lede">This document was written before the code. Everything below is a place the code
+      disagreed with it, and the code won. Read this section before trusting any ruling above it.</p>
+
+    <div class="tablewrap" style="margin-top:22px"><table>
+      <thead><tr><th style="width:26%">The doc said</th><th style="width:37%">What was actually true</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>System rows appear in the thread for seven task transitions.</td>
+          <td><b>The relay emitted no task transition events at all.</b> Zero
+            <code>emit_system_message</code> calls for tasks or initiatives anywhere. The rows were
+            specified against a publisher that did not exist.</td>
+          <td>Relay now emits five reachable transitions (created, review handoff, review rejected,
+            completed, cancelled). Bounce and escalated stay dormant with their copy paths intact,
+            because neither operation exists yet.</td></tr>
+        <tr><td>Fan-out shows an estimated cost.</td>
+          <td><b>Colony cannot forecast cost.</b> The price book is strictly post-hoc, and nothing
+            records historical turns-per-task to regress from.</td>
+          <td>The Ask states a <b>declared ceiling</b> summed from the stages, or explicit
+            <code>null</code> when no stage declares one — never a fabricated zero.</td></tr>
+        <tr><td>Every board dimension needs a new single-letter mirror tag.</td>
+          <td>Entity mentions already had a mechanism: Block mentions use the standard NIP-01
+            <code>a</code> tag with a marker.</td>
+          <td>Cohort mentions write <code>["a", "30201:…", "", "cohort"]</code> through the same path,
+            parameterized by kind. No parallel mechanism.</td></tr>
+        <tr><td>A cancelled dependency is an open question.</td>
+          <td>Settled, and the reasoning is the ruling: work whose premise was deliberately killed must
+            not become assignable while the owner believes the branch is dead.</td>
+          <td>Only <code>Completed</code> satisfies an edge. A cancelled upstream leaves the dependent
+            visibly <code>blocked</code> — falling out of the transition table itself, since
+            <code>Cancelled</code> simply has no arm to <code>Ready</code>.</td></tr>
+        <tr><td>Fan-out is something an agent does.</td>
+          <td><b>Company actions must be signed by the current human owner</b>
+            (<code>authorize_company_actor</code>) — not a managed agent, not the relay. Otherwise
+            transferring ownership would transfer the ability to rewrite history.</td>
+          <td>Fan-out cannot be fully autonomous. An agent proposes; a human executes. The executor
+            lives in <code>buzz-cli</code> for exactly this reason.</td></tr>
+        <tr><td>A cost Ask could be auto-approved under a grant.</td>
+          <td><code>category: "spend"</code> is on NIP-IQ's <b>immutable hard list</b>, so
+            <code>parse_ask</code> structurally refuses a <code>default_option</code>.</td>
+          <td>A spend Ask can never auto-execute by default. The overdue sweep resolves Asks by
+            executing their stated default; this one cannot carry one, so it waits for a person
+            indefinitely rather than timing out into "yes".</td></tr>
+        <tr><td>Adding a table means writing a migration.</td>
+          <td>A community-scoped table needs <b>five</b> registrations: the migration, the table in
+            <code>schema/schema.sql</code>, the write fence in <em>both</em> places, and both deletion
+            catalog lists.</td>
+          <td>Miss the fence in the migration and the relay does not degrade — it refuses to boot,
+            because it validates its deletion inventory at startup.</td></tr>
+        <tr><td>Dedupe skips a member at one stage.</td>
+          <td>A skip has to cascade. Later stages for that member would depend on a task the run
+            never created.</td>
+          <td>A skip at stage N skips every later stage for that subject, and each skip is reported
+            rather than silently dropped.</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note good" style="margin-top:20px"><b>The pattern.</b> Six of these eight were found by
+      running something rather than reasoning about it, and three were found only because a test suite
+      that had never executed was wired into CI. The design was directionally right and specifically
+      wrong in exactly the places nobody had checked.</div>
+  </div>
+</section>
+
+<section id="gaps">
+  <div class="wrap">
+    <h2><span class="num">7d</span> The four gaps, closed</h2>
+    <p class="lede">The build shipped with four things flagged rather than hidden. Three were bounds
+      chosen to get something landed. The fourth was not a gap at all, and saying so is the fix.</p>
+
+    <div class="tablewrap" style="margin-top:22px"><table>
+      <thead><tr><th style="width:22%">Gap</th><th style="width:39%">What was actually wrong</th><th>Resolution</th></tr></thead>
+      <tbody>
+        <tr><td><b><code>reviewerTeamId</code> did not route</b></td>
+          <td>The field existed on <code>TemplateStage</code> and never reached a Task. Fan-out gave every
+            task the <em>owning</em> team's own lead as QA regardless, so a template declaring "the build
+            team builds it, the QA team signs it off" produced self-review and looked identical to a
+            template that asked for nothing. The blocker was a contract rule: QA had to be an owning-team
+            member.</td>
+          <td>The rule was never about the owning team for its own sake. It says QA belongs to the pool
+            that <em>holds the gate</em>, and before a reviewer could be named those were necessarily the
+            same pool. So the check widened rather than loosened: with no reviewer team it is unchanged,
+            with one the QA persona must belong to the team the task names. Tasks carry
+            <code>reviewerTeamId</code>; <code>g</code> becomes a <em>set</em> of every team a task touches
+            so a reviewer's <code>#g</code> filter finds the reviews it owes, while <code>team</code> stays
+            the scalar "who is accountable". Accountability did not move.</td></tr>
+
+        <tr><td><b>Snooze had no picker</b></td>
+          <td>The queue card parked a task for a fixed 24 hours. Nothing about the relay required that —
+            <code>plan_task_snooze</code> always took an arbitrary <code>wake_at</code> and the wake sweep
+            always read it from content. A working picker already existed one directory away, in reminders,
+            answering the identical question.</td>
+          <td><code>SnoozeMenu</code> and its presets moved to <code>shared/</code> unchanged and gained a
+            <code>label</code> prop, so the same component is a clock icon in the reminders list and a
+            labelled button in the queue's action row. Feature-scoped only because reminders needed it
+            first.</td></tr>
+
+        <tr><td><b>A cohort could not hold a campaign</b></td>
+          <td><code>MAX_COHORT_MEMBERS</code> was 100 and said so provisionally: "widen once fan-out proves
+            it too small." It did. But widening one input exposed a product nobody had bounded — 500 members
+            against the 50-stage template cap permits <b>25,000 tasks from one sentence in chat</b>, and
+            neither input cap can catch that, because neither is wrong on its own.</td>
+          <td>500 members, bounded by the relay's 256 KB frame rather than by taste: a cohort head carries
+            every member twice, in content and as an indexed <code>m</code> mirror, so 500 worst-case members
+            occupy about 150 KB. Plus a new <code>MAX_FAN_OUT_TASKS</code> of 2,000 — a full cohort through a
+            four-stage pipeline — checked <em>while planning</em>, which is the only cheap place to refuse
+            it. After submission those tasks exist, and undoing 25,000 of them is not an operation this
+            system has.</td></tr>
+
+        <tr><td><b>Grant auto-approval "deferred"</b></td>
+          <td>Not deferred. <b>Structurally impossible, and correctly so.</b> NIP-IQ's hard list rejects a
+            hard-list category on a delegation grant outright, so no grant can ever carry <code>spend</code>,
+            and with no such grant no decision log can cite one either. Both doors are shut, from both sides,
+            on purpose. A spend decision reaches a human or it does not happen.</td>
+          <td>Recorded as settled rather than pending, and pinned by two tests so the tempting shortcut —
+            quietly moving fan-out approval off the hard list — fails loudly. The <em>real</em> cost of the
+            rule was never the waiting; it was the waiting being invisible. The relay already publishes
+            <code>on_expiry: "rearms"</code> on its ask-state head (kind 30200) and the desktop read nothing
+            at all. It now does, and says so on the ask card: <em>"This will not resolve on its own: nothing
+            happens until you answer. Waiting 11 days so far."</em></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note good" style="margin-top:20px"><b>The pattern, again.</b> Three of the four were fixed by
+      widening a rule to what it actually meant, rather than by dropping it — the QA check, the cohort bound,
+      the snooze duration. The fourth was fixed by refusing to widen anything and building the visibility the
+      constraint costs instead. A gap is not always a missing feature; sometimes it is a correct answer nobody
+      had written down.</div>
+  </div>
+</section>
+
+<section id="build">
+  <div class="wrap">
+    <h2><span class="num">08</span> Build order</h2>
+    <p class="lede">Each phase is usable on its own. Nothing here needs the phase after it to be worth shipping.
+      <b>Phases 0 through 5 are built and CI-green</b> on <code>feat/work-model</code>; the status of each is
+      marked below.</p>
+
+    <div class="grid g2" style="margin-top:20px">
+      <div class="card"><div class="eyebrow">Phase 0 · done</div>
+        <h3 style="margin-top:6px">Thread-scoped agent sessions</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Session key <code>(channel, thread_root)</code>, affinity
+          and eviction updated. <b>Blocks everything else</b> — fan-out into one channel is unsafe until this lands.</p></div>
+
+      <div class="card"><div class="eyebrow">Phase 1 · done</div>
+        <h3 style="margin-top:6px">Edges and index</h3>
+        <p style="font-size:.86rem;color:var(--subtext)"><code>depends_on</code>, <code>subject</code>,
+          <code>stage</code>, <code>thread_root</code>, <code>doer_kind</code>, <code>snoozed</code>,
+          <code>outcome_reason</code>. Relay emits indexed tags. Blocked-state derivation on the relay.</p></div>
+
+      <div class="card"><div class="eyebrow">Phase 2 · done</div>
+        <h3 style="margin-top:6px">Work surfaces</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Board (stage columns), list with group/sort/filter,
+          thread task chip + history, deep links both directions. <b>This is the phase that pays for itself</b> —
+          it works on today's tasks before any fan-out exists.</p></div>
+
+      <div class="card"><div class="eyebrow">Phase 3 · done</div>
+        <h3 style="margin-top:6px">Human queue + bounce</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Queue view, outcome reasons, bounce transition,
+          staleness clock → Ask. Makes the last mile of the chain real instead of a card nobody opens.</p></div>
+
+      <div class="card"><div class="eyebrow">Phase 4 · done</div>
+        <h3 style="margin-top:6px">Cohorts + entity mentions</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Cohort kind, typed mentions so
+          <code>@premium-q3</code> and <code>@build-websites</code> resolve to something other than a person.
+          Composer, ingest, and agent prompt context.</p></div>
+
+      <div class="card" style="border-color:color-mix(in srgb,var(--blue) 40%,transparent)">
+        <div class="eyebrow" style="color:var(--blue)">Phase 5 · done — the ask you started with</div>
+        <h3 style="margin-top:6px">Templates + fan-out</h3>
+        <p style="font-size:.86rem;color:var(--subtext)">Template kind, planner, dedupe check, cost estimate,
+          approval Ask, eager graph write. The sentence
+          <em>"@mark take the leads from @premium-q3 and use @build-websites"</em> works here and not before.</p></div>
+    </div>
+
+    <div class="note" style="margin-top:20px"><b>Order is deliberate.</b> Phase 2 ships value against work
+      you already have. Phases 4 and 5 are the flashy part and they are last, because a fan-out you cannot see,
+      cannot stop, and cannot trust the output of is worse than no fan-out.</div>
+  </div>
+</section>
+
+<footer><div class="wrap">
+  Colony · work model v1 · decisions are canon until argued down. Open questions live at the bottom of each section.
+</div></footer>
+
+<script>
+// tabs
+document.querySelectorAll('.tabs [role=tab]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var group = btn.closest('.tabs');
+    group.querySelectorAll('[role=tab]').forEach(function(b){
+      b.setAttribute('aria-selected', String(b === btn));
+      document.getElementById(b.dataset.t).hidden = (b !== btn);
+    });
+  });
+});
+
+// toc active state
+var secs = Array.prototype.slice.call(document.querySelectorAll('section[id]'));
+var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+var io = new IntersectionObserver(function(entries){
+  entries.forEach(function(e){
+    if(!e.isIntersecting) return;
+    links.forEach(function(a){ a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); });
+  });
+}, {rootMargin:'-45% 0px -50% 0px'});
+secs.forEach(function(s){ io.observe(s); });
+
+// scenarios
+var SCN = [
+ {t:"Ambient work — a mention becomes a task",
+  s:"one message, no ceremony",
+  steps:[
+   ["You post in <b>#building-premium-websites</b>: <span class='mention'>@mark</span> rebuild ridgeway dental.",""],
+   ["Harness resolves work context. No task named, so Colony mints one, idempotent on the send.","implicit:true"],
+   ["Before its first turn Mark <b>names it</b>: <em>Rebuild Ridgeway Dental site</em> plus one sentence and its contract.","R11"],
+   ["It appears on the board straight away with a title a human would have written. Nothing hidden, nobody clicked.",""],
+   ["It carries <code>implicit: true</code> — nobody asked for it by name. Board defaults to hiding those, so you see assigned work; one toggle shows everything.","filter"],
+   ["Nothing was planned. Work started in one message. The record exists anyway, and cost is attributed.",""]
+  ],
+  note:["good","This path must never get heavier. If working with an agent requires filling in a form first, nobody uses the task system and you are back to threads. Naming costs the agent one tool call and costs you nothing — which is why the agent does it rather than a heuristic watching turn counts, and rather than you."]},
+
+ {t:"Fan-out — one sentence, 114 tasks",
+  s:"cohort × template",
+  steps:[
+   ["<span class='mention'>@mark</span> take the leads from <span class='mention ent'>@premium-q3</span> and use <span class='mention tpl'>@build-websites</span>.",""],
+   ["Mentions resolve by type: agent, cohort (38 parties), template (v3, 3 stages).",""],
+   ["Mark <b>plans</b> — free. 38 × 3 = 114 tasks. Dedupe check finds 2 parties with an open build elsewhere.","plan"],
+   ["Cost <b>ceiling</b> from the template's per-stage limits: <b>$480 max</b>. Not an estimate — see the note below.",""],
+   ["Ask raised to you: <em>Start 114 tasks over 36 leads? Ceiling $480. 2 skipped as duplicates.</em>","kind 44300"],
+   ["You approve. One Initiative + 114 tasks written eagerly. Stage-1 tasks <code>ready</code>, stages 2–3 <code>blocked</code>.","eager"],
+   ["Threads are <b>not</b> created yet. #sales stays clean until stage 2 actually starts.","lazy"],
+   ["Board opens on stage columns. 38 in Build, 0 elsewhere. Spend meter at $0."]
+  ],
+  note:["danger","Planning is free, creating is gated — that split is what makes it safe to let a sentence become three hundred dollars of work. But <b>Colony cannot forecast cost today</b>. The price book is strictly post-hoc: it prices usage records that already exist, and nothing records historical turns-per-task to regress from (<code>ledger/prices.rs</code>, <code>ledger/engine.rs</code>). <code>Initiative.expected_cost_usd</code> exists and is hand-typed with nothing behind it. So v1 shows a <b>declared ceiling</b>, which is honest, and a real estimate arrives only after enough runs exist to learn from. Do not ship a number that looks computed and is not."]},
+
+ {t:"Handoff — build done, sales picks it up",
+  s:"across channels, across teams",
+  steps:[
+   ["<b>web-1</b> claims Build site · Ridgeway. CAS on the job head, lease held, heartbeat every few seconds.","claim"],
+   ["Thread created in <b>#building-premium-websites</b>, system row posted, task chip live.",""],
+   ["Agent finishes. Task → <code>inReview</code>, reviewer <b>vera</b> from the template's reviewer team.",""],
+   ["Vera accepts. Task → <code>completed</code> with delivery evidence the relay validates.",""],
+   ["Stage-2 task's <code>depends_on</code> is now satisfied → relay flips it <code>blocked</code> → <code>ready</code>.","auto"],
+   ["Because <code>ready</code>, its thread is created — in <b>#sales</b>, owned by the <b>sales</b> team.",""],
+   ["Any idle outreach agent may claim it. Not a named one. The template named a <b>team</b>, not a persona.",""],
+   ["Stage 3 stays <code>blocked</code>. It is a human task and will never be auto-claimed."]
+  ],
+  note:["","Nothing here is a special integration between two channels. Cross-channel handoff is just a task whose stage declares a different channel and a different team."]},
+
+ {t:"The human stage — Sarah's twelve",
+  s:"where the money is",
+  steps:[
+   ["Stage 3 flips <code>ready</code>. <code>doer_kind: human</code>, so no job filing, no lease, no claim race.",""],
+   ["It appears in <b>Sarah's queue</b>, not as an unread thread among a hundred others.",""],
+   ["The card carries assembled context: the built site, the outreach pack, the contact. She reads, she calls.",""],
+   ["She presses <b>Replied</b>. <code>outcome_reason</code> recorded, task <code>completed</code>.","outcome"],
+   ["Next card. Twelve leads is a twenty-minute session, not an afternoon of scrolling.",""],
+   ["Lumen Optics sat nine days untouched → staleness clock breached → one Ask to you, deduped across all stale leads.","stale"]
+  ],
+  note:["danger","This is the part with no existing machinery. Every mechanism in the relay today — claim, lease, heartbeat, outcome evidence, retry — assumes a worker process. The final stage of your value chain is a person, and a person heartbeats nothing."]},
+
+ {t:"Bounce — the pack is wrong",
+  s:"the most common real event",
+  steps:[
+   ["Sarah opens the Iris Interiors pack. The angle is for retail; Iris is trade-only.",""],
+   ["She presses <b>Bounce pack</b> and types one line: <em>wrong industry angle, they are trade-only</em>.","bounce"],
+   ["Upstream task (Outreach pack) → <code>ready</code>, reason attached, sales team re-notified, <code>bounce_count++</code>.",""],
+   ["Her own task → <code>blocked</code> and leaves her queue. It comes back on its own.",""],
+   ["An outreach agent claims the reopened task, reads the bounce reason in its prompt, rewrites.",""],
+   ["Board shows Iris with <b>↩ ×1</b>. Bounce rate per stage and per agent becomes a quality metric you can act on."]
+  ],
+  note:["","Cancel-and-recreate would have produced the same rewritten pack and thrown away the only signal that told you which agent needs a better prompt."]},
+
+ {t:"Stall — the agent dies",
+  s:"the failure that looks like success",
+  steps:[
+   ["web-3 is working Cove Coffee. The laptop sleeps mid-turn.",""],
+   ["Business state stays <code>inProgress</code>. It is not wrong — nobody withdrew.",""],
+   ["Lease expires. <code>runStatus</code> → lease-expired. <b>The card's dot goes red.</b>","two truths"],
+   ["Board toolbar reads <b>4 stalled</b>. Not buried, not a per-card discovery.",""],
+   ["Attempts remain → requeued, any eligible worker on the same seat picks it up, dot goes green.",""],
+   ["Attempts exhausted → <code>failed</code>. Template's <code>on_fail</code> decides: bounce, abandon the lead, or ask you.",""],
+   ["<code>abandon-lead</code> cancels that lead's remaining chain only. The other 37 keep running."]
+  ],
+  note:["danger","With one collapsed badge this card is indistinguishable from a healthy one until somebody opens it. At 114 tasks nobody opens them all. That is exactly how work silently dies."]},
+
+ {t:"Escalation — a task that is really a project",
+  s:"the only way depth is created",
+  steps:[
+   ["Kalahari Safaris turns out to need 14 pages, a booking flow, and new photography.",""],
+   ["The agent does not create subtasks — it cannot. It raises an escalation with a proposed breakdown.",""],
+   ["Ask to you: <em>Build site · Kalahari exceeds one deliverable. Open a child run of 6 tasks? Est $140.</em>",""],
+   ["You approve. Child Initiative created, <code>spawned_from_task_id</code> set, budget drawn from the parent's remaining.","no free budget"],
+   ["Parent task → <code>blocked</code>, card reads <b>opened a run ↗</b>. It is still the neck.",""],
+   ["Child completes → parent unblocks → <code>completed</code> → stage 2 for Kalahari goes <code>ready</code> as normal.",""]
+  ],
+  note:["","Depth is possible but never accidental. Every level costs an approval and a visible event, so nobody wakes up to a six-deep tree."]},
+
+ {t:"Cancel — kill it mid-run",
+  s:"stopping costs money too",
+  steps:[
+   ["You hit <b>Stop run</b> with 38 build tasks in flight and stages 2–3 blocked.",""],
+   ["Phase one: every <code>ready</code>, <code>blocked</code>, and <code>snoozed</code> task → <code>cancelled</code> at once.",""],
+   ["Phase two: in-flight tasks get a stop signal and read <code>cancelling</code> until their current turn ends.","not instant"],
+   ["Board shows <b>76 cancelled · 6 finishing</b>, and the spend meter keeps ticking for those six.",""],
+   ["Completed work is kept. Sites already built stay built; you decide separately what to do with them.",""],
+   ["Cancelling the parent cascades into child runs, because their budget was the parent's."]
+  ],
+  note:["","Telling the truth about the six that cannot stop instantly is the whole point. A cancel button that claims everything stopped is how you get a surprise bill."]},
+
+ {t:"Cold lead — snooze and wake",
+  s:"sales time, not engineering time",
+  steps:[
+   ["Cove Coffee replies: <em>revisit after summer</em>.",""],
+   ["Sarah presses <b>Snooze</b>, picks 12 October. <code>status: snoozed</code>, <code>wake_at</code> set.",""],
+   ["Card leaves her queue and leaves the active board count. It is not blocked and not cancelled — those would both be lies.",""],
+   ["On 12 October the relay flips it back to <code>ready</code> and it reappears in her queue with its full context intact.",""],
+   ["The Initiative stays open until every lead is terminal, so run-level completion is honest."]
+  ],
+  note:["","The current status set is engineering-shaped: proposed / ready / inProgress / inReview / blocked / completed / cancelled. Half your chain is sales, and sales has a state engineering does not: later."]}
+];
+
+var host = document.getElementById('scnlist');
+SCN.forEach(function(sc, i){
+  var d = document.createElement('details');
+  d.className = 'scn';
+  if(i === 0) d.open = true;
+  var noteHtml = '';
+  if(sc.note && sc.note[1]){
+    noteHtml = '<div class="note ' + (sc.note[0] || '') + '" style="margin-bottom:0"><b>' +
+      (sc.note[0] === 'danger' ? 'Watch this.' : sc.note[0] === 'good' ? 'Keep this light.' : 'Why it is shaped this way.') +
+      '</b> ' + sc.note[1] + '</div>';
+  }
+  d.innerHTML =
+    '<summary><span class="idx">' + String(i+1).padStart(2,'0') + '</span>' +
+      '<h3>' + sc.t + '</h3><span class="sub">' + sc.s + '</span></summary>' +
+    '<div class="inner"><ol class="steps">' +
+      sc.steps.map(function(st){
+        return '<li>' + st[0] + (st[1] ? '<span class="ev">' + st[1] + '</span>' : '') + '</li>';
+      }).join('') +
+    '</ol>' + noteHtml + '</div>';
+  host.appendChild(d);
+});
+</script>
+</body>
+</html>

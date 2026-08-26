@@ -192,6 +192,18 @@ export default defineConfig({
     },
     {
       name: "integration",
+      // Scoped to this project on purpose. The global default stays
+      // `on-first-retry`, which records nothing for a test that fails on
+      // attempt 0 and passes on retry — precisely the shape every occurrence
+      // of the live-forum-mention flake has taken, leaving the hung assertion
+      // unnameable and the diagnosis reduced to reading screenshots (see
+      // docs/tickets/live-forum-mention-inbox-gap.md).
+      //
+      // `retain-on-failure` records a trace for EVERY test and discards it on
+      // success, so it is not free: applied globally it pushed four `smoke`
+      // shards over their budget and had to be reverted. The integration
+      // shards have the headroom and are where the retry-passes actually
+      // happen, so the cost buys something here and nowhere else.
       testMatch: [
         "**/agents.spec.ts",
         "**/agent-snapshot-recipient.spec.ts",
@@ -216,6 +228,7 @@ export default defineConfig({
       ],
       use: {
         ...devices["Desktop Chrome"],
+        trace: "retain-on-failure",
       },
     },
     // Engine-parity projects. The packaged macOS app renders in WKWebView, so

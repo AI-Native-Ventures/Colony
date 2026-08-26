@@ -821,6 +821,53 @@ pub enum CompanyCmd {
         #[arg(long)]
         file: String,
     },
+    /// Plan a Cohort x Template fan-out and file the owner-approval Ask
+    ///
+    /// Creates nothing. Computes the Initiative/Task graph and files a
+    /// kind-44300 Ask (category `spend`) describing it; the owner answers
+    /// with `buzz asks answer`, and `fan-out-execute` submits the plan only
+    /// after an `approve` resolution lands.
+    FanOutPropose {
+        /// Cohort to fan out over.
+        #[arg(long)]
+        cohort: String,
+        /// Pipeline template to run.
+        #[arg(long)]
+        template: String,
+        /// Channel the fan-out originated in.
+        #[arg(long)]
+        channel: String,
+        /// Cost centre charged for the resulting initiative.
+        #[arg(long)]
+        cost_centre: String,
+        /// Commercial purpose slug (matches `CommercialPurpose`'s wire form).
+        #[arg(long)]
+        purpose: String,
+        /// Persona accountable for the resulting initiative.
+        #[arg(long)]
+        owner_persona: String,
+        /// Event id of the message that triggered this fan-out.
+        #[arg(long)]
+        trigger_event: String,
+        /// Optional client organization receiving the work.
+        #[arg(long)]
+        client_org: Option<String>,
+        /// Ask audience (defaults like `buzz asks raise`: the community owner).
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Submit an approved fan-out plan's Initiative and Task actions
+    ///
+    /// Re-plans against current state (fresh cohort membership, fresh
+    /// existing tasks) rather than trusting the plan as it looked when the
+    /// Ask was filed, then submits every resulting action. Safe to re-run:
+    /// each action's idempotency key is derived from stable identity, so an
+    /// already-applied action replays as a no-op rather than a duplicate.
+    FanOutExecute {
+        /// Event id of the fan-out approval Ask (kind 44300).
+        #[arg(long)]
+        ask: String,
+    },
     /// Collect public evidence from a company website
     ///
     /// Evidence only: pages, brand assets, structured data and explicit gaps.

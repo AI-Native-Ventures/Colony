@@ -387,6 +387,14 @@ const MessageTimelineBase = React.forwardRef<
     virtualizerRenderVersion,
   });
 
+  // Mirrors the anchored-scroll bottom flag for the at-bottom-state callback,
+  // which fires between renders. Same pattern as semanticAtBottomRef below.
+  const anchoredAtBottomRef = React.useRef(isAtBottom);
+  anchoredAtBottomRef.current = isAtBottom;
+  // Consumed (and cleared) by the unread-pill dismiss effect. Armed only when
+  // a resize correction is what flips `isAtBottom` back to true, so a resize
+  // can fix the jump-to-latest pill without also claiming the reader caught up.
+  const suppressUnreadPillDismissOnceRef = React.useRef(false);
   const hasConfirmedVirtualizerBottomRef = React.useRef(false);
   const bottomConfirmationChannelRef = React.useRef(channelId);
   if (bottomConfirmationChannelRef.current !== channelId) {
@@ -434,14 +442,22 @@ const MessageTimelineBase = React.forwardRef<
       hasConfirmedVirtualizerBottomRef.current =
         transition.next.hasConfirmedBottom;
       suppressNextSemanticBottomRef.current = transition.next.suppressNext;
-      // Only the virtualizer's own scroll callback drives the anchored-scroll
-      // notion of "at bottom". A resize re-measure exists to correct the
-      // semantic tail state; routing it here too would synthesize bottom
-      // transitions the reader never made, and the unread pill dismisses
-      // itself on exactly that transition.
-      if (reason === "scroll") {
-        onVirtualizerAtBottomStateChange(atBottom);
+      // A resize report is a fresh reading of the box, so it is allowed to
+      // correct a stale not-at-bottom latch. `onVirtualizerAtBottomStateChange`
+      // drops the not-at-bottom half, so a resize can only ever move this
+      // state towards bottom. Without that, a mid-resize `"scroll"` report
+      // computed from a half-applied box latches `isAtBottom` false, the
+      // settled resize report that follows is discarded, a stationary reader
+      // produces no further scroll report, and "Jump to latest" is offered
+      // over a scroller already sitting on the floor.
+      //
+      // The reason it was previously scroll-only stands and is preserved
+      // below: the unread pill dismisses itself on this transition, and a
+      // resize is not the reader catching up.
+      if (reason === "resize" && atBottom && !anchoredAtBottomRef.current) {
+        suppressUnreadPillDismissOnceRef.current = true;
       }
+      onVirtualizerAtBottomStateChange(atBottom, reason);
       if (transition.cancelBottomIntent) {
         timelineVirtualizerApi?.cancelBottomIntent();
       }
@@ -542,6 +558,12 @@ const MessageTimelineBase = React.forwardRef<
     hasShownPillRef.current = false;
   }, [channelId]);
   React.useEffect(() => {
+    const cameFromResize = suppressUnreadPillDismissOnceRef.current;
+    suppressUnreadPillDismissOnceRef.current = false;
+    // A resize that corrected the bottom latch is geometry moving under a
+    // stationary reader, not the reader catching up, so it must not dismiss
+    // the unread pill.
+    if (cameFromResize) return;
     if (isAtBottom && hasShownPillRef.current) {
       setIsUnreadPillDismissed(true);
     }
