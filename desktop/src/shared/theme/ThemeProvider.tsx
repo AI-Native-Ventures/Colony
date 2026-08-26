@@ -260,6 +260,12 @@ const CHROME_LIGHT_SATURATION_RATIO = 0.87;
 const CHROME_LIGHT_LIGHTNESS = 84;
 const CHROME_DARK_TOP = { saturation: 0.46, lightness: 20 };
 const CHROME_DARK_BOTTOM = { saturation: 0.52, lightness: 9 };
+const CHROME_NEUTRAL = {
+  lightTop: "#ebebeb",
+  lightBottom: "#ebebeb",
+  darkTop: "#2e2e2e",
+  darkBottom: "#141414",
+} as const;
 
 function parseHslComponents(
   hsl: string,
@@ -273,34 +279,105 @@ function parseHslComponents(
   };
 }
 
-function applyChromeTint(value: string) {
+/**
+ * HSL back to hex. The gradient stops stay in the same notation as the
+ * defaults they replace (theme.css, and mobile's colony_theme.dart), so a
+ * value read off the root is comparable with the one shipped rather than
+ * merely equivalent to it.
+ */
+function hslToHex(hue: number, saturation: number, lightness: number): string {
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = (((hue % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  const [r1, g1, b1] =
+    hp < 1
+      ? [c, x, 0]
+      : hp < 2
+        ? [x, c, 0]
+        : hp < 3
+          ? [0, c, x]
+          : hp < 4
+            ? [0, x, c]
+            : hp < 5
+              ? [x, 0, c]
+              : [c, 0, x];
+  const m = l - c / 2;
+  return `#${[r1, g1, b1]
+    .map((channel) =>
+      Math.round((channel + m) * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+/**
+ * The shipped Colony violet, kept verbatim.
+ *
+ * These four were picked by hand and sit slightly off the accent's own hue:
+ * #c9b6f7 is hue 257.5 where #895AF6 is 258.1, and the dark bottom stop is a
+ * blue #0a1423 rather than a violet. Derivation lands a unit away
+ * (#cab6f7), which is invisible but would still be a change to the default
+ * workspace for the sake of tidier code. The brand accent keeps its own
+ * values; every other accent is derived.
+ */
+const CHROME_BRAND_VIOLET = {
+  lightTop: "#c9b6f7",
+  lightBottom: "#c9b6f7",
+  darkTop: "#2a1e48",
+  darkBottom: "#0a1423",
+} as const;
+
+function setChromeStops(stops: {
+  lightTop: string;
+  lightBottom: string;
+  darkTop: string;
+  darkBottom: string;
+}) {
   const root = document.documentElement;
+  root.style.setProperty("--buzz-gradient-light-top", stops.lightTop);
+  root.style.setProperty("--buzz-gradient-light-bottom", stops.lightBottom);
+  root.style.setProperty("--buzz-gradient-dark-top", stops.darkTop);
+  root.style.setProperty("--buzz-gradient-dark-bottom", stops.darkBottom);
+}
+
+function applyChromeTint(value: string) {
+  if (value.toLowerCase() === DEFAULT_ACCENT.toLowerCase()) {
+    setChromeStops(CHROME_BRAND_VIOLET);
+    return;
+  }
+
   const components =
     value === NEUTRAL_ACCENT ? null : parseHslComponents(hexToHsl(value));
 
   if (!components || components.saturation === 0) {
     // Neutral, or a grey hex: a saturated wash would contradict the choice.
-    root.style.setProperty("--buzz-gradient-light-top", "hsl(0 0% 92%)");
-    root.style.setProperty("--buzz-gradient-light-bottom", "hsl(0 0% 92%)");
-    root.style.setProperty("--buzz-gradient-dark-top", "hsl(0 0% 18%)");
-    root.style.setProperty("--buzz-gradient-dark-bottom", "hsl(0 0% 8%)");
+    setChromeStops(CHROME_NEUTRAL);
     return;
   }
 
   const { hue, saturation } = components;
-  const light = `hsl(${hue.toFixed(0)} ${Math.round(
+  const light = hslToHex(
+    hue,
     saturation * CHROME_LIGHT_SATURATION_RATIO,
-  )}% ${CHROME_LIGHT_LIGHTNESS}%)`;
-  root.style.setProperty("--buzz-gradient-light-top", light);
-  root.style.setProperty("--buzz-gradient-light-bottom", light);
-  root.style.setProperty(
-    "--buzz-gradient-dark-top",
-    `hsl(${hue.toFixed(0)} ${Math.round(saturation * CHROME_DARK_TOP.saturation)}% ${CHROME_DARK_TOP.lightness}%)`,
+    CHROME_LIGHT_LIGHTNESS,
   );
-  root.style.setProperty(
-    "--buzz-gradient-dark-bottom",
-    `hsl(${hue.toFixed(0)} ${Math.round(saturation * CHROME_DARK_BOTTOM.saturation)}% ${CHROME_DARK_BOTTOM.lightness}%)`,
-  );
+  setChromeStops({
+    lightTop: light,
+    lightBottom: light,
+    darkTop: hslToHex(
+      hue,
+      saturation * CHROME_DARK_TOP.saturation,
+      CHROME_DARK_TOP.lightness,
+    ),
+    darkBottom: hslToHex(
+      hue,
+      saturation * CHROME_DARK_BOTTOM.saturation,
+      CHROME_DARK_BOTTOM.lightness,
+    ),
+  });
 }
 
 function applyAccentColor(value: string) {
