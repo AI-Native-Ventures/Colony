@@ -182,12 +182,29 @@ pub struct Initiative {
     pub commercial_purpose: CommercialPurpose,
     /// Optional client organization receiving the work.
     pub client_organization_id: Option<String>,
-    /// Optional expected total cost in USD.
+    /// Optional expected total cost in USD. For a fan-out run this is a
+    /// *declared* ceiling summed from the pinned template's per-stage
+    /// `costCeiling` values — not an estimate. Colony cannot forecast, so a
+    /// number that looks computed and is not would be worse than none.
     pub expected_cost_usd: Option<f64>,
     /// Channel in which the initiative originated.
     pub source_channel_id: String,
     /// Optional triggering message event.
     pub source_event_id: Option<String>,
+    /// Template this run was fanned out from, pinned at creation. `None` for
+    /// an initiative that was not fanned out from a template.
+    #[serde(default)]
+    pub template_id: Option<String>,
+    /// The template's `version` at the moment this run started. A run pins
+    /// this value rather than following the template's live head, so an
+    /// edit to the template after the run starts cannot mutate work already
+    /// in flight. `None` iff `template_id` is `None`.
+    #[serde(default)]
+    pub template_version: Option<i64>,
+    /// Cohort this run was fanned out over, pinned at creation. `None` for
+    /// an initiative that was not fanned out from a template.
+    #[serde(default)]
+    pub cohort_id: Option<String>,
     /// Unix timestamp at which the initiative was created.
     pub created_at: i64,
     /// Unix timestamp at which the initiative was last updated.
@@ -763,6 +780,26 @@ pub fn validate_initiative_update(
         &replacement.company_id,
         "initiative.companyId",
     )?;
+    // Pinned by a run, never followed: a fan-out run's template, the exact
+    // version it started with, and the cohort it ran over are fixed the
+    // moment the run starts. Letting an update repin any of them would let a
+    // later edit mutate work already in flight instead of only ever
+    // affecting the next run.
+    validate_immutable(
+        &previous.template_id,
+        &replacement.template_id,
+        "initiative.templateId",
+    )?;
+    validate_immutable(
+        &previous.template_version,
+        &replacement.template_version,
+        "initiative.templateVersion",
+    )?;
+    validate_immutable(
+        &previous.cohort_id,
+        &replacement.cohort_id,
+        "initiative.cohortId",
+    )?;
     validate_replacement_timestamps(
         previous.created_at,
         previous.updated_at,
@@ -944,6 +981,19 @@ pub fn validate_initiative(
         initiative.source_event_id.as_deref(),
         "initiative.sourceEventId",
     )?;
+    validate_optional_id(initiative.template_id.as_deref(), "initiative.templateId")?;
+    validate_optional_id(initiative.cohort_id.as_deref(), "initiative.cohortId")?;
+    // A pinned version is meaningless without the template it pins, and vice
+    // versa: either both are set (this is a fan-out run) or neither is.
+    match (&initiative.template_id, initiative.template_version) {
+        (Some(_), Some(version)) if version < 1 => {
+            return Err(CompanyContractError::InvalidVersion);
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(CompanyContractError::InvalidVersion);
+        }
+        _ => {}
+    }
 
     if initiative.company_id != company.id {
         return Err(CompanyContractError::MismatchedReference(
@@ -1620,6 +1670,9 @@ mod tests {
             expected_cost_usd: Some(125.0),
             source_channel_id: "sales".to_string(),
             source_event_id: Some("message-1".to_string()),
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_785_400_200,
             updated_at: 1_785_400_300,
         }

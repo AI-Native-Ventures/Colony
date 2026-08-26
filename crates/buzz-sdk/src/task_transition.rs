@@ -357,6 +357,9 @@ mod tests {
             expected_cost_usd: None,
             source_channel_id: "sales".to_string(),
             source_event_id: None,
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_800_000_000,
             updated_at: 1_800_000_000,
         }

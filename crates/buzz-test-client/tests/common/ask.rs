@@ -321,6 +321,9 @@ fn proposed_initiative(
         expected_cost_usd: None,
         source_channel_id: "welcome".to_string(),
         source_event_id: None,
+        template_id: None,
+        template_version: None,
+        cohort_id: None,
         created_at: stamp,
         updated_at: stamp,
     }

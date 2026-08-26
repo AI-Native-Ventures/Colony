@@ -131,6 +131,9 @@ fn initiative(company_id: &str, id: &str, owner_persona_id: &str, now: i64) -> I
         expected_cost_usd: None,
         source_channel_id: "welcome".to_string(),
         source_event_id: None,
+        template_id: None,
+        template_version: None,
+        cohort_id: None,
         created_at: now,
         updated_at: now,
     }

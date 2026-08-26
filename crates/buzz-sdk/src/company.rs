@@ -1229,6 +1229,9 @@ mod tests {
             expected_cost_usd: Some(42.5),
             source_channel_id: "general".to_owned(),
             source_event_id: None,
+            template_id: None,
+            template_version: None,
+            cohort_id: None,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }
