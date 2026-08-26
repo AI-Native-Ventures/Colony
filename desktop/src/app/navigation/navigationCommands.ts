@@ -18,6 +18,7 @@ export type NavigationCommandTargets = {
   goProjects: NavigationCommandTarget;
   goPulse: NavigationCommandTarget;
   goSettings: NavigationCommandTarget;
+  goCredits: NavigationCommandTarget;
   goSpend: NavigationCommandTarget;
   goWorkflows: NavigationCommandTarget;
   openBrowseChannels: NavigationCommandTarget;
@@ -121,6 +122,14 @@ export function buildNavigationCommands(
       title: "Open Spend",
     },
     {
+      description: "Buy Colony Credits",
+      id: "open-credits",
+      onSelect: () => {
+        void targets.goCredits();
+      },
+      title: "Open Credits",
+    },
+    {
       description: "Open Discovery",
       id: "open-discovery",
       onSelect: () => {
@@ -193,6 +202,7 @@ export function useNavigationCommands(
     goProjects,
     goPulse,
     goSettings,
+    goCredits,
     goSpend,
     goWorkflows,
     openBrowseChannels,
@@ -218,6 +228,7 @@ export function useNavigationCommands(
         goProjects,
         goPulse,
         goSettings,
+        goCredits,
         goSpend,
         goWorkflows,
         openBrowseChannels,
