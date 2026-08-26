@@ -841,18 +841,37 @@ test("inline video hover reveals a timeline without a second play control", asyn
     )
     .toBe("50%");
 
-  const restingControlsBox = await controls.boundingBox();
+  // Sample the controls' offset relative to the player surface atomically
+  // (one evaluate per sample). The reveal animation is opacity-only, so the
+  // invariant here is "hover must not slide the timeline vertically within
+  // the player". Comparing viewport-absolute boxes across two instants also
+  // captured unrelated timeline scroll settling from the virtualized list,
+  // which is not this test's subject and flaked CI with exactly-1px deltas.
+  const readRevealGeometry = () =>
+    surface.evaluate((surfaceEl) => {
+      const controlsEl = surfaceEl.querySelector<HTMLElement>(
+        "[data-testid='video-inline-controls']",
+      );
+      if (!controlsEl) {
+        return null;
+      }
+      return (
+        controlsEl.getBoundingClientRect().top -
+        surfaceEl.getBoundingClientRect().top
+      );
+    });
+  const restingTopOffset = await readRevealGeometry();
   const restingIconTransform = await centerIcon.evaluate(
     (element) => window.getComputedStyle(element).transform,
   );
-  expect(restingControlsBox).not.toBeNull();
+  expect(restingTopOffset).not.toBeNull();
   await expect(controls).toHaveCSS("opacity", "0");
   await surface.hover();
   await expect(controls).toHaveCSS("opacity", "1");
-  const hoveredControlsBox = await controls.boundingBox();
-  expect(hoveredControlsBox).not.toBeNull();
+  const hoveredTopOffset = await readRevealGeometry();
+  expect(hoveredTopOffset).not.toBeNull();
   expect(
-    Math.abs((hoveredControlsBox?.y ?? 0) - (restingControlsBox?.y ?? 0)),
+    Math.abs((hoveredTopOffset ?? 0) - (restingTopOffset ?? 0)),
   ).toBeLessThan(0.5);
   await expect
     .poll(() =>
