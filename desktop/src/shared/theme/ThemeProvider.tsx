@@ -237,6 +237,72 @@ function rgbToHex({ r, g, b }: Rgb): string {
     .join("")}`;
 }
 
+/**
+ * Colony's chrome wash follows the accent.
+ *
+ * The sidebar, rail and top chrome are painted from
+ * `--buzz-gradient-*` (see shared/styles/globals/buzz-sidebar.css). Those used
+ * to be one hardcoded violet, so picking green gave you a green selected row
+ * inside a lilac window, and the marketing site could not show the workspace
+ * in anything but violet whatever hue the page had rolled.
+ *
+ * The stops are derived from the accent rather than tabulated, so a custom hex
+ * from the picker tints the chrome too, not just the eleven presets. Ratios
+ * come from the pair the app already shipped: violet #895AF6 washed to
+ * #c9b6f7, which is the same hue at 87% of its saturation and 84% lightness.
+ * Neutral keeps the greys it always had.
+ *
+ * The defaults in theme.css stay as they are: they paint the first frame
+ * before this runs, and mobile mirrors them in
+ * mobile/lib/shared/theme/colony_theme.dart.
+ */
+const CHROME_LIGHT_SATURATION_RATIO = 0.87;
+const CHROME_LIGHT_LIGHTNESS = 84;
+const CHROME_DARK_TOP = { saturation: 0.46, lightness: 20 };
+const CHROME_DARK_BOTTOM = { saturation: 0.52, lightness: 9 };
+
+function parseHslComponents(
+  hsl: string,
+): { hue: number; saturation: number; lightness: number } | null {
+  const match = hsl.match(/^(-?[\d.]+)\s+(-?[\d.]+)%\s+(-?[\d.]+)%$/);
+  if (!match) return null;
+  return {
+    hue: Number(match[1]),
+    saturation: Number(match[2]),
+    lightness: Number(match[3]),
+  };
+}
+
+function applyChromeTint(value: string) {
+  const root = document.documentElement;
+  const components =
+    value === NEUTRAL_ACCENT ? null : parseHslComponents(hexToHsl(value));
+
+  if (!components || components.saturation === 0) {
+    // Neutral, or a grey hex: a saturated wash would contradict the choice.
+    root.style.setProperty("--buzz-gradient-light-top", "hsl(0 0% 92%)");
+    root.style.setProperty("--buzz-gradient-light-bottom", "hsl(0 0% 92%)");
+    root.style.setProperty("--buzz-gradient-dark-top", "hsl(0 0% 18%)");
+    root.style.setProperty("--buzz-gradient-dark-bottom", "hsl(0 0% 8%)");
+    return;
+  }
+
+  const { hue, saturation } = components;
+  const light = `hsl(${hue.toFixed(0)} ${Math.round(
+    saturation * CHROME_LIGHT_SATURATION_RATIO,
+  )}% ${CHROME_LIGHT_LIGHTNESS}%)`;
+  root.style.setProperty("--buzz-gradient-light-top", light);
+  root.style.setProperty("--buzz-gradient-light-bottom", light);
+  root.style.setProperty(
+    "--buzz-gradient-dark-top",
+    `hsl(${hue.toFixed(0)} ${Math.round(saturation * CHROME_DARK_TOP.saturation)}% ${CHROME_DARK_TOP.lightness}%)`,
+  );
+  root.style.setProperty(
+    "--buzz-gradient-dark-bottom",
+    `hsl(${hue.toFixed(0)} ${Math.round(saturation * CHROME_DARK_BOTTOM.saturation)}% ${CHROME_DARK_BOTTOM.lightness}%)`,
+  );
+}
+
 function applyAccentColor(value: string) {
   const root = document.documentElement;
   if (value === NEUTRAL_ACCENT) {
@@ -263,6 +329,7 @@ function applyAccentColor(value: string) {
     // the subtle wash for this accent alone, without special-casing every
     // other one.
     root.dataset.accentNeutral = "true";
+    applyChromeTint(value);
     return;
   }
 
@@ -282,6 +349,7 @@ function applyAccentColor(value: string) {
   root.style.setProperty("--sidebar-active", accentHsl);
   root.style.setProperty("--sidebar-active-foreground", fgHsl);
   delete root.dataset.accentNeutral;
+  applyChromeTint(hex);
 }
 
 /**
