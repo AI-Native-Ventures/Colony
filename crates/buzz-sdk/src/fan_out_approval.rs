@@ -17,6 +17,7 @@
 //! "nothing happens until a human says yes" behaviour a spend gate needs.
 
 use buzz_core::{
+    company::{CommercialPurpose, Initiative},
     interrupt::{is_hard_list_category, AskType},
     kind::KIND_ASK,
 };
@@ -77,15 +78,22 @@ fn tag(parts: &[&str]) -> Result<Tag, String> {
     Tag::parse(parts.iter().copied()).map_err(|error| format!("tag error: {error}"))
 }
 
-/// The Initiative payload's declared cost ceiling, or `None` when the plan's
-/// template declared no `costCeiling` on any stage. Reads the value back off
-/// the already-built `initiative_action` rather than recomputing it, so this
-/// can never drift from what `plan_fan_out` actually decided.
-fn declared_ceiling(plan: &FanOutPlan) -> Option<f64> {
+/// The `Initiative` payload `plan_fan_out` already built, borrowed back out
+/// of `plan.initiative_action` rather than reconstructed, so nothing here can
+/// drift from what the planner actually decided.
+fn initiative_payload(plan: &FanOutPlan) -> Result<&Initiative, String> {
     match &plan.initiative_action.payload {
-        CompanyActionPayload::Initiative(initiative) => initiative.expected_cost_usd,
-        _ => None,
+        CompanyActionPayload::Initiative(initiative) => Ok(initiative),
+        other => Err(format!(
+            "expected an initiative payload in the plan, found {other:?}"
+        )),
     }
+}
+
+/// The Initiative payload's declared cost ceiling, or `None` when the plan's
+/// template declared no `costCeiling` on any stage.
+fn declared_ceiling(initiative: &Initiative) -> Option<f64> {
+    initiative.expected_cost_usd
 }
 
 fn skip_reason_json(reason: &FanOutSkipReason) -> serde_json::Value {
@@ -144,6 +152,7 @@ pub fn build_fan_out_approval_ask(
     );
     let owner_pubkey = PublicKey::from_hex(owner_pubkey_hex)
         .map_err(|error| format!("invalid owner pubkey: {error}"))?;
+    let initiative = initiative_payload(plan)?;
     if plan.task_actions.is_empty() {
         // Every task was deduped away — nothing for the owner to approve.
         // `parse_ask` requires at least one `task` tag, so this cannot be
@@ -175,7 +184,7 @@ pub fn build_fan_out_approval_ask(
         tags.push(tag(&["task", task_id])?);
     }
 
-    let ceiling = declared_ceiling(plan);
+    let ceiling = declared_ceiling(initiative);
     let cost_line = match ceiling {
         Some(usd) => format!("Declared ceiling ${usd:.2}."),
         None => "No cost ceiling declared by this template.".to_string(),
@@ -210,6 +219,14 @@ pub fn build_fan_out_approval_ask(
         // but content JSON is not schema-closed either — see `parse_content`
         // in buzz-core/src/interrupt.rs — so this rides alongside for free
         // without needing its own event kind.
+        //
+        // `initiative` carries the full Initiative payload `plan_fan_out`
+        // built, not just its id: everything `read_fan_out_replan_seed`
+        // needs to re-derive the same `FanOutRequest` at execution time
+        // (cohort/template/pin/trigger/owner persona/cost centre/purpose/
+        // client org/channel) lives on that struct already, so the Ask is a
+        // self-contained resume token and execution never needs a
+        // side-channel store of "what was this fan-out actually about".
         "fanOut": {
             "initiativeId": plan.initiative_id,
             "memberCount": member_count,
@@ -217,10 +234,87 @@ pub fn build_fan_out_approval_ask(
             "taskCount": task_count,
             "declaredCostUsd": ceiling,
             "skipped": skipped,
+            "initiative": serde_json::to_value(initiative)
+                .map_err(|error| format!("failed to serialize initiative: {error}"))?,
         },
     });
 
     Ok(EventBuilder::new(Kind::Custom(KIND_ASK as u16), content.to_string()).tags(tags))
+}
+
+/// Re-plan inputs recovered from a previously-filed fan-out approval Ask's
+/// content: everything [`crate::fan_out::FanOutRequest`] needs besides live
+/// state (a fresh `Cohort`, `Template`, `CompanyProfile`, team list, and
+/// existing-tasks snapshot, all fetched at execution time, plus `now`) and
+/// the relay's own pubkey.
+///
+/// Deliberately does not carry the plan's task list or skip list: those were
+/// computed from a snapshot of cohort membership and open tasks that may be
+/// stale by the time an owner approves, and the whole reason to re-derive
+/// this seed rather than trust the frozen plan is to re-run `plan_fan_out`
+/// against current state instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FanOutReplanSeed {
+    /// Company the fan-out belongs to.
+    pub company_id: String,
+    /// Cohort to re-fetch and fan out over.
+    pub cohort_id: String,
+    /// Template to re-fetch, pinned to `template_version`.
+    pub template_id: String,
+    /// Template version pinned at proposal time.
+    pub template_version: i64,
+    /// Persona accountable for the resulting initiative.
+    pub owner_persona_id: String,
+    /// Cost centre charged for the resulting initiative.
+    pub cost_centre_id: String,
+    /// Commercial reason for the resulting initiative.
+    pub commercial_purpose: CommercialPurpose,
+    /// Optional client organization receiving the work.
+    pub client_organization_id: Option<String>,
+    /// Channel the fan-out originated in.
+    pub source_channel_id: String,
+    /// Event id of the message that triggered this fan-out.
+    pub trigger_event_id: String,
+}
+
+/// Read a [`FanOutReplanSeed`] back out of a fan-out approval Ask's parsed
+/// content (`buzz_core::interrupt::ParsedAsk` does not carry custom fields,
+/// so callers pass the ask event's own re-parsed `serde_json::Value`
+/// content, or `parsed.headline`'s sibling data another way — in practice,
+/// `serde_json::from_str(&event.content)`).
+pub fn read_fan_out_replan_seed(content: &serde_json::Value) -> Result<FanOutReplanSeed, String> {
+    let initiative_value = content
+        .get("fanOut")
+        .and_then(|fan_out| fan_out.get("initiative"))
+        .ok_or_else(|| "ask content has no fanOut.initiative block".to_string())?;
+    let initiative: Initiative = serde_json::from_value(initiative_value.clone())
+        .map_err(|error| format!("fanOut.initiative is not a valid initiative: {error}"))?;
+
+    let cohort_id = initiative
+        .cohort_id
+        .ok_or_else(|| "fanOut.initiative carries no cohortId".to_string())?;
+    let template_id = initiative
+        .template_id
+        .ok_or_else(|| "fanOut.initiative carries no templateId".to_string())?;
+    let template_version = initiative
+        .template_version
+        .ok_or_else(|| "fanOut.initiative carries no templateVersion".to_string())?;
+    let trigger_event_id = initiative
+        .source_event_id
+        .ok_or_else(|| "fanOut.initiative carries no sourceEventId".to_string())?;
+
+    Ok(FanOutReplanSeed {
+        company_id: initiative.company_id,
+        cohort_id,
+        template_id,
+        template_version,
+        owner_persona_id: initiative.owner_persona_id,
+        cost_centre_id: initiative.cost_centre_id,
+        commercial_purpose: initiative.commercial_purpose,
+        client_organization_id: initiative.client_organization_id,
+        source_channel_id: initiative.source_channel_id,
+        trigger_event_id,
+    })
 }
 
 #[cfg(test)]
@@ -459,6 +553,36 @@ mod tests {
         let error = build_fan_out_approval_ask(&plan, "Build websites", "Premium Q3", 1, 1, OWNER)
             .expect_err("an empty plan has nothing to approve");
         assert!(error.contains("no tasks"));
+    }
+
+    #[test]
+    fn a_filed_asks_content_recovers_a_replan_seed_matching_the_original_inputs() {
+        let plan = plan(Some(2.0), 3);
+        let builder =
+            build_fan_out_approval_ask(&plan, "Build websites", "Premium Q3", 3, 1, OWNER)
+                .expect("builds");
+        let event = builder.sign_with_keys(&Keys::generate()).expect("signs");
+        let content: serde_json::Value =
+            serde_json::from_str(&event.content).expect("content parses");
+
+        let seed = read_fan_out_replan_seed(&content).expect("seed recovers");
+        assert_eq!(seed.company_id, "horizonlabs");
+        assert_eq!(seed.cohort_id, "premium-q3");
+        assert_eq!(seed.template_id, "build-websites");
+        assert_eq!(seed.template_version, 1);
+        assert_eq!(seed.owner_persona_id, "sales-lead");
+        assert_eq!(seed.cost_centre_id, "cc-sales");
+        assert_eq!(seed.commercial_purpose, CommercialPurpose::Sales);
+        assert_eq!(seed.client_organization_id, None);
+        assert_eq!(seed.source_channel_id, "sales");
+        assert_eq!(seed.trigger_event_id, TRIGGER);
+    }
+
+    #[test]
+    fn a_replan_seed_from_content_missing_the_initiative_block_is_refused() {
+        let error = read_fan_out_replan_seed(&serde_json::json!({"fanOut": {}}))
+            .expect_err("no initiative block to recover a seed from");
+        assert!(error.contains("fanOut.initiative"));
     }
 
     #[test]
