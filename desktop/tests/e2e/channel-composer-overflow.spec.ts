@@ -33,7 +33,7 @@ async function waitForMockLiveSubscription(
 
 // The mock emitter defaults `created_at` to whole seconds, so a loop of emits
 // all land in the same second. `compareEventOrder` (formatTimelineMessages.ts)
-// then falls through to `id.localeCompare`, and the ids are random per run —
+// then falls through to `id.localeCompare`, and the ids are random per run,
 // so the rendered order is a shuffle of the emit order, and "the last message
 // I emitted" is not the bottom row. Stamp a strictly increasing second per
 // emit so the timeline order is the emit order. Backdated so nothing renders

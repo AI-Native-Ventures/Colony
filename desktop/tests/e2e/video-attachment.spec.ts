@@ -1315,7 +1315,7 @@ test("right-click menus expose distinct selectors for links, relay video, and of
   // Bind the probe to the message that was just emitted rather than to
   // `getByTestId("video-player").last()`. `.last()` resolves against whatever
   // is in the DOM at that instant, so before the new row renders it still
-  // names the *previous* video — and a right-click on it opens the wrong
+  // names the *previous* video, and a right-click on it opens the wrong
   // menu. See the off-relay probe below for the failure that caused.
   const relayPlayer = page
     .locator(`[data-message-id="${relayVideoEvent.id}"]`)

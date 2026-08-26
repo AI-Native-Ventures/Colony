@@ -443,7 +443,7 @@ const MessageTimelineBase = React.forwardRef<
         transition.next.hasConfirmedBottom;
       suppressNextSemanticBottomRef.current = transition.next.suppressNext;
       // A resize report is a fresh reading of the box, so it is allowed to
-      // correct a stale not-at-bottom latch — `onVirtualizerAtBottomStateChange`
+      // correct a stale not-at-bottom latch. `onVirtualizerAtBottomStateChange`
       // drops the not-at-bottom half, so a resize can only ever move this
       // state towards bottom. Without that, a mid-resize `"scroll"` report
       // computed from a half-applied box latches `isAtBottom` false, the
