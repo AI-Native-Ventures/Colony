@@ -96,6 +96,13 @@ export const KIND_COHORT = 30201;
 export const KIND_ASK = 44300;
 /** Resolution of an open ask: the answer that closes it. */
 export const KIND_ASK_RESOLUTION = 44301;
+/**
+ * Relay-signed ask-state head (d tag = the ask event id). Carries the relay's
+ * own deadline_at plus what happens when it passes, because nothing outside
+ * the relay can compute that deadline and a countdown that disagrees with the
+ * sweep is worse than none. Mirror of buzz-core's KIND_ASK_STATE.
+ */
+export const KIND_ASK_STATE = 30200;
 /** Withdrawal of an open ask by its filer. */
 export const KIND_ASK_WITHDRAWAL = 44302;
 /**

@@ -15,6 +15,22 @@
 //! due-ask sweep's own rule for an owner-audience Ask with no default is to
 //! re-deadline forever rather than execute anything, which is exactly the
 //! "nothing happens until a human says yes" behaviour a spend gate needs.
+//!
+//! There is no auto-approval path here and there is not going to be one. The
+//! obvious request — "let a standing owner grant approve routine campaigns"
+//! — is structurally impossible rather than merely unbuilt: NIP-IQ rejects a
+//! hard-list category on a delegation grant outright, so no grant can carry
+//! `spend`, and with no such grant no decision log can cite one either. Both
+//! halves are pinned by test (`a_spend_category_ask_structurally_cannot_
+//! carry_a_default_option`, `a_delegation_grant_can_never_cover_a_fan_out_
+//! approval`), because the tempting shortcut is to move this module off the
+//! hard list rather than accept the answer.
+//!
+//! The real cost of that rule is not the waiting, it is the waiting being
+//! invisible: an owner who never opens the Ask has a campaign parked behind
+//! a deadline that will be re-armed indefinitely. The relay already publishes
+//! that fact on the ask-state head (kind 30200, `on_expiry: "rearms"`); the
+//! desktop reads it and says so on the ask card.
 
 use buzz_core::{
     company::{CommercialPurpose, Initiative},
@@ -482,6 +498,40 @@ mod tests {
         let error = parse_ask(&event).expect_err("a spend-category ask must refuse a default");
         assert!(
             matches!(error, AskParseError::DefaultOnHardList(category) if category == FAN_OUT_APPROVAL_CATEGORY)
+        );
+    }
+
+    /// The other half of the same guarantee, and the reason fan-out approval
+    /// has no auto-approve path and is never getting one.
+    ///
+    /// The obvious ask ("let a standing owner grant approve routine
+    /// campaigns") is structurally impossible, not merely unimplemented:
+    /// NIP-IQ rejects a hard-list category on a delegation grant outright, so
+    /// no grant can ever carry `spend`, and with no such grant no decision
+    /// log can cite one either. A spend decision reaches a human or it does
+    /// not happen. Pinned here rather than left as a comment because the
+    /// tempting fix is to quietly move this module off the hard list.
+    #[test]
+    fn a_delegation_grant_can_never_cover_a_fan_out_approval() {
+        let keys = Keys::generate();
+        let content = format!(
+            r#"{{"category":"{FAN_OUT_APPROVAL_CATEGORY}","scope":"premium_q3_campaign","active":true}}"#
+        );
+        let grant = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_DELEGATION_GRANT as u16),
+            content,
+        )
+        .tags(vec![
+            Tag::parse(["d", "grant-campaigns"]).expect("tag parses")
+        ])
+        .sign_with_keys(&keys)
+        .expect("signs");
+
+        let error = buzz_core::interrupt::parse_grant(&grant)
+            .expect_err("a spend-category grant must be refused");
+        assert!(
+            matches!(&error, AskParseError::GrantOnHardList(category) if category == FAN_OUT_APPROVAL_CATEGORY),
+            "{error:?}"
         );
     }
 
