@@ -6,6 +6,7 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   BlockMentionCandidate,
   CohortMentionCandidate,
+  DiscoveryMentionCandidate,
   TeamMentionMember,
 } from "./mentionCandidates";
 
@@ -28,7 +29,8 @@ type ActorMentionSuggestionCandidate = {
 export type MentionSuggestionCandidate =
   | ActorMentionSuggestionCandidate
   | BlockMentionCandidate
-  | CohortMentionCandidate;
+  | CohortMentionCandidate
+  | DiscoveryMentionCandidate;
 
 export function mapMentionCandidateToSuggestion(opts: {
   candidate: MentionSuggestionCandidate;
@@ -64,6 +66,17 @@ export function mapMentionCandidateToSuggestion(opts: {
       kind: "cohort",
       cohortId: candidate.cohortId,
       cohortAddress: candidate.cohortAddress,
+      displayName: candidate.displayName,
+    };
+  }
+
+  if (candidate.kind === "discovery") {
+    return {
+      kind: "discovery",
+      discoveryKind: candidate.discoveryKind,
+      entityId: candidate.entityId,
+      contextId: candidate.contextId,
+      detail: candidate.detail,
       displayName: candidate.displayName,
     };
   }

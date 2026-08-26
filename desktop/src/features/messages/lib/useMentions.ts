@@ -99,6 +99,7 @@ export function useMentions(
   const channelsQuery = useChannelsQuery();
   const entityMentions = useEntityMentions({
     channels: channelsQuery.data,
+    mentionQuery,
     mentionMapRef,
     personaMentionMapRef,
     selectedAgentMentionNamesRef,
@@ -853,6 +854,7 @@ export function useMentions(
       personaMentionMapRef,
       blockMentionMapRef: entityMentions.blockMentionMapRef,
       cohortMentionMapRef: entityMentions.cohortMentionMapRef,
+      discoveryMentionMapRef: entityMentions.discoveryMentionMapRef,
       selectedAgentNamesRef: selectedAgentMentionNamesRef,
       cancelAutocomplete: cancelMentionAutocomplete,
       setSelectedNames: setSelectedMentionNames,
@@ -947,6 +949,7 @@ export function useMentions(
     clearMentions,
     extractBlockReferenceTags: entityMentions.extractBlockReferenceTags,
     extractCohortReferenceTags: entityMentions.extractCohortReferenceTags,
+    extractDiscoveryReferenceTags: entityMentions.extractDiscoveryReferenceTags,
     routeTypedMentionReferences: entityMentions.route,
     extractMentionPersonas,
     extractMentionPubkeys,
