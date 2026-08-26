@@ -64,7 +64,26 @@ export type WorkspaceResult =
   | {
       result: "lead";
       lead: LeadDetail;
+    }
+  | {
+      result: "entity_search";
+      entities: DiscoveryEntitySummary[];
     };
+
+/** One mention-directory row returned by `search_entities`. */
+export type DiscoveryEntitySummary = {
+  kind:
+    | "industry"
+    | "vertical"
+    | "campaign"
+    | "campaign_leads"
+    | "lead"
+    | "run";
+  id: string;
+  label: string;
+  context_id?: string;
+  detail?: string;
+};
 
 export type WorkspaceOperation =
   | "access"
@@ -78,6 +97,7 @@ export type WorkspaceOperation =
   | "list_campaigns"
   | "list_leads"
   | "list_lead_counts"
+  | "search_entities"
   | "get_lead"
   | "update_lead";
 export type RunOperation = "start" | "status" | "cancel";

@@ -1093,6 +1093,20 @@ pub enum DiscoveryCmd {
         #[arg(long)]
         idempotency_key: Option<Uuid>,
     },
+    /// Search mentionable Discovery entities: taxonomy rows, Campaigns,
+    /// Leads, Lead collections, and runs. Prints stable IDs suitable for
+    /// building `["discovery", kind, id]` mention tags.
+    Search {
+        /// Case-insensitive text query.
+        #[arg(long)]
+        query: String,
+        /// Maximum rows, 1 through 20.
+        #[arg(long, default_value_t = 10)]
+        limit: u16,
+        /// Stable retry key. Reuse it after an uncertain delivery.
+        #[arg(long)]
+        idempotency_key: Option<Uuid>,
+    },
     /// Read one retained Lead with its editable profile
     LeadGet {
         /// Lead UUID.

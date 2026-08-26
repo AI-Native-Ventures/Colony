@@ -11,9 +11,12 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-/// Canonical taxonomy bytes embedded verbatim into every consumer.
-pub const BUSINESS_TAXONOMY_JSON: &str =
-    include_str!("../../../assets/discovery/business_taxonomy.json");
+/// Canonical taxonomy bytes embedded verbatim into every consumer. The file
+/// lives beside the desktop bundle that also loads it, so the repository has
+/// exactly one editable copy of this data.
+pub const BUSINESS_TAXONOMY_JSON: &str = include_str!(
+    "../../../desktop/src/features/discovery/data/businessTaxonomy/business_taxonomy.json"
+);
 
 /// SHA-256 of [`BUSINESS_TAXONOMY_JSON`]. Any edit to the canonical JSON must
 /// update this constant in the same commit, which forces a deliberate,
