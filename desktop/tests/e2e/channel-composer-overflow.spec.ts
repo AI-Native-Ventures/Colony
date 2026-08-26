@@ -31,19 +31,33 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
+// The mock emitter defaults `created_at` to whole seconds, so a loop of emits
+// all land in the same second. `compareEventOrder` (formatTimelineMessages.ts)
+// then falls through to `id.localeCompare`, and the ids are random per run —
+// so the rendered order is a shuffle of the emit order, and "the last message
+// I emitted" is not the bottom row. Stamp a strictly increasing second per
+// emit so the timeline order is the emit order. Backdated so nothing renders
+// with a future timestamp; the window comfortably exceeds this file's ~63
+// total emits.
+const EMIT_BACKDATE_SECONDS = 600;
+let emitSequence = 0;
+
 async function emit(
   page: import("@playwright/test").Page,
   content: string,
   parentEventId: string | null = null,
 ) {
+  const createdAt =
+    Math.floor(Date.now() / 1000) - EMIT_BACKDATE_SECONDS + emitSequence++;
   const event = await page.evaluate(
     (payload) =>
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: payload.channel,
         content: payload.content,
+        createdAt: payload.createdAt,
         parentEventId: payload.parentEventId,
       }),
-    { channel: CHANNEL, content, parentEventId },
+    { channel: CHANNEL, content, createdAt, parentEventId },
   );
   if (!event) throw new Error("mock message emitter is not installed");
   return event as { created_at: number; id: string };
