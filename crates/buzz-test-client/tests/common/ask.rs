@@ -405,10 +405,19 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
         ),
     )
     .await;
-    assert_eq!(
-        outcome,
-        CompanyReceiptOutcome::Applied,
-        "the workspace's company must be created before any work can hang off it"
+    // Applied on the first workspace in this community, Conflict on every one
+    // after it. The profile is a singleton at a fixed coordinate now, so a
+    // second Create is refused rather than making a second company - and the
+    // precondition these tests actually need is that a profile EXISTS, not
+    // that this particular call is what created it. Every workspace builds
+    // the same profile (same cost centre id, same services), so an existing
+    // one is equivalent for everything downstream.
+    assert!(
+        matches!(
+            outcome,
+            CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+        ),
+        "the community profile must exist before any work can hang off it, got {outcome:?}"
     );
 
     Workspace {
