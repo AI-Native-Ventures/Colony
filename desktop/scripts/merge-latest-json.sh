@@ -78,7 +78,10 @@ if [[ -n "$EXISTING" ]] && printf '%s' "$EXISTING" | jq -e '.platforms' >/dev/nu
     fi
     sig=$(printf '%s' "$EXISTING" | jq -r --arg k "$key" '.platforms[$k].signature')
     url=$(printf '%s' "$EXISTING" | jq -r --arg k "$key" '.platforms[$k].url')
-    entry_ver=$(basename "$url" | sed -n 's/^Colony_\([^_]*\)_.*/\1/p')
+    # Canary assets are named Colony_Canary_<version>_<arch>.*, so the
+    # optional Canary_ segment has to be skipped before the version is read;
+    # without it every canary entry parses as version "Canary" and is dropped.
+    entry_ver=$(basename "$url" | sed -n 's/^Colony_\(Canary_\)\{0,1\}\([^_]*\)_.*/\2/p')
     if [[ -z "$entry_ver" || "$entry_ver" != "$VERSION" ]]; then
       echo "merge-latest-json: dropping ${key} entry at v${entry_ver:-<unknown>} (this release is v${VERSION})" >&2
       continue

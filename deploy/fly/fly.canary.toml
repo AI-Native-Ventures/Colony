@@ -1,0 +1,122 @@
+# Colony CANARY relay on Fly.io. Deploy from the repo root:
+#
+#   flyctl deploy --config deploy/fly/fly.canary.toml --image <ghcr image>
+#
+# This is a fork of deploy/fly/fly.toml (production). It exists so a relay
+# image can be proven against real Postgres/Redis/Tigris and a real client
+# before it is promoted to colony-relay. Everything that is a *lesson* in
+# fly.toml is carried over below; the differences are the app identity, the
+# host names, and the machine lifecycle.
+#
+# Provision the backing infrastructure with deploy/fly/provision-canary.sh
+# BEFORE the first deploy. Wipe and reseed it with scripts/canary-reset.sh.
+#
+# Secrets are set on the colony-relay-canary app and never live in this file:
+# DATABASE_URL, REDIS_URL, BUZZ_S3_ACCESS_KEY, BUZZ_S3_SECRET_KEY,
+# BUZZ_RELAY_PRIVATE_KEY, and optionally RELAY_OWNER_PUBKEY /
+# RELAY_OPERATOR_PUBKEYS. The canary's BUZZ_RELAY_PRIVATE_KEY is generated
+# fresh at provision time and is NEVER copied from production - a shared
+# signing key would let canary-signed events pass as production-relay events.
+app = "colony-relay-canary"
+primary_region = "iad"
+
+[env]
+BUZZ_BIND_ADDR = "0.0.0.0:3000"
+BUZZ_HEALTH_PORT = "8080"
+BUZZ_METRICS_PORT = "9102"
+BUZZ_GIT_REPO_PATH = "/data/git"
+BUZZ_AUTO_MIGRATE = "true"
+BUZZ_DOMAIN = "relay-canary.colony.ainative.ventures"
+BUZZ_MEDIA_BASE_URL = "https://relay-canary.colony.ainative.ventures/media"
+BUZZ_MEDIA_SERVER_DOMAIN = "relay-canary.colony.ainative.ventures"
+# The private operator bundle is served by this same relay image on the admin
+# host. Analytics NIP-98 signatures bind to this exact HTTPS origin.
+#
+# BUZZ_ADMIN_HOST MUST NOT equal BUZZ_DOMAIN. When a request's Host matches
+# the admin host, crates/buzz-relay/src/router.rs short-circuits `/` and
+# never lets it serve the public web bundle, the NIP-11 document, or the
+# WebSocket endpoint - so pointing admin at the relay host would silently
+# kill the canary's WebSocket. Hence a separate admin-canary name.
+BUZZ_ADMIN_HOST = "admin-canary.colony.ainative.ventures"
+RELAY_OPERATOR_API_ORIGIN = "https://admin-canary.colony.ainative.ventures"
+# BUZZ_CORS_ORIGINS is deliberately unset (permissive CORS). Every HTTP API
+# is NIP-98-authed with no cookie/ambient credentials, so an origin
+# allowlist adds nothing - and any allowlist here silently blocks the
+# desktop webview (origin tauri://localhost), whose fetches to /api/*
+# fail closed with no server-side trace. Broke invite-link minting in prod.
+BUZZ_S3_ENDPOINT = "https://fly.storage.tigris.dev"
+BUZZ_S3_BUCKET = "colony-relay-canary-media"
+# Canary identity and posture. Without RELAY_URL the relay advertises
+# ws://localhost:3000; without REQUIRE_RELAY_MEMBERSHIP anyone who finds the
+# host can join. BUZZ_RELAY_PRIVATE_KEY (secret) keeps the relay's own
+# identity stable across restarts - including across a canary-reset.sh wipe,
+# which drops the database but leaves secrets alone.
+RELAY_URL = "wss://relay-canary.colony.ainative.ventures"
+BUZZ_REQUIRE_RELAY_MEMBERSHIP = "true"
+BUZZ_REQUIRE_AUTH_TOKEN = "true"
+BUZZ_ALLOW_NIP_OA_AUTH = "true"
+BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
+# 2026-08-25: setting BUZZ_DISCOVERY_HOSTED_ENABLED=true took production down
+# for ~14 minutes on relay 0.9.0 (crash loop, Fly max restart count reached).
+# It is NOT a degraded mode: if the flag is true without ALL THREE of
+# OUTSCRAPER_API_KEY, BRAVE_SEARCH_API_KEY, and EXA_SEARCH_API_KEY present in
+# Fly secrets, the relay refuses to boot (see
+# crates/buzz-relay/src/discovery_gateway.rs config_from_env). A PARTIAL set
+# of those keys fails boot too - all three or nothing. The canary app is
+# provisioned with NONE of them, so this stays "false". Only flip it to
+# "true" after running, and then confirming in
+# `flyctl secrets list -a colony-relay-canary`:
+#   flyctl secrets set OUTSCRAPER_API_KEY=... BRAVE_SEARCH_API_KEY=... \
+#     EXA_SEARCH_API_KEY=... -a colony-relay-canary
+# (As of 2026-08-27 production itself only has OUTSCRAPER_API_KEY set, which
+# is exactly why production also still reads "false".)
+BUZZ_DISCOVERY_HOSTED_ENABLED = "false"
+# Member self-serve community creation is OFF on the canary, and the
+# BUZZ_SELF_PROVISION_* vars from fly.toml are deliberately absent. Prod's
+# feature works because the wildcard CNAME *.colony.ainative.ventures ->
+# colony-relay.fly.dev plus the Fly wildcard certificate cover every slug.
+# That wildcard points at PRODUCTION, so any slug a canary minted would
+# resolve to the prod relay, which has no such community - a confusing
+# failure with no canary-side trace. The canary is reachable only through
+# its own explicit relay-canary CNAME, which overrides the wildcard for that
+# one name.
+
+[[mounts]]
+source = "colony_relay_canary_data"
+destination = "/data"
+
+[http_service]
+internal_port = 3000
+force_https = true
+# Canary machines sleep when idle. This is the one deliberate divergence from
+# production, which runs auto_stop_machines = "off" / min_machines_running = 1.
+#
+# The tradeoff: a stopped machine drops every connected WebSocket, and a
+# client reconnecting into a cold start waits for the boot plus the relay's
+# Postgres/Redis handshake before its NIP-42 AUTH succeeds - so reconnects
+# briefly fail rather than queue. On a canary that is fine and cheap (it is
+# idle most of the day). On production it would be wrong: the desktop app
+# holds long-lived subscriptions, and a sleep/wake cycle presents to a user
+# as "Community connection failed" with nothing wrong on the server.
+#
+# Nothing is destroyed by "stop": the volume and the database outlive it, any
+# request to the public host wakes the machine via auto_start, and
+# `flyctl machine start -a colony-relay-canary` wakes it by hand.
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
+
+[[vm]]
+size = "shared-cpu-1x"
+memory = "512mb"
+
+# The health and metrics ports are not published by [http_service] (only 3000
+# is), so an external probe cannot reach them - probe the public relay port
+# instead. On port 3000, /_readiness is the reachable readiness endpoint and
+# it checks Postgres and Redis; canary-reset.sh uses it as its proof gate.
+[checks.readiness]
+type = "tcp"
+port = 3000
+interval = "15s"
+timeout = "5s"
+grace_period = "30s"

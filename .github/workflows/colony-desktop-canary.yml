@@ -1,0 +1,580 @@
+name: Colony Canary desktop (develop)
+
+# The canary desktop lane: a second, side-by-side Colony build cut from
+# `develop` every night, published to its own rolling prerelease and updating
+# on its own channel. Stable installs never see it and it never sees stable.
+#
+# Not to be confused with linux-canary.yml, windows-canary.yml,
+# macos-intel-canary.yml or signed-macos-canary.yml. Those are CI build
+# canaries: they prove the tree still compiles on a platform CI does not
+# otherwise cover. This one ships an app to people.
+#
+# What makes it side-by-side rather than an upgrade-in-place of stable:
+#   productName  Colony Canary            (Finder, Dock, menu bar)
+#   identifier   ventures.ainative.colony.canary
+#                                         (app support, prefs, keychain)
+#   relay        wss://relay-canary.colony.ainative.ventures
+#   updater      .../colony-canary-latest/latest.json
+#   version      <desktop package.json version>-canary.<run_number>
+# All of it comes from desktop/scripts/build-release-config.mjs with
+# BUZZ_RELEASE_CHANNEL=canary; see that file for why one script owns both
+# channels. Signing is deliberately identical to stable: the same ad-hoc Apple
+# identity from tauri.conf.json and the same Tauri updater keypair. A second
+# updater keypair would be a second one-way door to lose.
+#
+# Version ordering is semver: 0.11.7-canary.43 > 0.11.7-canary.42, and
+# 0.11.8-canary.1 > 0.11.7-canary.99. run_number is monotonic per workflow, so
+# the canary channel only ever moves forward even when the base version does
+# not change. Stable 0.11.7 sorts above 0.11.7-canary.42, but no canary install
+# polls the stable endpoint, so the two channels never cross.
+#
+# Triggers: a nightly cron at 03:00 UTC against `develop` (GitHub only runs
+# schedules from the default branch, so this file has to be on `develop` for
+# the cron to fire at all), plus workflow_dispatch with a free-form ref so any
+# branch can be handed to a tester without merging it first.
+
+on:
+  schedule:
+    # 03:00 UTC nightly. GitHub queues scheduled runs on a shared pool, so the
+    # actual start drifts by tens of minutes; nothing here depends on the time.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to build the canary from"
+        required: false
+        default: develop
+      force:
+        description: "Build even when the ref has not moved since the last canary"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never cancel a canary mid-publish: the rolling release is overwritten in
+# place, and a run killed between the archive upload and the manifest upload
+# leaves every canary install pointed at an asset that does not exist.
+concurrency:
+  group: colony-desktop-canary
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RELEASES_REPO: AI-Native-Ventures/colony-releases
+
+  # One rolling prerelease tag carries everything: the dmg a human downloads,
+  # the signed archive the updater fetches, and latest.json itself. Stable
+  # splits these across an immutable v<version> release and the rolling
+  # colony-desktop-latest one because its versioned releases are the product
+  # history; a canary has no history worth keeping, only a current build.
+  CANARY_ROLLING_TAG: colony-canary-latest
+
+  # Compiled into every canary binary, so it can never change without
+  # stranding the installs that already trust it.
+  UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-canary-latest/latest.json
+
+  # The whole point of the channel: canary builds talk to the canary relay.
+  # The binary gate below refuses to publish a build that does not have this
+  # exact string compiled in.
+  COLONY_CANARY_RELAY_WS_URL: wss://relay-canary.colony.ainative.ventures
+  COLONY_CANARY_RELAY_HTTP_URL: https://relay-canary.colony.ainative.ventures
+
+  # Only ever used as something to look for and warn about in the binary gate.
+  COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures
+
+jobs:
+  decide:
+    name: Decide whether the canary moved
+    if: github.repository == 'AI-Native-Ventures/Colony'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      sha: ${{ steps.check.outputs.sha }}
+      prev_sha: ${{ steps.check.outputs.prev_sha }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.ref || 'develop' }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # The skip check runs on a hosted runner rather than inside the Mac job
+      # so that an unchanged `develop` costs nothing on the shared build Mac,
+      # which is also somebody's development machine.
+      - name: Compare HEAD against the last published canary
+        id: check
+        env:
+          # colony-releases is public, so the repo-scoped GITHUB_TOKEN can read
+          # its releases. The App token is minted later, in the publishing job,
+          # where write access is actually needed.
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+          SOURCE_REF: ${{ inputs.ref || 'develop' }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          BASE_VERSION=$(node -p "require('./desktop/package.json').version")
+          VERSION="${BASE_VERSION}-canary.${GITHUB_RUN_NUMBER}"
+          {
+            echo "sha=$SHA"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+          # The previous canary's source commit is recorded in the rolling
+          # release body, written by the last step of the publishing job. It is
+          # written only after every verification passes, so a run that built
+          # and then failed to publish correctly does not suppress tomorrow's
+          # rebuild.
+          BODY=$(gh release view "$CANARY_ROLLING_TAG" --repo "$RELEASES_REPO" --json body --jq .body 2>/dev/null || true)
+          PREV=$(printf '%s\n' "$BODY" | sed -n 's/^canary-sha: \([0-9a-f]\{40\}\).*/\1/p' | tail -1)
+          echo "prev_sha=${PREV}" >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ]; then
+            REASON="force requested"
+            SHOULD=true
+          elif [ -z "$PREV" ]; then
+            REASON="no previous canary recorded on ${CANARY_ROLLING_TAG}"
+            SHOULD=true
+          elif [ "$PREV" = "$SHA" ]; then
+            REASON="${SOURCE_REF} is still at ${SHA}, unchanged since the last canary"
+            SHOULD=false
+          else
+            REASON="${SOURCE_REF} moved ${PREV} -> ${SHA}"
+            SHOULD=true
+          fi
+
+          echo "should_build=$SHOULD" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Colony Canary"
+            echo
+            echo "- ref: \`${SOURCE_REF}\`"
+            echo "- HEAD: \`${SHA}\`"
+            echo "- previous canary: \`${PREV:-none}\`"
+            echo "- version: \`${VERSION}\`"
+            echo "- build: **${SHOULD}** (${REASON})"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "build=${SHOULD}: ${REASON}"
+
+  publish-canary-macos:
+    name: Publish canary macOS (Apple Silicon)
+    needs: decide
+    if: needs.decide.outputs.should_build == 'true'
+    # The same self-hosted Mac the stable release uses. A canary rebuilds the
+    # whole Rust workspace exactly like a release does, and the persistent
+    # cargo cache on this runner is the difference between ~20 minutes and an
+    # hour. macOS aarch64 only in v1: Windows and Intel canaries would each
+    # need their own asset names and manifest entries, and nobody is testing
+    # on them yet.
+    runs-on: [self-hosted, macOS, colony-builder]
+    timeout-minutes: 150
+    env:
+      VERSION: ${{ needs.decide.outputs.version }}
+      BUILD_SHA: ${{ needs.decide.outputs.sha }}
+      PREV_SHA: ${{ needs.decide.outputs.prev_sha }}
+      SOURCE_REF: ${{ inputs.ref || 'develop' }}
+    steps:
+      # Check out the exact sha the decide job resolved, not the branch name.
+      # A push landing between the two jobs would otherwise produce a build
+      # whose recorded sha is not the sha it was built from, and skip-if-
+      # unchanged would then skip a commit that was never built.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.decide.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Same guard as the release lane, and for the same reason: this runner's
+      # disk is shared with development worktrees, and a cold build that dies
+      # 20 minutes in on ENOSPC reads like a build bug rather than a full disk.
+      - name: Check the runner has room to build
+        env:
+          MIN_FREE_GIB: "25"
+        run: |
+          set -euo pipefail
+          AVAIL_GIB=$(($(df -Pk . | awk 'NR==2 {print $4}') / 1024 / 1024))
+          echo "Free space on the release volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
+          if [ "$AVAIL_GIB" -ge "$MIN_FREE_GIB" ]; then
+            exit 0
+          fi
+          echo "::error::Only ${AVAIL_GIB} GiB free on the release runner, and a canary build needs at least ${MIN_FREE_GIB} GiB. Failing now instead of part way through the build."
+          echo "Largest cargo target directories under ${HOME} (usually one per git worktree):"
+          find "$HOME" -maxdepth 6 -type d -name target -prune 2>/dev/null \
+            | while read -r d; do du -sk "$d" 2>/dev/null; done \
+            | sort -rn | head -10 \
+            | awk '{printf "  %7.1f GiB  %s\n", $1/1024/1024, $2}'
+          exit 1
+
+      # This list must cover every entry in tauri.conf.json's externalBin:
+      # bundle-sidecars.sh refuses to bundle a sidecar it cannot find and Tauri
+      # refuses to package one that is not bundled.
+      - name: Build sidecar binaries
+        run: |
+          . ./bin/activate-hermit
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release --target aarch64-apple-darwin \
+            -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp \
+            -p git-credential-nostr -p buzz-cli
+          scripts/bundle-sidecars.sh aarch64-apple-darwin
+
+      - name: Check sidecars are real binaries
+        # The build recipe `touch`es sidecar paths, which creates 0-byte stubs
+        # when the staging step above was skipped or failed silently. A dmg
+        # with stub sidecars installs fine and then cannot launch any agent.
+        run: |
+          for bin in buzz-acp buzz-agent buzz-backend-kubernetes buzz-dev-mcp git-credential-nostr buzz; do
+            f="desktop/src-tauri/binaries/${bin}-aarch64-apple-darwin"
+            size=$(stat -f %z "$f" 2>/dev/null || echo 0)
+            if [ "$size" -lt 500000 ]; then
+              echo "::error::Sidecar $f is ${size} bytes - a stub, not a real binary"
+              exit 1
+            fi
+          done
+
+      # Writes desktop/src-tauri/tauri.release.conf.json plus, for this
+      # channel, desktop/src-tauri/Info.canary.plist. Between them they carry
+      # the canary product name, bundle identifier, version, updater endpoint
+      # and pubkey, and createUpdaterArtifacts. It is a delta merged over
+      # tauri.conf.json, so the ad-hoc signingIdentity in the base config still
+      # applies and the canary is signed exactly like stable.
+      - name: Write the canary release config
+        env:
+          BUZZ_RELEASE_CHANNEL: canary
+          BUZZ_CANARY_VERSION: ${{ needs.decide.outputs.version }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
+        run: |
+          . ./bin/activate-hermit
+          cd desktop && node scripts/build-release-config.mjs
+
+      - name: Build desktop app
+        env:
+          # build.rs embeds these in the packaged binary. Without them the app
+          # falls back to ws://localhost:3000, which is what the binary gate
+          # two steps below exists to catch.
+          BUZZ_RELAY_URL: ${{ env.COLONY_CANARY_RELAY_WS_URL }}
+          BUZZ_RELAY_HTTP: ${{ env.COLONY_CANARY_RELAY_HTTP_URL }}
+          # build.rs reads these two as well as the config generator: it only
+          # emits cfg(buzz_updater_enabled) when both are present, and without
+          # that cfg the updater plugin is compiled out of the binary entirely
+          # while every other artifact still looks correct.
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: ${{ env.UPDATER_ENDPOINT }}
+          # The same updater keypair stable uses, on purpose. Canary and stable
+          # are separate channels, not separate trust roots.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          . ./bin/activate-hermit
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # Presence, never the values.
+          echo "updater public key present: ${BUZZ_UPDATER_PUBLIC_KEY:+yes}"
+          echo "updater endpoint present:   ${BUZZ_UPDATER_ENDPOINT:+yes}"
+          # A self-hosted runner may retain ambient environment variables.
+          # Fail-safe into community selection, exactly like stable.
+          unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+          just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
+
+          # Resolve the target directory here, where hermit has put cargo on
+          # PATH. Later steps do not source hermit, and a `cargo metadata`
+          # there silently falls back to the wrong path.
+          TAURI_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)"
+          [ -n "$TAURI_TARGET_ROOT" ] || TAURI_TARGET_ROOT="desktop/src-tauri/target"
+          echo "TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT" >> "$GITHUB_ENV"
+          echo "resolved TAURI_TARGET_ROOT=$TAURI_TARGET_ROOT"
+
+      - name: Verify the canary bundle
+        # Tauri names its output after productName, so the .app is
+        # "Colony Canary.app" and the dmg is "Colony Canary_<v>_aarch64.dmg"
+        # with a space. Both are renamed to the underscore form the release
+        # assets and latest.json use, in lockstep with the .sig, so the
+        # manifest and the uploaded asset can never name different files.
+        run: |
+          set -euo pipefail
+          BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
+          APP="$BUNDLE/macos/Colony Canary.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::Missing $APP. The canary overlay did not take effect: without productName=\"Colony Canary\" this build is indistinguishable from stable and would install over it."
+            ls -la "$BUNDLE/macos" || true
+            exit 1
+          fi
+          PLIST="$APP/Contents/Info.plist"
+          GOT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")
+          GOT_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")
+          GOT_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$PLIST")
+          echo "version=$GOT_VERSION identifier=$GOT_ID name=$GOT_NAME"
+          if [ "$GOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Built app reports version $GOT_VERSION, expected $VERSION"
+            exit 1
+          fi
+          # The identifier is what keeps canary data out of the stable app's
+          # Application Support, preferences and keychain items.
+          if [ "$GOT_ID" != "ventures.ainative.colony.canary" ]; then
+            echo "::error::Built app identifier is $GOT_ID, expected ventures.ainative.colony.canary. This build would share stable's data directory."
+            exit 1
+          fi
+          if [ "$GOT_NAME" != "Colony Canary" ]; then
+            echo "::error::Built app CFBundleName is $GOT_NAME, expected \"Colony Canary\". The Info.plist overlay did not apply and the canary would call itself Colony in the Dock and menu bar."
+            exit 1
+          fi
+          codesign --verify --deep --strict "$APP"
+
+          BUILT_DMG=$(find "$BUNDLE/dmg" -maxdepth 1 -name '*.dmg' -type f | tail -1)
+          if [ -z "$BUILT_DMG" ]; then
+            echo "::error::No dmg in $BUNDLE/dmg"
+            exit 1
+          fi
+          DMG="$BUNDLE/dmg/Colony_Canary_${VERSION}_aarch64.dmg"
+          [ "$BUILT_DMG" = "$DMG" ] || mv "$BUILT_DMG" "$DMG"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Check the updater is actually in the binary
+        # The one property no downstream artifact reveals. Everything else
+        # about a build can be correct while the app cannot update itself.
+        run: |
+          set -euo pipefail
+          BIN="$APP/Contents/MacOS/buzz-desktop"
+          test -f "$BIN" || { echo "::error::Missing $BIN"; ls -la "$APP/Contents/MacOS"; exit 1; }
+          # `grep -c`, not `grep -q`: -q exits at the first match, which sends
+          # SIGPIPE to `strings` mid-stream on a 130MB binary, and under
+          # `pipefail` that failure becomes the pipeline's result. The gate
+          # then reports "missing" precisely when the marker IS present.
+          MARKERS=$(strings -a "$BIN" | grep -c "buzz-updater-enabled" || true)
+          echo "updater marker occurrences: ${MARKERS:-0}"
+          if [ "${MARKERS:-0}" -eq 0 ]; then
+            echo "::error::The updater plugin is not compiled into this build. \
+          build.rs needs BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT in \
+          the build step's environment; without them the app ships unable to \
+          update itself while every other artifact looks correct."
+            exit 1
+          fi
+          echo "Updater plugin present in the shipped binary"
+
+      - name: Check the CANARY relay is actually in the binary
+        # Mandatory. This is the gate that makes the channel mean something.
+        #
+        # relay_ws_url() falls back to ws://localhost:3000 when build.rs saw no
+        # BUZZ_RELAY_URL, and if the canary relay env were ever mistyped or
+        # dropped, the run would still produce a correctly named, correctly
+        # versioned, correctly signed "Colony Canary" that points nowhere - or,
+        # worse, at production, if someone copies the stable job's env block
+        # into this one. Nothing in the dmg, the plist, the signature or the
+        # manifest reveals the difference, so it is pinned here against the
+        # compiled bytes.
+        run: |
+          set -euo pipefail
+          BIN="$APP/Contents/MacOS/buzz-desktop"
+          # `grep -c`, not `grep -q` - see the updater gate above for why.
+          CANARY=$(strings -a "$BIN" | grep -c "$COLONY_CANARY_RELAY_WS_URL" || true)
+          PROD=$(strings -a "$BIN" | grep -c "$COLONY_PRODUCTION_RELAY_WS_URL" || true)
+          LOOPBACK=$(strings -a "$BIN" | grep -c "ws://localhost:3000" || true)
+          echo "canary relay occurrences:     ${CANARY:-0}"
+          echo "production relay occurrences: ${PROD:-0}"
+          echo "loopback default occurrences: ${LOOPBACK:-0}"
+          if [ "${CANARY:-0}" -eq 0 ]; then
+            echo "::error::This build has no compiled-in canary relay URL \
+          (${COLONY_CANARY_RELAY_WS_URL}), so it falls back to \
+          ws://localhost:3000 and every canary tester gets a dead app. \
+          build.rs needs BUZZ_RELAY_URL in the build step's environment, set \
+          to the canary relay and not to production."
+            exit 1
+          fi
+          if [ "${PROD:-0}" -gt 0 ]; then
+            # Not fatal: the production hostname legitimately appears in the
+            # bundled frontend (links, docs, community discovery copy), and a
+            # hard failure there would block canaries for a reason that has
+            # nothing to do with the compiled default. The compiled default is
+            # what the check above proves.
+            echo "::warning::The production relay hostname also appears ${PROD} time(s) in this binary. That is expected from bundled frontend assets, but if the compiled default ever needs to be audited, this is the string to look at."
+          fi
+          echo "Canary relay compiled into the shipped binary"
+
+      - name: Locate and name the updater archive
+        # Tauri writes "Colony Canary.app.tar.gz" next to the .app and signs it
+        # with the updater key. An unsigned or missing archive means the build
+        # silently lost TAURI_SIGNING_PRIVATE_KEY, which would publish a
+        # manifest no client can verify.
+        run: |
+          set -euo pipefail
+          BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
+          BUILT=$(find "$BUNDLE/macos" -name '*.app.tar.gz' ! -name '*.sig' -type f | tail -1)
+          if [ -z "$BUILT" ] || [ ! -f "$BUILT" ]; then
+            echo "::error::No updater archive in $BUNDLE/macos - is createUpdaterArtifacts on?"
+            exit 1
+          fi
+          if [ ! -s "${BUILT}.sig" ]; then
+            echo "::error::${BUILT}.sig missing or empty - the build had no signing key"
+            exit 1
+          fi
+          ARCHIVE="$BUNDLE/macos/Colony_Canary_${VERSION}_aarch64.app.tar.gz"
+          if [ "$BUILT" != "$ARCHIVE" ]; then
+            mv "$BUILT" "$ARCHIVE"
+            mv "${BUILT}.sig" "${ARCHIVE}.sig"
+          fi
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "ARCHIVE_SIG=${ARCHIVE}.sig" >> "$GITHUB_ENV"
+
+      # Minted after the long build so its one-hour lifetime cannot expire
+      # before the upload. Same App as the release tagger, scoped down to
+      # colony-releases only.
+      - name: Create release publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          owner: AI-Native-Ventures
+          repositories: colony-releases
+          permission-contents: write
+
+      - name: Publish the canary build
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          STAGING=$(mktemp -d)
+          # Both names on every run: the versioned one is what latest.json
+          # points at (a client holding a cached manifest must still be able to
+          # fetch the archive that manifest was signed for), and the
+          # unversioned one is the fixed URL a human bookmarks. The rolling tag
+          # is a prerelease, so /releases/latest/download does NOT resolve to
+          # it and the download URL must name the tag explicitly.
+          cp "$DMG" "$STAGING/Colony_Canary_${VERSION}_aarch64.dmg"
+          cp "$DMG" "$STAGING/Colony_Canary_aarch64.dmg"
+          cp "$ARCHIVE" "$STAGING/$(basename "$ARCHIVE")"
+
+          if ! gh release view "$CANARY_ROLLING_TAG" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            gh release create "$CANARY_ROLLING_TAG" --repo "$RELEASES_REPO" \
+              --prerelease --title "Colony Canary" \
+              --notes "Rolling prerelease for the Colony Canary channel. Publishing in progress."
+          fi
+
+          # Assets before the manifest: a latest.json that references an
+          # archive nobody has uploaded yet turns every canary update check
+          # into a 404.
+          gh release upload "$CANARY_ROLLING_TAG" --repo "$RELEASES_REPO" --clobber \
+            "$STAGING/Colony_Canary_${VERSION}_aarch64.dmg" \
+            "$STAGING/Colony_Canary_aarch64.dmg" \
+            "$STAGING/$(basename "$ARCHIVE")"
+
+      - name: Publish the canary update manifest
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          STAGING=$(mktemp -d)
+          ARCHIVE_NAME=$(basename "$ARCHIVE")
+          ARCHIVE_URL="https://github.com/${RELEASES_REPO}/releases/download/${CANARY_ROLLING_TAG}/${ARCHIVE_NAME}"
+
+          # Read the current manifest through the API, not the download URL:
+          # the CDN serves a stale copy for minutes after an upload. v1 is
+          # macOS-only so there is no other platform entry to preserve, but
+          # merging rather than generating keeps this lane on the same script
+          # as stable, so a future canary platform gets carry-over for free.
+          desktop/scripts/fetch-latest-json.sh \
+            "$RELEASES_REPO" "$CANARY_ROLLING_TAG" > "$STAGING/current.json"
+
+          UPDATER_NOTES="Colony Canary ${VERSION} (built from ${SOURCE_REF} at ${BUILD_SHA})" \
+            desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" "$STAGING/latest.json" \
+            "darwin-aarch64:${ARCHIVE_SIG}:${ARCHIVE_URL}"
+
+          cat "$STAGING/latest.json"
+          gh release upload "$CANARY_ROLLING_TAG" --repo "$RELEASES_REPO" --clobber \
+            "$STAGING/latest.json"
+
+      - name: Verify the canary update manifest
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Read what was actually stored, not what the download CDN is still
+          # serving; a CDN read here fails on releases whose artifacts are
+          # completely correct.
+          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
+            "$RELEASES_REPO" "$CANARY_ROLLING_TAG")
+          GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
+          GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].url')
+          GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].signature')
+          if [ "$GOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Manifest says version $GOT_VERSION, expected $VERSION"
+            exit 1
+          fi
+          if [ "$GOT_SIG" != "$(cat "$ARCHIVE_SIG")" ]; then
+            echo "::error::Manifest signature does not match the signature this build produced"
+            exit 1
+          fi
+          # A download-URL check on purpose: this is what a client fetches, so
+          # it retries through CDN propagation.
+          EXPECTED=$(stat -f %z "$ARCHIVE")
+          for attempt in 1 2 3 4 5; do
+            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
+              echo "Manifest and archive agree: v${VERSION}, ${SERVED} bytes"
+              exit 0
+            fi
+            echo "Attempt $attempt: archive served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::The archive the manifest points at is not the one this build produced"
+          exit 1
+
+      - name: Verify the canary download
+        run: |
+          set -euo pipefail
+          EXPECTED=$(stat -f %z "$DMG")
+          URL="https://github.com/${RELEASES_REPO}/releases/download/${CANARY_ROLLING_TAG}/Colony_Canary_aarch64.dmg"
+          for attempt in 1 2 3 4 5; do
+            GOT=$(curl -sIL "$URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
+            if [ "${GOT:-0}" = "$EXPECTED" ]; then
+              echo "$URL serves the new dmg ($GOT bytes)"
+              exit 0
+            fi
+            echo "Attempt $attempt: got '${GOT:-none}' bytes, expected $EXPECTED; retrying"
+            sleep 10
+          done
+          echo "::error::$URL does not serve the freshly published dmg"
+          exit 1
+
+      # Last, deliberately. The recorded sha is what the decide job reads to
+      # skip an unchanged tree, so it must only be written once the build is
+      # published AND verified. Recording it earlier would let a run that
+      # failed halfway suppress the next night's rebuild of the same commit.
+      - name: Record the built sha on the rolling release
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          NOTES=$(mktemp)
+          {
+            echo "Colony Canary ${VERSION} for macOS (Apple Silicon)."
+            echo
+            echo "Built from \`${SOURCE_REF}\` at ${BUILD_SHA}."
+            echo
+            echo "Download: [Colony_Canary_aarch64.dmg](https://github.com/${RELEASES_REPO}/releases/download/${CANARY_ROLLING_TAG}/Colony_Canary_aarch64.dmg)"
+            echo
+            echo "This is an unstable build from \`develop\`. It installs beside the"
+            echo "stable Colony app, keeps its own data, and talks to"
+            echo "${COLONY_CANARY_RELAY_WS_URL}."
+            echo
+            # Machine-readable, and parsed by this workflow's decide job. Keep
+            # the exact `canary-sha: <40 hex>` shape at the start of a line.
+            echo "canary-sha: ${BUILD_SHA}"
+            echo
+            if [ -n "$PREV_SHA" ] && git cat-file -e "${PREV_SHA}^{commit}" 2>/dev/null; then
+              echo "Changes since the previous canary (${PREV_SHA}):"
+              git log --no-merges -n 100 --pretty='- %s' "${PREV_SHA}..${BUILD_SHA}"
+            else
+              echo "Recent changes:"
+              git log --no-merges --pretty='- %s' -25 "${BUILD_SHA}"
+            fi
+          } > "$NOTES"
+          gh release edit "$CANARY_ROLLING_TAG" --repo "$RELEASES_REPO" \
+            --prerelease --title "Colony Canary ${VERSION}" --notes-file "$NOTES"
+          cat "$NOTES" >> "$GITHUB_STEP_SUMMARY"

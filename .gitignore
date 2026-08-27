@@ -78,6 +78,11 @@ deploy/charts/*/charts/*.tgz
 # and public key for the machine that built it; committing it would apply
 # those to every local build.
 desktop/src-tauri/tauri.release.conf.json
+
+# Canary-only Info.plist overlay, written per build by the same script. It is
+# derived from the checked-in Info.plist and only renames the bundle, so there
+# is nothing to review in it and a committed copy would go stale silently.
+desktop/src-tauri/Info.canary.plist
 .gstack/
 
 # Superpowers SDD scratch workspaces
