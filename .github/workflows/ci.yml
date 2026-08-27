@@ -1265,6 +1265,13 @@ jobs:
           # relay. Like e2e_interrupts it seeds its owner fixture directly in
           # Postgres (DATABASE_URL), and RELAY_HTTP_URL feeds its NIP-11 lookup.
           cargo test -p buzz-test-client --test e2e_company_work -- --ignored --nocapture --test-threads 1
+          # Discovery entity mention hydration against the live relay: strict
+          # ["discovery", kind, id] message tags, permission-checked
+          # resolve_entities, and the opaque cross-community refusal. This
+          # suite had never run in any CI job; the receipt-validator and
+          # claims-constraint bugs it now pins both shipped because of that.
+          # It seeds campaigns/leads directly in Postgres (DATABASE_URL).
+          cargo test -p buzz-test-client --test e2e_discovery discovery_entity_mentions -- --ignored --nocapture
         env:
           RELAY_URL: ws://localhost:3000
           RELAY_HTTP_URL: http://localhost:3000

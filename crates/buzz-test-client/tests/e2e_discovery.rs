@@ -1754,13 +1754,19 @@ async fn discovery_entity_mentions_hydrate_permission_checked_context() {
         .try_get("id")
         .expect("community UUID");
 
-    // A second community never seeded with this campaign.
-    let other_community_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO communities (id,name,host) VALUES ($1,'Other','mention-other.test')")
-        .bind(other_community_id)
-        .execute(&pool)
-        .await
-        .expect("seed outsider community");
+    // A second community never seeded with this campaign. Reuse an existing
+    // row so the fixture survives re-runs against the same harness database.
+    let other_community_id: Uuid = sqlx::query(
+        "INSERT INTO communities (id,host) VALUES ($1,'mention-other.test') \
+         ON CONFLICT (lower(host::text)) DO UPDATE SET host=EXCLUDED.host \
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(&pool)
+    .await
+    .expect("seed outsider community")
+    .try_get("id")
+    .expect("outsider community UUID");
 
     let actor = Keys::generate();
     let outsider = Keys::generate();
@@ -1815,8 +1821,9 @@ async fn discovery_entity_mentions_hydrate_permission_checked_context() {
     let run_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO discovery_runs (community_id,id,campaign_id,requested_by,\
-         start_idempotency_key,state,total_steps,completed_steps) \
-         VALUES ($1,$2,$3,$4,$5,'succeeded',3,3)",
+         start_idempotency_key,state,total_steps,completed_steps,\
+         discovery_protocol_version) \
+         VALUES ($1,$2,$3,$4,$5,'succeeded',3,3,2)",
     )
     .bind(community_id)
     .bind(run_id)
@@ -1830,29 +1837,50 @@ async fn discovery_entity_mentions_hydrate_permission_checked_context() {
     for (index, lead_id) in lead_ids.iter().enumerate() {
         sqlx::query(
             "INSERT INTO discovery_business_observations \
-             (community_id,id,first_run_id,provider,provider_record_id,name,city,country_code) \
-             VALUES ($1,$2,$3,'outscraper',$4,$5,$6,'ZA')",
+             (community_id,id,first_run_id,provider,provider_record_id,name,city,\
+             country_code,observation_fingerprint) \
+             VALUES ($1,$2,$3,'outscraper',$4,$5,$6,'ZA',sha256($4::bytea))",
         )
         .bind(community_id)
         .bind(lead_id)
         .bind(run_id)
-        .bind(format!("mention-proof-{index}"))
+        .bind(format!("mention-proof-{run_id}-{index}"))
         .bind(format!("Mention Proof Clinic {index}"))
         .bind("Sandton")
         .execute(&pool)
         .await
         .expect("seed observation");
         sqlx::query(
-            "INSERT INTO discovery_campaign_leads (community_id,campaign_id,lead_id) \
-             VALUES ($1,$2,$3)",
+            "INSERT INTO discovery_campaign_leads \
+             (community_id,campaign_id,lead_id,discovered_run_id) \
+             VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
         )
         .bind(community_id)
         .bind(campaign_id)
         .bind(lead_id)
+        .bind(run_id)
         .execute(&pool)
         .await
         .expect("attach observation to campaign");
     }
+
+    // Channel scope for the stream message: kind 9 requires an `h` tag, so
+    // create a channel the actor owns first.
+    let channel_id = Uuid::new_v4().to_string();
+    let channel_event = nostr::EventBuilder::new(Kind::Custom(9007), "")
+        .tags(vec![
+            nostr::Tag::parse(["h", channel_id.as_str()]).expect("h tag"),
+            nostr::Tag::parse(["name", "discovery-mention-proof"]).expect("name tag"),
+            nostr::Tag::parse(["channel_type", "stream"]).expect("type tag"),
+            nostr::Tag::parse(["visibility", "open"]).expect("visibility tag"),
+        ])
+        .sign_with_keys(&actor)
+        .expect("sign channel create");
+    let ok = actor_client
+        .send_event(channel_event)
+        .await
+        .expect("publish channel create");
+    assert!(ok.accepted, "channel create rejected: {}", ok.message);
 
     // The member message carries structured Discovery references only: no
     // p-tag is created for an entity, so nothing notifiable enters the event.
@@ -1865,10 +1893,11 @@ async fn discovery_entity_mentions_hydrate_permission_checked_context() {
     ];
     let message_event =
         nostr::EventBuilder::new(Kind::Custom(9), "Chase @Sandton Dentists leads today")
-            .tags(vec![nostr::Tag::parse(
-                discovery_tag_values.iter().map(String::as_str),
-            )
-            .expect("valid discovery tag")])
+            .tags(vec![
+                nostr::Tag::parse(["h", channel_id.as_str()]).expect("h tag"),
+                nostr::Tag::parse(discovery_tag_values.iter().map(String::as_str))
+                    .expect("valid discovery tag"),
+            ])
             .sign_with_keys(&actor)
             .expect("sign mention message");
     let ok = actor_client
@@ -1926,9 +1955,11 @@ async fn discovery_entity_mentions_hydrate_permission_checked_context() {
         }
     ));
 
-    // The same IDs resolved under another community's entitled member reveal
-    // nothing: every reference is unavailable, never an error and never a
-    // hint about existence.
+    // The same IDs resolved by an actor outside this community reveal
+    // nothing. The relay scopes the tenant by Host, so a non-member's resolve
+    // is refused at the membership gate before any lookup happens: denial is
+    // an opaque `restricted` refusal, never a per-entity answer that could
+    // hint at existence.
     let outsider_payload = DiscoveryWorkspaceActionPayload::ResolveEntities {
         refs: vec![
             DiscoveryEntityRef {
@@ -1941,23 +1972,34 @@ async fn discovery_entity_mentions_hydrate_permission_checked_context() {
             },
         ],
     };
-    let outsider_result =
-        submit_workspace_action(&mut outsider_client, &outsider, relay, outsider_payload).await;
-    let DiscoveryWorkspaceResult::ResolvedEntities { entities } = outsider_result else {
-        panic!("outsider resolve still returns resolved-entities envelope");
+    let outsider_request = DiscoveryWorkspaceRequest {
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        payload: outsider_payload,
     };
-    assert_eq!(entities.len(), 2, "duplicates collapse; one row per ref");
-    for entity in &entities {
-        assert!(
-            matches!(entity, ResolvedDiscoveryEntity::Unavailable { .. }),
-            "wrong-community reference must be unavailable"
-        );
-    }
-
-    // Clean the seeded second community so reruns stay deterministic.
-    sqlx::query("DELETE FROM communities WHERE id=$1")
-        .bind(other_community_id)
-        .execute(&pool)
+    let outsider_event = build_discovery_workspace_action(relay, &outsider_request)
+        .expect("valid outsider action")
+        .sign_with_keys(&outsider)
+        .expect("sign outsider action");
+    let outsider_ok = outsider_client
+        .send_event(outsider_event)
         .await
-        .expect("clean outsider community");
+        .expect("publish outsider action");
+    assert!(
+        !outsider_ok.accepted,
+        "outsider resolve must be refused, got: {}",
+        outsider_ok.message
+    );
+    assert!(
+        outsider_ok.message.contains("restricted"),
+        "outsider refusal must be the opaque membership gate, got: {}",
+        outsider_ok.message
+    );
+    assert!(
+        !outsider_ok.message.contains(&campaign_id.to_string()),
+        "refusal must not echo entity identifiers"
+    );
+
+    // No cleanup: the outsider community is reused across runs (the seed
+    // upserts by host), and auth-created user rows hold an FK to it.
 }
