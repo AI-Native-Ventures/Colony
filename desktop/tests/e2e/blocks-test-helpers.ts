@@ -601,34 +601,65 @@ export async function openChannel(
   await waitForLiveChannel(page, channelName);
 }
 
+// Scroll to the floor and require it to still be the floor two frames later.
+// Re-scrolling on every attempt is what makes this converge while rows are
+// still landing, and measuring two frames after the scroll is what keeps it
+// from being vacuous: anything that arrives in that window reopens the gap and
+// the poll goes round again.
+async function pinTimelineToFloor(timeline: Locator) {
+  await expect
+    .poll(() =>
+      timeline.evaluate(
+        (element) =>
+          new Promise<number>((resolve) => {
+            element.scrollTo({ behavior: "auto", top: element.scrollHeight });
+            window.requestAnimationFrame(() =>
+              window.requestAnimationFrame(() =>
+                resolve(
+                  Math.abs(
+                    element.scrollHeight -
+                      element.clientHeight -
+                      element.scrollTop,
+                  ),
+                ),
+              ),
+            );
+          }),
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+}
+
 export async function settleTimelineAtLatest(page: Page) {
   const timeline = page.getByTestId("message-timeline");
   const jumpToLatest = page.getByTestId("message-scroll-to-latest");
   await expect(timeline).toBeVisible();
-  await timeline.evaluate((element) => {
-    element.scrollTo({ behavior: "auto", top: element.scrollHeight });
-  });
-  await expect
-    .poll(() =>
-      timeline.evaluate((element) =>
-        Math.abs(
-          element.scrollHeight - element.clientHeight - element.scrollTop,
-        ),
-      ),
-    )
-    .toBeLessThanOrEqual(1);
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() =>
-          window.requestAnimationFrame(() => resolve()),
-        );
-      }),
-  );
-  if (await jumpToLatest.isVisible()) {
+  // Dismiss the pill before asserting anything about the floor, not after.
+  //
+  // "Jump to latest" is the control that admits the rows the timeline withheld
+  // while it was reported off the bottom, and a timeline holding rows back
+  // cannot be scrolled to a floor that those rows have not joined yet. The old
+  // order gated the click on a floor assertion, so once the pill was up the
+  // helper could only fail: it polled a floor it was not allowed to reach, and
+  // the click that would have released it sat behind the poll. CI run
+  // 33087235433 (Desktop Smoke E2E shard 1) is that exact state. It measured
+  // 4275px off the floor for the entire 15s, and its failure screenshot has
+  // the pill sitting in the corner of the timeline the whole time.
+  //
+  // The loop runs more than once because clearing the queue can admit rows
+  // that arrived behind it and re-raise the pill. It is bounded rather than a
+  // while-loop so a timeline that re-raises the pill forever fails the floor
+  // assertion below with a real measurement instead of hanging until the test
+  // times out somewhere unrelated.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!(await jumpToLatest.isVisible())) {
+      break;
+    }
     await jumpToLatest.click();
     await expect(jumpToLatest).toBeHidden();
+    await pinTimelineToFloor(timeline);
   }
+  await pinTimelineToFloor(timeline);
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
