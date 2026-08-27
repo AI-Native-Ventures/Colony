@@ -254,3 +254,58 @@ test("a wrong recovery code maps to invalid-credentials", async () => {
     (error) => error.kind === "invalid-credentials",
   );
 });
+
+test("recover imports the returned blob with the typed code", async () => {
+  // The recovery blob is encrypted under the recovery code itself (the same
+  // discipline as signUp's passwordBlob/recoveryBlob pair), so recover can
+  // decrypt and import it with no new password: the recovery code is a
+  // genuine second way in, not just a token that proves identity.
+  let imported;
+  const auth = createAuthService(
+    deps({
+      post: async () => ({
+        status: 200,
+        body: {
+          pubkey: "a".repeat(64),
+          recoveryBlob: "ncryptsec1xyz",
+          resetToken: "tok123",
+        },
+      }),
+      importIdentity: async (blob, password) => {
+        imported = { blob, password };
+      },
+    }),
+  );
+  const result = await auth.recover(
+    "founder@example.com",
+    "ABCDE-FGHJK-MNPQR-STVWX",
+  );
+  assert.deepEqual(imported, {
+    blob: "ncryptsec1xyz",
+    password: "ABCDE-FGHJK-MNPQR-STVWX",
+  });
+  assert.deepEqual(result, { pubkey: "a".repeat(64), resetToken: "tok123" });
+});
+
+test("a recover response with no blob to open maps to unreachable", async () => {
+  // Half an answer is worse than none: importing nothing would leave the
+  // screen believing recovery worked while the keyring still holds whatever
+  // it held before.
+  let imports = 0;
+  const auth = createAuthService(
+    deps({
+      post: async () => ({
+        status: 200,
+        body: { pubkey: "a".repeat(64), resetToken: "tok123" },
+      }),
+      importIdentity: async () => {
+        imports += 1;
+      },
+    }),
+  );
+  await assert.rejects(
+    () => auth.recover("founder@example.com", "ABCDE-FGHJK-MNPQR-STVWX"),
+    (error) => error.kind === "unreachable",
+  );
+  assert.equal(imports, 0, "nothing is imported when there is no blob to open");
+});

@@ -13,7 +13,14 @@ pub(crate) fn keyring_service() -> &'static str {
             .get_or_init(|| dev_keyring_service(std::env::var("BUZZ_DEV_KEYRING_SERVICE").ok()))
             .as_str()
     } else {
-        "buzz-desktop"
+        // Channel-scoped when baked at build time (the Canary release sets
+        // `colony-canary-desktop`); stable and OSS builds stay on the
+        // historical default. Sharing one service across channels would let a
+        // side-by-side install read - and fail to rewrite - the other
+        // channel's identity blob, which broke Canary signup outright
+        // (2026-08-27).
+        const BAKED: Option<&str> = option_env!("BUZZ_DESKTOP_BUILD_KEYRING_SERVICE");
+        BAKED.unwrap_or("buzz-desktop")
     }
 }
 

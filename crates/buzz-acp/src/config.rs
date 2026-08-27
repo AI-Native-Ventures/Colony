@@ -454,9 +454,18 @@ pub struct CliArgs {
 
     /// Maximum number of context messages to include for thread replies and DMs.
     /// Set to 0 to disable automatic context fetching. Max 100.
-    #[arg(long, env = "BUZZ_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
+    #[arg(long, env = "BUZZ_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 50,
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub context_message_limit: u32,
+
+    /// Enable the per-turn [Thread Record] prompt section: structured
+    /// protocol events tied to the agent's current thread (asks raised from
+    /// it, their outcomes, decision logs), fetched fresh each turn so open /
+    /// resolved status stays current. On by default; set
+    /// `BUZZ_ACP_THREAD_RECORD=false` to disable both the fetches and the
+    /// rendered section.
+    #[arg(long, env = "BUZZ_ACP_THREAD_RECORD", default_value_t = true)]
+    pub thread_record: bool,
 
     /// Maximum turns per session before proactive rotation. 0 = disabled
     /// (rotate only on MaxTokens / MaxTurnRequests).
@@ -685,6 +694,9 @@ pub struct Config {
     /// `[Agent Memory — core]` section. On by default; disabled via the
     /// `--no-memory` / `BUZZ_ACP_NO_MEMORY` opt-out.
     pub memory_enabled: bool,
+    /// Whether the per-turn `[Thread Record]` prompt section is fetched and
+    /// rendered. On by default; disabled via `BUZZ_ACP_THREAD_RECORD=false`.
+    pub thread_record_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
     /// LLM provider the desired model belongs to. Used to qualify an
@@ -1330,6 +1342,7 @@ impl Config {
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
             memory_enabled: args.memory && !args.no_memory,
+            thread_record_enabled: args.thread_record,
             model,
             provider: args.provider,
             session_title: args
@@ -1703,11 +1716,12 @@ mod tests {
             meter_openai_provider: None,
             imputed_cost: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
-            context_message_limit: 12,
+            context_message_limit: 50,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: true,
+            thread_record_enabled: true,
             model: None,
             provider: None,
             session_title: None,
@@ -2486,6 +2500,14 @@ channels = "ALL"
     }
 
     #[test]
+    fn context_message_limit_defaults_to_50() {
+        let args = CliArgs::parse_from(["buzz-acp", "--private-key", TEST_PRIVATE_KEY]);
+        assert_eq!(args.context_message_limit, 50);
+        let config = Config::from_args(args).expect("minimal args produce a config");
+        assert_eq!(config.context_message_limit, 50);
+    }
+
+    #[test]
     fn debug_surfaces_redact_meter_credentials() {
         let mut config = test_config(SubscribeMode::All);
         config.meter_openai_key = Some("gateway-token-test".to_string());
@@ -2567,6 +2589,15 @@ channels = "ALL"
         assert!(
             config.memory_enabled,
             "memory_enabled should default to true"
+        );
+    }
+
+    #[test]
+    fn test_thread_record_enabled_default_true() {
+        let config = test_config(SubscribeMode::Mentions);
+        assert!(
+            config.thread_record_enabled,
+            "thread_record_enabled should default to true"
         );
     }
 

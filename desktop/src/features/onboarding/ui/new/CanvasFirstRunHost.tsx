@@ -35,6 +35,11 @@ type Props = {
   /** Relay of the applied community, when one exists. */
   activeRelayUrl: string | null;
   onFinished: () => void;
+  /**
+   * Explicit user exit toward email sign-in; CommunityApp routes it to the
+   * machine flow's account-signin page. The canvas run is left unstarted.
+   */
+  onRequestSignIn?: () => void;
 };
 
 /**
@@ -50,6 +55,7 @@ export function CanvasFirstRunHost({
   communityApplied,
   activeRelayUrl,
   onFinished,
+  onRequestSignIn,
 }: Props) {
   const queryClient = useQueryClient();
   const { addCommunity } = useCommunities();
@@ -139,6 +145,7 @@ export function CanvasFirstRunHost({
       services={services}
       provisioning={provisioning}
       onComplete={onComplete}
+      onRequestSignIn={onRequestSignIn}
     />
   );
 }

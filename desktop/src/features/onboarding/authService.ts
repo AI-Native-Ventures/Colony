@@ -126,8 +126,9 @@ async function guard<T>(attempt: () => Promise<T>): Promise<T> {
  * Signup derives the auth key, encrypts the saved identity twice (once under
  * the password, once under the recovery code), and posts both. Signin derives
  * the auth key, posts it, and hands the returned backup to the identity
- * command for decryption on this computer. Recovery hashes the typed code and
- * returns the reset token the password reset consumes.
+ * command for decryption on this computer. Recovery hashes the typed code,
+ * imports the returned recovery blob under that code (it is a second way in),
+ * and returns the reset token the password reset consumes.
  */
 export function createAuthService(deps: AuthDeps): OnboardingServices["auth"] {
   return {
@@ -194,9 +195,21 @@ export function createAuthService(deps: AuthDeps): OnboardingServices["auth"] {
         }
         const pubkey = readString(response.body, "pubkey");
         const resetToken = readString(response.body, "resetToken");
-        if (pubkey === undefined || resetToken === undefined) {
+        const recoveryBlob = readString(response.body, "recoveryBlob");
+        // The recovery blob is encrypted under the recovery code itself, the
+        // same discipline as signUp's passwordBlob/recoveryBlob pair, so the
+        // typed code is a genuine second way in rather than a token that
+        // merely proves identity. Half an answer (no blob to open) would leave
+        // the keyring holding whatever it held before while a screen reports
+        // success, so that maps to unreachable like any other unusable reply.
+        if (
+          pubkey === undefined ||
+          resetToken === undefined ||
+          recoveryBlob === undefined
+        ) {
           throw unreachable();
         }
+        await deps.importIdentity(recoveryBlob, code);
         return { pubkey, resetToken };
       }),
   };

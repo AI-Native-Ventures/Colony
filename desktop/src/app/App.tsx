@@ -300,10 +300,16 @@ function AppReady({
 function CommunityApp({
   currentPubkey,
   onBackToMachineConfig,
+  onRequestSignIn,
   sharedIdentity,
 }: {
   currentPubkey: string | null;
   onBackToMachineConfig: () => void;
+  /**
+   * Explicit user exit from the canvas first run toward email sign-in, wired
+   * only while that run is on screen (the canvas host is the sole caller).
+   */
+  onRequestSignIn: () => void;
   sharedIdentity: boolean;
 }) {
   const {
@@ -575,6 +581,7 @@ function CommunityApp({
         communityApplied={communityApplied}
         currentPubkey={currentPubkey}
         onFinished={() => setCanvasRunState("finished")}
+        onRequestSignIn={onRequestSignIn}
       />
     );
   } else if (!transaction) {
@@ -689,6 +696,14 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
     machine.reopen();
   }, [machine.reopen]);
 
+  // The canvas signup path hands a user who already has an account over to
+  // the email sign-in detour. Their explicit click is what leaves the canvas
+  // run behind; nothing here finishes or discards it silently.
+  const openMachineSignin = useCallback(() => {
+    setMachineInitialPage("account-signin");
+    machine.reopen();
+  }, [machine.reopen]);
+
   const completeMachineOnboarding = useCallback(
     (pubkey?: string) => {
       setMachineInitialPage(undefined);
@@ -756,6 +771,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
       <CommunityApp
         currentPubkey={machine.currentPubkey}
         onBackToMachineConfig={reopenMachineConfig}
+        onRequestSignIn={openMachineSignin}
         sharedIdentity={sharedIdentity}
       />
     );
