@@ -255,10 +255,10 @@ export function CreditsScreen({
 
   const sub =
     track === "colony"
-      ? "Finding customers, reaching out, research: work that carries on while you sleep. Your helpers run on Colony, and credits are what they run on."
+      ? "Finding customers, reaching out, research: work that carries on while you sleep. Your agents run on Colony, and credits are what they run on."
       : track === "byo"
-        ? "You picked a tool you already pay for, so it covers your helpers' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."
-        : "Your helpers run on Colony, and Colony runs on credits: model calls, searches, sends. Top up whenever the tin runs low.";
+        ? "You picked a tool you already pay for, so it covers your agents' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."
+        : "Your agents run on Colony, and Colony runs on credits: model calls, searches, sends. Top up whenever the tin runs low.";
 
   return (
     <div className="onb-screen" data-wide={wide ? "true" : undefined}>
@@ -373,7 +373,7 @@ export function CreditsScreen({
           >
             {finishing
               ? "Opening your workspace"
-              : "I will run my own helpers for now"}
+              : "I will run my own agents for now"}
           </button>
         ) : null}
         {onBack ? (

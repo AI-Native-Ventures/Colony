@@ -104,7 +104,7 @@ export function AccountScreen({
           Let's get your <em>colony</em> started.
         </h1>
         <p className="onb-sub">
-          Two minutes. We'll set up your workspace and get your first helpers
+          Two minutes. We'll set up your workspace and get your first agents
           working.
         </p>
       </div>

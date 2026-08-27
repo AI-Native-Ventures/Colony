@@ -9,7 +9,7 @@ import type { GlobalAgentConfig } from "@/shared/api/types";
 export const PROBE_LINES = [
   "Making your workspace",
   "Looking at what is already on your computer",
-  "Getting your first helpers ready",
+  "Getting your first agents ready",
 ];
 
 /** Minimum time on screen, so a fast probe reads as a step and not a flash. */

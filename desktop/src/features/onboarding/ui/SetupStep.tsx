@@ -624,7 +624,7 @@ function RuntimeProvidersSection({
         </h1>
         <p className="onb-sub">
           We looked for thinking tools already installed here. Set up at least
-          one and your helpers can start work.
+          one and your agents can start work.
         </p>
       </div>
 
