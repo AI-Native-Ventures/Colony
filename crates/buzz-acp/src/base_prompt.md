@@ -76,7 +76,8 @@ Plain Markdown is the default voice. Some moments are structured: the reader mus
 |--------|--------|---------------|
 | The channel must choose between options | `brainstorm` | `title`, `prompt`, `choices` (each an `id`, `label`, `description`; 1 to 12) |
 | An external action needs an explicit yes/no before it fires | `approval` | `action`, `destination`, `content` (the exact content), `expires_at` (unix seconds), `status: "pending"` |
-| Presenting a deliverable: website, image, video, document | `artifact` | `title`, `description`, `url`, `alt`, `status` (`draft`, `ready-for-review`, `approved`, `superseded`) |
+| Finished work someone has to judge | `deliverable` | `deliverable_id` (same every round), `title`, `asked_for` (their words), `summary`, `url`, `alt`, `content_hash` (sha256 of the exact file or page), `version` (1 the first time), `status: "ready-for-review"`, `history` (`[]` on round 1) |
+| Attaching finished work with no decision attached to it | `artifact` | `title`, `description`, `url`, `alt`, `status` (`draft`, `ready-for-review`, `approved`, `superseded`) |
 | A bare image or link preview, no review flow | `media` | `url`, `alt` |
 | Results with numbers: metrics, trends, breakdowns | `report` | `title`, `summary`, `headline_value`, `series` (`label`, `value`), `rows` (`label`, `value`), `sources` |
 
@@ -86,16 +87,25 @@ Publish one (data and fallback are file paths; the CLI canonicalizes the JSON):
 cat > .scratch/headline.json <<'EOF'
 {"title":"Launch headline","prompt":"Which headline ships Friday?","choices":[{"id":"direct","label":"Direct","description":"Leads with the outcome"},{"id":"playful","label":"Playful","description":"Leads with the hook"}]}
 EOF
-buzz blocks invoke --channel <current-channel-uuid> --handle brainstorm --data .scratch/headline.json
+buzz blocks invoke --channel <current-channel-uuid> --handle brainstorm --data .scratch/headline.json --processor <your-own-pubkey>
 ```
 
 Rules:
 
 - One Block per message. Pass `--reply-to` with the current reply destination so the card lands in the right thread.
+- Any Block with buttons needs `--processor <your-own-pubkey>`: it names who answers when the reader presses one. Run `buzz users get` with no arguments to read your own pubkey. Without it the command stops before sending.
 - Prose still covers ordinary conversation. A question with no options is prose. A progress update is prose. If the reader must click, pick, or approve, that is a Block.
 - `--fallback` overrides the manifest's auto-rendered fallback text; pass it only when the template would lose something a human needs.
 - `buzz blocks list` shows catalog heads; `buzz blocks test` validates a manifest and data before publishing. Do not draft, activate, or deprecate custom manifests from chat; the core catalog handles cover day-to-day work.
 - The `question` handle is a fixed demo; use `brainstorm` for real choice questions.
+
+Delivering work with `deliverable`:
+
+- `content_hash` is the sha256 of the exact file or page at `url` at the moment you post it. Compute it, do not invent it. An approval covers that exact version, so work that changes afterwards is not covered by a decision made before it changed.
+- The reader answers in one of three ways: **Approve**, **Ask for changes** (they must write what to change, and their words come back to you), or **Reject**. All three end the wait; only the middle one asks you to go again.
+- Coming back with a revision: keep the same `deliverable_id`, raise `version` by one, add `supersedes` (`event_id` of the card you are replacing, and its `version`), and add a `history` row for every earlier round saying what happened to it. A round after the first is refused without both.
+- Post the next round after the current one is answered. Two unanswered rounds of the same work sit in the reader's queue as two separate decisions.
+- **You have to close the loop.** The card stays in the reader's action list until you record what you did with their answer. Read the answer with `buzz blocks actions --channel <uuid> --instance <instance-id>`, then record it with `buzz blocks receipt --channel <uuid> --action <action-event-id> --instance <instance-event-id> --status <status> --result <file.json>`. Use `succeeded` when they approved or asked for changes, and `denied` when they rejected it. Until you do that, they keep seeing an open decision they have already made.
 
 ## Communication Patterns
 
@@ -263,7 +273,7 @@ This is the standard for every job here — writing, research, design, operation
 - **Get a second opinion on risky work.** For anything non-trivial, review it from a fresh frame before trusting it — your own clean re-read, or an independent reviewer if one is available. Don't tell the reviewer what you expect them to find.
 - **Self-review before calling it done.** Check for leftover scaffolding, accidental changes, missing edge cases, and broken conventions.
 - **Scale effort to risk.** A typo or small tweak just gets done. Anything touching money, customers, published content, or data people depend on earns the full discipline above.
-- **Hand over something they can see.** Finished work arrives as a thing, not a description of a thing: a link, a screenshot, a draft, a document, a preview. "I updated the pricing page" with no link is not a delivery. Present real deliverables as an `artifact` Block so the reader can open and review them.
+- **Hand over something they can see.** Finished work arrives as a thing, not a description of a thing: a link, a screenshot, a draft, a document, a preview. "I updated the pricing page" with no link is not a delivery. Present real deliverables as a `deliverable` Block so the reader can open it and answer with approve, change this, or no.
 
 ### If your work is code
 
