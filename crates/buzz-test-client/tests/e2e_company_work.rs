@@ -1547,7 +1547,11 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
         ),
     )
     .await;
-    assert_eq!(outcome, CompanyReceiptOutcome::Applied);
+    // Applied first, Conflict after: the profile is a community singleton.
+    assert!(matches!(
+        outcome,
+        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+    ));
 
     let initiative_id = "launch".to_string();
     let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
@@ -1842,14 +1846,16 @@ async fn seed_live_work_context() {
     let relay = relay_self().await;
     let stamp = now();
 
-    let company_id = "livecompany".to_string();
+    // Not an identifier any more, just a distinctive prefix for this
+    // seed's own initiative and task ids.
+    let prefix = "livecompany";
     let team = CompanyTeamRef {
         id: "live-team".to_string(),
         lead_persona_id: "live-lead".to_string(),
         persona_ids: vec!["live-lead".to_string()],
     };
-    let initiative_id = format!("{company_id}:live-initiative");
-    let task_id = format!("{company_id}:live-task");
+    let initiative_id = format!("{prefix}:live-initiative");
+    let task_id = format!("{prefix}:live-task");
 
     publish_team(&mut client, &owner, &team).await;
 
@@ -1858,7 +1864,7 @@ async fn seed_live_work_context() {
             &relay,
             CompanyActionOperation::Create,
             CompanyActionPayload::Company(company(stamp)),
-            coordinate(KIND_COMPANY_PROFILE, &relay, &company_id),
+            coordinate(KIND_COMPANY_PROFILE, &relay, COMMUNITY_PROFILE_ID),
             None,
         ),
         action(
@@ -1902,7 +1908,7 @@ async fn seed_live_work_context() {
     println!("LIVE_TASK={task_id}");
     println!("LIVE_INITIATIVE={initiative_id}");
     println!("LIVE_TEAM={}", team.id);
-    println!("LIVE_COMPANY={company_id}");
+    println!("LIVE_COMPANY={COMMUNITY_PROFILE_ID}");
     client.disconnect().await.ok();
 }
 
