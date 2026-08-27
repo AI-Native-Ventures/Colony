@@ -17,7 +17,8 @@ and two release lines make "higher version" stop meaning "newer".
    release several components.
 4. The tag push fires the publisher:
    - `v<v>` runs `colony-desktop-release.yml`: builds the dmg on the
-     self-hosted Mac runner (`colony-mac-builder`) and publishes
+     self-hosted Mac runner (labels `self-hosted, macOS, colony-builder`)
+     and publishes
      `Colony_<v>_aarch64.dmg` plus the fixed-name `Colony_aarch64.dmg` to
      `AI-Native-Ventures/colony-releases`. The site's download button
      follows `/releases/latest`, so publishing is the whole deploy. The same
@@ -77,6 +78,165 @@ password manager.
 
 Anyone still on 0.7.0 or earlier has no updater compiled in and must
 download once from the site; 0.8.0 onward updates itself.
+
+### Canary channel
+
+`colony-desktop-canary.yml` ("Colony Canary desktop (develop)") ships a
+second, side-by-side desktop app cut from `develop`. It is a product lane, not
+a CI lane: do not confuse it with `linux-canary.yml`, `windows-canary.yml`,
+`macos-intel-canary.yml` or `signed-macos-canary.yml`, which only prove the
+tree still compiles on platforms CI does not otherwise cover.
+
+Testers download it once from:
+
+```
+https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-canary-latest/Colony_Canary_aarch64.dmg
+```
+
+and it updates itself from then on. That URL names the tag explicitly because
+`colony-canary-latest` is a prerelease, so `/releases/latest/download` never
+resolves to it. The release page is
+<https://github.com/AI-Native-Ventures/colony-releases/releases/tag/colony-canary-latest>.
+
+| | Stable | Canary |
+|---|---|---|
+| Product name | Colony | Colony Canary |
+| Bundle identifier | `xyz.block.buzz.app` | `ventures.ainative.colony.canary` |
+| dmg | `Colony_<v>_aarch64.dmg` | `Colony_Canary_<v>_aarch64.dmg` |
+| Updater endpoint | `colony-desktop-latest/latest.json` | `colony-canary-latest/latest.json` |
+| Relay | `wss://relay.colony.ainative.ventures` | `wss://relay-canary.colony.ainative.ventures` |
+| Version | `<v>` from the tag | `<desktop package.json version>-canary.<run_number>` |
+| Signing | ad-hoc Apple identity + shared Tauri updater key | identical |
+
+The different identifier and product name together are what let the canary
+install beside stable: macOS keys application support, preferences and
+keychain items off the identifier, and Finder, the Dock and the menu bar off
+the bundle name. Both come from `desktop/scripts/build-release-config.mjs`
+with `BUZZ_RELEASE_CHANNEL=canary`, which also writes an `Info.canary.plist`
+overlay, because the checked-in `Info.plist` hardcodes `CFBundleName` and
+those keys beat `productName` in the built app.
+
+Signing is deliberately shared with stable. A second updater keypair would be
+a second one-way door to lose, and the channels are already separated by
+endpoint: no canary install ever polls the stable manifest, and no stable
+install ever polls the canary one.
+
+How it runs:
+
+- Nightly at 03:00 UTC against `develop`. GitHub only fires schedules from the
+  default branch, so this file has to be on `develop` for the cron to run at
+  all.
+- `workflow_dispatch` takes a `ref` input, so any branch can be handed to a
+  tester without merging it first, and a `force` input to rebuild an unchanged
+  tree.
+- A hosted `decide` job compares HEAD against the `canary-sha:` line in the
+  rolling release body and exits early when nothing moved, so an idle
+  `develop` costs nothing on the self-hosted Mac (which is also somebody's
+  development machine).
+- That sha is written **after** every verification passes, so a run that built
+  and then failed to publish does not suppress the next night's rebuild.
+- Mandatory gate: the job runs `strings` over the shipped binary and refuses to
+  publish unless `wss://relay-canary.colony.ainative.ventures` is compiled in.
+  Nothing in the dmg, the plist, the signature or the manifest reveals a
+  wrong compiled-in relay, and the fallback when `BUZZ_RELAY_URL` is missing is
+  `ws://localhost:3000`.
+- macOS aarch64 only in v1.
+
+### Canary relay (Fly)
+
+The canary app talks to its own relay, not production. That is the whole point:
+experimental event kinds and migrations land in a disposable database, and
+production is never touched by anything that has not been promoted to `main`.
+
+| | Production | Canary |
+|---|---|---|
+| Relay app | `colony-relay` | `colony-relay-canary` |
+| Postgres | `colony-db-iad` | `colony-db-canary-iad` |
+| Redis | `colony-redis` | `colony-redis-canary` |
+| Host | `relay.colony.ainative.ventures` | `relay-canary.colony.ainative.ventures` |
+| Admin host | `admin.colony.ainative.ventures` | `admin-canary.colony.ainative.ventures` |
+| Fly config | `deploy/fly/fly.toml` | `deploy/fly/fly.canary.toml` |
+| Deploy trigger | manual dispatch at a `relay-v*` image tag | automatic, every `develop` merge |
+| Machines when idle | 1 (always on) | 0 (`auto_stop_machines`) |
+| Relay identity key | production `BUZZ_RELAY_PRIVATE_KEY` | its own, generated at provision time |
+
+How a develop merge reaches the canary relay:
+
+1. `docker.yml` now also triggers on pushes to `develop`, publishing
+   `ghcr.io/ai-native-ventures/colony-relay:develop` and `:sha-<7>` (plus the
+   `debug-` variants). Branch pushes never publish `:latest`, and the
+   `push-gateway-*` jobs are guarded to the release lane, so a develop merge
+   builds the relay only.
+2. `fly-deploy-relay-canary.yml` runs on that workflow's completion, resolves
+   the triggering commit's `sha-<7>` tag (never the moving `:develop` tag, so
+   every canary deploy is traceable to one commit), retags it into
+   `registry.fly.io/colony-relay-canary` and deploys with
+   `--config deploy/fly/fly.canary.toml --strategy immediate`.
+3. It then asserts the deployed image identity with `flyctl image show` and
+   runs `scripts/verify-relay-live.sh` against the canary host. The identity
+   check is the load-bearing one: the relay's crate version is not unique per
+   develop commit, so readiness alone cannot tell you which build is live.
+
+**This workflow is the only thing that deploys the canary relay, and it deploys
+only from `develop`.** No manual pushes from feature branches. A canary that
+anyone can push to from anywhere stops meaning "what develop looks like".
+
+Integration and E2E suites never target this relay either. They reseed
+databases, and the isolated test harness exists precisely so concurrent runs
+stop clobbering each other. The canary is a dogfooding target.
+
+#### Provisioning (one time)
+
+```bash
+deploy/fly/provision-canary.sh
+```
+
+Idempotent: it checks for each resource before creating it, refuses to touch
+any name that does not contain `canary`, stages secrets rather than deploying,
+and prints what it created versus skipped. It deliberately does not deploy; the
+image tag stays an explicit choice.
+
+Then add both DNS records, or nothing works:
+
+| Type | Name | Value | Proxy |
+|---|---|---|---|
+| CNAME | `relay-canary` | `colony-relay-canary.fly.dev` | DNS only |
+| CNAME | `admin-canary` | `colony-relay-canary.fly.dev` | DNS only |
+
+`*.colony.ainative.ventures` already points at **production**, so both canary
+names resolve to the production relay until these explicit records exist. A
+more specific record beats the wildcard, which is the only reason a canary can
+live inside this domain at all. On Cloudflare both must be grey-cloud:
+proxying breaks ACME HTTP-01 and mangles the WebSocket upgrade. `flyctl certs
+add` sits at "Awaiting configuration" until DNS lands, then flips to Issued on
+its own.
+
+Two things the canary configures differently from production, both load-bearing:
+
+- **The admin host is a separate name.** The router short-circuits `/` whenever
+  the request Host matches `BUZZ_ADMIN_HOST` and refuses to serve the web
+  bundle, the NIP-11 document or the WebSocket endpoint. Pointing the admin var
+  at the relay host would silently kill the canary's WebSocket.
+- **`BUZZ_SELF_PROVISION_*` is omitted.** Self-serve community slugs only
+  resolve through the wildcard, and the wildcard points at production, so any
+  slug the canary minted would land on a production community that does not
+  exist.
+
+#### Reseeding
+
+The canary database is cattle. Migration renumbering across parallel branches
+will drift it, and the fix is a wipe, not a repair:
+
+```bash
+scripts/canary-reset.sh          # prompts; type the app name to confirm
+scripts/canary-reset.sh --yes    # unattended
+```
+
+It stops the machine, drops and recreates the database, restarts, lets
+`BUZZ_AUTO_MIGRATE` rebuild the schema, and proves the result by polling
+`/_readiness` on port 3000 (which checks Postgres *and* Redis, so a 200 means
+migrations landed and both backends answer). It refuses to run against any app
+name other than `colony-relay-canary`, with no override flag.
 
 Everything below this section is the upstream Buzz release process, kept
 for reference; its desktop lane (`just release-desktop`, `release.yml`) is

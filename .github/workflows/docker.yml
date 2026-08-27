@@ -21,13 +21,16 @@ name: Docker image
 # the relay image version tracks crates/buzz-relay/Cargo.toml, never desktop.
 #
 # Triggers:
-#   - push to main           → :main + :sha-<7>
-#                              + :debug-main + :debug-sha-<7>
+#   - push to develop        → :develop + :sha-<7>
+#                              + :debug-develop + :debug-sha-<7>
+#                              RELAY ONLY — the push-gateway-* jobs are
+#                              guarded to the release lane and are skipped
 #   - push tags relay-v*.*.* → :{version} + :{major}.{minor} + :{major}
 #                              + matching :debug-* tags
 #                              (+ :latest/:debug-latest for stable releases)
-#   - pull_request           → build only (no push), cache stays warm
-#   - workflow_dispatch      → manual relay-tag rescue at the tag itself
+#                              + the push gateway image
+#   - workflow_dispatch      → manual relay-tag rescue at the tag itself,
+#                              gateway included
 #
 # Why workflow_dispatch carries a version input:
 #   Normal releases arrive through the push:tags trigger above. The input is
@@ -42,14 +45,18 @@ name: Docker image
 # The :latest tag tracks the latest STABLE relay release: metadata-action's
 # `flavor.latest=auto` (its default) emits :latest only for non-prerelease
 # semver, so relay-v0.3.0-rc.1 publishes :0.3.0-rc.1 without moving :latest,
-# and main pushes (no semver tag) never produce :latest.
+# and develop pushes (no semver tag) never produce :latest.
 
-# Relay releases only. Per-merge and per-PR image builds are disabled on
-# this fork: pushes target ghcr.io/block/buzz (or the GHCR_IMAGE override),
-# which this repo has no credentials for, so branch-triggered runs only
-# ever failed at the push step while billing four Linux jobs per merge.
+# Relay releases plus a develop canary lane. Per-merge builds were disabled
+# on this fork while pushes targeted ghcr.io/block/buzz, which this repo has
+# no credentials for, so branch-triggered runs only ever failed at the push
+# step. GHCR_IMAGE now points at this org's own namespace
+# (ghcr.io/ai-native-ventures/colony-relay - the image RELEASING.md and
+# fly-deploy-relay.yml both name), so a develop merge publishes an image the
+# deploy lane can pull. Per-PR image builds stay off.
 on:
   push:
+    branches: ["develop"]
     tags: ["relay-v[0-9]*"]
   workflow_dispatch:
     inputs:
@@ -121,7 +128,7 @@ jobs:
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
         with:
           images: ${{ env.IMAGE_NAME }}
-          # Tag matrix — every main commit gets sha-<7>, relay releases get the
+          # Tag matrix — every develop commit gets sha-<7>, relay releases get the
           # full semver family. The semver entries carry match=^relay-v(.*)$
           # because metadata-action does NOT strip a `relay-v` prefix on its
           # own — it only strips refs/tags/, then runs the raw ref through
@@ -134,7 +141,7 @@ jobs:
           # behavior is unchanged. Pull requests get nothing (push: false
           # below). :latest is intentionally absent — flavor.latest defaults to
           # `auto`, which adds :latest for stable semver tags only (not
-          # prereleases, not main pushes).
+          # prereleases, not branch pushes).
           tags: |
             type=ref,event=branch,enable=${{ github.event_name != 'workflow_dispatch' || inputs.version == '' }}
             type=sha,prefix=sha-,format=short,enable=${{ github.event_name != 'workflow_dispatch' || inputs.version == '' }}
@@ -327,6 +334,12 @@ jobs:
 
   push-gateway-build:
     name: Build public push gateway (${{ matrix.platform }})
+    # Release lane only. The develop lane exists to publish a canary relay
+    # image; the push gateway ships on the relay's release cadence, so a
+    # branch push must not build or publish it. Same expression the
+    # tag-bound source check below uses: true for a relay-v* tag push and
+    # for a rescue dispatch (whose github.ref is a branch), false on develop.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -420,7 +433,8 @@ jobs:
 
   push-gateway-merge:
     name: Publish public push gateway image
-    if: github.event_name != 'pull_request'
+    # Mirrors push-gateway-build's release-lane guard.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: push-gateway-build
     timeout-minutes: 15
