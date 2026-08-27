@@ -1,5 +1,5 @@
 // desktop/src/features/onboarding/flow/completeFirstRunIo.ts
-import { sendChannelMessage } from "@/shared/api/tauri";
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { updateProfile } from "@/shared/api/tauriProfiles";
 
@@ -20,18 +20,16 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
     ),
   updateProfile: (input) => updateProfile(input),
   hasMarker: (args) => hasManagedAgentChannelMessageMarker(args),
+  // The marker travels as a client tag, not a Block reference: `welcomeKickoff`
+  // and `has_managed_agent_channel_message_marker` both look for
+  // `["client", marker]`, and `clientTags` is the validated channel for it.
   sendFirstTask: async (channelId, content, marker) => {
-    const sent = await sendChannelMessage(
+    const sent = await sendChannelMessage({
       channelId,
       content,
-      null,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      [["client", marker]],
-    );
+      parentEventId: null,
+      clientTags: [["client", marker]],
+    });
     return { eventId: sent.eventId };
   },
   markComplete: markCommunityOnboardingComplete,

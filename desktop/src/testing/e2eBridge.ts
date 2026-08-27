@@ -10116,7 +10116,8 @@ async function handleSendChannelMessage(
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
-    referenceTags?: string[][] | null;
+    blockReferenceTags?: string[][] | null;
+    clientTags?: string[][] | null;
     linkPreviewTags?: string[][] | null;
     mentionTags?: string[][] | null;
     sentFromThreadTag?: string[] | null;
@@ -10141,8 +10142,20 @@ async function handleSendChannelMessage(
   const emojiTags = args.emojiTags ?? [];
   // Typed references (`a` tags for Blocks, plus any future reference kind)
   // are validated by the native command before signing. Mirror the accepted
-  // tag set in mock mode so E2E tests exercise the actual send contract.
-  const referenceTags = args.referenceTags ?? [];
+  // tag set in mock mode so E2E tests exercise the actual send contract,
+  // including the rejection that let onboarding's `client` marker ship
+  // through the wrong channel on 2026-08-27.
+  const blockReferenceTags = args.blockReferenceTags ?? [];
+  if (blockReferenceTags.some((tag) => tag[0] === "client")) {
+    throw new Error(
+      "client marker tags belong in clientTags, not blockReferenceTags",
+    );
+  }
+  // `["client", …]` idempotency markers ride their own validated arg.
+  const clientTags = args.clientTags ?? [];
+  if (clientTags.some((tag) => tag[0] !== "client" || tag.length < 2)) {
+    throw new Error("client tags must use 'client' prefix and carry a marker");
+  }
   // Sender-authored link preview snapshots are independently validated by the
   // real command and echoed on the stored event. Preserve them in the mock so
   // E2E recipient rendering exercises the same authored-snapshot path.
@@ -10179,7 +10192,8 @@ async function handleSendChannelMessage(
   const extraTags = [
     ...mediaTags,
     ...emojiTags,
-    ...referenceTags,
+    ...blockReferenceTags,
+    ...clientTags,
     ...linkPreviewTags,
     ...mentionTags,
     ...(sentFromThreadTag ? [sentFromThreadTag] : []),

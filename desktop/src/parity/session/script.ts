@@ -12,6 +12,7 @@
  *   silently dropped.
  */
 
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import { NativeChannel } from "@/shared/api/nativeBridge";
 import { CHANNEL_EVENT_KINDS } from "@/shared/constants/kinds";
 import type { SessionContext } from "@/parity/session/context";
@@ -37,7 +38,6 @@ import {
   searchMessages,
   getEventById,
   getThreadReplies,
-  sendChannelMessage,
   uploadMediaBytes,
   editMessage,
   addReaction,
@@ -549,10 +549,10 @@ export const SESSION_STEPS: SessionStep[] = [
     "messages-send",
     "send_channel_message",
     (ctx) =>
-      sendChannelMessage(
-        ctx.channelId,
-        `parity-oracle probe message ${ctx.runId}`,
-      ),
+      sendChannelMessage({
+        channelId: ctx.channelId,
+        content: `parity-oracle probe message ${ctx.runId}`,
+      }),
     {
       capture: (ctx, r) => {
         const result = r as { eventId: string; createdAt: number };
