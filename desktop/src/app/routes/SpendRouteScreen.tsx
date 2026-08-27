@@ -1,7 +1,10 @@
 import * as React from "react";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { SPEND_PERIODS, type SpendPeriod } from "@/features/ledger/agentSpend";
 import {
+  useAgentSpend,
   useLedgerReport,
   usePublishPrice,
   useRecordCorrection,
@@ -19,6 +22,14 @@ export function SpendRouteScreen() {
   const [correcting, setCorrecting] = React.useState<LedgerEntry | null>(null);
   const price = usePublishPrice(communityId);
   const [pricing, setPricing] = React.useState(false);
+  // The by-agent section's window. Held here because LedgerScreen is
+  // presentational: every screen mounting it owns its own fetching, and the
+  // period picker is part of that fetching, not part of the card.
+  const [period, setPeriod] = React.useState<SpendPeriod>(
+    SPEND_PERIODS[0] as SpendPeriod,
+  );
+  const agentSpend = useAgentSpend(communityId, period.days);
+  const { goCredits } = useAppNavigation();
 
   const closePriceDialog = React.useCallback(
     (open: boolean) => {
@@ -41,10 +52,14 @@ export function SpendRouteScreen() {
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <LedgerScreen
+        agentSpend={agentSpend}
         error={reportQuery.error instanceof Error ? reportQuery.error : null}
         isLoading={activeCommunity !== null && reportQuery.isLoading}
         onAddPrice={() => setPricing(true)}
         onAttribute={setCorrecting}
+        onOpenCredits={() => void goCredits()}
+        onPeriodChange={setPeriod}
+        period={period}
         report={reportQuery.data ?? null}
       />
       <PriceDialog

@@ -19,7 +19,7 @@ export function actionCenterSourceDestination(
       threadRootId: item.source.ask.threadId,
     };
   }
-  if (item.source.kind === "message") {
+  if (item.source.kind === "message" || item.source.kind === "block") {
     const channelId = item.source.item.channelId;
     if (!channelId) return null;
     return {

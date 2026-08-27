@@ -1,7 +1,12 @@
 import { ClipboardList } from "lucide-react";
 
-import type { ActionItem, ActionMessageItem } from "../contracts";
+import type {
+  ActionBlockItem,
+  ActionItem,
+  ActionMessageItem,
+} from "../contracts";
 import { ActionCenterAskDetail } from "./ActionCenterAskDetail";
+import { ActionCenterBlockDetail } from "./ActionCenterBlockDetail";
 import { ActionCenterMessageDetail } from "./ActionCenterMessageDetail";
 import { ActionCenterReminderDetail } from "./ActionCenterReminderDetail";
 import { ActionCenterResolvedAskDetail } from "./ActionCenterResolvedAskDetail";
@@ -120,6 +125,19 @@ export function ActionCenterDetail({
                 : undefined
             }
             onUndoDone={() => onUndoDone(item)}
+          />
+        </section>
+      );
+    case "block":
+      return (
+        <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
+          <ActionCenterBlockDetail
+            item={item as ActionBlockItem}
+            onOpenSource={
+              item.capabilities.includes("open-source")
+                ? () => onOpenSource(item)
+                : undefined
+            }
           />
         </section>
       );

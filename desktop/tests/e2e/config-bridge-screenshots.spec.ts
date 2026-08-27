@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const SHOTS = "test-results/config-bridge";
@@ -135,11 +136,13 @@ async function openAgentProfileFromChannel(
   return panel;
 }
 
-// Settle any in-flight animations before capture.
+// Settle any in-flight animations before capture. The shared helper exists
+// because a raw Promise.all over `finished` both hangs on looping animations
+// and rejects with AbortError when any animation is cancelled mid-flight
+// (a skeleton swapping to loaded content cancels its own pulse). This spec
+// mounts cards that load asynchronously, so both traps are live here.
 async function settleAnimations(panel: import("@playwright/test").Locator) {
-  await panel.evaluate((el) =>
-    Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)),
-  );
+  await waitForAnimations(panel.page());
 }
 
 test.describe("config bridge screenshots", () => {
@@ -326,10 +329,10 @@ test.describe("config bridge screenshots", () => {
     });
     await panel.page().waitForTimeout(200);
 
-    // Settle any in-flight animations before capture.
-    await panel.evaluate((el) =>
-      Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)),
-    );
+    // Settle any in-flight animations before capture. Same reasoning as
+    // settleAnimations above: the raw Promise.all aborts the evaluate when a
+    // loading card cancels its own skeleton pulse.
+    await waitForAnimations(panel.page());
 
     await panel.screenshot({
       path: `${SHOTS}/06-profile-side-panel-config.png`,

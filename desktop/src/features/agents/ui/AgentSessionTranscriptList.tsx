@@ -2,10 +2,7 @@ import * as React from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { CheckCheck, Clock, Radio } from "lucide-react";
 
-import {
-  useActiveAgentTurns,
-  type ActiveTurnSummary,
-} from "@/features/agents/activeAgentTurnsStore";
+import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
 import {
   subscribeAgentObserverStore,
   getLatestLiveSessionId,
@@ -28,6 +25,15 @@ import type { PromptSection, TranscriptItem } from "./agentSessionTypes";
 import { TurnLivenessIndicator } from "./TurnLivenessIndicator";
 import { PromptSectionList as PromptContextSections } from "./PromptSectionAccordion";
 import {
+  formatPromptSetupSummary,
+  getGroupedFileEditDiffs,
+  getTranscriptMessageLink,
+  getTurnSegmentKey,
+  hasRenderableDisplayContent,
+  isAgentTurnLive,
+  summarizeFileEditDiffs,
+} from "./agentSessionTranscriptListHelpers";
+import {
   AgentSessionTranscriptVariantProvider,
   type AgentSessionTranscriptVariant,
   useAgentSessionTranscriptVariant,
@@ -45,7 +51,6 @@ import {
 } from "./activityRenderClasses/ActivityRow";
 import { TranscriptTimestamp } from "./activityRenderClasses/TranscriptTimestamp";
 import type { AgentTranscriptIdentityProps } from "./activityRenderClasses/types";
-import type { FileEditDiff } from "./agentSessionFileEditDiff";
 import {
   buildTranscriptDisplayBlocks,
   formatTurnSetupLabel,
@@ -55,10 +60,8 @@ import {
   type TranscriptDisplayBlock,
   type TranscriptTurnSegment,
 } from "./agentSessionTranscriptGrouping";
-import { buildCompactToolSummary } from "./agentSessionToolSummary";
 import { shouldShowTranscriptRowTimestamp } from "./agentSessionTranscriptPresentation";
 import { formatTranscriptTimestampTitle } from "./agentSessionUtils";
-import { hasFileEditLineDiff } from "./FileEditDiffView";
 import { UserMessageBubble } from "./activityRenderClasses/UserMessageBubble";
 
 const TRANSCRIPT_ACP_SOURCE_STORAGE_KEY = "buzz:show-transcript-acp-source";
@@ -278,63 +281,16 @@ export function AgentSessionTranscriptList({
               </motion.div>
             );
           })}
-          {isTurnLive && !isCompactPreview ? <TurnLivenessIndicator /> : null}
+          {isTurnLive && !isCompactPreview ? (
+            <TurnLivenessIndicator
+              agentPubkey={agentPubkey}
+              channelId={channelId ?? null}
+            />
+          ) : null}
         </AgentSessionTranscriptVariantProvider>
       </div>
     </motion.div>
   );
-}
-
-function isAgentTurnLive(
-  activeTurns: ActiveTurnSummary[],
-  channelId: string | null,
-) {
-  if (activeTurns.length === 0) {
-    return false;
-  }
-  if (!channelId) {
-    return true;
-  }
-  return activeTurns.some((turn) => turn.channelId === channelId);
-}
-
-function hasRenderableDisplayContent(
-  displayBlocks: TranscriptDisplayBlock[],
-  variant: AgentSessionTranscriptVariant,
-) {
-  if (variant !== "compactPreview") {
-    return displayBlocks.length > 0;
-  }
-
-  return displayBlocks.some(hasRenderableCompactBlock);
-}
-
-function hasRenderableCompactBlock(block: TranscriptDisplayBlock) {
-  if (block.kind === "single") {
-    return isRenderableCompactItem(block.item);
-  }
-
-  // session-boundary dividers are not renderable content in compact view.
-  if (block.kind === "session-boundary") {
-    return false;
-  }
-
-  return block.segments.some((segment) => {
-    if (segment.kind === "item") {
-      return isRenderableCompactItem(segment.item);
-    }
-    if (segment.kind === "prompt") {
-      return true;
-    }
-    if (segment.kind === "summary") {
-      return segment.summary.items.some(isRenderableCompactItem);
-    }
-    return false;
-  });
-}
-
-function isRenderableCompactItem(item: TranscriptItem) {
-  return item.renderClass !== "raw-rail" && item.renderClass !== "suppressed";
 }
 
 function TranscriptAcpSourceBadge({ source }: { source: string }) {
@@ -420,21 +376,6 @@ function TranscriptDisplayBlockView({
       ))}
     </div>
   );
-}
-
-function getTurnSegmentKey(turnId: string, segment: TranscriptTurnSegment) {
-  if (segment.kind === "setup") {
-    return `turn:${turnId}:setup`;
-  }
-  if (segment.kind === "prompt") {
-    // A turn can hold multiple prompt segments (initial prompt + mid-turn
-    // steers), so key on the user message id rather than the bare turn id.
-    return `turn:${turnId}:prompt:${segment.user.id}`;
-  }
-  if (segment.kind === "summary") {
-    return segment.summary.id;
-  }
-  return segment.item.id;
 }
 
 function TranscriptTurnSegmentView({
@@ -581,33 +522,6 @@ function SameKindSummaryItem({
         <TranscriptRowTimestamp timestamp={summary.timestamp} />
       ) : null}
     </>
-  );
-}
-
-function getGroupedFileEditDiffs(items: TranscriptItem[]): FileEditDiff[] {
-  return items.flatMap((item) => {
-    if (item.type !== "tool" || item.isError) {
-      return [];
-    }
-
-    const diff = buildCompactToolSummary(item).fileEditDiff;
-    return diff && hasFileEditLineDiff(diff) ? [diff] : [];
-  });
-}
-
-function summarizeFileEditDiffs(
-  diffs: FileEditDiff[],
-): ActivityRowStats | null {
-  if (diffs.length === 0) {
-    return null;
-  }
-
-  return diffs.reduce(
-    (stats, diff) => ({
-      additions: stats.additions + diff.additions,
-      deletions: stats.deletions + diff.deletions,
-    }),
-    { additions: 0, deletions: 0 },
   );
 }
 
@@ -766,14 +680,6 @@ function PromptContextDialog({
   );
 }
 
-function formatPromptSetupSummary(
-  items: Extract<TranscriptItem, { type: "lifecycle" }>[],
-) {
-  const label = formatTurnSetupLabel(items);
-  const detail = turnSetupDetail(items);
-  return [label, detail].filter(Boolean).join(" · ");
-}
-
 function TurnSetupFooter({
   contextOpen = false,
   hasContext = false,
@@ -832,16 +738,6 @@ function TurnSetupFooter({
       ) : null}
     </div>
   );
-}
-
-function getTranscriptMessageLink(
-  item: Extract<TranscriptItem, { type: "message" }>,
-) {
-  if (!item.channelId || !item.messageId) return null;
-  return {
-    channelId: item.channelId,
-    messageId: item.messageId,
-  };
 }
 
 function TranscriptItemRow({
