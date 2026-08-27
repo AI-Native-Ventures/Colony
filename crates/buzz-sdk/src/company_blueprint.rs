@@ -12,8 +12,8 @@ use crate::company::{
 };
 use buzz_core::{
     company::{
-        CompanyProfile, CompanyService, CostCentre, Initiative, InitiativeStatus, COMPANY_SCHEMA,
-        INITIATIVE_SCHEMA,
+        CompanyProfile, CompanyService, CostCentre, Initiative, InitiativeStatus,
+        COMMUNITY_PROFILE_ID, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
     },
     company_roster::ValidatedBlueprint,
     kind::{KIND_COMPANY_PROFILE, KIND_INITIATIVE},
@@ -75,7 +75,7 @@ pub fn company_action(
         operation: CompanyActionOperation::Create,
         request_id: parse_uuid(&blueprint.request_id)?,
         idempotency_key: step_idempotency_key(&blueprint.request_id, "company"),
-        target: coordinate(KIND_COMPANY_PROFILE, relay_pubkey, &blueprint.company.id),
+        target: coordinate(KIND_COMPANY_PROFILE, relay_pubkey, COMMUNITY_PROFILE_ID),
         // No expected head: creating a company that already exists is what the
         // relay's own idempotency claim is for, and asserting a head here would
         // turn a safe retry into a conflict.

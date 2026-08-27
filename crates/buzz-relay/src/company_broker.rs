@@ -1470,7 +1470,7 @@ mod tests {
             !head.tags.iter().any(|tag| tag.as_slice()[0] == "h"),
             "company heads are community-global and never carry `h`"
         );
-        let parsed = parse_company_event(&head).expect("parse relay head");
+        parse_company_event(&head).expect("parse relay head");
     }
 
     /// A create must not be accepted when a head already exists, and a

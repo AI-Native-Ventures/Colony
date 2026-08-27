@@ -412,8 +412,8 @@ pub async fn resolve_for_event(
         .find(|event| event.kind.as_u16() as u32 == KIND_INITIATIVE)
         .cloned();
 
-    let task =
-        parse_task_event(task_event).map_err(|error| format!("task is unreadable: {error}"))?;
+    // Parsed for validation only: an unreadable task must stop the hydrate.
+    parse_task_event(task_event).map_err(|error| format!("task is unreadable: {error}"))?;
     let company_events = rest
         .query_events(&[head_filter(
             KIND_COMPANY_PROFILE,

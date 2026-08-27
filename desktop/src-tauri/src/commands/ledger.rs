@@ -580,7 +580,6 @@ pub struct CorrectionRequest {
     /// Hex event id of the usage record being re-attributed.
     pub usage_record_event_id: String,
     /// Company charged.
-    pub company_id: String,
     /// Cost centre charged.
     pub cost_centre_id: String,
     /// Team accountable.
@@ -631,11 +630,8 @@ pub async fn ledger_correct(
     if blank(&request.reason) {
         return Err("a correction needs a reason: it is the audit trail".to_string());
     }
-    if blank(&request.company_id)
-        || blank(&request.cost_centre_id)
-        || blank(&request.owning_team_id)
-    {
-        return Err("a correction needs a company, a cost centre, and an owning team".to_string());
+    if blank(&request.cost_centre_id) || blank(&request.owning_team_id) {
+        return Err("a correction needs a cost centre and an owning team".to_string());
     }
     if request.usage_record_event_id.len() != 64
         || !request
@@ -660,7 +656,6 @@ pub async fn ledger_correct(
         id: uuid::Uuid::new_v4().to_string(),
         usage_record_event_id: request.usage_record_event_id,
         assign: buzz_core_pkg::ledger::attribution::RuleAssignment {
-            company_id: request.company_id,
             cost_centre_id: request.cost_centre_id,
             owning_team_id: request.owning_team_id,
             commercial_purpose,

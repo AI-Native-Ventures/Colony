@@ -141,7 +141,6 @@ pub async fn advance_initiative(
     let step = next_step(
         &initiative,
         &initiative_event.id.to_hex(),
-        &company,
         &teams,
         &relay_pubkey,
         intent,
@@ -250,8 +249,7 @@ pub async fn ensure_chat_task(
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
     let now = buzz_core_pkg::company_roster::approval_timestamp(&format!(
-        "{}:{channel_id}:{send_id}",
-        company.id
+        "{channel_id}:{send_id}"
     ));
 
     let plan = plan_implicit_task(
