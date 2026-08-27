@@ -60,7 +60,8 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { useRemindLater } from "@/features/reminders/ui/RemindMeLaterProvider";
-import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
+import { deleteMessage } from "@/shared/api/tauri";
 import type { Channel } from "@/shared/api/types";
 import { KIND_REACTION } from "@/shared/constants/kinds";
 import { topChromeInset } from "@/shared/layout/chromeLayout";
@@ -834,17 +835,15 @@ export function HomeView({
                     emojiTags,
                     mentionTags,
                   } = splitOutgoingTags(mediaTags);
-                  const result = await sendChannelMessage(
+                  const result = await sendChannelMessage({
                     channelId,
                     content,
                     parentEventId,
-                    imetaTags,
+                    mediaTags: imetaTags,
                     mentionPubkeys,
-                    undefined,
                     emojiTags,
                     mentionTags,
-                    undefined,
-                  );
+                  });
                   const authorPubkey = currentPubkey ?? itemToReply.item.pubkey;
                   const reply: InboxReply = {
                     authorLabel: currentPubkey

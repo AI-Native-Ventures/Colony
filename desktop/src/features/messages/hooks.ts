@@ -1,3 +1,4 @@
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import { useEffect, useEffectEvent } from "react";
 import {
   type QueryClient,
@@ -47,7 +48,6 @@ import {
   deleteMessage,
   editMessage,
   removeReaction,
-  sendChannelMessage,
 } from "@/shared/api/tauri";
 import { getThreadCanvas, setThreadCanvas } from "@/shared/api/threadCanvas";
 import { getChannelWindowEvents } from "@/shared/api/channelWindow";
@@ -535,19 +535,18 @@ export function useSendMessageMutation(
           queryClient.getQueryData<RelayEvent[]>(
             channelMessagesKey(effectiveChannel.id),
           ) ?? [];
-        const result = await sendChannelMessage(
-          effectiveChannel.id,
+        const result = await sendChannelMessage({
+          channelId: effectiveChannel.id,
           content,
-          parentEventId ?? null,
-          imetaTags,
-          recipientPubkeys,
-          undefined,
+          parentEventId: parentEventId ?? null,
+          mediaTags: imetaTags,
+          mentionPubkeys: recipientPubkeys,
           emojiTags,
           mentionTags,
-          referenceTags,
+          blockReferenceTags: referenceTags,
           linkPreviewTags,
           sentFromThreadTag,
-        );
+        });
 
         // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta, emoji.
         // For replies, buildReplyTags already includes ["p", author] and ["h", channel].

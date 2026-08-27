@@ -1,4 +1,4 @@
-import { sendChannelMessage } from "@/shared/api/tauri";
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import type {
   Channel,
   ManagedAgent,
@@ -129,9 +129,11 @@ export async function stopManagedAgentWithRules({
       throw new Error("Cannot stop: agent is not in any channel");
     }
 
-    await sendChannelMessage(channelId, "!shutdown", undefined, undefined, [
-      agent.pubkey,
-    ]);
+    await sendChannelMessage({
+      channelId,
+      content: "!shutdown",
+      mentionPubkeys: [agent.pubkey],
+    });
     return {
       noticeMessage: "Shutdown command sent. Agent will stop shortly.",
     };
@@ -164,9 +166,11 @@ export async function deleteManagedAgentWithRules({
 
     if (channelId) {
       if (presence === "online" || presence === "away") {
-        await sendChannelMessage(channelId, "!shutdown", undefined, undefined, [
-          agent.pubkey,
-        ]);
+        await sendChannelMessage({
+          channelId,
+          content: "!shutdown",
+          mentionPubkeys: [agent.pubkey],
+        });
 
         if (!skipRemoteDeleteConfirm) {
           const confirmed = window.confirm(

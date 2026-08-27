@@ -111,6 +111,16 @@ pub(super) fn append_block_reference_tags(
             _ => false,
         };
         if !valid {
+            // Name the channel that would accept it. Onboarding's first-task
+            // marker spent an afternoon failing here (2026-08-27) because this
+            // message said only that the tag was invalid: the caller had passed
+            // `["client", …]`, which has its own validated parameter, and the
+            // wording sent the reader into this allowlist instead of to it.
+            if reference.first().map(String::as_str) == Some("client") {
+                return Err(format!(
+                    "client marker tags belong in clientTags, not blockReferenceTags: {reference:?}"
+                ));
+            }
             return Err(format!("invalid Block reference tag: {reference:?}"));
         }
         tags.push(Tag::parse(reference.clone()).map_err(|e| format!("invalid Block tag: {e}"))?);

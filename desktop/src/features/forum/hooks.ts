@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getForumPosts, getForumThread } from "@/shared/api/forum";
 import { useFocusedRefetchInterval } from "@/shared/lib/useDocumentVisible";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
-import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
+import { deleteMessage } from "@/shared/api/tauri";
 import type {
   Channel,
   ForumPostsResponse,
@@ -98,14 +99,14 @@ export function useCreateForumPostMutation(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      return sendChannelMessage(
-        channel.id,
+      return sendChannelMessage({
+        channelId: channel.id,
         content,
-        null,
+        parentEventId: null,
         mediaTags,
         mentionPubkeys,
-        KIND_FORUM_POST,
-      );
+        kind: KIND_FORUM_POST,
+      });
     },
     onSuccess: () => {
       if (channel) {
@@ -184,14 +185,14 @@ export function useCreateForumReplyMutation(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      return sendChannelMessage(
-        channel.id,
+      return sendChannelMessage({
+        channelId: channel.id,
         content,
         parentEventId,
         mediaTags,
         mentionPubkeys,
-        KIND_FORUM_COMMENT,
-      );
+        kind: KIND_FORUM_COMMENT,
+      });
     },
     onSuccess: (_data, variables) => {
       if (channel) {
