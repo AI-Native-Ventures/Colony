@@ -64,6 +64,23 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => "__COLONY_RENDER_SLIDE__" in window);
 });
 
+test("every layout the kit advertises actually draws", async ({ page }) => {
+  // A kit that lists a template the renderer cannot build hands an agent a
+  // card that throws at render time, which is the failure this pins.
+  for (const layout of ["statement", "poster"]) {
+    const slide = await page.evaluate(
+      (card) => window.__COLONY_RENDER_SLIDE__(card),
+      { ...CARD, badge: "Week 1", layout, slug: `proof-${layout}` },
+    );
+    expect(slide.pixelVariance, layout).toBeGreaterThan(100);
+    expect(
+      Math.min(...slide.contrast.map((run) => run.ratio)),
+      layout,
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(slide.font.pass, layout).toBe(true);
+  }
+});
+
 test("a card rasterises to pixels rather than to a blank canvas", async ({
   page,
 }) => {

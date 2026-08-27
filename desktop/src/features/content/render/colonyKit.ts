@@ -131,7 +131,11 @@ export const COLONY_KIT: BrandKit = {
     },
   },
   source: { type: "manual" },
-  templates: ["statement", "poster", "wordmark", "float"],
+  // Only what the app can actually draw. `wordmark` needs the site's own
+  // wordmark vendored in, and `float` needs a product screenshot out of the
+  // asset library; a kit that advertised either would hand an agent a layout
+  // that throws at render time.
+  templates: ["statement", "poster"],
   type: { families: ["Inter"], scale: {} },
   version: "colony-launch/1",
 };
