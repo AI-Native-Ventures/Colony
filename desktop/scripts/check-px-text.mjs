@@ -33,6 +33,7 @@ const overrides = new Set([
   // to a PNG, so it must NOT scale with the app's Cmd +/- zoom: a rem token
   // here would move the type relative to the ground it was composed against.
   "src/features/content/render/compositions.ts:font-size:23px",
+  "src/features/content/render/compositions.ts:font-size:22px",
 ]);
 
 await runPxTextCheck({
