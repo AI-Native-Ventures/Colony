@@ -74,6 +74,7 @@ import {
 } from "@/features/settings/ui/SettingsPanels";
 import { useDueReminderBadgeCount } from "@/features/reminders/hooks";
 import { useAskNotifications } from "@/features/asks/useAskNotifications";
+import { useBudgetNotifications } from "@/features/ledger/useBudgetNotifications";
 import { useReminderNotifications } from "@/features/reminders/useReminderNotifications";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { requestFocusedThreadClose } from "@/features/channels/focusedThreadCloseRequest";
@@ -248,6 +249,13 @@ export function AppShell() {
   // `useFeedDesktopNotifications` never sees them. Mounted here, once, next
   // to the reminder detector it mirrors.
   useAskNotifications(
+    identityQuery.data?.pubkey,
+    notificationSettings.settings,
+  );
+  // Budget crossings are ledger state, not feed rows either, so they need
+  // their own watcher. Same settings plumbing, same notification path, same
+  // mount point as the ask detector beside it.
+  useBudgetNotifications(
     identityQuery.data?.pubkey,
     notificationSettings.settings,
   );

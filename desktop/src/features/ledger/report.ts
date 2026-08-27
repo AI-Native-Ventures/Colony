@@ -403,6 +403,18 @@ export async function loadLedgerReport(): Promise<LedgerReport> {
 }
 
 /**
+ * The one explanation of an unpriced model, wherever it is met.
+ *
+ * Both the ledger's own exception list and the token-priced views built on
+ * archived agent metrics run into the same fact, and a reader who sees it
+ * phrased two ways has to work out whether they are two problems. It is one:
+ * the book has no rate, so the money is not knowable, and it is never zero.
+ */
+export function unpricedModelExplanation(model: string | null): string {
+  return `No price is on file for ${model ?? "this model"}, so its cost is unknown. Add a price to count it.`;
+}
+
+/**
  * A one-line reading of an exception, for a reader who does not know the
  * ledger's internals.
  *
@@ -413,7 +425,11 @@ export function describeException(exception: LedgerException): string {
   if (exception.diagnosis) return exception.diagnosis;
   switch (exception.type) {
     case "unpricedModel":
-      return `No price is on file for ${String(exception.detail.model ?? "this model")}, so its cost is unknown and its spend is unattributed. Add a price to count it.`;
+      return `${unpricedModelExplanation(
+        typeof exception.detail.model === "string"
+          ? exception.detail.model
+          : null,
+      )} Its spend is also left unattributed.`;
     case "duplicateConflict":
       return "Two records claimed the same provider call with different content. The first was counted; the second was set aside.";
     case "badTimestamp":

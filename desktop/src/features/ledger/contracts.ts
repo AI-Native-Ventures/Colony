@@ -61,6 +61,19 @@ export interface PriceEntry {
    * never displace an owner's own rate.
    */
   origin: PriceOrigin;
+  /**
+   * Whether this row applies only under conditions: a named provider, a
+   * service tier, a context-size band, or a recurring hourly window.
+   *
+   * The conditions themselves are not read here, because deciding which
+   * conditional row prices a *call* is the Rust engine's job and it has the
+   * call in front of it. What a reader of bare token totals needs is the one
+   * bit the engine cannot supply after the fact: whether a rate is safe to
+   * apply to usage that carries no provider, no tier and no per-call
+   * context. A conditional rate applied to a bare token total is a rate for
+   * calls nobody can prove these were.
+   */
+  conditioned: boolean;
 }
 
 export interface PriceBook {
@@ -379,6 +392,27 @@ function parseContent(
   return asObject(parsed, `${label} content`);
 }
 
+/**
+ * Whether a row's `conditions` narrow it to some calls rather than all.
+ *
+ * The relay omits the key entirely for an unconditional row, so absence is
+ * the common answer. A present-but-empty object is treated as unconditional
+ * too, because a row that names no provider, no tier, no context bound and
+ * no hours restricts nothing. Anything else is read as conditional without
+ * interpreting which condition it is: an unrecognised future condition must
+ * make a row *less* applicable, never silently more.
+ */
+function hasConditions(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  return Object.entries(value).some(([, field]) => {
+    if (field === null || field === undefined) return false;
+    if (Array.isArray(field)) return field.length > 0;
+    return true;
+  });
+}
+
 export function parsePriceBook(
   event: RelayEvent,
   relayPubkey: string,
@@ -401,16 +435,18 @@ export function parsePriceBook(
       const entryLabel = `${label}.entries[${index}]`;
       const raw = asObject(entry, entryLabel);
       // `conditions` is present on rows the relay writes for a tier, a
-      // context bound, or recurring hours. It is not read here: this screen
-      // shows what a company published, and pricing a call against those
-      // conditions is the ledger's job, not the list's. Rejecting the key
-      // would refuse the whole book over a field this view does not use.
+      // context bound, or recurring hours. Its contents are not read here:
+      // this screen shows what a company published, and pricing a call
+      // against those conditions is the ledger's job, not the list's.
+      // Rejecting the key would refuse the whole book over a field this view
+      // does not interpret. Only its *presence* is kept, as `conditioned`.
       requireExactKeys(
         raw,
         ["model", "effectiveFrom", "rates", "note", "origin", "conditions"],
         entryLabel,
       );
       return {
+        conditioned: hasConditions(raw.conditions),
         model: requireString(raw, "model", entryLabel),
         effectiveFrom: requireWholeNumber(raw, "effectiveFrom", entryLabel),
         rates: parseRates(raw.rates, `${entryLabel}.rates`),
