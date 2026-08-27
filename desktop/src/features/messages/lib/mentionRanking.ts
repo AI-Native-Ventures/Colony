@@ -57,12 +57,11 @@ function getMentionCandidateGroupRank(
   candidate: MentionCandidateForRanking,
   activePersonaIds: ReadonlySet<string>,
 ) {
-  if (
-    candidate.kind === "block" ||
-    candidate.kind === "cohort" ||
-    candidate.kind === "discovery"
-  )
-    return 2;
+  if (candidate.kind === "block" || candidate.kind === "cohort") return 2;
+  // Discovery rows come after every actor group: typing "@c" must keep
+  // offering charlie the agent ahead of "Charitable Foundations" the
+  // vertical, whatever membership state that agent is in.
+  if (candidate.kind === "discovery") return 4;
   if (candidate.isMember) return 0;
 
   const isRunnablePersona =
