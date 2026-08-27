@@ -347,16 +347,45 @@
               "action_id": "company-blueprint.approve",
               "resolves_attention": true
             }
-          },
-          {
-            "label": "Ask for changes",
-            "interaction": {
-              "type": "signed",
-              "action_id": "company-blueprint.revise",
-              "resolves_attention": true
-            }
           }
         ]
+      },
+      {
+        "type": "section",
+        "title": "Not right yet?",
+        "text": "Say what to change instead of approving. Whoever drafted this gets your words exactly as you write them, and nothing is created until you approve."
+      },
+      {
+        "type": "question",
+        "prompt": "What needs to change?",
+        "mode": "multi-select",
+        "options": [
+          {
+            "id": "people",
+            "label": "The people",
+            "description": "Wrong roles, too many, or someone missing."
+          },
+          {
+            "id": "teams",
+            "label": "The teams",
+            "description": "The teams do not match how the business actually works."
+          },
+          {
+            "id": "work",
+            "label": "The first pieces of work",
+            "description": "These are not what the business should start on."
+          },
+          {
+            "id": "facts",
+            "label": "The facts about the business",
+            "description": "Something written here about the business is wrong."
+          }
+        ],
+        "min_selections": 0,
+        "max_selections": 4,
+        "allow_custom": true,
+        "require_custom_input": true,
+        "submit_action": "company-blueprint.revise"
       }
     ]
   },
@@ -410,12 +439,30 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "what_to_change"
+          "selected",
+          "custom_input"
         ],
         "properties": {
-          "what_to_change": {
+          "selected": {
+            "type": "array",
+            "maxItems": 4,
+            "uniqueItems": true,
+            "description": "The areas ticked on the card. It may be empty; the written answer is what carries the request.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "people",
+                "teams",
+                "work",
+                "facts"
+              ]
+            }
+          },
+          "custom_input": {
             "type": "string",
-            "maxLength": 2000
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "What to change, in the owner's own words. Required, because a request for changes that does not say what to change is a rejection with extra steps."
           }
         }
       },
@@ -443,7 +490,8 @@
   "primitive_versions": {
     "section": 1,
     "table": 1,
-    "actions": 1
+    "actions": 1,
+    "question": 1
   },
   "examples": [
     {
@@ -625,6 +673,6 @@
   ],
   "validation": {
     "state": "tested",
-    "requires_attention": false
+    "requires_attention": true
   }
 }
