@@ -454,7 +454,7 @@ pub struct CliArgs {
 
     /// Maximum number of context messages to include for thread replies and DMs.
     /// Set to 0 to disable automatic context fetching. Max 100.
-    #[arg(long, env = "BUZZ_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
+    #[arg(long, env = "BUZZ_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 50,
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub context_message_limit: u32,
 
@@ -1703,7 +1703,7 @@ mod tests {
             meter_openai_provider: None,
             imputed_cost: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
-            context_message_limit: 12,
+            context_message_limit: 50,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
@@ -2483,6 +2483,14 @@ channels = "ALL"
     fn lazy_pool_defaults_off() {
         let key = "0".repeat(64);
         assert!(!CliArgs::parse_from(["buzz-acp", "--private-key", &key]).lazy_pool);
+    }
+
+    #[test]
+    fn context_message_limit_defaults_to_50() {
+        let args = CliArgs::parse_from(["buzz-acp", "--private-key", TEST_PRIVATE_KEY]);
+        assert_eq!(args.context_message_limit, 50);
+        let config = Config::from_args(args).expect("minimal args produce a config");
+        assert_eq!(config.context_message_limit, 50);
     }
 
     #[test]
