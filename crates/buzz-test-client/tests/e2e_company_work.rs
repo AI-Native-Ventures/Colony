@@ -564,6 +564,10 @@ struct Fixture {
     owner: Keys,
     relay: String,
     team: CompanyTeamRef,
+    /// Unique per test run. The community profile is a singleton, but
+    /// initiatives and tasks are not: two tests sharing an id would collide
+    /// on the same coordinate and the second Create would be refused.
+    token: String,
 }
 
 async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
@@ -575,7 +579,12 @@ async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
         persona_ids: vec![format!("lead-{}", &suffix[..12])],
     };
     publish_team(client, &owner, &team).await;
-    Fixture { owner, relay, team }
+    Fixture {
+        owner,
+        relay,
+        team,
+        token: suffix[..12].to_string(),
+    }
 }
 
 #[tokio::test]
@@ -1073,7 +1082,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     );
 
     // --- Create an initiative and two tasks ---------------------------------
-    let initiative_id = "launch".to_string();
+    let initiative_id = format!("launch-{}", fixture.token);
     let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
     let (outcome, _) = broker(
         &mut client,
@@ -1092,7 +1101,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
 
     let mut task_heads = Vec::new();
     for suffix in ["one", "two"] {
-        let task_id = "task-{suffix}".to_string();
+        let task_id = format!("task-{suffix}-{}", fixture.token);
         let record = task(&task_id, &fixture.team, stamp);
         let (outcome, head_id) = broker(
             &mut client,
@@ -1191,7 +1200,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     );
 
     // --- A replayed action is answered, not applied twice -------------------
-    let replay_id = "task-replay".to_string();
+    let replay_id = format!("task-replay-{}", fixture.token);
     let replay_record = task(&replay_id, &fixture.team, stamp);
     let replay = action(
         &fixture.relay,
@@ -1362,8 +1371,8 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
         CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
     ));
 
-    let task_a_id = "call-the-client".to_string();
-    let task_b_id = "send-the-followup".to_string();
+    let task_a_id = format!("call-the-client-{}", fixture.token);
+    let task_b_id = format!("send-the-followup-{}", fixture.token);
 
     // A is a phone call: doerKind human, so it completes without review.
     let mut task_a = task(&task_a_id, &fixture.team, stamp);
@@ -1553,7 +1562,7 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
         CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
     ));
 
-    let initiative_id = "launch".to_string();
+    let initiative_id = format!("launch-{}", fixture.token);
     let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
     let (outcome, _) = broker(
         &mut client,
