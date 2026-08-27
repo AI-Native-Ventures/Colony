@@ -55,6 +55,14 @@ RELAY_URL = "wss://relay-canary.colony.ainative.ventures"
 BUZZ_REQUIRE_RELAY_MEMBERSHIP = "true"
 BUZZ_REQUIRE_AUTH_TOKEN = "true"
 BUZZ_ALLOW_NIP_OA_AUTH = "true"
+# Default BUZZ_DB_POOL_SIZE is 50 writers, which a one-node smallest-Flex
+# Postgres cannot serve: on first real client contact every background
+# worker timed out on "pool timed out" / mid-read EOFs and user-facing
+# requests (account creation) failed intermittently (2026-08-27). Prod
+# carries tuned pool values as Fly secrets; the canary pins small values
+# here in config-as-code instead.
+BUZZ_DB_POOL_SIZE = "6"
+BUZZ_DB_READ_POOL_SIZE = "8"
 BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
 # 2026-08-25: setting BUZZ_DISCOVERY_HOSTED_ENABLED=true took production down
 # for ~14 minutes on relay 0.9.0 (crash loop, Fly max restart count reached).
