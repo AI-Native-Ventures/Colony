@@ -11,8 +11,7 @@ use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
     CommercialPurpose, CompanyProfile, CompanyService, CompanyTask, CompanyTeamRef, CostCentre,
     CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMMUNITY_PROFILE_ID,
-    COMPANY_SCHEMA,
-    INITIATIVE_SCHEMA,
+    COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
