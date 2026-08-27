@@ -10,7 +10,8 @@ use std::time::Duration;
 use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
     CommercialPurpose, CompanyProfile, CompanyService, CompanyTask, CompanyTeamRef, CostCentre,
-    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMPANY_SCHEMA,
+    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMMUNITY_PROFILE_ID,
+    COMPANY_SCHEMA,
     INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
@@ -381,7 +382,6 @@ pub struct Workspace {
 pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
     let relay = relay_self().await;
     let suffix = Uuid::new_v4().simple().to_string();
-    let company_id = format!("co{}", &suffix[..12]);
     let team = CompanyTeamRef {
         id: format!("team-{}", &suffix[..12]),
         lead_persona_id: format!("lead-{}", &suffix[..12]),
@@ -398,7 +398,11 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
             &relay,
             CompanyActionOperation::Create,
             CompanyActionPayload::Company(company.clone()),
-            coordinate(buzz_core::kind::KIND_COMPANY_PROFILE, &relay, &company_id),
+            coordinate(
+                buzz_core::kind::KIND_COMPANY_PROFILE,
+                &relay,
+                COMMUNITY_PROFILE_ID,
+            ),
         ),
     )
     .await;
