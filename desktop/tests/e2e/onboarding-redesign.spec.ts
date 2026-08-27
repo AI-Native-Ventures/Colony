@@ -172,8 +172,11 @@ test("a disabled primary action always says what is missing", async ({
 
   // The rule the redesign exists to honour: never a dead Continue with no
   // reason. A short password shows the exact count still missing.
+  // 12 is PASSWORD_MIN, which tracks MIN_PASSPHRASE_LEN in key_backup.rs: the
+  // identity backup runs before signup posts, so a shorter password fails
+  // locally and reads as a network error.
   await page.getByLabel("Password").fill("short");
-  await expect(page.getByText("5 more characters")).toBeVisible();
+  await expect(page.getByText("7 more characters")).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
 
   // The same rule on the business screen: unanswered questions are named.
