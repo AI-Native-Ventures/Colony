@@ -85,7 +85,11 @@ fn base_url_vars(port: u16, virtual_key: &str) -> Vec<(String, String)> {
         ("ANTHROPIC_BASE_URL".to_string(), anthropic.clone()),
         ("ANTHROPIC_HOST".to_string(), anthropic),
         ("OPENAI_BASE_URL".to_string(), openai_v1.clone()),
-        ("OPENAI_API_BASE".to_string(), openai_v1),
+        ("OPENAI_API_BASE".to_string(), openai_v1.clone()),
+        // `buzz-agent` on the `openai-compat` provider reads this name and no
+        // other, so without it a metered agent falls back to the vendor
+        // default and bills a real provider with a Colony gateway token.
+        ("OPENAI_COMPAT_BASE_URL".to_string(), openai_v1),
         ("OPENAI_HOST".to_string(), openai_root),
     ]
 }
@@ -303,6 +307,12 @@ mod tests {
         );
         assert_eq!(
             get("OPENAI_API_BASE"),
+            "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
+        );
+        // The name `buzz-agent` reads on `openai-compat`. Missing it sent a
+        // metered agent to the vendor default carrying a Colony token.
+        assert_eq!(
+            get("OPENAI_COMPAT_BASE_URL"),
             "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
         );
         assert_eq!(

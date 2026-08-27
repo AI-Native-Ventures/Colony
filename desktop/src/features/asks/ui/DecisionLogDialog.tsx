@@ -1,13 +1,12 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
 
 import {
   decisionLogsFromEvents,
-  decisionLogsQueryKey,
-  fetchDecisionLogEvents,
   filterDecisionLogs,
   type DecisionLog,
 } from "@/features/asks/lib/decisionLog";
+import { decidedTotalNanoUsd } from "@/features/asks/lib/grantSpend";
+import { useDecisionLogEventsQuery } from "@/features/asks/useDecisionLogEvents";
 import { formatNanousdAsUsd } from "@/shared/api/tauriProvisionedCredits";
 import type { RelayEvent } from "@/shared/api/types";
 import {
@@ -27,6 +26,10 @@ import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
  * was decided -- it does not re-litigate who was allowed to decide. The undo
  * path leads each row: it is the only field the owner acts on, and burying
  * it behind the narrative would invert the record's purpose.
+ *
+ * The events come from the shared query the delegated authority section also
+ * reads, so the running totals shown there and the rows listed here are the
+ * same record, fetched once.
  */
 
 const EMPTY_EVENTS: RelayEvent[] = [];
@@ -91,12 +94,7 @@ export function DecisionLogDialog({
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
-  const logsQuery = useQuery({
-    enabled: communityId !== "" && open,
-    queryFn: fetchDecisionLogEvents,
-    queryKey: decisionLogsQueryKey(communityId),
-    staleTime: 30_000,
-  });
+  const logsQuery = useDecisionLogEventsQuery({ communityId, enabled: open });
 
   // Filter selections reset per mount: callers render this dialog only while
   // open, so reopening an agent's log starts scoped to that agent again.
@@ -129,6 +127,11 @@ export function DecisionLogDialog({
   );
   // Hoisted so a fully-filtered render reuses one array identity.
   const displayLogs = visibleLogs.length > 0 ? visibleLogs : EMPTY_LOGS;
+  // Summed as bigint: nanoUSD totals outrun a JS number's exact range.
+  const shownTotalNanoUsd = React.useMemo(
+    () => decidedTotalNanoUsd(displayLogs),
+    [displayLogs],
+  );
 
   const agentOptions = React.useMemo(
     () =>
@@ -223,20 +226,34 @@ export function DecisionLogDialog({
             No decisions match these filters.
           </p>
         ) : (
-          <ul
-            className="-mr-2 max-h-[52vh] space-y-2 overflow-y-auto pr-2"
-            data-testid="decision-log-list"
-          >
-            {displayLogs.map((log) => (
-              <DecisionLogRow
-                agentLabel={
-                  agentNames[log.agentPubkey] ?? truncatePubkey(log.agentPubkey)
-                }
-                key={log.eventId}
-                log={log}
-              />
-            ))}
-          </ul>
+          <>
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="decision-log-total"
+            >
+              {displayLogs.length === 1
+                ? "1 decision"
+                : `${displayLogs.length} decisions`}{" "}
+              shown, {formatNanousdAsUsd(shownTotalNanoUsd.toString())} in
+              total. A delegation's limit is checked one decision at a time, so
+              nothing held this total down.
+            </p>
+            <ul
+              className="-mr-2 max-h-[52vh] space-y-2 overflow-y-auto pr-2"
+              data-testid="decision-log-list"
+            >
+              {displayLogs.map((log) => (
+                <DecisionLogRow
+                  agentLabel={
+                    agentNames[log.agentPubkey] ??
+                    truncatePubkey(log.agentPubkey)
+                  }
+                  key={log.eventId}
+                  log={log}
+                />
+              ))}
+            </ul>
+          </>
         )}
       </DialogContent>
     </Dialog>

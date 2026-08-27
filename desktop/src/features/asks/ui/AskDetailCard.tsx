@@ -1,27 +1,27 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import type { AskAnswerInput } from "@/features/asks/answerAsk";
 import type { OpenAsk } from "@/features/asks/lib/askEvent";
 import { readAsk } from "@/features/asks/lib/askEvent";
-import {
-  askStatesFromEvents,
-  describeAskExpiry,
-} from "@/features/asks/lib/askState";
+import { readAskOptions } from "@/features/asks/lib/askOptions";
 import {
   classifyAskRouting,
   effectiveFilerPubkey,
 } from "@/features/asks/lib/askRouting";
+import { AskDeadlineNote } from "@/features/asks/ui/AskDeadlineNote";
+import { AskOptionList } from "@/features/asks/ui/AskOptionList";
+import { useAskState } from "@/features/asks/useAskStates";
 import { useReportingLineLookup } from "@/features/agents/reportingLine";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { relayClient } from "@/shared/api/relayClient";
-import { useRelaySelfQuery } from "@/features/moderation/hooks";
-import { KIND_ASK, KIND_ASK_STATE } from "@/shared/constants/kinds";
+import { KIND_ASK } from "@/shared/constants/kinds";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 type AskDetailCardProps = {
   ask: OpenAsk;
-  onAnswer: (decision: string, rationale: string) => Promise<void>;
+  onAnswer: (answer: AskAnswerInput) => Promise<void>;
   isSubmitting: boolean;
 };
 
@@ -31,8 +31,9 @@ type AskDetailCardProps = {
  * when the relay promoted it up the ladder, that it moved and from whom.
  *
  * Everything here reads the event stream itself -- the `p` tag, and the
- * `prior`/`filer` pair only the relay's promotions carry. Deadlines are
- * deliberately absent: they live in the relay's asks table alone today.
+ * `prior`/`filer` pair only the relay's promotions carry. The deadline is a
+ * separate read: it lives on the relay-signed ask-state head (kind 30200),
+ * see `AskDeadlineNote`.
  */
 function AskRoutingNote({ ask }: { ask: OpenAsk }): React.JSX.Element | null {
   const { activeCommunity } = useCommunities();
@@ -100,79 +101,17 @@ function AskRoutingNote({ ask }: { ask: OpenAsk }): React.JSX.Element | null {
   );
 }
 
-/** Wall-clock seconds, re-read on a coarse tick so a countdown does not stall. */
-function useNowSeconds(intervalMs = 30_000): number {
-  const [now, setNow] = React.useState(() => Math.floor(Date.now() / 1_000));
-  React.useEffect(() => {
-    const timer = setInterval(
-      () => setNow(Math.floor(Date.now() / 1_000)),
-      intervalMs,
-    );
-    return () => clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
-
-/**
- * What the relay will do about this ask when its deadline passes, read from
- * the relay-signed ask-state head (kind 30200).
- *
- * This exists mainly for the asks it CANNOT decide. NIP-IQ's hard list
- * forbids a default answer on `spend`, `hiring`, `legal` and the rest, so a
- * fan-out approval expires to a re-arm: the relay pushes the deadline out and
- * waits again, indefinitely. That is the correct behaviour and it is not
- * going to change, which is exactly why it has to be on screen — otherwise a
- * campaign sits parked behind an ask the owner assumes will time out into a
- * decision, and nothing anywhere says it will not.
- *
- * Renders nothing at all when the head is missing, unreadable, or not signed
- * by this relay: an absent countdown is honest, an invented one is not.
- */
-function AskExpiryNote({ ask }: { ask: OpenAsk }): React.JSX.Element | null {
-  const { activeCommunity } = useCommunities();
-  const communityId = activeCommunity?.id ?? "";
-  const relaySelfPubkey = useRelaySelfQuery().data;
-  const nowSeconds = useNowSeconds();
-
-  const stateQuery = useQuery({
-    enabled: communityId !== "",
-    queryKey: ["ask-state-head", communityId, ask.id],
-    queryFn: () =>
-      relayClient.fetchEvents({
-        kinds: [KIND_ASK_STATE],
-        "#d": [ask.id],
-        limit: 4,
-      }),
-    staleTime: 15_000,
-  });
-
-  const state = React.useMemo(
-    () =>
-      askStatesFromEvents(stateQuery.data ?? [], relaySelfPubkey).get(ask.id) ??
-      null,
-    [ask.id, relaySelfPubkey, stateQuery.data],
-  );
-  if (state === null) return null;
-
-  const sentence = describeAskExpiry(state, ask.createdAt, nowSeconds);
-  if (sentence === null) return null;
-
-  return (
-    <p
-      className="text-xs leading-4 text-muted-foreground"
-      data-testid="ask-expiry-note"
-    >
-      {sentence}
-    </p>
-  );
-}
-
 /**
  * The card the founder answers an ask from.
  *
  * `ask_broker` already accepts an owner answering by replying in the thread;
  * this is the other half it was written against, so a founder does not have
  * to find the thread to unblock somebody.
+ *
+ * Two shapes, decided by the ask's own content. An ask that states `options`
+ * is a pick-one: the choices render with their consequences and the free-text
+ * box drops to an optional rationale. An ask with no options keeps the
+ * free-text answer box as the only input, exactly as before.
  */
 export function AskDetailCard({
   ask,
@@ -181,7 +120,42 @@ export function AskDetailCard({
 }: AskDetailCardProps): React.JSX.Element {
   const [decision, setDecision] = React.useState("");
   const [rationale, setRationale] = React.useState("");
-  const canSubmit = decision.trim().length > 0 && !isSubmitting;
+  const [selectedOption, setSelectedOption] = React.useState<string | null>(
+    null,
+  );
+  const askState = useAskState(ask.id);
+
+  const { options } = React.useMemo(
+    () => readAskOptions(ask.rawContent),
+    [ask.rawContent],
+  );
+  const hasOptions = options.length > 0;
+
+  // Selection belongs to one ask. Moving to another must not carry a stale
+  // pick across, which would otherwise let a click on "Answer and unblock"
+  // publish the previous ask's option against this one. Reset during render
+  // (React's documented "adjusting state when a prop changes" pattern) rather
+  // than in an effect, so the new ask never paints for a frame wearing the
+  // previous one's answer.
+  const [answeringAskId, setAnsweringAskId] = React.useState(ask.id);
+  if (answeringAskId !== ask.id) {
+    setAnsweringAskId(ask.id);
+    setSelectedOption(null);
+    setDecision("");
+    setRationale("");
+  }
+
+  const canSubmit = hasOptions
+    ? selectedOption !== null && !isSubmitting
+    : decision.trim().length > 0 && !isSubmitting;
+
+  const submit = () => {
+    void onAnswer({
+      decision: hasOptions ? (selectedOption ?? "") : decision.trim(),
+      optionLabel: hasOptions ? selectedOption : null,
+      rationale: rationale.trim(),
+    });
+  };
 
   return (
     <div className="flex flex-col gap-4 p-4" data-testid="ask-detail-card">
@@ -198,19 +172,33 @@ export function AskDetailCard({
           </p>
         ) : null}
         <AskRoutingNote ask={ask} />
-        <AskExpiryNote ask={ask} />
+        <AskDeadlineNote
+          askCreatedAt={ask.createdAt}
+          error={askState.error}
+          isLoading={askState.isLoading}
+          state={askState.state}
+        />
       </div>
 
-      <label className="flex flex-col gap-1">
-        <span className="text-xs text-muted-foreground">Your answer</span>
-        <textarea
-          className="min-h-24 rounded-md border border-border bg-background p-2 text-sm outline-none"
-          data-testid="ask-answer-decision"
-          onChange={(event) => setDecision(event.target.value)}
-          placeholder="What you decided."
-          value={decision}
+      {hasOptions ? (
+        <AskOptionList
+          disabled={isSubmitting}
+          onSelect={setSelectedOption}
+          options={options}
+          selectedLabel={selectedOption}
         />
-      </label>
+      ) : (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Your answer</span>
+          <textarea
+            className="min-h-24 rounded-md border border-border bg-background p-2 text-sm outline-none"
+            data-testid="ask-answer-decision"
+            onChange={(event) => setDecision(event.target.value)}
+            placeholder="What you decided."
+            value={decision}
+          />
+        </label>
+      )}
 
       <label className="flex flex-col gap-1">
         <span className="text-xs text-muted-foreground">Why (optional)</span>
@@ -227,7 +215,7 @@ export function AskDetailCard({
         className="self-start rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
         data-testid="ask-answer-submit"
         disabled={!canSubmit}
-        onClick={() => void onAnswer(decision.trim(), rationale.trim())}
+        onClick={submit}
         type="button"
       >
         {isSubmitting ? "Sending…" : "Answer and unblock"}

@@ -485,10 +485,14 @@ test("the first-run opener introduces the Chief of Staff and asks for the websit
   assert.match(opener, /Send me the company website/);
   assert.match(opener, /a few focused questions instead/);
   // The promise the materialization path has to keep.
+  // The opener promises only the gate the code actually keeps: company
+  // creation and hiring are blocked behind blueprint approval, ordinary work
+  // afterwards is not. See blueprintApproval.ts.
   assert.match(
     opener,
-    /won't create the company or start work until you approve/,
+    /won't create the company or hire anyone until you approve/,
   );
+  assert.doesNotMatch(opener, /start work until you approve/);
   // No coordination copy: there is nobody to coordinate with yet.
   assert.doesNotMatch(opener, /introduce yoursel/);
   assert.doesNotMatch(opener, /Welcome to Buzz/);

@@ -43,7 +43,6 @@ import {
 import { CompanyScreen, type CompanyValues } from "./screens/CompanyScreen";
 import { CreditsScreen } from "./screens/CreditsScreen";
 import { DescriptionScreen } from "./screens/DescriptionScreen";
-import { InstallScreen, type InstallState } from "./screens/InstallScreen";
 import { InviteScreen } from "./screens/InviteScreen";
 import { ProbingScreen } from "./screens/ProbingScreen";
 import { ReadingScreen } from "./screens/ReadingScreen";
@@ -67,14 +66,6 @@ function readReducedMotion(): boolean {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }
-
-/**
- * There is no installer behind the Colony-agent step yet (contracts has no
- * install member), so the step is driven by a timed fake that mirrors the
- * reviewed prototype. The real installer replaces the timer, not the wiring.
- */
-const FAKE_INSTALL_MS = 3400;
-const FAKE_INSTALL_REDUCED_MS = 900;
 
 const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
 
@@ -227,7 +218,6 @@ export function NewOnboardingFlow({
 
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
-  const [installState, setInstallState] = useState<InstallState>("running");
 
   const [businessStage, setBusinessStage] = useState<BusinessStage | null>(
     null,
@@ -305,36 +295,27 @@ export function NewOnboardingFlow({
 
   const handleProbeResolved = useCallback((result: TrackResult) => {
     setTrackResult(result);
+    if (result.installed.length === 0) {
+      // Nothing on this computer can do the thinking, so there is no choice to
+      // put in front of anyone: Colony runs it, and the credits screen is where
+      // that is spelled out. This branch used to hold the user on a progress
+      // bar for three seconds while an installer that does not exist appeared
+      // to work. Recording the answer keeps a resumed run from landing back
+      // here.
+      setSelectedBrain(null);
+      setAnswers((current) => ({
+        ...current,
+        track: result.track,
+        brain: current.brain ?? "colony",
+      }));
+      setStep("business");
+      return;
+    }
     // Spec: one runtime preselected, by fixed catalog order not detection luck.
     setSelectedBrain(result.installed[0] ?? null);
     setAnswers((current) => ({ ...current, track: result.track }));
     setStep("brain");
   }, []);
-
-  const settleInstall = useCallback((state: InstallState) => {
-    setInstallState(state);
-    if (state === "done" || state === "degraded") {
-      // The colony branch has no named brain; recording one keeps resume from
-      // bouncing through this step again.
-      setAnswers((current) => ({
-        ...current,
-        brain: current.brain ?? "colony",
-      }));
-      setStep("business");
-    }
-  }, []);
-
-  useEffect(() => {
-    if (step !== "brain" || installState !== "running") return undefined;
-    if (trackResult !== null && trackResult.installed.length > 0) {
-      return undefined;
-    }
-    const id = setTimeout(
-      () => settleInstall("done"),
-      reducedMotion ? FAKE_INSTALL_REDUCED_MS : FAKE_INSTALL_MS,
-    );
-    return () => clearTimeout(id);
-  }, [step, installState, trackResult, reducedMotion, settleInstall]);
 
   const handleAccountSubmit = async () => {
     if (!accountReady(accountValues) || isSigningUp) return;
@@ -538,21 +519,12 @@ export function NewOnboardingFlow({
             />
           );
         }
-        if (trackResult.installed.length === 0) {
-          // The brain picker only makes sense when something usable was
-          // found. The colony branch installs its own agent instead.
-          return (
-            <InstallScreen
-              state={installState}
-              onRetry={() => setInstallState("running")}
-              onContinueAnyway={() => settleInstall("degraded")}
-            />
-          );
-        }
+        // The picker is only reached when the probe found something usable on
+        // this computer: handleProbeResolved skips the step otherwise.
         return (
           <BrainScreen
             brains={trackResult.brains}
-            selected={selectedBrain ?? trackResult.installed[0]}
+            selected={selectedBrain ?? trackResult.installed[0] ?? null}
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
           />

@@ -43,6 +43,19 @@ type AskEventShape = {
 const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
+ * The pinned `ask-type` vocabulary (`buzz_core::interrupt::AskType`). Anything
+ * outside it is rejected at ingest, so an unrecognized value here means the
+ * event did not come through the relay's parser.
+ */
+const ASK_TYPES: ReadonlySet<string> = new Set([
+  "decision",
+  "question",
+  "credential",
+  "blocker",
+  "stall",
+]);
+
+/**
  * Read a single-valued routing tag, mirroring the relay's ask parser
  * (`buzz_core::interrupt::parse_ask` via `single_tag_value`): the FIRST
  * occurrence supplies the value, and a duplicate means the tag is
@@ -89,9 +102,21 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
   const filerTag = singleRoutingTag(tags, "filer");
   const channelId = sourceTag("h");
   const threadId = sourceTag("e");
+  // NIP-IQ carries the ask type on the `ask-type` TAG, not in content, and
+  // requires exactly one occurrence. Reading `content.type` was wrong: no ask
+  // the CLI or relay files has such a field, so every real ask rendered as
+  // "question" regardless of what it actually was. The content field stays as
+  // a fallback only so older fixtures keep resolving.
+  const askTypeTag = singleRoutingTag(tags, "ask-type");
+  const askType =
+    askTypeTag !== null && ASK_TYPES.has(askTypeTag)
+      ? askTypeTag
+      : typeof fields.type === "string" && ASK_TYPES.has(fields.type)
+        ? fields.type
+        : "question";
   return {
     id: event.id,
-    askType: typeof fields.type === "string" ? fields.type : "question",
+    askType,
     headline,
     costOfDelay:
       typeof fields.cost_of_delay === "string" ? fields.cost_of_delay : null,

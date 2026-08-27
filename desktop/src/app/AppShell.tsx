@@ -73,6 +73,7 @@ import {
   isSettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { useDueReminderBadgeCount } from "@/features/reminders/hooks";
+import { useAskNotifications } from "@/features/asks/useAskNotifications";
 import { useReminderNotifications } from "@/features/reminders/useReminderNotifications";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { requestFocusedThreadClose } from "@/features/channels/focusedThreadCloseRequest";
@@ -242,6 +243,13 @@ export function AppShell() {
     identityQuery.data?.pubkey,
     notificationSettings.settings,
     channels,
+  );
+  // Asks (NIP-IQ) are relay events, not Home-feed rows, so
+  // `useFeedDesktopNotifications` never sees them. Mounted here, once, next
+  // to the reminder detector it mirrors.
+  useAskNotifications(
+    identityQuery.data?.pubkey,
+    notificationSettings.settings,
   );
   const refetchHomeFeedFromLiveSignal = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();

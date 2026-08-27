@@ -5,9 +5,9 @@ import {
   useAcpRuntimesQuery,
   useInstallAcpRuntimeMutation,
 } from "@/features/agents/hooks";
+import { installAndConfigureColonyAgent } from "@/features/onboarding/automaticAgentSetup";
 import {
   configForAutomaticCli,
-  defaultColonyAgentConfig,
   selectAutomaticRuntime,
 } from "@/features/onboarding/automaticRuntime";
 import {
@@ -238,9 +238,20 @@ export function OnboardingV2Flow({
   const installColonyAgent = async () => {
     setError(null);
     try {
-      await installRuntime.mutateAsync("buzz-agent");
-      const current = await getGlobalAgentConfig();
-      await setGlobalAgentConfig(defaultColonyAgentConfig(current));
+      // The install runs through the mutation so the button keeps its pending
+      // state and the runtime catalog is refetched; what a hosted config is,
+      // and whether this relay can back one, is decided in one shared place.
+      const plan = await installAndConfigureColonyAgent({
+        installRuntime: (runtimeId) => installRuntime.mutateAsync(runtimeId),
+      });
+      if (plan.action === "skip") {
+        setError(
+          plan.reason === "relay-has-no-hosted-agent"
+            ? "This community's relay does not host agents, so Colony Credits are unavailable here. Connect your own provider in Settings."
+            : "Colony Credits cannot run this agent's provider. Connect your own provider in Settings.",
+        );
+        return;
+      }
       let credits: OnboardingV2Draft["credits"] = {
         balanceNanousd: null,
         status: "unavailable",

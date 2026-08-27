@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { answerAsk } from "@/features/asks/answerAsk";
+import { answerAsk, type AskAnswerInput } from "@/features/asks/answerAsk";
 import { AskDetailCard } from "@/features/asks/ui/AskDetailCard";
 import { AskResolutionNotice } from "@/features/asks/ui/AskResolutionNotice";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
@@ -233,7 +233,7 @@ function InboxMessageDetailPane({
     );
   }, [closedResolverPubkey, currentPubkey, resolverLabelQuery.data]);
   const handleAnswerAsk = React.useCallback(
-    async (decision: string, rationale: string): Promise<void> => {
+    async (answer: AskAnswerInput): Promise<void> => {
       if (!selectedAsk) {
         setAskAnswerError("This ask is no longer available.");
         return;
@@ -242,7 +242,7 @@ function InboxMessageDetailPane({
       setAskAnswerError(null);
       setIsSubmittingAsk(true);
       try {
-        await answerAsk(selectedAsk, decision, rationale, {
+        await answerAsk(selectedAsk, answer, {
           invalidateQueries: (queryKey) =>
             queryClient.invalidateQueries({ queryKey }),
           publishEvent: (event, timeoutMessage, sendErrorMessage) =>
