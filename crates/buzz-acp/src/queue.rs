@@ -3061,6 +3061,78 @@ mod tests {
     }
 
     #[test]
+    fn test_format_prompt_thread_record_renders_before_thread_context() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let ctx = ConversationContext::Thread {
+            messages: vec![ContextMessage {
+                event_id: String::new(),
+                pubkey: "npub1test".into(),
+                content: "prior message".into(),
+                timestamp: "2024-01-01T00:00:00Z".into(),
+            }],
+            total: 1,
+            truncated: false,
+        };
+        let record = "[Thread Record]\nAsks:\n- [open] blocker: \"Staging DB creds expired\"";
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                conversation_context: Some(&ctx),
+                thread_record: Some(record),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        let context_pos = prompt.find("[Context]").expect("[Context] missing");
+        let record_pos = prompt
+            .find("[Thread Record]")
+            .expect("[Thread Record] missing");
+        let thread_pos = prompt
+            .find("[Thread Context")
+            .expect("[Thread Context] missing");
+        assert!(
+            context_pos < record_pos && record_pos < thread_pos,
+            "[Thread Record] must be its own block immediately before \
+             [Thread Context]"
+        );
+    }
+
+    #[test]
+    fn test_format_prompt_thread_record_absent_when_not_fetched() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        // Non-thread scope, disabled flag, and fetch failure all resolve to
+        // None at the fetch site (should_fetch_thread_record + fail-open), so
+        // format_prompt must render no section from a None arg.
+        let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        assert!(!prompt.contains("[Thread Record]"));
+    }
+
+    #[test]
     fn test_drop_mode_discards_in_flight_events() {
         let mut q = EventQueue::new(DedupMode::Drop);
         let ch = Uuid::new_v4();

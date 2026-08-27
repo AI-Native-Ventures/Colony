@@ -5548,6 +5548,44 @@ mod tests {
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use serde_json::json;
 
+    #[test]
+    fn thread_record_fetch_gates_on_flag_scope_and_dm() {
+        // Thread-scoped channel turn with the flag on (default): fetch.
+        assert!(should_fetch_thread_record(true, Some("abc123"), false));
+        // Flag disabled: skip, whatever the scope.
+        assert!(!should_fetch_thread_record(false, Some("abc123"), false));
+        // Channel-scope turn (no thread root): skip entirely.
+        assert!(!should_fetch_thread_record(true, None, false));
+        // DM turns: skip entirely, even inside a DM thread.
+        assert!(!should_fetch_thread_record(true, Some("abc123"), true));
+    }
+
+    #[test]
+    fn decode_verified_events_skips_malformed_and_unverified() {
+        let signed = Keys::generate();
+        let ev = EventBuilder::new(
+            Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"x"}"#,
+        )
+        .sign_with_keys(&signed)
+        .unwrap();
+
+        let mut arr = vec![
+            serde_json::to_value(&ev).unwrap(),
+            json!({"kind": "not an event"}),
+            json!("junk"),
+        ];
+        // A structurally complete event whose content was mutated after
+        // signing must not supply prompt context.
+        let mut tampered = serde_json::to_value(&ev).unwrap();
+        tampered["content"] = json!("tampered");
+        arr.push(tampered);
+
+        let decoded = decode_verified_events(json!(arr));
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].id, ev.id);
+    }
+
     fn test_mcp_server() -> McpServer {
         McpServer {
             name: "dev".into(),
