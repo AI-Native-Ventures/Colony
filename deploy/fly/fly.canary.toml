@@ -63,6 +63,15 @@ BUZZ_ALLOW_NIP_OA_AUTH = "true"
 # here in config-as-code instead.
 BUZZ_DB_POOL_SIZE = "6"
 BUZZ_DB_READ_POOL_SIZE = "8"
+# Self-serve workspaces under the canary's own suffix, e.g.
+# acme.canary.colony.ainative.ventures. The earlier deliberate omission
+# (no self-provision) broke the new hosted-workspace onboarding with a
+# literal 404 on POST /api/communities, which the desktop renders as
+# "We could not reach your workspace" (2026-08-27). PUBLIC=true is needed
+# because a first-run founder is not yet a member anywhere; default
+# creation limits (3/IP/hour, 50/hour deployment-wide) still apply.
+BUZZ_SELF_PROVISION_DOMAIN = "canary.colony.ainative.ventures"
+BUZZ_SELF_PROVISION_PUBLIC = "true"
 BUZZ_DISCOVERY_EXTERNAL_WORKER_ENABLED = "true"
 # 2026-08-25: setting BUZZ_DISCOVERY_HOSTED_ENABLED=true took production down
 # for ~14 minutes on relay 0.9.0 (crash loop, Fly max restart count reached).
