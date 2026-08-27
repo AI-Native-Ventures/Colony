@@ -188,8 +188,15 @@ stop clobbering each other. The canary is a dogfooding target.
 #### Provisioning (one time)
 
 ```bash
-deploy/fly/provision-canary.sh
+CANARY_OWNER_PUBKEY=<64-hex> deploy/fly/provision-canary.sh
 ```
+
+`CANARY_OWNER_PUBKEY` is required, not optional: the canary runs with
+`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`, and the relay refuses to boot when
+`RELAY_OWNER_PUBKEY` is unset (exit 1 at startup, crash loop until max
+restarts). Without it provisioning produces an app that can never come up.
+Use the same pubkey as the production owner for the canary; a fresh key is
+also fine but then that key is the canary owner.
 
 Idempotent: it checks for each resource before creating it, refuses to touch
 any name that does not contain `canary`, stages secrets rather than deploying,
