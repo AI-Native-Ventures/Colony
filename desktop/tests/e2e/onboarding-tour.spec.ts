@@ -2,7 +2,7 @@ import { test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
-import { seedActiveIdentity } from "../helpers/onboarding";
+import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
 
 const FIRST_RUN_IDENTITY = { ...TEST_IDENTITIES.tyler, username: "" };
 const OUT = "test-results/onboarding-tour";
@@ -13,12 +13,19 @@ async function shot(page: Page, name: string) {
 }
 
 test("tour", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+  // The canvas flow runs before any community exists, so the tour has to
+  // start where a founder does: no community seeded, and the machine landing
+  // passed by hand.
+  await seedFreshFounder(page, FIRST_RUN_IDENTITY.pubkey);
   await seedActiveIdentity(page, FIRST_RUN_IDENTITY);
-  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await installMockBridge(page, undefined, {
+    skipOnboardingSeed: true,
+    skipCommunitySeed: true,
+  });
   await page.goto("/");
+
+  await shot(page, "00-machine-landing");
+  await page.getByRole("button", { name: "Start with Colony" }).click();
 
   await shot(page, "01-account");
   await page.getByLabel("Your name").fill("Aisha Bello");

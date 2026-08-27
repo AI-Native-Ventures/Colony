@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
-import { seedActiveIdentity } from "../helpers/onboarding";
+import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
 
 // A blank username means the mock bridge reports no kind:0 profile event for
 // the active identity, which is what keeps the app-level onboarding gate open.
@@ -18,13 +18,28 @@ async function seedFreshFirstRun(
   extraStorage: Record<string, string> = {},
 ) {
   await page.addInitScript((extra) => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
     for (const [key, value] of Object.entries(extra)) {
       window.localStorage.setItem(key, value);
     }
   }, extraStorage);
+  // The flow mounts above the community boundary now, so the founder marker
+  // and an empty community list are what open it, not the app-level gate.
+  await seedFreshFounder(page, FIRST_RUN_IDENTITY.pubkey);
   await seedActiveIdentity(page, FIRST_RUN_IDENTITY);
-  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await installMockBridge(page, undefined, {
+    skipOnboardingSeed: true,
+    skipCommunitySeed: true,
+  });
+}
+
+/**
+ * Machine onboarding stands in front of the flow on a machine with no
+ * community: its completion is vouched by a matching community pubkey, and
+ * these runs deliberately have none. One click is the whole step.
+ */
+async function passMachineLanding(page: Page) {
+  await expect(page.getByTestId("machine-onboarding-gate")).toBeVisible();
+  await page.getByRole("button", { name: "Start with Colony" }).click();
 }
 
 test("a non-technical user can get from the first screen to the end", async ({
@@ -32,6 +47,7 @@ test("a non-technical user can get from the first screen to the end", async ({
 }) => {
   await seedFreshFirstRun(page);
   await page.goto("/");
+  await passMachineLanding(page);
 
   // Screen 1: account. The primary button is dead until every field answers.
   await expect(
@@ -117,6 +133,7 @@ test("a taken email address is explained inline and keeps the form intact", asyn
     "colony.e2e.authFailure": JSON.stringify({ kind: "email-taken" }),
   });
   await page.goto("/");
+  await passMachineLanding(page);
 
   await expect(
     page.getByRole("heading", { name: "Let's get your colony started." }),
@@ -151,6 +168,7 @@ test("a disabled primary action always says what is missing", async ({
 }) => {
   await seedFreshFirstRun(page);
   await page.goto("/");
+  await passMachineLanding(page);
 
   // The rule the redesign exists to honour: never a dead Continue with no
   // reason. A short password shows the exact count still missing.

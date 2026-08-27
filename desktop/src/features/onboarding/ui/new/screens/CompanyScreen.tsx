@@ -15,10 +15,21 @@ type Props = {
   onChange: (patch: Partial<CompanyValues>) => void;
   onSubmit: () => void;
   onBack: () => void;
+  /** The workspace is being claimed right now. */
+  isSubmitting?: boolean;
+  /** Why the last attempt did not work, in the user's words. */
+  error?: string | null;
 };
 
-export function CompanyScreen({ values, onChange, onSubmit, onBack }: Props) {
-  const ready = companyReady(values);
+export function CompanyScreen({
+  values,
+  onChange,
+  onSubmit,
+  onBack,
+  isSubmitting = false,
+  error = null,
+}: Props) {
+  const ready = companyReady(values) && !isSubmitting;
 
   return (
     <div className="onb-screen">
@@ -43,10 +54,11 @@ export function CompanyScreen({ values, onChange, onSubmit, onBack }: Props) {
             }}
           />
         </label>
+        {error ? <p className="onb-note onb-note-warn">{error}</p> : null}
       </div>
       <div className="onb-actions">
         <Button size="lg" disabled={!ready} onClick={onSubmit}>
-          Create workspace
+          {isSubmitting ? "Creating your workspace" : "Create workspace"}
         </Button>
         <button type="button" className="onb-quiet-action" onClick={onBack}>
           Back

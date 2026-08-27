@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
+import { markFreshIdentity } from "../freshFounder";
 import { BackupStep } from "./BackupStep";
 import { DefaultConfigStep } from "./DefaultConfigStep";
 import { DownloadKeyStep } from "./DownloadKeyStep";
@@ -143,6 +144,10 @@ export function MachineOnboardingFlow({
         `buzz-identity-backup-reminder.v1:${identity.pubkey}`,
         "pending",
       );
+      // A brand-new identity started here is the one signal that the canvas
+      // first run should own the next screens; imported identities never
+      // write it.
+      markFreshIdentity(identity.pubkey);
       complete(identity.pubkey);
     } catch (cause) {
       setError(
