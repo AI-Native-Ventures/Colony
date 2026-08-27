@@ -190,6 +190,85 @@ fn action(
     }
 }
 
+/// Prefix the relay uses when an action lost an idempotency claim to an
+/// earlier signed action (`ingest::broker_duplicate_result`).
+const SUPERSEDED_PREFIX: &str = "conflict: superseded by original action ";
+
+/// Read the winning action's id out of a supersede answer, if that is what
+/// this answer is.
+///
+/// Two signings of the same `CompanyAction` differ only in `created_at`, which
+/// nostr stamps at second granularity. Inside one second they produce the same
+/// event id and the relay answers `accepted=true` against a receipt that
+/// already exists. Across a second boundary they produce two ids, the claim is
+/// already held, and the relay supersedes the second one — deliberately, per
+/// `company_broker::replay_claim`. Only the winner has a receipt, so the loser's
+/// id is a dead end to poll and the caller must follow the winner named here.
+fn superseding_action_id(ok: &buzz_ws_client::OkResponse) -> Option<String> {
+    if ok.accepted {
+        return None;
+    }
+    let id = ok.message.strip_prefix(SUPERSEDED_PREFIX)?.trim();
+    (id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit())).then(|| id.to_owned())
+}
+
+#[test]
+fn superseding_action_id_follows_the_winner_named_by_the_relay() {
+    let winner = "a".repeat(64);
+    let superseded = buzz_ws_client::OkResponse {
+        event_id: "b".repeat(64),
+        accepted: false,
+        message: format!("{SUPERSEDED_PREFIX}{winner}"),
+    };
+    assert_eq!(superseding_action_id(&superseded), Some(winner));
+}
+
+/// The prefix is asserted against a message copied verbatim off the wire, not
+/// against itself: `SUPERSEDED_PREFIX` is a guess about relay wording, and a
+/// guess that drifts silently stops matching and restores the original flake.
+/// This is the run that first exposed it (Relay E2E, PR #472).
+#[test]
+fn superseding_action_id_reads_the_message_the_relay_actually_sent() {
+    let observed = "conflict: superseded by original action \
+                    7d8f661f1e48fecd0cb6439cf97bb63e0489a58fbd05df91e2518c04f267816a";
+    let ok = buzz_ws_client::OkResponse {
+        event_id: "e1bb24caae7e6350381a978addfe504028aaf53420f52017c58a275e7078f694".to_owned(),
+        accepted: false,
+        message: observed.to_owned(),
+    };
+    assert_eq!(
+        superseding_action_id(&ok).as_deref(),
+        Some("7d8f661f1e48fecd0cb6439cf97bb63e0489a58fbd05df91e2518c04f267816a")
+    );
+}
+
+#[test]
+fn superseding_action_id_ignores_every_other_answer() {
+    let cases = [
+        (true, String::new()),
+        (true, "identical action already applied".to_owned()),
+        (false, "conflict: that record already exists".to_owned()),
+        (
+            false,
+            "conflict: the record changed since this request was prepared".to_owned(),
+        ),
+        // A malformed id must not be polled as if it were real.
+        (false, format!("{SUPERSEDED_PREFIX}not-hex")),
+    ];
+    for (accepted, message) in cases {
+        let ok = buzz_ws_client::OkResponse {
+            event_id: "b".repeat(64),
+            accepted,
+            message: message.clone(),
+        };
+        assert_eq!(
+            superseding_action_id(&ok),
+            None,
+            "accepted={accepted} message={message:?} must not be read as a supersede"
+        );
+    }
+}
+
 /// Publish one action and wait for the relay's linked receipt.
 async fn broker(
     client: &mut BuzzTestClient,
@@ -217,6 +296,22 @@ async fn broker(
         ok.message
     );
 
+    // A superseded action has no receipt of its own — the claim it lost is
+    // answered by the winner's receipt, which is the outcome this helper is
+    // asked for. Follow the winner rather than polling an id the relay will
+    // never author against.
+    let receipt_action_id = match superseding_action_id(&ok) {
+        Some(winner) => {
+            eprintln!(
+                "action {} was superseded by {}; reading that receipt instead",
+                &action_id[..12],
+                &winner[..12]
+            );
+            winner
+        }
+        None => action_id,
+    };
+
     // The receipt is authored by the relay after it processes the action, so
     // this polls rather than assuming it is already stored.
     for attempt in 0..40 {
@@ -224,7 +319,7 @@ async fn broker(
         let filter = Filter::new()
             .kind(Kind::Custom(KIND_COMPANY_RECEIPT as u16))
             .author(nostr::PublicKey::from_hex(relay).expect("relay key"))
-            .event(nostr::EventId::from_hex(&action_id).expect("action id"))
+            .event(nostr::EventId::from_hex(&receipt_action_id).expect("action id"))
             .limit(1);
         client
             .subscribe(&id, vec![filter])
@@ -238,7 +333,9 @@ async fn broker(
         let events = match client.collect_until_eose(&id, Duration::from_secs(5)).await {
             Ok(events) => events,
             Err(error) => {
-                eprintln!("receipt poll {attempt} for {action_id} errored, retrying: {error}");
+                eprintln!(
+                    "receipt poll {attempt} for {receipt_action_id} errored, retrying: {error}"
+                );
                 let _ = client.close_subscription(&id).await;
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 continue;
@@ -248,7 +345,7 @@ async fn broker(
         if let Some(event) = events.first() {
             let receipt = parse_company_receipt(event).expect("receipt parses");
             assert_eq!(
-                receipt.action_event_id, action_id,
+                receipt.action_event_id, receipt_action_id,
                 "a receipt must name the action it answers"
             );
             return (receipt.outcome, receipt.head_event_id);
@@ -1212,6 +1309,14 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     let (first_outcome, first_replay_head) =
         broker(&mut client, &fixture.owner, &fixture.relay, &replay).await;
     assert_eq!(first_outcome, CompanyReceiptOutcome::Applied);
+    // Cross a `created_at` second boundary before retrying. Nostr stamps
+    // `created_at` in whole seconds, so two signings of one action inside the
+    // same second are byte-identical and the relay answers the trivial
+    // "duplicate: identical action already applied" — which never reaches the
+    // claim-replay path this block exists to test. Waiting makes the retry a
+    // genuinely distinct event, so every run exercises the supersede branch
+    // instead of testing it on roughly one run in twenty by luck.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     let (second_outcome, second_replay_head) =
         broker(&mut client, &fixture.owner, &fixture.relay, &replay).await;
     assert_eq!(
