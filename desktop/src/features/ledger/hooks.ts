@@ -109,12 +109,20 @@ export function useLedgerReport(
      * is in the background, so a closed laptop costs nothing.
      */
     refetchIntervalMs?: number;
+    /**
+     * False suspends the report entirely, not just its interval. A watcher
+     * that is not allowed to speak should also not be decrypting the
+     * ledger on a timer: the budget alerter passes its settings gate here,
+     * so an owner with desktop alerts off pays nothing for a watcher that
+     * can never deliver.
+     */
+    enabled?: boolean;
   },
 ) {
   return useQuery<LedgerReport>({
     queryKey: ledgerReportQueryKey(communityId),
     queryFn: loadLedgerReport,
-    enabled: communityId.length > 0,
+    enabled: communityId.length > 0 && (options?.enabled ?? true),
     staleTime: 60_000,
     ...(options?.refetchIntervalMs
       ? { refetchInterval: options.refetchIntervalMs }

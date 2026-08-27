@@ -97,8 +97,15 @@ export function useBudgetNotifications(
 ): void {
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
+  // The settings gate decides whether this watcher may speak, so it also
+  // decides whether it listens: with alerts off there is no delivery path,
+  // and a ledger decryption on a timer buys nothing. Reading the gate from
+  // the same place the deliver step does keeps the two from drifting.
+  const alertsEnabled =
+    settings.desktopEnabled && settings.slotAlertsEnabled.needs_action;
   const reportQuery = useLedgerReport(communityId, {
     refetchIntervalMs: BUDGET_REPORT_REFETCH_MS,
+    enabled: alertsEnabled,
   });
 
   const settingsRef = React.useRef(settings);
