@@ -145,7 +145,7 @@ export function CreditsPage({
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-7 sm:px-6 sm:py-8">
       <div className="mx-auto w-full max-w-3xl">
         <PageHeader
-          description="Top up the balance your agents draw on."
+          description="Top up the balance your agents draw on. Credits are a one-off purchase, not a subscription, and they do not expire."
           title="Credits"
         />
 
@@ -170,7 +170,7 @@ export function CreditsPage({
             <section className="rounded-2xl border border-border/60 bg-card/60 px-5 py-5">
               <fieldset className="min-w-0 border-0 p-0">
                 <legend className="text-sm font-medium text-foreground">
-                  Add credits
+                  Choose an amount
                 </legend>
 
                 {!packs || !currency ? (
@@ -195,9 +195,14 @@ export function CreditsPage({
                           onClick={() => onSelect(pack.id)}
                           type="button"
                         >
-                          <span className="flex items-center justify-between gap-2">
-                            <span className="truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-                              {pack.name}
+                          {/* No pack name. "Starter", "Growth", "Pro" are
+                              subscription-tier words, and this is a one-off
+                              top-up: naming the tiers implied a plan someone
+                              would be signed up to. The amount is the whole
+                              identity of the choice, so it leads. */}
+                          <span className="flex items-baseline justify-between gap-2">
+                            <span className="text-lg font-semibold tracking-tight tabular-nums text-foreground">
+                              {formatGrant(pack.grantNanousd)}
                             </span>
                             {/* A short pill, not a sentence: every chip must
                                 stay one line tall or the row's baselines
@@ -207,9 +212,6 @@ export function CreditsPage({
                                 +{packGain}%
                               </span>
                             ) : null}
-                          </span>
-                          <span className="mt-1 block text-lg font-semibold tracking-tight tabular-nums text-foreground">
-                            {formatGrant(pack.grantNanousd)}
                           </span>
                           {/* Always the charge, never sometimes the charge and
                               sometimes a saving: one slot, one meaning. */}
