@@ -20,6 +20,7 @@ export const EMPTY_ANSWERS: OnboardingAnswers = {
   website: null,
   description: null,
   paid: false,
+  communitySlug: null,
 };
 
 /**
@@ -52,6 +53,7 @@ function coerce(raw: unknown): OnboardingAnswers {
     website: value.website ?? null,
     description: value.description ?? null,
     paid: value.paid === true,
+    communitySlug: value.communitySlug ?? null,
   };
 }
 

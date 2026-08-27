@@ -16,6 +16,9 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
+import { markFreshIdentity } from "../freshFounder";
+import { resolveMachineAuthService } from "../lib/wiredAuthService";
+import { AccountSignInStep } from "./AccountSignInStep";
 import { BackupStep } from "./BackupStep";
 import { DefaultConfigStep } from "./DefaultConfigStep";
 import { DownloadKeyStep } from "./DownloadKeyStep";
@@ -43,6 +46,7 @@ import type { DefaultConfigDraft } from "./types";
 
 export type MachineOnboardingPage =
   | "identity"
+  | "account-signin"
   | "key-import"
   | "backup"
   | "setup"
@@ -57,6 +61,10 @@ type BackupSubview = "created" | "options" | "password";
  */
 const MACHINE_PAGE_STEP: Record<MachineOnboardingPage, MachineStep> = {
   identity: "identity",
+  // Like key import, both sign-in doors are detours off the landing screen
+  // rather than steps of their own, so they keep the landing hue: the colour
+  // would otherwise announce progress the person has not made.
+  "account-signin": "identity",
   "key-import": "identity",
   backup: "backup",
   setup: "setup",
@@ -107,6 +115,12 @@ export function MachineOnboardingFlow({
     "backup" | "phone" | null
   >(null);
   const [phoneRecoveryStep, setPhoneRecoveryStep] = React.useState("loading");
+  const [isSigningIn, setIsSigningIn] = React.useState(false);
+  // The machine flow's email-and-password door, wired once per mount so the
+  // service identity never changes mid-run (an in-flight sign-in reads it).
+  const [auth] = React.useState(() =>
+    resolveMachineAuthService(import.meta.env),
+  );
   const selectedPubkey: string | null = null;
   const identityStorage: IdentityStorage | undefined = undefined;
   const [readyRuntimeIds, setReadyRuntimeIds] = React.useState<string[]>([]);
@@ -143,6 +157,10 @@ export function MachineOnboardingFlow({
         `buzz-identity-backup-reminder.v1:${identity.pubkey}`,
         "pending",
       );
+      // A brand-new identity started here is the one signal that the canvas
+      // first run should own the next screens; imported identities never
+      // write it.
+      markFreshIdentity(identity.pubkey);
       complete(identity.pubkey);
     } catch (cause) {
       setError(
@@ -205,6 +223,28 @@ export function MachineOnboardingFlow({
     [complete, continueWithIdentity, queryClient],
   );
 
+  /**
+   * Runs after the auth service has imported the signed-in or recovered
+   * backup into this computer's keyring: resolve the live identity and hand
+   * it off exactly like key import does. A different pubkey remounts the app
+   * through the normal boundary; nothing special lands afterward.
+   */
+  const finishAccountSignIn = React.useCallback(async () => {
+    const identity = await getIdentity();
+    continueWithIdentity(identity.pubkey);
+    queryClient.setQueryData(["identity"], identity);
+    complete(identity.pubkey);
+  }, [complete, continueWithIdentity, queryClient]);
+
+  const openAccountSignin = React.useCallback(() => {
+    // Landing doors reset whatever detour they lead away from, so choosing
+    // this one leaves any half-typed private-key entry behind.
+    setKeyImportDialog(null);
+    setKeyImportStage("key-entry");
+    setTransitionDirection("forward");
+    setPage("account-signin");
+  }, []);
+
   const backFromKeyImport = React.useCallback(() => {
     if (keyImportStage === "backup-password") {
       setKeyImportFormKey((current) => current + 1);
@@ -242,30 +282,38 @@ export function MachineOnboardingFlow({
     page === "key-import" &&
     (!identityLost || keyImportStage === "backup-password")
       ? { disabled: isKeyImporting, onClick: backFromKeyImport }
-      : page === "backup" && backupSubview !== "created"
+      : page === "account-signin"
         ? {
-            label: "Return to onboarding",
-            onClick: returnToCreatedKey,
-            testId: "backup-return-to-onboarding",
+            disabled: isSigningIn,
+            onClick: () => {
+              setTransitionDirection("backward");
+              setPage("identity");
+            },
           }
-        : page === "backup"
+        : page === "backup" && backupSubview !== "created"
           ? {
-              onClick: () => {
-                setTransitionDirection("backward");
-                setPage("identity");
-              },
+              label: "Return to onboarding",
+              onClick: returnToCreatedKey,
+              testId: "backup-return-to-onboarding",
             }
-          : page === "setup"
-            ? { onClick: backFromSetup }
-            : page === "config"
-              ? {
-                  disabled: isDefaultConfigSaving,
-                  onClick: () => {
-                    setTransitionDirection("backward");
-                    setPage("setup");
-                  },
-                }
-              : undefined;
+          : page === "backup"
+            ? {
+                onClick: () => {
+                  setTransitionDirection("backward");
+                  setPage("identity");
+                },
+              }
+            : page === "setup"
+              ? { onClick: backFromSetup }
+              : page === "config"
+                ? {
+                    disabled: isDefaultConfigSaving,
+                    onClick: () => {
+                      setTransitionDirection("backward");
+                      setPage("setup");
+                    },
+                  }
+                : undefined;
 
   return (
     <MachineCanvas
@@ -317,12 +365,7 @@ export function MachineOnboardingFlow({
                 <button
                   className="onb-quiet-action"
                   disabled={isPending}
-                  onClick={() => {
-                    setKeyImportDialog(null);
-                    setKeyImportStage("key-entry");
-                    setTransitionDirection("forward");
-                    setPage("key-import");
-                  }}
+                  onClick={openAccountSignin}
                   type="button"
                 >
                   {selectedPubkey
@@ -331,6 +374,24 @@ export function MachineOnboardingFlow({
                 </button>
               </div>
               <IdentityKeyHelpDialog />
+            </OnboardingSlideTransition>
+          ) : page === "account-signin" ? (
+            <OnboardingSlideTransition
+              className="onb-screen"
+              data-solo="true"
+              direction={transitionDirection}
+              transitionKey={`machine-account-signin-${transitionDirection}`}
+            >
+              <AccountSignInStep
+                auth={auth}
+                onCompleteIdentity={finishAccountSignIn}
+                onBusyChange={setIsSigningIn}
+                onUsePrivateKey={() => {
+                  setKeyImportStage("key-entry");
+                  setTransitionDirection("forward");
+                  setPage("key-import");
+                }}
+              />
             </OnboardingSlideTransition>
           ) : page === "key-import" ? (
             <OnboardingSlideTransition

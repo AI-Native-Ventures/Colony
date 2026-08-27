@@ -19,7 +19,9 @@ test("welcome canvas explains name, role, and team mentions", () => {
 
 test("welcome canvas promises nothing happens without approval", () => {
   assert.match(WELCOME_CANVAS_CONTENT, /blocks in this channel/i);
-  assert.match(WELCOME_CANVAS_CONTENT, /until you approve the blueprint/i);
+  assert.match(WELCOME_CANVAS_CONTENT, /until you\s+approve the blueprint/i);
+  // Only creation and hiring are gated, so the canvas must not claim work is.
+  assert.doesNotMatch(WELCOME_CANVAS_CONTENT, /or start work/i);
 });
 
 test("welcome canvas is Colony-facing and names no retired starter agents", () => {

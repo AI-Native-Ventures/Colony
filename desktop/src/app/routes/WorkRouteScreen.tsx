@@ -4,7 +4,6 @@ import { toast } from "sonner";
 
 import {
   tasksQueryKey,
-  useActiveCompany,
   useCompanyTasks,
   useInitiatives,
 } from "@/features/company/hooks";
@@ -37,14 +36,10 @@ export function WorkRouteScreen() {
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
 
-  const companyQuery = useActiveCompany(communityId);
-  const companyId = companyQuery.data?.ok ? companyQuery.data.value.id : null;
-  const tasksQuery = useCompanyTasks(
-    communityId,
-    { companyId: companyId ?? undefined },
-    companyId !== null,
-  );
-  const initiativesQuery = useInitiatives(communityId, companyId);
+  // No company gate. Work belongs to the community, so the only thing these
+  // wait on is the community itself being resolved.
+  const tasksQuery = useCompanyTasks(communityId, {});
+  const initiativesQuery = useInitiatives(communityId);
 
   const tasks = tasksQuery.data?.ok ? tasksQuery.data.value : [];
   // Sorted so the runs query key is stable across refetches.
@@ -77,22 +72,16 @@ export function WorkRouteScreen() {
   );
 
   const error =
-    companyQuery.error instanceof Error
-      ? companyQuery.error
-      : tasksQuery.error instanceof Error
-        ? tasksQuery.error
-        : companyQuery.data && !companyQuery.data.ok
-          ? new Error(companyQuery.data.message)
-          : tasksQuery.data && !tasksQuery.data.ok
-            ? new Error(tasksQuery.data.message)
-            : null;
+    tasksQuery.error instanceof Error
+      ? tasksQuery.error
+      : tasksQuery.data && !tasksQuery.data.ok
+        ? new Error(tasksQuery.data.message)
+        : null;
 
   const initiatives = initiativesQuery.data?.ok
     ? initiativesQuery.data.value
     : [];
-  const isLoading =
-    (communityId !== "" && companyQuery.isLoading) ||
-    (companyId !== null && tasksQuery.isLoading);
+  const isLoading = communityId !== "" && tasksQuery.isLoading;
 
   // Dependencies can reach across initiatives, so the blocked-by count
   // resolves against every fetched task, not just the board's narrowed
@@ -138,9 +127,7 @@ export function WorkRouteScreen() {
           return;
         }
         await queryClient.invalidateQueries({
-          queryKey: tasksQueryKey(communityId, {
-            companyId: companyId ?? undefined,
-          }),
+          queryKey: tasksQueryKey(communityId, {}),
         });
       } catch (thrown) {
         toast.error(
@@ -150,7 +137,7 @@ export function WorkRouteScreen() {
         setPendingTaskId(null);
       }
     },
-    [queryClient, communityId, companyId],
+    [queryClient, communityId],
   );
 
   const handleQueueComplete = React.useCallback(

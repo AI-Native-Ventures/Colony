@@ -100,7 +100,9 @@ export const KIND_ASK_RESOLUTION = 44301;
  * Relay-signed ask-state head (d tag = the ask event id). Carries the relay's
  * own deadline_at plus what happens when it passes, because nothing outside
  * the relay can compute that deadline and a countdown that disagrees with the
- * sweep is worse than none. Mirror of buzz-core's KIND_ASK_STATE.
+ * sweep is worse than none. Relay-only at ingest
+ * (`buzz_core::kind::is_relay_only_kind`), so a client can never author one.
+ * Mirror of buzz-core's KIND_ASK_STATE.
  */
 export const KIND_ASK_STATE = 30200;
 /** Withdrawal of an open ask by its filer. */

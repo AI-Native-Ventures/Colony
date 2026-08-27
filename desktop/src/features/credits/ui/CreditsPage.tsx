@@ -1,11 +1,10 @@
-import { Check, CreditCard, Loader2, ShieldCheck } from "lucide-react";
+import { Loader2, ShieldCheck, Wallet } from "lucide-react";
 
 import type {
   ChargeCurrency,
   CreditPack,
 } from "@/features/onboarding/contracts";
 import {
-  DEFAULT_PACK_ID,
   formatGrant,
   formatPrice,
   priceOf,
@@ -16,6 +15,9 @@ import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 export type CheckoutState = "idle" | "leaving" | "returned" | "failed";
+
+const NANO_USD_PER_DOLLAR = 1_000_000_000;
+const NANO_USD_PER_CENT = 10_000_000;
 
 type Props = {
   balanceUsdCents: number | null;
@@ -28,18 +30,98 @@ type Props = {
   state: CheckoutState;
 };
 
+/** Charge per granted dollar. Lower is better value.
+ *
+ * The catalogue's one intentional relationship is that grants step up faster
+ * than prices, so this is the only comparison between packs worth showing. It
+ * is derived from prices the relay sent rather than stored, so a price change
+ * cannot leave a stale "better value" claim on screen. */
+function chargePerGrantedDollar(pack: CreditPack, currency: ChargeCurrency) {
+  const grantedDollars = pack.grantNanousd / NANO_USD_PER_DOLLAR;
+  return grantedDollars === 0
+    ? Infinity
+    : priceOf(pack, currency) / grantedDollars;
+}
+
+/** How much better value a pack is than the cheapest one, as whole percent.
+ *
+ * Measured against the smallest pack because that is the one a buyer has
+ * usually already bought, so it is the number they can feel. Below five
+ * percent nothing is shown: a "+2%" badge on four tiers at once is noise
+ * that makes the two tiers where the saving is real harder to see. */
+function valueGainPercent(
+  pack: CreditPack,
+  packs: CreditPack[],
+  currency: ChargeCurrency,
+): number {
+  const base = packs[0];
+  if (!base || base.id === pack.id) return 0;
+  const baseRate = chargePerGrantedDollar(base, currency);
+  const rate = chargePerGrantedDollar(pack, currency);
+  if (!Number.isFinite(baseRate) || !Number.isFinite(rate)) return 0;
+  return Math.round(((baseRate - rate) / baseRate) * 100);
+}
+
+function BalancePanel({ balanceUsdCents }: { balanceUsdCents: number | null }) {
+  return (
+    <section className="rounded-2xl border border-border/60 bg-card/60 px-5 py-5">
+      <p className="flex items-center gap-2 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+        <Wallet aria-hidden="true" className="size-3.5" />
+        Available credits
+      </p>
+      {balanceUsdCents === null ? (
+        <Skeleton className="mt-3 h-9 w-32" />
+      ) : (
+        <p
+          className="mt-2 text-4xl font-semibold tracking-tight tabular-nums text-foreground"
+          data-testid="credits-balance"
+        >
+          {formatGrant(balanceUsdCents * NANO_USD_PER_CENT)}
+        </p>
+      )}
+      <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+        Credits pay for the model calls, searches and sends your agents make.
+        They are denominated in US dollars because that is what those calls
+        cost.
+      </p>
+    </section>
+  );
+}
+
+function LadderSkeleton() {
+  return (
+    <div
+      aria-busy="true"
+      aria-label="Loading prices"
+      className="mt-3 flex flex-wrap gap-2"
+      role="status"
+    >
+      {[0, 1, 2, 3, 4, 5, 6].map((index) => (
+        <Skeleton className="h-16 w-28 rounded-xl" key={index} />
+      ))}
+    </div>
+  );
+}
+
 /**
  * Buying Credits, in the app's own visual language.
  *
  * Deliberately NOT the onboarding wizard's screen. That one lives on a full
  * bleed canvas whose styles are all scoped under `.onb-canvas`, so mounting it
  * in a normal route strips every rule and collapses the packs into a wall of
- * run-together text. It is also shaped for a wizard step — one decision, no
- * surrounding app — rather than for a page someone returns to.
+ * run-together text.
  *
- * The purchase LOGIC is still shared: the pack list, the formatters and the
- * payments service are the same ones onboarding uses, so the rules that matter
- * have one implementation. Only the presentation is local.
+ * It is also shaped differently on purpose. The wizard asks a first-time buyer
+ * to compare a catalogue; this screen serves someone who has already decided to
+ * top up and only needs to choose an amount. So the packs are an amount ladder
+ * rather than a grid of equal cards: the decision is "how much", the tiers span
+ * two hundred to one, and a row of identical boxes hides both facts. What the
+ * charge buys is stated once, under the ladder, instead of seven times inside
+ * it.
+ *
+ * The purchase LOGIC is still shared with onboarding: the pack list, the
+ * formatters and the payments service are the same ones the wizard uses, so the
+ * rules that matter have one implementation. Only presentation is local.
  *
  * Presentational on purpose: the caller owns fetching and checkout, so this
  * renders identically from live data or a fixture.
@@ -56,127 +138,177 @@ export function CreditsPage({
 }: Props) {
   const chosen = packs?.find((pack) => pack.id === selected) ?? null;
   const busy = state === "leaving";
+  const gain =
+    chosen && packs && currency ? valueGainPercent(chosen, packs, currency) : 0;
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-6 py-8">
-      <PageHeader
-        description="Credits pay for model calls, searches and sends. They are priced in US dollars because that is what the models cost."
-        title="Credits"
-      />
+    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-7 sm:px-6 sm:py-8">
+      <div className="mx-auto w-full max-w-3xl">
+        <PageHeader
+          description="Top up the balance your agents draw on. Credits are a one-off purchase, not a subscription, and they do not expire."
+          title="Credits"
+        />
 
-      <section className="mt-6 rounded-2xl border border-border/60 bg-card/60 px-5 py-4">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Current balance
-        </p>
-        {balanceUsdCents === null ? (
-          <Skeleton className="mt-2 h-8 w-32" />
-        ) : (
-          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
-            {formatGrant(balanceUsdCents * 10_000_000)}
-          </p>
-        )}
-      </section>
+        <div className="mt-7 space-y-4">
+          <BalancePanel balanceUsdCents={balanceUsdCents} />
 
-      <h2 className="mt-8 text-sm font-medium text-muted-foreground">
-        Choose a top-up
-      </h2>
-
-      {loadFailed ? (
-        <p className="mt-3 rounded-2xl border border-destructive/40 bg-destructive/5 px-5 py-4 text-sm">
-          Could not load prices. Check your connection and reopen this page.
-        </p>
-      ) : !packs || !currency ? (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {[0, 1, 2, 3, 4, 5].map((index) => (
-            <Skeleton className="h-28 rounded-2xl" key={index} />
-          ))}
-        </div>
-      ) : (
-        <ul className="mt-3 grid list-none gap-3 p-0 sm:grid-cols-2 lg:grid-cols-3">
-          {packs.map((pack) => {
-            const isSelected = pack.id === selected;
-            return (
-              <li key={pack.id}>
-                <button
-                  aria-pressed={isSelected}
-                  className={cn(
-                    "w-full rounded-2xl border px-5 py-4 text-left transition-colors",
-                    "hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    isSelected
-                      ? "border-primary bg-primary/5"
-                      : "border-border/60 bg-card/60",
-                  )}
-                  data-selected={isSelected}
-                  data-testid={`credits-pack-${pack.id}`}
-                  onClick={() => onSelect(pack.id)}
-                  type="button"
-                >
-                  <span className="flex items-start justify-between gap-2">
-                    <span className="text-sm font-medium">{pack.name}</span>
-                    {isSelected ? (
-                      <Check aria-hidden className="h-4 w-4 text-primary" />
-                    ) : null}
-                  </span>
-                  {/* The charge is the loud number: it is what leaves the
-                      account. The grant is what arrives, in dollars, because
-                      the ledger is denominated in dollars. */}
-                  <span className="mt-2 block text-2xl font-semibold tracking-tight tabular-nums">
-                    {formatPrice(priceOf(pack, currency), currency)}
-                  </span>
-                  <span className="mt-1 block text-sm text-muted-foreground">
-                    {formatGrant(pack.grantNanousd)} of credits
-                    {pack.id === DEFAULT_PACK_ID ? (
-                      <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-xs">
-                        Popular
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      <div className="mt-8 flex flex-wrap items-center gap-4">
-        <Button
-          disabled={!chosen || busy}
-          data-testid="credits-pay"
-          onClick={onPay}
-          size="lg"
-        >
-          {busy ? (
-            <>
-              <Loader2 aria-hidden className="mr-2 h-4 w-4 animate-spin" />
-              Opening checkout…
-            </>
-          ) : chosen && currency ? (
-            <>
-              <CreditCard aria-hidden className="mr-2 h-4 w-4" />
-              Pay {formatPrice(priceOf(chosen, currency), currency)}
-            </>
+          {loadFailed ? (
+            <div
+              className="rounded-2xl border border-destructive/25 bg-destructive/5 px-5 py-8"
+              role="alert"
+            >
+              <h2 className="text-base font-semibold text-foreground">
+                Prices could not be loaded
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Colony could not be reached, so nothing is shown rather than a
+                price that might be wrong. Check your connection and reopen this
+                page.
+              </p>
+            </div>
           ) : (
-            "Choose a top-up"
+            <section className="rounded-2xl border border-border/60 bg-card/60 px-5 py-5">
+              <fieldset className="min-w-0 border-0 p-0">
+                <legend className="text-sm font-medium text-foreground">
+                  Choose an amount
+                </legend>
+
+                {!packs || !currency ? (
+                  <LadderSkeleton />
+                ) : (
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                    {packs.map((pack) => {
+                      const isSelected = pack.id === selected;
+                      const packGain = valueGainPercent(pack, packs, currency);
+                      return (
+                        <button
+                          aria-pressed={isSelected}
+                          className={cn(
+                            "relative rounded-xl border px-4 py-3 text-left transition-colors",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            isSelected
+                              ? "border-primary bg-primary/10 ring-1 ring-primary"
+                              : "border-border/70 bg-background/40 hover:border-primary/50",
+                          )}
+                          data-testid={`credits-pack-${pack.id}`}
+                          key={pack.id}
+                          onClick={() => onSelect(pack.id)}
+                          type="button"
+                        >
+                          {/* No pack name. "Starter", "Growth", "Pro" are
+                              subscription-tier words, and this is a one-off
+                              top-up: naming the tiers implied a plan someone
+                              would be signed up to. The amount is the whole
+                              identity of the choice, so it leads. */}
+                          <span className="flex items-baseline justify-between gap-2">
+                            <span className="text-lg font-semibold tracking-tight tabular-nums text-foreground">
+                              {formatGrant(pack.grantNanousd)}
+                            </span>
+                            {/* A short pill, not a sentence: every chip must
+                                stay one line tall or the row's baselines
+                                break the moment one of them wraps. */}
+                            {packGain >= 5 ? (
+                              <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-3xs font-medium tabular-nums text-primary">
+                                +{packGain}%
+                              </span>
+                            ) : null}
+                          </span>
+                          {/* Always the charge, never sometimes the charge and
+                              sometimes a saving: one slot, one meaning. */}
+                          <span className="mt-0.5 block text-2xs tabular-nums text-muted-foreground">
+                            {formatPrice(priceOf(pack, currency), currency)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </fieldset>
+
+              {chosen && currency ? (
+                <dl className="mt-5 flex flex-wrap items-baseline gap-x-8 gap-y-3 border-t border-border/60 pt-4">
+                  <div>
+                    <dt className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+                      You pay
+                    </dt>
+                    <dd className="mt-1 text-xl font-semibold tracking-tight tabular-nums text-foreground">
+                      {formatPrice(priceOf(chosen, currency), currency)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+                      You receive
+                    </dt>
+                    <dd className="mt-1 text-xl font-semibold tracking-tight tabular-nums text-foreground">
+                      {formatGrant(chosen.grantNanousd)}
+                    </dd>
+                  </div>
+                  {gain >= 5 ? (
+                    <div>
+                      <dt className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Value
+                      </dt>
+                      <dd className="mt-1 text-xl font-semibold tracking-tight tabular-nums text-foreground">
+                        {gain}% better
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : null}
+
+              <div className="mt-5 flex flex-col gap-3">
+                <Button
+                  className="w-full sm:w-auto sm:self-start"
+                  data-testid="credits-pay"
+                  disabled={!chosen || !currency || busy}
+                  onClick={onPay}
+                  size="lg"
+                >
+                  {busy ? (
+                    <>
+                      <Loader2
+                        aria-hidden="true"
+                        className="mr-2 size-4 animate-spin"
+                      />
+                      Opening checkout
+                    </>
+                  ) : chosen && currency ? (
+                    `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
+                  ) : (
+                    "Choose an amount"
+                  )}
+                </Button>
+
+                <p className="flex items-center gap-2 text-2xs text-muted-foreground">
+                  <ShieldCheck aria-hidden="true" className="size-3.5" />
+                  Checkout opens in your browser. Colony never sees your card
+                  details.
+                </p>
+              </div>
+
+              {state === "returned" ? (
+                <p
+                  className="mt-4 rounded-xl border border-border/60 bg-background/40 px-4 py-3 text-sm text-muted-foreground"
+                  role="status"
+                >
+                  Waiting for your bank to confirm. Credits land automatically,
+                  and the balance above updates on its own. You can leave this
+                  page.
+                </p>
+              ) : null}
+              {state === "failed" ? (
+                <p
+                  className="mt-4 rounded-xl border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-foreground"
+                  role="alert"
+                >
+                  Checkout could not be started, so nothing was charged. Try
+                  again in a moment.
+                </p>
+              ) : null}
+            </section>
           )}
-        </Button>
-
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <ShieldCheck aria-hidden className="h-4 w-4" />
-          Payment opens in your browser. Colony never sees your card details.
-        </p>
+        </div>
       </div>
-
-      {state === "returned" ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Waiting for the payment to confirm. Your balance updates here as soon
-          as it clears.
-        </p>
-      ) : null}
-      {state === "failed" ? (
-        <p className="mt-4 text-sm text-destructive">
-          That payment did not go through. Nothing was charged.
-        </p>
-      ) : null}
     </div>
   );
 }

@@ -281,7 +281,6 @@ fn default_task(
     CompanyTask {
         schema: "colony.task/v1".to_string(),
         id: id.to_string(),
-        company_id: "acme".to_string(),
         initiative_id: initiative_id.map(str::to_string),
         title: format!("Task {id}"),
         status,
@@ -324,8 +323,6 @@ async fn store_task_head_at(
     let content = serde_json::to_string(task).expect("serialize task head content");
     let mut tags = vec![
         tag(&["d", &task.id]),
-        tag(&["c", &task.company_id]),
-        tag(&["company", &task.company_id]),
         tag(&["team", &task.owning_team_id]),
         tag(&["cost-centre", &task.cost_centre_id]),
     ];

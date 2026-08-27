@@ -35,11 +35,11 @@ use crate::PartiesCmd;
 /// Route `buzz parties ...`.
 pub async fn dispatch_parties(command: PartiesCmd, client: &BuzzClient) -> Result<(), CliError> {
     match command {
-        PartiesCmd::List { company } => list_parties(client, &company).await,
+        PartiesCmd::List => list_parties(client).await,
         PartiesCmd::Get { id } => get_party(client, &id).await,
         PartiesCmd::Create { file } => create_party(client, &file).await,
         PartiesCmd::Relate { file } => relate_party(client, &file).await,
-        PartiesCmd::Resolve { company, file } => resolve_party(client, &company, &file).await,
+        PartiesCmd::Resolve { file } => resolve_party(client, &file).await,
         PartiesCmd::Merge { survivor, retire } => merge_party(client, &survivor, &retire).await,
     }
 }
@@ -204,13 +204,12 @@ async fn get_party(client: &BuzzClient, id: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn list_parties(client: &BuzzClient, company: &str) -> Result<(), CliError> {
+async fn list_parties(client: &BuzzClient) -> Result<(), CliError> {
     let relay = relay_self(client).await?;
     let events = client
         .query_all(json!({
             "kinds": [KIND_PARTY],
-            "authors": [relay.to_hex()],
-            "#c": [company]
+            "authors": [relay.to_hex()]
         }))
         .await?;
 
@@ -224,8 +223,8 @@ async fn list_parties(client: &BuzzClient, company: &str) -> Result<(), CliError
             // Scoped twice: `#c` is the indexed tag the relay can answer, and
             // this narrows again. Showing an owner another company's customers
             // is worse than being slow.
-            Ok(PartyHead::Party(party)) if party.company_id == company => parties.push(party),
-            Ok(PartyHead::Alias(alias)) if alias.company_id == company => retired.push(alias),
+            Ok(PartyHead::Party(party)) => parties.push(party),
+            Ok(PartyHead::Alias(alias)) => retired.push(alias),
             _ => continue,
         }
     }
@@ -297,7 +296,7 @@ async fn relate_party(client: &BuzzClient, file: &str) -> Result<(), CliError> {
 /// Reads only. Nothing is written on the strength of this answer, because an
 /// automatic merge on a wrong match fuses two customers' histories and nothing
 /// downstream can tell that it happened.
-async fn resolve_party(client: &BuzzClient, company: &str, file: &str) -> Result<(), CliError> {
+async fn resolve_party(client: &BuzzClient, file: &str) -> Result<(), CliError> {
     let raw = std::fs::read_to_string(file)
         .map_err(|error| CliError::Usage(format!("cannot read {file}: {error}")))?;
     let observed: Vec<PartyIdentifier> = serde_json::from_str(&raw).map_err(|error| {
@@ -308,8 +307,7 @@ async fn resolve_party(client: &BuzzClient, company: &str, file: &str) -> Result
     let events = client
         .query_all(json!({
             "kinds": [KIND_PARTY],
-            "authors": [relay.to_hex()],
-            "#c": [company]
+            "authors": [relay.to_hex()]
         }))
         .await?;
     // Live parties only. Resolving onto a retired handle would point new
@@ -319,7 +317,7 @@ async fn resolve_party(client: &BuzzClient, company: &str, file: &str) -> Result
         .filter_map(|raw| {
             let event = Event::from_json(raw.to_string()).ok()?;
             match parse_party_event(&event).ok()? {
-                PartyHead::Party(party) if party.company_id == company => Some(party),
+                PartyHead::Party(party) => Some(party),
                 _ => None,
             }
         })
@@ -375,7 +373,6 @@ async fn merge_party(client: &BuzzClient, survivor: &str, retire: &str) -> Resul
     let alias = PartyAlias {
         schema: PARTY_ALIAS_SCHEMA.to_string(),
         id: retired_handle.clone(),
-        company_id: merged.company_id.clone(),
         resolves_to: merged.id.clone(),
         merged_at: chrono::Utc::now().timestamp(),
         // The relay writes the real value: it is the hash of the action this
@@ -536,7 +533,6 @@ mod tests {
         json!({
             "schema": PARTY_SCHEMA,
             "id": "acme-industries",
-            "companyId": "horizonlabs",
             "kind": "organization",
             "displayName": "Acme Industries",
             "legalName": null,
@@ -582,7 +578,6 @@ mod tests {
         let view = json!({
             "schema": PARTY_RELATIONSHIP_SCHEMA,
             "id": "acme-industries:lead",
-            "companyId": "horizonlabs",
             "partyId": "acme-industries",
             "relationship": "lead",
             "status": "candidate",

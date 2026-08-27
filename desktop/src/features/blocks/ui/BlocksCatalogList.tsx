@@ -71,11 +71,12 @@ export function BlocksCatalogList({
       <div className="rounded-2xl border border-dashed border-border/70 px-5 py-12 text-center">
         <Blocks className="mx-auto size-8 text-muted-foreground" />
         <h2 className="mt-3 text-base font-semibold text-foreground">
-          No Blocks published yet
+          No Blocks yet
         </h2>
         <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-          Published Blocks will appear here. Work with an agent in chat to
-          create or improve one.
+          Agents already have Colony's built-in cards to use in a conversation.
+          Blocks added to this workspace show up here, and only an owner or an
+          admin can add one.
         </p>
       </div>
     );

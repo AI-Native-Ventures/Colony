@@ -27,6 +27,33 @@ test("a well-formed ask reads its fields", () => {
   assert.equal(ask.rawContent, event.content);
 });
 
+test("the ask type comes off the `ask-type` tag, where NIP-IQ puts it", () => {
+  const ask = readAsk({
+    ...askEvent("ask-typed", { headline: "Ship it?" }),
+    tags: [["ask-type", "credential"]],
+  });
+  assert.equal(ask.askType, "credential");
+});
+
+test("a value outside the pinned ask-type vocabulary falls back rather than rendering junk", () => {
+  const ask = readAsk({
+    ...askEvent("ask-weird", { headline: "Ship it?" }),
+    tags: [["ask-type", "urgent"]],
+  });
+  assert.equal(ask.askType, "question");
+});
+
+test("a duplicate ask-type tag fails closed, as the relay's parser does", () => {
+  const ask = readAsk({
+    ...askEvent("ask-dupe", { headline: "Ship it?" }),
+    tags: [
+      ["ask-type", "blocker"],
+      ["ask-type", "decision"],
+    ],
+  });
+  assert.equal(ask.askType, "question");
+});
+
 test("an ask keeps optional channel and thread source tags", () => {
   const ask = readAsk({
     ...askEvent("ask-source", { type: "question", headline: "Need context" }),

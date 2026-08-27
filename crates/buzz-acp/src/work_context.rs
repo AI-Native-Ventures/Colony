@@ -20,8 +20,8 @@ use std::collections::HashMap;
 
 use buzz_core::{
     company::{
-        classify_cost, AgentWorkContext, AttributionState, CommercialPurpose,
-        CompanyOnboardingStatus, CompanyProfile, CompanyTask, Initiative,
+        classify_cost, AgentWorkContext, AttributionState, CommercialPurpose, CompanyProfile,
+        CompanyTask, Initiative, COMMUNITY_PROFILE_ID,
     },
     employee::parse_employee_head,
     interrupt::AgentTier,
@@ -157,16 +157,18 @@ pub fn head_filter(kind: u32, relay_pubkey: &nostr::PublicKey, id: &str) -> nost
 /// The three filters one work reference needs, in a fixed order.
 pub fn work_filters(
     reference: &WorkReference,
-    company_id: Option<&str>,
     relay_pubkey: &nostr::PublicKey,
 ) -> Vec<nostr::Filter> {
     let mut filters = vec![head_filter(KIND_TASK, relay_pubkey, &reference.task_id)];
     if let Some(initiative_id) = reference.initiative_id.as_deref() {
         filters.push(head_filter(KIND_INITIATIVE, relay_pubkey, initiative_id));
     }
-    if let Some(company_id) = company_id {
-        filters.push(head_filter(KIND_COMPANY_PROFILE, relay_pubkey, company_id));
-    }
+    // Always: there is one profile per community, at one fixed coordinate.
+    filters.push(head_filter(
+        KIND_COMPANY_PROFILE,
+        relay_pubkey,
+        COMMUNITY_PROFILE_ID,
+    ));
     filters
 }
 
@@ -211,9 +213,6 @@ pub fn hydrate(
     if task.owning_team_id != reference.owning_team_id {
         return Err("the message and the task disagree about the owning team".to_string());
     }
-    if task.company_id != company.id {
-        return Err("the task belongs to a different company".to_string());
-    }
     if !company
         .cost_centres
         .iter()
@@ -231,9 +230,6 @@ pub fn hydrate(
                 || task.initiative_id.as_deref() != Some(initiative_id)
             {
                 return Err("the initiative record does not match the reference".to_string());
-            }
-            if initiative.company_id != task.company_id {
-                return Err("the initiative belongs to a different company".to_string());
             }
             Some(initiative)
         }
@@ -256,7 +252,6 @@ pub fn hydrate(
     );
 
     let metric = AgentWorkContext {
-        company_id: task.company_id.clone(),
         task_id: task.id.clone(),
         initiative_id: task.initiative_id.clone(),
         owning_team_id: task.owning_team_id.clone(),
@@ -405,7 +400,7 @@ pub async fn resolve_for_event(
         })?;
 
     let first = rest
-        .query_events(&work_filters(&reference, None, &relay_pubkey))
+        .query_events(&work_filters(&reference, &relay_pubkey))
         .await
         .map_err(|error| format!("could not read the work records: {error}"))?;
     let task_event = first
@@ -417,19 +412,19 @@ pub async fn resolve_for_event(
         .find(|event| event.kind.as_u16() as u32 == KIND_INITIATIVE)
         .cloned();
 
-    let task =
-        parse_task_event(task_event).map_err(|error| format!("task is unreadable: {error}"))?;
+    // Parsed for validation only: an unreadable task must stop the hydrate.
+    parse_task_event(task_event).map_err(|error| format!("task is unreadable: {error}"))?;
     let company_events = rest
         .query_events(&[head_filter(
             KIND_COMPANY_PROFILE,
             &relay_pubkey,
-            &task.company_id,
+            COMMUNITY_PROFILE_ID,
         )])
         .await
-        .map_err(|error| format!("could not read the company record: {error}"))?;
+        .map_err(|error| format!("could not read the community profile: {error}"))?;
     let company_event = company_events
         .first()
-        .ok_or_else(|| "the company this work belongs to does not exist".to_string())?;
+        .ok_or_else(|| "this community has no operating profile yet".to_string())?;
 
     let mut context = hydrate(
         &reference,
@@ -442,60 +437,32 @@ pub async fn resolve_for_event(
     Ok(Some(context))
 }
 
-/// Resolve the workspace's onboarding status from an already-fetched set of
-/// company-profile heads.
+/// Whether this community has published its operating profile yet.
 ///
-/// A Colony workspace has at most one company. NIP-33 replacement is enforced
-/// at write time (`Db::replace_parameterized_replaceable`), so at most one
-/// live head exists per company id -- this never has to resolve "latest
-/// wins" itself, only "how many distinct companies are live".
+/// There is at most one profile per community and it lives at one fixed
+/// coordinate, so this is a presence check rather than a resolution: NIP-33
+/// replacement is enforced at write time, and the community is already named
+/// by the relay the query went to.
 ///
-/// `None` covers two states [`crate::should_inject_company_onboarding`]
-/// treats identically: no company has been published yet, and -- a
-/// defensive case this data model does not otherwise produce -- more than
-/// one distinct company id is live at once. Guessing which of several
-/// companies governs the workspace would be worse than withholding the
-/// protocol, so ambiguity logs a warning and falls back to `None` rather
-/// than picking one.
-fn resolve_onboarding_status_from_heads(
-    events: &[Event],
-    relay_pubkey: &nostr::PublicKey,
-) -> Option<CompanyOnboardingStatus> {
-    let mut by_id: HashMap<String, CompanyOnboardingStatus> = HashMap::new();
-    for event in events {
-        if relay_authored(event, relay_pubkey, "company").is_err() {
-            continue;
-        }
-        let Ok(profile) = parse_company_event(event) else {
-            continue;
-        };
-        by_id.insert(profile.id, profile.onboarding_status);
-    }
-    match by_id.len() {
-        0 => None,
-        1 => by_id.into_values().next(),
-        count => {
-            tracing::warn!(
-                target: "work_context::onboarding",
-                company_count = count,
-                "more than one company profile is live; withholding the onboarding protocol \
-                 rather than guessing which one governs the workspace"
-            );
-            None
-        }
-    }
+/// Replaces an earlier reading of an `onboardingStatus` field. That field
+/// existed to say whether an owner had approved a separate Company record;
+/// with no such record, "has this community described its business yet" is
+/// the only question left, and a profile existing answers it.
+fn community_profile_exists(events: &[Event], relay_pubkey: &nostr::PublicKey) -> bool {
+    events.iter().any(|event| {
+        relay_authored(event, relay_pubkey, "community profile").is_ok()
+            && parse_company_event(event).is_ok()
+    })
 }
 
-/// Fetch every company-profile head this relay has published and resolve the
-/// workspace's onboarding status from them.
+/// Fetch this community's operating profile head, if it has one.
 ///
-/// Queried by kind and author only -- no `d` tag -- because the caller does
-/// not know a company id to look up yet; that is exactly the "no company
-/// yet" state the onboarding protocol exists for. `limit` is generous
-/// headroom over the "at most one" a workspace is expected to hold.
-pub async fn fetch_company_onboarding_status(
+/// Queried by kind and author only. The profile sits at a fixed `d` tag, but
+/// querying without one keeps this readable against heads written before that
+/// was true and costs nothing at this cardinality.
+pub async fn fetch_community_profile_exists(
     rest: &crate::relay::RestClient,
-) -> Result<Option<CompanyOnboardingStatus>, String> {
+) -> Result<bool, String> {
     let relay_pubkey = rest
         .relay_self()
         .await
@@ -512,9 +479,9 @@ pub async fn fetch_company_onboarding_status(
     let events = rest
         .query_events(&[filter])
         .await
-        .map_err(|error| format!("could not read company records: {error}"))?;
+        .map_err(|error| format!("could not read the community profile: {error}"))?;
 
-    Ok(resolve_onboarding_status_from_heads(&events, &relay_pubkey))
+    Ok(community_profile_exists(&events, &relay_pubkey))
 }
 
 fn purpose_label(purpose: CommercialPurpose) -> &'static str {
@@ -651,8 +618,8 @@ pub fn work_context_section(context: &HydratedWorkContext) -> String {
 mod tests {
     use super::*;
     use buzz_core::company::{
-        CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind, DoerKind,
-        InitiativeStatus, TaskStatus, COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+        CompanyService, CostCentre, CostCentreKind, DoerKind, InitiativeStatus, TaskStatus,
+        COMPANY_SCHEMA, INITIATIVE_SCHEMA,
     };
     use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 
@@ -669,7 +636,6 @@ mod tests {
     fn company() -> CompanyProfile {
         CompanyProfile {
             schema: COMPANY_SCHEMA.to_string(),
-            id: "horizonlabs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
@@ -688,7 +654,6 @@ mod tests {
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Approved,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_000,
         }
@@ -698,7 +663,6 @@ mod tests {
         Initiative {
             schema: INITIATIVE_SCHEMA.to_string(),
             id: "horizonlabs:launch-outbound".to_string(),
-            company_id: "horizonlabs".to_string(),
             title: "Launch outbound".to_string(),
             summary: "Open a first outbound channel.".to_string(),
             status: InitiativeStatus::Active,
@@ -721,7 +685,6 @@ mod tests {
         CompanyTask {
             schema: "colony.task/v1".to_string(),
             id: "horizonlabs:chat:0001".to_string(),
-            company_id: "horizonlabs".to_string(),
             initiative_id: None,
             title: "Take a look at the failing deploy".to_string(),
             status: TaskStatus::InProgress,
@@ -772,11 +735,7 @@ mod tests {
         head(
             KIND_COMPANY_PROFILE,
             &serde_json::to_value(record).expect("company json"),
-            vec![
-                scalar("d", &record.id),
-                scalar("c", &record.id),
-                scalar("company", &record.id),
-            ],
+            vec![scalar("d", COMMUNITY_PROFILE_ID)],
             keys,
         )
     }
@@ -788,8 +747,6 @@ mod tests {
             &serde_json::to_value(&record).expect("initiative json"),
             vec![
                 scalar("d", &record.id),
-                scalar("c", &record.company_id),
-                scalar("company", &record.company_id),
                 scalar("cost-centre", &record.cost_centre_id),
             ],
             keys,
@@ -799,8 +756,6 @@ mod tests {
     fn task_head(record: &CompanyTask, keys: &Keys) -> Event {
         let mut tags = vec![
             scalar("d", &record.id),
-            scalar("c", &record.company_id),
-            scalar("company", &record.company_id),
             scalar("team", &record.owning_team_id),
             scalar("cost-centre", &record.cost_centre_id),
         ];
@@ -918,7 +873,6 @@ mod tests {
         .expect("hydrate");
 
         assert_eq!(context.task.id, "horizonlabs:chat:0001");
-        assert_eq!(context.company.id, "horizonlabs");
         assert_eq!(context.initiative, None);
         assert_eq!(context.metric.task_id, "horizonlabs:chat:0001");
         assert_eq!(
@@ -1108,7 +1062,7 @@ mod tests {
         let keys = relay();
         let mut reference = reference();
         reference.initiative_id = Some("horizonlabs:launch-outbound".to_string());
-        let filters = work_filters(&reference, Some("horizonlabs"), &keys.public_key());
+        let filters = work_filters(&reference, &keys.public_key());
         assert_eq!(filters.len(), 3);
         for filter in &filters {
             let json = filter.as_json();
@@ -1378,75 +1332,49 @@ mod tests {
     }
 
     #[test]
-    fn no_company_heads_resolve_to_no_status() {
+    fn no_profile_heads_means_the_community_has_no_profile() {
         let keys = relay();
-        assert_eq!(
-            resolve_onboarding_status_from_heads(&[], &keys.public_key()),
-            None
-        );
+        assert!(!community_profile_exists(&[], &keys.public_key()));
     }
 
+    /// Presence is the whole signal now. An earlier version read an
+    /// `onboardingStatus` off the head to decide whether an owner had
+    /// approved a separate Company record; there is no such record and no
+    /// such approval, so a profile existing is what "onboarding is done"
+    /// means.
     #[test]
-    fn a_single_company_head_resolves_to_its_status() {
+    fn one_relay_authored_profile_head_means_the_community_has_one() {
         let keys = relay();
-        let mut draft = company();
-        draft.onboarding_status = CompanyOnboardingStatus::Draft;
-        assert_eq!(
-            resolve_onboarding_status_from_heads(
-                &[company_head_for(&draft, &keys)],
-                &keys.public_key()
-            ),
-            Some(CompanyOnboardingStatus::Draft)
-        );
-
-        let approved = company(); // fixture default is Approved
-        assert_eq!(
-            resolve_onboarding_status_from_heads(
-                &[company_head_for(&approved, &keys)],
-                &keys.public_key()
-            ),
-            Some(CompanyOnboardingStatus::Approved)
-        );
+        let profile = company();
+        assert!(community_profile_exists(
+            &[company_head_for(&profile, &keys)],
+            &keys.public_key()
+        ));
     }
 
-    // Any authenticated member can publish a `KIND_COMPANY_PROFILE` event --
-    // the same client-writable exposure `interrupt_runtime.rs` documents for
-    // `KIND_MANAGED_AGENT`. Without the author check, an impostor head could
-    // convince every agent onboarding is either still open or already closed.
     #[test]
     fn heads_not_authored_by_the_relay_are_ignored() {
         let relay_keys = relay();
-        let mut draft = company();
-        draft.onboarding_status = CompanyOnboardingStatus::Draft;
-        let forged = company_head_for(&draft, &impostor());
-        assert_eq!(
-            resolve_onboarding_status_from_heads(&[forged], &relay_keys.public_key()),
-            None,
-            "an impostor-authored head must not decide onboarding status"
+        let forged = company_head_for(&company(), &impostor());
+        assert!(
+            !community_profile_exists(&[forged], &relay_keys.public_key()),
+            "an impostor-authored head must not count as this community's profile"
         );
     }
 
-    // Never guess which of several companies governs the workspace -- that is
-    // the same "Ok(None), never guess" discipline `persona_pubkey_in_roster`
-    // and `unique_executive_in_roster` use in `interrupt_runtime.rs`.
+    /// "More than one company is ambiguous" was a real hazard while a
+    /// workspace could hold several Company records. It cannot: there is one
+    /// profile per community, at one fixed coordinate, and NIP-33 replacement
+    /// is enforced at write time. Duplicates at that coordinate are the same
+    /// record, so presence is unambiguous by construction.
     #[test]
-    fn more_than_one_distinct_company_is_ambiguous_and_withheld() {
+    fn several_relay_authored_heads_still_mean_one_profile() {
         let keys = relay();
-        let mut first = company();
-        first.id = "horizonlabs".to_string();
-        first.onboarding_status = CompanyOnboardingStatus::Draft;
-        let mut second = company();
-        second.id = "other-co".to_string();
-        second.onboarding_status = CompanyOnboardingStatus::Approved;
-
         let heads = [
-            company_head_for(&first, &keys),
-            company_head_for(&second, &keys),
+            company_head_for(&company(), &keys),
+            company_head_for(&company(), &keys),
         ];
-        assert_eq!(
-            resolve_onboarding_status_from_heads(&heads, &keys.public_key()),
-            None
-        );
+        assert!(community_profile_exists(&heads, &keys.public_key()));
     }
 }
 
@@ -1525,8 +1453,8 @@ mod pool_wiring_tests {
             "the pool must consult the onboarding gate before composing a session's prompt"
         );
         assert!(
-            POOL.contains("crate::work_context::fetch_company_onboarding_status"),
-            "the pool must fetch the company's onboarding status, not assume one"
+            POOL.contains("crate::work_context::fetch_community_profile_exists"),
+            "the pool must check whether the community has a profile, not assume one"
         );
 
         let definition_start = POOL

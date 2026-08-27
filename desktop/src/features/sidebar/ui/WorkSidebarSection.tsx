@@ -2,11 +2,7 @@ import { ChevronDown, Inbox, LayoutGrid, ListTodo } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import {
-  useActiveCompany,
-  useCompanyTasks,
-  useInitiatives,
-} from "@/features/company/hooks";
+import { useCompanyTasks, useInitiatives } from "@/features/company/hooks";
 import { selectMyQueue } from "@/features/company/workQueueModel";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -63,19 +59,13 @@ export function WorkSidebarSection({
   const { goWorkBoard, goWorkQueue } = useAppNavigation();
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
-  const companyQuery = useActiveCompany(communityId);
-  const companyId = companyQuery.data?.ok ? companyQuery.data.value.id : null;
-  const initiativesQuery = useInitiatives(communityId, companyId);
+  const initiativesQuery = useInitiatives(communityId);
   const initiatives = initiativesQuery.data?.ok
     ? initiativesQuery.data.value
     : [];
   const identityQuery = useIdentityQuery();
   const selfPubkey = identityQuery.data?.pubkey ?? null;
-  const tasksQuery = useCompanyTasks(
-    communityId,
-    { companyId: companyId ?? undefined },
-    companyId !== null,
-  );
+  const tasksQuery = useCompanyTasks(communityId, {});
   const tasks = tasksQuery.data?.ok ? tasksQuery.data.value : [];
   const queueCount = selfPubkey ? selectMyQueue(tasks, [selfPubkey]).length : 0;
 

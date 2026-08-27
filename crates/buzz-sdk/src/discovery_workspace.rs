@@ -510,6 +510,12 @@ fn validate_receipt(receipt: &DiscoveryWorkspaceReceipt) -> Result<(), Discovery
         ) | (
             DiscoveryWorkspaceOperation::GetLead | DiscoveryWorkspaceOperation::UpdateLead,
             DiscoveryWorkspaceResult::Lead { .. }
+        ) | (
+            DiscoveryWorkspaceOperation::SearchEntities,
+            DiscoveryWorkspaceResult::EntitySearch { .. }
+        ) | (
+            DiscoveryWorkspaceOperation::ResolveEntities,
+            DiscoveryWorkspaceResult::ResolvedEntities { .. }
         )
     );
     if !matches {
@@ -686,6 +692,38 @@ mod tests {
                 )),
                 budget_approval: None,
             },
+        }
+    }
+
+    #[test]
+    fn receipt_builds_for_entity_search_and_resolve_operations() {
+        // Regression pin: these two operations were missing from the receipt
+        // op/result matrix, so the relay rejected its own receipts and every
+        // search_entities / resolve_entities call died as an internal error.
+        let actor = Keys::generate();
+        for (operation, result) in [
+            (
+                DiscoveryWorkspaceOperation::SearchEntities,
+                DiscoveryWorkspaceResult::EntitySearch { entities: vec![] },
+            ),
+            (
+                DiscoveryWorkspaceOperation::ResolveEntities,
+                DiscoveryWorkspaceResult::ResolvedEntities { entities: vec![] },
+            ),
+        ] {
+            let receipt = DiscoveryWorkspaceReceipt {
+                operation,
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                result,
+            };
+            build_discovery_workspace_receipt_for_version(
+                DiscoveryWorkspaceWireVersion::V3,
+                actor.public_key(),
+                nostr::EventId::all_zeros(),
+                &receipt,
+            )
+            .expect("entity op receipt must build");
         }
     }
 

@@ -10,7 +10,9 @@
 //! the current company owner, so an agent asks for a change in chat and an
 //! owner authorizes it.
 
-use buzz_core::company::{CompanyProfile, CompanyTask, Initiative, TaskStatus};
+use buzz_core::company::{
+    CompanyProfile, CompanyTask, Initiative, TaskStatus, COMMUNITY_PROFILE_ID,
+};
 use buzz_core::kind::{
     KIND_COHORT, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
     KIND_TEMPLATE,
@@ -363,7 +365,7 @@ pub(crate) fn payload_kind(payload: &CompanyActionPayload) -> u32 {
 
 pub(crate) fn payload_id(payload: &CompanyActionPayload) -> &str {
     match payload {
-        CompanyActionPayload::Company(profile) => &profile.id,
+        CompanyActionPayload::Company(_) => COMMUNITY_PROFILE_ID,
         CompanyActionPayload::Initiative(initiative) => &initiative.id,
         CompanyActionPayload::Task(task) => &task.id,
         CompanyActionPayload::Cohort(cohort) => &cohort.id,
@@ -594,7 +596,6 @@ mod tests {
             &company,
             serde_json::to_string(&json!({
                 "schema": "colony.company/v1",
-                "id": "horizon-labs",
                 "tradingName": "Horizon Labs",
                 "legalName": null,
                 "website": null,
@@ -604,7 +605,6 @@ mod tests {
                 "customerSegments": [],
                 "costCentres": [],
                 "sourceReportEventId": null,
-                "onboardingStatus": "draft",
                 "createdAt": 1000,
                 "updatedAt": 1000
             }))
@@ -613,7 +613,7 @@ mod tests {
         .expect("write");
         let parsed = read_payload(company.to_str().expect("path")).expect("parse company");
         assert_eq!(payload_kind(&parsed), KIND_COMPANY_PROFILE);
-        assert_eq!(payload_id(&parsed), "horizon-labs");
+        assert_eq!(payload_id(&parsed), COMMUNITY_PROFILE_ID);
 
         std::fs::remove_dir_all(&dir).ok();
     }

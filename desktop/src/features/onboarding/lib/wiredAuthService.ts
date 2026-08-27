@@ -20,6 +20,8 @@ import {
 } from "@/shared/api/tauriIdentity";
 
 import { createAuthService } from "../authService";
+import type { OnboardingServices } from "../contracts";
+import { createFakeServices } from "../contracts.fake";
 
 /** Bound account requests so an unreachable server fails in seconds instead
  *  of hanging on the OS-level connect timeout (mirrors invites.ts). */
@@ -50,4 +52,18 @@ export function createWiredAuthService() {
     },
     getPubkey: async () => (await getIdentity()).pubkey,
   });
+}
+
+/**
+ * Which auth service the machine onboarding pages run on, decided the same
+ * way `NewOnboardingFlow.resolveAuthServices` decides for the canvas flow:
+ * the e2e build keeps fakes so its specs stay hermetic, everything else gets
+ * the real service.
+ */
+export function resolveMachineAuthService(env: {
+  MODE?: string;
+}): OnboardingServices["auth"] {
+  return env.MODE === "e2e"
+    ? createFakeServices().auth
+    : createWiredAuthService();
 }

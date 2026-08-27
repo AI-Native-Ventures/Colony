@@ -15,8 +15,8 @@
 
 use buzz_core::{
     company::{
-        CompanyProfile, CompanyTask, CompanyTeamRef, DoerKind, Initiative, InitiativeStatus,
-        TaskStatus, INITIATIVE_SCHEMA,
+        CompanyTask, CompanyTeamRef, DoerKind, Initiative, InitiativeStatus, TaskStatus,
+        INITIATIVE_SCHEMA,
     },
     company_roster::step_idempotency_key,
     kind::{KIND_INITIATIVE, KIND_TASK},
@@ -158,7 +158,6 @@ fn kickoff_action(
     let task = CompanyTask {
         schema: TASK_SCHEMA.to_string(),
         id: task_id.clone(),
-        company_id: initiative.company_id.clone(),
         initiative_id: Some(initiative.id.clone()),
         title: clamp_title(&format!("Kick off: {}", initiative.title)),
         // Ready, not in progress: the work is waiting for whoever picks it up,
@@ -223,14 +222,12 @@ pub enum InitiativeIntent {
 pub fn next_activation_step(
     initiative: &Initiative,
     head_event_id: &str,
-    company: &CompanyProfile,
     teams: &[CompanyTeamRef],
     relay_pubkey: &str,
 ) -> Result<InitiativeStep, String> {
     next_step(
         initiative,
         head_event_id,
-        company,
         teams,
         relay_pubkey,
         InitiativeIntent::Start,
@@ -241,16 +238,12 @@ pub fn next_activation_step(
 pub fn next_step(
     initiative: &Initiative,
     head_event_id: &str,
-    company: &CompanyProfile,
     teams: &[CompanyTeamRef],
     relay_pubkey: &str,
     intent: InitiativeIntent,
 ) -> Result<InitiativeStep, String> {
     if initiative.schema != INITIATIVE_SCHEMA {
         return Err("that is not a Colony initiative".to_string());
-    }
-    if initiative.company_id != company.id {
-        return Err("that initiative belongs to a different company".to_string());
     }
 
     if intent == InitiativeIntent::Decline {
@@ -312,46 +305,41 @@ pub fn next_step(
 mod tests {
     use super::*;
     use buzz_core::company::{
-        CommercialPurpose, CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind,
-        COMPANY_SCHEMA,
+        CommercialPurpose, CompanyProfile, CostCentre, CostCentreKind, COMPANY_SCHEMA,
     };
 
     const RELAY: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
-    const HEAD: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
+    /// Still needed by `validate_task`, which resolves a task's cost centre
+    /// against the community's own profile. It no longer answers "which
+    /// company is this?" - nothing does, because there is only ever one.
     fn company() -> CompanyProfile {
         CompanyProfile {
             schema: COMPANY_SCHEMA.to_string(),
-            id: "horizonlabs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
-            summary: "Software for South African businesses.".to_string(),
-            business_type: "agency".to_string(),
-            services: vec![CompanyService {
-                id: "web".to_string(),
-                name: "Web builds".to_string(),
-                description: "Sites and apps.".to_string(),
-            }],
-            customer_segments: vec!["small business".to_string()],
+            summary: String::new(),
+            business_type: "digital-services".to_string(),
+            services: Vec::new(),
+            customer_segments: Vec::new(),
             cost_centres: vec![CostCentre {
                 id: "cc-internal".to_string(),
-                name: "Company coordination".to_string(),
+                name: "Internal".to_string(),
                 kind: CostCentreKind::Internal,
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Approved,
-            created_at: 1_780_000_000,
-            updated_at: 1_780_000_000,
+            created_at: 1_800_000_000,
+            updated_at: 1_800_000_000,
         }
     }
+    const HEAD: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
     fn initiative(status: InitiativeStatus) -> Initiative {
         Initiative {
             schema: INITIATIVE_SCHEMA.to_string(),
             id: "horizonlabs:launch-outbound".to_string(),
-            company_id: "horizonlabs".to_string(),
             title: "Launch outbound".to_string(),
             summary: "Open a first outbound channel.".to_string(),
             status,
@@ -400,7 +388,6 @@ mod tests {
         let step = next_activation_step(
             &initiative(InitiativeStatus::Proposed),
             HEAD,
-            &company(),
             &teams(),
             RELAY,
         )
@@ -430,7 +417,6 @@ mod tests {
         let step = next_activation_step(
             &initiative(InitiativeStatus::Approved),
             HEAD,
-            &company(),
             &teams(),
             RELAY,
         )
@@ -448,7 +434,6 @@ mod tests {
             next_activation_step(
                 &initiative(InitiativeStatus::Proposed),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
             )
@@ -463,14 +448,9 @@ mod tests {
 
     #[test]
     fn an_active_initiative_gets_one_task_owned_by_one_team() {
-        let step = next_activation_step(
-            &initiative(InitiativeStatus::Active),
-            HEAD,
-            &company(),
-            &teams(),
-            RELAY,
-        )
-        .expect("step");
+        let step =
+            next_activation_step(&initiative(InitiativeStatus::Active), HEAD, &teams(), RELAY)
+                .expect("step");
         let InitiativeStep::Kickoff {
             task_id,
             owning_team_id,
@@ -523,11 +503,9 @@ mod tests {
             InitiativeStatus::Active,
         ] {
             let first =
-                next_activation_step(&initiative(status), HEAD, &company(), &teams(), RELAY)
-                    .expect("step");
+                next_activation_step(&initiative(status), HEAD, &teams(), RELAY).expect("step");
             let second =
-                next_activation_step(&initiative(status), HEAD, &company(), &teams(), RELAY)
-                    .expect("step");
+                next_activation_step(&initiative(status), HEAD, &teams(), RELAY).expect("step");
             assert_eq!(
                 first, second,
                 "activation of {status:?} is not deterministic"
@@ -541,7 +519,6 @@ mod tests {
             next_activation_step(
                 &initiative(InitiativeStatus::Proposed),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
             )
@@ -551,7 +528,6 @@ mod tests {
             next_activation_step(
                 &initiative(InitiativeStatus::Approved),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
             )
@@ -569,22 +545,16 @@ mod tests {
             InitiativeStatus::Cancelled,
             InitiativeStatus::Blocked,
         ] {
-            let step = next_activation_step(&initiative(status), HEAD, &company(), &teams(), RELAY)
-                .expect("step");
+            let step =
+                next_activation_step(&initiative(status), HEAD, &teams(), RELAY).expect("step");
             assert_eq!(step, InitiativeStep::Settled { status });
         }
     }
 
     #[test]
     fn an_owner_with_no_team_cannot_start_work() {
-        let error = next_activation_step(
-            &initiative(InitiativeStatus::Active),
-            HEAD,
-            &company(),
-            &[],
-            RELAY,
-        )
-        .expect_err("an ownerless initiative must not produce a task");
+        let error = next_activation_step(&initiative(InitiativeStatus::Active), HEAD, &[], RELAY)
+            .expect_err("an ownerless initiative must not produce a task");
         assert!(error.contains("no team"), "unexpected error: {error}");
     }
 
@@ -602,7 +572,6 @@ mod tests {
             let step = next_step(
                 &initiative(status),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
                 InitiativeIntent::Decline,
@@ -624,7 +593,6 @@ mod tests {
             let step = next_step(
                 &initiative(status),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
                 InitiativeIntent::Decline,
@@ -642,7 +610,6 @@ mod tests {
             next_step(
                 &initiative(InitiativeStatus::Proposed),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
                 InitiativeIntent::Start,
@@ -653,7 +620,6 @@ mod tests {
             next_step(
                 &initiative(InitiativeStatus::Proposed),
                 HEAD,
-                &company(),
                 &teams(),
                 RELAY,
                 InitiativeIntent::Decline,
@@ -664,20 +630,10 @@ mod tests {
     }
 
     #[test]
-    fn an_initiative_from_another_company_is_refused() {
-        let mut foreign = initiative(InitiativeStatus::Proposed);
-        foreign.company_id = "someone-else".to_string();
-        let error = next_activation_step(&foreign, HEAD, &company(), &teams(), RELAY)
-            .expect_err("a foreign initiative must be refused");
-        assert!(error.contains("different company"), "unexpected: {error}");
-    }
-
-    #[test]
     fn a_member_owner_falls_back_to_the_team_they_belong_to() {
         let mut member_owned = initiative(InitiativeStatus::Active);
         member_owned.owner_persona_id = "company-role:abc:horizonlabs:sdr".to_string();
-        let step =
-            next_activation_step(&member_owned, HEAD, &company(), &teams(), RELAY).expect("step");
+        let step = next_activation_step(&member_owned, HEAD, &teams(), RELAY).expect("step");
         let InitiativeStep::Kickoff {
             owning_team_id,
             action,
@@ -708,7 +664,7 @@ mod tests {
     fn a_long_initiative_title_is_clamped_to_the_contract_limit() {
         let mut long = initiative(InitiativeStatus::Active);
         long.title = "é".repeat(199);
-        let step = next_activation_step(&long, HEAD, &company(), &teams(), RELAY).expect("step");
+        let step = next_activation_step(&long, HEAD, &teams(), RELAY).expect("step");
         let InitiativeStep::Kickoff { action, .. } = step else {
             panic!("expected a kickoff task");
         };

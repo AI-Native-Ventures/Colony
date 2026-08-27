@@ -95,17 +95,10 @@ fn identifier(scheme: IdentifierScheme, value: &str) -> PartyIdentifier {
     }
 }
 
-fn party(
-    company_id: &str,
-    id: &str,
-    provenance_id: &str,
-    identifiers: Vec<PartyIdentifier>,
-    stamp: i64,
-) -> Party {
+fn party(id: &str, provenance_id: &str, identifiers: Vec<PartyIdentifier>, stamp: i64) -> Party {
     Party {
         schema: PARTY_SCHEMA.to_string(),
         id: id.to_string(),
-        company_id: company_id.to_string(),
         kind: PartyKind::Organization,
         display_name: "Acme Industries".to_string(),
         legal_name: None,
@@ -124,7 +117,6 @@ fn party(
 }
 
 fn relationship(
-    company_id: &str,
     party_id: &str,
     kind: RelationshipKind,
     status: RelationshipStatus,
@@ -134,7 +126,6 @@ fn relationship(
     PartyRelationship {
         schema: PARTY_RELATIONSHIP_SCHEMA.to_string(),
         id: relationship_coordinate(party_id, kind),
-        company_id: company_id.to_string(),
         party_id: party_id.to_string(),
         relationship: kind,
         status,
@@ -348,7 +339,6 @@ async fn merge(
     let alias = PartyAlias {
         schema: PARTY_ALIAS_SCHEMA.to_string(),
         id: retired.id.clone(),
-        company_id: merged.company_id.clone(),
         resolves_to: merged.id.clone(),
         merged_at: stamp,
         // The relay writes the real value: it is the hash of the action this
@@ -372,7 +362,6 @@ async fn merge(
 struct Fixture {
     owner: Keys,
     relay: String,
-    company_id: String,
     survivor_id: String,
     retired_id: String,
 }
@@ -383,7 +372,6 @@ async fn setup(owner: Keys) -> Fixture {
     Fixture {
         owner,
         relay,
-        company_id: format!("co{}", &suffix[..12]),
         survivor_id: format!("acme{}", &suffix[..10]),
         retired_id: format!("acmeold{}", &suffix[..10]),
     }
@@ -400,7 +388,6 @@ async fn the_relay_authors_every_party_head_and_receipts_every_request() {
     let stamp = now();
 
     let record = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],
@@ -447,7 +434,6 @@ async fn lead_and_client_are_views_over_one_identity() {
     let stamp = now();
 
     let record = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],
@@ -456,7 +442,6 @@ async fn lead_and_client_are_views_over_one_identity() {
     create_party(&mut client, &fixture.owner, &fixture.relay, &record).await;
 
     let lead = relationship(
-        &fixture.company_id,
         &fixture.survivor_id,
         RelationshipKind::Lead,
         RelationshipStatus::Qualified,
@@ -464,7 +449,6 @@ async fn lead_and_client_are_views_over_one_identity() {
         stamp,
     );
     let client_view = relationship(
-        &fixture.company_id,
         &fixture.survivor_id,
         RelationshipKind::Client,
         RelationshipStatus::Active,
@@ -554,14 +538,12 @@ async fn a_merge_retires_a_handle_and_the_views_follow_the_identity() {
     let stamp = now();
 
     let survivor = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],
         stamp,
     );
     let retired = party(
-        &fixture.company_id,
         &fixture.retired_id,
         "prov-02",
         vec![identifier(IdentifierScheme::Phone, "+27115550000")],
@@ -573,7 +555,6 @@ async fn a_merge_retires_a_handle_and_the_views_follow_the_identity() {
     // Only the retired side carries a Client. It has nowhere to go unless the
     // merge moves it.
     let retired_client = relationship(
-        &fixture.company_id,
         &fixture.retired_id,
         RelationshipKind::Client,
         RelationshipStatus::Active,
@@ -600,14 +581,7 @@ async fn a_merge_retires_a_handle_and_the_views_follow_the_identity() {
             "other-lead",
         ),
     ] {
-        let view = relationship(
-            &fixture.company_id,
-            party_id,
-            RelationshipKind::Lead,
-            status,
-            persona,
-            stamp,
-        );
+        let view = relationship(party_id, RelationshipKind::Lead, status, persona, stamp);
         assert_eq!(
             create_view(&mut client, &fixture.owner, &fixture.relay, &view)
                 .await
@@ -713,14 +687,12 @@ async fn a_replayed_merge_returns_the_original_answer_and_merges_once() {
     let stamp = now();
 
     let survivor = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],
         stamp,
     );
     let retired = party(
-        &fixture.company_id,
         &fixture.retired_id,
         "prov-02",
         vec![identifier(IdentifierScheme::Phone, "+27115550000")],
@@ -797,7 +769,6 @@ async fn a_client_authored_party_head_is_rejected() {
     let stamp = now();
 
     let record = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],
@@ -810,8 +781,7 @@ async fn a_client_authored_party_head_is_rejected() {
         serde_json::to_string(&record).expect("party json"),
     )
     .tags(vec![
-        nostr::Tag::parse(["d", record.id.as_str()]).expect("d tag"),
-        nostr::Tag::parse(["c", record.company_id.as_str()]).expect("c tag"),
+        nostr::Tag::parse(["d", record.id.as_str()]).expect("d tag")
     ])
     .sign_with_keys(&fixture.owner)
     .expect("head signs");
@@ -846,14 +816,12 @@ async fn an_ended_view_meeting_a_live_one_refuses_the_merge() {
     let stamp = now();
 
     let survivor = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],
         stamp,
     );
     let retired = party(
-        &fixture.company_id,
         &fixture.retired_id,
         "prov-02",
         vec![identifier(IdentifierScheme::Phone, "+27115550000")],
@@ -867,7 +835,6 @@ async fn an_ended_view_meeting_a_live_one_refuses_the_merge() {
         (&fixture.retired_id, RelationshipStatus::Disqualified),
     ] {
         let view = relationship(
-            &fixture.company_id,
             party_id,
             RelationshipKind::Lead,
             status,
@@ -927,7 +894,6 @@ async fn a_relationship_without_its_party_is_refused() {
     let stamp = now();
 
     let orphan = relationship(
-        &fixture.company_id,
         &fixture.survivor_id,
         RelationshipKind::Lead,
         RelationshipStatus::Candidate,
@@ -968,7 +934,6 @@ async fn nobody_but_the_owner_can_change_party_state() {
         .await
         .expect("connect as a non-owner");
     let record = party(
-        &fixture.company_id,
         &fixture.survivor_id,
         "prov-01",
         vec![identifier(IdentifierScheme::Domain, "acme.example")],

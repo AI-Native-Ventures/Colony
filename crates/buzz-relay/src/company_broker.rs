@@ -25,7 +25,7 @@ use buzz_core::company::{
     is_task_status_transition_allowed, validate_cohort, validate_cohort_update, validate_company,
     validate_company_update, validate_initiative, validate_initiative_update, validate_task,
     validate_task_update, validate_template, validate_template_update, CompanyProfile, CompanyTask,
-    CompanyTeamRef, DoerKind, TaskStatus,
+    CompanyTeamRef, DoerKind, TaskStatus, COMMUNITY_PROFILE_ID,
 };
 use buzz_core::kind::{
     KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
@@ -107,25 +107,19 @@ pub(crate) fn build_head(
     previous_head: Option<&Event>,
 ) -> Result<Event, String> {
     // Every board dimension carries a single-letter mirror of its readable
-    // tag (`c` company, `g` team, `w` status, `i` initiative, `s` stage, `u`
+    // tag (`g` team, `w` status, `i` initiative, `s` stage, `u`
     // subject). Only single-letter tags are indexed — the nostr filter type
     // drops multi-letter keys before parsing — so without a mirror a value is
     // readable once you already have the event but unfilterable over the
     // wire, and "this run's tasks" is a question the relay cannot answer.
     let (kind, tags, content) = match payload {
         CompanyActionPayload::Company(profile) => {
-            let tags = vec![
-                scalar_tag("d", &profile.id)?,
-                scalar_tag("c", &profile.id)?,
-                scalar_tag("company", &profile.id)?,
-            ];
+            let tags = vec![scalar_tag("d", COMMUNITY_PROFILE_ID)?];
             (KIND_COMPANY_PROFILE, tags, serde_json::to_value(profile))
         }
         CompanyActionPayload::Initiative(initiative) => {
             let mut tags = vec![
                 scalar_tag("d", &initiative.id)?,
-                scalar_tag("c", &initiative.company_id)?,
-                scalar_tag("company", &initiative.company_id)?,
                 scalar_tag("cost-centre", &initiative.cost_centre_id)?,
                 // Mirror of the status in the signed content, spelled exactly
                 // as it serialises there.
@@ -139,8 +133,6 @@ pub(crate) fn build_head(
         CompanyActionPayload::Task(task) => {
             let mut tags = vec![
                 scalar_tag("d", &task.id)?,
-                scalar_tag("c", &task.company_id)?,
-                scalar_tag("company", &task.company_id)?,
                 scalar_tag("team", &task.owning_team_id)?,
                 scalar_tag("cost-centre", &task.cost_centre_id)?,
                 // Mirror of the status in the signed content.
@@ -187,11 +179,7 @@ pub(crate) fn build_head(
             (KIND_TASK, tags, serde_json::to_value(task))
         }
         CompanyActionPayload::Cohort(cohort) => {
-            let mut tags = vec![
-                scalar_tag("d", &cohort.id)?,
-                scalar_tag("c", &cohort.company_id)?,
-                scalar_tag("company", &cohort.company_id)?,
-            ];
+            let mut tags = vec![scalar_tag("d", &cohort.id)?];
             // One member mirror per entry, spelled exactly like a task's `u`
             // subject mirror (`kind:ref`) — what makes "which cohorts contain
             // this party" an indexed `#m` filter instead of a full scan.
@@ -204,11 +192,7 @@ pub(crate) fn build_head(
             (KIND_COHORT, tags, serde_json::to_value(cohort))
         }
         CompanyActionPayload::Template(template) => {
-            let mut tags = vec![
-                scalar_tag("d", &template.id)?,
-                scalar_tag("c", &template.company_id)?,
-                scalar_tag("company", &template.company_id)?,
-            ];
+            let mut tags = vec![scalar_tag("d", &template.id)?];
             // One team mirror per distinct team any stage names as owning or
             // reviewing, the same `g` letter Task already mirrors
             // `owningTeamId` onto — what makes "which templates touch my
@@ -754,7 +738,7 @@ async fn validate_payload_against_state(
             }
         }
         CompanyActionPayload::Initiative(initiative) => {
-            let company = load_company(tenant, state, &initiative.company_id).await?;
+            let company = load_company(tenant, state).await?;
             validate_initiative(initiative, &company).map_err(|error| error.to_string())?;
             if let Some(previous) = previous_head {
                 let previous = parse_initiative_event(previous)
@@ -764,7 +748,7 @@ async fn validate_payload_against_state(
             }
         }
         CompanyActionPayload::Task(task) => {
-            let company = load_company(tenant, state, &task.company_id).await?;
+            let company = load_company(tenant, state).await?;
             let initiative = match task.initiative_id.as_deref() {
                 Some(initiative_id) => {
                     let head = load_head(tenant, state, KIND_INITIATIVE, initiative_id)
@@ -787,7 +771,7 @@ async fn validate_payload_against_state(
             }
         }
         CompanyActionPayload::Cohort(cohort) => {
-            let company = load_company(tenant, state, &cohort.company_id).await?;
+            let company = load_company(tenant, state).await?;
             validate_cohort(cohort, &company).map_err(|error| error.to_string())?;
             if let Some(previous) = previous_head {
                 let previous = parse_cohort_event(previous)
@@ -797,7 +781,7 @@ async fn validate_payload_against_state(
             }
         }
         CompanyActionPayload::Template(template) => {
-            let company = load_company(tenant, state, &template.company_id).await?;
+            let company = load_company(tenant, state).await?;
             let teams = load_team_refs(tenant, state, &action_author).await?;
             validate_template(template, &company, &teams).map_err(|error| error.to_string())?;
             if let Some(previous) = previous_head {
@@ -811,16 +795,16 @@ async fn validate_payload_against_state(
     Ok(())
 }
 
-async fn load_company(
-    tenant: &TenantContext,
-    state: &AppState,
-    company_id: &str,
-) -> Result<CompanyProfile, String> {
-    let head = load_head(tenant, state, KIND_COMPANY_PROFILE, company_id)
+/// Load this community's own operating profile.
+///
+/// Takes no identifier: there is one profile per community, at one fixed
+/// coordinate, and `tenant` already says which community is being served.
+async fn load_company(tenant: &TenantContext, state: &AppState) -> Result<CompanyProfile, String> {
+    let head = load_head(tenant, state, KIND_COMPANY_PROFILE, COMMUNITY_PROFILE_ID)
         .await?
-        .ok_or_else(|| "referenced company does not exist".to_owned())?;
+        .ok_or_else(|| "this community has no operating profile yet".to_owned())?;
     parse_company_event(&head)
-        .map_err(|error| format!("stored company head is unreadable: {error}"))
+        .map_err(|error| format!("stored community profile is unreadable: {error}"))
 }
 
 /// Verify every compare-and-set reference the action declared still resolves.
@@ -907,7 +891,7 @@ pub(crate) async fn handle_company_action(
         CompanyActionPayload::Template(_) => KIND_TEMPLATE,
     };
     let entity_id = match &action.payload {
-        CompanyActionPayload::Company(profile) => profile.id.clone(),
+        CompanyActionPayload::Company(_) => COMMUNITY_PROFILE_ID.to_owned(),
         CompanyActionPayload::Initiative(initiative) => initiative.id.clone(),
         CompanyActionPayload::Task(task) => task.id.clone(),
         CompanyActionPayload::Cohort(cohort) => cohort.id.clone(),
@@ -1364,7 +1348,7 @@ async fn authorize_company_actor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::company::{CompanyOnboardingStatus, CompanyService, CostCentre, CostCentreKind};
+    use buzz_core::company::{CompanyService, CostCentre, CostCentreKind};
     use buzz_sdk::company::CompanySdkError;
 
     fn scalar_tag_value<'a>(head: &'a Event, name: &str) -> Option<&'a str> {
@@ -1393,7 +1377,6 @@ mod tests {
     fn sample_company() -> CompanyProfile {
         CompanyProfile {
             schema: "colony.company/v1".to_string(),
-            id: "horizon-labs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
@@ -1412,7 +1395,6 @@ mod tests {
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Draft,
             created_at: 1_000,
             updated_at: 1_000,
         }
@@ -1488,8 +1470,7 @@ mod tests {
             !head.tags.iter().any(|tag| tag.as_slice()[0] == "h"),
             "company heads are community-global and never carry `h`"
         );
-        let parsed = parse_company_event(&head).expect("parse relay head");
-        assert_eq!(parsed.id, "horizon-labs");
+        parse_company_event(&head).expect("parse relay head");
     }
 
     /// A create must not be accepted when a head already exists, and a
@@ -1509,7 +1490,7 @@ mod tests {
             request_id: uuid::Uuid::new_v4(),
             idempotency_key: uuid::Uuid::new_v4(),
             target: format!(
-                "{KIND_COMPANY_PROFILE}:{}:horizon-labs",
+                "{KIND_COMPANY_PROFILE}:{}:{COMMUNITY_PROFILE_ID}",
                 relay.public_key().to_hex()
             ),
             expected_head: None,
@@ -1536,7 +1517,6 @@ mod tests {
         buzz_core::company::Initiative {
             schema: "colony.initiative/v1".to_string(),
             id: "init-homepage".to_string(),
-            company_id: "horizon-labs".to_string(),
             title: "Homepage refresh".to_string(),
             summary: "Rebuild the marketing site".to_string(),
             status: buzz_core::company::InitiativeStatus::Proposed,
@@ -1559,7 +1539,6 @@ mod tests {
         buzz_core::company::CompanyTask {
             schema: "colony.task/v1".to_string(),
             id: "task-copy".to_string(),
-            company_id: "horizon-labs".to_string(),
             initiative_id: Some("init-homepage".to_string()),
             title: "Write homepage copy".to_string(),
             status: buzz_core::company::TaskStatus::InProgress,
@@ -1728,7 +1707,6 @@ mod tests {
         buzz_core::company::Cohort {
             schema: "colony.cohort/v1".to_string(),
             id: "q3-outbound-leads".to_string(),
-            company_id: "horizon-labs".to_string(),
             name: "Q3 outbound leads".to_string(),
             members: vec![
                 buzz_core::company::SubjectRef {
@@ -1955,7 +1933,6 @@ mod tests {
         buzz_core::company::Template {
             schema: "colony.template/v1".to_string(),
             id: "outbound-sequence".to_string(),
-            company_id: "horizon-labs".to_string(),
             name: "Outbound sequence".to_string(),
             version: 1,
             stages: vec![sample_template_stage()],
@@ -2137,7 +2114,7 @@ mod tests {
             request_id: uuid::Uuid::new_v4(),
             idempotency_key: uuid::Uuid::new_v4(),
             target: format!(
-                "{KIND_COMPANY_PROFILE}:{}:horizon-labs",
+                "{KIND_COMPANY_PROFILE}:{}:{COMMUNITY_PROFILE_ID}",
                 relay.public_key().to_hex()
             ),
             expected_head: None,

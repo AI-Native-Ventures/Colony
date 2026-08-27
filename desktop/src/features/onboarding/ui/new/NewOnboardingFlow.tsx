@@ -11,8 +11,8 @@ import type { AuthFailure } from "../../authService";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
 import { createWiredScrapeService } from "../../lib/wiredScrapeService";
 import { createWiredPaymentsService } from "../../lib/wiredPaymentsService";
-import { stashFounderBrief } from "../../flow/stashFounderBrief";
 import type { OnboardingServices, ScrapeResult } from "../../contracts";
+import type { ProvisionOutcome } from "../../flow/provisionWorkspace";
 import {
   clearAnswers,
   loadAnswers,
@@ -43,7 +43,6 @@ import {
 import { CompanyScreen, type CompanyValues } from "./screens/CompanyScreen";
 import { CreditsScreen } from "./screens/CreditsScreen";
 import { DescriptionScreen } from "./screens/DescriptionScreen";
-import { InstallScreen, type InstallState } from "./screens/InstallScreen";
 import { InviteScreen } from "./screens/InviteScreen";
 import { ProbingScreen } from "./screens/ProbingScreen";
 import { ReadingScreen } from "./screens/ReadingScreen";
@@ -67,14 +66,6 @@ function readReducedMotion(): boolean {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }
-
-/**
- * There is no installer behind the Colony-agent step yet (contracts has no
- * install member), so the step is driven by a timed fake that mirrors the
- * reviewed prototype. The real installer replaces the timer, not the wiring.
- */
-const FAKE_INSTALL_MS = 3400;
-const FAKE_INSTALL_REDUCED_MS = 900;
 
 const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
 
@@ -148,12 +139,45 @@ export function resolveAuthServices(
   };
 }
 
-type Props = {
-  services: OnboardingServices;
-  onComplete: () => void;
+export type OnboardingProvisioning = {
+  provision: (
+    companyName: string,
+    storedSlug: string | null,
+  ) => Promise<ProvisionOutcome>;
+  onProvisioned: (
+    outcome: Extract<ProvisionOutcome, { ok: true }>,
+    companyName: string,
+  ) => void;
 };
 
-export function NewOnboardingFlow({ services, onComplete }: Props) {
+type Props = {
+  services: OnboardingServices;
+  /**
+   * How the company screen claims a workspace. Null when a community is
+   * already applied (internal auto-connect builds): the screen then records
+   * the name and provisions nothing.
+   */
+  provisioning: OnboardingProvisioning | null;
+  /**
+   * Completes the run against the applied community. Rejecting keeps the
+   * flow on screen with a retry, so a failed handoff never strands anyone in
+   * an empty app.
+   */
+  onComplete: (answers: OnboardingAnswers) => Promise<void>;
+  /**
+   * Explicit user exit toward email sign-in (the machine flow's
+   * account-signin page). Offered only where the caller can honour it; the
+   * host is left unfinished because onboarding simply did not happen here.
+   */
+  onRequestSignIn?: () => void;
+};
+
+export function NewOnboardingFlow({
+  services,
+  provisioning,
+  onComplete,
+  onRequestSignIn,
+}: Props) {
   // Build-time flags never change mid-session, so both are read once.
   const canInvite = invitesEnabled(import.meta.env);
   // Resolved once per mount: the flow must not see a new services identity
@@ -190,10 +214,17 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
   const [companyValues, setCompanyValues] = useState<CompanyValues>({
     company: "",
   });
+  const [companyState, setCompanyState] = useState<{
+    status: "idle" | "provisioning" | "error";
+    message?: string;
+  }>({ status: "idle" });
+  const [finishState, setFinishState] = useState<{
+    status: "idle" | "running" | "error";
+    message?: string;
+  }>({ status: "idle" });
 
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
-  const [installState, setInstallState] = useState<InstallState>("running");
 
   const [businessStage, setBusinessStage] = useState<BusinessStage | null>(
     null,
@@ -211,22 +242,34 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
 
-  /** Flow complete: drop the stored answers so a relaunch starts clean, then
-   *  hand control back to the app. Idempotent, because completion can be
-   *  reached from several paths at once. */
+  /** Flow complete: hand the answers to the host, which sets the workspace
+   *  up against the applied community, then drop the stored answers so a
+   *  relaunch starts clean. Idempotent, because completion can be reached
+   *  from several paths at once; a rejected handoff releases the latch so
+   *  the user can try again rather than being stranded. */
   const finishedRef = useRef(false);
   const answersRef = useRef(answers);
   answersRef.current = answers;
   const finish = useCallback(() => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    // Hand the founder and company answers to the community-onboarding
-    // transaction before clearing them. That draft is what Scout's opening
-    // brief is built from, and it used to be filled by the flow this one
-    // replaced; without this the brief would go out empty.
-    stashFounderBrief(answersRef.current);
-    clearAnswers(answerStorage);
-    onCompleteRef.current();
+    setFinishState({ status: "running" });
+    void onCompleteRef
+      .current(answersRef.current)
+      .then(() => {
+        // Cleared only on success: a failed handoff must stay resumable.
+        clearAnswers(answerStorage);
+      })
+      .catch((error: unknown) => {
+        finishedRef.current = false;
+        setFinishState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Something went wrong opening your workspace. Try again.",
+        });
+      });
   }, []);
 
   const goTo = useCallback(
@@ -259,36 +302,27 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
 
   const handleProbeResolved = useCallback((result: TrackResult) => {
     setTrackResult(result);
+    if (result.installed.length === 0) {
+      // Nothing on this computer can do the thinking, so there is no choice to
+      // put in front of anyone: Colony runs it, and the credits screen is where
+      // that is spelled out. This branch used to hold the user on a progress
+      // bar for three seconds while an installer that does not exist appeared
+      // to work. Recording the answer keeps a resumed run from landing back
+      // here.
+      setSelectedBrain(null);
+      setAnswers((current) => ({
+        ...current,
+        track: result.track,
+        brain: current.brain ?? "colony",
+      }));
+      setStep("business");
+      return;
+    }
     // Spec: one runtime preselected, by fixed catalog order not detection luck.
     setSelectedBrain(result.installed[0] ?? null);
     setAnswers((current) => ({ ...current, track: result.track }));
     setStep("brain");
   }, []);
-
-  const settleInstall = useCallback((state: InstallState) => {
-    setInstallState(state);
-    if (state === "done" || state === "degraded") {
-      // The colony branch has no named brain; recording one keeps resume from
-      // bouncing through this step again.
-      setAnswers((current) => ({
-        ...current,
-        brain: current.brain ?? "colony",
-      }));
-      setStep("business");
-    }
-  }, []);
-
-  useEffect(() => {
-    if (step !== "brain" || installState !== "running") return undefined;
-    if (trackResult !== null && trackResult.installed.length > 0) {
-      return undefined;
-    }
-    const id = setTimeout(
-      () => settleInstall("done"),
-      reducedMotion ? FAKE_INSTALL_REDUCED_MS : FAKE_INSTALL_MS,
-    );
-    return () => clearTimeout(id);
-  }, [step, installState, trackResult, reducedMotion, settleInstall]);
 
   const handleAccountSubmit = async () => {
     if (!accountReady(accountValues) || isSigningUp) return;
@@ -335,10 +369,31 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     goTo(nextStep("recovery", updated));
   };
 
-  const handleCompanySubmit = () => {
+  const handleCompanySubmit = async () => {
     const name = companyValues.company.trim();
-    if (!name) return;
-    const updated: OnboardingAnswers = { ...answers, company: name };
+    if (!name || companyState.status === "provisioning") return;
+    if (!provisioning) {
+      // A community is already applied: nothing to claim, just record it.
+      const updated: OnboardingAnswers = { ...answers, company: name };
+      setAnswers(updated);
+      goTo(nextStep("company", updated));
+      return;
+    }
+    setCompanyState({ status: "provisioning" });
+    const outcome = await provisioning.provision(name, answers.communitySlug);
+    if (!outcome.ok) {
+      setCompanyState({ status: "error", message: outcome.message });
+      return;
+    }
+    provisioning.onProvisioned(outcome, name);
+    setCompanyState({ status: "idle" });
+    const updated: OnboardingAnswers = {
+      ...answers,
+      company: name,
+      // Recorded so a reload resumes onto the address already claimed
+      // instead of claiming a second one.
+      communitySlug: outcome.slug,
+    };
     setAnswers(updated);
     goTo(nextStep("company", updated));
   };
@@ -421,6 +476,7 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             onSubmit={handleAccountSubmit}
             isSubmitting={isSigningUp}
             failure={accountFailure}
+            onSignInRequest={onRequestSignIn}
           />
         );
       case "recovery":
@@ -436,11 +492,19 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
         return (
           <CompanyScreen
             values={companyValues}
-            onChange={(patch) =>
-              setCompanyValues((current) => ({ ...current, ...patch }))
-            }
-            onSubmit={handleCompanySubmit}
+            onChange={(patch) => {
+              setCompanyValues((current) => ({ ...current, ...patch }));
+              // Editing the name is a fresh attempt; drop the stale answer.
+              setCompanyState({ status: "idle" });
+            }}
+            onSubmit={() => void handleCompanySubmit()}
             onBack={goBack}
+            isSubmitting={companyState.status === "provisioning"}
+            error={
+              companyState.status === "error"
+                ? (companyState.message ?? null)
+                : null
+            }
           />
         );
       case "probing":
@@ -463,21 +527,12 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             />
           );
         }
-        if (trackResult.installed.length === 0) {
-          // The brain picker only makes sense when something usable was
-          // found. The colony branch installs its own agent instead.
-          return (
-            <InstallScreen
-              state={installState}
-              onRetry={() => setInstallState("running")}
-              onContinueAnyway={() => settleInstall("degraded")}
-            />
-          );
-        }
+        // The picker is only reached when the probe found something usable on
+        // this computer: handleProbeResolved skips the step otherwise.
         return (
           <BrainScreen
             brains={trackResult.brains}
-            selected={selectedBrain ?? trackResult.installed[0]}
+            selected={selectedBrain ?? trackResult.installed[0] ?? null}
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
           />
@@ -523,6 +578,13 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}
             onBack={goBack}
+            finishing={finishState.status === "running"}
+            finishError={
+              finishState.status === "error"
+                ? (finishState.message ?? null)
+                : null
+            }
+            onRetryFinish={finish}
           />
         );
       case "invite":
@@ -533,6 +595,13 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             onSend={handleInvitesSend}
             onSkip={() => goTo(nextStep("invite", answers))}
             onBack={goBack}
+            finishing={finishState.status === "running"}
+            finishError={
+              finishState.status === "error"
+                ? (finishState.message ?? null)
+                : null
+            }
+            onRetryFinish={finish}
           />
         ) : null;
       default:

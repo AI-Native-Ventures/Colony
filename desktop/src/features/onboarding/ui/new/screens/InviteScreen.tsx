@@ -36,6 +36,12 @@ type Props = {
   onSend: () => void;
   onSkip: () => void;
   onBack: () => void;
+  /** Onboarding is handing off to the app; the actions wait it out. */
+  finishing?: boolean;
+  /** Why the handoff failed, in the user's words. */
+  finishError?: string | null;
+  /** Retries a failed handoff without redoing the flow. */
+  onRetryFinish?: () => void;
 };
 
 export function InviteScreen({
@@ -44,6 +50,9 @@ export function InviteScreen({
   onSend,
   onSkip,
   onBack,
+  finishing = false,
+  finishError = null,
+  onRetryFinish,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState("");
@@ -105,14 +114,40 @@ export function InviteScreen({
           {problem || "Press enter after each address."}
         </p>
       </div>
+      {finishError && onRetryFinish ? (
+        <p className="onb-note onb-note-warn">
+          {finishError}{" "}
+          <button
+            type="button"
+            className="onb-quiet-action"
+            onClick={onRetryFinish}
+          >
+            Try again
+          </button>
+        </p>
+      ) : null}
       <div className="onb-actions">
-        <Button size="lg" disabled={!invites.length} onClick={onSend}>
+        <Button
+          size="lg"
+          disabled={!invites.length || finishing}
+          onClick={onSend}
+        >
           {invites.length ? "Send invites" : "Add an address to send invites"}
         </Button>
-        <button type="button" className="onb-quiet-action" onClick={onSkip}>
-          It is just me for now
+        <button
+          type="button"
+          className="onb-quiet-action"
+          disabled={finishing}
+          onClick={onSkip}
+        >
+          {finishing ? "Opening your workspace" : "It is just me for now"}
         </button>
-        <button type="button" className="onb-quiet-action" onClick={onBack}>
+        <button
+          type="button"
+          className="onb-quiet-action"
+          disabled={finishing}
+          onClick={onBack}
+        >
           Back
         </button>
       </div>

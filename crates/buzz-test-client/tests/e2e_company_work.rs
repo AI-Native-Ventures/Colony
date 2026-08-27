@@ -23,8 +23,8 @@
 use std::time::Duration;
 
 use buzz_core::company::{
-    CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyService, CompanyTask,
-    CompanyTeamRef, CostCentre, CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus,
+    CommercialPurpose, CompanyProfile, CompanyService, CompanyTask, CompanyTeamRef, CostCentre,
+    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMMUNITY_PROFILE_ID,
     COMPANY_SCHEMA, INITIATIVE_SCHEMA,
 };
 use buzz_core::job::{TaskArtifact, TaskArtifactKind, TaskCheckpoint};
@@ -88,10 +88,9 @@ async fn relay_self() -> String {
         .to_ascii_lowercase()
 }
 
-fn company(id: &str, now: i64) -> CompanyProfile {
+fn company(now: i64) -> CompanyProfile {
     CompanyProfile {
         schema: COMPANY_SCHEMA.to_string(),
-        id: id.to_string(),
         trading_name: "Horizon Labs".to_string(),
         legal_name: None,
         website: None,
@@ -110,17 +109,15 @@ fn company(id: &str, now: i64) -> CompanyProfile {
             service_id: None,
         }],
         source_report_event_id: None,
-        onboarding_status: CompanyOnboardingStatus::Approved,
         created_at: now,
         updated_at: now,
     }
 }
 
-fn initiative(company_id: &str, id: &str, owner_persona_id: &str, now: i64) -> Initiative {
+fn initiative(id: &str, owner_persona_id: &str, now: i64) -> Initiative {
     Initiative {
         schema: INITIATIVE_SCHEMA.to_string(),
         id: id.to_string(),
-        company_id: company_id.to_string(),
         title: "Launch outbound".to_string(),
         summary: "Open a first outbound channel.".to_string(),
         status: InitiativeStatus::Proposed,
@@ -139,11 +136,10 @@ fn initiative(company_id: &str, id: &str, owner_persona_id: &str, now: i64) -> I
     }
 }
 
-fn task(company_id: &str, id: &str, team: &CompanyTeamRef, now: i64) -> CompanyTask {
+fn task(id: &str, team: &CompanyTeamRef, now: i64) -> CompanyTask {
     CompanyTask {
         schema: TASK_SCHEMA.to_string(),
         id: id.to_string(),
-        company_id: company_id.to_string(),
         initiative_id: None,
         title: "Draft the first prospect list".to_string(),
         status: TaskStatus::Ready,
@@ -567,14 +563,16 @@ async fn expire_job_lease(job_id: &str) {
 struct Fixture {
     owner: Keys,
     relay: String,
-    company_id: String,
     team: CompanyTeamRef,
+    /// Unique per test run. The community profile is a singleton, but
+    /// initiatives and tasks are not: two tests sharing an id would collide
+    /// on the same coordinate and the second Create would be refused.
+    token: String,
 }
 
 async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
     let relay = relay_self().await;
     let suffix = Uuid::new_v4().simple().to_string();
-    let company_id = format!("co{}", &suffix[..12]);
     let team = CompanyTeamRef {
         id: format!("team-{}", &suffix[..12]),
         lead_persona_id: format!("lead-{}", &suffix[..12]),
@@ -584,8 +582,8 @@ async fn setup(client: &mut BuzzTestClient, owner: Keys) -> Fixture {
     Fixture {
         owner,
         relay,
-        company_id,
         team,
+        token: suffix[..12].to_string(),
     }
 }
 
@@ -600,20 +598,24 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
-    let profile = company(&fixture.company_id, stamp);
+    let profile = company(stamp);
     let create_company = action(
         &fixture.relay,
         CompanyActionOperation::Create,
         CompanyActionPayload::Company(profile.clone()),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
         None,
     );
-    assert_eq!(
+    // Applied the first time this community sees a profile, Conflict after:
+    // the profile is a singleton at a fixed coordinate, so a second Create is
+    // refused rather than making a second company. Every fixture builds the
+    // same profile, so an existing one is equivalent for what follows.
+    assert!(matches!(
         broker(&mut client, &fixture.owner, &fixture.relay, &create_company,)
             .await
             .0,
-        CompanyReceiptOutcome::Applied
-    );
+        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+    ));
 
     // The chat thread lives in a channel this test provisions itself. The
     // old hardcoded UUID only existed in the abandoned isolated harness's
@@ -1035,35 +1037,44 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     let stamp = now();
 
     // --- Create the company -------------------------------------------------
-    let profile = company(&fixture.company_id, stamp);
+    let profile = company(stamp);
     let create = action(
         &fixture.relay,
         CompanyActionOperation::Create,
         CompanyActionPayload::Company(profile.clone()),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
         None,
     );
     let (outcome, head_id) = broker(&mut client, &fixture.owner, &fixture.relay, &create).await;
-    assert_eq!(
-        outcome,
-        CompanyReceiptOutcome::Applied,
-        "the owner's own company must be created"
+    // Applied the first time this community sees a profile, Conflict after:
+    // the profile is a singleton at a fixed coordinate, so a second Create is
+    // refused rather than making a second company. Every fixture builds the
+    // same profile, so an existing one is equivalent for what follows.
+    assert!(
+        matches!(
+            outcome,
+            CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+        ),
+        "the community profile must exist, got {outcome:?}"
     );
-    let head_id = head_id.expect("an applied receipt names its head");
 
     let stored = head(
         &mut client,
         &fixture.relay,
         KIND_COMPANY_PROFILE,
-        &fixture.company_id,
+        COMMUNITY_PROFILE_ID,
     )
     .await
-    .expect("the company head exists");
-    assert_eq!(
-        stored.id.to_hex(),
-        head_id,
-        "the receipt names the real head"
-    );
+    .expect("the community profile head exists");
+    // Only an Applied receipt names a head; a Conflict created nothing, so
+    // there is no receipt-to-head correspondence left to check.
+    if let Some(head_id) = head_id {
+        assert_eq!(
+            stored.id.to_hex(),
+            head_id,
+            "the receipt names the real head"
+        );
+    }
     assert_eq!(
         stored.pubkey.to_hex(),
         fixture.relay,
@@ -1071,13 +1082,8 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     );
 
     // --- Create an initiative and two tasks ---------------------------------
-    let initiative_id = format!("{}:launch", fixture.company_id);
-    let proposed = initiative(
-        &fixture.company_id,
-        &initiative_id,
-        &fixture.team.lead_persona_id,
-        stamp,
-    );
+    let initiative_id = format!("launch-{}", fixture.token);
+    let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
     let (outcome, _) = broker(
         &mut client,
         &fixture.owner,
@@ -1095,8 +1101,8 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
 
     let mut task_heads = Vec::new();
     for suffix in ["one", "two"] {
-        let task_id = format!("{}:task-{suffix}", fixture.company_id);
-        let record = task(&fixture.company_id, &task_id, &fixture.team, stamp);
+        let task_id = format!("task-{suffix}-{}", fixture.token);
+        let record = task(&task_id, &fixture.team, stamp);
         let (outcome, head_id) = broker(
             &mut client,
             &fixture.owner,
@@ -1194,8 +1200,8 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     );
 
     // --- A replayed action is answered, not applied twice -------------------
-    let replay_id = format!("{}:task-replay", fixture.company_id);
-    let replay_record = task(&fixture.company_id, &replay_id, &fixture.team, stamp);
+    let replay_id = format!("task-replay-{}", fixture.token);
+    let replay_record = task(&replay_id, &fixture.team, stamp);
     let replay = action(
         &fixture.relay,
         CompanyActionOperation::Create,
@@ -1230,7 +1236,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
-    let profile = company(&fixture.company_id, stamp);
+    let profile = company(stamp);
     let (outcome, _) = broker(
         &mut client,
         &fixture.owner,
@@ -1239,12 +1245,19 @@ async fn nobody_but_the_owner_can_change_company_state() {
             &fixture.relay,
             CompanyActionOperation::Create,
             CompanyActionPayload::Company(profile.clone()),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
             None,
         ),
     )
     .await;
-    assert_eq!(outcome, CompanyReceiptOutcome::Applied);
+    // Applied the first time this community sees a profile, Conflict after:
+    // the profile is a singleton at a fixed coordinate, so a second Create is
+    // refused rather than making a second company. Every fixture builds the
+    // same profile, so an existing one is equivalent for what follows.
+    assert!(matches!(
+        outcome,
+        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+    ));
 
     // --- A member who is not the owner cannot replace the company -----------
     let stranger = Keys::generate();
@@ -1258,7 +1271,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
         &mut client,
         &fixture.relay,
         KIND_COMPANY_PROFILE,
-        &fixture.company_id,
+        COMMUNITY_PROFILE_ID,
     )
     .await
     .expect("company head");
@@ -1266,7 +1279,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
         &fixture.relay,
         CompanyActionOperation::Transition,
         CompanyActionPayload::Company(hijack),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
         Some(head_before.id.to_hex()),
     ))
     .expect("action builds")
@@ -1280,7 +1293,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
         &mut client,
         &fixture.relay,
         KIND_COMPANY_PROFILE,
-        &fixture.company_id,
+        COMMUNITY_PROFILE_ID,
     )
     .await
     .expect("company head still exists");
@@ -1298,9 +1311,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
         (KIND_COMPANY_RECEIPT, "receipt"),
     ] {
         let forged = EventBuilder::new(Kind::Custom(kind as u16), "{}")
-            .tags(vec![
-                Tag::parse(["d", fixture.company_id.as_str()]).expect("d")
-            ])
+            .tags(vec![Tag::parse(["d", COMMUNITY_PROFILE_ID]).expect("d")])
             .sign_with_keys(&fixture.owner)
             .expect("sign");
         let response = client.send_event(forged).await;
@@ -1340,30 +1351,31 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
     let stamp = now();
 
     // --- Company and two tasks: A human-doer InProgress, B Blocked on A ----
-    let profile = company(&fixture.company_id, stamp);
-    assert_eq!(
-        broker(
-            &mut client,
-            &fixture.owner,
+    let profile = company(stamp);
+    let profile_outcome = broker(
+        &mut client,
+        &fixture.owner,
+        &fixture.relay,
+        &action(
             &fixture.relay,
-            &action(
-                &fixture.relay,
-                CompanyActionOperation::Create,
-                CompanyActionPayload::Company(profile),
-                coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
-                None,
-            ),
-        )
-        .await
-        .0,
-        CompanyReceiptOutcome::Applied
-    );
+            CompanyActionOperation::Create,
+            CompanyActionPayload::Company(profile),
+            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
+            None,
+        ),
+    )
+    .await
+    .0;
+    assert!(matches!(
+        profile_outcome,
+        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+    ));
 
-    let task_a_id = format!("{}:call-the-client", fixture.company_id);
-    let task_b_id = format!("{}:send-the-followup", fixture.company_id);
+    let task_a_id = format!("call-the-client-{}", fixture.token);
+    let task_b_id = format!("send-the-followup-{}", fixture.token);
 
     // A is a phone call: doerKind human, so it completes without review.
-    let mut task_a = task(&fixture.company_id, &task_a_id, &fixture.team, stamp);
+    let mut task_a = task(&task_a_id, &fixture.team, stamp);
     task_a.status = TaskStatus::InProgress;
     task_a.doer_kind = DoerKind::Human;
     let (a_outcome, a_head_id) = broker(
@@ -1384,7 +1396,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
 
     // B starts blocked on A, exactly the eager fan-out shape: the whole
     // graph exists up front and downstream work waits.
-    let mut task_b = task(&fixture.company_id, &task_b_id, &fixture.team, stamp);
+    let mut task_b = task(&task_b_id, &fixture.team, stamp);
     task_b.status = TaskStatus::Blocked;
     task_b.depends_on = vec![task_a_id.clone()];
     assert_eq!(
@@ -1530,7 +1542,7 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
-    let profile = company(&fixture.company_id, stamp);
+    let profile = company(stamp);
     let (outcome, _) = broker(
         &mut client,
         &fixture.owner,
@@ -1539,20 +1551,19 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
             &fixture.relay,
             CompanyActionOperation::Create,
             CompanyActionPayload::Company(profile.clone()),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, &fixture.company_id),
+            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
             None,
         ),
     )
     .await;
-    assert_eq!(outcome, CompanyReceiptOutcome::Applied);
+    // Applied first, Conflict after: the profile is a community singleton.
+    assert!(matches!(
+        outcome,
+        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
+    ));
 
-    let initiative_id = format!("{}:launch", fixture.company_id);
-    let proposed = initiative(
-        &fixture.company_id,
-        &initiative_id,
-        &fixture.team.lead_persona_id,
-        stamp,
-    );
+    let initiative_id = format!("launch-{}", fixture.token);
+    let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
     let (outcome, _) = broker(
         &mut client,
         &fixture.owner,
@@ -1585,7 +1596,6 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
         let step = next_step(
             &record,
             &current.id.to_hex(),
-            &profile,
             &teams,
             &fixture.relay,
             InitiativeIntent::Start,
@@ -1691,7 +1701,6 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
     // Client delivery with a named client is the case the classifier has to get
     // right, because it is the one that moves money between COGS and OPEX.
     let work = AgentWorkContext {
-        company_id: format!("co{}", &suffix[..12]),
         task_id: format!("co{}:chat:0001", &suffix[..12]),
         initiative_id: Some(format!("co{}:launch", &suffix[..12])),
         owning_team_id: format!("team-{}", &suffix[..12]),
@@ -1846,14 +1855,16 @@ async fn seed_live_work_context() {
     let relay = relay_self().await;
     let stamp = now();
 
-    let company_id = "livecompany".to_string();
+    // Not an identifier any more, just a distinctive prefix for this
+    // seed's own initiative and task ids.
+    let prefix = "livecompany";
     let team = CompanyTeamRef {
         id: "live-team".to_string(),
         lead_persona_id: "live-lead".to_string(),
         persona_ids: vec!["live-lead".to_string()],
     };
-    let initiative_id = format!("{company_id}:live-initiative");
-    let task_id = format!("{company_id}:live-task");
+    let initiative_id = format!("{prefix}:live-initiative");
+    let task_id = format!("{prefix}:live-task");
 
     publish_team(&mut client, &owner, &team).await;
 
@@ -1861,15 +1872,14 @@ async fn seed_live_work_context() {
         action(
             &relay,
             CompanyActionOperation::Create,
-            CompanyActionPayload::Company(company(&company_id, stamp)),
-            coordinate(KIND_COMPANY_PROFILE, &relay, &company_id),
+            CompanyActionPayload::Company(company(stamp)),
+            coordinate(KIND_COMPANY_PROFILE, &relay, COMMUNITY_PROFILE_ID),
             None,
         ),
         action(
             &relay,
             CompanyActionOperation::Create,
             CompanyActionPayload::Initiative(initiative(
-                &company_id,
                 &initiative_id,
                 &team.lead_persona_id,
                 stamp,
@@ -1881,7 +1891,7 @@ async fn seed_live_work_context() {
             &relay,
             CompanyActionOperation::Create,
             CompanyActionPayload::Task({
-                let mut record = task(&company_id, &task_id, &team, stamp);
+                let mut record = task(&task_id, &team, stamp);
                 record.initiative_id = Some(initiative_id.clone());
                 // Client delivery for a named client, so the classification the
                 // live run reads back is COGS rather than the default.
@@ -1907,7 +1917,7 @@ async fn seed_live_work_context() {
     println!("LIVE_TASK={task_id}");
     println!("LIVE_INITIATIVE={initiative_id}");
     println!("LIVE_TEAM={}", team.id);
-    println!("LIVE_COMPANY={company_id}");
+    println!("LIVE_COMPANY={COMMUNITY_PROFILE_ID}");
     client.disconnect().await.ok();
 }
 

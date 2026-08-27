@@ -76,7 +76,6 @@ export function initiativeCardData(
 ): Record<string, unknown> {
   return {
     initiative_id: initiative.id,
-    company_id: initiative.companyId,
     title: initiative.title,
     summary: initiative.summary,
     status: initiative.status,
@@ -103,18 +102,13 @@ export function postedInstanceIds(
 }
 
 export type PostInitiativeCardsInput = {
-  companyId: string;
   channelId: string;
 };
 
 export type PostInitiativeCardsDependencies = {
   relaySelf: () => Promise<string | null>;
-  loadCompany: (
-    companyId: string,
-  ) => ReturnType<typeof companyRepository.getCompany>;
-  loadInitiatives: (
-    companyId: string,
-  ) => ReturnType<typeof companyRepository.listInitiatives>;
+  loadCompany: () => ReturnType<typeof companyRepository.getActiveCompany>;
+  loadInitiatives: () => ReturnType<typeof companyRepository.listInitiatives>;
   fetchChannel: (channelId: string) => Promise<RelayEvent[]>;
   fetchCatalog: (
     handle: string,
@@ -152,8 +146,8 @@ export function createInitiativeCardPoster(
     if (!relaySelfPubkey) return { posted: [], skipped: [] };
 
     const [company, initiatives] = await Promise.all([
-      dependencies.loadCompany(input.companyId),
-      dependencies.loadInitiatives(input.companyId),
+      dependencies.loadCompany(),
+      dependencies.loadInitiatives(),
     ]);
     if (!company.ok || !initiatives.ok) return { posted: [], skipped: [] };
 
@@ -206,8 +200,8 @@ export function createInitiativeCardPoster(
 
 export const postInitiativeCards = createInitiativeCardPoster({
   relaySelf: getRelaySelf,
-  loadCompany: (companyId) => companyRepository.getCompany(companyId),
-  loadInitiatives: (companyId) => companyRepository.listInitiatives(companyId),
+  loadCompany: () => companyRepository.getActiveCompany(),
+  loadInitiatives: () => companyRepository.listInitiatives(),
   fetchChannel: (channelId) =>
     relayClient.fetchEvents({
       kinds: [KIND_STREAM_MESSAGE],

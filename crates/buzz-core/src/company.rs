@@ -5,7 +5,14 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Schema string every Company profile carries.
+/// The `d` tag every community profile head lives at.
+///
+/// A constant, not an identifier. There is one profile per community and the
+/// community is already named by the relay host the head was written through,
+/// so the coordinate needs a stable slot, not a name of its own.
+pub const COMMUNITY_PROFILE_ID: &str = "profile";
+
+/// Schema string every community profile carries.
 pub const COMPANY_SCHEMA: &str = "colony.company/v1";
 /// Schema string every Initiative carries.
 pub const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
@@ -88,24 +95,20 @@ pub struct CostCentre {
     pub service_id: Option<String>,
 }
 
-/// Approval state of a company profile created during onboarding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CompanyOnboardingStatus {
-    /// Profile is still being assembled or reviewed.
-    Draft,
-    /// Owner approved the profile as authoritative.
-    Approved,
-}
-
-/// Relay-authored canonical company operating profile.
+/// Relay-authored canonical operating profile of the community.
+///
+/// There is exactly one of these per community and it has no identifier of
+/// its own: the community IS the business. An earlier design gave this record
+/// a separate `id` and an approval lifecycle, so every work record carried a
+/// `companyId` alongside the community scope the relay already derived from
+/// the connection host. That produced two competing scopes for one workspace
+/// and a failure mode where a perfectly working community could not show a
+/// single task because a second record nobody had heard of did not exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompanyProfile {
     /// Exact content schema identifier.
     pub schema: String,
-    /// Stable company coordinate identifier.
-    pub id: String,
     /// Customer-facing company name.
     pub trading_name: String,
     /// Optional registered company name.
@@ -124,8 +127,6 @@ pub struct CompanyProfile {
     pub cost_centres: Vec<CostCentre>,
     /// Optional source report event used during onboarding.
     pub source_report_event_id: Option<String>,
-    /// Whether the owner has approved this company profile.
-    pub onboarding_status: CompanyOnboardingStatus,
     /// Unix timestamp at which the profile was created.
     pub created_at: i64,
     /// Unix timestamp at which the profile was last updated.
@@ -176,8 +177,6 @@ pub struct Initiative {
     pub schema: String,
     /// Stable initiative coordinate identifier.
     pub id: String,
-    /// Company that owns the initiative.
-    pub company_id: String,
     /// Human-readable initiative title.
     pub title: String,
     /// Bounded initiative summary.
@@ -323,8 +322,6 @@ pub struct CompanyTask {
     pub schema: String,
     /// Stable task coordinate identifier.
     pub id: String,
-    /// Company that owns the task.
-    pub company_id: String,
     /// Optional initiative containing this task.
     pub initiative_id: Option<String>,
     /// Human-readable task title.
@@ -425,8 +422,6 @@ pub struct Cohort {
     pub schema: String,
     /// Stable cohort coordinate identifier.
     pub id: String,
-    /// Company that owns the cohort.
-    pub company_id: String,
     /// Human-readable cohort name.
     pub name: String,
     /// The bounded set of subjects fan-out will run over.
@@ -508,8 +503,6 @@ pub struct Template {
     pub schema: String,
     /// Stable template coordinate identifier.
     pub id: String,
-    /// Company that owns the template.
-    pub company_id: String,
     /// Human-readable template name.
     pub name: String,
     /// Monotonically increasing edit counter. A run pins the value current
@@ -551,8 +544,6 @@ pub enum AttributionState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentWorkContext {
-    /// Company charged for the turn.
-    pub company_id: String,
     /// Task charged for the turn.
     pub task_id: String,
     /// Optional initiative containing the task.
@@ -660,29 +651,6 @@ pub enum CompanyContractError {
     InvalidNumber(&'static str),
 }
 
-/// Return whether a company lifecycle transition is allowed.
-///
-/// Same-status replacements are allowed for content edits. Approval is
-/// irreversible: the only state change is `Draft -> Approved`.
-pub const fn is_company_status_transition_allowed(
-    from: CompanyOnboardingStatus,
-    to: CompanyOnboardingStatus,
-) -> bool {
-    matches!(
-        (from, to),
-        (
-            CompanyOnboardingStatus::Draft,
-            CompanyOnboardingStatus::Draft
-        ) | (
-            CompanyOnboardingStatus::Draft,
-            CompanyOnboardingStatus::Approved
-        ) | (
-            CompanyOnboardingStatus::Approved,
-            CompanyOnboardingStatus::Approved
-        )
-    )
-}
-
 /// Return whether an initiative lifecycle transition is allowed.
 ///
 /// Same-status replacements are allowed. Completed and cancelled initiatives
@@ -785,19 +753,12 @@ pub fn validate_company_update(
 ) -> Result<(), CompanyContractError> {
     validate_company(replacement)?;
     validate_immutable(&previous.schema, &replacement.schema, "company.schema")?;
-    validate_immutable(&previous.id, &replacement.id, "company.id")?;
     validate_replacement_timestamps(
         previous.created_at,
         previous.updated_at,
         replacement.created_at,
         replacement.updated_at,
     )?;
-    if !is_company_status_transition_allowed(
-        previous.onboarding_status,
-        replacement.onboarding_status,
-    ) {
-        return Err(CompanyContractError::InvalidStatusTransition("company"));
-    }
     Ok(())
 }
 
@@ -811,11 +772,6 @@ pub fn validate_initiative_update(
     validate_initiative(replacement, company)?;
     validate_immutable(&previous.schema, &replacement.schema, "initiative.schema")?;
     validate_immutable(&previous.id, &replacement.id, "initiative.id")?;
-    validate_immutable(
-        &previous.company_id,
-        &replacement.company_id,
-        "initiative.companyId",
-    )?;
     // Pinned by a run, never followed: a fan-out run's template, the exact
     // version it started with, and the cohort it ran over are fixed the
     // moment the run starts. Letting an update repin any of them would let a
@@ -860,11 +816,6 @@ pub fn validate_task_update(
     validate_task(replacement, company, initiative, teams)?;
     validate_immutable(&previous.schema, &replacement.schema, "task.schema")?;
     validate_immutable(&previous.id, &replacement.id, "task.id")?;
-    validate_immutable(
-        &previous.company_id,
-        &replacement.company_id,
-        "task.companyId",
-    )?;
     validate_replacement_timestamps(
         previous.created_at,
         previous.updated_at,
@@ -919,7 +870,6 @@ fn validate_bounce_delta(
 /// Validate one relay-authored canonical company profile.
 pub fn validate_company(profile: &CompanyProfile) -> Result<(), CompanyContractError> {
     validate_schema(&profile.schema, COMPANY_SCHEMA, "company")?;
-    validate_id(&profile.id, "company.id")?;
     validate_required_text(&profile.trading_name, "company.tradingName", MAX_NAME_LEN)?;
     validate_optional_text(
         profile.legal_name.as_deref(),
@@ -1003,7 +953,6 @@ pub fn validate_initiative(
     validate_company(company)?;
     validate_schema(&initiative.schema, INITIATIVE_SCHEMA, "initiative")?;
     validate_id(&initiative.id, "initiative.id")?;
-    validate_id(&initiative.company_id, "initiative.companyId")?;
     validate_required_text(&initiative.title, "initiative.title", MAX_NAME_LEN)?;
     validate_text(&initiative.summary, "initiative.summary", MAX_SUMMARY_LEN)?;
     validate_id(&initiative.owner_persona_id, "initiative.ownerPersonaId")?;
@@ -1031,11 +980,6 @@ pub fn validate_initiative(
         _ => {}
     }
 
-    if initiative.company_id != company.id {
-        return Err(CompanyContractError::MismatchedReference(
-            "initiative.companyId",
-        ));
-    }
     if !company
         .cost_centres
         .iter()
@@ -1066,7 +1010,6 @@ pub fn validate_task(
     validate_teams(teams)?;
     validate_schema(&task.schema, TASK_SCHEMA, "task")?;
     validate_id(&task.id, "task.id")?;
-    validate_id(&task.company_id, "task.companyId")?;
     validate_optional_id(task.initiative_id.as_deref(), "task.initiativeId")?;
     validate_required_text(&task.title, "task.title", MAX_NAME_LEN)?;
     validate_id(&task.owning_team_id, "task.owningTeamId")?;
@@ -1116,20 +1059,12 @@ pub fn validate_task(
         validate_required_text(bounce_reason.text(), "task.bounceReason", MAX_REASON_LEN)?;
     }
 
-    if task.company_id != company.id {
-        return Err(CompanyContractError::MismatchedReference("task.companyId"));
-    }
     match (task.initiative_id.as_deref(), initiative) {
         (Some(task_initiative_id), Some(initiative)) => {
             validate_initiative(initiative, company)?;
             if initiative.id != task_initiative_id {
                 return Err(CompanyContractError::MismatchedReference(
                     "task.initiativeId",
-                ));
-            }
-            if initiative.company_id != task.company_id {
-                return Err(CompanyContractError::MismatchedReference(
-                    "task.initiative.companyId",
                 ));
             }
         }
@@ -1203,7 +1138,6 @@ pub fn validate_cohort(
     validate_company(company)?;
     validate_schema(&cohort.schema, COHORT_SCHEMA, "cohort")?;
     validate_id(&cohort.id, "cohort.id")?;
-    validate_id(&cohort.company_id, "cohort.companyId")?;
     validate_required_text(&cohort.name, "cohort.name", MAX_NAME_LEN)?;
     ensure_cardinality(&cohort.members, "cohort.members", MAX_COHORT_MEMBERS)?;
 
@@ -1223,12 +1157,6 @@ pub fn validate_cohort(
         }
     }
 
-    if cohort.company_id != company.id {
-        return Err(CompanyContractError::MismatchedReference(
-            "cohort.companyId",
-        ));
-    }
-
     Ok(())
 }
 
@@ -1243,11 +1171,6 @@ pub fn validate_cohort_update(
     validate_cohort(replacement, company)?;
     validate_immutable(&previous.schema, &replacement.schema, "cohort.schema")?;
     validate_immutable(&previous.id, &replacement.id, "cohort.id")?;
-    validate_immutable(
-        &previous.company_id,
-        &replacement.company_id,
-        "cohort.companyId",
-    )?;
     validate_replacement_timestamps(
         previous.created_at,
         previous.updated_at,
@@ -1329,7 +1252,6 @@ pub fn validate_template(
     validate_teams(teams)?;
     validate_schema(&template.schema, TEMPLATE_SCHEMA, "template")?;
     validate_id(&template.id, "template.id")?;
-    validate_id(&template.company_id, "template.companyId")?;
     validate_required_text(&template.name, "template.name", MAX_NAME_LEN)?;
     if template.version < 1 {
         return Err(CompanyContractError::InvalidVersion);
@@ -1347,12 +1269,6 @@ pub fn validate_template(
                 "template.stages.slug",
             ));
         }
-    }
-
-    if template.company_id != company.id {
-        return Err(CompanyContractError::MismatchedReference(
-            "template.companyId",
-        ));
     }
 
     Ok(())
@@ -1375,11 +1291,6 @@ pub fn validate_template_update(
     validate_template(replacement, company, teams)?;
     validate_immutable(&previous.schema, &replacement.schema, "template.schema")?;
     validate_immutable(&previous.id, &replacement.id, "template.id")?;
-    validate_immutable(
-        &previous.company_id,
-        &replacement.company_id,
-        "template.companyId",
-    )?;
     if replacement.version <= previous.version {
         return Err(CompanyContractError::InvalidVersion);
     }
@@ -1468,7 +1379,6 @@ pub fn classify_cost(
 impl AgentWorkContext {
     /// Validate identifiers and the deterministic cost-classification snapshot.
     pub fn validate(&self) -> Result<(), CompanyContractError> {
-        validate_id(&self.company_id, "workContext.companyId")?;
         validate_id(&self.task_id, "workContext.taskId")?;
         validate_optional_id(self.initiative_id.as_deref(), "workContext.initiativeId")?;
         validate_id(&self.owning_team_id, "workContext.owningTeamId")?;
@@ -1658,7 +1568,6 @@ mod tests {
     fn company_fixture() -> CompanyProfile {
         CompanyProfile {
             schema: "colony.company/v1".to_string(),
-            id: "horizon-labs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: Some("Horizon Labs (Pty) Ltd".to_string()),
             website: Some("https://horizonlabs.co.za".to_string()),
@@ -1685,7 +1594,6 @@ mod tests {
                 },
             ],
             source_report_event_id: Some("scan-event-1".to_string()),
-            onboarding_status: CompanyOnboardingStatus::Approved,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }
@@ -1717,7 +1625,6 @@ mod tests {
         Initiative {
             schema: "colony.initiative/v1".to_string(),
             id: "tennant-premium-site".to_string(),
-            company_id: "horizon-labs".to_string(),
             title: "Tennant Group premium website".to_string(),
             summary: "Rebuild the client's website and launch the campaign.".to_string(),
             status: InitiativeStatus::Active,
@@ -1740,7 +1647,6 @@ mod tests {
         Cohort {
             schema: COHORT_SCHEMA.to_string(),
             id: "q3-outbound-leads".to_string(),
-            company_id: "horizon-labs".to_string(),
             name: "Q3 outbound leads".to_string(),
             members: vec![
                 SubjectRef {
@@ -1777,7 +1683,6 @@ mod tests {
         Template {
             schema: TEMPLATE_SCHEMA.to_string(),
             id: "outbound-sequence".to_string(),
-            company_id: "horizon-labs".to_string(),
             name: "Outbound sequence".to_string(),
             version: 1,
             stages: vec![template_stage_fixture()],
@@ -1791,7 +1696,6 @@ mod tests {
             CompanyTask {
                 schema: "colony.task/v1".to_string(),
                 id: "build-tennant-site".to_string(),
-                company_id: "horizon-labs".to_string(),
                 initiative_id: Some("tennant-premium-site".to_string()),
                 title: "Build the Tennant Group website".to_string(),
                 status: TaskStatus::InProgress,
@@ -1826,7 +1730,6 @@ mod tests {
             CompanyTask {
                 schema: "colony.task/v1".to_string(),
                 id: "launch-tennant-campaign".to_string(),
-                company_id: "horizon-labs".to_string(),
                 initiative_id: Some("tennant-premium-site".to_string()),
                 title: "Launch the Tennant Group campaign".to_string(),
                 status: TaskStatus::Ready,
@@ -1890,12 +1793,10 @@ mod tests {
             "web-development"
         );
         assert_eq!(company_value["sourceReportEventId"], "scan-event-1");
-        assert_eq!(company_value["onboardingStatus"], "approved");
         assert_eq!(company_value["createdAt"], 1_785_400_000_i64);
         assert_eq!(company_value["updatedAt"], 1_785_400_100_i64);
         assert!(company_value.get("trading_name").is_none());
 
-        assert_eq!(initiative_value["companyId"], "horizon-labs");
         assert_eq!(initiative_value["status"], "active");
         assert_eq!(initiative_value["ownerPersonaId"], "chief-of-staff");
         assert_eq!(initiative_value["costCentreId"], "web-delivery");
@@ -1908,7 +1809,6 @@ mod tests {
         assert_eq!(initiative_value["updatedAt"], 1_785_400_300_i64);
         assert!(initiative_value.get("company_id").is_none());
 
-        assert_eq!(task_value["companyId"], "horizon-labs");
         assert_eq!(task_value["initiativeId"], "tennant-premium-site");
         assert_eq!(task_value["status"], "inProgress");
         assert_eq!(task_value["owningTeamId"], "web-team");
@@ -2005,10 +1905,6 @@ mod tests {
     fn company_rejects_blank_ids_titles_and_duplicate_children() {
         assert!(validate_company(&company_fixture()).is_ok());
 
-        let mut blank_id = company_fixture();
-        blank_id.id = " ".to_string();
-        assert!(validate_company(&blank_id).is_err());
-
         let mut blank_title = company_fixture();
         blank_title.trading_name = "".to_string();
         assert!(validate_company(&blank_title).is_err());
@@ -2059,10 +1955,6 @@ mod tests {
         let mut blank_title = base.clone();
         blank_title.title = "".to_string();
         assert!(validate_task(&blank_title, &company, Some(&initiative), &teams).is_err());
-
-        let mut wrong_initiative = initiative.clone();
-        wrong_initiative.company_id = "another-company".to_string();
-        assert!(validate_task(&base, &company, Some(&wrong_initiative), &teams).is_err());
 
         let mut missing_team = base.clone();
         missing_team.owning_team_id = "missing-team".to_string();
@@ -2162,38 +2054,6 @@ mod tests {
             .assignee_persona_ids
             .contains(&"content-specialist".to_string()));
         assert!(validate_task(&task, &company, Some(&initiative), &teams).is_ok());
-    }
-
-    #[test]
-    fn company_status_transition_graph_is_exhaustive() {
-        let statuses = [
-            CompanyOnboardingStatus::Draft,
-            CompanyOnboardingStatus::Approved,
-        ];
-        let allowed = [
-            (
-                CompanyOnboardingStatus::Draft,
-                CompanyOnboardingStatus::Draft,
-            ),
-            (
-                CompanyOnboardingStatus::Draft,
-                CompanyOnboardingStatus::Approved,
-            ),
-            (
-                CompanyOnboardingStatus::Approved,
-                CompanyOnboardingStatus::Approved,
-            ),
-        ];
-
-        for from in statuses {
-            for to in statuses {
-                assert_eq!(
-                    is_company_status_transition_allowed(from, to),
-                    allowed.contains(&(from, to)),
-                    "unexpected company transition result: {from:?} -> {to:?}"
-                );
-            }
-        }
     }
 
     #[test]
@@ -2326,7 +2186,6 @@ mod tests {
         let json = r#"{
             "schema": "colony.task/v1",
             "id": "build-tennant-site",
-            "companyId": "horizon-labs",
             "initiativeId": "tennant-premium-site",
             "title": "Build the Tennant Group website",
             "status": "inProgress",
@@ -2384,20 +2243,6 @@ mod tests {
         replacement.updated_at += 1;
         assert!(validate_company_update(&previous, &replacement).is_ok());
 
-        let mut approved_to_draft = replacement.clone();
-        approved_to_draft.onboarding_status = CompanyOnboardingStatus::Draft;
-        assert_eq!(
-            validate_company_update(&previous, &approved_to_draft),
-            Err(CompanyContractError::InvalidStatusTransition("company"))
-        );
-
-        let mut changed_id = replacement.clone();
-        changed_id.id = "different-company".to_string();
-        assert_eq!(
-            validate_company_update(&previous, &changed_id),
-            Err(CompanyContractError::ImmutableField("company.id"))
-        );
-
         let mut changed_created_at = replacement.clone();
         changed_created_at.created_at += 1;
         assert_eq!(
@@ -2427,15 +2272,6 @@ mod tests {
         assert_eq!(
             validate_initiative_update(&previous, &invalid_transition, &company),
             Err(CompanyContractError::InvalidStatusTransition("initiative"))
-        );
-
-        let mut changed_company = replacement.clone();
-        changed_company.company_id = "different-company".to_string();
-        let mut different_company = company.clone();
-        different_company.id = changed_company.company_id.clone();
-        assert_eq!(
-            validate_initiative_update(&previous, &changed_company, &different_company),
-            Err(CompanyContractError::ImmutableField("initiative.companyId"))
         );
 
         let mut changed_id = replacement.clone();
@@ -2699,19 +2535,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cohort_for_another_company_is_refused() {
-        let company = company_fixture();
-        let mut cohort = cohort_fixture();
-        cohort.company_id = "someone-elses-company".to_string();
-        assert_eq!(
-            validate_cohort(&cohort, &company),
-            Err(CompanyContractError::MismatchedReference(
-                "cohort.companyId"
-            ))
-        );
-    }
-
-    #[test]
     fn cohort_replacement_requires_immutable_identity_and_monotonic_time() {
         let company = company_fixture();
         let previous = cohort_fixture();
@@ -2871,20 +2694,6 @@ mod tests {
             validate_template(&negative_staleness, &company, &teams),
             Err(CompanyContractError::InvalidNumber(
                 "template.stages.stalenessAfterSecs"
-            ))
-        );
-    }
-
-    #[test]
-    fn a_template_for_another_company_is_refused() {
-        let company = company_fixture();
-        let teams = team_fixtures();
-        let mut template = template_fixture();
-        template.company_id = "someone-elses-company".to_string();
-        assert_eq!(
-            validate_template(&template, &company, &teams),
-            Err(CompanyContractError::MismatchedReference(
-                "template.companyId"
             ))
         );
     }

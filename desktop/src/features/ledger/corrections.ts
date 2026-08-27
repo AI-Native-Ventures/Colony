@@ -18,7 +18,6 @@ export interface CorrectionRequest {
   /** Hex event id of the usage record being re-attributed. */
   usageRecordEventId: string;
   /** Company charged. */
-  companyId: string;
   /** Cost centre charged. */
   costCentreId: string;
   /** Team accountable. */
@@ -68,7 +67,6 @@ export function correctionProblem(request: CorrectionRequest): string | null {
   if (!/^[0-9a-f]{64}$/i.test(request.usageRecordEventId)) {
     return "That record cannot be identified.";
   }
-  if (!request.companyId.trim()) return "Name the company being charged.";
   if (!request.costCentreId.trim())
     return "Name the cost centre being charged.";
   if (!request.owningTeamId.trim()) return "Name the team accountable for it.";

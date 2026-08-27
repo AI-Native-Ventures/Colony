@@ -158,17 +158,20 @@ pub struct FanOutPlan {
 /// the trigger event, so retrying the same "@build-websites" send always
 /// asks for the same Initiative rather than starting a second run.
 fn fan_out_initiative_id(
-    company_id: &str,
     cohort_id: &str,
     template_id: &str,
     template_version: i64,
     trigger_event_id: &str,
 ) -> String {
+    // No company prefix: the community already scopes this id, because the
+    // relay derives the community from the host every head is written
+    // through. Prefixing it with a second identity only ever produced a
+    // longer string that said the same thing.
     let derived = step_idempotency_key(
-        company_id,
-        &format!("fanout:{cohort_id}:{template_id}:{template_version}:{trigger_event_id}"),
+        "fanout",
+        &format!("{cohort_id}:{template_id}:{template_version}:{trigger_event_id}"),
     );
-    format!("{company_id}:fanout:{derived}")
+    format!("fanout:{derived}")
 }
 
 /// The stable identity of one (subject, stage) task within a fan-out run.
@@ -209,12 +212,6 @@ fn find_open_task<'a>(
 /// version to pin, and every existing task in the company — this function
 /// never reaches into a database or a relay itself.
 pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
-    if request.cohort.company_id != request.company.id {
-        return Err("cohort belongs to a different company".to_string());
-    }
-    if request.template.company_id != request.company.id {
-        return Err("template belongs to a different company".to_string());
-    }
     if request.cohort.members.is_empty() {
         return Err("cohort has no members to fan out over".to_string());
     }
@@ -271,7 +268,6 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
     }
 
     let initiative_id = fan_out_initiative_id(
-        &request.company.id,
         &request.cohort.id,
         &request.template.id,
         request.template.version,
@@ -335,7 +331,6 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
             let task = CompanyTask {
                 schema: TASK_SCHEMA.to_string(),
                 id: task_id.clone(),
-                company_id: request.company.id.clone(),
                 initiative_id: Some(initiative_id.clone()),
                 title: clamp_title(&format!("{}: {}", stage.title, member.r#ref)),
                 // Ready only at the entry stage: every later stage waits on
@@ -399,7 +394,6 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
     let initiative = Initiative {
         schema: INITIATIVE_SCHEMA.to_string(),
         id: initiative_id.clone(),
-        company_id: request.company.id.clone(),
         title: clamp_title(&format!(
             "{}: {}",
             request.template.name, request.cohort.name
@@ -449,8 +443,8 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
 mod tests {
     use super::*;
     use buzz_core::company::{
-        CompanyOnboardingStatus, CostCentre, CostCentreKind, DoerKind, StageFailureAction,
-        SubjectKind, TemplateStage, COHORT_SCHEMA, COMPANY_SCHEMA, TEMPLATE_SCHEMA,
+        CostCentre, CostCentreKind, DoerKind, StageFailureAction, SubjectKind, TemplateStage,
+        COHORT_SCHEMA, COMPANY_SCHEMA, TEMPLATE_SCHEMA,
     };
 
     const RELAY: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
@@ -459,7 +453,6 @@ mod tests {
     fn company() -> CompanyProfile {
         CompanyProfile {
             schema: COMPANY_SCHEMA.to_string(),
-            id: "horizonlabs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
@@ -474,7 +467,6 @@ mod tests {
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Approved,
             created_at: 1_800_000_000,
             updated_at: 1_800_000_000,
         }
@@ -492,7 +484,6 @@ mod tests {
         Cohort {
             schema: COHORT_SCHEMA.to_string(),
             id: "premium-q3".to_string(),
-            company_id: "horizonlabs".to_string(),
             name: "Premium Q3".to_string(),
             members: (0..members)
                 .map(|index| SubjectRef {
@@ -525,7 +516,6 @@ mod tests {
         Template {
             schema: TEMPLATE_SCHEMA.to_string(),
             id: "build-websites".to_string(),
-            company_id: "horizonlabs".to_string(),
             name: "Build websites".to_string(),
             version: 1,
             stages,
@@ -680,7 +670,6 @@ mod tests {
         let existing = CompanyTask {
             schema: TASK_SCHEMA.to_string(),
             id: "elsewhere:outreach-lead-0".to_string(),
-            company_id: "horizonlabs".to_string(),
             initiative_id: None,
             title: "Already working lead-0".to_string(),
             status: TaskStatus::InProgress,
@@ -751,7 +740,6 @@ mod tests {
         let mut existing = CompanyTask {
             schema: TASK_SCHEMA.to_string(),
             id: "elsewhere:outreach-lead-0".to_string(),
-            company_id: "horizonlabs".to_string(),
             initiative_id: None,
             title: "Already worked lead-0".to_string(),
             status: TaskStatus::Completed,

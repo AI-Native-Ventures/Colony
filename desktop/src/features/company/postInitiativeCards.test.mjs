@@ -31,7 +31,6 @@ const COMPANY = {
     },
   ],
   sourceReportEventId: null,
-  onboardingStatus: "approved",
   createdAt: 1_780_000_000,
   updatedAt: 1_780_000_000,
 };
@@ -40,7 +39,6 @@ function initiative(overrides = {}) {
   return {
     schema: "colony.initiative/v1",
     id: "horizonlabs:launch-outbound",
-    companyId: "horizonlabs",
     title: "Launch outbound",
     summary: "Open a first outbound channel.",
     status: "proposed",
@@ -189,7 +187,6 @@ test("the card names the initiative, its cost centre, and its purpose", () => {
   const data = initiativeCardData(initiative(), COMPANY);
   assert.deepEqual(data, {
     initiative_id: "horizonlabs:launch-outbound",
-    company_id: "horizonlabs",
     title: "Launch outbound",
     summary: "Open a first outbound channel.",
     status: "proposed",

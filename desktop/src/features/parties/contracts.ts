@@ -103,7 +103,6 @@ export type ProvenanceEntry = {
 export type Party = {
   schema: string;
   id: string;
-  companyId: string;
   kind: PartyKind;
   displayName: string;
   legalName: string | null;
@@ -118,7 +117,6 @@ export type Party = {
 export type PartyAlias = {
   schema: string;
   id: string;
-  companyId: string;
   resolvesTo: string;
   mergedAt: number;
   mergeActionEventId: string;
@@ -127,7 +125,6 @@ export type PartyAlias = {
 export type PartyRelationship = {
   schema: string;
   id: string;
-  companyId: string;
   partyId: string;
   relationship: RelationshipKind;
   status: RelationshipStatus;
@@ -234,7 +231,6 @@ const PROVENANCE_FIELDS: Record<string, FieldKind> = {
 const PARTY_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
-  companyId: { type: "string" },
   kind: { type: "enum", values: PARTY_KINDS },
   displayName: { type: "string" },
   legalName: { type: "optionalString" },
@@ -248,7 +244,6 @@ const PARTY_FIELDS: Record<string, FieldKind> = {
 const ALIAS_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
-  companyId: { type: "string" },
   resolvesTo: { type: "string" },
   mergedAt: { type: "integer" },
   mergeActionEventId: { type: "string" },
@@ -257,7 +252,6 @@ const ALIAS_FIELDS: Record<string, FieldKind> = {
 const RELATIONSHIP_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
-  companyId: { type: "string" },
   partyId: { type: "string" },
   relationship: { type: "enum", values: RELATIONSHIP_KINDS },
   status: { type: "enum", values: RELATIONSHIP_STATUSES },
@@ -373,7 +367,6 @@ export function parsePartyHead(
     }
     if (
       exactlyOneTag(event, "d") !== alias.id ||
-      exactlyOneTag(event, "c") !== alias.companyId ||
       exactlyOneTag(event, "alias") !== alias.resolvesTo
     ) {
       return partyFailure(
@@ -395,7 +388,6 @@ export function parsePartyHead(
   // is reachable under a coordinate describing a different party.
   if (
     exactlyOneTag(event, "d") !== party.id ||
-    exactlyOneTag(event, "c") !== party.companyId ||
     exactlyOneTag(event, "party-kind") !== party.kind
   ) {
     return partyFailure(
@@ -459,7 +451,6 @@ export function parsePartyRelationshipHead(
   }
   if (
     exactlyOneTag(event, "d") !== relationship.id ||
-    exactlyOneTag(event, "c") !== relationship.companyId ||
     exactlyOneTag(event, "party") !== relationship.partyId
   ) {
     return partyFailure(

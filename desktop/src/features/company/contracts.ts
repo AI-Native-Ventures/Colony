@@ -82,9 +82,12 @@ export type SubjectKind = (typeof SUBJECT_KINDS)[number];
 export const COST_CLASSIFICATIONS = ["cogs", "opex", "needsReview"] as const;
 export type CostClassification = (typeof COST_CLASSIFICATIONS)[number];
 
-const COMPANY_ONBOARDING_STATUSES = ["draft", "approved"] as const;
-export type CompanyOnboardingStatus =
-  (typeof COMPANY_ONBOARDING_STATUSES)[number];
+/**
+ * The `d` tag every community profile head lives at. A constant, not an
+ * identifier: there is one profile per community, and the relay host the head
+ * came from already names which community that is.
+ */
+export const COMMUNITY_PROFILE_ID = "profile";
 
 const COST_CENTRE_KINDS = ["service", "internal"] as const;
 export type CostCentreKind = (typeof COST_CENTRE_KINDS)[number];
@@ -104,7 +107,6 @@ export type CostCentre = {
 
 export type CompanyProfile = {
   schema: string;
-  id: string;
   tradingName: string;
   legalName: string | null;
   website: string | null;
@@ -114,7 +116,6 @@ export type CompanyProfile = {
   customerSegments: string[];
   costCentres: CostCentre[];
   sourceReportEventId: string | null;
-  onboardingStatus: CompanyOnboardingStatus;
   createdAt: number;
   updatedAt: number;
 };
@@ -122,7 +123,6 @@ export type CompanyProfile = {
 export type Initiative = {
   schema: string;
   id: string;
-  companyId: string;
   title: string;
   summary: string;
   status: InitiativeStatus;
@@ -147,7 +147,6 @@ export type SubjectRef = {
 export type CompanyTask = {
   schema: string;
   id: string;
-  companyId: string;
   initiativeId: string | null;
   title: string;
   status: TaskStatus;
@@ -176,7 +175,6 @@ export type CompanyTask = {
 export type Cohort = {
   schema: string;
   id: string;
-  companyId: string;
   name: string;
   members: SubjectRef[];
   createdAt: number;
@@ -353,7 +351,6 @@ const COST_CENTRE_FIELDS: Record<string, FieldKind> = {
 
 const COMPANY_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
-  id: { type: "string" },
   tradingName: { type: "string" },
   legalName: { type: "optionalString" },
   website: { type: "optionalString" },
@@ -363,7 +360,6 @@ const COMPANY_FIELDS: Record<string, FieldKind> = {
   customerSegments: { type: "stringArray" },
   costCentres: { type: "objectArray", fields: COST_CENTRE_FIELDS },
   sourceReportEventId: { type: "optionalString" },
-  onboardingStatus: { type: "enum", values: COMPANY_ONBOARDING_STATUSES },
   createdAt: { type: "integer" },
   updatedAt: { type: "integer" },
 };
@@ -371,7 +367,6 @@ const COMPANY_FIELDS: Record<string, FieldKind> = {
 const INITIATIVE_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
-  companyId: { type: "string" },
   title: { type: "string" },
   summary: { type: "optionalString" },
   status: { type: "enum", values: INITIATIVE_STATUSES },
@@ -394,7 +389,6 @@ const SUBJECT_REF_FIELDS: Record<string, FieldKind> = {
 const COHORT_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
-  companyId: { type: "string" },
   name: { type: "string" },
   members: { type: "objectArray", fields: SUBJECT_REF_FIELDS },
   createdAt: { type: "integer" },
@@ -404,7 +398,6 @@ const COHORT_FIELDS: Record<string, FieldKind> = {
 const TASK_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
-  companyId: { type: "string" },
   initiativeId: { type: "optionalString" },
   title: { type: "string" },
   status: { type: "enum", values: TASK_STATUSES },
@@ -514,11 +507,7 @@ export function parseCompanyHead(
   }
   // Tags are what queries match on. A head whose tags disagree with its content
   // is reachable under a coordinate that describes a different company.
-  if (
-    exactlyOneTag(event, "d") !== profile.id ||
-    exactlyOneTag(event, "c") !== profile.id ||
-    exactlyOneTag(event, "company") !== profile.id
-  ) {
+  if (exactlyOneTag(event, "d") !== COMMUNITY_PROFILE_ID) {
     return companyFailure(
       "invalid-head",
       "company head tags do not match its content",
@@ -546,8 +535,6 @@ export function parseInitiativeHead(
   }
   if (
     exactlyOneTag(event, "d") !== initiative.id ||
-    exactlyOneTag(event, "c") !== initiative.companyId ||
-    exactlyOneTag(event, "company") !== initiative.companyId ||
     exactlyOneTag(event, "cost-centre") !== initiative.costCentreId
   ) {
     return companyFailure(
@@ -578,8 +565,6 @@ export function parseTaskHead(
   }
   if (
     exactlyOneTag(event, "d") !== task.id ||
-    exactlyOneTag(event, "c") !== task.companyId ||
-    exactlyOneTag(event, "company") !== task.companyId ||
     exactlyOneTag(event, "team") !== task.owningTeamId ||
     exactlyOneTag(event, "cost-centre") !== task.costCentreId ||
     exactlyOneTag(event, "initiative") !== task.initiativeId
@@ -615,8 +600,6 @@ export function parseCohortHead(
     .sort();
   if (
     exactlyOneTag(event, "d") !== cohort.id ||
-    exactlyOneTag(event, "c") !== cohort.companyId ||
-    exactlyOneTag(event, "company") !== cohort.companyId ||
     memberMirrors.length !== expectedMirrors.length ||
     memberMirrors.some((value, index) => value !== expectedMirrors[index])
   ) {

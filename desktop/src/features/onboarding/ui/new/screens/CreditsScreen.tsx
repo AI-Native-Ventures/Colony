@@ -108,6 +108,12 @@ type Props = {
   onPaid?: () => void;
   onSkip?: () => void;
   onBack?: () => void;
+  /** Onboarding is handing off to the app; the actions wait it out. */
+  finishing?: boolean;
+  /** Why the handoff failed, in the user's words. */
+  finishError?: string | null;
+  /** Retries a failed handoff without redoing the flow. */
+  onRetryFinish?: () => void;
 };
 
 export function CreditsScreen({
@@ -119,6 +125,9 @@ export function CreditsScreen({
   onPaid,
   onSkip,
   onBack,
+  finishing = false,
+  finishError = null,
+  onRetryFinish,
 }: Props) {
   const [state, setState] = useState<CheckoutState>("idle");
   const [packs, setPacks] = useState<CreditPack[] | null>(null);
@@ -331,10 +340,22 @@ export function CreditsScreen({
           {checkoutNote(currency, state, unconfirmed, track !== undefined)}
         </p>
       </div>
+      {finishError && onRetryFinish ? (
+        <p className="onb-note onb-note-warn">
+          {finishError}{" "}
+          <button
+            type="button"
+            className="onb-quiet-action"
+            onClick={onRetryFinish}
+          >
+            Try again
+          </button>
+        </p>
+      ) : null}
       <div className="onb-actions">
         <Button
           size="lg"
-          disabled={!chosen || !emailReady || state === "leaving"}
+          disabled={!chosen || !emailReady || state === "leaving" || finishing}
           onClick={() => void pay()}
         >
           {state === "leaving"
@@ -344,12 +365,24 @@ export function CreditsScreen({
               : "Pay"}
         </Button>
         {track === "byo" && onSkip ? (
-          <button type="button" className="onb-quiet-action" onClick={onSkip}>
-            I will run my own helpers for now
+          <button
+            type="button"
+            className="onb-quiet-action"
+            disabled={finishing}
+            onClick={onSkip}
+          >
+            {finishing
+              ? "Opening your workspace"
+              : "I will run my own helpers for now"}
           </button>
         ) : null}
         {onBack ? (
-          <button type="button" className="onb-quiet-action" onClick={onBack}>
+          <button
+            type="button"
+            className="onb-quiet-action"
+            disabled={finishing}
+            onClick={onBack}
+          >
             Back
           </button>
         ) : null}

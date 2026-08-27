@@ -36,7 +36,7 @@ test("business_with_a_website_goes_to_reading", () => {
 test("back_skips_steps_that_do_work_on_entry", () => {
   // Landing back on reading would re-run the scrape and spend money again.
   assert.equal(backStep("description"), "business");
-  // Landing back on the probe would re-probe, and on install would reinstall.
+  // Landing back on the probe would re-read the user's computer.
   assert.equal(backStep("business"), "company");
 });
 

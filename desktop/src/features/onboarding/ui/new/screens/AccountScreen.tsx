@@ -54,6 +54,12 @@ type Props = {
   isSubmitting: boolean;
   /** Why the last signup attempt failed, if one did. Cleared on any edit. */
   failure?: AuthFailure | null;
+  /**
+   * Explicit exit toward the email sign-in screen: a user who just learned
+   * their address is taken goes back the other way instead of guessing that
+   * key import is the answer. Optional so plain flows stay unchanged.
+   */
+  onSignInRequest?: () => void;
 };
 
 /** Seconds left on a lockout, ticking once per second while one is active. */
@@ -82,6 +88,7 @@ export function AccountScreen({
   onSubmit,
   isSubmitting,
   failure = null,
+  onSignInRequest,
 }: Props) {
   const [emailTouched, setEmailTouched] = useState(false);
   const ready = accountReady(values);
@@ -234,6 +241,16 @@ export function AccountScreen({
         </p>
       ) : null}
       <div className="onb-actions">
+        {failure?.kind === "email-taken" && onSignInRequest ? (
+          <button
+            className="onb-quiet-action"
+            data-testid="onb-account-taken-sign-in"
+            onClick={onSignInRequest}
+            type="button"
+          >
+            I already have an account - sign in
+          </button>
+        ) : null}
         <Button size="lg" disabled={!ready || isSubmitting} onClick={onSubmit}>
           {isSubmitting ? "Creating your account" : "Continue"}
         </Button>

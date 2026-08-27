@@ -1,4 +1,4 @@
-use buzz_core_pkg::company::{CommercialPurpose, CompanyOnboardingStatus, CostCentreKind};
+use buzz_core_pkg::company::{CommercialPurpose, CostCentreKind};
 use buzz_core_pkg::company_roster::{
     BaselineRoleId, BlueprintCompany, BlueprintCostCentre, BlueprintInitiative,
     BlueprintRosterEntry, BlueprintService, BlueprintTeam, BlueprintTeamKind, CompanyBlueprint,
@@ -79,7 +79,9 @@ fn blueprint() -> ValidatedBlueprint {
 #[test]
 fn the_company_action_targets_the_relay_authored_coordinate() {
     let action = company_action(&blueprint(), RELAY, NOW).expect("build");
-    assert_eq!(action.target, format!("30179:{RELAY}:horizon-labs"));
+    // One profile per community, at one fixed slot; the blueprint's own
+    // company id no longer names anything.
+    assert_eq!(action.target, format!("30179:{RELAY}:profile"));
     assert_eq!(action.relay_pubkey, RELAY);
     assert_eq!(action.operation, CompanyActionOperation::Create);
 }
@@ -91,7 +93,6 @@ fn the_company_is_recorded_as_approved() {
     let action = company_action(&blueprint(), RELAY, NOW).expect("build");
     match action.payload {
         CompanyActionPayload::Company(profile) => {
-            assert_eq!(profile.onboarding_status, CompanyOnboardingStatus::Approved);
             assert_eq!(profile.trading_name, "Horizon Labs");
             assert_eq!(profile.cost_centres.len(), 1);
             assert_eq!(profile.services.len(), 1);
@@ -116,7 +117,6 @@ fn every_initiative_is_proposed_and_costs_nothing_yet() {
                     initiative.expected_cost_usd, None,
                     "nothing is committed, so no cost may be claimed"
                 );
-                assert_eq!(initiative.company_id, "horizon-labs");
                 assert_eq!(initiative.source_channel_id, CHANNEL);
             }
             other => panic!("expected an initiative payload, got {other:?}"),

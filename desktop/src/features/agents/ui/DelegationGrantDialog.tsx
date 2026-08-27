@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
 
 import {
   delegationGrantDraftProblem,
@@ -28,6 +29,17 @@ import { Input } from "@/shared/ui/input";
  *
  * The cap is entered in dollars and published as integer nanoUSD, the unit
  * every cap comparison on the relay uses.
+ *
+ * Two fields are deliberately worded down from what they look like:
+ *
+ * - The cap is a PER-DECISION ceiling. `enforce_decision_log_authority`
+ *   checks one decision's amount against it and never sums the ones already
+ *   logged under the same grant, so a capped grant bounds no total. Calling
+ *   it a "spending cap" invited an owner to read a budget into it, which is
+ *   the one reading that is false.
+ * - `scope` is descriptive only. The relay refuses a wildcard and then never
+ *   verifies that any decision falls inside what was written, so it is an
+ *   instruction to the agent, not a restriction the system applies.
  */
 
 const NANO_USD_PER_DOLLAR = 1_000_000_000;
@@ -145,7 +157,7 @@ export function DelegationGrantDialog({
               className="text-sm font-medium text-foreground"
               htmlFor="delegation-scope"
             >
-              Scope
+              What this covers, in your words
             </label>
             <Input
               aria-invalid={problem?.includes("wildcard") === true}
@@ -156,8 +168,11 @@ export function DelegationGrantDialog({
               value={scope}
             />
             <p className="text-xs text-muted-foreground">
-              Wildcard scopes are refused: a delegation without a boundary is no
-              policy at all.
+              This is an instruction the agent is asked to follow, not a fence
+              anything holds it to. Nothing checks a decision against it, so
+              read the decision log to see what was actually done. Be specific
+              anyway: "all" and "*" are refused, because a delegation without a
+              boundary is no policy at all.
             </p>
           </div>
 
@@ -166,7 +181,7 @@ export function DelegationGrantDialog({
               className="text-sm font-medium text-foreground"
               htmlFor="delegation-cap"
             >
-              Spending cap in USD (optional)
+              Most for one decision, in USD (optional)
             </label>
             <Input
               data-testid="new-grant-cap-input"
@@ -176,9 +191,18 @@ export function DelegationGrantDialog({
               placeholder="25.00"
               value={capDollars}
             />
-            <p className="text-xs text-muted-foreground">
-              Every decision under this delegation must declare an amount at or
-              under the cap.
+            <p
+              className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-300"
+              data-testid="new-grant-cap-warning"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                This is not a budget. It limits each decision on its own, so an
+                agent can make one decision after another at this amount and
+                nothing adds them up or stops it. The delegated authority list
+                shows the running total, and revoking the delegation is what
+                ends the spending.
+              </span>
             </p>
           </div>
 

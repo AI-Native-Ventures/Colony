@@ -126,8 +126,9 @@ pub async fn advance_initiative(
     let company_event = relay_head(&company_head, &relay_pubkey, "company")?;
     let initiative_event = relay_head(&initiative_head, &relay_pubkey, "initiative")?;
 
-    let company = parse_company_event(&company_event)
-        .map_err(|error| format!("the company head is unreadable: {error}"))?;
+    // Parsed for validation only; `next_step` no longer takes the profile.
+    parse_company_event(&company_event)
+        .map_err(|error| format!("the community profile head is unreadable: {error}"))?;
     let initiative = buzz_sdk_pkg::company::parse_initiative_event(&initiative_event)
         .map_err(|error| format!("the initiative head is unreadable: {error}"))?;
 
@@ -141,7 +142,6 @@ pub async fn advance_initiative(
     let step = next_step(
         &initiative,
         &initiative_event.id.to_hex(),
-        &company,
         &teams,
         &relay_pubkey,
         intent,
@@ -249,10 +249,7 @@ pub async fn ensure_chat_task(
 
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
-    let now = buzz_core_pkg::company_roster::approval_timestamp(&format!(
-        "{}:{channel_id}:{send_id}",
-        company.id
-    ));
+    let now = buzz_core_pkg::company_roster::approval_timestamp(&format!("{channel_id}:{send_id}"));
 
     let plan = plan_implicit_task(
         &company,

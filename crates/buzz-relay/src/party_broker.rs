@@ -293,9 +293,6 @@ async fn validate_payload_against_state(
             let retired = load_party(tenant, state, &alias.id)
                 .await?
                 .ok_or_else(|| "the party being merged away does not exist".to_owned())?;
-            if retired.company_id != survivor.company_id {
-                return Err("those parties belong to different companies".to_owned());
-            }
             // Recompute the merge from stored state rather than trusting the
             // survivor the caller sent: the caller proposes, the relay decides
             // what union of evidence the record actually gets.
@@ -599,7 +596,6 @@ mod tests {
         Party {
             schema: PARTY_SCHEMA.to_string(),
             id: id.to_string(),
-            company_id: "horizonlabs".to_string(),
             kind: PartyKind::Organization,
             display_name: "Acme Industries".to_string(),
             legal_name: None,
@@ -638,7 +634,6 @@ mod tests {
         let alias = PartyAlias {
             schema: buzz_core::party::PARTY_ALIAS_SCHEMA.to_string(),
             id: "acme-old".to_string(),
-            company_id: "horizonlabs".to_string(),
             resolves_to: "acme-industries".to_string(),
             merged_at: 1_785_369_600,
             // A well-formed event ID that has nothing to do with this action.

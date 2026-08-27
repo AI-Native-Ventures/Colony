@@ -10,7 +10,10 @@ import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { clearActiveTurnsForAgentOnStop } from "@/features/agents/managedAgentRuntimeHooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { welcomeKickoffMarker } from "@/features/onboarding/devFreshOnboarding";
-import { resolveAgentReadiness } from "@/features/onboarding/ui/agentReadiness";
+import {
+  type AgentReadinessResult,
+  resolveAgentReadiness,
+} from "@/features/onboarding/ui/agentReadiness";
 import {
   ensureWelcomeTeam,
   pickWelcomeTeamStarterAgentForRelay,
@@ -44,6 +47,20 @@ const providerMarker = welcomeKickoffMarker(WELCOME_KICKOFF_PROVIDER_MARKER);
 
 export const WELCOME_KICKOFF_PROVIDER_MESSAGE =
   "To get started with agents, connect to an AI provider in Settings. Once you're connected, come back here and we'll introduce the team.";
+
+/**
+ * Which of the kickoff's two openings a first visit to Welcome gets.
+ *
+ * The branch lived inline in the effect below, where no test could reach it,
+ * so a first-run path that left the machine unconfigured shipped the Settings
+ * errand to every new owner and nothing caught it. Named here, the config
+ * onboarding writes can be checked against the message it actually produces.
+ */
+export function welcomeKickoffOpening(
+  readiness: AgentReadinessResult,
+): "provider-required" | "team-intro" {
+  return readiness.ready ? "team-intro" : "provider-required";
+}
 
 const WELCOME_KICKOFF_CTA =
   "What can we help you build? Bring us something you're working on, or give us a quick challenge to see how we work together.";
@@ -187,7 +204,7 @@ export function buildWelcomeKickoffOpener(
     const chiefGreeting = trimmedOwnerName
       ? `Hi @${trimmedOwnerName}, I'm ${lead.name}, your Chief of Staff.`
       : `Hi, I'm ${lead.name}, your Chief of Staff.`;
-    return `${chiefGreeting}\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or start work until you approve the blueprint.`;
+    return `${chiefGreeting}\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or hire anyone until you approve the blueprint. Until then I'm the only one here: nobody else is set up, switched on, or billed to you.`;
   }
 
   const greeting = trimmedOwnerName
@@ -612,7 +629,7 @@ export function useWelcomeKickoff(
         if (await markerExists(channelId, closerMarker)) {
           return;
         }
-        if (!readiness.ready) {
+        if (welcomeKickoffOpening(readiness) === "provider-required") {
           await sendManagedAgentChannelMessage({
             agentPubkey: resolvedAgentSet.lead.pubkey,
             channelId,

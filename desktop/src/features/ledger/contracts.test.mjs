@@ -29,7 +29,6 @@ const RATES = {
 };
 
 const ASSIGNMENT = {
-  companyId: "horizon-labs",
   costCentreId: "web-delivery",
   owningTeamId: "web-team",
   commercialPurpose: "clientDelivery",

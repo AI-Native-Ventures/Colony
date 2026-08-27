@@ -17,7 +17,6 @@ const INPUT = {
 function execution(overrides = {}) {
   return {
     outcome: "created",
-    companyId: "horizon-labs",
     personaIds: ["builtin:fizz", "company:abc:horizon-labs:cto"],
     teamIds: ["company-team:abc:horizon-labs:engineering"],
     initiativeIds: ["horizon-labs:init-1"],
@@ -50,7 +49,6 @@ test("publishes every action and completes with the company event id", async () 
   const outcome = await approve(INPUT);
 
   assert.equal(outcome.status, "created");
-  assert.equal(outcome.companyId, "horizon-labs");
   assert.deepEqual(calls.published, ["company", "init-1", "init-2", "init-3"]);
   assert.equal(calls.completed.length, 1);
   assert.equal(calls.completed[0].companyEventId, EVENT_ID);

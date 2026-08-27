@@ -33,9 +33,13 @@ function deps(overrides = {}) {
   };
 }
 
-test("publishes an ask resolution and invalidates both open-ask queries", async () => {
+test("publishes a free-text ask resolution and invalidates every ask query", async () => {
   const input = deps();
-  await answerAsk(ask, "approve", "Looks good", input);
+  await answerAsk(
+    ask,
+    { decision: "approve", rationale: "Looks good", optionLabel: null },
+    input,
+  );
 
   assert.deepEqual(input.calls[0], [
     "sign",
@@ -50,8 +54,28 @@ test("publishes an ask resolution and invalidates both open-ask queries", async 
   assert.equal(input.calls[1]?.[0], "publish");
   assert.deepEqual(
     input.calls.slice(2).map((call) => call[1]),
-    [["open-asks"], ["open-ask-closures"]],
+    [["open-asks"], ["open-ask-closures"], ["ask-states"]],
   );
+});
+
+test("an option answer names the option the relay's own default execution would", async () => {
+  const input = deps();
+  await answerAsk(
+    ask,
+    { decision: "", rationale: "cheaper", optionLabel: "B" },
+    input,
+  );
+
+  assert.deepEqual(input.calls[0], [
+    "sign",
+    {
+      kind: 44301,
+      content: JSON.stringify({
+        answer: { option: "B", decision: "B", rationale: "cheaper" },
+      }),
+      tags: [["e", "ask-1"]],
+    },
+  ]);
 });
 
 test("does not invalidate when signing or publishing fails", async () => {
@@ -61,6 +85,13 @@ test("does not invalidate when signing or publishing fails", async () => {
     },
   });
 
-  await assert.rejects(answerAsk(ask, "approve", "", input), /signing failed/);
+  await assert.rejects(
+    answerAsk(
+      ask,
+      { decision: "approve", rationale: "", optionLabel: null },
+      input,
+    ),
+    /signing failed/,
+  );
   assert.deepEqual(input.calls, []);
 });

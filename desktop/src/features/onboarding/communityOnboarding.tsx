@@ -284,6 +284,27 @@ export function shouldForceFirstCommunityJourney(
   );
 }
 
+/**
+ * Whether this transaction is the owner setting up a community of their own,
+ * which is the only journey allowed to write this device's agent defaults.
+ *
+ * A joiner is not who Colony provisions for. Their agents would be pointed at
+ * a Colony Credits account nobody funded on a relay somebody else owns, so
+ * onboarding would have swapped a Settings errand for an agent that pauses at
+ * $0.00 on its first turn. `first-community` covers joining as well as owning,
+ * hence the page check: only the "owned" page creates a community, or
+ * reconnects one the signer already owns.
+ */
+export function isOwnerLedCommunityOnboarding(
+  transaction: CommunityOnboardingTransaction,
+): boolean {
+  if (transaction.source === "create-community") return true;
+  return (
+    transaction.source === "first-community" &&
+    transaction.firstCommunityPage === "owned"
+  );
+}
+
 export function markCommunityOnboardingComplete(
   pubkey: string,
   relayUrl: string,

@@ -5,7 +5,7 @@ import test from "node:test";
 import { BUSINESS_TAXONOMY } from "./businessTaxonomy/index.ts";
 
 const CANONICAL_PATH = new URL(
-  "./businessTaxonomy/business_taxonomy.json",
+  "../../../../../crates/buzz-core/assets/discovery/business_taxonomy.json",
   import.meta.url,
 );
 

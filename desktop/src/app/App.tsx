@@ -6,7 +6,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -24,9 +23,9 @@ import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkey
 import { huddleWindowChannelId } from "@/features/huddle/lib/huddleWindow";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
-import { createFakeServices } from "@/features/onboarding/contracts.fake";
+import { isFreshFounder } from "@/features/onboarding/freshFounder";
 import { isNewOnboardingEnabled } from "@/features/onboarding/newOnboardingFlag";
-import { NewOnboardingFlow } from "@/features/onboarding/ui/new/NewOnboardingFlow";
+import { CanvasFirstRunHost } from "@/features/onboarding/ui/new/CanvasFirstRunHost";
 import {
   type FirstCommunityPage,
   useCommunityOnboarding,
@@ -250,10 +249,6 @@ function AppReady({
   isCommunitySwitch: boolean;
 }) {
   const onboarding = useAppOnboardingState(isSharedIdentity);
-  // Fakes until the real auth, payments, scrape and invite services exist.
-  // Memoised so the flow never sees a new services identity mid-run, which
-  // would restart in-flight steps such as the website read.
-  const onboardingServices = useMemo(() => createFakeServices(), []);
 
   if (onboarding.stage === "reset-failed") {
     return <ResetFailedScreen />;
@@ -268,15 +263,10 @@ function AppReady({
   }
 
   if (onboarding.stage === "onboarding") {
-    if (isNewOnboardingEnabled(import.meta.env)) {
-      return (
-        <NewOnboardingFlow
-          key={onboarding.currentPubkey ?? "anonymous"}
-          services={onboardingServices}
-          onComplete={onboarding.flow.actions.complete}
-        />
-      );
-    }
+    // The redesigned flow runs above this boundary now (CanvasFirstRunHost in
+    // CommunityApp), because claiming a workspace is one of its own steps.
+    // What reaches here is the residue: identity-lost recovery and dev
+    // force-fresh runs, where a community is already applied.
     return (
       <OnboardingFlow
         actions={onboarding.flow.actions}
@@ -310,10 +300,16 @@ function AppReady({
 function CommunityApp({
   currentPubkey,
   onBackToMachineConfig,
+  onRequestSignIn,
   sharedIdentity,
 }: {
   currentPubkey: string | null;
   onBackToMachineConfig: () => void;
+  /**
+   * Explicit user exit from the canvas first run toward email sign-in, wired
+   * only while that run is on screen (the canvas host is the sole caller).
+   */
+  onRequestSignIn: () => void;
   sharedIdentity: boolean;
 }) {
   const {
@@ -543,8 +539,52 @@ function CommunityApp({
   const showBootSplashOverlay =
     bootSplashPhase !== "done" && !isCommunitySwitch;
 
+  // Wait for this exact community config to be applied to the backend before
+  // rendering anything that connects to the relay. The appliedKey check avoids
+  // a one-render race where React sees the new active community while the
+  // Tauri backend is still configured for the previous one.
+  const communityApplied =
+    community.isReady && community.appliedKey === communityKey;
+  useLayoutEffect(() => {
+    if (communityApplied) {
+      completeCommunityViewTransition();
+    }
+  }, [communityApplied]);
+
+  // The canvas first run owns the founder journey from before any community
+  // exists: claiming the workspace is one of its own steps. Latching it
+  // "active" is what keeps it mounted once provisioning succeeds and the
+  // community stops looking like a first run.
+  const [canvasRunState, setCanvasRunState] = useState<
+    "unstarted" | "active" | "finished"
+  >("unstarted");
+  const canvasEligible =
+    isNewOnboardingEnabled(import.meta.env) &&
+    !transaction &&
+    canvasRunState !== "finished" &&
+    (canvasRunState === "active" ||
+      isFreshFounder({
+        pubkey: currentPubkey,
+        communitiesCount: communities.length,
+      }));
+  useEffect(() => {
+    if (canvasEligible && canvasRunState === "unstarted") {
+      setCanvasRunState("active");
+    }
+  }, [canvasEligible, canvasRunState]);
+
   let appContent: ReactNode = null;
-  if (!transaction) {
+  if (canvasEligible && currentPubkey) {
+    appContent = (
+      <CanvasFirstRunHost
+        activeRelayUrl={activeCommunity?.relayUrl ?? null}
+        communityApplied={communityApplied}
+        currentPubkey={currentPubkey}
+        onFinished={() => setCanvasRunState("finished")}
+        onRequestSignIn={onRequestSignIn}
+      />
+    );
+  } else if (!transaction) {
     if (community.needsSetup) {
       // Show welcome setup for first-run users with no communities
       appContent = (
@@ -573,17 +613,6 @@ function CommunityApp({
       );
     }
   }
-  // Wait for this exact community config to be applied to the backend before
-  // rendering anything that connects to the relay. The appliedKey check avoids
-  // a one-render race where React sees the new active community while the
-  // Tauri backend is still configured for the previous one.
-  const communityApplied =
-    community.isReady && community.appliedKey === communityKey;
-  useLayoutEffect(() => {
-    if (communityApplied) {
-      completeCommunityViewTransition();
-    }
-  }, [communityApplied]);
   if (appContent === null && (!transaction || isEnteringCurtain)) {
     appContent = communityApplied ? (
       <CommunityQueryProvider key={communityKey}>
@@ -667,6 +696,14 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
     machine.reopen();
   }, [machine.reopen]);
 
+  // The canvas signup path hands a user who already has an account over to
+  // the email sign-in detour. Their explicit click is what leaves the canvas
+  // run behind; nothing here finishes or discards it silently.
+  const openMachineSignin = useCallback(() => {
+    setMachineInitialPage("account-signin");
+    machine.reopen();
+  }, [machine.reopen]);
+
   const completeMachineOnboarding = useCallback(
     (pubkey?: string) => {
       setMachineInitialPage(undefined);
@@ -734,6 +771,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
       <CommunityApp
         currentPubkey={machine.currentPubkey}
         onBackToMachineConfig={reopenMachineConfig}
+        onRequestSignIn={openMachineSignin}
         sharedIdentity={sharedIdentity}
       />
     );
