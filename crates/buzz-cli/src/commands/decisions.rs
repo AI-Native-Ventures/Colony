@@ -16,6 +16,7 @@ use buzz_core::kind::KIND_DECISION_LOG;
 
 use crate::client::{normalize_write_response, write_conflict_reason, BuzzClient};
 use crate::error::CliError;
+use crate::validate::validate_hex64;
 
 /// Build a two-element string tag, e.g. `["grant", "grant-copy"]`.
 fn tag(parts: &[&str]) -> Result<Tag, CliError> {
@@ -38,10 +39,14 @@ fn build_decision_log_event(
     decision: &str,
     undo_path: &str,
     amount_nano_usd: Option<i64>,
+    thread_hex: Option<&str>,
 ) -> Result<EventBuilder, CliError> {
     let mut tags = vec![tag(&["grant", grant])?];
     for task_id in tasks {
         tags.push(tag(&["task", task_id])?);
+    }
+    if let Some(thread) = thread_hex {
+        tags.push(tag(&["e", thread])?);
     }
 
     let mut content = serde_json::json!({
@@ -68,9 +73,21 @@ async fn cmd_log(
     decision: &str,
     undo_path: &str,
     amount_nano_usd: Option<i64>,
+    thread: Option<&str>,
 ) -> Result<(), CliError> {
-    let builder =
-        build_decision_log_event(grant, tasks, category, decision, undo_path, amount_nano_usd)?;
+    if let Some(thread) = thread {
+        validate_hex64(thread)?;
+    }
+
+    let builder = build_decision_log_event(
+        grant,
+        tasks,
+        category,
+        decision,
+        undo_path,
+        amount_nano_usd,
+        thread,
+    )?;
     let event = client.sign_event(builder)?;
     parse_decision_log(&event).map_err(|error| {
         CliError::Usage(format!(
@@ -120,6 +137,7 @@ pub async fn dispatch(cmd: crate::DecisionsCmd, client: &BuzzClient) -> Result<(
             decision,
             undo_path,
             amount_nano_usd,
+            thread,
         } => {
             cmd_log(
                 client,
@@ -129,6 +147,7 @@ pub async fn dispatch(cmd: crate::DecisionsCmd, client: &BuzzClient) -> Result<(
                 &decision,
                 &undo_path,
                 amount_nano_usd,
+                thread.as_deref(),
             )
             .await
         }
@@ -149,10 +168,37 @@ mod tests {
         undo_path: &str,
         amount_nano_usd: Option<i64>,
     ) -> nostr::Event {
+        signed_decision_log_with_thread(
+            grant,
+            tasks,
+            category,
+            decision,
+            undo_path,
+            amount_nano_usd,
+            None,
+        )
+    }
+
+    fn signed_decision_log_with_thread(
+        grant: &str,
+        tasks: &[String],
+        category: &str,
+        decision: &str,
+        undo_path: &str,
+        amount_nano_usd: Option<i64>,
+        thread_hex: Option<&str>,
+    ) -> nostr::Event {
         let signer = Keys::generate();
-        let builder =
-            build_decision_log_event(grant, tasks, category, decision, undo_path, amount_nano_usd)
-                .expect("build_decision_log_event");
+        let builder = build_decision_log_event(
+            grant,
+            tasks,
+            category,
+            decision,
+            undo_path,
+            amount_nano_usd,
+            thread_hex,
+        )
+        .expect("build_decision_log_event");
         builder.sign_with_keys(&signer).expect("sign")
     }
 
@@ -204,6 +250,58 @@ mod tests {
         assert_eq!(parsed.amount_nano_usd, None);
     }
 
+    /// The optional origin-thread `e` tag mirrors `buzz asks raise --thread`:
+    /// when present it must land on the event verbatim, and the parser --
+    /// which treats the tag as informational -- must still accept the event.
+    #[test]
+    fn build_decision_log_event_includes_e_tag_for_thread() {
+        let tasks = vec!["task-1".to_string()];
+        let thread = "b".repeat(64);
+        let event = signed_decision_log_with_thread(
+            "grant-copy",
+            &tasks,
+            "copy_change",
+            "shortened the title",
+            "revert commit abc",
+            None,
+            Some(&thread),
+        );
+
+        assert_eq!(
+            event
+                .tags
+                .iter()
+                .filter(|tag| tag.kind().to_string() == "e")
+                .map(|tag| tag.content().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec![thread.as_str()]
+        );
+
+        parse_decision_log(&event)
+            .expect("parse_decision_log should accept an event carrying an e tag");
+    }
+
+    /// A malformed `--thread` must be rejected by validation before any
+    /// event is built or network call made.
+    #[tokio::test]
+    async fn log_rejects_malformed_thread_before_any_network_call() {
+        let client = offline_client();
+        let tasks = vec!["task-1".to_string()];
+        let error = cmd_log(
+            &client,
+            "grant-copy",
+            &tasks,
+            "copy_change",
+            "shortened the title",
+            "revert commit abc",
+            None,
+            Some("nothex"),
+        )
+        .await
+        .expect_err("a malformed --thread must be rejected");
+        assert!(matches!(error, CliError::Usage(_)));
+    }
+
     /// A hard-list `--category` must be rejected by self-validation before
     /// any network call.
     #[tokio::test]
@@ -217,6 +315,7 @@ mod tests {
             "spend",
             "moved money",
             "revert commit abc",
+            None,
             None,
         )
         .await
@@ -238,6 +337,7 @@ mod tests {
             "shortened the title",
             "revert commit abc",
             Some(-1),
+            None,
         )
         .await
         .expect_err("a negative amount must be rejected");

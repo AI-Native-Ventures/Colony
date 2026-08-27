@@ -3309,6 +3309,11 @@ pub enum DecisionsCmd {
         /// How to undo this decision. Required: no undo path, no autonomy
         #[arg(long)]
         undo_path: String,
+        /// Origin thread root event id (64-char hex), optional. Pass it when
+        /// the decision was made while working a thread: it records where the
+        /// decision came from (informational only)
+        #[arg(long)]
+        thread: Option<String>,
         /// Money this decision moves, in integer nanoUSD. Required when the
         /// grant carries a cap
         #[arg(long)]
