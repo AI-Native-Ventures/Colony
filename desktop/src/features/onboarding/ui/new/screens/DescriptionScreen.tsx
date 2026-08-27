@@ -26,7 +26,7 @@ export function descriptionCopy(input: {
   if (!input.hasWebsite) {
     return {
       title: "Tell us what you do.",
-      sub: "A line or two is enough. Your helpers work from this.",
+      sub: "A line or two is enough. Your agents work from this.",
     };
   }
   if (input.scrapeFailed) {
@@ -37,7 +37,7 @@ export function descriptionCopy(input: {
   }
   return {
     title: "Here is what we found.",
-    sub: "Change anything we got wrong. Your helpers work from this.",
+    sub: "Change anything we got wrong. Your agents work from this.",
   };
 }
 

@@ -17,9 +17,18 @@ test("email_rejects_a_string_with_no_domain", () => {
 });
 
 test("password_shortfall_counts_down_to_zero", () => {
-  assert.equal(passwordShortfall(""), 10);
-  assert.equal(passwordShortfall("abcd"), 6);
+  assert.equal(passwordShortfall(""), 12);
+  assert.equal(passwordShortfall("abcd"), 8);
   assert.equal(passwordShortfall("colonyprototype"), 0);
+});
+
+// The Rust backup command refuses anything shorter than 12 characters, and
+// signup encrypts the identity before it posts, so a password this screen
+// accepts but the command rejects fails with a network-shaped error and no
+// request. Guard the boundary in both directions.
+test("password_minimum_matches_the_identity_backup_floor", () => {
+  assert.equal(passwordShortfall("elevenchars"), 1);
+  assert.equal(passwordShortfall("twelvechars!"), 0);
 });
 
 test("website_rejects_a_bare_word_and_accepts_a_domain", () => {

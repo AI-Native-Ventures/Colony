@@ -386,11 +386,11 @@ export function DefaultConfigStep({
     >
       <div className="onb-col-head">
         <h1 className="onb-headline">
-          Choose the <em>brain</em> your helpers think with.
+          Choose the <em>brain</em> your agents think with.
         </h1>
         <p className="onb-sub">
-          Every helper you make will use this by default. You can change it
-          later in Settings, or give one helper something different.
+          Every agent you make will use this by default. You can change it later
+          in Settings, or give one agent something different.
         </p>
       </div>
 

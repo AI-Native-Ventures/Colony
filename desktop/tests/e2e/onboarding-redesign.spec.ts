@@ -112,7 +112,7 @@ test("a non-technical user can get from the first screen to the end", async ({
   ).toBeVisible();
 
   await page
-    .getByRole("button", { name: "I will run my own helpers for now" })
+    .getByRole("button", { name: "I will run my own agents for now" })
     .click();
 
   // The flow hands control back to the app: the canvas unmounts and the main
