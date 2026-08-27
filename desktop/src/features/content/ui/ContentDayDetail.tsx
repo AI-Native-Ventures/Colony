@@ -136,9 +136,8 @@ export function ContentDayDetail({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-lg font-semibold">
-            {post.headline ?? post.slug}
-          </h2>
+          {/* The headline is the panel header's title; repeating it here cost a
+              line of vertical space and said the same thing twice. */}
           <p className="text-xs text-muted-foreground">
             Week {post.week} · {post.scheduledFor}
             {post.job ? ` · ${post.job}` : ""}

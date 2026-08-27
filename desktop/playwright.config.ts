@@ -43,6 +43,7 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
+        "**/content-screenshots.spec.ts",
         "**/onboarding-tour.spec.ts",
         "**/blocks.spec.ts",
         "**/timeline-settle-helper.spec.ts",

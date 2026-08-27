@@ -79,6 +79,12 @@ export function cardSpecs(
           : (post.headline ?? "");
       specs.push({
         accent: typeof slide.accent === "string" ? slide.accent : undefined,
+        badge:
+          typeof slide.badge === "string"
+            ? slide.badge
+            : typeof style?.raw.badge === "string"
+              ? style.raw.badge
+              : undefined,
         family: readFamily(slide.family, family),
         footLine:
           typeof slide.foot_line === "string" ? slide.foot_line : undefined,
@@ -91,6 +97,7 @@ export function cardSpecs(
     });
   } else {
     specs.push({
+      badge: typeof style?.raw.badge === "string" ? style.raw.badge : undefined,
       family,
       headline: post.headline ?? "",
       hues,

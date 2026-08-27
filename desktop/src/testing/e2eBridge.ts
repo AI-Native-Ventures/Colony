@@ -1375,6 +1375,23 @@ declare global {
     __BUZZ_E2E_UNSUPPORTED_PROJECT_ANNOUNCEMENTS__?: boolean;
     /** Project event kinds accepted once but reported as failed to test lost acknowledgements. */
     __BUZZ_E2E_FAIL_PROJECT_EVENT_ACK_KINDS__?: number[];
+    /**
+     * Arbitrary relay events served to any matching REQ filter.
+     *
+     * A general seam rather than another per-feature store: the mock relay had
+     * one for messages and one for projects, so a screenshot of any other
+     * record-backed surface (the content calendar was the case that forced
+     * this) had nothing to render. Matched with the same filter predicate the
+     * mock relay already uses.
+     */
+    __BUZZ_E2E_SEEDED_EVENTS__?: Array<{
+      id: string;
+      kind: number;
+      pubkey: string;
+      created_at: number;
+      content: string;
+      tags: string[][];
+    }>;
     /** Extra project events appended to the mock store on first access. */
     __BUZZ_E2E_EXTRA_PROJECT_EVENTS__?: Array<{
       id: string;
@@ -10945,6 +10962,23 @@ function sendToMockSocket(args: {
         const sourceId = event.tags.find((tag) => tag[0] === "d")?.[1];
         if (sourceIds && (!sourceId || !sourceIds.includes(sourceId))) continue;
         sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+
+    // Seeded events win over every built-in store: a spec that seeded a kind
+    // is asking for exactly those, and falling through to a store that has
+    // none of them would answer an empty EOSE instead.
+    const seeded = window.__BUZZ_E2E_SEEDED_EVENTS__ ?? [];
+    if (
+      seeded.length > 0 &&
+      filter.kinds?.some((kind) => seeded.some((event) => event.kind === kind))
+    ) {
+      for (const event of seeded as RelayEvent[]) {
+        if (mockEventMatchesFilter(event, filter)) {
+          sendWsText(socket.handler, ["EVENT", subId, event]);
+        }
       }
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
