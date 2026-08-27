@@ -13,8 +13,15 @@
 # and skips if it does, so a partial run can simply be re-run. It never
 # deletes anything and it never touches the production apps.
 #
+# Required environment:
+#   CANARY_OWNER_PUBKEY      64-hex - becomes RELAY_OWNER_PUBKEY on the canary.
+#                            REQUIRED: BUZZ_REQUIRE_RELAY_MEMBERSHIP is "true"
+#                            on the canary, and the relay refuses to boot
+#                            without an owner pubkey (exit 1 at startup, then
+#                            a crash loop until max restarts). Provisioning
+#                            without one produces a dead app.
+#
 # Optional environment:
-#   CANARY_OWNER_PUBKEY      64-hex - becomes RELAY_OWNER_PUBKEY on the canary
 #   CANARY_OPERATOR_PUBKEYS  comma-separated 64-hex - RELAY_OPERATOR_PUBKEYS
 #   FLY_ORG                  Fly organization slug (default: personal)
 #
@@ -282,8 +289,8 @@ else
     unset S3_KEY S3_SECRET
 fi
 
-# ------------------------------------------- 9. optional owner / operators
-step "Owner and operator pubkeys (optional)"
+# ------------------------------------------- 9. owner / operators
+step "Owner and operator pubkeys"
 if [[ -n "${CANARY_OWNER_PUBKEY:-}" ]]; then
     if ! [[ "$CANARY_OWNER_PUBKEY" =~ ^[0-9a-f]{64}$ ]]; then
         die "CANARY_OWNER_PUBKEY must be 64 lowercase hex chars"
@@ -294,9 +301,11 @@ if [[ -n "${CANARY_OWNER_PUBKEY:-}" ]]; then
 elif secret_exists "$RELAY_APP" RELAY_OWNER_PUBKEY; then
     note_skipped "secret RELAY_OWNER_PUBKEY"
 else
-    printf '  none set. BUZZ_REQUIRE_RELAY_MEMBERSHIP is "true" on the canary,\n'
-    printf '  so without an owner nobody can join it. Re-run with\n'
-    printf '  CANARY_OWNER_PUBKEY=<64-hex> or set the secret by hand.\n'
+    # Not a warning: with BUZZ_REQUIRE_RELAY_MEMBERSHIP=true the relay exits
+    # at startup when RELAY_OWNER_PUBKEY is missing. Deploying an app staged
+    # without one guarantees a crash loop (observed 2026-08-27 on first boot:
+    # migrations completed, then exit code 1 x10 restarts).
+    die "CANARY_OWNER_PUBKEY is required (64-hex). The canary relay cannot boot without it."
 fi
 
 if [[ -n "${CANARY_OPERATOR_PUBKEYS:-}" ]]; then
