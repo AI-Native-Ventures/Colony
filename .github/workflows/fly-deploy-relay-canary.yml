@@ -131,15 +131,30 @@ jobs:
           TAG: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
-          flyctl image show --app "$FLY_APP" --json >/tmp/canary-image.json
+          # flyctl deploy returns before the machine's image swap fully
+          # propagates: four consecutive runs (2026-08-27) each read the
+          # PREVIOUS sha here, then the machine ran the expected tag minutes
+          # later. So poll for the swap instead of asserting once; 30 x 20s is
+          # a hard ceiling - past it something is genuinely stuck and failing
+          # loudly is correct.
+          found=""
+          for attempt in $(seq 1 30); do
+            flyctl image show --app "$FLY_APP" --json >/tmp/canary-image.json
+            if jq -e --arg tag "$TAG" '[.. | strings] | index($tag) != null' \
+              /tmp/canary-image.json >/dev/null; then
+              found=1
+              break
+            fi
+            echo "attempt ${attempt}/30: machine not yet on '$TAG'; retrying in 20s." >&2
+            sleep 20
+          done
           cat /tmp/canary-image.json
-          # Field names differ across flyctl versions, so match on values
-          # rather than a specific key path.
-          if ! jq -e --arg tag "$TAG" '[.. | strings] | index($tag) != null' \
-            /tmp/canary-image.json >/dev/null; then
-            echo "$FLY_APP is not running image tag '$TAG'" >&2
+          if [[ -z "$found" ]]; then
+            echo "$FLY_APP never converged onto image tag '$TAG'" >&2
             exit 1
           fi
+          # Field names differ across flyctl versions, so match on values
+          # rather than a specific key path.
           if ! jq -e --arg app "$FLY_APP" '[.. | strings] | any(contains($app))' \
             /tmp/canary-image.json >/dev/null; then
             echo "$FLY_APP is not running an image from its own Fly registry repo" >&2
