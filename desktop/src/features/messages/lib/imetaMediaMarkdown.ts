@@ -374,7 +374,10 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
       mentionTags.push(tag);
     } else if (tag[0] === "link-preview") {
       linkPreviewTags.push(tag);
-    } else if (tag[0] === "a" && (tag[3] === "block" || tag[3] === "cohort")) {
+    } else if (
+      (tag[0] === "a" && (tag[3] === "block" || tag[3] === "cohort")) ||
+      (tag[0] === "discovery" && tag.length >= 3)
+    ) {
       referenceTags.push(tag);
     } else {
       mediaTags.push(tag);

@@ -57,10 +57,25 @@ export type DraftCohortMentionRef = {
   cohortAddress: string;
 };
 
+/** One structured Discovery entity reference persisted in a draft. The kind
+ * + ID pair is authoritative; `displayName` is presentation only. */
+export type DraftDiscoveryMentionRef = {
+  displayName: string;
+  discoveryKind:
+    | "industry"
+    | "vertical"
+    | "campaign"
+    | "campaign_leads"
+    | "lead"
+    | "run";
+  entityId: string;
+};
+
 export type DraftMentionRef =
   | DraftActorMentionRef
   | DraftBlockMentionRef
-  | DraftCohortMentionRef;
+  | DraftCohortMentionRef
+  | DraftDiscoveryMentionRef;
 
 export type DraftState = {
   content: string;
@@ -294,6 +309,29 @@ function isInvalidRef(ref: unknown): boolean {
       !EVENT_ID_RE.test(ref.manifestId)
     );
   }
+  if ("discoveryKind" in ref || "entityId" in ref) {
+    const kind = (ref as { discoveryKind?: unknown }).discoveryKind;
+    const entityId = (ref as { entityId?: unknown }).entityId;
+    const kinds = [
+      "industry",
+      "vertical",
+      "campaign",
+      "campaign_leads",
+      "lead",
+      "run",
+    ];
+    if (
+      typeof entityId !== "string" ||
+      entityId.trim().length === 0 ||
+      typeof kind !== "string" ||
+      !kinds.includes(kind)
+    ) {
+      return true;
+    }
+    // Shape-checked by the composer validator on restore; persisted drafts
+    // only need the structural envelope here.
+    return false;
+  }
   return (
     !("cohortAddress" in ref) ||
     typeof ref.cohortAddress !== "string" ||
@@ -423,6 +461,14 @@ function draftStatesEqual(a: DraftState, b: DraftState): boolean {
         !("blockAddress" in br) ||
         ar.blockAddress !== br.blockAddress ||
         ar.manifestId !== br.manifestId
+      ) {
+        return false;
+      }
+    } else if ("discoveryKind" in ar) {
+      if (
+        !("discoveryKind" in br && "entityId" in br) ||
+        ar.discoveryKind !== br.discoveryKind ||
+        ar.entityId !== br.entityId
       ) {
         return false;
       }

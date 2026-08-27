@@ -2570,6 +2570,16 @@ pub async fn run_prompt_task(
             );
         }
 
+        let discoverable: Vec<crate::queue::BatchEvent> = b
+            .events
+            .iter()
+            .chain(b.cancelled_events.iter())
+            .cloned()
+            .collect();
+        let discovery_context =
+            crate::discovery_context::resolve_discovery_context(&ctx.rest_client, &discoverable)
+                .await;
+
         crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {
@@ -2585,6 +2595,7 @@ pub async fn run_prompt_task(
                 agent_canvas: standing.agent_canvas,
                 agent_thread_canvas: standing.agent_thread_canvas,
                 standing_context_sent,
+                discovery_context: discovery_context.as_deref(),
             },
         )
     } else {

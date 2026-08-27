@@ -22,6 +22,8 @@ pub mod content_brand_kit;
 pub mod content_library;
 /// Core contracts for Colony business Discovery runs.
 pub mod discovery;
+/// Canonical Business Discovery taxonomy shared by relay, CLI, and desktop.
+pub mod discovery_taxonomy;
 /// Core contracts for trusted local Colony Discovery workers.
 pub mod discovery_worker;
 /// Private workspace records that connect Discovery campaigns and Leads.

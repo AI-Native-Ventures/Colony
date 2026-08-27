@@ -2,6 +2,7 @@ import { hasMention } from "@/features/messages/lib/hasMention";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import type {
   DraftActorMentionRef,
+  DraftDiscoveryMentionRef,
   DraftMentionRef,
 } from "@/features/messages/lib/useDrafts";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -12,6 +13,13 @@ import {
   getMentionTagPubkey,
   resolveMentionProps,
 } from "@/shared/lib/resolveMentionNames";
+import {
+  DISCOVERY_MENTION_TAG,
+  extractDiscoveryReferenceTags,
+  isDiscoveryMentionKind,
+  normalizeDiscoveryMention,
+  type DiscoveryMentionReference,
+} from "./discoveryMentionRefs";
 
 export function resolveEditMentionRefs(
   content: string,
@@ -23,7 +31,7 @@ export function resolveEditMentionRefs(
     tags,
     profiles,
   );
-  const refs = (mentionNames ?? [])
+  const refs: DraftMentionRef[] = (mentionNames ?? [])
     .filter((displayName) => hasMention(content, displayName))
     .flatMap((displayName) => {
       const pubkey = mentionPubkeysByName?.[displayName.toLowerCase()];
@@ -37,6 +45,24 @@ export function resolveEditMentionRefs(
           ]
         : [];
     });
+  // Structured Discovery references survive editing too: the event's own
+  // tags are the durable record of which entity the token names.
+  for (const tag of tags ?? []) {
+    if (tag[0] !== DISCOVERY_MENTION_TAG || tag.length !== 4) continue;
+    const [, rawKind, entityId, label] = tag;
+    if (!isDiscoveryMentionKind(rawKind) || !entityId || !label) continue;
+    if (!hasMention(content, label)) continue;
+    const normalized = normalizeDiscoveryMention(label, {
+      discoveryKind: rawKind,
+      entityId,
+    });
+    if (!normalized) continue;
+    refs.push({
+      displayName: normalized.displayName,
+      discoveryKind: normalized.discoveryKind,
+      entityId: normalized.entityId,
+    } satisfies DraftDiscoveryMentionRef);
+  }
   return refs;
 }
 
@@ -177,6 +203,7 @@ export function snapshotDraftMentionRefs(
   selectedAgentNames: readonly string[],
   blockMentions: ReadonlyMap<string, BlockMentionReference> = new Map(),
   cohortMentions: ReadonlyMap<string, CohortMentionReference> = new Map(),
+  discoveryMentions: ReadonlyMap<string, DiscoveryMentionReference> = new Map(),
 ): DraftMentionRef[] {
   const agentNames = new Set(selectedAgentNames.map(normalizeMentionName));
   const entityRefs: DraftMentionRef[] = [];
@@ -195,6 +222,18 @@ export function snapshotDraftMentionRefs(
     if (normalized) {
       entityRefs.push(normalized);
       entityOwnedNames.add(normalizeMentionName(normalized.displayName));
+    }
+  }
+  for (const [displayName, reference] of discoveryMentions) {
+    if (!hasMention(content, displayName)) continue;
+    const normalized = normalizeDiscoveryMention(displayName, reference);
+    if (normalized) {
+      entityRefs.push({
+        displayName: normalized.displayName,
+        discoveryKind: normalized.discoveryKind,
+        entityId: normalized.entityId,
+      });
+      entityOwnedNames.add(normalizeMentionName(displayName));
     }
   }
   const actorRefs: DraftMentionRef[] = [...mentions.entries()]
@@ -226,6 +265,17 @@ function normalizeDraftMentionRefs(
       if (cohortRef) normalized.push(cohortRef);
       continue;
     }
+    if ("discoveryKind" in ref && isDiscoveryMentionKind(ref.discoveryKind)) {
+      const discoveryRef = normalizeDiscoveryMention(ref.displayName, {
+        discoveryKind: ref.discoveryKind,
+        entityId: String(
+          "entityId" in ref ? ((ref.entityId as string) ?? "") : "",
+        ),
+      });
+      if (discoveryRef) normalized.push(discoveryRef);
+      continue;
+    }
+    if ("entityId" in ref) continue;
     const displayName = ref.displayName.trim();
     const pubkey = normalizePubkey(ref.pubkey);
     if (displayName && pubkey) {
@@ -241,11 +291,13 @@ export function replaceWithDraftMentionRefs(
   personaMentions: Map<string, string>,
   blockMentions: Map<string, BlockMentionReference> = new Map(),
   cohortMentions: Map<string, CohortMentionReference> = new Map(),
+  discoveryMentions: Map<string, DiscoveryMentionReference> = new Map(),
 ): { names: string[]; agentNames: string[] } {
   mentions.clear();
   personaMentions.clear();
   blockMentions.clear();
   cohortMentions.clear();
+  discoveryMentions.clear();
   const normalized = normalizeDraftMentionRefs(refs);
   const winningRefs = new Map<string, DraftMentionRef>();
   for (const ref of normalized) {
@@ -260,6 +312,11 @@ export function replaceWithDraftMentionRefs(
     } else if ("cohortAddress" in ref) {
       cohortMentions.set(ref.displayName, {
         cohortAddress: ref.cohortAddress,
+      });
+    } else if ("discoveryKind" in ref) {
+      discoveryMentions.set(ref.displayName, {
+        discoveryKind: ref.discoveryKind,
+        entityId: ref.entityId,
       });
     } else {
       mentions.set(ref.displayName, ref.pubkey);
@@ -285,6 +342,7 @@ export function extractTypedActorPubkeys(
   blockMentions: ReadonlyMap<string, BlockMentionReference>,
   reservedActorNames: Iterable<string> = [],
   cohortMentions: ReadonlyMap<string, CohortMentionReference> = new Map(),
+  discoveryMentions: ReadonlyMap<string, DiscoveryMentionReference> = new Map(),
 ): string[] {
   const entityOwnedNames = new Set<string>();
   for (const [displayName, reference] of blockMentions) {
@@ -299,6 +357,14 @@ export function extractTypedActorPubkeys(
     if (
       hasMention(content, displayName) &&
       normalizeCohortReference(displayName, reference)
+    ) {
+      entityOwnedNames.add(normalizeMentionName(displayName));
+    }
+  }
+  for (const [displayName, reference] of discoveryMentions) {
+    if (
+      hasMention(content, displayName) &&
+      normalizeDiscoveryMention(displayName, reference)
     ) {
       entityOwnedNames.add(normalizeMentionName(displayName));
     }
@@ -384,17 +450,24 @@ export function extractCohortReferenceTags(
   return tags;
 }
 
+/**
+ * Reference tags for every non-actor entity kind. Blocks and cohorts reuse
+ * the NIP-01 address tag; Discovery writes its own structured shape:
+ * `["discovery", <kind>, <stable-id>, <label>]`.
+ */
 export function routeTypedMentionReferences(
   content: string,
   actorPubkeys: readonly string[],
   blockMentions: ReadonlyMap<string, BlockMentionReference>,
   cohortMentions: ReadonlyMap<string, CohortMentionReference> = new Map(),
+  discoveryMentions: ReadonlyMap<string, DiscoveryMentionReference> = new Map(),
 ): { actorPubkeys: string[]; referenceTags: string[][] } {
   return {
     actorPubkeys: [...actorPubkeys],
     referenceTags: [
       ...extractBlockReferenceTags(content, blockMentions),
       ...extractCohortReferenceTags(content, cohortMentions),
+      ...extractDiscoveryReferenceTags(content, discoveryMentions),
     ],
   };
 }

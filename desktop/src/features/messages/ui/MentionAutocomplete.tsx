@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Blocks, Bot, Layers, Users } from "lucide-react";
+import { Blocks, Bot, Layers, Radar, Users } from "lucide-react";
+import type { DiscoveryMentionKind } from "@/features/messages/lib/discoveryMentionRefs";
 import type { TeamMentionMember } from "@/features/messages/lib/mentionCandidates";
 
 import { Badge } from "@/shared/ui/badge";
@@ -13,6 +14,15 @@ import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { safeNpub } from "@/shared/lib/nostrUtils";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 
+const DISCOVERY_MENTION_LABELS: Record<string, string> = {
+  industry: "Industry",
+  vertical: "Vertical",
+  campaign: "Campaign",
+  campaign_leads: "Leads",
+  lead: "Lead",
+  run: "Run",
+};
+
 export type MentionSuggestion = {
   pubkey?: string;
   personaId?: string;
@@ -23,7 +33,11 @@ export type MentionSuggestion = {
   manifestId?: string;
   cohortId?: string;
   cohortAddress?: string;
-  kind?: "identity" | "persona" | "team" | "block" | "cohort";
+  discoveryKind?: DiscoveryMentionKind;
+  entityId?: string;
+  contextId?: string;
+  detail?: string;
+  kind?: "identity" | "persona" | "team" | "block" | "cohort" | "discovery";
   /** The token inserted into the draft and used to key the mention maps. */
   displayName: string;
   /** The alias not being inserted (role title, or personal name for a role match). */
@@ -108,6 +122,9 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
           const suggestionKey =
             suggestion.blockAddress ??
             suggestion.cohortAddress ??
+            (suggestion.kind === "discovery" && suggestion.entityId
+              ? `discovery-${suggestion.discoveryKind}-${suggestion.entityId}`
+              : null) ??
             suggestion.pubkey ??
             (suggestion.personaId ? `persona-${suggestion.personaId}` : null) ??
             (suggestion.teamId ? `team-${suggestion.teamId}` : null) ??
@@ -153,6 +170,14 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                     data-testid="mention-cohort-icon"
                   />
                 </span>
+              ) : suggestion.kind === "discovery" ? (
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Radar
+                    aria-hidden="true"
+                    className="h-4 w-4"
+                    data-testid="mention-discovery-icon"
+                  />
+                </span>
               ) : suggestion.kind === "team" ? (
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <Users aria-hidden="true" className="h-4 w-4" />
@@ -174,6 +199,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 </span>
                 {suggestion.kind === "block" ||
                 suggestion.kind === "cohort" ||
+                suggestion.kind === "discovery" ||
                 suggestion.kind === "team" ||
                 suggestion.isAgent ||
                 suggestion.role ||
@@ -197,6 +223,15 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                       <span className="inline-flex shrink-0 items-center gap-1">
                         <Layers aria-hidden="true" className="h-3.5 w-3.5" />
                         Cohort
+                      </span>
+                    ) : suggestion.kind === "discovery" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1">
+                        <Radar aria-hidden="true" className="h-3.5 w-3.5" />
+                        {
+                          DISCOVERY_MENTION_LABELS[
+                            suggestion.discoveryKind ?? "campaign"
+                          ]
+                        }
                       </span>
                     ) : suggestion.kind === "team" ? (
                       <span className="inline-flex shrink-0 items-center gap-1">
@@ -250,6 +285,15 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                     {suggestion.kind === "block" && suggestion.blockHandle ? (
                       <span className="min-w-0 truncate">
                         @{suggestion.blockHandle}
+                      </span>
+                    ) : null}
+                    {suggestion.kind === "discovery" && suggestion.detail ? (
+                      <span
+                        className="min-w-0 truncate"
+                        data-testid="mention-discovery-detail"
+                        title={suggestion.detail}
+                      >
+                        {suggestion.detail}
                       </span>
                     ) : null}
                   </span>

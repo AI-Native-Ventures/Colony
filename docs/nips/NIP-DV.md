@@ -136,3 +136,74 @@ This NIP achieves that with two layers. First, a filter-level `#p` read-authoriz
 - **NIP-IA (Identity Archival)**: Same relay-signed-snapshot shape (user-or-relay intent → relay-signed, replaceable, relay-scoped state). NIP-DV applies the pattern per-viewer for DM presentation rather than per-pubkey for membership surfaces.
 - **NIP-43 (Relay Access Metadata and Requests)**: Defines membership/access control. NIP-DV is strictly presentation state layered on top — a DM can be hidden without any membership change.
 - **NIP-29 group membership (`kind:39002`)**: The source of the DM list a client rebuilds. NIP-DV is the missing per-viewer filter applied on top of it.
+
+---
+
+# NIP-DV Addendum: Discovery Entity Mentions (colony extension)
+
+## Summary
+
+Discovery records (Industry, Vertical, Campaign, Campaign Lead collection,
+Lead, and Discovery run) are first-class mention targets in every message
+composer. Messages carry stable structured references; receiving agents get
+current, permission-checked context hydrated at processing time.
+
+## Structured Reference Tag
+
+Selecting a Discovery entity in a composer inserts readable `@Label` text and
+one structured tag on the outgoing event:
+
+```
+["discovery", "<kind>", "<stable-id>", "<label>"]
+```
+
+- `<kind>` is one of: `industry`, `vertical`, `campaign`, `campaign_leads`,
+  `lead`, `run`.
+- `<stable-id>` is authoritative: a UUID for campaign/campaign_leads/lead/run,
+  a canonical taxonomy ID for industry, and the composite
+  `<industry-id>/<vertical-id>` for vertical (vertical slugs repeat across
+  industries).
+- `<label>` is presentation only. It MAY drift from the current record name.
+  Labels MUST NOT be used to identify anything.
+
+Rules:
+
+- The tag adds no recipient. It MUST NOT create a `p` tag or any notification.
+- A message carries at most 20 distinct discovery references; parsers SHOULD
+  ignore excess, malformed, unknown-kind, and duplicate references.
+- The label element is optional when encoding but MUST be ignored by resolvers.
+
+## Agent Context Resolution
+
+Before a batch of events enters an agent prompt, the agent harness resolves
+each reference by signing a `resolve_entities` Discovery workspace action with
+the receiving agent's own identity and awaiting the relay's private receipt.
+The relay verifies: referenced community equals the event's channel community;
+current Discovery entitlement and (for agents) capability; then returns bounded
+current projections.
+
+Resolution results:
+
+- Authorized entities resolve to their full entitled projection
+  (Campaign with budget state, Lead detail, run summary, taxonomy row with live
+  Lead counts, and Campaign Lead collections bounded to their total plus at
+  most 25 rows).
+- Forged IDs, malformed tags, duplicates beyond the first, wrong community,
+  revoked access, and deleted records all resolve to an explicit
+  `unavailable` entry that reveals nothing about whether a hidden record
+  exists.
+- The raw event is never modified; hydration renders beside the Buzz event
+  block as a bounded `<discovery-context>` prompt section.
+- A failed or timed-out resolution delivers the user message with an
+  unavailable section rather than dropping the turn.
+
+Because every lookup runs under the receiving agent's CURRENT permissions,
+revoking access takes effect at the next processed message even though older
+messages still display their original labels.
+
+## Agent command surface
+
+Agents can go beyond the hydrated bounds with the existing CLI:
+`buzz discovery search --query <text>` returns mention suggestions with stable
+IDs; `campaign-get`, `lead-get`, `leads-list --campaign <id>`, and
+`status --run <id>` read exactly what the caller is authorized to read.

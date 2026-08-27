@@ -27,18 +27,17 @@ export const FIXTURE_INDUSTRIES: Industry[] = BUSINESS_TAXONOMY.map(
     const leadCount = industry.verticals.reduce(
       (total, vertical) =>
         total +
-        (DEMO_VERTICAL_LEAD_COUNTS.get(`${industry.slug}/${vertical.slug}`) ??
-          0),
+        (DEMO_VERTICAL_LEAD_COUNTS.get(`${industry.id}/${vertical.id}`) ?? 0),
       0,
     );
     return {
-      id: industry.slug,
-      slug: industry.slug,
-      name: industry.name,
+      id: industry.id,
+      slug: industry.id,
+      name: industry.label,
       description:
         industry.description ??
-        `Discover companies across ${industry.name.toLowerCase()} verticals.`,
-      imageKey: `industry.${industry.slug}`,
+        `Discover companies across ${industry.label.toLowerCase()} verticals.`,
+      imageKey: `industry.${industry.id}`,
       verticalCount: industry.verticals.length,
       leadCount,
       campaignCount: leadCount > 0 ? 1 : 0,
@@ -51,16 +50,16 @@ export const FIXTURE_VERTICALS: Vertical[] = BUSINESS_TAXONOMY.flatMap(
   (industry) =>
     industry.verticals.map((vertical) => {
       const leadCount =
-        DEMO_VERTICAL_LEAD_COUNTS.get(`${industry.slug}/${vertical.slug}`) ?? 0;
+        DEMO_VERTICAL_LEAD_COUNTS.get(`${industry.id}/${vertical.id}`) ?? 0;
       return {
-        id: vertical.slug,
-        slug: vertical.slug,
-        industryId: industry.slug,
-        name: vertical.name,
+        id: vertical.id,
+        slug: vertical.id,
+        industryId: industry.id,
+        name: vertical.label,
         description:
           vertical.description ??
-          `Discover businesses in the ${vertical.name} vertical.`,
-        imageKey: `industry.${industry.slug}`,
+          `Discover businesses in the ${vertical.label} vertical.`,
+        imageKey: `industry.${industry.id}`,
         campaignCount: leadCount > 0 ? 1 : 0,
         leadCount,
         status: leadCount > 0 ? "active" : "available",

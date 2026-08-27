@@ -24,6 +24,13 @@ export type MentionCandidateForRanking =
       cohortId: string;
       displayName: string;
       kind: "cohort";
+    }
+  | {
+      displayName: string;
+      /** Stable mention ID: a UUID, taxonomy ID, or industry/vertical pair. */
+      discoveryKind: string;
+      entityId: string;
+      kind: "discovery";
     };
 
 export type RankedMentionCandidate<T extends MentionCandidateForRanking> = {
@@ -51,6 +58,10 @@ function getMentionCandidateGroupRank(
   activePersonaIds: ReadonlySet<string>,
 ) {
   if (candidate.kind === "block" || candidate.kind === "cohort") return 2;
+  // Discovery rows come after every actor group: typing "@c" must keep
+  // offering charlie the agent ahead of "Charitable Foundations" the
+  // vertical, whatever membership state that agent is in.
+  if (candidate.kind === "discovery") return 4;
   if (candidate.isMember) return 0;
 
   const isRunnablePersona =
@@ -67,13 +78,20 @@ function getMentionCandidateGroupRank(
 /** True for actor candidates (identity/persona/team) — the only variants
  * carrying a pubkey, role, or persona-name field. Block and cohort
  * candidates are reference-only entities and never match here. */
+/** True for actor candidates (identity/persona/team) — the only variants
+ * carrying a pubkey, role, or persona-name field. Reference-only entity
+ * candidates (block, cohort, discovery) never match here. */
 function isActorCandidate(
   candidate: MentionCandidateForRanking,
 ): candidate is Extract<
   MentionCandidateForRanking,
   { kind: "identity" | "persona" | "team" }
 > {
-  return candidate.kind !== "block" && candidate.kind !== "cohort";
+  return (
+    candidate.kind !== "block" &&
+    candidate.kind !== "cohort" &&
+    candidate.kind !== "discovery"
+  );
 }
 
 function scoreMentionCandidateLabel(

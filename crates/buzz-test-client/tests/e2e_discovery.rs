@@ -1727,3 +1727,237 @@ async fn provision_member(pool: &sqlx::PgPool, community_id: Uuid, keys: &Keys) 
     .await
     .expect("provision test member");
 }
+
+/// Discovery entity mentions: the relay accepts member messages carrying
+/// strict `["discovery", kind, id]` references with no recipient added, and
+/// `resolve_entities` hydrates current, permission-checked context — while a
+/// wrong-community actor learns only `unavailable`.
+#[tokio::test]
+#[ignore = "requires the isolated Postgres, Redis, and relay harness"]
+async fn discovery_entity_mentions_hydrate_permission_checked_context() {
+    use buzz_core::discovery_workspace::{
+        DiscoveryEntityKind, DiscoveryEntityRef, ResolvedDiscoveryEntity,
+    };
+
+    let _test_guard = DISCOVERY_E2E_LOCK.lock().await;
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5471/buzz".to_owned());
+    let pool = sqlx::PgPool::connect(&database_url)
+        .await
+        .expect("connect isolated Postgres");
+    let host = buzz_core::tenant::relay_url_authority(&relay_url());
+    let community_id: Uuid = sqlx::query("SELECT id FROM communities WHERE lower(host)=lower($1)")
+        .bind(&host)
+        .fetch_one(&pool)
+        .await
+        .expect("isolated community exists")
+        .try_get("id")
+        .expect("community UUID");
+
+    // A second community never seeded with this campaign.
+    let other_community_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO communities (id,name,host) VALUES ($1,'Other','mention-other.test')")
+        .bind(other_community_id)
+        .execute(&pool)
+        .await
+        .expect("seed outsider community");
+
+    let actor = Keys::generate();
+    let outsider = Keys::generate();
+    provision_member(&pool, community_id, &actor).await;
+    provision_member(&pool, other_community_id, &outsider).await;
+    sqlx::query(
+        "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+         VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
+         DO UPDATE SET active=TRUE,updated_at=now()",
+    )
+    .bind(community_id)
+    .execute(&pool)
+    .await
+    .expect("enable entitlement");
+    sqlx::query(
+        "INSERT INTO discovery_entitlements (community_id,active,updated_at) \
+         VALUES ($1,TRUE,now()) ON CONFLICT (community_id) \
+         DO UPDATE SET active=TRUE,updated_at=now()",
+    )
+    .bind(other_community_id)
+    .execute(&pool)
+    .await
+    .expect("enable outsider entitlement");
+
+    let info: Value = reqwest::Client::new()
+        .get(relay_http_url())
+        .header("Accept", "application/nostr+json")
+        .send()
+        .await
+        .expect("fetch NIP-11")
+        .json()
+        .await
+        .expect("parse NIP-11");
+    let relay = nostr::PublicKey::parse(
+        info.get("self")
+            .and_then(Value::as_str)
+            .expect("NIP-11 self key"),
+    )
+    .expect("valid relay pubkey");
+
+    let mut actor_client = BuzzTestClient::connect(&relay_url(), &actor)
+        .await
+        .expect("authenticate actor");
+    let mut outsider_client = BuzzTestClient::connect(&relay_url(), &outsider)
+        .await
+        .expect("authenticate outsider");
+
+    let campaign_id = create_campaign(&mut actor_client, &actor, relay).await;
+
+    // A real run and 30 retained Leads attached to it, so Lead and
+    // Campaign-Leads hydration can prove both resolution and the bound.
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO discovery_runs (community_id,id,campaign_id,requested_by,\
+         start_idempotency_key,state,total_steps,completed_steps) \
+         VALUES ($1,$2,$3,$4,$5,'succeeded',3,3)",
+    )
+    .bind(community_id)
+    .bind(run_id)
+    .bind(campaign_id)
+    .bind(actor.public_key().to_bytes().as_slice())
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect("seed campaign run");
+    let lead_ids: Vec<Uuid> = (0..30).map(|_| Uuid::new_v4()).collect();
+    for (index, lead_id) in lead_ids.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO discovery_business_observations \
+             (community_id,id,first_run_id,provider,provider_record_id,name,city,country_code) \
+             VALUES ($1,$2,$3,'outscraper',$4,$5,$6,'ZA')",
+        )
+        .bind(community_id)
+        .bind(lead_id)
+        .bind(run_id)
+        .bind(format!("mention-proof-{index}"))
+        .bind(format!("Mention Proof Clinic {index}"))
+        .bind("Sandton")
+        .execute(&pool)
+        .await
+        .expect("seed observation");
+        sqlx::query(
+            "INSERT INTO discovery_campaign_leads (community_id,campaign_id,lead_id) \
+             VALUES ($1,$2,$3)",
+        )
+        .bind(community_id)
+        .bind(campaign_id)
+        .bind(lead_id)
+        .execute(&pool)
+        .await
+        .expect("attach observation to campaign");
+    }
+
+    // The member message carries structured Discovery references only: no
+    // p-tag is created for an entity, so nothing notifiable enters the event.
+    let mentioned_lead = lead_ids[0];
+    let discovery_tag_values: Vec<String> = vec![
+        "discovery".into(),
+        "campaign".into(),
+        campaign_id.to_string(),
+        "@Sandton Dentists".into(),
+    ];
+    let message_event =
+        nostr::EventBuilder::new(Kind::Custom(9), "Chase @Sandton Dentists leads today")
+            .tags(vec![nostr::Tag::parse(
+                discovery_tag_values.iter().map(String::as_str),
+            )
+            .expect("valid discovery tag")])
+            .sign_with_keys(&actor)
+            .expect("sign mention message");
+    let ok = actor_client
+        .send_event(message_event)
+        .await
+        .expect("publish mention message");
+    assert!(ok.accepted, "mention message rejected: {}", ok.message);
+
+    let resolved_refs = |kind: DiscoveryEntityKind, id: String| DiscoveryEntityRef { kind, id };
+    let resolve_payload = DiscoveryWorkspaceActionPayload::ResolveEntities {
+        refs: vec![
+            resolved_refs(DiscoveryEntityKind::Industry, "healthcare".to_string()),
+            resolved_refs(
+                DiscoveryEntityKind::Vertical,
+                "healthcare/dentists".to_string(),
+            ),
+            resolved_refs(DiscoveryEntityKind::Campaign, campaign_id.to_string()),
+            resolved_refs(DiscoveryEntityKind::CampaignLeads, campaign_id.to_string()),
+            resolved_refs(DiscoveryEntityKind::Lead, mentioned_lead.to_string()),
+            resolved_refs(DiscoveryEntityKind::Run, run_id.to_string()),
+            // Never created anywhere: must come back unavailable, not an error.
+            resolved_refs(DiscoveryEntityKind::Lead, Uuid::new_v4().to_string()),
+        ],
+    };
+    let result = submit_workspace_action(&mut actor_client, &actor, relay, resolve_payload).await;
+    let DiscoveryWorkspaceResult::ResolvedEntities { entities } = result else {
+        panic!("resolve_entities returns resolved entities");
+    };
+    assert_eq!(entities.len(), 7);
+    assert!(
+        matches!(&entities[2], ResolvedDiscoveryEntity::Campaign { campaign }
+        if campaign.campaign_id == campaign_id)
+    );
+    let ResolvedDiscoveryEntity::CampaignLeads { collection } = &entities[3] else {
+        panic!("collection resolves");
+    };
+    assert_eq!(collection.campaign_id, campaign_id);
+    assert_eq!(collection.total, 30);
+    assert!(
+        collection.leads.len() <= 25,
+        "collection rows must stay bounded, got {}",
+        collection.leads.len()
+    );
+    assert!(
+        matches!(&entities[4], ResolvedDiscoveryEntity::Lead { lead }
+        if lead.lead.lead_id == mentioned_lead)
+    );
+    assert!(matches!(&entities[5], ResolvedDiscoveryEntity::Run { run }
+        if run.run_id == run_id && matches!(run.state, buzz_core::discovery::DiscoveryRunState::Succeeded)));
+    assert!(matches!(
+        &entities[6],
+        ResolvedDiscoveryEntity::Unavailable {
+            kind: DiscoveryEntityKind::Lead,
+            ..
+        }
+    ));
+
+    // The same IDs resolved under another community's entitled member reveal
+    // nothing: every reference is unavailable, never an error and never a
+    // hint about existence.
+    let outsider_payload = DiscoveryWorkspaceActionPayload::ResolveEntities {
+        refs: vec![
+            DiscoveryEntityRef {
+                kind: DiscoveryEntityKind::Campaign,
+                id: campaign_id.to_string(),
+            },
+            DiscoveryEntityRef {
+                kind: DiscoveryEntityKind::Lead,
+                id: mentioned_lead.to_string(),
+            },
+        ],
+    };
+    let outsider_result =
+        submit_workspace_action(&mut outsider_client, &outsider, relay, outsider_payload).await;
+    let DiscoveryWorkspaceResult::ResolvedEntities { entities } = outsider_result else {
+        panic!("outsider resolve still returns resolved-entities envelope");
+    };
+    assert_eq!(entities.len(), 2, "duplicates collapse; one row per ref");
+    for entity in &entities {
+        assert!(
+            matches!(entity, ResolvedDiscoveryEntity::Unavailable { .. }),
+            "wrong-community reference must be unavailable"
+        );
+    }
+
+    // Clean the seeded second community so reruns stay deterministic.
+    sqlx::query("DELETE FROM communities WHERE id=$1")
+        .bind(other_community_id)
+        .execute(&pool)
+        .await
+        .expect("clean outsider community");
+}
