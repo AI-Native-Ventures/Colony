@@ -211,6 +211,22 @@ jobs:
           # before public community creation can run.
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+
+          # The canary workflow builds into this same shared target directory
+          # on this same runner, and it renames its updater archive in place to
+          # Colony_Canary_<version>_aarch64.app.tar.gz, which then outlives its
+          # run. v0.11.8 published one of those as the stable macOS update:
+          # every gate passed, because the archive was real and its signature
+          # matched it, and stable clients auto-updated into a canary build
+          # pointed at the canary relay. Delete every updater archive before
+          # building so the only one present afterwards is this build's.
+          PRE_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || echo desktop/src-tauri/target)"
+          PRE_MACOS="$PRE_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos"
+          if [ -d "$PRE_MACOS" ]; then
+            find "$PRE_MACOS" -maxdepth 1 \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -print -delete
+            rm -rf "$PRE_MACOS/Colony Canary.app"
+          fi
+
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
           # Publish the resolved target directory for every later step. Those
@@ -290,18 +306,35 @@ jobs:
         # updater key. An unsigned or missing archive means the build silently
         # lost TAURI_SIGNING_PRIVATE_KEY, which would publish a manifest no
         # client can verify, so fail here rather than ship it.
+        #
+        # Name the archive exactly, never `find | head -1`: the canary
+        # workflow shares this bundle directory and leaves its own renamed
+        # archive behind, and v0.11.8 shipped that one to stable clients.
+        # The build step now purges stale archives, so a wrong name here means
+        # something else went wrong and the run must stop.
         run: |
           set -euo pipefail
           BUNDLE="$TAURI_TARGET_ROOT/aarch64-apple-darwin/release/bundle"
-          ARCHIVE=$(find "$BUNDLE/macos" -name '*.app.tar.gz' ! -name '*.sig' -type f | head -1)
-          if [ -z "$ARCHIVE" ] || [ ! -f "$ARCHIVE" ]; then
-            echo "::error::No updater archive in $BUNDLE/macos — is createUpdaterArtifacts on?"
+          ARCHIVE="$BUNDLE/macos/Colony.app.tar.gz"
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "::error::No $ARCHIVE — is createUpdaterArtifacts on? Present instead:"
+            ls -la "$BUNDLE/macos" || true
             exit 1
           fi
           if [ ! -s "${ARCHIVE}.sig" ]; then
             echo "::error::${ARCHIVE}.sig missing or empty — the build had no signing key"
             exit 1
           fi
+          # Prove the bytes about to be published are the stable app. The
+          # signature only proves the archive was signed with the updater key,
+          # which the canary build is signed with too, on purpose.
+          ROOT_ENTRY=$(tar tzf "$ARCHIVE" | head -1)
+          if [ "$ROOT_ENTRY" != "Colony.app/" ]; then
+            echo "::error::Updater archive contains $ROOT_ENTRY, expected Colony.app/. \
+          This archive is not the stable build and must not be published."
+            exit 1
+          fi
+          echo "Updater archive holds $ROOT_ENTRY"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
           echo "ARCHIVE_SIG=${ARCHIVE}.sig" >> "$GITHUB_ENV"
 
