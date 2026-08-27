@@ -6,13 +6,9 @@ import {
   markCommunityOnboardingComplete,
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
-import { initializeStarterChannels } from "@/features/onboarding/hooks";
 import { useClaimInvite } from "@/features/onboarding/useClaimInvite";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
-import {
-  takePendingWelcomeChannelForDirectEntry,
-  WELCOME_SURFACE_READY_EVENT,
-} from "@/features/onboarding/welcome";
+import { WELCOME_SURFACE_READY_EVENT } from "@/features/onboarding/welcome";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { registerAvatarWhenReady } from "@/features/profile/avatarProfileSync";
 import { profileQueryKey } from "@/features/profile/hooks";
@@ -22,8 +18,6 @@ import {
   ProfileAvatarEditor,
 } from "@/features/profile/ui/ProfileAvatarEditor";
 import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
-import { sendChannelMessage } from "@/shared/api/tauri";
-import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
 import {
@@ -45,10 +39,8 @@ import {
 } from "./OnboardingChrome";
 import { OnboardingFooter, OnboardingFooterProvider } from "./OnboardingFooter";
 import { OnboardingV2Flow } from "./OnboardingV2Flow";
-import {
-  buildOnboardingFirstTaskMessage,
-  onboardingFirstTaskMarker,
-} from "../onboardingV2FirstTask";
+import { completeFirstRun } from "../flow/completeFirstRun";
+import { DEFAULT_COMPLETE_FIRST_RUN_IO } from "../flow/completeFirstRunIo";
 
 function isRelayMembershipDeniedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -274,60 +266,33 @@ export function CommunityOnboardingFlow({
     try {
       const work = (async () => {
         const identity = await getIdentity();
-        const result = await initializeStarterChannels(queryClient, {
-          focus: true,
-          pubkey: identity.pubkey,
-          communityScope: relayUrl,
-        });
-        // Public starter channels are optional; initializeStarterChannels still
-        // returns a focus channel when the required private Welcome channel was
-        // created successfully. Only a failure without a focus target should
-        // keep onboarding open.
-        if (!result.ok && !result.focusChannelId) {
-          throw new Error(result.reason);
-        }
-        if (result.focusChannelId) {
+        // A resumed transaction whose brief already went out keeps its
+        // recorded id and must not re-check the marker; passing draft: null
+        // preserves that exactly.
+        const draft = transaction?.onboardingV2 ?? null;
+        const alreadyDelivered = Boolean(draft?.firstTask.deliveredEventId);
+        const completion = await completeFirstRun(
+          {
+            queryClient,
+            relayUrl,
+            pubkey: identity.pubkey,
+            draft: alreadyDelivered ? null : draft,
+            // The legacy profile stage already published kind:0.
+            profileDisplayName: null,
+          },
+          DEFAULT_COMPLETE_FIRST_RUN_IO,
+        );
+        if (completion.focusChannelId) {
           let onboardingV2 = transaction?.onboardingV2;
-          if (
-            onboardingV2?.firstTask.content.trim() &&
-            !onboardingV2.firstTask.deliveredEventId
-          ) {
-            const marker = onboardingFirstTaskMarker(onboardingV2);
-            const exists = await hasManagedAgentChannelMessageMarker({
-              channelId: result.focusChannelId,
-              marker,
-              markerScope: "channel",
-            });
-            let deliveredEventId = "already-delivered";
-            if (!exists) {
-              const sent = await sendChannelMessage(
-                result.focusChannelId,
-                buildOnboardingFirstTaskMessage(onboardingV2),
-                null,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                [["client", marker]],
-              );
-              deliveredEventId = sent.eventId;
-            }
+          if (onboardingV2 && completion.firstTaskEventId) {
             onboardingV2 = {
               ...onboardingV2,
               firstTask: {
                 ...onboardingV2.firstTask,
-                deliveredEventId,
+                deliveredEventId: completion.firstTaskEventId,
               },
             };
           }
-          // Direct entry: point the router at the Welcome channel *before* the
-          // app mounts, so it never lands on Home first. Consume the pending
-          // entry — it exists for the Home-route fallback, and leaving it would
-          // yank a later Home visit back to Welcome.
-          takePendingWelcomeChannelForDirectEntry();
-          window.location.hash = `/channels/${result.focusChannelId}`;
-          markCommunityOnboardingComplete(identity.pubkey, relayUrl);
           // Keep this screen mounted as a curtain over the loading app; the
           // "entering" stage fades it out once Welcome reports ready.
           update({
