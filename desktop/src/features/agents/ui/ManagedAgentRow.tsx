@@ -14,10 +14,14 @@ import { useCommunities } from "@/features/communities/useCommunities";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
-import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
+import {
+  AgentActivityBadge,
+  AgentActivityDetail,
+} from "@/features/agents/ui/AgentActivityBadge";
+import { useAgentLiveness } from "@/features/agents/useAgentLiveness";
+import { agentProcessStateFromStatus } from "@/features/agents/managedAgentRuntimeStatus";
+import type { AgentLivenessState } from "@/features/agents/agentLivenessState";
 import { useOpenAgentActivity } from "@/features/agents/useOpenAgentActivity";
-import { formatElapsed } from "@/features/agents/ui/agentSessionUtils";
-import { useNow } from "@/shared/lib/useNow";
 import type {
   ManagedAgent,
   PresenceLookup,
@@ -78,19 +82,25 @@ export function ManagedAgentRow({
   const { activeCommunity } = useCommunities();
   const rank = useAgentRank(activeCommunity?.id ?? "", agent.pubkey);
   const presenceStatus = presenceLookup[agent.pubkey.trim().toLowerCase()];
-  const activeTurns = useAgentWorking(agent.pubkey).channels;
+  // Turn liveness, not process lifecycle. `agent.status` still contributes
+  // the process axis, but it can no longer be the whole answer: a "running"
+  // subprocess that has been silent for two hours is exactly the case this
+  // row used to render as healthy.
+  const liveness = useAgentLiveness(agent.pubkey, {
+    process: agentProcessStateFromStatus(agent.status),
+    presence: presenceStatus,
+    presenceLoaded,
+  });
   const activeWorkingChannels = React.useMemo(
     () =>
-      activeTurns
-        .map(({ channelId, anchorAt }) => ({
+      liveness.channels
+        .map((channelId) => ({
           id: channelId,
           name: channelIdToName[channelId] ?? channelId,
-          anchorAt,
         }))
         .slice(0, 3),
-    [activeTurns, channelIdToName],
+    [liveness.channels, channelIdToName],
   );
-  const isWorking = activeWorkingChannels.length > 0;
   const [isReconnecting, setIsReconnecting] = React.useState(false);
   const [reconnectError, setReconnectError] = React.useState<string | null>(
     null,
@@ -165,6 +175,7 @@ export function ManagedAgentRow({
                 <AgentSummary
                   activeWorkingChannels={activeWorkingChannels}
                   agent={agent}
+                  liveness={liveness}
                   channelNames={channelNames}
                   isExpandable
                   isLogSelected={isLogSelected}
@@ -176,7 +187,7 @@ export function ManagedAgentRow({
               <StatusBlock
                 friendlyError={friendlyError}
                 reconnectError={reconnectError}
-                isWorking={isWorking}
+                liveness={liveness}
                 isReconnecting={isReconnecting}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
@@ -208,6 +219,7 @@ export function ManagedAgentRow({
               <AgentSummary
                 activeWorkingChannels={activeWorkingChannels}
                 agent={agent}
+                liveness={liveness}
                 channelNames={channelNames}
                 isExpandable={false}
                 isLogSelected={false}
@@ -218,7 +230,7 @@ export function ManagedAgentRow({
               <StatusBlock
                 friendlyError={friendlyError}
                 reconnectError={reconnectError}
-                isWorking={isWorking}
+                liveness={liveness}
                 isReconnecting={isReconnecting}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
@@ -288,12 +300,14 @@ function AgentSummary({
   channelNames,
   isExpandable,
   isLogSelected,
+  liveness,
   personaLabel,
   presenceStatus,
   rank,
 }: {
-  activeWorkingChannels: { id: string; name: string; anchorAt: number }[];
+  activeWorkingChannels: { id: string; name: string }[];
   agent: ManagedAgent;
+  liveness: AgentLivenessState;
   channelNames: { id: string; name: string }[];
   isExpandable: boolean;
   isLogSelected: boolean;
@@ -394,17 +408,26 @@ function AgentSummary({
           {activeWorkingChannels.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {activeWorkingChannels.map((channel) => (
-                <WorkingBadge
+                // One badge per working channel, all carrying the same
+                // agent-level phase. The phase is derived from the agent's
+                // busiest turn, so a quiet channel never gets to claim the
+                // agent is idle while another channel is producing output.
+                <button
+                  className="cursor-pointer text-left hover:opacity-80"
                   key={`working-${channel.id}`}
-                  channelId={channel.id}
-                  name={channel.name}
-                  anchorAt={channel.anchorAt}
-                  // Deep-link straight into the agent's activity pane in the
-                  // working channel, not just the channel timeline.
-                  onNavigate={(channelId) =>
-                    openAgentActivity(agent.pubkey, { channelId })
-                  }
-                />
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // Deep-link straight into the agent's activity pane in
+                    // the working channel, not just the channel timeline.
+                    openAgentActivity(agent.pubkey, { channelId: channel.id });
+                  }}
+                  type="button"
+                >
+                  <AgentActivityBadge
+                    channelLabel={channel.name}
+                    state={liveness}
+                  />
+                </button>
               ))}
             </div>
           ) : null}
@@ -414,40 +437,11 @@ function AgentSummary({
   );
 }
 
-function WorkingBadge({
-  channelId,
-  name,
-  anchorAt,
-  onNavigate,
-}: {
-  channelId: string;
-  name: string;
-  anchorAt: number;
-  onNavigate: (channelId: string) => void;
-}) {
-  // The 1s tick lives here, at the leaf, so only visible working badges
-  // re-render each second — idle rows never mount this hook.
-  const now = useNow(1000);
-
-  return (
-    <Badge
-      className="cursor-pointer motion-safe:animate-pulse normal-case tracking-normal hover:opacity-80"
-      variant="default"
-      onClick={(e) => {
-        e.stopPropagation();
-        onNavigate(channelId);
-      }}
-    >
-      Working in #{name} · {formatElapsed(now - anchorAt)}
-    </Badge>
-  );
-}
-
 function StatusBlock({
   friendlyError,
   reconnectError,
   isReconnecting,
-  isWorking,
+  liveness,
   presenceLoaded,
   presenceStatus,
   processDetail,
@@ -457,7 +451,7 @@ function StatusBlock({
   friendlyError: ReturnType<typeof friendlyAgentLastError>;
   reconnectError: string | null;
   isReconnecting: boolean;
-  isWorking: boolean;
+  liveness: AgentLivenessState;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
   processDetail: string;
@@ -468,11 +462,14 @@ function StatusBlock({
     <div className="space-y-1 lg:pt-0.5">
       <SubsectionLabel className="lg:hidden">Status</SubsectionLabel>
       <AgentStatusBadge
-        isWorking={isWorking}
+        liveness={liveness}
         presenceLoaded={presenceLoaded}
         presenceStatus={presenceStatus}
         status={status}
       />
+      {/* The sentence that makes the badge actionable: which tool is still
+          running, or that the agent stopped reporting mid-task. */}
+      <AgentActivityDetail state={liveness} />
       <p className="text-xs text-muted-foreground">{processDetail}</p>
       {friendlyError ? (
         <div className="space-y-1">
