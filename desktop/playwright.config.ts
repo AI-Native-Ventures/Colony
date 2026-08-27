@@ -50,6 +50,7 @@ export default defineConfig({
         "**/onboarding-docked-cta-screenshots.spec.ts",
         "**/identity-key-help.spec.ts",
         "**/key-import-reveal.spec.ts",
+        "**/account-signin.spec.ts",
         "**/navigation.spec.ts",
         "**/navigation-command-palette.spec.ts",
         "**/action-center.spec.ts",

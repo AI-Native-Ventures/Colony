@@ -164,12 +164,19 @@ type Props = {
    * an empty app.
    */
   onComplete: (answers: OnboardingAnswers) => Promise<void>;
+  /**
+   * Explicit user exit toward email sign-in (the machine flow's
+   * account-signin page). Offered only where the caller can honour it; the
+   * host is left unfinished because onboarding simply did not happen here.
+   */
+  onRequestSignIn?: () => void;
 };
 
 export function NewOnboardingFlow({
   services,
   provisioning,
   onComplete,
+  onRequestSignIn,
 }: Props) {
   // Build-time flags never change mid-session, so both are read once.
   const canInvite = invitesEnabled(import.meta.env);
@@ -469,6 +476,7 @@ export function NewOnboardingFlow({
             onSubmit={handleAccountSubmit}
             isSubmitting={isSigningUp}
             failure={accountFailure}
+            onSignInRequest={onRequestSignIn}
           />
         );
       case "recovery":

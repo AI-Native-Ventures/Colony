@@ -63,6 +63,12 @@ test("existing-account recovery returns to community onboarding without setup sc
   await page
     .getByRole("button", { name: "Sign in to an existing account" })
     .click();
+  // The sign-in door now opens the email sign-in page first; key import sits
+  // behind its private-key detour.
+  await expect(
+    page.getByRole("heading", { name: "Welcome back." }),
+  ).toBeVisible();
+  await page.getByTestId("signin-use-private-key").click();
   await expect(
     page.getByRole("heading", { name: "Enter your private key" }),
   ).toBeVisible();
