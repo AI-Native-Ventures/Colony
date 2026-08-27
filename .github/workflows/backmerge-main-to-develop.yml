@@ -72,6 +72,48 @@ jobs:
             exit 1
           fi
 
+          # A clean back-merge needs no branch of its own: a PR whose head is
+          # `main` carries exactly the same commits and requires no push. That
+          # matters because this token cannot push workflow files at all —
+          #   ! [remote rejected] refusing to allow a GitHub App to create or
+          #     update workflow .github/workflows/... without `workflows`
+          #     permission
+          # which is how the v0.11.9 release hotfix left develop behind. Every
+          # hotfix that touches .github/workflows/** hit this, and the only
+          # signal was a red run on a workflow nobody watches.
+          if [[ "$STATUS" == clean ]]; then
+            pr_number=$(gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --base develop --head main --state open \
+              --json number --jq '.[0].number // empty')
+            if [[ -n "$pr_number" ]]; then
+              echo "reusing open back-merge PR #$pr_number from main"
+            else
+              body="$RUNNER_TEMP/backmerge-body.md"
+              {
+                echo '`main` contains clean drift that is missing from `develop`.'
+                echo
+                echo 'Opened directly from `main` rather than a prepared branch, so'
+                echo 'the back-merge works even when the drift includes workflow'
+                echo 'files. It enters the normal `develop` merge queue after its'
+                echo 'required checks pass.'
+              } >"$body"
+              pr_url=$(gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
+                --base develop --head main \
+                --title "back-merge: main into develop" \
+                --body-file "$body")
+              pr_number=${pr_url##*/}
+              echo "opened back-merge PR #$pr_number from main"
+            fi
+            echo "number=$pr_number" >> "$GITHUB_OUTPUT"
+            gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --merge --auto
+            echo "armed PR #$pr_number for the protected develop merge queue"
+            exit 0
+          fi
+
+          # Conflicting drift still needs a branch, because someone has to
+          # resolve it somewhere, and `main` is not writable.
           pr_number=$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
             --base develop \
@@ -92,26 +134,22 @@ jobs:
             fi
 
             git switch -c "$BRANCH"
-            git push origin "HEAD:refs/heads/$BRANCH"
+            if ! git push origin "HEAD:refs/heads/$BRANCH"; then
+              echo "::error::Could not push $BRANCH. If the push was rejected \
+          for a workflow file, this token lacks the Workflows permission: grant \
+          it, or merge main into develop by hand. Until that happens, the next \
+          promotion of develop can silently revert production."
+              exit 1
+            fi
 
             body="$RUNNER_TEMP/backmerge-body.md"
-            if [[ "$STATUS" == clean ]]; then
-              title="back-merge: main into develop"
-              {
-                echo '`main` contains clean drift that is missing from `develop`.'
-                echo
-                echo 'This PR was prepared automatically and will enter the normal'
-                echo '`develop` merge queue after its required checks pass.'
-              } >"$body"
-            else
-              title="back-merge: main into develop (conflicts)"
-              {
-                echo '`main` contains drift that conflicts with `develop`.'
-                echo
-                echo 'Resolve this PR rather than closing it. Until it merges, the'
-                echo 'next promotion of `develop` could silently revert production.'
-              } >"$body"
-            fi
+            title="back-merge: main into develop (conflicts)"
+            {
+              echo '`main` contains drift that conflicts with `develop`.'
+              echo
+              echo 'Resolve this PR rather than closing it. Until it merges, the'
+              echo 'next promotion of `develop` could silently revert production.'
+            } >"$body"
 
             pr_url=$(gh pr create \
               --repo "$GITHUB_REPOSITORY" \
@@ -123,11 +161,8 @@ jobs:
             echo "opened back-merge PR #$pr_number"
           fi
 
+          # Only the conflict path reaches here; the clean path exited above.
           echo "number=$pr_number" >> "$GITHUB_OUTPUT"
-          if [[ "$STATUS" == clean ]]; then
-            gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --merge --auto
-            echo "armed PR #$pr_number for the protected develop merge queue"
-          fi
 
       - name: Report
         run: |
