@@ -1,7 +1,7 @@
 //! Canonical Business Discovery taxonomy shared by relay, CLI, and desktop.
 //!
-//! `assets/discovery/business_taxonomy.json` is the single source of truth.
-//! The desktop bundle loads the same file (see
+//! `crates/buzz-core/assets/discovery/business_taxonomy.json` is the single
+//! source of truth. The desktop bundle loads the same file (see
 //! `desktop/src/features/discovery/data/businessTaxonomy`), so an industry or
 //! vertical ID minted on one side is valid everywhere. Editing the JSON by
 //! hand is fine; the `parity_hash` test pins the exact bytes both runtimes
@@ -12,11 +12,11 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 /// Canonical taxonomy bytes embedded verbatim into every consumer. The file
-/// lives beside the desktop bundle that also loads it, so the repository has
-/// exactly one editable copy of this data.
-pub const BUSINESS_TAXONOMY_JSON: &str = include_str!(
-    "../../../desktop/src/features/discovery/data/businessTaxonomy/business_taxonomy.json"
-);
+/// lives inside this crate so container builds that ship only `crates/` (the
+/// Sprig image excludes `desktop/` via `.dockerignore`) can compile it; the
+/// desktop bundle imports the same file by relative path, so the repository
+/// still has exactly one editable copy of this data.
+pub const BUSINESS_TAXONOMY_JSON: &str = include_str!("../assets/discovery/business_taxonomy.json");
 
 /// SHA-256 of [`BUSINESS_TAXONOMY_JSON`]. Any edit to the canonical JSON must
 /// update this constant in the same commit, which forces a deliberate,
