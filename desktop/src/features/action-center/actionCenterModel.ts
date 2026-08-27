@@ -10,6 +10,7 @@ import {
   KIND_APPROVAL_REQUEST,
 } from "@/shared/constants/kinds";
 import { describeAskResolution } from "@/features/asks/lib/askResolution";
+import { projectBlockFeedItem } from "./lib/blockActionCenter";
 import type {
   ActionCenterFilter,
   ActionCenterProjectionInput,
@@ -27,6 +28,7 @@ const FILTER_KIND: Record<
   ActionItemKind
 > = {
   asks: "ask",
+  blocks: "block",
   tasks: "task",
   messages: "message",
   reminders: "reminder",
@@ -72,6 +74,7 @@ function sourceUpdatedAt(source: ActionSource): number {
   switch (source.kind) {
     case "ask":
       return source.ask.createdAt;
+    case "block":
     case "message":
       return source.item.createdAt;
     case "reminder":
@@ -91,17 +94,70 @@ function compareItems(left: ActionItem, right: ActionItem): number {
   );
 }
 
+type FeedSourceItem = NonNullable<
+  ActionCenterProjectionInput["feed"]
+>["mentions"][number];
+
+/** `e` markers that reference Block plumbing, never a thread. */
+const BLOCK_E_MARKERS = new Set([
+  "block",
+  "block-instance",
+  "block-manifest",
+  "block-action",
+  "block-receipt",
+]);
+
+function feedThreadRootId(item: FeedSourceItem): string | null {
+  const rootTag = item.tags.find(
+    (tag) => tag[0] === "e" && tag.length >= 2 && tag[3] === "root",
+  );
+  if (rootTag) return rootTag[1] ?? null;
+  // A Block instance's first `e` tag points at its manifest, not a thread, so
+  // Block references are skipped rather than mistaken for a thread root.
+  const fallbackTag = item.tags.find((tag) => {
+    if (tag[0] !== "e" || tag.length < 2) return false;
+    const marker = tag.length >= 4 ? tag[3] : undefined;
+    return marker === undefined || !BLOCK_E_MARKERS.has(marker);
+  });
+  return fallbackTag?.[1] ?? null;
+}
+
+/**
+ * A feed row that carries Block instance tags becomes a Block item, so the
+ * queue can render the Block itself and offer its declared decision instead of
+ * the plain-text fallback sentence the relay happens to have stored.
+ * Anything that does not parse as a Block instance falls through unchanged.
+ */
+function blockItem(
+  item: FeedSourceItem,
+  doneIds: ReadonlySet<string>,
+): ActionItem | null {
+  const isDone = doneIds.has(item.id);
+  const projection = projectBlockFeedItem(item, feedThreadRootId(item), isDone);
+  if (!projection) return null;
+  return {
+    id: actionItemId("block", item.id),
+    kind: "block",
+    state: isDone
+      ? "completed"
+      : projection.source.awaitingDecision
+        ? "needs-action"
+        : feedState(item.category, item.kind, false),
+    title: projection.title,
+    summary: projection.summary,
+    createdAt: item.createdAt,
+    updatedAt: item.createdAt,
+    source: projection.source,
+    capabilities: projection.capabilities,
+  };
+}
+
 function messageItem(
-  item: NonNullable<ActionCenterProjectionInput["feed"]>["mentions"][number],
+  item: FeedSourceItem,
   doneIds: ReadonlySet<string>,
 ): ActionItem {
   const isDone = doneIds.has(item.id);
-  const threadRootId =
-    item.tags.find(
-      (tag) => tag[0] === "e" && tag.length >= 2 && tag[3] === "root",
-    )?.[1] ??
-    item.tags.find((tag) => tag[0] === "e" && tag.length >= 2)?.[1] ??
-    null;
+  const threadRootId = feedThreadRootId(item);
   const source: ActionSource = {
     kind: "message",
     item,
@@ -306,7 +362,7 @@ export function buildActionCenterItems({
       continue;
     if (reminderEventIds.has(item.id)) continue;
     seenFeedIds.add(item.id);
-    items.push(messageItem(item, doneIds));
+    items.push(blockItem(item, doneIds) ?? messageItem(item, doneIds));
   }
 
   const unique = new Map<string, ActionItem>();

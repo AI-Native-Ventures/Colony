@@ -3,6 +3,7 @@ import type {
   AskResolution,
   ResolvedAsk,
 } from "@/features/asks/lib/askResolution";
+import type { BlockInstanceRef } from "@/features/blocks/contracts";
 import type { CompanyTask } from "@/features/company/contracts";
 import type { TaskRunHead } from "@/features/company/taskRunContracts";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
@@ -17,6 +18,7 @@ export const ACTION_CENTER_FILTERS = [
   "needs-action",
   "all",
   "asks",
+  "blocks",
   "tasks",
   "messages",
   "reminders",
@@ -36,6 +38,7 @@ export type ActionCenterStateFilter = (typeof ACTION_CENTER_STATES)[number];
 
 export type ActionItemKind =
   | "ask"
+  | "block"
   | "task"
   | "message"
   | "reminder"
@@ -49,8 +52,15 @@ export type ActionItemState =
 
 export type ActionCapability =
   | "answer"
+  /** Decide the item in place, without navigating to its channel. */
+  | "decide-inline"
   | "open-source"
   | "mark-done"
+  /**
+   * Hide a row that is still unresolved at the relay. Distinct from
+   * `mark-done`, which is only offered where nothing else is waiting on it.
+   */
+  | "hide-locally"
   | "undo-done"
   | "complete"
   | "snooze"
@@ -80,6 +90,23 @@ export type ActionMessageSource = {
   isDone: boolean;
 };
 
+export type ActionBlockSource = {
+  kind: "block";
+  item: FeedItem;
+  /** Parsed `block` / `block-data` / `block-attention` tags of the instance. */
+  instance: BlockInstanceRef;
+  threadRootId: string | null;
+  isDone: boolean;
+  /**
+   * True only while the relay itself still counts this instance as unresolved:
+   * the block declares `block-attention required` AND the relay returned it in
+   * the needs-action feed, which already subtracts resolved receipts. The
+   * client never re-decides this, so a locally hidden row and a relay-resolved
+   * one stay tellable apart.
+   */
+  awaitingDecision: boolean;
+};
+
 export type ActionReminderSource = {
   kind: "reminder";
   reminder: Reminder;
@@ -102,6 +129,7 @@ export type ActionWorkflowSource = {
 
 export type ActionSource =
   | ActionAskSource
+  | ActionBlockSource
   | ActionMessageSource
   | ActionReminderSource
   | ActionTaskSource
@@ -122,6 +150,11 @@ export type ActionItem = {
 export type ActionMessageItem = Omit<ActionItem, "kind" | "source"> & {
   kind: "message";
   source: ActionMessageSource;
+};
+
+export type ActionBlockItem = Omit<ActionItem, "kind" | "source"> & {
+  kind: "block";
+  source: ActionBlockSource;
 };
 
 export type ActionCenterProjectionInput = {
