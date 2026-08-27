@@ -3313,8 +3313,10 @@ async fn fetch_thread_record_section(
         .kind(nostr::Kind::Custom(buzz_core::kind::KIND_ASK as u16))
         .custom_tags(e_tag, [root.clone()])
         .limit(THREAD_RECORD_QUERY_LIMIT);
-    let asks_json =
-        fetch_with_retry(|| async { query_relay_json(rest, &[ask_filter.clone()]).await }).await?;
+    let asks_json = fetch_with_retry(|| async {
+        query_relay_json(rest, std::slice::from_ref(&ask_filter)).await
+    })
+    .await?;
     let asks: Vec<crate::thread_record::ThreadAsk> = decode_verified_events(asks_json)
         .iter()
         .filter_map(crate::thread_record::read_thread_ask)
