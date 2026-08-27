@@ -46,6 +46,8 @@ export type OnboardingAnswers = {
   website: string | null;
   description: string | null;
   paid: boolean;
+  /** Hosted address claimed for this run, for idempotent resume. */
+  communitySlug: string | null;
 };
 
 /**

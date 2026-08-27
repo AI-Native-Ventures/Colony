@@ -16,6 +16,7 @@ import {
   rememberPendingWelcomeChannel,
 } from "@/features/onboarding/welcome";
 import { forceFreshOnboarding } from "@/features/onboarding/devFreshOnboarding";
+import { onboardingCompletionStorageKey } from "@/features/onboarding/completionKey";
 import { ensureWelcomeCanvas } from "@/features/onboarding/welcomeCanvas";
 import { ensureWelcomeTeam } from "@/features/onboarding/welcomeGuide";
 import { useProfileQuery } from "@/features/profile/hooks";
@@ -189,7 +190,6 @@ async function refreshChannelsCache(
   await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
 }
 
-const ONBOARDING_COMPLETION_STORAGE_KEY = "buzz-onboarding-complete.v1";
 type OnboardingGateStage = "blocking" | "onboarding" | "ready";
 
 type UseFirstRunOnboardingGateOptions = {
@@ -209,10 +209,6 @@ type OnboardingGateState = {
   hasSettledCurrentPubkey: boolean;
   isOpen: boolean;
 };
-
-function onboardingCompletionStorageKey(pubkey: string) {
-  return `${ONBOARDING_COMPLETION_STORAGE_KEY}:${pubkey}`;
-}
 
 function readOnboardingCompletion(pubkey: string | null) {
   if (forceFreshOnboarding) {
