@@ -2,7 +2,7 @@ import { useCommunities } from "@/features/communities/useCommunities";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 
 import type { Cohort } from "./contracts";
-import { useActiveCompany, useCohorts } from "./hooks";
+import { useCohorts } from "./hooks";
 
 /**
  * The active community's company + its cohorts + the relay-self pubkey
@@ -21,11 +21,7 @@ export function useActiveCompanyCohorts(): {
 } {
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
-  const activeCompanyQuery = useActiveCompany(communityId, communityId !== "");
-  const companyId = activeCompanyQuery.data?.ok
-    ? activeCompanyQuery.data.value.id
-    : null;
-  const cohortsQuery = useCohorts(communityId, companyId);
+  const cohortsQuery = useCohorts(communityId, communityId !== "");
   const relaySelfQuery = useRelaySelfQuery(communityId !== "");
 
   return {

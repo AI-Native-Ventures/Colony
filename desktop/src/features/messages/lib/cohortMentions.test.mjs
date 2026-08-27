@@ -28,7 +28,6 @@ const COHORT_ADDRESS = `30201:${RELAY_PUBKEY}:${COHORT_ID}`;
 const catalogCohort = {
   schema: "colony.cohort/v1",
   id: COHORT_ID,
-  companyId: "company-1",
   name: "Premium Q3",
   members: [],
   createdAt: 0,

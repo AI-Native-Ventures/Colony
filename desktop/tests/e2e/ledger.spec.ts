@@ -59,7 +59,6 @@ const REPORT = {
       effectiveAssignment: {
         clientOrganizationId: "tennant-group",
         commercialPurpose: "clientDelivery",
-        companyId: "horizon-labs",
         costCentreId: "web-delivery",
         owningTeamId: "web-team",
         taskId: null,
@@ -92,7 +91,6 @@ const REPORT = {
       effectiveAssignment: {
         clientOrganizationId: null,
         commercialPurpose: "internalProduct",
-        companyId: "horizon-labs",
         costCentreId: "internal-ops",
         owningTeamId: "platform",
         taskId: null,

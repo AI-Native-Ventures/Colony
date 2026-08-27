@@ -3250,7 +3250,6 @@ const mockChannels: MockChannel[] = [
 
 /** The Colony company an E2E spec seeds for agent-directed sends. */
 export type CompanyWorkContextConfig = {
-  companyId: string;
   /** Present when the seeded work belongs to an initiative. */
   initiativeId?: string;
   /** The Task the send flow will create and the message will reference. */
@@ -3346,7 +3345,6 @@ function signAsMockRelay(
 function mockCompanyRecord(config: CompanyWorkContextConfig) {
   return {
     schema: "colony.company/v1",
-    id: config.companyId,
     tradingName: config.tradingName ?? "Horizon Labs",
     legalName: null,
     website: null,
@@ -3363,7 +3361,6 @@ function mockCompanyRecord(config: CompanyWorkContextConfig) {
       },
     ],
     sourceReportEventId: null,
-    onboardingStatus: "approved",
     createdAt: 1_780_000_000,
     updatedAt: 1_780_000_000,
   };
@@ -3373,7 +3370,6 @@ function mockInitiativeRecord(config: CompanyWorkContextConfig) {
   return {
     schema: "colony.initiative/v1",
     id: config.initiativeId as string,
-    companyId: config.companyId,
     title: "Launch outbound",
     summary: "Open a first outbound channel.",
     status: "active",
@@ -3393,7 +3389,6 @@ function mockTaskRecord(config: CompanyWorkContextConfig, title: string) {
   return {
     schema: "colony.task/v1",
     id: config.taskId,
-    companyId: config.companyId,
     initiativeId: config.initiativeId ?? null,
     title,
     status: "inProgress",
@@ -3419,20 +3414,12 @@ function seedMockCompanyRecords(config: CompanyWorkContextConfig | undefined) {
   if (!config) return;
 
   const company = mockCompanyRecord(config);
-  mockCompanyHeads.push(
-    signAsMockRelay(30179, company, [
-      ["d", company.id],
-      ["c", company.id],
-      ["company", company.id],
-    ]),
-  );
+  mockCompanyHeads.push(signAsMockRelay(30179, company, [["d", "profile"]]));
   if (config.initiativeId) {
     const initiative = mockInitiativeRecord(config);
     mockCompanyHeads.push(
       signAsMockRelay(30180, initiative, [
         ["d", initiative.id],
-        ["c", initiative.companyId],
-        ["company", initiative.companyId],
         ["cost-centre", initiative.costCentreId],
       ]),
     );
@@ -3478,8 +3465,6 @@ function brokerMockCompanyAction(event: RelayEvent): boolean {
     const task = mockTaskRecord(config, title);
     const tags: string[][] = [
       ["d", task.id],
-      ["c", task.companyId],
-      ["company", task.companyId],
       ["team", task.owningTeamId],
       ["cost-centre", task.costCentreId],
     ];

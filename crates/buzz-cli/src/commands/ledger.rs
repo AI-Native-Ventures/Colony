@@ -86,7 +86,6 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
             match_model,
             match_channel,
             match_agent,
-            company,
             cost_centre,
             team,
             purpose,
@@ -101,13 +100,12 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
                 match_agent_pubkey: match_agent,
                 match_channel_id: match_channel,
                 match_model,
-                assign: assignment(company, cost_centre, team, &purpose, client_org, task)?,
+                assign: assignment(cost_centre, team, &purpose, client_org, task)?,
             };
             publish_action(client, LedgerActionPayload::Rule(rule)).await
         }
         LedgerCmd::Correct {
             record,
-            company,
             cost_centre,
             team,
             purpose,
@@ -119,7 +117,7 @@ pub async fn dispatch_ledger(command: LedgerCmd, client: &BuzzClient) -> Result<
             let correction = Correction {
                 id: Uuid::new_v4().to_string(),
                 usage_record_event_id: record,
-                assign: assignment(company, cost_centre, team, &purpose, client_org, task)?,
+                assign: assignment(cost_centre, team, &purpose, client_org, task)?,
                 reason,
                 corrected_at: parse_effective_from(corrected_at.as_deref())?,
             };
@@ -242,7 +240,6 @@ fn parse_effective_from(value: Option<&str>) -> Result<u64, CliError> {
 }
 
 fn assignment(
-    company_id: String,
     cost_centre_id: String,
     owning_team_id: String,
     purpose: &str,
@@ -252,7 +249,6 @@ fn assignment(
     let commercial_purpose = serde_json::from_value(Value::String(purpose.to_owned()))
         .map_err(|_| CliError::Usage(format!("unknown commercial purpose: {purpose}")))?;
     Ok(RuleAssignment {
-        company_id,
         cost_centre_id,
         owning_team_id,
         commercial_purpose,

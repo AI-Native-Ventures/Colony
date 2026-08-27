@@ -414,7 +414,6 @@ mod tests {
 
     fn assignment() -> RuleAssignment {
         RuleAssignment {
-            company_id: "horizon-labs".to_string(),
             cost_centre_id: "web-delivery".to_string(),
             owning_team_id: "web-team".to_string(),
             commercial_purpose: CommercialPurpose::ClientDelivery,

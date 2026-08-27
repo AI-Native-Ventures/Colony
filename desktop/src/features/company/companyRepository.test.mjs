@@ -26,7 +26,6 @@ const IMPOSTOR_SECRET = generateSecretKey();
 
 const COMPANY = {
   schema: "colony.company/v1",
-  id: "horizonlabs",
   tradingName: "Horizon Labs",
   legalName: null,
   website: "https://horizonlabs.co.za",
@@ -46,7 +45,6 @@ const COMPANY = {
     },
   ],
   sourceReportEventId: null,
-  onboardingStatus: "approved",
   createdAt: 1_780_000_000,
   updatedAt: 1_780_000_000,
 };
@@ -54,7 +52,6 @@ const COMPANY = {
 const INITIATIVE = {
   schema: "colony.initiative/v1",
   id: "horizonlabs:launch-outbound",
-  companyId: "horizonlabs",
   title: "Launch outbound",
   summary: "Open a first outbound channel to small businesses.",
   status: "proposed",
@@ -72,7 +69,6 @@ const INITIATIVE = {
 const TASK = {
   schema: "colony.task/v1",
   id: "horizonlabs:launch-outbound:draft-list",
-  companyId: "horizonlabs",
   initiativeId: "horizonlabs:launch-outbound",
   title: "Draft the first prospect list",
   status: "ready",
@@ -141,11 +137,7 @@ function companyHead(overrides = {}, options = {}) {
   return head(
     30179,
     record,
-    [
-      ["d", record.id],
-      ["c", record.id],
-      ["company", record.id],
-    ],
+    [["d", "profile"]],
     options.secret,
     options.createdAt,
   );
@@ -158,8 +150,6 @@ function initiativeHead(overrides = {}, options = {}) {
     record,
     [
       ["d", record.id],
-      ["c", record.companyId],
-      ["company", record.companyId],
       ["cost-centre", record.costCentreId],
     ],
     options.secret,
@@ -174,8 +164,6 @@ function taskHead(overrides = {}, options = {}) {
   const record = { ...TASK, ...overrides };
   const tags = [
     ["d", record.id],
-    ["c", record.companyId],
-    ["company", record.companyId],
     ["team", record.owningTeamId],
     ["g", record.owningTeamId],
     ["cost-centre", record.costCentreId],
@@ -228,8 +216,6 @@ test("a task head written before the chain fields existed still parses", () => {
       created_at: 1_780_000_100,
       tags: [
         ["d", record.id],
-        ["c", record.companyId],
-        ["company", record.companyId],
         ["team", record.owningTeamId],
         ["cost-centre", record.costCentreId],
         ["initiative", record.initiativeId],
@@ -256,8 +242,6 @@ test("a task head omitting reviewerTeamId parses with a null reviewer", () => {
       created_at: 1_780_000_100,
       tags: [
         ["d", record.id],
-        ["c", record.companyId],
-        ["company", record.companyId],
         ["team", record.owningTeamId],
         ["cost-centre", record.costCentreId],
         ["initiative", record.initiativeId],
@@ -345,11 +329,7 @@ test("the d tag must match the record id exactly", () => {
     {
       kind: 30179,
       created_at: 1_780_000_100,
-      tags: [
-        ["d", "someone-else"],
-        ["c", COMPANY.id],
-        ["company", COMPANY.id],
-      ],
+      tags: [["d", "someone-else"]],
       content: canonicalCompanyJson(COMPANY),
     },
     RELAY_SECRET,
@@ -367,8 +347,6 @@ test("a task head's team and initiative tags must match its content", () => {
       created_at: 1_780_000_100,
       tags: [
         ["d", record.id],
-        ["c", record.companyId],
-        ["company", record.companyId],
         ["team", "some-other-team"],
         ["cost-centre", record.costCentreId],
         ["initiative", record.initiativeId],
@@ -400,11 +378,7 @@ test("unknown and missing fields are both refused", () => {
   const missing = { ...COMPANY };
   delete missing.businessType;
   const parsedMissing = parseCompanyHead(
-    head(30179, missing, [
-      ["d", COMPANY.id],
-      ["c", COMPANY.id],
-      ["company", COMPANY.id],
-    ]),
+    head(30179, missing, [["d", "profile"]]),
     RELAY_PUBKEY,
   );
   assert.equal(parsedMissing.ok, false);
@@ -425,11 +399,7 @@ test("non-canonical content is refused", () => {
     {
       kind: 30179,
       created_at: 1_780_000_100,
-      tags: [
-        ["d", COMPANY.id],
-        ["c", COMPANY.id],
-        ["company", COMPANY.id],
-      ],
+      tags: [["d", "profile"]],
       content: JSON.stringify(COMPANY),
     },
     RELAY_SECRET,
@@ -480,8 +450,8 @@ test("every read query names its kinds and scopes to the tenant relay", async ()
     relaySelf: async () => RELAY_PUBKEY,
   });
 
-  await repository.getCompany("horizonlabs");
-  await repository.listInitiatives("horizonlabs");
+  await repository.getActiveCompany();
+  await repository.listInitiatives();
   await repository.listTasks({ initiativeId: "horizonlabs:launch-outbound" });
 
   assert.equal(filters.length, 3);
@@ -489,8 +459,10 @@ test("every read query names its kinds and scopes to the tenant relay", async ()
     assert.ok(Array.isArray(filter.kinds) && filter.kinds.length > 0);
     assert.deepEqual(filter.authors, [RELAY_PUBKEY]);
   }
-  assert.deepEqual(filters[0]["#d"], ["horizonlabs"]);
-  assert.deepEqual(filters[1]["#c"], ["horizonlabs"]);
+  // The profile sits at one fixed coordinate; initiatives need no narrow at
+  // all, because the relay only ever answers for one community.
+  assert.deepEqual(filters[0]["#d"], ["profile"]);
+  assert.equal(filters[1]["#c"], undefined);
   // Single-letter mirror only. `#initiative` is dropped by the nostr filter
   // type before it reaches a relay, so querying it would silently match
   // nothing useful.
@@ -509,7 +481,6 @@ test("work-surface narrows compile to single-letter tag filters", async () => {
   });
 
   await repository.listTasks({
-    companyId: "horizonlabs",
     initiativeId: "horizonlabs:launch-outbound",
     status: "inProgress",
     teamId: "relay1:horizonlabs:sales",
@@ -521,7 +492,7 @@ test("work-surface narrows compile to single-letter tag filters", async () => {
   const filter = filters[0];
   assert.ok(Array.isArray(filter.kinds) && filter.kinds.length > 0);
   assert.deepEqual(filter.authors, [RELAY_PUBKEY]);
-  assert.deepEqual(filter["#c"], ["horizonlabs"]);
+  assert.equal(filter["#c"], undefined);
   assert.deepEqual(filter["#i"], ["horizonlabs:launch-outbound"]);
   assert.deepEqual(filter["#w"], ["inProgress"]);
   assert.deepEqual(filter["#g"], ["relay1:horizonlabs:sales"]);
@@ -548,7 +519,6 @@ test("results are narrowed again against content after parsing", async () => {
     relaySelf: async () => RELAY_PUBKEY,
   });
   const result = await repository.listTasks({
-    companyId: "horizonlabs",
     status: "blocked",
   });
   assert.equal(result.ok, true);
@@ -600,7 +570,6 @@ test("a thread's tasks come back live-first, newest within each band", async () 
   });
 
   const result = await repository.listThreadTasks({
-    companyId: "horizonlabs",
     threadRoot: THREAD.toUpperCase(),
   });
   assert.equal(result.ok, true);
@@ -625,13 +594,12 @@ test("listing a thread's tasks pins kinds, author, and the company index", async
     relaySelf: async () => RELAY_PUBKEY,
   });
   await repository.listThreadTasks({
-    companyId: "horizonlabs",
     threadRoot: "a".repeat(64),
   });
   assert.equal(filters.length, 1);
   assert.deepEqual(filters[0].kinds, [30181]);
   assert.deepEqual(filters[0].authors, [RELAY_PUBKEY]);
-  assert.deepEqual(filters[0]["#c"], ["horizonlabs"]);
+  assert.equal(filters[0]["#c"], undefined);
 });
 
 test("thread and list queries refuse to run without their required input", async () => {
@@ -642,15 +610,15 @@ test("thread and list queries refuse to run without their required input", async
   });
 
   const noThread = await repository.listThreadTasks({
-    companyId: "horizonlabs",
     threadRoot: "   ",
   });
   assert.equal(noThread.ok, false);
   assert.equal(noThread.code, "invalid-record");
 
+  // An unnarrowed list is legal now: the community is the scope, so
+  // "every task" is already bounded.
   const noScope = await repository.listTasks({ status: "ready" });
-  assert.equal(noScope.ok, false);
-  assert.equal(noScope.code, "invalid-record");
+  assert.equal(noScope.ok, true);
 });
 
 test("listing initiatives keeps only the newest head per coordinate", async () => {
@@ -667,7 +635,7 @@ test("listing initiatives keeps only the newest head per coordinate", async () =
     relaySelf: async () => RELAY_PUBKEY,
   });
 
-  const result = await repository.listInitiatives("horizonlabs");
+  const result = await repository.listInitiatives();
   assert.equal(result.ok, true);
   assert.equal(result.value.length, 2);
   const outbound = result.value.find(
@@ -687,7 +655,7 @@ test("an unparseable head is dropped without failing the list", async () => {
     ],
     relaySelf: async () => RELAY_PUBKEY,
   });
-  const result = await repository.listInitiatives("horizonlabs");
+  const result = await repository.listInitiatives();
   assert.equal(result.ok, true);
   assert.equal(result.value.length, 1);
   assert.equal(result.value[0].id, "horizonlabs:launch-outbound");
@@ -699,11 +667,11 @@ test("empty results are an empty list, not a failure", async () => {
     fetchEvents: async () => [],
     relaySelf: async () => RELAY_PUBKEY,
   });
-  const initiatives = await repository.listInitiatives("horizonlabs");
+  const initiatives = await repository.listInitiatives();
   assert.equal(initiatives.ok, true);
   assert.deepEqual(initiatives.value, []);
 
-  const company = await repository.getCompany("horizonlabs");
+  const company = await repository.getActiveCompany();
   assert.equal(company.ok, false);
   assert.equal(company.code, "missing-head");
 });
@@ -716,7 +684,7 @@ test("a relay failure is reported, never treated as absence", async () => {
     },
     relaySelf: async () => RELAY_PUBKEY,
   });
-  const result = await repository.listInitiatives("horizonlabs");
+  const result = await repository.listInitiatives();
   assert.equal(result.ok, false);
   assert.equal(result.code, "unavailable");
 });
@@ -727,7 +695,7 @@ test("a community without a relay identity cannot be read from", async () => {
     fetchEvents: async () => [companyHead()],
     relaySelf: async () => null,
   });
-  const result = await repository.getCompany("horizonlabs");
+  const result = await repository.getActiveCompany();
   assert.equal(result.ok, false);
   assert.equal(result.code, "no-relay-identity");
 });
@@ -748,7 +716,7 @@ test("a read in flight across a community switch is cancelled", async () => {
     relaySelf: async () => RELAY_PUBKEY,
   });
 
-  const pending = repository.getCompany("horizonlabs");
+  const pending = repository.getActiveCompany();
   resetCompanyRepositoryState();
   release();
   const result = await pending;

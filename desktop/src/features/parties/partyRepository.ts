@@ -155,7 +155,7 @@ export function createPartyRepository(
    * reads one coordinate per hop instead, so answering "where does this point
    * now" costs bounded work rather than the whole party set.
    */
-  async function loadOccupants(companyId: string): Promise<
+  async function loadOccupants(): Promise<
     PartyParseResult<{
       parties: Map<string, Party>;
       aliases: Map<string, PartyAlias>;
@@ -165,7 +165,6 @@ export function createPartyRepository(
       (relaySelfPubkey) => ({
         kinds: [KIND_PARTY],
         authors: [relaySelfPubkey],
-        "#c": [companyId],
         limit: MAX_RECORDS,
       }),
       (events, relaySelfPubkey) => {
@@ -176,15 +175,11 @@ export function createPartyRepository(
           relaySelfPubkey,
           parsePartyHead,
         )) {
-          // Scoped twice: `#c` is the indexed tag the relay can answer, and
-          // this narrows again. Showing an owner another company's customers is
-          // worse than being slow.
-          if (head.type === "party" && head.party.companyId === companyId) {
+          // The relay answers for one community, so everything it returns
+          // is already this community's.
+          if (head.type === "party") {
             parties.set(head.party.id, head.party);
-          } else if (
-            head.type === "alias" &&
-            head.alias.companyId === companyId
-          ) {
+          } else if (head.type === "alias") {
             aliases.set(head.alias.id, head.alias);
           }
         }
@@ -226,12 +221,10 @@ export function createPartyRepository(
      * parties, and a caller that treated one as a party would write new
      * evidence to a coordinate that now only redirects.
      */
-    async listParties(
-      companyId: string,
-    ): Promise<
+    async listParties(): Promise<
       PartyParseResult<{ parties: Party[]; retiredHandles: PartyAlias[] }>
     > {
-      const occupants = await loadOccupants(companyId);
+      const occupants = await loadOccupants();
       if (!occupants.ok) return occupants;
       return {
         ok: true,
@@ -257,7 +250,6 @@ export function createPartyRepository(
      * that meets one anyway must survive it.
      */
     async resolveHandle(
-      companyId: string,
       start: string,
     ): Promise<PartyParseResult<ResolvedHandle>> {
       let handle = start;
@@ -267,16 +259,6 @@ export function createPartyRepository(
         if (!found.ok) return found;
         const head = found.value;
         if (head === null) {
-          return partyFailure<ResolvedHandle>(
-            "missing-head",
-            `No party or retired handle named ${handle} exists on this community.`,
-          );
-        }
-        // Scoped here rather than in the query: `#d` is the coordinate, and a
-        // handle is only this company's if the record says so.
-        const owner =
-          head.type === "party" ? head.party.companyId : head.alias.companyId;
-        if (owner !== companyId) {
           return partyFailure<ResolvedHandle>(
             "missing-head",
             `No party or retired handle named ${handle} exists on this community.`,
@@ -308,7 +290,6 @@ export function createPartyRepository(
      * does not exist.
      */
     async listRelationships(
-      companyId: string,
       partyId: string,
     ): Promise<PartyParseResult<PartyRelationship[]>> {
       const coordinates = RELATIONSHIP_KINDS.map((kind) =>
@@ -328,10 +309,7 @@ export function createPartyRepository(
             relaySelfPubkey,
             parsePartyRelationshipHead,
           )
-            .filter(
-              (view) =>
-                view.companyId === companyId && view.partyId === partyId,
-            )
+            .filter((view) => view.partyId === partyId)
             .sort((left, right) => left.id.localeCompare(right.id)),
         }),
       );
@@ -345,10 +323,9 @@ export function createPartyRepository(
      * writing again to a coordinate that only forwards.
      */
     async getPartyWithViews(
-      companyId: string,
       requested: string,
     ): Promise<PartyParseResult<PartyWithViews>> {
-      const resolved = await this.resolveHandle(companyId, requested);
+      const resolved = await this.resolveHandle(requested);
       if (!resolved.ok) return resolved;
       // One read for the resolved coordinate, not the party set.
       const found = await occupantAt(resolved.value.handle);
@@ -362,7 +339,7 @@ export function createPartyRepository(
           `That handle was retired while being read.`,
         );
       }
-      const relationships = await this.listRelationships(companyId, party.id);
+      const relationships = await this.listRelationships(party.id);
       if (!relationships.ok) return relationships;
       return {
         ok: true,
@@ -384,11 +361,10 @@ export function createPartyRepository(
      * up a separate lead record that could disagree with its client.
      */
     async getRelationship(
-      companyId: string,
       partyId: string,
       kind: RelationshipKind,
     ): Promise<PartyParseResult<PartyRelationship | null>> {
-      const views = await this.listRelationships(companyId, partyId);
+      const views = await this.listRelationships(partyId);
       if (!views.ok) return views;
       return {
         ok: true,

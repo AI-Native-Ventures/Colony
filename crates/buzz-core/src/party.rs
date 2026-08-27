@@ -119,8 +119,6 @@ pub struct Party {
     pub schema: String,
     /// Stable party handle. Never reused, never reassigned.
     pub id: String,
-    /// Company that owns this view of the party.
-    pub company_id: String,
     /// Organization or person.
     pub kind: PartyKind,
     /// The name the company refers to them by.
@@ -150,8 +148,6 @@ pub struct PartyAlias {
     pub schema: String,
     /// The retired handle.
     pub id: String,
-    /// Company that owns the merge.
-    pub company_id: String,
     /// The handle that survived.
     pub resolves_to: String,
     /// Unix timestamp of the merge.
@@ -234,8 +230,6 @@ pub struct PartyRelationship {
     pub schema: String,
     /// Stable coordinate identifier, `{partyId}:{relationship}`.
     pub id: String,
-    /// Company that owns the relationship.
-    pub company_id: String,
     /// The party this is a view of.
     pub party_id: String,
     /// Lead or Client.
@@ -409,7 +403,6 @@ fn validate_immutable(
 pub fn validate_party(party: &Party) -> Result<(), PartyContractError> {
     validate_schema(&party.schema, PARTY_SCHEMA, "party")?;
     validate_id(&party.id, "party.id")?;
-    validate_id(&party.company_id, "party.companyId")?;
     validate_required_text(&party.display_name, "party.displayName", MAX_NAME_LEN)?;
     validate_optional_text(party.legal_name.as_deref(), "party.legalName", MAX_NAME_LEN)?;
     validate_timestamps(party.created_at, party.updated_at)?;
@@ -486,11 +479,6 @@ pub fn validate_party_update(
     validate_party(replacement)?;
     validate_immutable(&previous.schema, &replacement.schema, "party.schema")?;
     validate_immutable(&previous.id, &replacement.id, "party.id")?;
-    validate_immutable(
-        &previous.company_id,
-        &replacement.company_id,
-        "party.companyId",
-    )?;
     validate_replacement_timestamps(
         previous.created_at,
         previous.updated_at,
@@ -515,7 +503,6 @@ pub fn validate_party_update(
 pub fn validate_alias(alias: &PartyAlias) -> Result<(), PartyContractError> {
     validate_schema(&alias.schema, PARTY_ALIAS_SCHEMA, "party alias")?;
     validate_id(&alias.id, "alias.id")?;
-    validate_id(&alias.company_id, "alias.companyId")?;
     validate_id(&alias.resolves_to, "alias.resolvesTo")?;
     if alias.id == alias.resolves_to {
         return Err(PartyContractError::CircularAlias);
@@ -545,7 +532,6 @@ pub fn validate_relationship(
         "party relationship",
     )?;
     validate_id(&relationship.id, "relationship.id")?;
-    validate_id(&relationship.company_id, "relationship.companyId")?;
     validate_id(&relationship.party_id, "relationship.partyId")?;
     validate_id(
         &relationship.owner_persona_id,
@@ -560,11 +546,6 @@ pub fn validate_relationship(
     if relationship.party_id != party.id {
         return Err(PartyContractError::MismatchedReference(
             "relationship.partyId",
-        ));
-    }
-    if relationship.company_id != party.company_id {
-        return Err(PartyContractError::MismatchedReference(
-            "relationship.companyId",
         ));
     }
     // The coordinate is what makes a second Lead on one party impossible, so an
@@ -592,11 +573,6 @@ pub fn validate_relationship_update(
         &previous.party_id,
         &replacement.party_id,
         "relationship.partyId",
-    )?;
-    validate_immutable(
-        &previous.company_id,
-        &replacement.company_id,
-        "relationship.companyId",
     )?;
     if previous.relationship != replacement.relationship {
         return Err(PartyContractError::ImmutableField(
@@ -657,9 +633,6 @@ pub fn merge_parties(survivor: &Party, retired: &Party) -> Result<Party, PartyCo
     validate_party(survivor)?;
     validate_party(retired)?;
 
-    if survivor.company_id != retired.company_id {
-        return Err(PartyContractError::MismatchedReference("party.companyId"));
-    }
     if survivor.id == retired.id {
         return Err(PartyContractError::CircularAlias);
     }
@@ -750,7 +723,6 @@ mod tests {
         Party {
             schema: PARTY_SCHEMA.to_string(),
             id: id.to_string(),
-            company_id: "horizonlabs".to_string(),
             kind: PartyKind::Organization,
             display_name: "Acme Industries".to_string(),
             legal_name: None,
@@ -770,7 +742,6 @@ mod tests {
         PartyRelationship {
             schema: PARTY_RELATIONSHIP_SCHEMA.to_string(),
             id: format!("{party_id}:{}", kind.slug()),
-            company_id: "horizonlabs".to_string(),
             party_id: party_id.to_string(),
             relationship: kind,
             status,
@@ -785,7 +756,6 @@ mod tests {
         PartyAlias {
             schema: PARTY_ALIAS_SCHEMA.to_string(),
             id: id.to_string(),
-            company_id: "horizonlabs".to_string(),
             resolves_to: resolves_to.to_string(),
             merged_at: 1_785_370_000,
             merge_action_event_id: "a".repeat(64),
@@ -902,11 +872,8 @@ mod tests {
     #[test]
     fn a_replacement_may_not_change_what_makes_it_the_same_party() {
         let previous = party("acme-industries");
-        let cases: [Mutation; 3] = [
+        let cases: [Mutation; 2] = [
             ("handle", |p: &mut Party| p.id = "acme-inc".to_string()),
-            ("company", |p: &mut Party| {
-                p.company_id = "someone-else".to_string()
-            }),
             ("created_at", |p: &mut Party| p.created_at += 1),
         ];
         for (label, mutate) in cases {
@@ -1326,17 +1293,6 @@ mod tests {
         assert_eq!(
             merge_parties(&twice, &already),
             Err(PartyContractError::AlreadyRetired)
-        );
-    }
-
-    #[test]
-    fn parties_from_different_companies_never_merge() {
-        let survivor = party("acme-industries");
-        let mut foreign = party("acme-inc");
-        foreign.company_id = "someone-else".to_string();
-        assert_eq!(
-            merge_parties(&survivor, &foreign),
-            Err(PartyContractError::MismatchedReference("party.companyId"))
         );
     }
 

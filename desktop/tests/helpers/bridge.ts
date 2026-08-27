@@ -241,7 +241,6 @@ type MockBridgeOptions = {
    * key: company records are only canonical when that key signed them.
    */
   companyWorkContext?: {
-    companyId: string;
     initiativeId?: string;
     taskId: string;
     owningTeamId: string;

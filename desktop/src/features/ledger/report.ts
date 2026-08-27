@@ -276,7 +276,6 @@ function parseAssignment(value: unknown): RuleAssignment {
       raw,
       "commercialPurpose",
     ) as RuleAssignment["commercialPurpose"],
-    companyId: requireString(raw, "companyId"),
     costCentreId: requireString(raw, "costCentreId"),
     owningTeamId: requireString(raw, "owningTeamId"),
     taskId: optionalString(raw, "taskId"),

@@ -14,7 +14,6 @@ const RUN_SECRET = generateSecretKey();
 const RUN_EMPLOYEE = getPublicKey(RUN_SECRET);
 
 const CONTEXT = {
-  companyId: "horizonlabs",
   taskId: TASK_ID,
   owningTeamId: TEAM_ID,
   qaPersonaId: QA_ID,

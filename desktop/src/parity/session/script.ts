@@ -1240,7 +1240,6 @@ export const SESSION_STEPS: SessionStep[] = [
   step("ledger-correct-bogus", "ledger_correct", () =>
     submitCorrection({
       usageRecordEventId: BOGUS_UUID,
-      companyId: BOGUS_UUID,
       costCentreId: BOGUS_UUID,
       owningTeamId: BOGUS_UUID,
       commercialPurpose: "internalProduct",

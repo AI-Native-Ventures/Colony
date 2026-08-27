@@ -16,14 +16,12 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
  *   unattributed turn.
  */
 
-const COMPANY_ID = "horizonlabs";
 const TASK_ID = "horizonlabs:chat:0001";
 const INITIATIVE_ID = "horizonlabs:launch-outbound";
 const COORDINATION_TEAM = "company-team:abc:horizonlabs:company-coordination";
 const FIZZ_PERSONA = "company-role:abc:horizonlabs:chief-of-staff";
 
 const COMPANY_WORK_CONTEXT = {
-  companyId: COMPANY_ID,
   initiativeId: INITIATIVE_ID,
   taskId: TASK_ID,
   // Jason sits in Engineering and in Company Coordination, so the work is

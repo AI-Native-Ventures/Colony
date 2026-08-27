@@ -696,7 +696,6 @@ pub fn validate_blueprint(blueprint: &CompanyBlueprint) -> Result<(), BlueprintE
     // would produce is built and put through that contract directly.
     crate::company::validate_company(&crate::company::CompanyProfile {
         schema: crate::company::COMPANY_SCHEMA.to_string(),
-        id: blueprint.company.id.clone(),
         trading_name: blueprint.company.trading_name.clone(),
         legal_name: blueprint.company.legal_name.clone(),
         website: blueprint.company.website.clone(),
@@ -724,7 +723,6 @@ pub fn validate_blueprint(blueprint: &CompanyBlueprint) -> Result<(), BlueprintE
             })
             .collect(),
         source_report_event_id: None,
-        onboarding_status: crate::company::CompanyOnboardingStatus::Draft,
         created_at: 0,
         updated_at: 0,
     })

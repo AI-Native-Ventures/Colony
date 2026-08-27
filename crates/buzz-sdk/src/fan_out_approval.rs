@@ -271,8 +271,6 @@ pub fn build_fan_out_approval_ask(
 /// against current state instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FanOutReplanSeed {
-    /// Company the fan-out belongs to.
-    pub company_id: String,
     /// Cohort to re-fetch and fan out over.
     pub cohort_id: String,
     /// Template to re-fetch, pinned to `template_version`.
@@ -320,7 +318,6 @@ pub fn read_fan_out_replan_seed(content: &serde_json::Value) -> Result<FanOutRep
         .ok_or_else(|| "fanOut.initiative carries no sourceEventId".to_string())?;
 
     Ok(FanOutReplanSeed {
-        company_id: initiative.company_id,
         cohort_id,
         template_id,
         template_version,
@@ -339,9 +336,9 @@ mod tests {
     use crate::fan_out::{plan_fan_out, FanOutRequest};
     use buzz_core::company::{Cohort, COHORT_SCHEMA};
     use buzz_core::company::{
-        CommercialPurpose, CompanyOnboardingStatus, CompanyProfile, CompanyTeamRef, CostCentre,
-        CostCentreKind, DoerKind, StageFailureAction, SubjectKind, SubjectRef, Template,
-        TemplateStage, COMPANY_SCHEMA, TEMPLATE_SCHEMA,
+        CommercialPurpose, CompanyProfile, CompanyTeamRef, CostCentre, CostCentreKind, DoerKind,
+        StageFailureAction, SubjectKind, SubjectRef, Template, TemplateStage, COMPANY_SCHEMA,
+        TEMPLATE_SCHEMA,
     };
     use buzz_core::interrupt::{parse_ask, AskParseError};
     use nostr::Keys;
@@ -353,7 +350,6 @@ mod tests {
     fn company() -> CompanyProfile {
         CompanyProfile {
             schema: COMPANY_SCHEMA.to_string(),
-            id: "horizonlabs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
@@ -368,7 +364,6 @@ mod tests {
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: CompanyOnboardingStatus::Approved,
             created_at: 1_800_000_000,
             updated_at: 1_800_000_000,
         }
@@ -386,7 +381,6 @@ mod tests {
         Cohort {
             schema: COHORT_SCHEMA.to_string(),
             id: "premium-q3".to_string(),
-            company_id: "horizonlabs".to_string(),
             name: "Premium Q3".to_string(),
             members: (0..members)
                 .map(|index| SubjectRef {
@@ -403,7 +397,6 @@ mod tests {
         Template {
             schema: TEMPLATE_SCHEMA.to_string(),
             id: "build-websites".to_string(),
-            company_id: "horizonlabs".to_string(),
             name: "Build websites".to_string(),
             version: 1,
             stages: vec![TemplateStage {
@@ -616,7 +609,6 @@ mod tests {
             serde_json::from_str(&event.content).expect("content parses");
 
         let seed = read_fan_out_replan_seed(&content).expect("seed recovers");
-        assert_eq!(seed.company_id, "horizonlabs");
         assert_eq!(seed.cohort_id, "premium-q3");
         assert_eq!(seed.template_id, "build-websites");
         assert_eq!(seed.template_version, 1);

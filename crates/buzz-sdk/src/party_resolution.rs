@@ -109,7 +109,6 @@ mod tests {
         Party {
             schema: PARTY_SCHEMA.to_string(),
             id: id.to_string(),
-            company_id: "horizonlabs".to_string(),
             kind: PartyKind::Organization,
             display_name: display_name.to_string(),
             legal_name: None,

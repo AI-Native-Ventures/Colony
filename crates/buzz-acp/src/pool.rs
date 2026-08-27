@@ -110,9 +110,9 @@ pub struct AgentModelCapabilities {
 /// nothing in the product telling the founder why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingResolution {
-    /// A real answer was obtained: inject when `should_inject_company_onboarding`
-    /// says so, never re-checked for this session.
-    Settled(Option<buzz_core::company::CompanyOnboardingStatus>),
+    /// A real answer was obtained: whether this community has published its
+    /// operating profile. Never re-checked for this session.
+    Settled(bool),
     /// The lookup could not be completed. Worth trying again on the next
     /// message to this channel.
     Unknown,
@@ -1269,7 +1269,7 @@ async fn resolve_onboarding_for_channel(rest: &RestClient, cid: Uuid) -> Onboard
     // Bounded -- same shape as the core-memory fetch: a stalled relay must
     // not block session creation on this lookup.
     const ONBOARDING_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
-    let fetch = crate::work_context::fetch_company_onboarding_status(rest);
+    let fetch = crate::work_context::fetch_community_profile_exists(rest);
     match tokio::time::timeout(ONBOARDING_FETCH_TIMEOUT, fetch).await {
         Ok(Ok(status)) => OnboardingResolution::Settled(status),
         Ok(Err(error)) => {
@@ -6857,7 +6857,7 @@ done"#
         agent
             .state
             .onboarding_resolution
-            .insert(channel_id, OnboardingResolution::Settled(None));
+            .insert(channel_id, OnboardingResolution::Settled(false));
 
         const ROOT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         const ROOT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

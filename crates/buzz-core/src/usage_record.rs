@@ -384,7 +384,6 @@ mod tests {
         let owner = Keys::generate();
         let mut payload = sample_payload();
         payload.work_context = Some(AgentWorkContext {
-            company_id: "horizon-labs".to_string(),
             task_id: "build-tennant-site".to_string(),
             initiative_id: None,
             owning_team_id: "web-team".to_string(),

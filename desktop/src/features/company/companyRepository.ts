@@ -19,6 +19,7 @@ import type {
   TaskStatus,
 } from "./contracts";
 import {
+  COMMUNITY_PROFILE_ID,
   companyFailure,
   isTerminalTaskStatus,
   newestHead,
@@ -63,7 +64,6 @@ export type CompanyRepositoryDependencies = {
  * be queried.
  */
 export type TaskQuery = {
-  companyId?: string;
   initiativeId?: string;
   status?: TaskStatus;
   teamId?: string;
@@ -72,8 +72,6 @@ export type TaskQuery = {
 };
 
 export type ThreadTaskQuery = {
-  /** Optional but recommended: scopes the scan through the company index. */
-  companyId?: string;
   threadRoot: string;
 };
 
@@ -91,7 +89,6 @@ function taskQueryTagFilters(
   query: TaskQuery,
 ): Partial<Record<`#${string}`, string[]>> {
   const filters: Partial<Record<`#${string}`, string[]>> = {};
-  if (query.companyId) filters["#c"] = [query.companyId];
   if (query.initiativeId) filters["#i"] = [query.initiativeId];
   if (query.status) filters["#w"] = [query.status];
   if (query.teamId) filters["#g"] = [query.teamId];
@@ -107,7 +104,6 @@ function taskQueryTagFilters(
  */
 function taskMatchesQuery(task: CompanyTask, query: TaskQuery): boolean {
   return (
-    (!query.companyId || task.companyId === query.companyId) &&
     (!query.initiativeId || task.initiativeId === query.initiativeId) &&
     (!query.status || task.status === query.status) &&
     (!query.teamId || task.owningTeamId === query.teamId) &&
@@ -182,7 +178,7 @@ export function createCompanyRepository(
   }
 
   /** Newest head per `d` coordinate, dropping anything that will not parse. */
-  function collectHeads<T extends { id: string }>(
+  function collectHeads<T>(
     events: RelayEvent[],
     relaySelfPubkey: string,
     parse: (
@@ -213,74 +209,48 @@ export function createCompanyRepository(
     /**
      * The company this community operates as.
      *
-     * A community has one. Rather than making every caller carry an ID it has
-     * no way to know, this asks the relay which company it authored. When more
-     * than one somehow exists, the oldest wins: that is the one the owner
-     * approved first, and picking the newest would let a later stray record
-     * quietly take over what work is charged to.
+     * A community has exactly one, at a fixed coordinate. Absent simply means
+     * the owner has not described the business yet; nothing else in Work
+     * depends on it existing, so callers must not gate on it.
      */
     async getActiveCompany(): Promise<CompanyParseResult<CompanyProfile>> {
       return read<CompanyProfile>(
         (relaySelfPubkey) => ({
           kinds: [KIND_COMPANY_PROFILE],
           authors: [relaySelfPubkey],
-          limit: 16,
-        }),
-        (events, relaySelfPubkey) => {
-          const heads = collectHeads(events, relaySelfPubkey, parseCompanyHead);
-          const company = heads.sort(
-            (left, right) =>
-              left.createdAt - right.createdAt ||
-              left.id.localeCompare(right.id),
-          )[0];
-          return company
-            ? { ok: true, value: company }
-            : companyFailure<CompanyProfile>(
-                "missing-head",
-                "No company record exists on this community yet.",
-              );
-        },
-      );
-    },
-
-    async getCompany(
-      companyId: string,
-    ): Promise<CompanyParseResult<CompanyProfile>> {
-      return read<CompanyProfile>(
-        (relaySelfPubkey) => ({
-          kinds: [KIND_COMPANY_PROFILE],
-          authors: [relaySelfPubkey],
-          "#d": [companyId],
+          "#d": [COMMUNITY_PROFILE_ID],
           limit: 8,
         }),
         (events, relaySelfPubkey) => {
-          const heads = collectHeads(events, relaySelfPubkey, parseCompanyHead);
-          const company = heads.find((record) => record.id === companyId);
-          return company
-            ? { ok: true, value: company }
+          const profile = collectHeads(
+            events,
+            relaySelfPubkey,
+            parseCompanyHead,
+          )[0];
+          return profile
+            ? { ok: true, value: profile }
             : companyFailure<CompanyProfile>(
                 "missing-head",
-                "No company record exists on this community yet.",
+                "This community has not described its business yet.",
               );
         },
       );
     },
 
-    async listInitiatives(
-      companyId: string,
-    ): Promise<CompanyParseResult<Initiative[]>> {
+    async listInitiatives(): Promise<CompanyParseResult<Initiative[]>> {
       return read<Initiative[]>(
         (relaySelfPubkey) => ({
           kinds: [KIND_INITIATIVE],
           authors: [relaySelfPubkey],
-          "#c": [companyId],
           limit: MAX_RECORDS,
         }),
         (events, relaySelfPubkey) => ({
           ok: true,
-          value: collectHeads(events, relaySelfPubkey, parseInitiativeHead)
-            .filter((initiative) => initiative.companyId === companyId)
-            .sort((left, right) => left.id.localeCompare(right.id)),
+          value: collectHeads(
+            events,
+            relaySelfPubkey,
+            parseInitiativeHead,
+          ).sort((left, right) => left.id.localeCompare(right.id)),
         }),
       );
     },
@@ -314,12 +284,6 @@ export function createCompanyRepository(
     async listTasks(
       query: TaskQuery,
     ): Promise<CompanyParseResult<CompanyTask[]>> {
-      if (!query.companyId && !query.initiativeId) {
-        return companyFailure<CompanyTask[]>(
-          "invalid-record",
-          "Listing tasks requires a company or an initiative.",
-        );
-      }
       return read<CompanyTask[]>(
         (relaySelfPubkey) => ({
           kinds: [KIND_TASK],
@@ -363,7 +327,6 @@ export function createCompanyRepository(
         (relaySelfPubkey) => ({
           kinds: [KIND_TASK],
           authors: [relaySelfPubkey],
-          ...(query.companyId ? { "#c": [query.companyId] } : {}),
           limit: MAX_RECORDS,
         }),
         (events, relaySelfPubkey) => ({
@@ -381,21 +344,18 @@ export function createCompanyRepository(
     },
 
     /** Cohorts are inert data: no status narrow, sorted by id like initiatives. */
-    async listCohorts(
-      companyId: string,
-    ): Promise<CompanyParseResult<Cohort[]>> {
+    async listCohorts(): Promise<CompanyParseResult<Cohort[]>> {
       return read<Cohort[]>(
         (relaySelfPubkey) => ({
           kinds: [KIND_COHORT],
           authors: [relaySelfPubkey],
-          "#c": [companyId],
           limit: MAX_RECORDS,
         }),
         (events, relaySelfPubkey) => ({
           ok: true,
-          value: collectHeads(events, relaySelfPubkey, parseCohortHead)
-            .filter((cohort) => cohort.companyId === companyId)
-            .sort((left, right) => left.id.localeCompare(right.id)),
+          value: collectHeads(events, relaySelfPubkey, parseCohortHead).sort(
+            (left, right) => left.id.localeCompare(right.id),
+          ),
         }),
       );
     },

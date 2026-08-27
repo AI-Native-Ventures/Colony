@@ -7,7 +7,7 @@ import { KIND_COMPANY_PROFILE } from "@/shared/constants/kinds";
 
 import { companyRepository } from "./companyRepository";
 import type { CompanyTask } from "./contracts";
-import { newestHead } from "./contracts";
+import { COMMUNITY_PROFILE_ID, newestHead } from "./contracts";
 import { companyActionBroker } from "./workRepository";
 import type { CompanyActionBroker } from "./workRepository";
 
@@ -36,7 +36,6 @@ export type ResolvedWorkContext = {
 };
 
 export type WorkContextRequest = {
-  companyId: string;
   channelId: string;
   /** This client's stable identity for this send. A retry reuses it. */
   sendId: string;
@@ -48,10 +47,7 @@ export type WorkContextRequest = {
 
 export type WorkContextDependencies = {
   relaySelf: () => Promise<string | null>;
-  fetchCompanyHead: (
-    companyId: string,
-    relaySelfPubkey: string,
-  ) => Promise<RelayEvent | null>;
+  fetchCompanyHead: (relaySelfPubkey: string) => Promise<RelayEvent | null>;
   ensureTask: (input: {
     companyHead: string;
     channelId: string;
@@ -101,12 +97,11 @@ export function createWorkContextResolver(
         "This community's relay has no stable identity, so agent work cannot be recorded against it.",
       );
     }
-    const companyEvent = await dependencies.fetchCompanyHead(
-      request.companyId,
-      relayPubkey,
-    );
+    const companyEvent = await dependencies.fetchCompanyHead(relayPubkey);
     if (!companyEvent) {
-      throw new Error("This community has no company to charge this work to.");
+      throw new Error(
+        "This community has not described its business yet, so this work has no cost centre to charge.",
+      );
     }
 
     const planned = await dependencies.ensureTask({
@@ -149,12 +144,12 @@ export function createWorkContextResolver(
 
 export const resolveWorkContext = createWorkContextResolver({
   relaySelf: getRelaySelf,
-  fetchCompanyHead: async (companyId, relaySelfPubkey) =>
+  fetchCompanyHead: async (relaySelfPubkey) =>
     newestHead(
       await relayClient.fetchEvents({
         kinds: [KIND_COMPANY_PROFILE],
         authors: [relaySelfPubkey],
-        "#d": [companyId],
+        "#d": [COMMUNITY_PROFILE_ID],
         limit: 8,
       }),
     ),

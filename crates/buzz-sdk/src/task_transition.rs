@@ -163,7 +163,6 @@ mod tests {
         CompanyTask {
             schema: "colony.task/v1".to_string(),
             id: "horizonlabs:run-outreach".to_string(),
-            company_id: "horizonlabs".to_string(),
             initiative_id: Some("horizonlabs:premium-q3".to_string()),
             title: "Run outreach".to_string(),
             status,
@@ -322,7 +321,6 @@ mod tests {
     fn company() -> buzz_core::company::CompanyProfile {
         buzz_core::company::CompanyProfile {
             schema: buzz_core::company::COMPANY_SCHEMA.to_string(),
-            id: "horizonlabs".to_string(),
             trading_name: "Horizon Labs".to_string(),
             legal_name: None,
             website: None,
@@ -337,7 +335,6 @@ mod tests {
                 service_id: None,
             }],
             source_report_event_id: None,
-            onboarding_status: buzz_core::company::CompanyOnboardingStatus::Approved,
             created_at: 1_800_000_000,
             updated_at: 1_800_000_000,
         }
@@ -347,7 +344,6 @@ mod tests {
         buzz_core::company::Initiative {
             schema: buzz_core::company::INITIATIVE_SCHEMA.to_string(),
             id: "horizonlabs:premium-q3".to_string(),
-            company_id: "horizonlabs".to_string(),
             title: "Premium Q3 run".to_string(),
             summary: "Outbound for premium sites.".to_string(),
             status: buzz_core::company::InitiativeStatus::Active,

@@ -9,7 +9,7 @@ import {
 } from "@/features/asks/lib/askRouting";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
 import { useResolvedAsks } from "@/features/asks/useAskResolutions";
-import { useActiveCompany, useCompanyTasks } from "@/features/company/hooks";
+import { useCompanyTasks } from "@/features/company/hooks";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
@@ -94,15 +94,7 @@ export function useActionCenterItems({
   );
   const channelIdKey = memberChannelIds.join(",");
 
-  const activeCompanyQuery = useActiveCompany(communityId);
-  const activeCompanyId = activeCompanyQuery.data?.ok
-    ? activeCompanyQuery.data.value.id
-    : null;
-  const tasksQuery = useCompanyTasks(
-    communityId,
-    { companyId: activeCompanyId ?? undefined },
-    activeCompanyId !== null,
-  );
+  const tasksQuery = useCompanyTasks(communityId, {});
   const tasks = tasksQuery.data?.ok ? tasksQuery.data.value : [];
   const taskIds = React.useMemo(
     () => tasks.map((task) => task.id).sort(),
@@ -316,7 +308,6 @@ export function useActionCenterItems({
     homeFeedQuery.error,
     openAsks.error,
     remindersQuery.error,
-    activeCompanyQuery.error,
     tasksQuery.error,
     taskRunsQuery.error,
     workflowsQuery.error,
@@ -332,7 +323,6 @@ export function useActionCenterItems({
     remindersQuery.isLoading;
   const isOptionalSourceLoading =
     channelsQuery.isLoading ||
-    activeCompanyQuery.isLoading ||
     tasksQuery.isLoading ||
     taskRunsQuery.isLoading ||
     workflowsQuery.isLoading ||

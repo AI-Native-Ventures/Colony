@@ -14,8 +14,6 @@ use crate::usage_record::UsageRecordPayload;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleAssignment {
-    /// Company charged.
-    pub company_id: String,
     /// Cost centre charged.
     pub cost_centre_id: String,
     /// Team accountable.
@@ -192,7 +190,6 @@ mod tests {
 
     fn assignment(centre: &str, purpose: CommercialPurpose) -> RuleAssignment {
         RuleAssignment {
-            company_id: "horizon-labs".to_string(),
             cost_centre_id: centre.to_string(),
             owning_team_id: "web-team".to_string(),
             commercial_purpose: purpose,
