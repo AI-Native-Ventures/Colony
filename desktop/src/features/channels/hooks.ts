@@ -15,10 +15,8 @@ import {
   getChannelDetails,
   getChannelMembers,
   getChannels,
-  hideDm,
   joinChannel,
   leaveChannel,
-  openDm,
   invokeTauri,
   removeChannelMember,
   setCanvas,
@@ -32,7 +30,6 @@ import type {
   Channel,
   ChannelDetail,
   CreateChannelInput,
-  OpenDmInput,
   SetChannelPurposeInput,
   SetChannelTopicInput,
   UpdateChannelInput,
@@ -50,6 +47,11 @@ import {
 } from "@/features/channels/channelSnapshot";
 
 export const channelsQueryKey = ["channels"] as const;
+export {
+  useHideDmMutation,
+  useOpenDmMutation,
+  useUpsertCachedChannel,
+} from "@/features/channels/dmMutations";
 /** Keeps focused polling at the established one-minute cadence. */
 export const CHANNELS_REFETCH_INTERVAL_MS = 60_000;
 /** Suppresses the expensive focus refetch until the channel list is old. */
@@ -521,75 +523,6 @@ export function useCreateChannelMutation() {
         queryKey: channelsQueryKey,
         refetchType: "none",
       });
-    },
-  });
-}
-
-export function useOpenDmMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (input: OpenDmInput) => openDm(input),
-    onSuccess: (openedChannel) => {
-      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
-        upsertCachedChannel(current, openedChannel),
-      );
-    },
-    onSettled: () => {
-      // The relay-returned DM is already in the cache. Mark the list stale so
-      // the normal live/poll refresh can reconcile it later without putting a
-      // full get_channels round-trip on the critical path to the conversation.
-      void queryClient.invalidateQueries({
-        queryKey: channelsQueryKey,
-        refetchType: "none",
-      });
-    },
-  });
-}
-
-/**
- * Reasserts a relay-returned channel in the shared cache before a caller
- * depends on it for navigation. The open-DM mutation already made the relay
- * write authoritative, so cancel any older list read and stay local rather
- * than blocking on a read-after-write channel-list refresh.
- */
-export function useUpsertCachedChannel() {
-  const queryClient = useQueryClient();
-
-  return React.useCallback(
-    async (channel: Channel) => {
-      await queryClient.cancelQueries({
-        queryKey: channelsQueryKey,
-        exact: true,
-      });
-      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
-        reconcileRefreshedCachedChannel(current, channel),
-      );
-    },
-    [queryClient],
-  );
-}
-
-export function useHideDmMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (channelId: string) => hideDm(channelId),
-    onMutate: async (channelId) => {
-      await queryClient.cancelQueries({ queryKey: channelsQueryKey });
-      const previous = queryClient.getQueryData<Channel[]>(channelsQueryKey);
-      queryClient.setQueryData<Channel[]>(channelsQueryKey, (current = []) =>
-        current.filter((channel) => channel.id !== channelId),
-      );
-      return { previous };
-    },
-    onError: (_error, _channelId, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(channelsQueryKey, context.previous);
-      }
-    },
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     },
   });
 }
