@@ -28,6 +28,7 @@ fn trim_optional(value: Option<String>) -> Option<String> {
 }
 
 mod pending;
+mod scope;
 pub(in crate::commands) use pending::retain_persona_pending;
 pub(super) use pending::tombstone_persona_pending;
 mod create;
@@ -51,6 +52,19 @@ pub async fn list_personas(app: AppHandle) -> Result<Vec<AgentDefinition>, Strin
             .lock()
             .map_err(|error| error.to_string())?;
         let mut personas = load_personas(&app)?;
+        // Definitions carry no relay pin, so without this every community
+        // lists every agent ever created anywhere. See `scope`.
+        let records = load_managed_agents(&app)?;
+        let agents: Vec<scope::AgentRow<'_>> = records.iter().map(scope::AgentRow::of).collect();
+        let workspace_relay = crate::relay::relay_ws_url_with_override(&state);
+        personas.retain(|persona| {
+            scope::definition_in_workspace(
+                &persona.id,
+                persona.is_builtin,
+                &agents,
+                &workspace_relay,
+            )
+        });
         pending::project_active_persona_sharing(&app, &state, &mut personas);
         Ok(personas)
     })
