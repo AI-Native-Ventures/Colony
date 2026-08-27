@@ -356,7 +356,7 @@ jobs:
       # archive it points at keeps its version in the filename: a client that
       # cached an older manifest then downloads the archive that manifest was
       # signed for, instead of a newer archive its signature cannot verify.
-      - name: Publish the update manifest
+      - name: Publish the archive and this platform's manifest fragment
         env:
           GH_TOKEN: ${{ steps.publisher.outputs.token }}
         run: |
@@ -367,60 +367,35 @@ jobs:
           cp "$ARCHIVE" "$STAGING/$ARCHIVE_NAME"
           ARCHIVE_URL="https://github.com/AI-Native-Ventures/colony-releases/releases/download/${ROLLING}/${ARCHIVE_NAME}"
 
-          # Read the current manifest through the API, not the download URL:
-          # the CDN serves a stale copy for minutes after an upload, and
-          # merging onto a stale copy drops the other platform's entry.
-          desktop/scripts/fetch-latest-json.sh \
-            AI-Native-Ventures/colony-releases "$ROLLING" > "$STAGING/current.json"
-
-          desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" "$STAGING/latest.json" \
-            "darwin-aarch64:${ARCHIVE_SIG}:${ARCHIVE_URL}"
+          # This job no longer writes latest.json. Both platform jobs used to
+          # read the manifest, merge their own entry, and upload the result,
+          # which is a read-modify-write race on one asset: on v0.11.8 the
+          # Windows job read before this job's upload landed and wrote after
+          # it, erasing the darwin entry, and every Mac client's update check
+          # failed with "None of the fallback platforms were found". Reading
+          # through the API rather than the CDN narrowed that window but could
+          # not close it. Each platform now publishes a fragment under a
+          # filename only it writes, and publish-manifest composes latest.json
+          # exactly once.
+          jq -n \
+            --arg version "$VERSION" \
+            --arg key "darwin-aarch64" \
+            --arg signature "$(cat "$ARCHIVE_SIG")" \
+            --arg url "$ARCHIVE_URL" \
+            '{version: $version, key: $key, signature: $signature, url: $url}' \
+            > "$STAGING/fragment-darwin-aarch64.json"
 
           if ! gh release view "$ROLLING" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
             gh release create "$ROLLING" --repo AI-Native-Ventures/colony-releases \
               --prerelease --title "Colony auto-update manifest" \
               --notes "Rolling target for the desktop auto-updater. Do not download from here; use the versioned release."
           fi
-          # Archive first: a manifest that references an asset nobody has
-          # uploaded yet turns every client's update check into a 404.
+          # Archive first: a fragment naming an asset nobody has uploaded yet
+          # would let the manifest job publish a 404.
           gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
             "$STAGING/$ARCHIVE_NAME"
           gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
-            "$STAGING/latest.json"
-
-      - name: Verify the update manifest
-        env:
-          GH_TOKEN: ${{ steps.publisher.outputs.token }}
-        run: |
-          set -euo pipefail
-          # Read what was actually stored, not what the download CDN is still
-          # serving. Reading the CDN here failed v0.10.9 on both platforms
-          # while every published artifact was correct.
-          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
-            AI-Native-Ventures/colony-releases colony-desktop-latest)
-          GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
-          GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].url')
-          GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["darwin-aarch64"].signature')
-          if [ "$GOT_VERSION" != "$VERSION" ]; then
-            echo "::error::Manifest says version $GOT_VERSION, expected $VERSION"
-            exit 1
-          fi
-          if [ "$GOT_SIG" != "$(cat "$ARCHIVE_SIG")" ]; then
-            echo "::error::Manifest signature does not match the signature this build produced"
-            exit 1
-          fi
-          EXPECTED=$(stat -f %z "$ARCHIVE")
-          for attempt in 1 2 3 4 5; do
-            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
-            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
-              echo "Manifest and archive agree: v${VERSION}, ${SERVED} bytes"
-              exit 0
-            fi
-            echo "Attempt $attempt: archive served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
-            sleep 10
-          done
-          echo "::error::The archive the manifest points at is not the one this build produced"
-          exit 1
+            "$STAGING/fragment-darwin-aarch64.json"
 
       - name: Verify the public download
         run: |
@@ -622,7 +597,7 @@ jobs:
       # the other platform's entry over only when it was built for the same
       # version. Archive first: a manifest that references an asset nobody
       # has uploaded yet turns every client's update check into a 404.
-      - name: Publish the update manifest
+      - name: Publish the installer and this platform's manifest fragment
         env:
           GH_TOKEN: ${{ steps.publisher.outputs.token }}
         run: |
@@ -633,16 +608,16 @@ jobs:
           cp "$EXE_PATH" "$STAGING/$EXE_NAME"
           EXE_URL="https://github.com/AI-Native-Ventures/colony-releases/releases/download/${ROLLING}/${EXE_NAME}"
 
-          # Read the current manifest through the API, not the download URL:
-          # the CDN serves a stale copy for minutes after an upload, and
-          # merging onto a stale copy drops the other platform's entry. This
-          # job finishes long after the Mac one, so a stale read here is
-          # exactly how a Mac entry would go missing.
-          desktop/scripts/fetch-latest-json.sh \
-            AI-Native-Ventures/colony-releases "$ROLLING" > "$STAGING/current.json"
-
-          desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" "$STAGING/latest.json" \
-            "windows-x86_64:${EXE_SIG}:${EXE_URL}"
+          # See the Mac job for why this no longer writes latest.json: two
+          # jobs merging into one asset is a read-modify-write race, and this
+          # job is the one that won it on v0.11.8 and dropped the Mac entry.
+          jq -n \
+            --arg version "$VERSION" \
+            --arg key "windows-x86_64" \
+            --arg signature "$(cat "$EXE_SIG")" \
+            --arg url "$EXE_URL" \
+            '{version: $version, key: $key, signature: $signature, url: $url}' \
+            > "$STAGING/fragment-windows-x86_64.json"
 
           if ! gh release view "$ROLLING" --repo AI-Native-Ventures/colony-releases >/dev/null 2>&1; then
             gh release create "$ROLLING" --repo AI-Native-Ventures/colony-releases \
@@ -652,44 +627,7 @@ jobs:
           gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
             "$STAGING/$EXE_NAME"
           gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
-            "$STAGING/latest.json"
-
-      - name: Verify the update manifest
-        env:
-          GH_TOKEN: ${{ steps.publisher.outputs.token }}
-        run: |
-          set -euo pipefail
-          # Read what was actually stored, not what the download CDN is still
-          # serving. Reading the CDN here failed v0.10.9 on both platforms
-          # while every published artifact was correct.
-          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
-            AI-Native-Ventures/colony-releases colony-desktop-latest)
-          GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
-          GOT_URL=$(echo "$MANIFEST" | jq -r '.platforms["windows-x86_64"].url')
-          GOT_SIG=$(echo "$MANIFEST" | jq -r '.platforms["windows-x86_64"].signature')
-          if [ "$GOT_VERSION" != "$VERSION" ]; then
-            echo "::error::Manifest says version $GOT_VERSION, expected $VERSION"
-            exit 1
-          fi
-          if [ "$GOT_SIG" != "$(cat "$EXE_SIG")" ]; then
-            echo "::error::Manifest signature does not match the signature this build produced"
-            exit 1
-          fi
-          # The installer the manifest points at has to be the one this build
-          # produced. This is a download-URL check on purpose - it is what a
-          # client actually fetches - so it retries through CDN propagation.
-          EXPECTED=$(stat -c %s "$EXE_PATH")
-          for attempt in 1 2 3 4 5; do
-            SERVED=$(curl -sIL "$GOT_URL" | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r')
-            if [ "${SERVED:-0}" = "$EXPECTED" ]; then
-              echo "Manifest and installer agree: v${VERSION}, ${SERVED} bytes"
-              exit 0
-            fi
-            echo "Attempt $attempt: installer served ${SERVED:-none} bytes, expected $EXPECTED; retrying"
-            sleep 10
-          done
-          echo "::error::The installer the manifest points at is not the one this build produced"
-          exit 1
+            "$STAGING/fragment-windows-x86_64.json"
 
       - name: Verify the public download
         run: |
@@ -707,3 +645,138 @@ jobs:
           done
           echo "::error::latest/download/Colony_x86_64-setup_unsigned.exe does not serve the freshly published installer"
           exit 1
+
+  # The single writer of latest.json.
+  #
+  # Both platform jobs used to read the manifest, merge their own entry and
+  # upload the result. That is a read-modify-write race on one asset with no
+  # lock: on v0.11.8 the Windows job read before the Mac job's upload landed
+  # and wrote after it, so the published manifest carried only
+  # `windows-x86_64` and every Mac client's update check failed with "None of
+  # the fallback platforms were found in the response `platforms` object".
+  # Each job's own verify passed, because each only checked its own key.
+  #
+  # Platform jobs now publish a fragment under a filename only they write, and
+  # this job composes the manifest from whichever fragments this release
+  # produced. One writer, so there is nothing to race.
+  publish-manifest:
+    name: Publish the update manifest
+    needs: [publish-macos, publish-windows]
+    # `always()` so a release that builds one platform, or where one platform
+    # fails, still publishes a manifest for the platform that succeeded —
+    # never publishing is how a good build reaches nobody.
+    if: |
+      always() && github.repository == 'AI-Native-Ventures/Colony' &&
+      (needs.publish-macos.result == 'success' || needs.publish-windows.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Resolve the version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing manifest for v$VERSION"
+
+      - name: Create release publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          owner: AI-Native-Ventures
+          repositories: colony-releases
+          permission-contents: write
+
+      - name: Compose and publish latest.json
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          ROLLING=colony-desktop-latest
+          STAGING=$(mktemp -d)
+          mkdir -p "$STAGING/frags"
+
+          for KEY in darwin-aarch64 windows-x86_64; do
+            NAME="fragment-${KEY}.json"
+            # Fragments are read through the API for the same reason the merge
+            # was: the download CDN serves a stale copy for minutes after an
+            # upload, and a stale fragment would republish the previous
+            # release's signature under this release's version.
+            #
+            # fetch-latest-json.sh prints nothing and exits 0 when the asset is
+            # absent, so emptiness is the "not published" signal, not the exit
+            # code.
+            desktop/scripts/fetch-latest-json.sh \
+              AI-Native-Ventures/colony-releases "$ROLLING" "$NAME" \
+              > "$STAGING/frags/$NAME" 2>/dev/null || true
+            if [ -s "$STAGING/frags/$NAME" ]; then
+              GOT=$(jq -r '.version' "$STAGING/frags/$NAME")
+              if [ "$GOT" != "$VERSION" ]; then
+                echo "Skipping $KEY: fragment is for v$GOT, this release is v$VERSION"
+                rm -f "$STAGING/frags/$NAME"
+              fi
+            else
+              echo "No fragment published for $KEY"
+              rm -f "$STAGING/frags/$NAME"
+            fi
+          done
+
+          TRIPLES=()
+          for FRAG in "$STAGING/frags"/*.json; do
+            [ -e "$FRAG" ] || continue
+            KEY=$(jq -r '.key' "$FRAG")
+            jq -r '.signature' "$FRAG" > "$STAGING/${KEY}.sig"
+            URL=$(jq -r '.url' "$FRAG")
+            TRIPLES+=("${KEY}:${STAGING}/${KEY}.sig:${URL}")
+          done
+
+          if [ ${#TRIPLES[@]} -eq 0 ]; then
+            echo "::error::No fragment for v$VERSION from any platform; refusing to publish an empty manifest"
+            exit 1
+          fi
+
+          desktop/scripts/fetch-latest-json.sh \
+            AI-Native-Ventures/colony-releases "$ROLLING" > "$STAGING/current.json"
+
+          desktop/scripts/merge-latest-json.sh "$VERSION" "@$STAGING/current.json" \
+            "$STAGING/latest.json" "${TRIPLES[@]}"
+
+          gh release upload "$ROLLING" --repo AI-Native-Ventures/colony-releases --clobber \
+            "$STAGING/latest.json"
+
+          echo "PUBLISHED_KEYS=$(jq -r '[.platforms|keys[]]|join(" ")' "$STAGING/latest.json")" >> "$GITHUB_ENV"
+
+      - name: Verify every platform in the published manifest
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Read what was stored, not what the CDN is still serving. Each
+          # platform job used to verify only its own key, which is why the
+          # v0.11.8 manifest passed verification while missing macOS entirely.
+          MANIFEST=$(desktop/scripts/fetch-latest-json.sh \
+            AI-Native-Ventures/colony-releases colony-desktop-latest)
+          GOT_VERSION=$(echo "$MANIFEST" | jq -r '.version')
+          if [ "$GOT_VERSION" != "$VERSION" ]; then
+            echo "::error::Manifest says version $GOT_VERSION, expected $VERSION"
+            exit 1
+          fi
+          for KEY in $PUBLISHED_KEYS; do
+            URL=$(echo "$MANIFEST" | jq -r --arg k "$KEY" '.platforms[$k].url // ""')
+            SIG=$(echo "$MANIFEST" | jq -r --arg k "$KEY" '.platforms[$k].signature // ""')
+            if [ -z "$URL" ] || [ -z "$SIG" ]; then
+              echo "::error::Manifest is missing $KEY after publish"
+              exit 1
+            fi
+            CODE=$(curl -sIL -o /dev/null -w '%{http_code}' "$URL")
+            if [ "$CODE" != "200" ]; then
+              echo "::error::$KEY points at $URL which returned HTTP $CODE"
+              exit 1
+            fi
+            echo "$KEY: signed, and its archive is reachable"
+          done
+          echo "Manifest v$VERSION complete for: $PUBLISHED_KEYS"
