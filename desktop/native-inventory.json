@@ -1638,8 +1638,9 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriArchive.ts:5",
-        "src/shared/api/tauriArchive.ts:472"
+        "src/features/ledger/agentSpend.ts:15",
+        "src/features/ledger/agentSpend.ts:441",
+        "src/shared/api/tauriArchive.ts:5"
       ]
     },
     "get_audio_output_device": {
