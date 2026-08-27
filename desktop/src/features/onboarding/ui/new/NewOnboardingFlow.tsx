@@ -11,8 +11,8 @@ import type { AuthFailure } from "../../authService";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
 import { createWiredScrapeService } from "../../lib/wiredScrapeService";
 import { createWiredPaymentsService } from "../../lib/wiredPaymentsService";
-import { stashFounderBrief } from "../../flow/stashFounderBrief";
 import type { OnboardingServices, ScrapeResult } from "../../contracts";
+import type { ProvisionOutcome } from "../../flow/provisionWorkspace";
 import {
   clearAnswers,
   loadAnswers,
@@ -148,12 +148,38 @@ export function resolveAuthServices(
   };
 }
 
-type Props = {
-  services: OnboardingServices;
-  onComplete: () => void;
+export type OnboardingProvisioning = {
+  provision: (
+    companyName: string,
+    storedSlug: string | null,
+  ) => Promise<ProvisionOutcome>;
+  onProvisioned: (
+    outcome: Extract<ProvisionOutcome, { ok: true }>,
+    companyName: string,
+  ) => void;
 };
 
-export function NewOnboardingFlow({ services, onComplete }: Props) {
+type Props = {
+  services: OnboardingServices;
+  /**
+   * How the company screen claims a workspace. Null when a community is
+   * already applied (internal auto-connect builds): the screen then records
+   * the name and provisions nothing.
+   */
+  provisioning: OnboardingProvisioning | null;
+  /**
+   * Completes the run against the applied community. Rejecting keeps the
+   * flow on screen with a retry, so a failed handoff never strands anyone in
+   * an empty app.
+   */
+  onComplete: (answers: OnboardingAnswers) => Promise<void>;
+};
+
+export function NewOnboardingFlow({
+  services,
+  provisioning,
+  onComplete,
+}: Props) {
   // Build-time flags never change mid-session, so both are read once.
   const canInvite = invitesEnabled(import.meta.env);
   // Resolved once per mount: the flow must not see a new services identity
@@ -190,6 +216,14 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
   const [companyValues, setCompanyValues] = useState<CompanyValues>({
     company: "",
   });
+  const [companyState, setCompanyState] = useState<{
+    status: "idle" | "provisioning" | "error";
+    message?: string;
+  }>({ status: "idle" });
+  const [finishState, setFinishState] = useState<{
+    status: "idle" | "running" | "error";
+    message?: string;
+  }>({ status: "idle" });
 
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
@@ -211,22 +245,34 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
 
-  /** Flow complete: drop the stored answers so a relaunch starts clean, then
-   *  hand control back to the app. Idempotent, because completion can be
-   *  reached from several paths at once. */
+  /** Flow complete: hand the answers to the host, which sets the workspace
+   *  up against the applied community, then drop the stored answers so a
+   *  relaunch starts clean. Idempotent, because completion can be reached
+   *  from several paths at once; a rejected handoff releases the latch so
+   *  the user can try again rather than being stranded. */
   const finishedRef = useRef(false);
   const answersRef = useRef(answers);
   answersRef.current = answers;
   const finish = useCallback(() => {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    // Hand the founder and company answers to the community-onboarding
-    // transaction before clearing them. That draft is what Scout's opening
-    // brief is built from, and it used to be filled by the flow this one
-    // replaced; without this the brief would go out empty.
-    stashFounderBrief(answersRef.current);
-    clearAnswers(answerStorage);
-    onCompleteRef.current();
+    setFinishState({ status: "running" });
+    void onCompleteRef
+      .current(answersRef.current)
+      .then(() => {
+        // Cleared only on success: a failed handoff must stay resumable.
+        clearAnswers(answerStorage);
+      })
+      .catch((error: unknown) => {
+        finishedRef.current = false;
+        setFinishState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Something went wrong opening your workspace. Try again.",
+        });
+      });
   }, []);
 
   const goTo = useCallback(
@@ -335,10 +381,31 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
     goTo(nextStep("recovery", updated));
   };
 
-  const handleCompanySubmit = () => {
+  const handleCompanySubmit = async () => {
     const name = companyValues.company.trim();
-    if (!name) return;
-    const updated: OnboardingAnswers = { ...answers, company: name };
+    if (!name || companyState.status === "provisioning") return;
+    if (!provisioning) {
+      // A community is already applied: nothing to claim, just record it.
+      const updated: OnboardingAnswers = { ...answers, company: name };
+      setAnswers(updated);
+      goTo(nextStep("company", updated));
+      return;
+    }
+    setCompanyState({ status: "provisioning" });
+    const outcome = await provisioning.provision(name, answers.communitySlug);
+    if (!outcome.ok) {
+      setCompanyState({ status: "error", message: outcome.message });
+      return;
+    }
+    provisioning.onProvisioned(outcome, name);
+    setCompanyState({ status: "idle" });
+    const updated: OnboardingAnswers = {
+      ...answers,
+      company: name,
+      // Recorded so a reload resumes onto the address already claimed
+      // instead of claiming a second one.
+      communitySlug: outcome.slug,
+    };
     setAnswers(updated);
     goTo(nextStep("company", updated));
   };
@@ -436,11 +503,19 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
         return (
           <CompanyScreen
             values={companyValues}
-            onChange={(patch) =>
-              setCompanyValues((current) => ({ ...current, ...patch }))
-            }
-            onSubmit={handleCompanySubmit}
+            onChange={(patch) => {
+              setCompanyValues((current) => ({ ...current, ...patch }));
+              // Editing the name is a fresh attempt; drop the stale answer.
+              setCompanyState({ status: "idle" });
+            }}
+            onSubmit={() => void handleCompanySubmit()}
             onBack={goBack}
+            isSubmitting={companyState.status === "provisioning"}
+            error={
+              companyState.status === "error"
+                ? (companyState.message ?? null)
+                : null
+            }
           />
         );
       case "probing":
@@ -523,6 +598,13 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}
             onBack={goBack}
+            finishing={finishState.status === "running"}
+            finishError={
+              finishState.status === "error"
+                ? (finishState.message ?? null)
+                : null
+            }
+            onRetryFinish={finish}
           />
         );
       case "invite":
@@ -533,6 +615,13 @@ export function NewOnboardingFlow({ services, onComplete }: Props) {
             onSend={handleInvitesSend}
             onSkip={() => goTo(nextStep("invite", answers))}
             onBack={goBack}
+            finishing={finishState.status === "running"}
+            finishError={
+              finishState.status === "error"
+                ? (finishState.message ?? null)
+                : null
+            }
+            onRetryFinish={finish}
           />
         ) : null;
       default:

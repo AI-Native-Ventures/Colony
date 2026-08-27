@@ -273,7 +273,8 @@ function AppReady({
         <NewOnboardingFlow
           key={onboarding.currentPubkey ?? "anonymous"}
           services={onboardingServices}
-          onComplete={onboarding.flow.actions.complete}
+          provisioning={null}
+          onComplete={async () => onboarding.flow.actions.complete()}
         />
       );
     }

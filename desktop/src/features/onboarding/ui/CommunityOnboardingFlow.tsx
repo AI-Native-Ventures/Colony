@@ -483,9 +483,8 @@ export function CommunityOnboardingFlow({
   // meant answering the same questions twice in one sitting. A returning
   // founder creating a second community never sees the redesigned flow at
   // all, and that journey is V2's alone, so it still renders here. The draft
-  // is the brief's payload either way — V2 fills it on this path, and
-  // flow/stashFounderBrief.ts fills it on the first-run path. Delivery below
-  // reads the same field and does not care which wrote it.
+  // is the brief's payload on this path; the canvas first run builds its own
+  // from the flow answers and delivers it through the same shared module.
   const isReturningFounderJourney = transaction.source === "create-community";
   if (
     transaction.onboardingV2 &&
