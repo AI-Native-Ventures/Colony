@@ -337,6 +337,12 @@ fn request_supported_by_wire_version(
             ..
         }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ListLeadCounts
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::SearchEntities {
+            ..
+        }
+        | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::ResolveEntities {
+            ..
+        }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::GetLead { .. }
         | buzz_core::discovery_workspace::DiscoveryWorkspaceActionPayload::UpdateLead { .. } => {
             wire_version == DiscoveryWorkspaceWireVersion::V2
@@ -403,6 +409,8 @@ fn receipt_for_wire_version(
             DiscoveryWorkspaceResult::Access { .. }
             | DiscoveryWorkspaceResult::Budget { .. }
             | DiscoveryWorkspaceResult::Leads { .. }
+            | DiscoveryWorkspaceResult::EntitySearch { .. }
+            | DiscoveryWorkspaceResult::ResolvedEntities { .. }
             | DiscoveryWorkspaceResult::LeadCounts { .. }
             | DiscoveryWorkspaceResult::Lead { .. } => {}
         },
@@ -422,6 +430,8 @@ fn receipt_for_wire_version(
             }
             DiscoveryWorkspaceResult::Access { .. }
             | DiscoveryWorkspaceResult::Budget { .. }
+            | DiscoveryWorkspaceResult::EntitySearch { .. }
+            | DiscoveryWorkspaceResult::ResolvedEntities { .. }
             | DiscoveryWorkspaceResult::LeadCounts { .. }
             | DiscoveryWorkspaceResult::Lead { .. } => {}
         },
@@ -523,6 +533,8 @@ fn operation_tag(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
         DiscoveryWorkspaceOperation::ListLeadCounts => "list_lead_counts",
+        DiscoveryWorkspaceOperation::SearchEntities => "search_entities",
+        DiscoveryWorkspaceOperation::ResolveEntities => "resolve_entities",
         DiscoveryWorkspaceOperation::GetLead => "get_lead",
         DiscoveryWorkspaceOperation::UpdateLead => "update_lead",
     }
@@ -541,6 +553,8 @@ fn parse_operation(value: &str) -> Result<DiscoveryWorkspaceOperation, Discovery
         "list_campaigns" => Ok(DiscoveryWorkspaceOperation::ListCampaigns),
         "list_leads" => Ok(DiscoveryWorkspaceOperation::ListLeads),
         "list_lead_counts" => Ok(DiscoveryWorkspaceOperation::ListLeadCounts),
+        "search_entities" => Ok(DiscoveryWorkspaceOperation::SearchEntities),
+        "resolve_entities" => Ok(DiscoveryWorkspaceOperation::ResolveEntities),
         "get_lead" => Ok(DiscoveryWorkspaceOperation::GetLead),
         "update_lead" => Ok(DiscoveryWorkspaceOperation::UpdateLead),
         _ => Err(DiscoveryWorkspaceSdkError::InvalidEnvelope(

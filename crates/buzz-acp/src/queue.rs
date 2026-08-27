@@ -1610,6 +1610,11 @@ pub struct FormatPromptArgs<'a> {
     /// Defaults to `false` so a caller that never sets it behaves as if this
     /// were the session's first message.
     pub standing_context_sent: bool,
+    /// Pre-resolved `<discovery-context>` section for this batch, produced
+    /// by [`crate::discovery_context::resolve_discovery_context`] before the
+    /// prompt is formatted. Rendered between conversation context and the
+    /// triggering events; `None` when no Discovery references are present.
+    pub discovery_context: Option<&'a str>,
 }
 
 /// The prompt sections that do not change for the life of a session: base
@@ -1769,6 +1774,12 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
     // 3. Conversation context (thread or DM).
     if let Some(ctx) = args.conversation_context {
         sections.push(format_conversation_context(ctx, args.profile_lookup));
+    }
+
+    // 3b. Hydrated Discovery context. Resolved by the caller under the
+    // receiving agent's identity; labels in the message text are never used.
+    if let Some(discovery) = args.discovery_context {
+        sections.push(discovery.to_string());
     }
 
     // 4. Cancelled + re-prompt framing. When a turn was cancelled to deliver

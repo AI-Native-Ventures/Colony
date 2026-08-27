@@ -58,6 +58,11 @@ pub enum DiscoveryWorkspaceOperation {
     ListLeads,
     /// List retained-Lead counts per taxonomy row.
     ListLeadCounts,
+    /// Search taxonomies, Campaigns, Lead collections, Leads, and runs
+    /// for mention suggestions.
+    SearchEntities,
+    /// Resolve mention references into current permission-checked context.
+    ResolveEntities,
     /// Read one retained Lead with its editable profile.
     GetLead,
     /// Update one retained Lead's editable profile and funnel status.
@@ -571,6 +576,18 @@ pub enum DiscoveryWorkspaceActionPayload {
     },
     /// List retained-Lead counts per taxonomy row.
     ListLeadCounts,
+    /// Search mentionable Discovery entities in the active community.
+    SearchEntities {
+        /// Case-insensitive text query. Empty matches the newest entities.
+        query: String,
+        /// Maximum rows, 1 through [`DISCOVERY_MENTION_MAX_REFS`].
+        limit: u16,
+    },
+    /// Resolve mention references into current permission-checked context.
+    ResolveEntities {
+        /// Strict references, at most [`DISCOVERY_MENTION_MAX_REFS`].
+        refs: Vec<DiscoveryEntityRef>,
+    },
     /// Read one retained Lead with its editable profile.
     GetLead {
         /// Stable observation identifier.
@@ -604,6 +621,8 @@ impl DiscoveryWorkspaceActionPayload {
             Self::ListCampaigns { .. } => DiscoveryWorkspaceOperation::ListCampaigns,
             Self::ListLeads { .. } => DiscoveryWorkspaceOperation::ListLeads,
             Self::ListLeadCounts => DiscoveryWorkspaceOperation::ListLeadCounts,
+            Self::SearchEntities { .. } => DiscoveryWorkspaceOperation::SearchEntities,
+            Self::ResolveEntities { .. } => DiscoveryWorkspaceOperation::ResolveEntities,
             Self::GetLead { .. } => DiscoveryWorkspaceOperation::GetLead,
             Self::UpdateLead { .. } => DiscoveryWorkspaceOperation::UpdateLead,
         }
@@ -662,6 +681,22 @@ impl DiscoveryWorkspaceActionPayload {
             Self::ListCampaigns { request } => request.validate(),
             Self::ListLeads { request } => request.validate(),
             Self::ListLeadCounts => Ok(()),
+            Self::SearchEntities { query, limit } => {
+                crate::discovery_taxonomy::validate_search_query(query)?;
+                if *limit == 0 || *limit as usize > DISCOVERY_MENTION_MAX_REFS {
+                    return Err(DiscoveryWorkspaceValidationError::InvalidField("limit"));
+                }
+                Ok(())
+            }
+            Self::ResolveEntities { refs } => {
+                if refs.is_empty() || refs.len() > DISCOVERY_MENTION_MAX_REFS {
+                    return Err(DiscoveryWorkspaceValidationError::InvalidField("refs"));
+                }
+                for entity_ref in refs {
+                    entity_ref.validate()?;
+                }
+                Ok(())
+            }
             Self::GetLead { lead_id } => validate_uuid(*lead_id, "lead_id"),
             Self::UpdateLead { lead_id, input } => {
                 validate_uuid(*lead_id, "lead_id")?;
@@ -829,6 +864,90 @@ pub struct DiscoveryLeadCountRow {
     pub count: u32,
 }
 
+/// Current permission-checked context for a mentioned Industry or Vertical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryTaxonomyProjection {
+    /// Parent industry identifier.
+    pub industry_id: String,
+    /// Parent industry label.
+    pub industry_label: String,
+    /// Vertical identifier; absent when this row is an industry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_id: Option<String>,
+    /// Vertical label; absent when this row is an industry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_label: Option<String>,
+    /// Canonical description, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Leads currently retained in the workspace under this row.
+    pub lead_count: u32,
+}
+
+/// Bounded current view of the Leads in one Campaign.
+///
+/// Deliberately a snapshot projection of at most
+/// [`DISCOVERY_LEAD_COLLECTION_ROWS`] rows plus the live total: it is prompt
+/// context, never a copy of the collection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryLeadCollectionProjection {
+    /// Campaign whose Leads are collected.
+    pub campaign_id: Uuid,
+    /// Live total number of Leads in the collection.
+    pub total: u32,
+    /// First summary rows in stable newest-first order.
+    pub leads: Vec<DiscoveryBusinessLeadProjection>,
+}
+
+/// Result of resolving one Discovery mention reference.
+///
+/// Hidden and forbidden records both resolve to [`Self::Unavailable`] without
+/// revealing whether the record exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "resolved", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ResolvedDiscoveryEntity {
+    /// Industry matched a canonical taxonomy row.
+    Industry {
+        /// Current row projection.
+        taxonomy: Box<DiscoveryTaxonomyProjection>,
+    },
+    /// Vertical matched a canonical taxonomy row.
+    Vertical {
+        /// Current row projection.
+        taxonomy: Box<DiscoveryTaxonomyProjection>,
+    },
+    /// Campaign is visible with its full entitled projection.
+    Campaign {
+        /// Current campaign projection.
+        campaign: Box<DiscoveryCampaignProjection>,
+    },
+    /// Campaign Lead collection resolved to a bounded view.
+    CampaignLeads {
+        /// Bounded collection projection.
+        collection: Box<DiscoveryLeadCollectionProjection>,
+    },
+    /// Lead is visible with its full detail.
+    Lead {
+        /// Current lead detail.
+        lead: Box<DiscoveryLeadDetail>,
+    },
+    /// Run is visible with its current projection.
+    Run {
+        /// Current run projection.
+        run: Box<crate::discovery::DiscoveryRunProjection>,
+    },
+    /// The reference was forged, malformed, deleted, unauthorized, or
+    /// outside the event's community.
+    Unavailable {
+        /// Kind as referenced.
+        kind: DiscoveryEntityKind,
+        /// ID as referenced.
+        id: String,
+    },
+}
+
 /// Aggregated retained-Lead counts for taxonomy grids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -839,6 +958,130 @@ pub struct DiscoveryLeadCounts {
     pub industries: Vec<DiscoveryLeadCountRow>,
     /// Counts per vertical within their industry, highest first.
     pub verticals: Vec<DiscoveryLeadCountRow>,
+}
+
+/// Maximum Discovery references resolved for one message or one request.
+pub const DISCOVERY_MENTION_MAX_REFS: usize = 20;
+
+/// Maximum Lead rows hydrated into a Campaign Lead collection context.
+pub const DISCOVERY_LEAD_COLLECTION_ROWS: usize = 25;
+
+/// Entity kinds addressable by a `discovery` mention tag. The kind is
+/// authoritative; the display label travels with the message but is never
+/// trusted to identify anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryEntityKind {
+    /// Canonical business taxonomy Industry.
+    Industry,
+    /// Canonical business taxonomy Vertical inside an Industry.
+    Vertical,
+    /// One Discovery Campaign.
+    Campaign,
+    /// The bounded virtual collection of Leads in one Campaign.
+    CampaignLeads,
+    /// One retained Lead.
+    Lead,
+    /// One Discovery run.
+    Run,
+}
+
+impl DiscoveryEntityKind {
+    /// Parse the wire spelling used by `["discovery", "<kind>", ...]` tags.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "industry" => Some(Self::Industry),
+            "vertical" => Some(Self::Vertical),
+            "campaign" => Some(Self::Campaign),
+            "campaign_leads" => Some(Self::CampaignLeads),
+            "lead" => Some(Self::Lead),
+            "run" => Some(Self::Run),
+            _ => None,
+        }
+    }
+
+    /// Whether this kind's ID must be a UUID (as opposed to a taxonomy ID).
+    pub const fn requires_uuid(self) -> bool {
+        matches!(
+            self,
+            Self::Campaign | Self::CampaignLeads | Self::Lead | Self::Run
+        )
+    }
+
+    /// Whether this kind is one of the two canonical taxonomy rows.
+    pub const fn is_taxonomy(self) -> bool {
+        matches!(self, Self::Industry | Self::Vertical)
+    }
+}
+
+/// Structured reference embedded in a mention tag or a resolve request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryEntityRef {
+    /// Authoritative referenced-entity kind.
+    pub kind: DiscoveryEntityKind,
+    /// Stable identifier: a UUID, a canonical taxonomy ID, or, for Verticals,
+    /// the composite `<industry_id>/<vertical_id>` (vertical slugs repeat
+    /// across industries, so the parent must travel with the child).
+    pub id: String,
+}
+
+/// A vertical reference carries its parent industry ID so resolution can
+/// locate the canonical row without guessing.
+impl DiscoveryEntityRef {
+    /// Validate the strict shape of this reference.
+    pub fn validate(&self) -> Result<(), DiscoveryWorkspaceValidationError> {
+        match self.kind {
+            DiscoveryEntityKind::Campaign
+            | DiscoveryEntityKind::CampaignLeads
+            | DiscoveryEntityKind::Lead
+            | DiscoveryEntityKind::Run => {
+                let Ok(uuid) = Uuid::parse_str(&self.id) else {
+                    return Err(DiscoveryWorkspaceValidationError::InvalidField(
+                        "entity_ref",
+                    ));
+                };
+                validate_uuid(uuid, "entity_ref")
+            }
+            DiscoveryEntityKind::Industry => validate_taxonomy_id(&self.id, "entity_ref"),
+            DiscoveryEntityKind::Vertical => match self.id.split_once('/') {
+                Some((industry_id, vertical_id)) => {
+                    validate_taxonomy_id(industry_id, "entity_ref")?;
+                    validate_taxonomy_id(vertical_id, "entity_ref")
+                }
+                None => Err(DiscoveryWorkspaceValidationError::InvalidField(
+                    "entity_ref",
+                )),
+            },
+        }
+    }
+
+    /// Split a Vertical reference into `(industry, vertical)` components.
+    /// Returns `None` for other kinds or malformed composites.
+    pub fn vertical_components(&self) -> Option<(&str, &str)> {
+        if self.kind != DiscoveryEntityKind::Vertical {
+            return None;
+        }
+        self.id.split_once('/')
+    }
+}
+
+/// Search result row surfaced to mention directories and the CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct DiscoveryEntitySummary {
+    /// Referenced-entity kind.
+    pub kind: DiscoveryEntityKind,
+    /// Stable identifier suitable for building a mention tag.
+    pub id: String,
+    /// Human-readable label (presentation only).
+    pub label: String,
+    /// Parent industry ID for vertical results, campaign ID for run results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+    /// Short secondary detail line (status, location, counts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// Funnel status vocabulary for a retained Lead, mirroring the Party
@@ -1009,6 +1252,17 @@ pub enum DiscoveryWorkspaceResult {
     LeadCounts {
         /// Complete entitled count aggregation.
         counts: DiscoveryLeadCounts,
+    },
+    /// Mention-directory search results across Discovery entities.
+    EntitySearch {
+        /// Ranked, bounded result rows.
+        entities: Vec<DiscoveryEntitySummary>,
+    },
+    /// Permission-checked resolution of every requested reference, in
+    /// request order (duplicates collapsed to their first occurrence).
+    ResolvedEntities {
+        /// Current resolution per unique reference.
+        entities: Vec<ResolvedDiscoveryEntity>,
     },
     /// One retained Lead with its editable profile.
     Lead {

@@ -5,6 +5,7 @@ pub mod ask_context;
 mod codex_usage_adapter;
 pub mod completion_check;
 mod config;
+pub mod discovery_context;
 mod engram_fetch;
 mod filter;
 mod meter_env;

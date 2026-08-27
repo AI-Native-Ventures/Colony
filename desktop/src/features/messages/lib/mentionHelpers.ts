@@ -49,6 +49,7 @@ export function extractPersonaMentionTargets(
 export type MentionAliasSource =
   | { kind: "block"; blockHandle: string; displayName: string }
   | { kind: "cohort"; displayName: string }
+  | { kind: "discovery"; displayName: string }
   | {
       kind: "identity" | "persona" | "team";
       displayName: string | null;
@@ -93,13 +94,15 @@ export function collectSearchableMentionNames(
         ? [candidate.displayName, candidate.blockHandle]
         : candidate.kind === "cohort"
           ? [candidate.displayName]
-          : [
-              candidate.displayName,
-              candidate.personaName,
-              candidate.roleId,
-              candidate.roleTitle,
-              candidate.secondaryLabel,
-            ],
+          : candidate.kind === "discovery"
+            ? [candidate.displayName]
+            : [
+                candidate.displayName,
+                candidate.personaName,
+                candidate.roleId,
+                candidate.roleTitle,
+                candidate.secondaryLabel,
+              ],
     ),
   );
 }

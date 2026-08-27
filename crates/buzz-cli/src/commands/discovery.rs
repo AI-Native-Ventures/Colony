@@ -288,6 +288,18 @@ pub async fn dispatch(command: DiscoveryCmd, client: &BuzzClient) -> Result<(), 
             )
             .await
         }
+        DiscoveryCmd::Search {
+            query,
+            limit,
+            idempotency_key,
+        } => {
+            publish_workspace_payload(
+                client,
+                DiscoveryWorkspaceActionPayload::SearchEntities { query, limit },
+                idempotency_key,
+            )
+            .await
+        }
         DiscoveryCmd::LeadGet {
             lead,
             idempotency_key,
