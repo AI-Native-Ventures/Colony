@@ -1578,6 +1578,12 @@ pub struct FormatPromptArgs<'a> {
     pub agent_core: Option<&'a str>,
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
+    /// Rendered `[Thread Record]` section — structured protocol events tied
+    /// to this thread (asks, their outcomes, decision logs), fetched fresh
+    /// per turn by the caller. `None` for DM or channel-scope turns, when the
+    /// feature is disabled, or on fetch failure (fail open). Rendered as its
+    /// own block immediately before `[Thread Context]`.
+    pub thread_record: Option<&'a str>,
     /// True when delivery-delta filtering removed at least one event that this
     /// live session had already received. Trigger-only context does not set it.
     pub conversation_context_had_delivered_events: bool,
@@ -1688,8 +1694,10 @@ pub(crate) fn base_section(base_prompt: &str) -> String {
 ///    agents only, and only on the session's first message (see
 ///    `standing_context_sent`)
 /// 1. `[Context]` — scope, channel name, and contextual hints for the agent
-/// 2. `[Thread Context]` or `[Conversation Context]` — if fetched
-/// 3. `[Event]` / `[Buzz events]` — the triggering event(s)
+/// 2. `[Thread Record]` — structured protocol events tied to the thread, if
+///    fetched (per-turn; thread scope only)
+/// 3. `[Thread Context]` or `[Conversation Context]` — if fetched
+/// 4. `[Event]` / `[Buzz events]` — the triggering event(s)
 ///
 /// Each section is returned as its own block rather than one joined string so
 /// the observer frame's size trimmer (`fit_observer_event_to_budget`) elides
@@ -1771,11 +1779,19 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         reply_anchor.as_deref(),
     ));
 
+    // 2b. [Thread Record] — structured protocol events tied to this thread.
+    //     Own block, immediately before [Thread Context] (D7 + render
+    //     position), so the desktop Prompt-context observer panel counts and
+    //     trims it like any other section. Per-turn content, never standing
+    //     context: ask status changes mid-session.
+    if let Some(record) = args.thread_record {
+        sections.push(record.to_string());
+    }
+
     // 3. Conversation context (thread or DM).
     if let Some(ctx) = args.conversation_context {
         sections.push(format_conversation_context(ctx, args.profile_lookup));
     }
-
     // 3b. Hydrated Discovery context. Resolved by the caller under the
     // receiving agent's identity; labels in the message text are never used.
     if let Some(discovery) = args.discovery_context {
