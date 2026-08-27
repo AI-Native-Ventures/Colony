@@ -525,6 +525,24 @@ test.describe("Blocks live Gate C", () => {
         `proposal row ${index} must render exactly once`,
       ).toHaveCount(1);
     }
+    // The pointer is still parked on the sidebar channel row that opened this
+    // channel, and parking survives the reload above. ChannelActivityPopover
+    // opens on that hover after 250ms and renders across the timeline, so the
+    // click below lands on its "Open thread from ..." overlay rather than the
+    // button underneath. Run 33087235433 (Blocks Live Gate) burnt its entire
+    // 240s budget retrying exactly that, alternating between the popover and
+    // the composer dock as the button settled onto the bottom edge beneath it.
+    //
+    // toBeVisible() would not have caught either: it ignores occlusion, so the
+    // two assertions below pass while the button is completely covered. Park
+    // the pointer off the sidebar and prove the popover is gone, then bring the
+    // row into the middle of the scroller so the sticky composer cannot reach
+    // it.
+    await page.mouse.move(0, 0);
+    await expect(page.getByLabel(/^Open thread from /)).toHaveCount(0);
+    await proposalRows[0].evaluate((row) =>
+      row.scrollIntoView({ block: "center" }),
+    );
     await expect(
       proposalRows[0].getByRole("button", { name: "Review agent" }),
     ).toBeVisible({ timeout: 30_000 });
