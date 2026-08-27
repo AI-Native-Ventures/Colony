@@ -44,7 +44,7 @@ import {
   writeStoredProjectsAgentConversation,
 } from "@/features/projects/lib/projectAgentConversationStorage";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { sendChannelMessage } from "@/shared/api/tauri";
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -385,9 +385,11 @@ export function ProjectsAgentPromptPage({
       const content = conversation
         ? trimmed
         : `${trimmed}${repoContextBlock(projects)}`;
-      await sendChannelMessage(channel.id, content, undefined, undefined, [
-        selectedAgent.pubkey,
-      ]);
+      await sendChannelMessage({
+        channelId: channel.id,
+        content,
+        mentionPubkeys: [selectedAgent.pubkey],
+      });
       if (!conversation) {
         const nextConversation = {
           channel,

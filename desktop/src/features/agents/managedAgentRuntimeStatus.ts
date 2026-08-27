@@ -1,4 +1,58 @@
-import type { ManagedAgentRuntimeStatus } from "@/shared/api/types";
+import type {
+  ManagedAgent,
+  ManagedAgentRuntimeStatus,
+} from "@/shared/api/types";
+import type { AgentProcessState } from "./agentLivenessState";
+
+/**
+ * Flatten a runtime row into the process axis the liveness state machine
+ * consumes.
+ *
+ * This is the ONLY thing process lifecycle is allowed to contribute now.
+ * `agentCommunityAvailability` below still answers "can this device reach
+ * the agent at all", which is a real question, but it was also being read as
+ * "is the agent working", which it never answered: a subprocess that is
+ * `ready` and has been silent for two hours reports `Here`. Whether work is
+ * happening comes from turn liveness, in `deriveAgentLivenessState`.
+ */
+export function agentProcessStateFromRuntime(
+  runtime: ManagedAgentRuntimeStatus | undefined | null,
+): AgentProcessState {
+  if (!runtime) return "unknown";
+  if (!runtime.localSetup) return "needs-setup";
+  switch (runtime.lifecycle) {
+    case "starting":
+    case "listening":
+    case "waking":
+      return "waking";
+    case "ready":
+      return "ready";
+    case "stopped":
+      return "stopped";
+    case "failed":
+      return "failed";
+  }
+}
+
+/**
+ * Same projection from the coarser `ManagedAgent.status`, for surfaces that
+ * hold an agent record but no runtime row. `not_deployed` maps to
+ * `unknown` rather than `stopped`: it means Colony was never asked to run
+ * this agent here, not that something stopped it.
+ */
+export function agentProcessStateFromStatus(
+  status: ManagedAgent["status"],
+): AgentProcessState {
+  switch (status) {
+    case "running":
+    case "deployed":
+      return "ready";
+    case "stopped":
+      return "stopped";
+    case "not_deployed":
+      return "unknown";
+  }
+}
 
 export type AgentCommunityAvailability =
   | "Here"

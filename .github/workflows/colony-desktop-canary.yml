@@ -259,6 +259,11 @@ jobs:
           # two steps below exists to catch.
           BUZZ_RELAY_URL: ${{ env.COLONY_CANARY_RELAY_WS_URL }}
           BUZZ_RELAY_HTTP: ${{ env.COLONY_CANARY_RELAY_HTTP_URL }}
+          # Canary's own keyring service: without this the release binary
+          # defaults to the stable app's service ("buzz-desktop") and a
+          # side-by-side install reads - and fails to rewrite - stable's
+          # identity blob, breaking first-run signup.
+          BUZZ_DESKTOP_KEYRING_SERVICE: colony-canary-desktop
           # build.rs reads these two as well as the config generator: it only
           # emits cfg(buzz_updater_enabled) when both are present, and without
           # that cfg the updater plugin is compiled out of the binary entirely
@@ -408,6 +413,20 @@ jobs:
             echo "::warning::The production relay hostname also appears ${PROD} time(s) in this binary. That is expected from bundled frontend assets, but if the compiled default ever needs to be audited, this is the string to look at."
           fi
           echo "Canary relay compiled into the shipped binary"
+          # The keyring service must be canary-scoped: the release default is
+          # the stable app's "buzz-desktop", and a binary that shares it reads
+          # and rewrites the stable install's identity blob (this broke
+          # first-run signup on 2026-08-27 before it was caught).
+          KEYRING=$(strings -a "$BIN" | grep -c "colony-canary-desktop" || true)
+          echo "canary keyring service occurrences: ${KEYRING:-0}"
+          if [ "${KEYRING:-0}" -eq 0 ]; then
+            echo "::error::This build has no baked canary keyring service \
+          (colony-canary-desktop), so it would use the stable app's keychain \
+          identity. build.rs needs BUZZ_DESKTOP_KEYRING_SERVICE in the build \
+          step's environment."
+            exit 1
+          fi
+          echo "Canary keyring service compiled into the shipped binary"
 
       - name: Locate and name the updater archive
         # Tauri writes "Colony Canary.app.tar.gz" next to the .app and signs it

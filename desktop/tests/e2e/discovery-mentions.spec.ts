@@ -29,7 +29,7 @@ async function lastSendMessagePayload(
   page: import("@playwright/test").Page,
 ): Promise<{
   content?: string;
-  referenceTags?: string[][] | null;
+  blockReferenceTags?: string[][] | null;
   mentionPubkeys?: string[] | null;
 }> {
   return page.evaluate(() => {
@@ -49,7 +49,7 @@ async function lastSendMessagePayload(
     if (!last) throw new Error("no send_channel_message payload captured");
     return last.payload as {
       content?: string;
-      referenceTags?: string[][] | null;
+      blockReferenceTags?: string[][] | null;
       mentionPubkeys?: string[] | null;
     };
   });
@@ -82,7 +82,7 @@ test("composer suggests Discovery entities and sends one structured reference", 
 
   const payload = await lastSendMessagePayload(page);
   expect(payload.content).toContain("@Dental Practices status this week");
-  const discoveryTags = (payload.referenceTags ?? []).filter(
+  const discoveryTags = (payload.blockReferenceTags ?? []).filter(
     (tag) => tag[0] === "discovery",
   );
   expect(discoveryTags).toEqual([
@@ -119,7 +119,7 @@ test("discovery references survive draft reload as structured refs", async ({
   await restored.press("Enter");
 
   const payload = await lastSendMessagePayload(page);
-  const discoveryTags = (payload.referenceTags ?? []).filter(
+  const discoveryTags = (payload.blockReferenceTags ?? []).filter(
     (tag) => tag[0] === "discovery",
   );
   expect(discoveryTags).toEqual([

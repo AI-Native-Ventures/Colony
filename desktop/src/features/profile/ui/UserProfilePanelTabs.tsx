@@ -3,6 +3,8 @@ import { Archive, ChevronRight, Info, RefreshCw, Wrench } from "lucide-react";
 
 import type { IdentityArchiveActions } from "@/features/identity-archive/hooks";
 import type { ManagedAgent, RestartDiffEntry } from "@/shared/api/types";
+import { AgentSpendCard } from "@/features/ledger/ui/AgentSpendCard";
+import { useCommunities } from "@/features/communities/useCommunities";
 import {
   AUTO_RESTART_OFF_BLURB,
   AUTO_RESTART_ON_BLURB,
@@ -737,6 +739,13 @@ export function ProfileRuntimeTabContent({
   const [reconnectError, setReconnectError] = React.useState<string | null>(
     null,
   );
+  // What this agent has cost, priced from the local archive by the same
+  // engine as the Spend screen. The card fetches its own data; this mount
+  // supplies identity only, beside the model that decides the cost.
+  const { activeCommunity } = useCommunities();
+  const communityId = activeCommunity?.id ?? "";
+  const spendPubkey = typeof currentPubkey === "string" ? currentPubkey : null;
+  const showAgentSpend = communityId.length > 0 && spendPubkey !== null;
   const subscribeToDenial = React.useCallback(
     (listener: () => void) =>
       colonyCreditsAgentPubkey
@@ -827,6 +836,7 @@ export function ProfileRuntimeTabContent({
     liveDenialFriendlyError.action === "reconnect";
 
   if (
+    !showAgentSpend &&
     statusDiagnosticsFields.length === 0 &&
     !hasActivityRows &&
     !hasConfigurationRows &&
@@ -971,6 +981,9 @@ export function ProfileRuntimeTabContent({
         </ProfileSectionGroup>
       ) : null}
       {modelSettings}
+      {showAgentSpend && spendPubkey !== null ? (
+        <AgentSpendCard agentPubkey={spendPubkey} communityId={communityId} />
+      ) : null}
       {hasInstances ? (
         <ProfileInstancesSection
           currentPubkey={currentPubkey}

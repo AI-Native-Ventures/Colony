@@ -30,8 +30,8 @@ function Figure({
       <p
         className={
           emphasis
-            ? "mt-2 text-2xl font-semibold tracking-tight text-foreground"
-            : "mt-2 text-2xl font-semibold tracking-tight text-muted-foreground"
+            ? "mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground"
+            : "mt-2 text-2xl font-semibold tracking-tight tabular-nums text-muted-foreground"
         }
       >
         {value}

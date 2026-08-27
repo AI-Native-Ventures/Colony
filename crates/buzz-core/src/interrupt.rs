@@ -1733,6 +1733,32 @@ mod tests {
         assert_eq!(log.amount_nano_usd, Some(250000));
     }
 
+    /// Regression: an optional origin-thread `e` tag (NIP-IQ 44303) must be
+    /// accepted at ingest and parsed identically to a log without one. The
+    /// parser attaches no semantics to it; this guards against a future
+    /// change that would start rejecting or misreading the tag.
+    #[test]
+    fn parse_decision_log_accepts_optional_origin_thread_e_tag() {
+        let content = r#"{"decision":"Used stock photo B instead of A","undo_path":"revert commit abc123","category":"copy_change","amount_nano_usd":250000}"#;
+        let without = sign_decision_log(
+            vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])],
+            content,
+        );
+        let with = sign_decision_log(
+            vec![
+                t(&["grant", "grant-1"]),
+                t(&["task", "task-9"]),
+                t(&["e", &"a".repeat(64)]),
+            ],
+            content,
+        );
+
+        let plain = parse_decision_log(&without).expect("parse");
+        let threaded =
+            parse_decision_log(&with).expect("an e tag must not reject ingest for kind 44303");
+        assert_eq!(plain, threaded);
+    }
+
     #[test]
     fn parse_decision_log_rejects_missing_undo_path() {
         let tags = vec![t(&["grant", "grant-1"]), t(&["task", "task-9"])];

@@ -62,6 +62,8 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "1e350094a920530ccaf8ee6d521ab0dc8bf2a3103b6a0200ab578aba77d36967",
   // handover
   "542e2eefd8e515e35fb1d72063271b90d7975bedfc59afb98594a5216dd43198",
+  // deliverable
+  "341c6999607295c49c161785eaed12ac8480e8594dfb9a4d7e2a0b356298057e",
 ]);
 
 type CachedManifest = {

@@ -1,0 +1,446 @@
+{
+  "schema": "ai-native-office.block-manifest/1",
+  "handle": "deliverable",
+  "version": "1.0.0",
+  "created_at": 1785369600,
+  "name": "Deliverable",
+  "description": "Finished work put in front of the person who asked for it, with three ways to answer: approve it, say what to change, or turn it down.",
+  "origin": "core",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "deliverable_id",
+      "title",
+      "asked_for",
+      "summary",
+      "url",
+      "alt",
+      "content_hash",
+      "version",
+      "status",
+      "history"
+    ],
+    "properties": {
+      "deliverable_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Stays the same every time this piece of work comes back, so round 3 is recognisably the same job as round 1."
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "asked_for": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "description": "What was asked for, in the words it was asked in. Without it the reader is judging the work against their memory of the request."
+      },
+      "summary": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "description": "What was actually done, including anything deliberately left out."
+      },
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^https?://",
+        "maxLength": 2000,
+        "description": "Where the finished work can be opened. A description of the work is not the work."
+      },
+      "alt": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "What the preview shows, for anyone who cannot see it."
+      },
+      "content_hash": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "A fingerprint of the exact file or page being shown. An approval covers this version and only this version, so work that changes afterwards is not quietly covered by a decision made before it changed."
+      },
+      "version": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Which round of this work this is. The first time it is 1."
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "ready-for-review",
+          "approved",
+          "changes-requested",
+          "rejected",
+          "superseded"
+        ],
+        "description": "The status when this card was written. Anything decided after that is decided by the buttons below, and those decisions are recorded separately."
+      },
+      "history": {
+        "type": "array",
+        "maxItems": 20,
+        "description": "What happened to every earlier round of this work. Empty on the first round, and required to be honest after that.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "outcome",
+            "what_happened"
+          ],
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "approved",
+                "changes-requested",
+                "rejected",
+                "superseded"
+              ]
+            },
+            "what_happened": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "description": "In one line: what was said about that round, or why it was replaced."
+            }
+          }
+        }
+      },
+      "supersedes": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "version"
+        ],
+        "description": "The card this one replaces. It makes the chain of rounds followable rather than a set of separate messages that happen to share a title.",
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      }
+    },
+    "if": {
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "minimum": 2
+        }
+      }
+    },
+    "then": {
+      "required": [
+        "supersedes"
+      ],
+      "properties": {
+        "history": {
+          "minItems": 1
+        }
+      }
+    }
+  },
+  "tree": {
+    "type": "stack",
+    "gap": "medium",
+    "children": [
+      {
+        "type": "card",
+        "title": "{{title}}",
+        "description": "{{summary}}",
+        "children": [
+          {
+            "type": "media",
+            "url_path": "/url",
+            "alt": "{{alt}}"
+          },
+          {
+            "type": "details",
+            "items": [
+              {
+                "label": "What you asked for",
+                "value": "{{asked_for}}"
+              },
+              {
+                "label": "Round",
+                "value": "{{version}}"
+              },
+              {
+                "label": "Where it is",
+                "value": "{{url}}"
+              },
+              {
+                "label": "Fingerprint of this exact version",
+                "value": "{{content_hash}}"
+              }
+            ]
+          },
+          {
+            "type": "status",
+            "label": "Review",
+            "state_path": "/status"
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "title": "Earlier rounds of this work",
+        "text": "What was said last time, and what it led to."
+      },
+      {
+        "type": "table",
+        "columns": [
+          {
+            "key": "version",
+            "label": "Round"
+          },
+          {
+            "key": "outcome",
+            "label": "Outcome"
+          },
+          {
+            "key": "what_happened",
+            "label": "What happened"
+          }
+        ],
+        "rows_path": "/history"
+      },
+      {
+        "type": "actions",
+        "controls": [
+          {
+            "label": "Approve",
+            "interaction": {
+              "type": "signed",
+              "action_id": "deliverable.approve",
+              "resolves_attention": true
+            }
+          },
+          {
+            "label": "Reject",
+            "interaction": {
+              "type": "signed",
+              "action_id": "deliverable.reject",
+              "resolves_attention": true
+            }
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "title": "Close, but not right yet?",
+        "text": "Say what to change instead of approving or rejecting. Whoever did the work gets your words exactly as you write them, and they stay on the record with the rest of this decision."
+      },
+      {
+        "type": "question",
+        "prompt": "What needs to change?",
+        "mode": "multi-select",
+        "options": [
+          {
+            "id": "content",
+            "label": "The words or the facts",
+            "description": "Something written on it is wrong, missing, or out of date."
+          },
+          {
+            "id": "look",
+            "label": "The look or the layout",
+            "description": "It works, but it does not look right."
+          },
+          {
+            "id": "missing",
+            "label": "Part of it is missing",
+            "description": "Something that was asked for is not there."
+          },
+          {
+            "id": "direction",
+            "label": "Wrong direction",
+            "description": "Fixing details will not help. Start from somewhere else."
+          }
+        ],
+        "min_selections": 0,
+        "max_selections": 4,
+        "allow_custom": true,
+        "require_custom_input": true,
+        "submit_action": "deliverable.request-changes"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "id": "deliverable.approve",
+      "label": "Approve",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Repeats the fingerprint shown on the card. When it is sent it must match the card, so an approval can never be read as covering a later version of the same work."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Anything to pass on with the approval."
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "deliverable.approve",
+        "resolves_attention": true
+      },
+      "permissions": []
+    },
+    {
+      "id": "deliverable.request-changes",
+      "label": "Ask for changes",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "selected",
+          "custom_input"
+        ],
+        "properties": {
+          "selected": {
+            "type": "array",
+            "maxItems": 4,
+            "uniqueItems": true,
+            "description": "The areas ticked on the card. It may be empty; the written answer is what carries the request.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "content",
+                "look",
+                "missing",
+                "direction"
+              ]
+            }
+          },
+          "custom_input": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "What to change, in the reader's own words. Required, because a request for changes that does not say what to change is a rejection with extra steps."
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "deliverable.request-changes",
+        "resolves_attention": true
+      },
+      "permissions": []
+    },
+    {
+      "id": "deliverable.reject",
+      "label": "Reject",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Why this is not wanted at all. Optional, because turning work down is allowed without a defence."
+          }
+        }
+      },
+      "interaction": {
+        "type": "signed",
+        "action_id": "deliverable.reject",
+        "resolves_attention": true
+      },
+      "permissions": []
+    }
+  ],
+  "permissions": [],
+  "fallback_template": "{{title}} is ready for you to review. This is round {{version}}.\n\nWhat you asked for: {{asked_for}}\nWhat was done: {{summary}}\nWhere it is: {{url}}\nFingerprint of this exact version: {{content_hash}}\n\nReply with one of: approve it, ask for changes and say exactly what to change, or reject it.",
+  "supported_clients": [
+    "desktop"
+  ],
+  "primitive_versions": {
+    "card": 1,
+    "media": 1,
+    "details": 1,
+    "status": 1,
+    "section": 1,
+    "table": 1,
+    "actions": 1,
+    "question": 1
+  },
+  "examples": [
+    {
+      "name": "First round of a rebuilt website",
+      "data": {
+        "deliverable_id": "tennant-group-website",
+        "title": "Tennant Group website",
+        "asked_for": "Rebuild the site so it looks like the work we actually do, and make the phone number easy to find on a phone.",
+        "summary": "The homepage, the about page and the contact form are rebuilt and live on a preview link. Everything from the old site is carried over except the news posts from 2019, which I left out because they read as out of date.",
+        "url": "https://example.com/tennant-preview",
+        "alt": "The rebuilt Tennant Group homepage shown on a laptop and a phone",
+        "content_hash": "9f2c8a1b3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+        "version": 1,
+        "status": "ready-for-review",
+        "history": []
+      }
+    },
+    {
+      "name": "Third round, after two sets of changes",
+      "data": {
+        "deliverable_id": "tennant-group-website",
+        "title": "Tennant Group website",
+        "asked_for": "Rebuild the site so it looks like the work we actually do, and make the phone number easy to find on a phone.",
+        "summary": "The phone number now sits at the top of every page on a phone, and the three testimonials you asked for are back on the homepage. Nothing else changed since round 2.",
+        "url": "https://example.com/tennant-preview-3",
+        "alt": "The rebuilt Tennant Group homepage with the phone number pinned to the top on mobile",
+        "content_hash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+        "version": 3,
+        "status": "ready-for-review",
+        "supersedes": {
+          "event_id": "5555555555555555555555555555555555555555555555555555555555555555",
+          "version": 2
+        },
+        "history": [
+          {
+            "version": 1,
+            "outcome": "changes-requested",
+            "what_happened": "You said the phone number was still hard to find on a phone."
+          },
+          {
+            "version": 2,
+            "outcome": "changes-requested",
+            "what_happened": "You asked for the old testimonials back on the homepage."
+          }
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "state": "tested",
+    "requires_attention": true
+  }
+}

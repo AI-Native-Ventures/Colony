@@ -1,5 +1,6 @@
 import {
   Bell,
+  Blocks,
   Bot,
   CircleAlert,
   CircleHelp,
@@ -19,6 +20,7 @@ const KIND_ICON: Record<ActionItemKind, typeof CircleHelp> = {
   message: MessageSquare,
   reminder: Bell,
   workflow: Workflow,
+  block: Blocks,
 };
 
 const STATE_LABEL: Record<ActionItemState, string> = {
@@ -43,7 +45,7 @@ function formatAge(timestamp: number): string {
   return `${Math.floor(seconds / 86_400)}d ago`;
 }
 
-function sourceLabel(item: ActionItem): string {
+export function sourceLabel(item: ActionItem): string {
   switch (item.source.kind) {
     case "ask":
       // A closed ask's meta line names HOW it closed. An executed default
@@ -64,6 +66,11 @@ function sourceLabel(item: ActionItem): string {
       return "Durable task";
     case "workflow":
       return item.source.approval ? "Approval required" : "Workflow run";
+    case "block":
+      // The row's state badge already says whether the decision is resolved.
+      // The meta line only has to say what KIND of thing this is without
+      // protocol vocabulary.
+      return item.source.awaitingDecision ? "Block waiting on you" : "Block";
   }
 }
 

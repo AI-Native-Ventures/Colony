@@ -85,6 +85,59 @@ fn block_reference_channel_rejects_arbitrary_and_noncanonical_tags() {
     }
 }
 
+/// Onboarding's first-task marker, end to end through the real builder.
+///
+/// `completeFirstRunIo` sends this marker so `welcomeKickoff` and
+/// `has_managed_agent_channel_message_marker` can find the message again. On
+/// 2026-08-27 it travelled through the Blocks-only reference channel, which
+/// rejects it, so first-run completion failed for every new user with
+/// "invalid Block reference tag". Both directions are pinned here: the marker
+/// is accepted where it belongs, and refused where it does not with a message
+/// that names the right channel.
+#[test]
+fn onboarding_first_task_marker_rides_the_client_tag_channel() {
+    let marker = "colony-onboarding-v2:first-task:7b171fd3-0772-4ab9-a7f4-b369b07fc8b8";
+    let client_tags = vec![vec!["client".to_owned(), marker.to_owned()]];
+
+    let event = build_message_with_client_tags(
+        Uuid::new_v4(),
+        "Scout, here is the company context I confirmed during onboarding.",
+        None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        "https://relay.example",
+        &client_tags,
+    )
+    .expect("client marker is accepted on its own channel")
+    .sign_with_keys(&Keys::generate())
+    .expect("signed");
+
+    assert!(event
+        .tags
+        .iter()
+        .any(|tag| tag.as_slice() == ["client".to_owned(), marker.to_owned()]));
+
+    let error = build_message_with_reference_tags(
+        Uuid::new_v4(),
+        "Scout, here is the company context I confirmed during onboarding.",
+        None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &client_tags,
+    )
+    .expect_err("a client marker is not a Block reference");
+    assert!(
+        error.contains("belong in clientTags"),
+        "the rejection must name the channel that accepts it, got: {error}"
+    );
+}
+
 #[test]
 fn channel_builders_reject_hash_only_names() {
     let channel_id = Uuid::new_v4();

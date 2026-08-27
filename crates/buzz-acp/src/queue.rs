@@ -1190,7 +1190,7 @@ const MAX_PROMPT_LABEL_LEN: usize = 64;
 /// Sanitize a profile label for safe embedding in prompt structure.
 /// Strips control characters (newlines, tabs, etc.) that could break
 /// prompt formatting, and truncates to [`MAX_PROMPT_LABEL_LEN`].
-fn sanitize_prompt_label(raw: &str) -> Option<String> {
+pub(crate) fn sanitize_prompt_label(raw: &str) -> Option<String> {
     let clean: String = raw
         .trim()
         .chars()
@@ -1204,7 +1204,7 @@ fn sanitize_prompt_label(raw: &str) -> Option<String> {
     }
 }
 
-fn resolve_prompt_label(
+pub(crate) fn resolve_prompt_label(
     pubkey: &str,
     profile_lookup: Option<&PromptProfileLookup>,
 ) -> Option<String> {
@@ -1578,6 +1578,12 @@ pub struct FormatPromptArgs<'a> {
     pub agent_core: Option<&'a str>,
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
+    /// Rendered `[Thread Record]` section — structured protocol events tied
+    /// to this thread (asks, their outcomes, decision logs), fetched fresh
+    /// per turn by the caller. `None` for DM or channel-scope turns, when the
+    /// feature is disabled, or on fetch failure (fail open). Rendered as its
+    /// own block immediately before `[Thread Context]`.
+    pub thread_record: Option<&'a str>,
     /// True when delivery-delta filtering removed at least one event that this
     /// live session had already received. Trigger-only context does not set it.
     pub conversation_context_had_delivered_events: bool,
@@ -1688,8 +1694,10 @@ pub(crate) fn base_section(base_prompt: &str) -> String {
 ///    agents only, and only on the session's first message (see
 ///    `standing_context_sent`)
 /// 1. `[Context]` — scope, channel name, and contextual hints for the agent
-/// 2. `[Thread Context]` or `[Conversation Context]` — if fetched
-/// 3. `[Event]` / `[Buzz events]` — the triggering event(s)
+/// 2. `[Thread Record]` — structured protocol events tied to the thread, if
+///    fetched (per-turn; thread scope only)
+/// 3. `[Thread Context]` or `[Conversation Context]` — if fetched
+/// 4. `[Event]` / `[Buzz events]` — the triggering event(s)
 ///
 /// Each section is returned as its own block rather than one joined string so
 /// the observer frame's size trimmer (`fit_observer_event_to_budget`) elides
@@ -1771,11 +1779,19 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         reply_anchor.as_deref(),
     ));
 
+    // 2b. [Thread Record] — structured protocol events tied to this thread.
+    //     Own block, immediately before [Thread Context] (D7 + render
+    //     position), so the desktop Prompt-context observer panel counts and
+    //     trims it like any other section. Per-turn content, never standing
+    //     context: ask status changes mid-session.
+    if let Some(record) = args.thread_record {
+        sections.push(record.to_string());
+    }
+
     // 3. Conversation context (thread or DM).
     if let Some(ctx) = args.conversation_context {
         sections.push(format_conversation_context(ctx, args.profile_lookup));
     }
-
     // 3b. Hydrated Discovery context. Resolved by the caller under the
     // receiving agent's identity; labels in the message text are never used.
     if let Some(discovery) = args.discovery_context {
@@ -3042,6 +3058,78 @@ mod tests {
         // No [Base] or [System] in user message
         assert!(!prompt.contains("[Base]"));
         assert!(!prompt.contains("[System]"));
+    }
+
+    #[test]
+    fn test_format_prompt_thread_record_renders_before_thread_context() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let ctx = ConversationContext::Thread {
+            messages: vec![ContextMessage {
+                event_id: String::new(),
+                pubkey: "npub1test".into(),
+                content: "prior message".into(),
+                timestamp: "2024-01-01T00:00:00Z".into(),
+            }],
+            total: 1,
+            truncated: false,
+        };
+        let record = "[Thread Record]\nAsks:\n- [open] blocker: \"Staging DB creds expired\"";
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                conversation_context: Some(&ctx),
+                thread_record: Some(record),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        let context_pos = prompt.find("[Context]").expect("[Context] missing");
+        let record_pos = prompt
+            .find("[Thread Record]")
+            .expect("[Thread Record] missing");
+        let thread_pos = prompt
+            .find("[Thread Context")
+            .expect("[Thread Context] missing");
+        assert!(
+            context_pos < record_pos && record_pos < thread_pos,
+            "[Thread Record] must be its own block immediately before \
+             [Thread Context]"
+        );
+    }
+
+    #[test]
+    fn test_format_prompt_thread_record_absent_when_not_fetched() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        // Non-thread scope, disabled flag, and fetch failure all resolve to
+        // None at the fetch site (should_fetch_thread_record + fail-open), so
+        // format_prompt must render no section from a None arg.
+        let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        assert!(!prompt.contains("[Thread Record]"));
     }
 
     #[test]

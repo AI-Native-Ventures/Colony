@@ -3,12 +3,16 @@ import { Receipt } from "lucide-react";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
 
+import type { SpendPeriod, UsageSpend } from "../agentSpend";
 import { attentionItems } from "../lib/summarize";
 import type { LedgerEntry, LedgerReport } from "../report";
 import { LedgerActivity } from "./LedgerActivity";
 import { LedgerAttention } from "./LedgerAttention";
 import { LedgerBreakdown } from "./LedgerBreakdown";
+import { LedgerByAgent } from "./LedgerByAgent";
+import { LedgerByJob } from "./LedgerByJob";
 import { LedgerTotals } from "./LedgerTotals";
+import { SpendLimitCard } from "./SpendLimitCard";
 
 /**
  * What the company has spent on agent work.
@@ -17,6 +21,15 @@ import { LedgerTotals } from "./LedgerTotals";
  * from live data or a fixture. The order of the page is deliberate —
  * anything that makes the totals incomplete appears above them, because a
  * reader who meets a number first has already trusted it.
+ *
+ * The order below that is a widening of the same question. The totals say
+ * what the company spent; the breakdown says which part of the company;
+ * "what actually stops spending" says which of the three limits people
+ * conflate would have caught it; and then by agent and by job say who and on
+ * what. By agent sits outside the "any spend recorded" gate on purpose: the
+ * archive can hold an agent's turns on a machine where no signed usage
+ * record has landed yet, and a screen that hid that would report a working
+ * agent as costing nothing.
  */
 
 function LoadingState() {
@@ -59,19 +72,37 @@ function EmptyState() {
   );
 }
 
+/** Everything the by-agent section needs, as the caller resolved it. */
+export interface AgentSpendView {
+  spend: UsageSpend | null;
+  isLoading: boolean;
+  error: Error | null;
+  collectionEnabled: boolean;
+}
+
 export function LedgerScreen({
+  agentSpend,
   error,
   isLoading,
   onAddPrice,
   onAttribute,
+  onOpenCredits,
+  onPeriodChange,
+  period,
   report,
 }: {
+  /** Per-agent figures; absent when the host cannot supply them. */
+  agentSpend?: AgentSpendView;
   error: Error | null;
   isLoading: boolean;
   /** Absent when the viewer cannot correct, e.g. is not the owner. */
   onAttribute?: (entry: LedgerEntry) => void;
   /** Absent when the viewer cannot publish prices. */
   onAddPrice?: () => void;
+  /** Absent when the app cannot route to the Credits screen. */
+  onOpenCredits?: () => void;
+  onPeriodChange?: (period: SpendPeriod) => void;
+  period?: SpendPeriod;
   report: LedgerReport | null;
 }) {
   const hasSpend =
@@ -118,11 +149,31 @@ export function LedgerScreen({
                 <>
                   <LedgerTotals report={report} />
                   <LedgerBreakdown report={report} />
-                  <LedgerActivity onAttribute={onAttribute} report={report} />
                 </>
               ) : (
                 <EmptyState />
               )}
+
+              <SpendLimitCard onOpenCredits={onOpenCredits} />
+
+              {agentSpend && period && onPeriodChange ? (
+                <LedgerByAgent
+                  collectionEnabled={agentSpend.collectionEnabled}
+                  error={agentSpend.error}
+                  isLoading={agentSpend.isLoading}
+                  onAddPrice={onAddPrice}
+                  onPeriodChange={onPeriodChange}
+                  period={period}
+                  spend={agentSpend.spend}
+                />
+              ) : null}
+
+              {hasSpend ? (
+                <>
+                  <LedgerByJob report={report} />
+                  <LedgerActivity onAttribute={onAttribute} report={report} />
+                </>
+              ) : null}
             </>
           ) : null}
         </div>

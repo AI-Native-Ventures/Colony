@@ -1,5 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as React from "react";
 
+import {
+  type AgentUsageSeries,
+  getAgentUsageSeries,
+  onAgentMetricsChanged,
+} from "@/shared/api/tauriArchive";
+
+import {
+  localMidnightBoundaries,
+  priceUsageSeries,
+  type UsageSpend,
+} from "./agentSpend";
 import type { Budget, CorrectionBook, PriceBook, Rulebook } from "./contracts";
 import {
   loadBudgets,
@@ -81,12 +93,40 @@ export function useBudgets(communityId: string) {
  * `staleTime` is generous because spend is a running total, not a live
  * feed: a number a minute old is still the right number to act on.
  */
-export function useLedgerReport(communityId: string) {
+export function useLedgerReport(
+  communityId: string,
+  options?: {
+    /**
+     * Re-run the report on an interval, for a caller that is watching rather
+     * than reading: the budget alerter needs a figure that keeps moving even
+     * though nobody is looking at the Spend screen.
+     *
+     * Not free. Each run re-reads and decrypts every usage record addressed
+     * to this identity, so an interval here is a real cost paid on a timer.
+     * Anything watching should choose an interval matched to how fast the
+     * thing it watches actually changes; a monthly budget does not need
+     * minutes. React Query does not refetch on an interval while the window
+     * is in the background, so a closed laptop costs nothing.
+     */
+    refetchIntervalMs?: number;
+    /**
+     * False suspends the report entirely, not just its interval. A watcher
+     * that is not allowed to speak should also not be decrypting the
+     * ledger on a timer: the budget alerter passes its settings gate here,
+     * so an owner with desktop alerts off pays nothing for a watcher that
+     * can never deliver.
+     */
+    enabled?: boolean;
+  },
+) {
   return useQuery<LedgerReport>({
     queryKey: ledgerReportQueryKey(communityId),
     queryFn: loadLedgerReport,
-    enabled: communityId.length > 0,
+    enabled: communityId.length > 0 && (options?.enabled ?? true),
     staleTime: 60_000,
+    ...(options?.refetchIntervalMs
+      ? { refetchInterval: options.refetchIntervalMs }
+      : {}),
   });
 }
 
@@ -132,4 +172,129 @@ export function usePublishPrice(communityId: string) {
       });
     },
   });
+}
+
+// ── Per-agent spend, from the local archive ─────────────────────────────────
+
+/**
+ * How long a priced usage window stays fresh.
+ *
+ * The archive is a local SQLite read, so this is cheap, but the answer is a
+ * running total rather than a live feed: a figure a minute old is still the
+ * figure to act on. Newly archived metrics invalidate it immediately through
+ * `onAgentMetricsChanged`, so freshness does not depend on the interval.
+ */
+const USAGE_STALE_TIME_MS = 60_000;
+
+export function agentUsageQueryKey(
+  communityId: string,
+  days: number,
+  agentPubkey: string | null,
+) {
+  return [LEDGER_ROOT, communityId, "agent-usage", days, agentPubkey] as const;
+}
+
+/**
+ * The locally archived usage series for a window.
+ *
+ * Bucket boundaries are rebuilt per fetch rather than held in the key, so a
+ * window that spans midnight refreshes onto the new day instead of pinning
+ * the boundaries it was first mounted with.
+ */
+export function useAgentUsageSeries(
+  communityId: string,
+  days: number,
+  agentPubkey?: string,
+) {
+  const queryClient = useQueryClient();
+  const key = agentUsageQueryKey(communityId, days, agentPubkey ?? null);
+
+  // Archiving a batch of kind 44200 metrics changes this answer. Without
+  // this the screen would keep serving the pre-turn figure until something
+  // else happened to remount it.
+  React.useEffect(
+    () =>
+      onAgentMetricsChanged(() => {
+        void queryClient.invalidateQueries({
+          queryKey: [LEDGER_ROOT, communityId, "agent-usage"],
+        });
+      }),
+    [communityId, queryClient],
+  );
+
+  return useQuery<AgentUsageSeries>({
+    queryKey: key,
+    queryFn: () =>
+      getAgentUsageSeries({
+        bucketBoundaries: localMidnightBoundaries(days),
+        ...(agentPubkey ? { agentPubkey } : {}),
+      }),
+    enabled: communityId.length > 0,
+    staleTime: USAGE_STALE_TIME_MS,
+  });
+}
+
+/** What `useAgentSpend` hands its callers. */
+export interface AgentSpendResult {
+  /**
+   * The priced window, or `null` while it is still being worked out or when
+   * it could not be read.
+   *
+   * `null` rather than an empty result on purpose. A screen that rendered a
+   * pending or failed read as `$0.00` would be telling an owner their agents
+   * cost nothing, which is the single most reassuring way to be wrong about
+   * money.
+   */
+  spend: UsageSpend | null;
+  isLoading: boolean;
+  error: Error | null;
+  /** False when kind 44200 archiving is off, so there is nothing to read. */
+  collectionEnabled: boolean;
+  /** True when the archive holds metrics for this agent outside the window. */
+  hasArchivedEvidence: boolean | null;
+}
+
+/**
+ * What agents cost over a window, in money.
+ *
+ * Joins the local usage archive to the published price book. Both have to
+ * arrive: usage without prices is tokens, and prices without usage is a rate
+ * card. Either one still loading leaves `spend` null rather than producing
+ * a total that is missing half its inputs.
+ */
+export function useAgentSpend(
+  communityId: string,
+  days: number,
+  agentPubkey?: string,
+): AgentSpendResult {
+  const usageQuery = useAgentUsageSeries(communityId, days, agentPubkey);
+  const priceQuery = usePriceBook(communityId);
+
+  const isLoading = usageQuery.isLoading || priceQuery.isLoading;
+  const error =
+    usageQuery.error instanceof Error
+      ? usageQuery.error
+      : priceQuery.error instanceof Error
+        ? priceQuery.error
+        : null;
+
+  const series = usageQuery.data ?? null;
+  const book = priceQuery.data ?? null;
+  const ready = !isLoading && error === null && series !== null;
+
+  const spend = React.useMemo(
+    () =>
+      ready
+        ? priceUsageSeries(series, book, Math.floor(Date.now() / 1000))
+        : null,
+    [book, ready, series],
+  );
+
+  return {
+    collectionEnabled: series?.collectionEnabled ?? true,
+    error,
+    hasArchivedEvidence: series?.hasArchivedEvidence ?? null,
+    isLoading,
+    spend,
+  };
 }

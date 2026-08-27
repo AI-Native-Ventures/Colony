@@ -442,6 +442,13 @@ fn batch_thread_root(batch: Option<&FlushBatch>) -> Option<String> {
         .and_then(|tags| tags.root_event_id)
 }
 
+/// Whether this turn gets a `[Thread Record]` fetch. Per D4 the section is
+/// thread-scoped ONLY: skipped entirely for DM turns, for channel-scope turns
+/// (no thread root), and when the feature is disabled.
+fn should_fetch_thread_record(enabled: bool, thread_root: Option<&str>, is_dm: bool) -> bool {
+    enabled && thread_root.is_some() && !is_dm
+}
+
 /// Return the human-facing kind label for a prompt source.
 fn prompt_source_label(source: &PromptSource) -> &'static str {
     match source {
@@ -783,6 +790,12 @@ pub struct PromptContext {
     /// `[Agent Memory — core]` section. On by default; disabled via
     /// `--no-memory` / `BUZZ_ACP_NO_MEMORY`.
     pub memory_enabled: bool,
+    /// Whether the per-turn `[Thread Record]` section is fetched and
+    /// rendered. On by default; disabled via `BUZZ_ACP_THREAD_RECORD=false`.
+    /// Unlike the standing sections this is per-turn, not per-session: ask
+    /// status changes mid-session (open -> resolved), so it is re-fetched
+    /// alongside conversation context every turn and never cached.
+    pub thread_record_enabled: bool,
     /// Harness identity string for NIP-AM `harness` field. Derived from the
     /// configured `agent_command` at startup (e.g. `"goose"`, `"buzz-agent"`).
     pub harness_name: String,
@@ -1142,6 +1155,11 @@ const CONTEXT_COUNT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Delay between the first failed context fetch and the single retry.
 const CONTEXT_FETCH_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+/// Per-round-trip relay query limit for [Thread Record] fetches. Comfortably
+/// above the render cap of 20 per category so the `(showing N of M)` note can
+/// state a real total.
+const THREAD_RECORD_QUERY_LIMIT: usize = 200;
 
 /// Timeout for model-switch requests (`session/set_config_option`, `session/set_model`).
 const MODEL_SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -2554,6 +2572,41 @@ pub async fn run_prompt_task(
         let profile_lookup =
             fetch_prompt_profile_lookup(b, conversation_context.as_ref(), &ctx.rest_client).await;
 
+        // [Thread Record] — per-turn fetch (D3), thread-scoped only (D4).
+        // Fetched here, after the profile lookup, so resolved-ask owner labels
+        // render through the same lookup as every other section. Fetched once
+        // per turn, never cached: ask status changes mid-session.
+        let is_dm_turn = channel_info
+            .as_ref()
+            .map(|ci| ci.channel_type == "dm")
+            .unwrap_or(false);
+        let thread_record_section = if should_fetch_thread_record(
+            ctx.thread_record_enabled,
+            turn_thread_root.as_deref(),
+            is_dm_turn,
+        ) {
+            // `should_fetch_thread_record` guarantees the root is present here.
+            if let Some(root) = turn_thread_root.as_deref() {
+                match fetch_thread_record_section(root, profile_lookup.as_ref(), &ctx.rest_client)
+                    .await
+                {
+                    Some(section) => Some(section),
+                    None => {
+                        tracing::debug!(
+                            target: "thread_record",
+                            channel = %b.channel_id,
+                            "thread record unavailable — emitting no section"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let known_names: Vec<&str> = profile_lookup
             .iter()
             .flat_map(|lookup| lookup.values())
@@ -2588,6 +2641,7 @@ pub async fn run_prompt_task(
                 conversation_context: conversation_context.as_ref(),
                 conversation_context_had_delivered_events,
                 profile_lookup: profile_lookup.as_ref(),
+                thread_record: thread_record_section.as_deref(),
                 has_system_prompt_support: agent.has_system_prompt_support(),
                 base_prompt: standing.base_prompt,
                 system_prompt: standing.system_prompt,
@@ -3182,6 +3236,150 @@ where
     }
     tokio::time::sleep(CONTEXT_FETCH_RETRY_DELAY).await;
     f().await
+}
+
+/// Decode a relay query response into verified events. Malformed JSON and
+/// events whose id/signature do not verify are skipped silently — a
+/// display-only context section must not fail the turn over one bad event,
+/// and the relay verifies at ingest anyway, so this only defends against a
+/// misbehaving intermediary.
+fn decode_verified_events(json: serde_json::Value) -> Vec<nostr::Event> {
+    let Some(raw_events) = json.as_array() else {
+        return Vec::new();
+    };
+    raw_events
+        .iter()
+        .filter_map(|raw| serde_json::from_value::<nostr::Event>(raw.clone()).ok())
+        .filter_map(|event| {
+            if event.verify().is_ok() {
+                Some(event)
+            } else {
+                tracing::debug!(
+                    target: "thread_record",
+                    event_id = %event.id,
+                    "query returned an unverifiable event — skipping"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+/// One relay query attempt under the context-fetch timeout. `Some(json)` on
+/// success; `None` (logged) on relay error or timeout, so [`fetch_with_retry`]
+/// retries once and a persistent failure fails open — no section, turn
+/// proceeds.
+async fn query_relay_json(
+    rest: &RestClient,
+    filters: &[nostr::Filter],
+) -> Option<serde_json::Value> {
+    match timeout(CONTEXT_FETCH_TIMEOUT, rest.query(filters)).await {
+        Ok(Ok(json)) => Some(json),
+        Ok(Err(e)) => {
+            tracing::debug!(target: "thread_record", %e, "query failed — will retry");
+            None
+        }
+        Err(_) => {
+            tracing::debug!(target: "thread_record", "query timed out — will retry");
+            None
+        }
+    }
+}
+
+/// Fetch the structured events tied to `root_event_id` and render the
+/// per-turn `[Thread Record]` section, or `None` on any persistent failure or
+/// when the thread has no structured events (fail open — the turn proceeds).
+///
+/// Query shape (D4), two round trips:
+/// 1. kinds [44300] #e:[thread root] — asks raised from this thread
+/// 2. ONE request, two filters: kinds [44301, 44302] #e:[ask ids] AND
+///    kinds [44303] #e:[thread root]
+///
+/// Every filter carries explicit `kinds` — the relay's p-gate rejects
+/// open-ended queries. Per-turn lifecycle (D3): no caching, no standing
+/// context, so an ask that resolves mid-session is reflected on the next
+/// turn.
+async fn fetch_thread_record_section(
+    root_event_id: &str,
+    profile_lookup: Option<&crate::queue::PromptProfileLookup>,
+    rest: &RestClient,
+) -> Option<String> {
+    use nostr::{Alphabet, SingleLetterTag};
+    let e_tag = SingleLetterTag::lowercase(Alphabet::E);
+    let root = root_event_id.to_string();
+
+    // Round trip 1: the asks raised from this thread.
+    let ask_filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(buzz_core::kind::KIND_ASK as u16))
+        .custom_tags(e_tag, [root.clone()])
+        .limit(THREAD_RECORD_QUERY_LIMIT);
+    let asks_json = fetch_with_retry(|| async {
+        query_relay_json(rest, std::slice::from_ref(&ask_filter)).await
+    })
+    .await?;
+    let asks: Vec<crate::thread_record::ThreadAsk> = decode_verified_events(asks_json)
+        .iter()
+        .filter_map(crate::thread_record::read_thread_ask)
+        .collect();
+
+    // Round trip 2: outcomes for those asks, plus decision logs linked to the
+    // root — two filters, one request.
+    let mut round2_filters = Vec::with_capacity(2);
+    if !asks.is_empty() {
+        let ask_ids: Vec<String> = asks.iter().map(|ask| ask.id.clone()).collect();
+        round2_filters.push(
+            nostr::Filter::new()
+                .kind(nostr::Kind::Custom(
+                    buzz_core::kind::KIND_ASK_RESOLUTION as u16,
+                ))
+                .kind(nostr::Kind::Custom(
+                    buzz_core::kind::KIND_ASK_WITHDRAWAL as u16,
+                ))
+                .custom_tags(e_tag, ask_ids)
+                .limit(THREAD_RECORD_QUERY_LIMIT),
+        );
+    }
+    round2_filters.push(
+        nostr::Filter::new()
+            .kind(nostr::Kind::Custom(
+                buzz_core::kind::KIND_DECISION_LOG as u16,
+            ))
+            .custom_tags(e_tag, [root.clone()])
+            .limit(THREAD_RECORD_QUERY_LIMIT),
+    );
+    let round2_json =
+        fetch_with_retry(|| async { query_relay_json(rest, &round2_filters.clone()).await })
+            .await?;
+
+    let mut outcomes: Vec<crate::thread_record::AskOutcome> = Vec::new();
+    let mut decisions: Vec<crate::thread_record::ThreadDecision> = Vec::new();
+    for event in decode_verified_events(round2_json) {
+        match event.kind.as_u16() as u32 {
+            buzz_core::kind::KIND_ASK_RESOLUTION | buzz_core::kind::KIND_ASK_WITHDRAWAL => {
+                if let Some(outcome) = crate::thread_record::read_ask_outcome(&event) {
+                    outcomes.push(outcome);
+                }
+            }
+            buzz_core::kind::KIND_DECISION_LOG => {
+                if let Some(decision) = crate::thread_record::read_thread_decision(&event) {
+                    decisions.push(decision);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    crate::thread_record::render_thread_record(
+        &asks,
+        &outcomes,
+        &decisions,
+        profile_lookup,
+        now_secs,
+    )
 }
 
 /// Lazy-fetch channel metadata for a channel not in the startup discovery cache.
@@ -5351,6 +5549,44 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
     use serde_json::json;
+
+    #[test]
+    fn thread_record_fetch_gates_on_flag_scope_and_dm() {
+        // Thread-scoped channel turn with the flag on (default): fetch.
+        assert!(should_fetch_thread_record(true, Some("abc123"), false));
+        // Flag disabled: skip, whatever the scope.
+        assert!(!should_fetch_thread_record(false, Some("abc123"), false));
+        // Channel-scope turn (no thread root): skip entirely.
+        assert!(!should_fetch_thread_record(true, None, false));
+        // DM turns: skip entirely, even inside a DM thread.
+        assert!(!should_fetch_thread_record(true, Some("abc123"), true));
+    }
+
+    #[test]
+    fn decode_verified_events_skips_malformed_and_unverified() {
+        let signed = Keys::generate();
+        let ev = EventBuilder::new(
+            Kind::from(buzz_core::kind::KIND_ASK as u16),
+            r#"{"headline":"x"}"#,
+        )
+        .sign_with_keys(&signed)
+        .unwrap();
+
+        let mut arr = vec![
+            serde_json::to_value(&ev).unwrap(),
+            json!({"kind": "not an event"}),
+            json!("junk"),
+        ];
+        // A structurally complete event whose content was mutated after
+        // signing must not supply prompt context.
+        let mut tampered = serde_json::to_value(&ev).unwrap();
+        tampered["content"] = json!("tampered");
+        arr.push(tampered);
+
+        let decoded = decode_verified_events(json!(arr));
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].id, ev.id);
+    }
 
     fn test_mcp_server() -> McpServer {
         McpServer {
@@ -8914,6 +9150,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             agent_keys: agent_keys.clone(),
             agent_owner_pubkey: owner_pubkey,
             memory_enabled: false,
+            thread_record_enabled: true,
             harness_name: "goose".to_string(),
             adapter_usage_provider: None,
             usage_outbox: None,

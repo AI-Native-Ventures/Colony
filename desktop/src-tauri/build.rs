@@ -12,6 +12,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_ENDPOINT");
+    println!("cargo:rerun-if-env-changed=BUZZ_DESKTOP_KEYRING_SERVICE");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_PROVIDER");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_MODEL");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_ENV");
@@ -32,6 +33,13 @@ fn main() {
 
     if let Ok(relay_http) = std::env::var("BUZZ_RELAY_HTTP") {
         println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_RELAY_HTTP={relay_http}");
+    }
+
+    // Channel-scoped keyring service (e.g. `colony-canary-desktop` for the
+    // Canary build) so a side-by-side install cannot read or rewrite the
+    // stable app's identity blob. Absent = the stable channel default.
+    if let Ok(service) = std::env::var("BUZZ_DESKTOP_KEYRING_SERVICE") {
+        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_KEYRING_SERVICE={service}");
     }
 
     if let Ok(provider) = std::env::var("BUZZ_BUILD_BUZZ_AGENT_PROVIDER") {
