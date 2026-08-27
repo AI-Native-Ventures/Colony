@@ -155,6 +155,25 @@ export function createContentRepository(
         );
     },
 
+    /**
+     * One post's head as the relay stores it, body unparsed.
+     *
+     * The renderer writes its result back onto the post, and a body rebuilt
+     * from the parsed record would drop every field the relay stores
+     * opaquely. So the write path merges into this rather than into a
+     * `ContentPost`.
+     */
+    async getPostBody(
+      address: string,
+    ): Promise<Record<string, unknown> | null> {
+      const heads = await read(
+        { kinds: [KIND_CONTENT_POST], "#d": [address], limit: 8 },
+        (events) => newestHeads(events),
+      );
+      const head = heads?.at(0);
+      return head ? parseEventBody(head) : null;
+    },
+
     /** The house style, or a named campaign's override. */
     async getStyle(
       scope: string = HOUSE_STYLE_SCOPE,
