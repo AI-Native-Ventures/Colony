@@ -279,6 +279,19 @@ jobs:
           # Fail-safe into community selection, exactly like stable.
           unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY
           unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY
+
+          # The stable release workflow builds into this same shared target
+          # directory on this same runner, so an updater archive left behind by
+          # either side can be picked up by the other. That is how v0.11.8
+          # published a canary build as the stable macOS update. Purge before
+          # building, so the only archive present afterwards is this build's.
+          PRE_TARGET_ROOT="$(cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 --no-deps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || echo desktop/src-tauri/target)"
+          PRE_MACOS="$PRE_TARGET_ROOT/aarch64-apple-darwin/release/bundle/macos"
+          if [ -d "$PRE_MACOS" ]; then
+            find "$PRE_MACOS" -maxdepth 1 \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -print -delete
+            rm -rf "$PRE_MACOS/Colony.app"
+          fi
+
           just desktop-release-build aarch64-apple-darwin src-tauri/tauri.release.conf.json
 
           # Resolve the target directory here, where hermit has put cargo on
@@ -413,6 +426,16 @@ jobs:
             echo "::error::${BUILT}.sig missing or empty - the build had no signing key"
             exit 1
           fi
+          # Prove the bytes are the canary build before renaming them into the
+          # canary's published name. Both channels sign with the same updater
+          # key on purpose, so a signature check cannot tell them apart.
+          ROOT_ENTRY=$(tar tzf "$BUILT" | head -1)
+          if [ "$ROOT_ENTRY" != "Colony Canary.app/" ]; then
+            echo "::error::Updater archive contains $ROOT_ENTRY, expected \"Colony Canary.app/\". \
+          This archive is not the canary build and must not be published."
+            exit 1
+          fi
+          echo "Updater archive holds $ROOT_ENTRY"
           ARCHIVE="$BUNDLE/macos/Colony_Canary_${VERSION}_aarch64.app.tar.gz"
           if [ "$BUILT" != "$ARCHIVE" ]; then
             mv "$BUILT" "$ARCHIVE"
