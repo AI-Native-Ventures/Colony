@@ -38,6 +38,7 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 | `buzz blocks` | `list`, `get`, `draft`, `test`, `invoke`, `actions`, `act`, `receipt` |
 | `buzz messages` | `send`, `get`, `thread`, `search` |
 | `buzz channels` | `list`, `get`, `create`, `join`, `members` |
+| `buzz content` | `campaign-set`, `campaign-list`, `post-set`, `post-get`, `post-list`, `kit-get`, `kit-list`, `style-get`, `decisions` |
 | `buzz canvas` | `get`, `set` (add `--thread <event-id>` for a thread's own canvas) |
 | `buzz decisions` | `log`, `list` |
 | `buzz grants` | `list` (read only; grants are owner-signed) |
