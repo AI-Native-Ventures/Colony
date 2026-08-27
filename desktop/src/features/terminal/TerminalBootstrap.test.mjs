@@ -15,9 +15,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   pretendToBeVisual: true,
   url: "http://localhost",
 });
-const callbacks = new Map();
 const calls = [];
-const nextCallback = 1;
 let channel;
 let resizeCallback;
 let canvasWidth = 840;

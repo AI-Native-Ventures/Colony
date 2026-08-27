@@ -525,6 +525,15 @@ type E2eConfig = {
     // (e.g. a generic PDF) without a real upload pipeline. See
     // tests/helpers/bridge.ts:MockBridgeOptions.uploadDescriptors.
     uploadDelayMs?: number;
+    /**
+     * Hold mocked uploads open until the spec calls `releaseUpload()`. Unlike
+     * `uploadDelayMs`, this makes the in-flight window deterministic: the
+     * upload cannot complete while the spec is still interacting, however
+     * slow the runner is.
+     */
+    uploadHold?: boolean;
+    /** Set by the bridge while an upload is held; resolves the held upload. */
+    releaseUpload?: () => void;
     /** Start the mocked media proxy unavailable, then release it from E2E. */
     mediaProxyInitiallyUnavailable?: boolean;
     /** Exercise the production composer path that queues files until send. */
@@ -10026,6 +10035,16 @@ async function resolveMockUploadDescriptors(
   const delayMs = config?.mock?.uploadDelayMs ?? 0;
   if (delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+  const mock = config?.mock;
+  if (mock?.uploadHold) {
+    await new Promise<void>((resolve) => {
+      mock.releaseUpload = () => {
+        mock.uploadHold = false;
+        mock.releaseUpload = undefined;
+        resolve();
+      };
+    });
   }
 
   const configured = config?.mock?.uploadDescriptors;

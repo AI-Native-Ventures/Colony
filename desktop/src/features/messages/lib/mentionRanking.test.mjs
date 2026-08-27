@@ -139,3 +139,25 @@ test("rankMentionCandidates: owned teams rank with runnable personas", () => {
     ["team", "identity"],
   );
 });
+
+test("discovery candidates rank below every actor group, including non-member agents", () => {
+  const ranked = rankMentionCandidates(
+    [
+      {
+        kind: "discovery",
+        discoveryKind: "vertical",
+        entityId: "nonprofits/charitable-foundations",
+        displayName: "Charitable Foundations",
+      },
+      {
+        kind: "identity",
+        pubkey: "c".repeat(64),
+        displayName: "charlie",
+        isMember: false,
+        isAgent: true,
+      },
+    ],
+    "c",
+  );
+  assert.equal(ranked[0].candidate.displayName, "charlie");
+});

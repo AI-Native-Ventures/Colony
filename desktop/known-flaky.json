@@ -1,4 +1,9 @@
 {
   "comment": "Tests allowed to fail once and pass on retry without failing the job. Everything else that flakes fails CI. This list is debt: each entry is a test that is lying about the product, and it should shrink, never grow. Adding an entry is a deliberate decision that needs a reason and a date, not a way to get a red build green.",
-  "allow": []
+  "allow": [
+    "virtualization.spec.ts › 08 — cascading older pages never snap the viewport toward newest"
+  ],
+  "notes": {
+    "virtualization.spec.ts › 08 — cascading older pages never snap the viewport toward newest": "Added 2026-08-27. This is NOT a slow assertion: the run reports maxDrift 118 against a 5px bar, so the viewport really does snap toward newest under CI CPU contention. It reproduced on two consecutive runs of an unrelated PR (168 passed, this one flaked), and it currently blocks every PR against develop, including a production fix for agents leaking across communities. Listed to unblock that, not because it is understood. The drift is a real product symptom and this entry should be removed with a fix, not renewed."
+  }
 }

@@ -166,13 +166,16 @@ test("opening edit during an immediate photo upload preserves the draft", async 
   page,
 }) => {
   await page.goto("/");
+  // Hold the upload open (not a timer): a fixed delay races the menu
+  // interactions below on slow CI runners, letting the upload finish before
+  // the edit click and flipping the expected rejection into a normal edit.
   await page.evaluate(() => {
     const e2e = (
       window as Window & {
-        __BUZZ_E2E__?: { mock?: { uploadDelayMs?: number } };
+        __BUZZ_E2E__?: { mock?: { uploadHold?: boolean } };
       }
     ).__BUZZ_E2E__;
-    if (e2e?.mock) e2e.mock.uploadDelayMs = 1_000;
+    if (e2e?.mock) e2e.mock.uploadHold = true;
   });
   await page.getByTestId("channel-general").click();
   await choosePhoto(page);
@@ -185,8 +188,21 @@ test("opening edit during an immediate photo upload preserves the draft", async 
   // reserved upload slot. The upload remains current and lands in the draft.
   await expect(page.getByTestId("edit-target")).toHaveCount(0);
   await expect(page.getByTestId("upload-progress")).toBeVisible();
+  await page.evaluate(() => {
+    const e2e = (
+      window as Window & {
+        __BUZZ_E2E__?: {
+          mock?: { uploadHold?: boolean; releaseUpload?: () => void };
+        };
+      }
+    ).__BUZZ_E2E__;
+    // Clearing the flag covers the order where the bridge has not reached its
+    // hold check yet; calling release covers the already-holding order.
+    if (e2e?.mock) e2e.mock.uploadHold = false;
+    e2e?.mock?.releaseUpload?.();
+  });
   await expect(page.getByTestId("upload-progress")).toHaveCount(0, {
-    timeout: 5_000,
+    timeout: 15_000,
   });
   await expect(page.getByTestId("message-composer")).toContainText(
     "quarterly-report.pdf",

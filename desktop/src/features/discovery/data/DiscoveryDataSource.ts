@@ -20,8 +20,27 @@ import type {
   VerticalDetail,
 } from "../types";
 
+/** One mention-directory row from `search_entities` (relay-shaped). */
+export type DiscoveryEntitySummary = {
+  kind:
+    | "industry"
+    | "vertical"
+    | "campaign"
+    | "campaign_leads"
+    | "lead"
+    | "run";
+  id: string;
+  label: string;
+  context_id?: string;
+  detail?: string;
+};
+
 export interface DiscoveryDataSource {
   getEntitlement(): Promise<DiscoveryEntitlement>;
+  searchEntities?(
+    query: string,
+    limit?: number,
+  ): Promise<DiscoveryEntitySummary[]>;
   getIndustries(): Promise<Industry[]>;
   getVerticals(industryId: string): Promise<Vertical[]>;
   getVertical(industryId: string, verticalId: string): Promise<VerticalDetail>;

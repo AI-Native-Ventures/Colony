@@ -10,10 +10,11 @@ use buzz_core::{
         campaign_budget_fingerprint, DiscoveryBusinessLeadProjection,
         DiscoveryCampaignBudgetApproval, DiscoveryCampaignBudgetProjection,
         DiscoveryCampaignBudgetState, DiscoveryCampaignInputV2, DiscoveryCampaignListRequest,
-        DiscoveryCampaignPage, DiscoveryCampaignProjection, DiscoveryLeadCountRow,
-        DiscoveryLeadCounts, DiscoveryLeadDetail, DiscoveryLeadListRequest, DiscoveryLeadPage,
-        DiscoveryLeadStatus, DiscoveryLeadUpdateInput, DiscoveryWorkspaceActionPayload,
-        DiscoveryWorkspaceOperation, DiscoveryWorkspaceRequest, DiscoveryWorkspaceResult,
+        DiscoveryCampaignPage, DiscoveryCampaignProjection, DiscoveryEntitySummary,
+        DiscoveryLeadCountRow, DiscoveryLeadCounts, DiscoveryLeadDetail, DiscoveryLeadListRequest,
+        DiscoveryLeadPage, DiscoveryLeadStatus, DiscoveryLeadUpdateInput,
+        DiscoveryWorkspaceActionPayload, DiscoveryWorkspaceOperation, DiscoveryWorkspaceRequest,
+        DiscoveryWorkspaceResult,
     },
     party::{is_relationship_transition_allowed, RelationshipKind},
     CommunityId, StoredEvent,
@@ -438,6 +439,16 @@ async fn apply_workspace_operation_tx(
         DiscoveryWorkspaceActionPayload::ListLeadCounts => {
             Ok(DiscoveryWorkspaceResult::LeadCounts {
                 counts: list_lead_counts_tx(tx, community_id).await?,
+            })
+        }
+        DiscoveryWorkspaceActionPayload::SearchEntities { query, limit } => {
+            Ok(DiscoveryWorkspaceResult::EntitySearch {
+                entities: search_entities_tx(tx, community_id, query, *limit).await?,
+            })
+        }
+        DiscoveryWorkspaceActionPayload::ResolveEntities { refs } => {
+            Ok(DiscoveryWorkspaceResult::ResolvedEntities {
+                entities: resolve_entities_tx(tx, community_id, refs).await?,
             })
         }
         DiscoveryWorkspaceActionPayload::GetLead { lead_id } => {
@@ -993,6 +1004,329 @@ async fn list_lead_counts_tx(
     })
 }
 
+/// Escape a user query for use inside an ILIKE pattern. Only `%`, `_`, and
+/// the escape character itself need treatment; Postgres lowercases via ILIKE.
+fn ilike_pattern(query: &str) -> String {
+    let escaped = query
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+async fn search_entities_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    query: &str,
+    limit: u16,
+) -> Result<Vec<DiscoveryEntitySummary>> {
+    let max_rows =
+        usize::from(limit).min(buzz_core::discovery_taxonomy::DISCOVERY_ENTITY_SEARCH_LIMIT);
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut summaries: Vec<DiscoveryEntitySummary> = Vec::new();
+
+    // 1. Canonical taxonomy rows. Free, relay-authoritative, and ranked by
+    //    the shared core search so CLI and composer agree on one order.
+    for row in buzz_core::discovery_taxonomy::search_taxonomy(query, max_rows) {
+        let vertical = row.vertical_id.is_some();
+        summaries.push(DiscoveryEntitySummary {
+            kind: if vertical {
+                buzz_core::discovery_workspace::DiscoveryEntityKind::Vertical
+            } else {
+                buzz_core::discovery_workspace::DiscoveryEntityKind::Industry
+            },
+            id: row.entity_id(),
+            label: row.entity_label().to_string(),
+            context_id: Some(row.industry_id),
+            detail: None,
+        });
+    }
+
+    // 2. Campaigns by name or location, newest first.
+    let pattern = ilike_pattern(query);
+    let campaign_rows = sqlx::query(
+        "SELECT c.id,c.name,c.location,\
+                (SELECT count(*) FROM discovery_campaign_leads cl \
+                 WHERE cl.community_id=c.community_id AND cl.campaign_id=c.id) AS lead_count \
+         FROM discovery_campaigns c \
+         WHERE c.community_id=$1 AND (c.name ILIKE $2 OR c.location ILIKE $2) \
+         ORDER BY c.created_at DESC,c.id DESC LIMIT $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(&pattern)
+    .bind(i64::from(limit))
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in campaign_rows {
+        let lead_count: i64 = row.try_get("lead_count")?;
+        summaries.push(DiscoveryEntitySummary {
+            kind: buzz_core::discovery_workspace::DiscoveryEntityKind::Campaign,
+            id: row.try_get::<Uuid, _>("id")?.to_string(),
+            label: row.try_get("name")?,
+            context_id: None,
+            detail: Some(format!(
+                "{} · {} leads",
+                row.try_get::<String, _>("location")?,
+                lead_count.max(0)
+            )),
+        });
+    }
+
+    // 3. Leads by name, city, or category.
+    let lead_rows = sqlx::query(
+        "SELECT o.id,o.name,o.city,o.category \
+         FROM discovery_business_observations o \
+         JOIN discovery_campaign_leads cl ON cl.community_id=o.community_id AND cl.lead_id=o.id \
+         WHERE o.community_id=$1 \
+           AND (o.name ILIKE $2 OR COALESCE(o.city,'') ILIKE $2 \
+                OR COALESCE(o.category,'') ILIKE $2) \
+         ORDER BY o.first_observed_at DESC,o.id DESC LIMIT $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(&pattern)
+    .bind(i64::from(limit))
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in lead_rows {
+        let city: Option<String> = row.try_get("city")?;
+        summaries.push(DiscoveryEntitySummary {
+            kind: buzz_core::discovery_workspace::DiscoveryEntityKind::Lead,
+            id: row.try_get::<Uuid, _>("id")?.to_string(),
+            label: row.try_get("name")?,
+            context_id: None,
+            detail: city,
+        });
+    }
+
+    // 4. Runs by campaign name, state text, or ID prefix.
+    let run_rows = sqlx::query(
+        "SELECT r.id,r.state::text AS state_text,c.name AS campaign_name \
+         FROM discovery_runs r \
+         JOIN discovery_campaigns c ON c.community_id=r.community_id AND c.id=r.campaign_id \
+         WHERE r.community_id=$1 \
+           AND (c.name ILIKE $2 OR r.state::text ILIKE $2 OR r.id::text ILIKE $2) \
+         ORDER BY r.created_at DESC,r.id DESC LIMIT $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(&pattern)
+    .bind(i64::from(limit))
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in run_rows {
+        summaries.push(DiscoveryEntitySummary {
+            kind: buzz_core::discovery_workspace::DiscoveryEntityKind::Run,
+            id: row.try_get::<Uuid, _>("id")?.to_string(),
+            label: format!("{} run", row.try_get::<String, _>("campaign_name")?),
+            context_id: None,
+            detail: Some(row.try_get("state_text")?),
+        });
+    }
+    summaries.truncate(max_rows);
+    Ok(summaries)
+}
+
+async fn resolve_entities_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: CommunityId,
+    refs: &[buzz_core::discovery_workspace::DiscoveryEntityRef],
+) -> Result<Vec<buzz_core::discovery_workspace::ResolvedDiscoveryEntity>> {
+    use buzz_core::discovery_workspace::{
+        DiscoveryEntityKind as Kind, DiscoveryEntityRef, ResolvedDiscoveryEntity as Resolved,
+    };
+
+    // Taxonomy rows are canonical, not per-community rows; their Lead counts
+    // come from one shared aggregation fetched at most once per request.
+    let mut counts: Option<DiscoveryLeadCounts> = None;
+    async fn counts_for_kind(
+        tx: &mut Transaction<'_, Postgres>,
+        community_id: CommunityId,
+        cache: &mut Option<DiscoveryLeadCounts>,
+    ) -> Result<()> {
+        if cache.is_none() {
+            *cache = Some(list_lead_counts_tx(tx, community_id).await?);
+        }
+        Ok(())
+    }
+
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut resolved: Vec<Resolved> = Vec::with_capacity(refs.len());
+
+    let unavailable = |kind: Kind, id: &str| Resolved::Unavailable {
+        kind,
+        id: id.to_string(),
+    };
+
+    for DiscoveryEntityRef { kind, id } in refs {
+        if !seen.insert((format!("{kind:?}"), id.clone())) {
+            continue;
+        }
+        match *kind {
+            Kind::Industry => match buzz_core::discovery_taxonomy::resolve_taxonomy_row(id, None) {
+                Some(row) => {
+                    counts_for_kind(tx, community_id, &mut counts).await?;
+                    let lead_count = counts
+                        .as_ref()
+                        .and_then(|counts| {
+                            counts
+                                .industries
+                                .iter()
+                                .find(|entry| entry.industry_id == *id)
+                                .map(|entry| entry.count)
+                        })
+                        .unwrap_or(0);
+                    resolved.push(Resolved::Industry {
+                        taxonomy: Box::new(taxonomy_projection(&row, lead_count)),
+                    });
+                }
+                None => resolved.push(unavailable(*kind, id)),
+            },
+            Kind::Vertical => {
+                let components = DiscoveryEntityRef {
+                    kind: *kind,
+                    id: id.clone(),
+                }
+                .vertical_components()
+                .map(|(industry, vertical)| (industry.to_string(), vertical.to_string()));
+                match components.and_then(|(industry_id, vertical_id)| {
+                    buzz_core::discovery_taxonomy::resolve_taxonomy_row(
+                        &industry_id,
+                        Some(&vertical_id),
+                    )
+                    .map(|row| (row, industry_id))
+                }) {
+                    Some((row, industry_id)) => {
+                        counts_for_kind(tx, community_id, &mut counts).await?;
+                        let lead_count = counts
+                            .as_ref()
+                            .and_then(|counts| {
+                                counts.verticals.iter().find(|entry| {
+                                    entry.industry_id == industry_id
+                                        && entry.vertical_id.as_deref()
+                                            == row.vertical_id.as_deref()
+                                })
+                            })
+                            .map(|entry| entry.count)
+                            .unwrap_or(0);
+                        resolved.push(Resolved::Vertical {
+                            taxonomy: Box::new(taxonomy_projection(&row, lead_count)),
+                        });
+                    }
+                    None => resolved.push(unavailable(*kind, id)),
+                }
+            }
+            Kind::Campaign | Kind::CampaignLeads | Kind::Lead | Kind::Run => {
+                let Ok(entity_id) = Uuid::parse_str(id) else {
+                    resolved.push(unavailable(*kind, id));
+                    continue;
+                };
+                if entity_id.is_nil() {
+                    resolved.push(unavailable(*kind, id));
+                    continue;
+                }
+                match *kind {
+                    Kind::Campaign => match load_campaign_tx(tx, community_id, entity_id).await {
+                        Ok(campaign) => resolved.push(Resolved::Campaign {
+                            campaign: Box::new(campaign),
+                        }),
+                        Err(DbError::NotFound(_)) => resolved.push(unavailable(*kind, id)),
+                        Err(error) => return Err(error),
+                    },
+                    Kind::CampaignLeads => {
+                        let page = list_leads_tx(
+                            tx,
+                            community_id,
+                            &DiscoveryLeadListRequest {
+                                campaign_id: Some(entity_id),
+                                industry_id: None,
+                                vertical_id: None,
+                                status: None,
+                                offset: 0,
+                                limit:
+                                    buzz_core::discovery_workspace::DISCOVERY_LEAD_COLLECTION_ROWS
+                                        as u16,
+                            },
+                        )
+                        .await;
+                        match page {
+                            Ok(page) => resolved.push(Resolved::CampaignLeads {
+                                collection: Box::new(
+                                    buzz_core::discovery_workspace::DiscoveryLeadCollectionProjection {
+                                        campaign_id: entity_id,
+                                        total: page.total,
+                                        leads: page.leads,
+                                    },
+                                ),
+                            }),
+                            // An empty campaign list is still a valid
+                            // collection only when the campaign exists;
+                            // otherwise resolve as unavailable so forged IDs
+                            // reveal nothing about hidden campaigns.
+                            Err(DbError::NotFound(_)) => resolved.push(unavailable(*kind, id)),
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    Kind::Lead => match get_lead_tx(tx, community_id, entity_id).await {
+                        Ok(lead) => resolved.push(Resolved::Lead {
+                            lead: Box::new(lead),
+                        }),
+                        Err(DbError::NotFound(_)) => resolved.push(unavailable(*kind, id)),
+                        Err(error) => return Err(error),
+                    },
+                    Kind::Run => {
+                        let row = sqlx::query(
+                            "SELECT r.campaign_id AS run_campaign_id,r.state AS run_state,\
+                                    r.completed_steps,r.total_steps,r.cancel_requested,\
+                                    r.terminal_reason,\
+                                    r.discovery_protocol_version AS run_protocol_version,\
+                                    r.payer_pubkey AS run_payer_pubkey,\
+                                    r.price_per_retained_lead_nanousd AS run_price_nanousd,\
+                                    r.billable_lead_limit AS run_billable_lead_limit,\
+                                    r.reserved_nanousd AS run_reserved_nanousd,\
+                                    r.settled_nanousd AS run_settled_nanousd,\
+                                    r.released_nanousd AS run_released_nanousd,\
+                                    r.billed_retained_lead_count AS run_billed_retained_lead_count,\
+                                    r.settlement_ref AS run_settlement_ref,\
+                                    r.settled_at AS run_settled_at,\
+                                    r.created_at AS run_created_at,\
+                                    r.updated_at AS run_updated_at \
+                             FROM discovery_runs r WHERE r.community_id=$1 AND r.id=$2",
+                        )
+                        .bind(community_id.as_uuid())
+                        .bind(entity_id)
+                        .fetch_optional(&mut **tx)
+                        .await?;
+                        match row {
+                            Some(row) => resolved.push(Resolved::Run {
+                                run: Box::new(run_projection_from_row(&row, entity_id)?),
+                            }),
+                            None => resolved.push(unavailable(*kind, id)),
+                        }
+                    }
+                    _ => unreachable!("uuid kinds handled above"),
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn taxonomy_projection(
+    row: &buzz_core::discovery_taxonomy::TaxonomySearchRow,
+    lead_count: u32,
+) -> buzz_core::discovery_workspace::DiscoveryTaxonomyProjection {
+    buzz_core::discovery_workspace::DiscoveryTaxonomyProjection {
+        industry_id: row.industry_id.clone(),
+        industry_label: row.industry_label.clone(),
+        vertical_id: row.vertical_id.clone(),
+        vertical_label: row.vertical_label.clone(),
+        description: row.description.clone(),
+        lead_count,
+    }
+}
+
 const CAMPAIGN_PROJECTION_SELECT: &str = concat!(
     "SELECT ",
     "c.id AS campaign_record_id,c.name,c.industry_id,c.industry_name,c.vertical_id,c.vertical_name,\
@@ -1371,6 +1705,8 @@ fn operation_text(operation: DiscoveryWorkspaceOperation) -> &'static str {
         DiscoveryWorkspaceOperation::ListCampaigns => "list_campaigns",
         DiscoveryWorkspaceOperation::ListLeads => "list_leads",
         DiscoveryWorkspaceOperation::ListLeadCounts => "list_lead_counts",
+        DiscoveryWorkspaceOperation::SearchEntities => "search_entities",
+        DiscoveryWorkspaceOperation::ResolveEntities => "resolve_entities",
         DiscoveryWorkspaceOperation::GetLead => "get_lead",
         DiscoveryWorkspaceOperation::UpdateLead => "update_lead",
     }
@@ -1663,5 +1999,168 @@ mod fingerprint_tests {
             .execute(&db.pool)
             .await
             .expect("clean approval replay account");
+    }
+}
+
+#[cfg(test)]
+mod mention_contract_tests {
+    use super::*;
+    use buzz_core::discovery_workspace::{
+        DiscoveryEntityKind, DiscoveryEntityRef, DiscoveryEntitySummary, ResolvedDiscoveryEntity,
+    };
+
+    #[test]
+    fn entity_search_payload_round_trips_snake_case() {
+        let request = DiscoveryWorkspaceRequest {
+            request_id: Uuid::from_u128(10),
+            idempotency_key: Uuid::from_u128(11),
+            payload: DiscoveryWorkspaceActionPayload::SearchEntities {
+                query: "dent".into(),
+                limit: 20,
+            },
+        };
+        let encoded = serde_json::to_string(&request).expect("encode");
+        assert!(encoded.contains("\"operation\":\"search_entities\""));
+        assert!(encoded.contains("\"limit\":20"));
+        assert!(!encoded.contains("\"query\":\"dent\"}") || encoded.contains("\"query\":\"dent\""));
+        assert_eq!(
+            workspace_request_fingerprint(&request).expect("fingerprint"),
+            <[u8; 32]>::from(Sha256::digest(encoded.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn resolve_entities_reject_out_of_bounds_and_malformed_refs() {
+        let make = |refs| DiscoveryWorkspaceRequest {
+            request_id: Uuid::from_u128(1),
+            idempotency_key: Uuid::from_u128(2),
+            payload: DiscoveryWorkspaceActionPayload::ResolveEntities { refs },
+        };
+        assert!(make(Vec::new()).validate().is_err(), "empty refs rejected");
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let valid = |kind, id: &str| DiscoveryEntityRef {
+            kind,
+            id: id.to_string(),
+        };
+        assert!(
+            make(
+                (0..21)
+                    .map(|i| valid(
+                        DiscoveryEntityKind::Lead,
+                        &Uuid::from_u128(i as u128).to_string()
+                    ))
+                    .collect()
+            )
+            .validate()
+            .is_err(),
+            "more than DISCOVERY_MENTION_MAX_REFS rejected"
+        );
+        assert!(make(vec![valid(DiscoveryEntityKind::Lead, "not-a-uuid")])
+            .validate()
+            .is_err());
+        assert!(make(vec![valid(DiscoveryEntityKind::CampaignLeads, "")])
+            .validate()
+            .is_err());
+        assert!(make(vec![valid(DiscoveryEntityKind::Vertical, "dentists")])
+            .validate()
+            .is_err());
+        assert!(make(vec![valid(
+            DiscoveryEntityKind::Vertical,
+            "healthcare/dentists"
+        )])
+        .validate()
+        .is_ok());
+        assert!(make(vec![valid(DiscoveryEntityKind::Run, &uuid)])
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn resolved_entity_wire_shape_is_stable() {
+        let lead_detail = DiscoveryLeadDetail {
+            lead: DiscoveryBusinessLeadProjection {
+                lead_id: Uuid::from_u128(7),
+                campaign_id: Uuid::from_u128(8),
+                industry_id: "healthcare".into(),
+                vertical_id: "dentists".into(),
+                status: DiscoveryLeadStatus::Qualified,
+                provider: buzz_core::discovery::DiscoveryProvider::Outscraper,
+                name: "Pearly Smiles".into(),
+                website: None,
+                phone: None,
+                full_address: None,
+                city: None,
+                state: None,
+                country: None,
+                category: None,
+                subtypes: vec![],
+                rating_hundredths: None,
+                reviews_count: None,
+                source_url: None,
+                image_url: None,
+                added_at: chrono::DateTime::<chrono::Utc>::MIN_UTC,
+            },
+            owner_persona_id: None,
+            website_override: None,
+            email: None,
+            phone_override: None,
+            linkedin_url: None,
+            contact_name: None,
+            contact_title: None,
+            notes: None,
+            score: None,
+            updated_by: None,
+            updated_at: None,
+        };
+        let resolved = ResolvedDiscoveryEntity::Lead {
+            lead: Box::new(lead_detail),
+        };
+        let encoded = serde_json::to_string(&resolved).expect("encode resolved lead");
+        assert!(encoded.contains("\"resolved\":\"lead\""));
+        let decoded: ResolvedDiscoveryEntity = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, resolved);
+
+        let unavailable = ResolvedDiscoveryEntity::Unavailable {
+            kind: DiscoveryEntityKind::Campaign,
+            id: "018f0000-0000-7000-8000-000000000001".into(),
+        };
+        let encoded = serde_json::to_string(&unavailable).expect("encode unavailable");
+        assert!(encoded.contains("\"resolved\":\"unavailable\""));
+        assert!(encoded.contains("\"kind\":\"campaign\""));
+        let decoded: ResolvedDiscoveryEntity = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, unavailable);
+    }
+
+    #[test]
+    fn entity_summaries_serialize_for_composer_suggestions() {
+        let summary = DiscoveryEntitySummary {
+            kind: DiscoveryEntityKind::Vertical,
+            id: "healthcare/dentists".into(),
+            label: "Dentists".into(),
+            context_id: Some("healthcare".into()),
+            detail: None,
+        };
+        let encoded = serde_json::to_string(&summary).expect("encode summary");
+        assert_eq!(
+            encoded,
+            "{\"kind\":\"vertical\",\"id\":\"healthcare/dentists\",\"label\":\"Dentists\",\"context_id\":\"healthcare\"}"
+        );
+    }
+
+    #[test]
+    fn entity_search_rejects_bad_query_and_limit() {
+        let make = |query: &str, limit: u16| DiscoveryWorkspaceRequest {
+            request_id: Uuid::from_u128(1),
+            idempotency_key: Uuid::from_u128(2),
+            payload: DiscoveryWorkspaceActionPayload::SearchEntities {
+                query: query.to_string(),
+                limit,
+            },
+        };
+        assert!(make("", 10).validate().is_err());
+        assert!(make(" dentists", 10).validate().is_err());
+        assert!(make("d", 0).validate().is_err());
+        assert!(make("d", 21).validate().is_err());
+        assert!(make("dentists", 20).validate().is_ok());
     }
 }

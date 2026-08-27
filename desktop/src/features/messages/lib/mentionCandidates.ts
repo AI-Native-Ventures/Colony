@@ -2,6 +2,10 @@ import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import type { Cohort } from "@/features/company/contracts";
 import type { AgentPersona, AgentTeam, ChannelRole } from "@/shared/api/types";
 import { KIND_COHORT } from "@/shared/constants/kinds";
+import {
+  DISCOVERY_MENTION_KINDS,
+  type DiscoveryMentionKind,
+} from "./discoveryMentionRefs";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 
 export type TeamMentionMember = {
@@ -53,10 +57,22 @@ export type CohortMentionCandidate = {
   displayName: string;
 };
 
+export type DiscoveryMentionCandidate = {
+  kind: "discovery";
+  discoveryKind: DiscoveryMentionKind;
+  entityId: string;
+  /** Parent industry ID for vertical rows, campaign ID for runs. */
+  contextId?: string;
+  /** Short secondary line (location, status, counts). */
+  detail?: string;
+  displayName: string;
+};
+
 export type MentionCandidate =
   | ActorMentionCandidate
   | BlockMentionCandidate
-  | CohortMentionCandidate;
+  | CohortMentionCandidate
+  | DiscoveryMentionCandidate;
 
 export type BlockCatalogMentionSource = {
   handle: string;
@@ -75,16 +91,56 @@ export function mentionCandidateLabel(candidate: MentionCandidate) {
   if (candidate.kind === "block" || candidate.kind === "cohort") {
     return candidate.displayName;
   }
+  if (candidate.kind === "discovery") {
+    return candidate.displayName;
+  }
   return (
     candidate.displayName ??
     (candidate.pubkey ? truncatePubkey(candidate.pubkey) : "agent")
   );
 }
 
+/** Relay-shaped row for `search_entities`, accepted by the builder. */
+export type DiscoveryEntitySearchRow = {
+  kind: string;
+  id: string;
+  label: string;
+  context_id?: string;
+  detail?: string;
+};
+
+/** Build strict, deduplicated Discovery entries from relay search results. */
+export function buildDiscoveryMentionCandidates(
+  rows: readonly DiscoveryEntitySearchRow[],
+): DiscoveryMentionCandidate[] {
+  const byKey = new Map<string, DiscoveryMentionCandidate>();
+  for (const row of rows) {
+    const entityId = row.id.trim();
+    const displayName = row.label.trim();
+    if (
+      !DISCOVERY_MENTION_KINDS.includes(row.kind as DiscoveryMentionKind) ||
+      !entityId ||
+      !displayName
+    ) {
+      continue;
+    }
+    byKey.set(`${row.kind}:${entityId}`, {
+      kind: "discovery",
+      discoveryKind: row.kind as DiscoveryMentionKind,
+      entityId,
+      contextId: row.context_id?.trim() || undefined,
+      detail: row.detail?.trim() || undefined,
+      displayName,
+    });
+  }
+  return [...byKey.values()];
+}
+
 export function globalSearchIdentityKey(candidate: MentionCandidate) {
+  if (candidate.kind !== "identity" && candidate.kind !== "persona") {
+    return null;
+  }
   if (
-    candidate.kind === "block" ||
-    candidate.kind === "cohort" ||
     !candidate.isGlobalSearchResult ||
     candidate.isMember ||
     candidate.isAgent

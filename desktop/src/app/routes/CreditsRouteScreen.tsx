@@ -1,16 +1,20 @@
 import * as React from "react";
 
-import { CreditsScreen } from "@/features/onboarding/ui/new/screens/CreditsScreen";
+import { CreditsPage } from "@/features/credits/ui/CreditsPage";
+import type { CheckoutState } from "@/features/credits/ui/CreditsPage";
+import type {
+  ChargeCurrency,
+  CreditPack,
+} from "@/features/onboarding/contracts";
 import { createWiredPaymentsService } from "@/features/onboarding/lib/wiredPaymentsService";
-import type { OnboardingServices } from "@/features/onboarding/contracts";
+import { defaultPack } from "@/features/onboarding/ui/new/screens/CreditsScreen";
 import { useIdentityQuery } from "@/shared/api/hooks";
 
 /** Where the buyer's email is remembered between top-ups.
  *
- * The gateway needs an email for the receipt, the identity record does not
- * carry one, and re-typing it on every top-up is friction on the one screen
- * that must not have any. Local only: it never leaves this device except as
- * the email already sent to the gateway at checkout. */
+ * The gateway needs an email for the receipt and the identity record does not
+ * carry one. Asking on every top-up would be friction on the one screen that
+ * must not have any, so it is asked once and kept locally. */
 const BUYER_EMAIL_KEY = "colony.credits.buyerEmail";
 
 function readRememberedEmail(): string {
@@ -21,129 +25,100 @@ function readRememberedEmail(): string {
   }
 }
 
-function rememberEmail(email: string): void {
-  try {
-    window.localStorage.setItem(BUYER_EMAIL_KEY, email);
-  } catch {
-    // A device that refuses local storage still gets to buy; it just
-    // re-types the address next time.
-  }
-}
-
 /**
  * Buying Credits from inside the app.
  *
- * Until this screen existed, `CreditsScreen` was mounted in exactly one place:
- * the first-run onboarding wizard. Anyone who finished onboarding and later ran
- * out of Credits had no route to pay — the entire business model sat behind a
- * door that only opened once. This is that door, reachable from the sidebar
- * beside Spend: Spend is where the money went, Credits is where more comes from.
+ * Until this route existed, the purchase screen was mounted in exactly one
+ * place — the first-run onboarding wizard — so anyone who finished onboarding
+ * and later ran out of Credits had no way to pay.
  *
- * The purchase path itself is NOT reimplemented here. It reuses `CreditsScreen`
- * and the wired payments service, so there is one implementation of the rules
- * that matter: the client names a pack and never a price, prices are read from
- * the relay at runtime, and the charge currency's own symbol is shown.
+ * This owns fetching and checkout; `CreditsPage` owns presentation. The rules
+ * that matter are unchanged and still shared with onboarding: the client names
+ * a pack and never a price, prices are read from the relay at runtime, the
+ * default is pinned by id rather than position, and the charge currency's own
+ * symbol is shown.
  */
 export function CreditsRouteScreen() {
   const identityQuery = useIdentityQuery();
   const pubkey = identityQuery.data?.pubkey ?? "";
 
-  // One service instance for the life of the screen: rebuilding it per render
-  // would re-fetch the pack list on every keystroke in the email field.
-  const [services] = React.useState<OnboardingServices>(
-    () =>
-      ({
-        payments: createWiredPaymentsService(),
-      }) as OnboardingServices,
-  );
+  // One instance for the life of the screen: rebuilding it per render would
+  // refetch the pack list on every state change.
+  const [payments] = React.useState(() => createWiredPaymentsService());
 
-  const [email, setEmail] = React.useState(readRememberedEmail);
-  const [confirmedEmail, setConfirmedEmail] =
-    React.useState(readRememberedEmail);
+  const [packs, setPacks] = React.useState<CreditPack[] | null>(null);
+  const [currency, setCurrency] = React.useState<ChargeCurrency | null>(null);
+  const [selected, setSelected] = React.useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  const [balance, setBalance] = React.useState<number | null>(null);
+  const [state, setState] = React.useState<CheckoutState>("idle");
 
-  // What you already hold, so the decision to top up is an informed one.
-  const loadBalance = React.useCallback(() => {
+  // Prices come from the relay so a change reaches users without a new build,
+  // and so the client never holds a price it could send back.
+  React.useEffect(() => {
+    let live = true;
+    payments
+      .packs()
+      .then((list) => {
+        if (!live) return;
+        setPacks(list.packs);
+        setCurrency(list.currency);
+        setSelected(defaultPack(list.packs)?.id ?? null);
+      })
+      .catch(() => {
+        if (live) setLoadFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [payments]);
+
+  const refreshBalance = React.useCallback(() => {
     if (!pubkey) return;
-    services.payments.balance(pubkey).catch(() => {
-      // CreditsScreen renders its own balance line and its own failure
-      // state; this call only warms the value it reads.
-    });
-  }, [pubkey, services]);
+    payments
+      .balance(pubkey)
+      .then((result) => setBalance(result.usdCents))
+      .catch(() => setBalance(null));
+  }, [payments, pubkey]);
 
-  React.useEffect(loadBalance, [loadBalance]);
+  React.useEffect(refreshBalance, [refreshBalance]);
 
-  const emailLooksUsable = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const pay = React.useCallback(async () => {
+    if (!selected) return;
+    setState("leaving");
+    try {
+      // The pack id goes to the relay, never a price. The relay prices it.
+      const started = await payments.createTransaction(
+        selected,
+        readRememberedEmail() || `${pubkey}@colony.local`,
+      );
+      window.open(started.authorizationUrl, "_blank", "noopener,noreferrer");
+      setState("returned");
+    } catch {
+      setState("failed");
+    }
+  }, [payments, pubkey, selected]);
 
-  if (identityQuery.isLoading) {
-    return (
-      <div
-        aria-busy="true"
-        className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        Loading Credits…
-      </div>
-    );
-  }
+  // Settlement lands via the gateway's webhook, not this window, so the page
+  // polls while a payment is outstanding rather than trusting the redirect.
+  React.useEffect(() => {
+    if (state !== "returned") return;
+    const timer = window.setInterval(refreshBalance, 5_000);
+    return () => window.clearInterval(timer);
+  }, [refreshBalance, state]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-6 py-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Credits</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Colony Credits pay for model usage. Balances are held in US dollars
-          because model providers bill in dollars.
-        </p>
-
-        {confirmedEmail && emailLooksUsable ? (
-          <div className="mt-8">
-            <CreditsScreen
-              email={confirmedEmail}
-              pubkey={pubkey}
-              payments={services.payments}
-              onPaid={loadBalance}
-            />
-            <button
-              className="mt-4 text-sm text-muted-foreground underline"
-              onClick={() => setConfirmedEmail("")}
-              type="button"
-            >
-              Use a different email
-            </button>
-          </div>
-        ) : (
-          <form
-            className="mt-8 flex flex-col gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const trimmed = email.trim();
-              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return;
-              rememberEmail(trimmed);
-              setConfirmedEmail(trimmed);
-            }}
-          >
-            <label className="text-sm font-medium" htmlFor="credits-email">
-              Email for the receipt
-            </label>
-            <input
-              autoComplete="email"
-              className="w-full max-w-sm rounded-md border px-3 py-2 text-sm"
-              id="credits-email"
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
-              type="email"
-              value={email}
-            />
-            <button
-              className="w-fit rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-              disabled={!emailLooksUsable}
-              type="submit"
-            >
-              Continue
-            </button>
-          </form>
-        )}
-      </div>
+      <CreditsPage
+        balanceUsdCents={balance}
+        currency={currency}
+        loadFailed={loadFailed}
+        onPay={pay}
+        onSelect={setSelected}
+        packs={packs}
+        selected={selected}
+        state={state}
+      />
     </div>
   );
 }

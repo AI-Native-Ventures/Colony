@@ -49,6 +49,7 @@ import {
   DEFAULT_BROKER,
   DiscoveryBroker,
   type DiscoveryBrokerDependencies,
+  type DiscoveryEntitySummary as EntitySummary,
   RUN_STATUS_INTERVAL_MS,
 } from "./relayBroker";
 
@@ -191,6 +192,24 @@ export class RelayDiscoveryDataSource implements DiscoveryDataSource {
     });
     this.leadCountsPromise = pending;
     return pending;
+  }
+
+  /**
+   * Search the mentionable Discovery entities of this community: canonical
+   * taxonomy rows, Campaigns, Leads, Lead collections, and runs. Bounded by
+   * the relay at 20 rows; free per the approved Discovery pricing decisions.
+   */
+  async searchEntities(query: string, limit = 10): Promise<EntitySummary[]> {
+    if (!(await this.live())) return [];
+    const result = await this.broker.workspace("search_entities", {
+      operation: "search_entities",
+      query,
+      limit,
+    });
+    if (result.result !== "entity_search") {
+      throw new Error("The relay returned the wrong entity-search result.");
+    }
+    return result.entities;
   }
 
   private async readLeadCounts(): Promise<LeadCounts> {
