@@ -1190,7 +1190,7 @@ const MAX_PROMPT_LABEL_LEN: usize = 64;
 /// Sanitize a profile label for safe embedding in prompt structure.
 /// Strips control characters (newlines, tabs, etc.) that could break
 /// prompt formatting, and truncates to [`MAX_PROMPT_LABEL_LEN`].
-fn sanitize_prompt_label(raw: &str) -> Option<String> {
+pub(crate) fn sanitize_prompt_label(raw: &str) -> Option<String> {
     let clean: String = raw
         .trim()
         .chars()
@@ -1204,7 +1204,7 @@ fn sanitize_prompt_label(raw: &str) -> Option<String> {
     }
 }
 
-fn resolve_prompt_label(
+pub(crate) fn resolve_prompt_label(
     pubkey: &str,
     profile_lookup: Option<&PromptProfileLookup>,
 ) -> Option<String> {

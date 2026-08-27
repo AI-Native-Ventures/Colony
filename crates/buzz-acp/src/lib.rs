@@ -16,6 +16,7 @@ mod pool_lifecycle;
 mod queue;
 mod relay;
 mod setup_mode;
+mod thread_record;
 mod usage;
 mod usage_outbox;
 mod work_context;
