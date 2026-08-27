@@ -50,7 +50,7 @@ const page = await browser.newPage({ viewport: { width: W, height: 700 } });
 await page.setContent(page_html, { waitUntil: "load" });
 
 const result = await page.evaluate(
-  async ({ W, H, GROUND, INK }) => {
+  async ({ W, H }) => {
     const out = {};
 
     // --- 1. did the inlined font actually load and render? -------------
@@ -92,7 +92,7 @@ const result = await page.evaluate(
     try {
       ctx.drawImage(img, 0, 0, W, H);
     } catch (e) {
-      drawThrew = String(e && e.message ? e.message : e);
+      drawThrew = String(e?.message ? e.message : e);
     }
     out.drawThrew = drawThrew;
 
@@ -101,7 +101,7 @@ const result = await page.evaluate(
     try {
       data = ctx.getImageData(0, 0, W, H).data;
     } catch (e) {
-      out.getImageDataThrew = String(e && e.message ? e.message : e);
+      out.getImageDataThrew = String(e?.message ? e.message : e);
       return out;
     }
     let sum = 0;
