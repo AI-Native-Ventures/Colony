@@ -26,8 +26,9 @@ stay referenceable, and keep their state if you close the app mid-review.
 
 ## Nothing happens without your approval
 
-Colony will not create the company, hire the rest of the roster, or start work
-until you approve the blueprint.
+Colony will not create the company or hire the rest of the roster until you
+approve the blueprint. Until then your Chief of Staff is the only one here:
+nobody else is set up, switched on, or billed to you.
 
 Ask the team a question here, or read the [Colony user guide](https://github.com/AI-Native-Ventures/colony-releases#readme).
 `;

@@ -2,7 +2,7 @@ import * as React from "react";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
-import { answerAsk } from "@/features/asks/answerAsk";
+import { answerAsk, type AskAnswerInput } from "@/features/asks/answerAsk";
 import type { OpenAsk } from "@/features/asks/lib/askEvent";
 import { AskDetailCard } from "@/features/asks/ui/AskDetailCard";
 import { relayClient } from "@/shared/api/relayClient";
@@ -22,11 +22,11 @@ export function ActionCenterAskDetail({
   const [error, setError] = React.useState<string | null>(null);
 
   const handleAnswer = React.useCallback(
-    async (decision: string, rationale: string) => {
+    async (answer: AskAnswerInput) => {
       setError(null);
       setIsSubmitting(true);
       try {
-        await answerAsk(ask, decision, rationale, {
+        await answerAsk(ask, answer, {
           invalidateQueries: (queryKey) =>
             queryClient.invalidateQueries({ queryKey }),
           publishEvent: (event, timeoutMessage, sendErrorMessage) =>

@@ -2,7 +2,9 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Users } from "lucide-react";
 
+import { ensureAutomaticAgentConfig } from "@/features/onboarding/automaticAgentSetup";
 import {
+  isOwnerLedCommunityOnboarding,
   markCommunityOnboardingComplete,
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
@@ -240,6 +242,30 @@ export function CommunityOnboardingFlow({
       error: undefined,
     });
   const relayUrl = transaction?.relayUrl;
+  const isOwnerLed = transaction
+    ? isOwnerLedCommunityOnboarding(transaction)
+    : false;
+
+  // Whether this machine has an agent path is what decides which of its two
+  // openings the Welcome kickoff posts, so the config has to be written before
+  // the app mounts on Welcome. It starts as soon as the team screen appears,
+  // and `finalize` awaits whatever is in flight, so someone who clicks
+  // straight through cannot outrun it.
+  const agentSetupRef = React.useRef<Promise<unknown> | null>(null);
+  const startAgentSetup = React.useCallback(() => {
+    if (!agentSetupRef.current) {
+      agentSetupRef.current = ensureAutomaticAgentConfig().catch((error) => {
+        // Setup never blocks entry: an unconfigured machine still lands the
+        // user in Colony, and Settings is still there to do it by hand.
+        console.warn("Automatic agent setup failed.", error);
+      });
+    }
+    return agentSetupRef.current;
+  }, []);
+  React.useEffect(() => {
+    if (!isTeamIntroVisible || !isOwnerLed) return;
+    void startAgentSetup();
+  }, [isOwnerLed, isTeamIntroVisible, startAgentSetup]);
   const finish = React.useCallback(async () => {
     if (!relayUrl) return;
     const identity = await getIdentity();
@@ -265,6 +291,8 @@ export function CommunityOnboardingFlow({
     });
     try {
       const work = (async () => {
+        // Before the channels exist, so it is settled before the kickoff runs.
+        if (isOwnerLed) await startAgentSetup();
         const identity = await getIdentity();
         // A resumed transaction whose brief already went out keeps its
         // recorded id and must not re-check the marker; passing draft: null
@@ -316,9 +344,11 @@ export function CommunityOnboardingFlow({
     }
   }, [
     finish,
+    isOwnerLed,
     isPending,
     queryClient,
     relayUrl,
+    startAgentSetup,
     transaction?.onboardingV2,
     update,
   ]);

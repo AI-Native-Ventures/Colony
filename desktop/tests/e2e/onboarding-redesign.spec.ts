@@ -79,8 +79,8 @@ test("a non-technical user can get from the first screen to the end", async ({
   // login needed, so resolveTrack lands on the byo track: the brain picker
   // appears here with Oh My Pi preselected, and credits later offers its skip
   // button instead of a payment handoff. If someone changes that catalog so
-  // nothing is ready, this screen becomes the timed Colony install instead
-  // and credits loses its skip path, which breaks the rest of this walk.
+  // nothing is ready, the flow skips this screen altogether and credits loses
+  // its skip path, which breaks the rest of this walk.
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });

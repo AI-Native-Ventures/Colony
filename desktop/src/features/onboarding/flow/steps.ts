@@ -52,9 +52,9 @@ export type OnboardingAnswers = {
 
 /**
  * Steps that do work the moment they are entered: probing reads the user's
- * computer, install writes to it, and reading spends Colony's own money on a
- * scrape. Back must never land on one of these, and resume must re-run them
- * rather than restore a half-finished result.
+ * computer, and reading spends Colony's own money on a scrape. Back must never
+ * land on one of these, and resume must re-run them rather than restore a
+ * half-finished result.
  */
 const WORKING_STEPS: ReadonlySet<OnboardingStep> = new Set([
   "probing",
