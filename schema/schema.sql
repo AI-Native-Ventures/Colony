@@ -1485,7 +1485,7 @@ CREATE TABLE discovery_workspace_action_claims (
         'approve_campaign_budget', 'pause_campaign_budget',
         'revoke_campaign_budget', 'get_campaign_budget',
         'get_campaign', 'list_campaigns', 'list_leads', 'list_lead_counts',
-        'get_lead', 'update_lead'
+        'get_lead', 'update_lead', 'search_entities', 'resolve_entities'
     )),
     request_fingerprint BYTEA NOT NULL CHECK (octet_length(request_fingerprint) = 32),
     action_event_id BYTEA NOT NULL CHECK (octet_length(action_event_id) = 32),
