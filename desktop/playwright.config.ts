@@ -242,14 +242,20 @@ export default defineConfig({
     // harness costs a full release rebuild.
     {
       name: "engine-chromium",
-      testMatch: ["**/workspace-web-input.spec.ts"],
+      testMatch: [
+        "**/workspace-web-input.spec.ts",
+        "**/content-render.spec.ts",
+      ],
       use: {
         ...devices["Desktop Chrome"],
       },
     },
     {
       name: "engine-webkit",
-      testMatch: ["**/workspace-web-input.spec.ts"],
+      testMatch: [
+        "**/workspace-web-input.spec.ts",
+        "**/content-render.spec.ts",
+      ],
       use: {
         ...devices["Desktop Safari"],
       },
