@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 424,
-    "rust_lines": 165521,
+    "rust_total": 425,
+    "rust_lines": 165679,
     "tauri_coupled": 170,
-    "portable": 254,
-    "portable_lines": 93460,
+    "portable": 255,
+    "portable_lines": 93611,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -231,6 +231,7 @@
       "src-tauri/src/commands/personas/card/tests.rs",
       "src-tauri/src/commands/personas/delete_cascade_tests.rs",
       "src-tauri/src/commands/personas/inbound/inbound_tests.rs",
+      "src-tauri/src/commands/personas/scope.rs",
       "src-tauri/src/commands/personas/snapshot/fidelity_tests.rs",
       "src-tauri/src/commands/personas/snapshot/import_avatar_tests.rs",
       "src-tauri/src/commands/personas/snapshot/import_egress_guard_tests.rs",
