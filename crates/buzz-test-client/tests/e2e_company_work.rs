@@ -281,10 +281,11 @@ async fn broker(
         .sign_with_keys(keys)
         .expect("action signs");
     let action_id = event.id.to_hex();
-    let ok = client
-        .send_event(event)
-        .await
-        .expect("the relay answers every action");
+    // Retried past a silent window for the same reason the receipt poll below
+    // is: a company action carries an idempotency key, so a re-sent identical
+    // event is answered by the claim the first attempt made rather than
+    // applied twice.
+    let ok = send_past_transport_stall(client, event, "the relay answers every action").await;
     // `accepted` is not asserted: a conflict and a duplicate are both legitimate
     // answers this suite goes on to read from the receipt. It is printed
     // because when a run does fail, the relay's reason is the whole diagnosis,
@@ -397,6 +398,39 @@ async fn head(
     panic!("the relay never answered a head read for {d_tag}");
 }
 
+/// Send one event, retrying past a silent transport window.
+///
+/// The read paths in this file already treat a timed-out window as a hiccup
+/// rather than an answer, because the relay going quiet for one window proves
+/// nothing about the write. The seed writes did not, so a single stalled
+/// window failed the whole suite with `relay accepts team: Timeout` — a
+/// transport event reported as a relay verdict.
+///
+/// Only `Timeout` is retried. Every other error, and any answered-but-rejected
+/// write, is returned untouched: a relay that says no is an answer, and
+/// retrying past it would hide exactly the failures this suite exists to catch.
+///
+/// Retrying is safe because the same signed event carries the same id. An
+/// addressable event replaces itself, and a re-sent one the relay already
+/// stored comes back `duplicate:`/accepted rather than as a second write.
+async fn send_past_transport_stall(
+    client: &mut BuzzTestClient,
+    event: nostr::Event,
+    what: &str,
+) -> buzz_ws_client::OkResponse {
+    for attempt in 0..8 {
+        match client.send_event(event.clone()).await {
+            Ok(ok) => return ok,
+            Err(buzz_test_client::TestClientError::Timeout) => {
+                eprintln!("{what} send attempt {attempt} timed out, retrying");
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(error) => panic!("{what}: {error}"),
+        }
+    }
+    panic!("{what}: the relay never answered eight send attempts");
+}
+
 /// Publish the Team the relay validates Task ownership against.
 async fn publish_team(client: &mut BuzzTestClient, keys: &Keys, team: &CompanyTeamRef) {
     let content = serde_json::json!({
@@ -411,7 +445,7 @@ async fn publish_team(client: &mut BuzzTestClient, keys: &Keys, team: &CompanyTe
     .tags(vec![Tag::parse(["d", team.id.as_str()]).expect("d tag")])
     .sign_with_keys(keys)
     .expect("team signs");
-    client.send_event(event).await.expect("relay accepts team");
+    send_past_transport_stall(client, event, "relay accepts team").await;
 }
 
 fn now() -> i64 {

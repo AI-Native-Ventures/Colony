@@ -19,18 +19,22 @@ struct StarterChannelSpec {
     description: &'static str,
 }
 
-const STARTER_CHANNELS: &[StarterChannelSpec] = &[
-    StarterChannelSpec {
-        slug: "general",
-        name: "general",
-        description: "General conversation and community updates.",
-    },
-    StarterChannelSpec {
-        slug: "welcome-everyone",
-        name: "welcome-everyone",
-        description: "Say hi, ask a question, or share what brought you here.",
-    },
-];
+/// The public channels a brand-new workspace starts with.
+///
+/// One, deliberately. A founder finishing signup used to land on a sidebar
+/// holding `Welcome`, `welcome-everyone` and `general`: three channels, two of
+/// them named some variant of welcome, all three empty, before they had told
+/// anyone what the business does. `welcome-everyone` existed to greet people
+/// who join later, which `general` already does, and the private `Welcome`
+/// channel is where the Chief of Staff actually is.
+///
+/// Workspaces that already have `welcome-everyone` keep it: this list only
+/// decides what gets created, never what gets removed.
+const STARTER_CHANNELS: &[StarterChannelSpec] = &[StarterChannelSpec {
+    slug: "general",
+    name: "general",
+    description: "General conversation and community updates.",
+}];
 
 fn advance_directory_cursor(filter: &mut serde_json::Value, page: &[nostr::Event]) {
     let last = page
