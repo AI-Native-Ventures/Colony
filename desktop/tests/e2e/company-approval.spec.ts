@@ -224,12 +224,26 @@ test("a blueprint missing its document cannot be approved", async ({
 test("asking for changes creates no company", async ({ page }) => {
   await showBlueprint(page, blueprintData());
 
-  // Revising asks the owner what to change, so it is not a direct click. What
-  // matters here is that nothing on this Block creates a company except the
-  // approve control.
+  // This used to assert that an "Ask for changes" button was visible, and it
+  // passed for as long as that button was dead: the control declared a
+  // required input nothing supplied, so it rendered permanently disabled and
+  // visibility was the most the test could claim. The request now goes through
+  // the question that collects the words, so assert the owner can actually
+  // make one, and that making it still creates no company.
+  const question = page.locator(
+    '[data-block-handle="company-blueprint"] [data-block-primitive="question"]',
+  );
+  await expect(question).toBeVisible();
+  const submit = question.getByRole("button", { name: "Submit" });
   await expect(
-    page.getByRole("button", { name: /ask for changes/i }),
-  ).toBeVisible();
+    submit,
+    "a change request with no words is a rejection with extra steps",
+  ).toBeDisabled();
+  await question
+    .getByLabel("Something else")
+    .fill("The roster is missing whoever runs support.");
+  await expect(submit).toBeEnabled();
+  await submit.click();
 
   const commands = (await commandLog(page)).map((entry) => entry.command);
   expect(commands).not.toContain("execute_company_blueprint");
