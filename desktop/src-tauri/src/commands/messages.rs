@@ -1,4 +1,4 @@
-use nostr::{Event, EventId, Keys, PublicKey};
+use nostr::{EventId, Keys, PublicKey};
 use tauri::{AppHandle, State};
 #[cfg(test)]
 mod feed;
@@ -7,6 +7,12 @@ mod feed;
 use feed::build_feed_projection_filter;
 
 mod forum;
+mod markers;
+
+#[cfg(test)]
+use markers::event_has_client_marker;
+pub use markers::has_managed_agent_channel_message_marker;
+use markers::{find_managed_agent_channel_message_by_marker, marker_author_for_scope};
 
 use forum::{
     apply_link_preview_suppression, fetch_agent_owner_pubkeys, link_preview_suppression_targets,
@@ -490,7 +496,8 @@ pub async fn send_channel_message(
     media_tags: Option<Vec<Vec<String>>>,
     emoji_tags: Option<Vec<Vec<String>>>,
     mention_tags: Option<Vec<Vec<String>>>,
-    reference_tags: Option<Vec<Vec<String>>>,
+    block_reference_tags: Option<Vec<Vec<String>>>,
+    client_tags: Option<Vec<Vec<String>>>,
     link_preview_tags: Option<Vec<Vec<String>>>,
     sent_from_thread_tag: Option<Vec<String>>,
     mention_pubkeys: Option<Vec<String>>,
@@ -504,7 +511,8 @@ pub async fn send_channel_message(
     let media = media_tags.unwrap_or_default();
     let emoji = emoji_tags.unwrap_or_default();
     let mention_refs_only = mention_tags.unwrap_or_default();
-    let block_references = reference_tags.unwrap_or_default();
+    let block_references = block_reference_tags.unwrap_or_default();
+    let client_markers = client_tags.unwrap_or_default();
     let link_previews = link_preview_tags.unwrap_or_default();
     let relay_base = crate::relay::relay_api_base_url_with_override(&state);
     let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
@@ -513,6 +521,9 @@ pub async fn send_channel_message(
     }
     if kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE && !block_references.is_empty() {
         return Err("Block reference tags are only supported on stream messages".into());
+    }
+    if kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE && !client_markers.is_empty() {
+        return Err("client marker tags are only supported on stream messages".into());
     }
 
     let mut resolved_root: Option<String> = None;
@@ -560,7 +571,7 @@ pub async fn send_channel_message(
                 &link_previews,
                 sent_from_thread_tag.as_deref(),
                 &relay_base,
-                &[],
+                &client_markers,
                 &block_references,
             )?
         }
@@ -582,101 +593,6 @@ pub async fn send_channel_message(
         depth,
         created_at: chrono::Utc::now().timestamp(),
     })
-}
-
-fn event_has_client_marker(event: &Event, marker: &str) -> bool {
-    event.tags.iter().any(|tag| {
-        let parts = tag.as_slice();
-        parts.len() >= 2 && parts[0] == "client" && parts[1] == marker
-    })
-}
-
-async fn find_managed_agent_channel_message_by_marker(
-    state: &AppState,
-    agent_pubkey: Option<&str>,
-    channel_id: &str,
-    marker: &str,
-) -> Result<Option<Event>, String> {
-    let author = agent_pubkey
-        .map(str::trim)
-        .filter(|pubkey| !pubkey.is_empty())
-        .map(str::to_ascii_lowercase);
-
-    let mut until: Option<u64> = None;
-
-    for _ in 0..10 {
-        let mut filter = serde_json::json!({
-            "kinds": [buzz_core_pkg::kind::KIND_STREAM_MESSAGE],
-            "#h": [channel_id],
-            "limit": 500,
-        });
-        if let Some(author) = author.as_deref() {
-            filter["authors"] = serde_json::json!([author]);
-        }
-        if let Some(until) = until {
-            filter["until"] = serde_json::json!(until);
-        }
-
-        let events = query_relay(state, &[filter]).await?;
-        if let Some(existing) = events
-            .iter()
-            .find(|event| event_has_client_marker(event, marker))
-        {
-            return Ok(Some(existing.clone()));
-        }
-
-        if events.len() < 500 {
-            break;
-        }
-        until = events
-            .iter()
-            .map(|event| event.created_at.as_secs())
-            .min()
-            .map(|timestamp| timestamp.saturating_sub(1));
-        if until.is_none() {
-            break;
-        }
-    }
-
-    Ok(None)
-}
-
-fn marker_author_for_scope<'a>(
-    marker_scope: Option<&str>,
-    agent_pubkey: Option<&'a str>,
-) -> Result<Option<&'a str>, String> {
-    match marker_scope {
-        Some("channel") => Ok(None),
-        Some("agent") | None => agent_pubkey
-            .map(Some)
-            .ok_or_else(|| "agent pubkey is required for agent-scoped markers".to_string()),
-        Some(scope) => Err(format!("unsupported marker scope: {scope}")),
-    }
-}
-
-#[tauri::command]
-pub async fn has_managed_agent_channel_message_marker(
-    channel_id: String,
-    marker: String,
-    agent_pubkey: Option<String>,
-    marker_scope: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    uuid::Uuid::parse_str(&channel_id)
-        .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
-    let marker = marker.trim();
-    if marker.is_empty() {
-        return Err("message marker is required".into());
-    }
-    let agent_pubkey = agent_pubkey
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    let marker_author = marker_author_for_scope(marker_scope.as_deref(), agent_pubkey)?;
-    find_managed_agent_channel_message_by_marker(&state, marker_author, &channel_id, marker)
-        .await
-        .map(|event| event.is_some())
 }
 
 fn stored_managed_agent_auth_tag(auth_tag: Option<&str>) -> Option<String> {

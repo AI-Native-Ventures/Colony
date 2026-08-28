@@ -32,11 +32,11 @@ export function BrainScreen({ brains, selected, onSelect, onContinue }: Props) {
         </h1>
         <p className="onb-sub">
           {anyReady
-            ? "Your helpers need a brain to think with. We found one already on your computer, so this costs you nothing."
-            : "Your helpers need a brain to think with. Colony can set one up for you."}
+            ? "Your agents need a brain to think with. We found one already on your computer, so this costs you nothing."
+            : "Your agents need a brain to think with. Colony can set one up for you."}
         </p>
       </div>
-      <div className="onb-options" role="listbox" aria-label="Your helpers">
+      <div className="onb-options" role="listbox" aria-label="Your agents">
         {brains.map((brain) => {
           const ready = brain.status === "ready";
           return (

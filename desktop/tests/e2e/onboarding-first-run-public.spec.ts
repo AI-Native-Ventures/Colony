@@ -85,7 +85,7 @@ test("public first run: fresh identity to Welcome through the canvas flow", asyn
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "I will run my own helpers for now" })
+    .getByRole("button", { name: "I will run my own agents for now" })
     .click();
 
   // The flow hands control to the app only once the workspace is open.

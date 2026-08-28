@@ -18,7 +18,7 @@ import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import { buildWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { sendChannelMessage } from "@/shared/api/tauri";
+import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import { KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
@@ -232,7 +232,10 @@ export function useProfileInteractionActions({
           onClose();
         }
 
-        const result = await sendChannelMessage(dm.id, content);
+        const result = await sendChannelMessage({
+          channelId: dm.id,
+          content,
+        });
         queryClient.setQueryData<RelayEvent[]>(queryKey, (current = []) =>
           mergeTimelineCacheMessages(current, {
             id: result.eventId,

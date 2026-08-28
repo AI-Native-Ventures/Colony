@@ -331,7 +331,8 @@ applies.
   "pubkey": "<leader or executive agent pubkey>",
   "tags": [
     ["grant", "<delegation_grant_id>"],
-    ["task", "<task_id>"]
+    ["task", "<task_id>"],
+    ["e", "<origin_thread_root_id>"]
   ],
   "content": "{\"decision\":\"...\",\"undo_path\":\"...\",\"category\":\"...\",\"amount_nano_usd\":500000}"
 }
@@ -341,6 +342,7 @@ applies.
 |---|---|---|
 | `grant` | exactly 1 | the `d` tag (grant id) of the delegation grant this decision was made under |
 | `task` | 1 or more | the task(s) this decision covers |
+| `e` | 0 or 1 | the origin thread root event id: the thread the decision was made in, for agents to pass when logging a decision reached while working a thread. Informational only -- the relay attaches no ingest semantics to it |
 
 | Content field | Type | Required | Notes |
 |---|---|---|---|
@@ -845,7 +847,7 @@ self-validate-before-submit structure:
 | `buzz grants create --id <id> --category <cat> --scope <scope> [--cap-nano-usd <n>]` | 30189 | publishes or updates a grant head; owner key required, the relay refuses a signer who is not a current community owner |
 | `buzz grants revoke --id <id>` | 30189 | reads the newest head with this `d` tag, then republishes the same category/scope/cap with `active: false`; the record stays, only the flag flips |
 | `buzz grants list [--active]` | reads 30189 | keeps only the newest head per `d` tag, newest first; `--active` filters to grants whose newest head is active |
-| `buzz decisions log --grant <id> --task <id>... --category <cat> --decision <text> --undo-path <text> [--amount-nano-usd <n>]` | 44303 | `--task` is repeatable and required at least once; the relay refuses a category that does not match the cited grant's, and enforces the grant's cap per decision |
+| `buzz decisions log --grant <id> --task <id>... --category <cat> --decision <text> --undo-path <text> [--thread <root>] [--amount-nano-usd <n>]` | 44303 | `--task` is repeatable and required at least once; optional `--thread` records the origin thread root event id (informational); the relay refuses a category that does not match the cited grant's, and enforces the grant's cap per decision |
 | `buzz decisions list` | reads 44303 | newest first |
 
 `grants create`/`revoke` and `decisions log` self-validate the exact event

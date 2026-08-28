@@ -1399,7 +1399,7 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(page.getByTestId("onboarding-page-config")).toBeVisible();
   await expect(
     page.getByRole("heading", {
-      name: "Choose the brain your helpers think with.",
+      name: "Choose the brain your agents think with.",
     }),
   ).toBeVisible();
   await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
