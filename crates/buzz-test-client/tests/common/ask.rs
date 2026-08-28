@@ -388,36 +388,55 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
     };
     publish_team(client, &owner, &team).await;
 
+    // The relay writes every community a default profile at startup, so the
+    // profile already exists here and carries the default cost centre rather
+    // than this suite's. Create it if somehow absent, otherwise EDIT it: the
+    // Tasks below charge to `cc-coordination`, and `validate_task` refuses a
+    // Task whose cost centre is not on the profile. This is exactly the
+    // read-modify-write a real owner does from Settings.
     let company = company_profile(now());
-    let outcome = broker(
-        client,
-        &owner,
+    let profile_coordinate = coordinate(
+        buzz_core::kind::KIND_COMPANY_PROFILE,
         &relay,
-        &action(
-            &relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(company.clone()),
-            coordinate(
-                buzz_core::kind::KIND_COMPANY_PROFILE,
-                &relay,
-                COMMUNITY_PROFILE_ID,
-            ),
-        ),
+        COMMUNITY_PROFILE_ID,
+    );
+    let existing = head(
+        client,
+        &relay,
+        buzz_core::kind::KIND_COMPANY_PROFILE,
+        COMMUNITY_PROFILE_ID,
     )
     .await;
-    // Applied on the first workspace in this community, Conflict on every one
-    // after it. The profile is a singleton at a fixed coordinate now, so a
-    // second Create is refused rather than making a second company - and the
-    // precondition these tests actually need is that a profile EXISTS, not
-    // that this particular call is what created it. Every workspace builds
-    // the same profile (same cost centre id, same services), so an existing
-    // one is equivalent for everything downstream.
-    assert!(
-        matches!(
-            outcome,
-            CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-        ),
-        "the community profile must exist before any work can hang off it, got {outcome:?}"
+    let outcome = match existing {
+        Some(current) => {
+            let mut edit = action(
+                &relay,
+                CompanyActionOperation::Update,
+                CompanyActionPayload::Company(company.clone()),
+                profile_coordinate,
+            );
+            edit.expected_head = Some(current.id.to_hex());
+            broker(client, &owner, &relay, &edit).await
+        }
+        None => {
+            broker(
+                client,
+                &owner,
+                &relay,
+                &action(
+                    &relay,
+                    CompanyActionOperation::Create,
+                    CompanyActionPayload::Company(company.clone()),
+                    profile_coordinate,
+                ),
+            )
+            .await
+        }
+    };
+    assert_eq!(
+        outcome,
+        CompanyReceiptOutcome::Applied,
+        "the community profile must carry this suite's cost centre before any work hangs off it"
     );
 
     Workspace {

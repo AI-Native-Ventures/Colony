@@ -270,6 +270,44 @@ fn superseding_action_id_ignores_every_other_answer() {
 }
 
 /// Publish one action and wait for the relay's linked receipt.
+/// Put this suite's profile on the community, whether or not one is there.
+///
+/// The relay writes every community a default profile at startup, carrying
+/// the default cost centre rather than this suite's `cc-coordination`. Since
+/// `validate_task` refuses a Task whose cost centre is not on the profile,
+/// every test here has to EDIT the profile rather than create it — which is
+/// exactly the read-modify-write a real owner does from Settings.
+async fn ensure_profile(
+    client: &mut BuzzTestClient,
+    owner: &Keys,
+    relay: &str,
+    profile: CompanyProfile,
+) -> (CompanyReceiptOutcome, Option<String>) {
+    let target = coordinate(KIND_COMPANY_PROFILE, relay, COMMUNITY_PROFILE_ID);
+    match head(client, relay, KIND_COMPANY_PROFILE, COMMUNITY_PROFILE_ID).await {
+        Some(current) => {
+            let edit = action(
+                relay,
+                CompanyActionOperation::Update,
+                CompanyActionPayload::Company(profile),
+                target,
+                Some(current.id.to_hex()),
+            );
+            broker(client, owner, relay, &edit).await
+        }
+        None => {
+            let create = action(
+                relay,
+                CompanyActionOperation::Create,
+                CompanyActionPayload::Company(profile),
+                target,
+                None,
+            );
+            broker(client, owner, relay, &create).await
+        }
+    }
+}
+
 async fn broker(
     client: &mut BuzzTestClient,
     keys: &Keys,
@@ -696,23 +734,20 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
     let stamp = now();
 
     let profile = company(stamp);
-    let create_company = action(
-        &fixture.relay,
-        CompanyActionOperation::Create,
-        CompanyActionPayload::Company(profile.clone()),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-        None,
-    );
     // Applied the first time this community sees a profile, Conflict after:
     // the profile is a singleton at a fixed coordinate, so a second Create is
     // refused rather than making a second company. Every fixture builds the
     // same profile, so an existing one is equivalent for what follows.
-    assert!(matches!(
-        broker(&mut client, &fixture.owner, &fixture.relay, &create_company,)
+    // The relay writes every community a default profile at startup, carrying
+    // the default cost centre rather than this suite's. Edit it rather than
+    // create it, or the Tasks below charge to a cost centre the profile does
+    // not have and `validate_task` refuses them.
+    assert_eq!(
+        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone())
             .await
             .0,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+        CompanyReceiptOutcome::Applied
+    );
 
     // The chat thread lives in a channel this test provisions itself. The
     // old hardcoded UUID only existed in the abandoned isolated harness's
@@ -1135,24 +1170,16 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
 
     // --- Create the company -------------------------------------------------
     let profile = company(stamp);
-    let create = action(
-        &fixture.relay,
-        CompanyActionOperation::Create,
-        CompanyActionPayload::Company(profile.clone()),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-        None,
-    );
-    let (outcome, head_id) = broker(&mut client, &fixture.owner, &fixture.relay, &create).await;
-    // Applied the first time this community sees a profile, Conflict after:
-    // the profile is a singleton at a fixed coordinate, so a second Create is
-    // refused rather than making a second company. Every fixture builds the
-    // same profile, so an existing one is equivalent for what follows.
-    assert!(
-        matches!(
-            outcome,
-            CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-        ),
-        "the community profile must exist, got {outcome:?}"
+    // The relay writes every community a default profile at startup, carrying
+    // the default cost centre rather than this suite's. Edit it rather than
+    // create it, or the Tasks below charge to a cost centre the profile does
+    // not have and `validate_task` refuses them.
+    let (outcome, head_id) =
+        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone()).await;
+    assert_eq!(
+        outcome,
+        CompanyReceiptOutcome::Applied,
+        "the community profile must carry this suite's cost centre"
     );
 
     let stored = head(
@@ -1342,27 +1369,13 @@ async fn nobody_but_the_owner_can_change_company_state() {
     let stamp = now();
 
     let profile = company(stamp);
-    let (outcome, _) = broker(
-        &mut client,
-        &fixture.owner,
-        &fixture.relay,
-        &action(
-            &fixture.relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(profile.clone()),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
-    )
-    .await;
-    // Applied the first time this community sees a profile, Conflict after:
-    // the profile is a singleton at a fixed coordinate, so a second Create is
-    // refused rather than making a second company. Every fixture builds the
-    // same profile, so an existing one is equivalent for what follows.
-    assert!(matches!(
-        outcome,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+    // The relay writes every community a default profile at startup, carrying
+    // the default cost centre rather than this suite's. Edit it rather than
+    // create it, or the Tasks below charge to a cost centre the profile does
+    // not have and `validate_task` refuses them.
+    let (outcome, _) =
+        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone()).await;
+    assert_eq!(outcome, CompanyReceiptOutcome::Applied);
 
     // --- A member who is not the owner cannot replace the company -----------
     let stranger = Keys::generate();
@@ -1457,24 +1470,16 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
 
     // --- Company and two tasks: A human-doer InProgress, B Blocked on A ----
     let profile = company(stamp);
-    let profile_outcome = broker(
-        &mut client,
-        &fixture.owner,
-        &fixture.relay,
-        &action(
-            &fixture.relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(profile),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
-    )
-    .await
-    .0;
-    assert!(matches!(
-        profile_outcome,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+    // The relay writes every community a default profile at startup, carrying
+    // the default cost centre rather than this suite's. Edit it rather than
+    // create it, or the Tasks below charge to a cost centre the profile does
+    // not have and `validate_task` refuses them.
+    assert_eq!(
+        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile)
+            .await
+            .0,
+        CompanyReceiptOutcome::Applied
+    );
 
     let task_a_id = format!("call-the-client-{}", fixture.token);
     let task_b_id = format!("send-the-followup-{}", fixture.token);
@@ -1648,24 +1653,13 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
     let stamp = now();
 
     let profile = company(stamp);
-    let (outcome, _) = broker(
-        &mut client,
-        &fixture.owner,
-        &fixture.relay,
-        &action(
-            &fixture.relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(profile.clone()),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
-    )
-    .await;
-    // Applied first, Conflict after: the profile is a community singleton.
-    assert!(matches!(
-        outcome,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+    // The relay writes every community a default profile at startup, carrying
+    // the default cost centre rather than this suite's. Edit it rather than
+    // create it, or the Tasks below charge to a cost centre the profile does
+    // not have and `validate_task` refuses them.
+    let (outcome, _) =
+        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone()).await;
+    assert_eq!(outcome, CompanyReceiptOutcome::Applied);
 
     let initiative_id = format!("launch-{}", fixture.token);
     let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
@@ -1973,14 +1967,18 @@ async fn seed_live_work_context() {
 
     publish_team(&mut client, &owner, &team).await;
 
+    // Edited rather than created: the relay already wrote this community a
+    // default profile at startup, and the seeded Task charges to this
+    // suite's cost centre rather than the default one.
+    assert_eq!(
+        ensure_profile(&mut client, &owner, &relay, company(stamp))
+            .await
+            .0,
+        CompanyReceiptOutcome::Applied,
+        "the live seed needs its own cost centre on the profile"
+    );
+
     for action in [
-        action(
-            &relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(company(stamp)),
-            coordinate(KIND_COMPANY_PROFILE, &relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
         action(
             &relay,
             CompanyActionOperation::Create,
