@@ -10,8 +10,8 @@ use std::time::Duration;
 use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
     CommercialPurpose, CompanyProfile, CompanyService, CompanyTask, CompanyTeamRef, CostCentre,
-    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMMUNITY_PROFILE_ID,
-    COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMPANY_SCHEMA,
+    INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
@@ -288,7 +288,7 @@ fn company_profile(stamp: i64) -> CompanyProfile {
         }],
         customer_segments: vec!["small business".to_string()],
         cost_centres: vec![CostCentre {
-            id: "cc-coordination".to_string(),
+            id: "general".to_string(),
             name: "Company coordination".to_string(),
             kind: CostCentreKind::Internal,
             service_id: None,
@@ -307,7 +307,7 @@ fn proposed_initiative(id: &str, owner_persona_id: &str, stamp: i64) -> Initiati
         summary: "Ship the premium build.".to_string(),
         status: InitiativeStatus::Proposed,
         owner_persona_id: owner_persona_id.to_string(),
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::ClientDelivery,
         client_organization_id: None,
         expected_cost_usd: None,
@@ -334,7 +334,7 @@ fn chat_task(id: &str, team: &CompanyTeamRef, stamp: i64) -> CompanyTask {
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
         qa_persona_id: team.lead_persona_id.clone(),
         reviewer_team_id: None,
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
         client_organization_id: None,
         source_channel_id: "engineering".to_string(),
@@ -392,75 +392,16 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
     // profile already exists here and carries the default cost centre rather
     // than this suite's. Create it if somehow absent, otherwise EDIT it: the
     // Tasks below charge to `cc-coordination`, and `validate_task` refuses a
-    // Task whose cost centre is not on the profile. This is exactly the
-    // read-modify-write a real owner does from Settings.
-    let company = company_profile(now());
-    let profile_coordinate = coordinate(
-        buzz_core::kind::KIND_COMPANY_PROFILE,
-        &relay,
-        COMMUNITY_PROFILE_ID,
-    );
-    // Retries on conflict: these suites run concurrently against one
-    // community and therefore one profile, so two of them reading the same
-    // head and editing it is an ordinary compare-and-set race. The loser
-    // re-reads and re-applies, which is what any concurrent editor has to do.
-    let mut outcome = CompanyReceiptOutcome::Conflict;
-    for _ in 0..8 {
-        let existing = head(
-            client,
-            &relay,
-            buzz_core::kind::KIND_COMPANY_PROFILE,
-            COMMUNITY_PROFILE_ID,
-        )
-        .await;
-        outcome = match existing {
-            Some(current) => {
-                // A replacement keeps the original `createdAt` and must move
-                // `updatedAt` forward; the relay refuses anything else.
-                let previous = buzz_sdk::company::parse_company_event(&current)
-                    .expect("stored profile parses");
-                let mut replacement = company.clone();
-                replacement.created_at = previous.created_at;
-                replacement.updated_at = previous.updated_at + 1;
-                let mut edit = action(
-                    &relay,
-                    CompanyActionOperation::Update,
-                    CompanyActionPayload::Company(replacement),
-                    profile_coordinate.clone(),
-                );
-                edit.expected_head = Some(current.id.to_hex());
-                broker(client, &owner, &relay, &edit).await
-            }
-            None => {
-                broker(
-                    client,
-                    &owner,
-                    &relay,
-                    &action(
-                        &relay,
-                        CompanyActionOperation::Create,
-                        CompanyActionPayload::Company(company.clone()),
-                        profile_coordinate.clone(),
-                    ),
-                )
-                .await
-            }
-        };
-        if outcome != CompanyReceiptOutcome::Conflict {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-    assert_eq!(
-        outcome,
-        CompanyReceiptOutcome::Applied,
-        "the community profile must carry this suite's cost centre before any work hangs off it"
-    );
-
+    // Nothing here writes the community profile. The relay writes every
+    // community its own at startup, carrying the `general` cost centre these
+    // fixtures charge to, and that profile is shared across every
+    // concurrently-running test — so each one editing it was an ordinary
+    // compare-and-set race the relay was right to refuse. Reading what is
+    // already there removes the contention instead of retrying through it.
     Workspace {
         owner,
         relay,
-        company,
+        company: company_profile(now()),
         team,
     }
 }
