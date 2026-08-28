@@ -141,28 +141,36 @@ export function CompanySettingsCard() {
             description="The name this workspace does business as."
             title="Identity"
           >
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">
+            <div className="flex flex-col gap-1">
+              <label
+                className="text-xs text-muted-foreground"
+                htmlFor="company-trading-name"
+              >
                 Trading name
-              </span>
+              </label>
               <Input
                 data-testid="company-trading-name"
+                id="company-trading-name"
                 onChange={(event) => patch({ tradingName: event.target.value })}
                 value={profile.tradingName}
               />
-            </label>
-            <label className="mt-3 flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">
+            </div>
+            <div className="mt-3 flex flex-col gap-1">
+              <label
+                className="text-xs text-muted-foreground"
+                htmlFor="company-summary"
+              >
                 What the business does
-              </span>
+              </label>
               <Textarea
                 className="min-h-20"
                 data-testid="company-summary"
+                id="company-summary"
                 onChange={(event) => patch({ summary: event.target.value })}
                 placeholder="One or two sentences. Agents read this to understand the work."
                 value={profile.summary}
               />
-            </label>
+            </div>
           </SettingsOptionGroup>
 
           <SettingsOptionGroup
