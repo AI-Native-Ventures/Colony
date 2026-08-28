@@ -961,13 +961,9 @@ mod tests {
 
             // The two washes close the ramp and carry no type, so they are
             // only required to be pale.
-            for index in 6..8 {
-                let (_, _, l) = rgb_to_hsl(hex_to_rgb(&ramp[index]).expect("parse"));
-                assert!(
-                    l > 0.8,
-                    "{base} wash {index} is not pale: {:?}",
-                    ramp[index]
-                );
+            for (offset, wash) in ramp[6..8].iter().enumerate() {
+                let (_, _, l) = rgb_to_hsl(hex_to_rgb(wash).expect("parse"));
+                assert!(l > 0.8, "{base} wash {} is not pale: {wash:?}", 6 + offset);
             }
         }
     }
