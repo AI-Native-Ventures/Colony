@@ -409,10 +409,19 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
     .await;
     let outcome = match existing {
         Some(current) => {
+            // A replacement keeps the original `createdAt` and must move
+            // `updatedAt` forward; the relay refuses anything else. The
+            // profile being replaced is the one the relay wrote at startup,
+            // so its timestamps are not this suite's.
+            let previous =
+                buzz_sdk::company::parse_company_event(&current).expect("stored profile parses");
+            let mut replacement = company.clone();
+            replacement.created_at = previous.created_at;
+            replacement.updated_at = previous.updated_at + 1;
             let mut edit = action(
                 &relay,
                 CompanyActionOperation::Update,
-                CompanyActionPayload::Company(company.clone()),
+                CompanyActionPayload::Company(replacement),
                 profile_coordinate,
             );
             edit.expected_head = Some(current.id.to_hex());

@@ -286,10 +286,19 @@ async fn ensure_profile(
     let target = coordinate(KIND_COMPANY_PROFILE, relay, COMMUNITY_PROFILE_ID);
     match head(client, relay, KIND_COMPANY_PROFILE, COMMUNITY_PROFILE_ID).await {
         Some(current) => {
+            // A replacement keeps the original `createdAt` and must move
+            // `updatedAt` forward; the relay refuses anything else. The
+            // profile being replaced is the one the relay wrote at startup,
+            // so its timestamps are not this suite's.
+            let previous =
+                buzz_sdk::company::parse_company_event(&current).expect("stored profile parses");
+            let mut replacement = profile;
+            replacement.created_at = previous.created_at;
+            replacement.updated_at = previous.updated_at + 1;
             let edit = action(
                 relay,
                 CompanyActionOperation::Update,
-                CompanyActionPayload::Company(profile),
+                CompanyActionPayload::Company(replacement),
                 target,
                 Some(current.id.to_hex()),
             );
