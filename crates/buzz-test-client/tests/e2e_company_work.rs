@@ -1866,6 +1866,11 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
 #[ignore = "seeds live fixtures; run explicitly before a live agent turn"]
 async fn seed_live_work_context() {
     let owner = owner_keys();
+    // Every other test in this file seeds the owner before writing as one.
+    // This is the only one that did not, and the only one whose first write
+    // times out — the suites in this job share one community, so what an
+    // earlier suite happened to leave behind was carrying it.
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
