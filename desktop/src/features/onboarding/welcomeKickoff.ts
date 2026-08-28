@@ -34,6 +34,13 @@ import { getPresence, listManagedAgents } from "@/shared/api/tauri";
 import { getProfile } from "@/shared/api/tauriProfiles";
 import type { Channel, ManagedAgent, RelayEvent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+
+import {
+  clearFounderBrief,
+  type FounderBriefSummary,
+  founderBriefOpening,
+  readFounderBrief,
+} from "./founderBriefSummary";
 import { useQueryClient } from "@tanstack/react-query";
 
 export const WELCOME_KICKOFF_OPENER_MARKER = "buzz-welcome-kickoff.opener.v1";
@@ -189,6 +196,7 @@ export function buildWelcomeKickoffOpener(
   introTeammates: readonly ManagedAgent[],
   allTeammates: readonly ManagedAgent[] = introTeammates,
   ownerName?: string | null,
+  founderBrief?: FounderBriefSummary | null,
 ) {
   // Greet the new user by name when we know it. Paired with their pubkey in
   // the p tags, the @mention renders as a pill and files the opener into
@@ -204,7 +212,16 @@ export function buildWelcomeKickoffOpener(
     const chiefGreeting = trimmedOwnerName
       ? `Hi @${trimmedOwnerName}, I'm ${lead.name}, your Chief of Staff.`
       : `Hi, I'm ${lead.name}, your Chief of Staff.`;
-    return `${chiefGreeting}\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. I won't create the company or hire anyone until you approve the blueprint. Until then I'm the only one here: nobody else is set up, switched on, or billed to you.`;
+    const promise =
+      "I won't create the company or hire anyone until you approve the blueprint. Until then I'm the only one here: nobody else is set up, switched on, or billed to you.";
+    // Signup already asked for the website, the location and the first task.
+    // Repeating those questions teaches a brand-new founder that nothing they
+    // type is kept, so when the answers exist the opener reflects them back
+    // and asks only for what is genuinely missing.
+    if (founderBrief) {
+      return `${chiefGreeting}\n\nColony is where we'll run the company together.\n\n${founderBriefOpening(founderBrief)}\n\n${promise}`;
+    }
+    return `${chiefGreeting}\n\nColony is where we'll run the company together. I'll learn how the business works, propose the smallest useful team, coordinate work, and bring decisions back here.\n\nSend me the company website. If there isn't one yet, say so and I'll ask a few focused questions instead. ${promise}`;
   }
 
   const greeting = trimmedOwnerName
@@ -455,6 +472,7 @@ export function buildWelcomeKickoffOpenerSendInput(
   introTeammates: readonly ManagedAgent[],
   channelId: string,
   owner?: WelcomeKickoffOwner | null,
+  founderBrief?: FounderBriefSummary | null,
 ) {
   // Greet the new user by name and tag their pubkey. The p tag renders the
   // "@Name" in the copy as a mention pill and files the opener into their
@@ -476,6 +494,7 @@ export function buildWelcomeKickoffOpenerSendInput(
       introTeammates,
       agentSet.teammates,
       owner?.displayName,
+      founderBrief,
     ),
     marker: openerMarker,
     markerScope: "channel" as const,
@@ -720,14 +739,18 @@ export function useWelcomeKickoff(
             displayName: profile.displayName,
           }))
           .catch(() => null);
+        // Read once, use once: the summary exists for this single message.
+        const founderBrief = readFounderBrief();
         const openerResult = await sendManagedAgentChannelMessage(
           buildWelcomeKickoffOpenerSendInput(
             resolvedAgentSet,
             introTeammates,
             channelId,
             owner,
+            founderBrief,
           ),
         );
+        clearFounderBrief();
         if (!isCancelled()) onKickoffOpenerPosted?.(openerResult.eventId);
       } catch (error) {
         console.warn("Failed to start the Welcome team kickoff.", error);

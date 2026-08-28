@@ -25,6 +25,7 @@ function makeIo(overrides = {}) {
       markComplete: (pubkey, relayUrl) => {
         calls.push(`complete:${pubkey}:${relayUrl}`);
       },
+      rememberFounderBrief: () => calls.push("brief"),
       takePendingWelcomeChannelForDirectEntry: () => {},
       navigateToChannel: (id) => calls.push(`nav:${id}`),
       ...overrides,
@@ -55,10 +56,36 @@ test("happy path: channels, profile, task, gate key, navigation", async () => {
   assert.deepEqual(calls, [
     "channels",
     "profile:Aisha Bello",
-    "task",
     "nav:chan-1",
+    "brief",
+    "task",
     "complete:pk1:wss://acme.test",
   ]);
+});
+
+// Delivery is a network write; landing is not. A founder whose brief fails to
+// send still owns a working workspace, and they can only retry from inside it.
+test("a failed brief still lands the founder in Welcome", async () => {
+  const { io, calls } = makeIo({
+    sendFirstTask: async () => {
+      calls.push("task");
+      throw new Error("relay refused the message");
+    },
+  });
+  await assert.rejects(
+    completeFirstRun(
+      {
+        queryClient: {},
+        relayUrl: "wss://acme.test",
+        pubkey: "pk1",
+        draft,
+        profileDisplayName: null,
+      },
+      io,
+    ),
+    /relay refused the message/,
+  );
+  assert.deepEqual(calls, ["channels", "nav:chan-1", "brief", "task"]);
 });
 
 test("skips delivery when the marker already exists", async () => {

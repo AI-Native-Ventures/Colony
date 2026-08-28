@@ -1,5 +1,7 @@
 // desktop/src/features/onboarding/flow/completeFirstRunIo.ts
 import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
+
+import { rememberFounderBrief } from "../founderBriefSummary";
 import { hasManagedAgentChannelMessageMarker } from "@/shared/api/tauriManagedAgentMessageMarkers";
 import { updateProfile } from "@/shared/api/tauriProfiles";
 
@@ -33,6 +35,7 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
     return { eventId: sent.eventId };
   },
   markComplete: markCommunityOnboardingComplete,
+  rememberFounderBrief,
   takePendingWelcomeChannelForDirectEntry,
   navigateToChannel: (channelId) => {
     window.location.hash = `/channels/${channelId}`;

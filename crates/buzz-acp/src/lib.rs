@@ -5113,9 +5113,21 @@ mod company_onboarding_prompt_tests {
 
     #[test]
     fn company_onboarding_asks_for_the_website_once_and_scans_it() {
-        assert!(PROMPT.contains("Ask for the company website a single time"));
+        assert!(PROMPT.contains("ask for it a single time"));
         assert!(PROMPT.contains("Do not ask again"));
         assert!(PROMPT.contains("buzz company scan --url"));
+    }
+
+    /// Signup already asked for the website, the location, the work and the
+    /// first task. Asking again teaches a brand-new owner that nothing they
+    /// type is kept, so the protocol reads their brief before it speaks.
+    #[test]
+    fn company_onboarding_reads_the_owners_brief_before_asking_anything() {
+        assert!(PROMPT.contains("Read the owner's brief before you say anything"));
+        assert!(PROMPT.contains("Never ask for a fact the brief already carries"));
+        assert!(PROMPT.contains("scan it without asking"));
+        // No brief is a state to report, not a licence to invent familiarity.
+        assert!(PROMPT.contains("say so plainly rather than pretending to know them"));
     }
 
     /// A scan reads a website; it does not audit a business. Overclaiming here
