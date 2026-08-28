@@ -5070,8 +5070,8 @@ pub const COMPANY_ONBOARDING_PROMPT: &str = include_str!("company_onboarding_pro
 ///
 /// Takes the status rather than querying, so the rule is testable on its own
 /// and the caller owns the lookup.
-pub fn should_inject_company_onboarding(community_profile_exists: bool) -> bool {
-    !community_profile_exists
+pub fn should_inject_company_onboarding(profile_is_unconfigured: bool) -> bool {
+    profile_is_unconfigured
 }
 
 #[cfg(test)]
@@ -5079,19 +5079,21 @@ mod company_onboarding_injection_tests {
     use super::*;
 
     #[test]
-    fn onboarding_is_injected_until_the_community_has_a_profile() {
-        // No profile yet: this is exactly the conversation the protocol is for.
-        assert!(should_inject_company_onboarding(false));
+    fn onboarding_is_injected_while_the_profile_says_nothing_about_the_business() {
+        // A community that has a profile but has not described itself is
+        // exactly the conversation the protocol is for.
+        assert!(should_inject_company_onboarding(true));
     }
 
-    /// Once the profile exists, re-injecting would tell the agent to re-run an
-    /// interview the owner has already finished. There is no longer a
-    /// "drafted but not approved" middle state: the profile either exists or
-    /// it does not, because approving a separate Company record is not a step
-    /// any more.
+    /// Once an owner or an agent has filled the profile in, re-injecting
+    /// would tell the agent to re-run an interview that already happened.
+    ///
+    /// The gate reads "unconfigured", not "absent": every community has a
+    /// profile from the moment it exists, so absence stopped being a signal
+    /// and gating on it would have retired the interview outright.
     #[test]
-    fn onboarding_stops_once_the_profile_exists() {
-        assert!(!should_inject_company_onboarding(true));
+    fn onboarding_stops_once_the_business_is_described() {
+        assert!(!should_inject_company_onboarding(false));
     }
 
     /// It is long on purpose, and that is precisely why it must not live in
