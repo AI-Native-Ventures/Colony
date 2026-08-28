@@ -799,6 +799,7 @@ export function AgentDefinitionDialog({
         >
           {aiConfigurationMode === "custom" ? (
             <AgentHarnessField
+              catalogStatus={runtimeCatalogStatus}
               disabled={isPending || runtimesLoading}
               onValueChange={handleRuntimeDropdownChange}
               options={runtimeDropdownOptions}
@@ -807,7 +808,6 @@ export function AgentDefinitionDialog({
               warning={runtimeWarning}
             />
           ) : null}
-
           {llmProviderFieldVisible && aiConfigurationMode === "custom" ? (
             <div className="space-y-1.5">
               <RequiredFieldLabel

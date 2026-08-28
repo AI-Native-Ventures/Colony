@@ -1,8 +1,8 @@
 {
   "files": {
-    "rust_total": 529,
+    "rust_total": 530,
     "tauri_coupled": 209,
-    "portable": 320,
+    "portable": 321,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -394,6 +394,7 @@
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/discovery.rs",
       "src-tauri/src/managed_agents/discovery/auth_status_cache.rs",
+      "src-tauri/src/managed_agents/discovery/bounded_command.rs",
       "src-tauri/src/managed_agents/discovery/codex_probe.rs",
       "src-tauri/src/managed_agents/discovery/command_paths.rs",
       "src-tauri/src/managed_agents/discovery/login_shell.rs",
@@ -2795,7 +2796,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/hooks.ts:370",
+        "src/features/agents/hooks.ts:385",
         "src/parity/session/script.ts:1499",
         "src/shared/api/tauri.ts:630"
       ]
@@ -4043,7 +4044,7 @@
       "registered_in": "src-tauri/src/command_registry.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/agents/hooks.ts:715",
+        "src/features/agents/hooks.ts:730",
         "src/features/channels/hooks.ts:642",
         "src/features/messages/ui/useMentionSendFlow.ts:442"
       ]
