@@ -2,7 +2,7 @@
   "schema": "ai-native-office.block-manifest/1",
   "handle": "company-blueprint",
   "version": "1.0.0",
-  "created_at": 1785369600,
+  "created_at": 1787875200,
   "name": "Company Blueprint",
   "description": "The proposed company: who it hires, what teams they sit in, where costs land, and the first three pieces of work. Nothing is created until it is approved.",
   "origin": "core",

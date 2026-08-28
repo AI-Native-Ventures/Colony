@@ -867,6 +867,25 @@ fn validate_bounce_delta(
     Ok(())
 }
 
+/// Whether this profile is still the one the relay writes for a brand-new
+/// community, with nothing an owner or an agent has filled in yet.
+///
+/// The onboarding interview keys off this rather than off the profile's
+/// absence. Every community has a profile now, so "absent" no longer means
+/// "unconfigured" — and gating on absence would retire the interview
+/// entirely the moment defaults started shipping.
+///
+/// Deliberately reads only the fields the interview is there to establish:
+/// what the business does, what it sells, and who it sells to. The trading
+/// name is excluded because the default derives a real one from the host,
+/// and cost centres are excluded because the default ships a usable one.
+pub fn is_unconfigured_profile(profile: &CompanyProfile) -> bool {
+    profile.summary.trim().is_empty()
+        && profile.services.is_empty()
+        && profile.customer_segments.is_empty()
+        && profile.website.is_none()
+}
+
 /// Validate one relay-authored canonical company profile.
 pub fn validate_company(profile: &CompanyProfile) -> Result<(), CompanyContractError> {
     validate_schema(&profile.schema, COMPANY_SCHEMA, "company")?;

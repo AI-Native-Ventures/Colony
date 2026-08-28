@@ -12,6 +12,7 @@ pub(crate) mod ask_state_head;
 mod block_broker;
 /// Validation for chat-native Block event envelopes.
 pub mod blocks;
+pub mod community_profile;
 mod company_broker;
 mod discovery_broker;
 /// Bounded Colony-hosted provider transport for paid Discovery runs.

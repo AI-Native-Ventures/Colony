@@ -534,6 +534,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Every community gets an operating profile, whether or not anyone ever
+    // described their business. A Task charges to a cost centre and cost
+    // centres live on the profile, so a community without one cannot create
+    // work at all — and the only thing that used to create it was an agent
+    // interview with no trigger, which on real workspaces simply never ran.
+    // Idempotent: a community that already has a profile is untouched.
+    buzz_relay::community_profile::run_profile_backfill(Arc::clone(&state)).await;
+
     // Colony's maintained model price catalog, in two halves.
     //
     // The file shipped in this build is the offline floor: no network, always

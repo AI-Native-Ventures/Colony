@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Archive,
   BellRing,
+  Building2,
   Blocks,
   Bot,
   ChevronDown,
@@ -74,11 +75,13 @@ import { AgentsSettingsPanel } from "./AgentsSettingsPanel";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
+import { CompanySettingsCard } from "./CompanySettingsCard";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
 import { VoiceSettingsCard } from "./VoiceSettingsCard";
 
 export type SettingsSection =
   | "profile"
+  | "company"
   | "blocks"
   | "notifications"
   | "voice"
@@ -100,6 +103,7 @@ export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
 const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "profile",
+  "company",
   "blocks",
   "notifications",
   "voice",
@@ -158,6 +162,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "profile",
     label: "Profile",
     icon: UserRound,
+  },
+  {
+    value: "company",
+    label: "Company",
+    icon: Building2,
   },
   {
     value: "notifications",
@@ -839,6 +848,8 @@ export function renderSettingsSection(
           fallbackDisplayName={props.fallbackDisplayName}
         />
       );
+    case "company":
+      return <CompanySettingsCard />;
     case "notifications":
       return (
         <NotificationSettingsCard

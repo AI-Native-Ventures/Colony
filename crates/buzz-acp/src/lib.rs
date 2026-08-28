@@ -5070,8 +5070,8 @@ pub const COMPANY_ONBOARDING_PROMPT: &str = include_str!("company_onboarding_pro
 ///
 /// Takes the status rather than querying, so the rule is testable on its own
 /// and the caller owns the lookup.
-pub fn should_inject_company_onboarding(community_profile_exists: bool) -> bool {
-    !community_profile_exists
+pub fn should_inject_company_onboarding(profile_is_unconfigured: bool) -> bool {
+    profile_is_unconfigured
 }
 
 #[cfg(test)]
@@ -5079,19 +5079,21 @@ mod company_onboarding_injection_tests {
     use super::*;
 
     #[test]
-    fn onboarding_is_injected_until_the_community_has_a_profile() {
-        // No profile yet: this is exactly the conversation the protocol is for.
-        assert!(should_inject_company_onboarding(false));
+    fn onboarding_is_injected_while_the_profile_says_nothing_about_the_business() {
+        // A community that has a profile but has not described itself is
+        // exactly the conversation the protocol is for.
+        assert!(should_inject_company_onboarding(true));
     }
 
-    /// Once the profile exists, re-injecting would tell the agent to re-run an
-    /// interview the owner has already finished. There is no longer a
-    /// "drafted but not approved" middle state: the profile either exists or
-    /// it does not, because approving a separate Company record is not a step
-    /// any more.
+    /// Once an owner or an agent has filled the profile in, re-injecting
+    /// would tell the agent to re-run an interview that already happened.
+    ///
+    /// The gate reads "unconfigured", not "absent": every community has a
+    /// profile from the moment it exists, so absence stopped being a signal
+    /// and gating on it would have retired the interview outright.
     #[test]
-    fn onboarding_stops_once_the_profile_exists() {
-        assert!(!should_inject_company_onboarding(true));
+    fn onboarding_stops_once_the_business_is_described() {
+        assert!(!should_inject_company_onboarding(false));
     }
 
     /// It is long on purpose, and that is precisely why it must not live in
@@ -5113,9 +5115,21 @@ mod company_onboarding_prompt_tests {
 
     #[test]
     fn company_onboarding_asks_for_the_website_once_and_scans_it() {
-        assert!(PROMPT.contains("Ask for the company website a single time"));
+        assert!(PROMPT.contains("ask for it a single time"));
         assert!(PROMPT.contains("Do not ask again"));
         assert!(PROMPT.contains("buzz company scan --url"));
+    }
+
+    /// Signup already asked for the website, the location, the work and the
+    /// first task. Asking again teaches a brand-new owner that nothing they
+    /// type is kept, so the protocol reads their brief before it speaks.
+    #[test]
+    fn company_onboarding_reads_the_owners_brief_before_asking_anything() {
+        assert!(PROMPT.contains("Read the owner's brief before you say anything"));
+        assert!(PROMPT.contains("Never ask for a fact the brief already carries"));
+        assert!(PROMPT.contains("scan it without asking"));
+        // No brief is a state to report, not a licence to invent familiarity.
+        assert!(PROMPT.contains("say so plainly rather than pretending to know them"));
     }
 
     /// A scan reads a website; it does not audit a business. Overclaiming here

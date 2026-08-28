@@ -159,3 +159,126 @@ pub fn sign_action(action: &CompanyAction, keys: &nostr::Keys) -> Result<String,
 fn parse_uuid(value: &str) -> Result<uuid::Uuid, String> {
     uuid::Uuid::parse_str(value).map_err(|_| "request id is not a uuid".to_string())
 }
+
+/// The action that replaces this community's operating profile with an
+/// edited one.
+///
+/// Built and signed here for the same reason `company_action` is: the
+/// envelope has a canonical content encoding, a NIP-33 coordinate and a tag
+/// layout the relay broker validates exactly, and a second implementation in
+/// the frontend would agree in every test and diverge on the first real
+/// input.
+///
+/// `expected_head` is required, not optional. Editing a profile is a
+/// read-modify-write against a record an agent may also be filling in, and
+/// without the compare-and-set an owner saving a form would silently discard
+/// whatever landed between their read and their save.
+pub fn company_profile_update_action(
+    profile: &CompanyProfile,
+    expected_head_event_id: &str,
+    relay_pubkey: &str,
+    request_id: &str,
+) -> Result<CompanyAction, String> {
+    buzz_core::company::validate_company(profile)
+        .map_err(|error| format!("that is not a valid community profile: {error}"))?;
+
+    Ok(CompanyAction {
+        relay_pubkey: relay_pubkey.to_string(),
+        operation: CompanyActionOperation::Update,
+        request_id: parse_uuid(request_id)?,
+        idempotency_key: step_idempotency_key(request_id, "community-profile-update"),
+        target: coordinate(KIND_COMPANY_PROFILE, relay_pubkey, COMMUNITY_PROFILE_ID),
+        expected_head: Some(expected_head_event_id.to_string()),
+        expected_references: Vec::new(),
+        payload: CompanyActionPayload::Company(profile.clone()),
+    })
+}
+
+#[cfg(test)]
+mod profile_update_tests {
+    use super::*;
+    use buzz_core::company::{CostCentre, CostCentreKind};
+
+    const RELAY: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
+    const HEAD: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const REQUEST: &str = "6f1a1f0e-0f6a-4f2e-9d1a-2b3c4d5e6f70";
+
+    fn profile() -> CompanyProfile {
+        CompanyProfile {
+            schema: COMPANY_SCHEMA.to_string(),
+            trading_name: "Horizon Labs".to_string(),
+            legal_name: None,
+            website: None,
+            summary: "Software for South African businesses.".to_string(),
+            business_type: "agency".to_string(),
+            services: Vec::new(),
+            customer_segments: Vec::new(),
+            cost_centres: vec![CostCentre {
+                id: "general".to_string(),
+                name: "General".to_string(),
+                kind: CostCentreKind::Internal,
+                service_id: None,
+            }],
+            source_report_event_id: None,
+            created_at: 1_800_000_000,
+            updated_at: 1_800_000_100,
+        }
+    }
+
+    /// The action has to survive the relay's own strict parser, not merely be
+    /// well-formed JSON. Building it and signing it here is what proves the
+    /// envelope is right.
+    #[test]
+    fn a_profile_edit_round_trips_through_the_relay_parser() {
+        let keys = nostr::Keys::generate();
+        let action =
+            company_profile_update_action(&profile(), HEAD, RELAY, REQUEST).expect("builds");
+        let json = sign_action(&action, &keys).expect("signs");
+        let event: nostr::Event = nostr::JsonUtil::from_json(json.as_str()).expect("parses");
+        let parsed = crate::company::parse_company_action(&event).expect("relay parses it");
+        assert_eq!(parsed.operation, CompanyActionOperation::Update);
+        assert_eq!(parsed.expected_head.as_deref(), Some(HEAD));
+    }
+
+    /// One profile per community means one coordinate, always the same one.
+    #[test]
+    fn the_edit_targets_the_fixed_community_profile_coordinate() {
+        let action =
+            company_profile_update_action(&profile(), HEAD, RELAY, REQUEST).expect("builds");
+        assert_eq!(
+            action.target,
+            format!("30179:{RELAY}:{COMMUNITY_PROFILE_ID}")
+        );
+    }
+
+    /// Without the compare-and-set, an owner saving a form would silently
+    /// discard whatever an agent wrote between their read and their save.
+    #[test]
+    fn an_edit_without_an_expected_head_is_refused_by_the_envelope() {
+        let keys = nostr::Keys::generate();
+        let mut action =
+            company_profile_update_action(&profile(), HEAD, RELAY, REQUEST).expect("builds");
+        action.expected_head = None;
+        assert!(
+            sign_action(&action, &keys).is_err(),
+            "an Update with no expected head must not produce a signable action"
+        );
+    }
+
+    /// The contract is checked before anything is signed, so a bad form
+    /// cannot become an action the relay has to refuse later.
+    #[test]
+    fn an_invalid_profile_is_refused_before_signing() {
+        let mut blank = profile();
+        blank.trading_name = "  ".to_string();
+        assert!(company_profile_update_action(&blank, HEAD, RELAY, REQUEST).is_err());
+    }
+
+    /// Retrying one save must not produce a second logical request.
+    #[test]
+    fn the_same_request_id_produces_the_same_idempotency_key() {
+        let first = company_profile_update_action(&profile(), HEAD, RELAY, REQUEST).expect("a");
+        let second = company_profile_update_action(&profile(), HEAD, RELAY, REQUEST).expect("b");
+        assert_eq!(first.idempotency_key, second.idempotency_key);
+    }
+}

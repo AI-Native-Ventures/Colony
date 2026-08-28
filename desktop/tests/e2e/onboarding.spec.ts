@@ -306,28 +306,6 @@ async function expectHomeView(page: Page) {
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
 }
 
-async function expectWiderThanTall(locator: Locator) {
-  const box = await locator.boundingBox();
-  if (!box) {
-    throw new Error("Could not measure welcome intro action card");
-  }
-
-  expect(box.width).toBeGreaterThan(box.height);
-}
-
-async function expectIntroActionIconStackedAboveTitle(
-  action: Locator,
-  title: string,
-) {
-  const iconBox = await action.locator("svg").first().boundingBox();
-  const titleBox = await action.getByText(title, { exact: true }).boundingBox();
-  if (!iconBox || !titleBox) {
-    throw new Error("Could not measure welcome intro action content");
-  }
-
-  expect(titleBox.y).toBeGreaterThan(iconBox.y + iconBox.height);
-}
-
 async function expectWelcomeComposerBannerLayout(page: Page) {
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
@@ -436,7 +414,10 @@ async function expectPrivateWelcomeLanding(page: Page) {
 async function expectWelcomeView(page: Page) {
   await expectPrivateWelcomeLanding(page);
   await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
+  // One public starter channel, not two. `welcome-everyone` used to be created
+  // beside `general` and the private `Welcome`, so a founder's first sidebar
+  // held three empty channels, two of them named some variant of welcome.
+  await expect(page.getByTestId("channel-welcome-everyone")).toHaveCount(0);
   await expect(page.getByTestId("channel-ephemeral-Welcome")).toHaveCount(0);
   await expect(page.getByTestId("chat-ephemeral-badge")).toHaveCount(0);
   await expect(page.getByTestId("message-unread-pill")).toHaveCount(0);
@@ -444,53 +425,23 @@ async function expectWelcomeView(page: Page) {
   await expect(page.getByTestId("message-channel-intro")).toContainText(
     "private welcome channel",
   );
-  await expect(
-    page.getByTestId("message-channel-intro").getByRole("button"),
-  ).toHaveText(["Browse channels", "Create a channel", "Create an agent"]);
+  // The intro cards ship. Suppressing them here was tried and reverted in
+  // bdda2ea6b9: they are the only entry point to chat-first agent creation in
+  // this channel, which welcome-agent-modal-screenshots.spec.ts covers in two
+  // tests, and gating them on "the channel has no messages" hid them in
+  // exactly the state that spec exercises, because the Chief of Staff posts
+  // immediately. They do compete with a half-finished question about the
+  // business; the agreed fix is to move them below the conversation, which is
+  // a timeline layout change rather than a flag. Assert what ships until then.
   await expect(
     page.getByTestId("welcome-intro-action-browse-channels"),
   ).toBeVisible();
-  await expectWiderThanTall(
-    page.getByTestId("welcome-intro-action-browse-channels"),
-  );
-  await expectIntroActionIconStackedAboveTitle(
-    page.getByTestId("welcome-intro-action-browse-channels"),
-    "Browse channels",
-  );
-  await page.getByTestId("welcome-intro-action-browse-channels").click();
-  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
-  await expect(page.getByTestId("channel-browser-search")).toBeFocused();
-  await expect(page.getByRole("tab", { name: "All channels" })).toHaveAttribute(
-    "data-state",
-    "active",
-  );
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("channel-browser-dialog")).toHaveCount(0);
   await expect(
     page.getByTestId("welcome-intro-action-create-channel"),
   ).toBeVisible();
-  await expectWiderThanTall(
-    page.getByTestId("welcome-intro-action-create-channel"),
-  );
-  await expectIntroActionIconStackedAboveTitle(
-    page.getByTestId("welcome-intro-action-create-channel"),
-    "Create a channel",
-  );
-  await expect(
-    page
-      .getByTestId("welcome-intro-action-create-channel")
-      .getByText("Create a channel", { exact: true }),
-  ).toHaveCSS("white-space", "normal");
   await expect(
     page.getByTestId("welcome-intro-action-create-agent"),
   ).toBeVisible();
-  await expectWiderThanTall(
-    page.getByTestId("welcome-intro-action-create-agent"),
-  );
-  await expectIntroActionIconStackedAboveTitle(
-    page.getByTestId("welcome-intro-action-create-agent"),
-    "Create an agent",
-  );
   await expect(page.getByTestId("message-composer")).toBeVisible();
   await expect(page.getByTestId("welcome-composer-guide-banner")).toBeVisible();
   await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
@@ -619,7 +570,10 @@ async function expectStarterChannels(page: Page) {
   await expect
     .poll(async () => {
       const channels = await getMockChannels(page);
-      return ["general", "welcome-everyone"].map((name) => {
+      // One public starter channel. `welcome-everyone` duplicated `general`
+      // for anyone who joined later, and left a new founder looking at three
+      // empty channels, two of them named some variant of welcome.
+      return ["general"].map((name) => {
         const channel = channels.find(
           (candidate) =>
             candidate.name === name && candidate.visibility === "open",
@@ -637,13 +591,6 @@ async function expectStarterChannels(page: Page) {
       });
     })
     .toEqual([
-      {
-        channelType: "stream",
-        isMember: true,
-        memberCountAtLeastOne: true,
-        ttlSeconds: null,
-        visibility: "open",
-      },
       {
         channelType: "stream",
         isMember: true,
@@ -2951,12 +2898,12 @@ test("completed onboarding backfills missing starter channels", async ({
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectHomeView(page);
   await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
+  await expect(page.getByTestId("channel-welcome-everyone")).toHaveCount(0);
   await expectStarterChannels(page);
   await expectWelcomeGuideIntro(page, { expectVisible: false });
 });
 
-test("finishing onboarding creates starter channels and focuses welcome-everyone for a new member", async ({
+test("finishing onboarding creates the starter channel and focuses private Welcome for a new member", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
