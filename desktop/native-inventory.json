@@ -1384,8 +1384,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/agents/ui/AgentCardViewerDialog.tsx:72",
-        "src/parity/session/script.ts:1072",
-        "src/parity/session/script.ts:1073"
+        "src/features/content/postPack.ts:9",
+        "src/features/content/ui/ContentDayDetail.tsx:121"
       ]
     },
     "download_voice_models": {
