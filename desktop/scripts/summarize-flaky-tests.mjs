@@ -71,11 +71,26 @@ try {
   process.exit(1);
 }
 
-const allowed = new Set(
-  (JSON.parse(await readFile(ALLOWLIST_PATH, "utf8")).allow ?? []).map(
-    (entry) => normalizeTestKey(entry.test),
-  ),
-);
+// `allow` is a list of test-title STRINGS, not objects. This read `entry.test`
+// for long enough that both live entries were dead: every key normalized to the
+// literal "undefined", so the set never matched a real title and no listed flake
+// was ever suppressed. Nothing failed loudly, because a non-matching allowlist
+// looks exactly like an empty one - the job just keeps failing on the flake you
+// believed you had listed. Reading a shape the file does not have is a silent
+// no-op, so the shape is asserted rather than assumed.
+const rawAllow = JSON.parse(await readFile(ALLOWLIST_PATH, "utf8")).allow ?? [];
+const malformed = rawAllow.filter((entry) => typeof entry !== "string");
+if (malformed.length > 0) {
+  console.error(
+    `desktop/known-flaky.json: every \`allow\` entry must be a test-title string.\n` +
+      `Found ${malformed.length} that ${malformed.length === 1 ? "is" : "are"} not:\n` +
+      malformed.map((entry) => `  - ${JSON.stringify(entry)}`).join("\n") +
+      "\n\nAn entry this script cannot read is an entry that suppresses nothing," +
+      "\nwhich is worse than no entry at all: the list looks maintained and is not.\n",
+  );
+  process.exit(1);
+}
+const allowed = new Set(rawAllow.map((entry) => normalizeTestKey(entry)));
 
 const flaky = [];
 for (const suite of report.suites ?? []) {

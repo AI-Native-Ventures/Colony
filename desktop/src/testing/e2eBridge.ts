@@ -7291,10 +7291,11 @@ async function handleEnsureStarterChannels(
     touchMockChannel(channel);
   };
 
-  for (const channelName of [
-    STARTER_GENERAL_CHANNEL_NAME,
-    STARTER_WELCOME_CHANNEL_NAME,
-  ]) {
+  // Mirrors STARTER_CHANNELS in desktop/src-tauri/src/commands/channels.rs.
+  // `welcome-everyone` is no longer created for new workspaces: it still
+  // exists in this catalog so specs can exercise an established workspace that
+  // has one, but ensure-starter-channels must not conjure it.
+  for (const channelName of [STARTER_GENERAL_CHANNEL_NAME]) {
     const channel = mockChannels.find(
       (candidate) =>
         candidate.name === channelName &&
