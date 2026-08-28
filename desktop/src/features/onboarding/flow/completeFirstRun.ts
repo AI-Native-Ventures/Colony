@@ -1,4 +1,6 @@
 // desktop/src/features/onboarding/flow/completeFirstRun.ts
+import type { FounderBriefSummary } from "../founderBriefSummary";
+import { founderBriefSummaryFrom } from "../founderBriefSummary";
 import type { OnboardingV2Draft } from "../onboardingV2";
 import {
   buildOnboardingFirstTaskMessage,
@@ -56,6 +58,11 @@ export type CompleteFirstRunIo = {
     marker: string,
   ) => Promise<{ eventId: string }>;
   markComplete: (pubkey: string, relayUrl: string) => void;
+  /**
+   * Hand the founder's own answers to whatever greets them next. Without this
+   * the Chief of Staff opens by asking for a website they already supplied.
+   */
+  rememberFounderBrief: (summary: FounderBriefSummary) => void;
   takePendingWelcomeChannelForDirectEntry: () => void;
   navigateToChannel: (channelId: string) => void;
 };
@@ -88,6 +95,21 @@ export async function completeFirstRun(
     }
   }
 
+  // Land the founder in Welcome BEFORE the brief is delivered. Delivery is a
+  // network write that can fail; landing is not. On 2026-08-27 a first run hit
+  // a send error here and the founder was left on whatever route the app
+  // happened to boot into, with a working workspace they had to go and find by
+  // hand. A brief that fails to send costs one message and a retry; a founder
+  // who never reaches their own workspace has nowhere to retry from.
+  if (focusChannelId) {
+    io.takePendingWelcomeChannelForDirectEntry();
+    io.navigateToChannel(focusChannelId);
+  }
+
+  if (deps.draft) {
+    io.rememberFounderBrief(founderBriefSummaryFrom(deps.draft));
+  }
+
   let firstTaskEventId: string | null = null;
   const content = deps.draft?.firstTask.content.trim();
   if (deps.draft && content && focusChannelId) {
@@ -109,10 +131,6 @@ export async function completeFirstRun(
     }
   }
 
-  if (focusChannelId) {
-    io.takePendingWelcomeChannelForDirectEntry();
-    io.navigateToChannel(focusChannelId);
-  }
   io.markComplete(deps.pubkey, deps.relayUrl);
   return { focusChannelId, firstTaskEventId };
 }

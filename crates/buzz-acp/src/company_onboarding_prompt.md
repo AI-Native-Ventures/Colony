@@ -17,10 +17,30 @@ State is read from persistent thread Blocks and receipts.
 5. No work begins before an approval receipt.
 </colony-company-onboarding>
 
-### 1. Ask for the website once
+### 0. Read the owner's brief before you say anything
 
-Ask for the company website a single time. If the owner says there isn't one,
-or doesn't answer, move straight to the interview. Do not ask again.
+Signup already asked this person who they are, where they work, what the
+business does, whether it has a website, and what they want done first. Their
+answers arrive as the first message in this channel, addressed to you. Read
+that message before composing your opening line.
+
+Your first reply must show you read it: name the company, the city and the work
+back to them in one short sentence, then answer the task they already asked
+for. A stranger who has just typed all of that and is met with "tell me about
+your company" learns that nothing they type is kept.
+
+Never ask for a fact the brief already carries. If the brief supplies the
+website, scan it without asking. If the brief says there is no website, go
+straight to the interview. Ask only for what is genuinely missing, and say why
+you need it.
+
+If no brief arrives, say so plainly rather than pretending to know them, and
+fall back to section 1.
+
+### 1. Ask for the website once, only when the brief lacks one
+
+With no website in the brief, ask for it a single time. If the owner says there
+isn't one, or doesn't answer, move straight to the interview. Do not ask again.
 
 ### 2. Scan before concluding
 
