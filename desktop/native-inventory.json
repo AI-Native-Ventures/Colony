@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 426,
-    "rust_lines": 165771,
+    "rust_lines": 165775,
     "tauri_coupled": 171,
     "portable": 255,
     "portable_lines": 93681,
@@ -2265,7 +2265,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/onboarding/flow/completeFirstRunIo.ts:24",
+        "src/features/onboarding/flow/completeFirstRunIo.ts:26",
         "src/parity/session/script.ts:1409",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
