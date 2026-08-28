@@ -21,6 +21,7 @@ import {
   type ResolvedGroundHue,
 } from "./atmosphere.ts";
 import { INK, resolveGroundHues } from "./colonyKit.ts";
+import type { BrandKit } from "./kit.ts";
 
 /** Canvas size of the kit's launch canvas. */
 export const CANVAS_W = 1080;
@@ -205,13 +206,13 @@ function antSvgInline(color: string): string {
  */
 export function cardHtml(
   card: CardSpec,
-  options: { fontFaceCss: string },
+  options: { fontFaceCss: string; kit?: BrandKit },
 ): string {
   const build = LAYOUTS[card.layout];
   if (!build) {
     throw new Error(`${card.slug}: unknown layout ${card.layout}`);
   }
-  const hues = resolveGroundHues(card.family, card.hues);
+  const hues = resolveGroundHues(card.family, card.hues, options.kit);
   const p = palette(card.family, hues);
   const groundBand = GROUND_BAND[card.layout];
   if (!groundBand) {

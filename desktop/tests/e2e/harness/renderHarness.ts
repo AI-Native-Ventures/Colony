@@ -14,7 +14,10 @@ import { renderSlide } from "../../../src/features/content/render/renderSlide";
 
 declare global {
   interface Window {
-    __COLONY_RENDER_SLIDE__: (card: CardSpec) => Promise<{
+    __COLONY_RENDER_SLIDE__: (
+      card: CardSpec,
+      kit?: unknown,
+    ) => Promise<{
       sha256: string;
       width: number;
       height: number;
@@ -26,9 +29,12 @@ declare global {
   }
 }
 
-window.__COLONY_RENDER_SLIDE__ = async (card: CardSpec) => {
+window.__COLONY_RENDER_SLIDE__ = async (card: CardSpec, kit?: unknown) => {
   const fontFaceCss = await loadKitFontFace();
-  const slide = await renderSlide(card, { fontFaceCss });
+  const slide = await renderSlide(card, {
+    fontFaceCss,
+    kit: kit as never,
+  });
   return {
     contrast: slide.contrast.map((run) => ({
       label: run.label,

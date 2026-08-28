@@ -101,7 +101,12 @@ function hue(
   base: string;
   ramp: string[];
 } {
-  return { base, name, ramp: [...solvedRamp(base), CANVAS[base]] };
+  // `solvedRamp` already ends with the canvas tint at the position
+  // `COLONY_RAMP.canvas` names. Appending it again made a ninth stop that is a
+  // duplicate of the eighth: harmless only because nothing reads past index 7,
+  // which is exactly why it survived. A ramp whose length disagrees with its
+  // named positions is the shape that made a derived kit unreadable.
+  return { base, name, ramp: solvedRamp(base) };
 }
 
 /**
@@ -158,6 +163,11 @@ export function inkRgb(): [number, number, number] {
  * Resolve the hue names an authored card cites into the colour slices the
  * ground renderer draws with.
  *
+ * `kit` defaults to Colony's own, which is what the app renders its own cards
+ * with. A customer's stored kit (kind 30198) is passed in instead, and that is
+ * the whole point of the record: until this took a parameter, a derived kit
+ * changed nothing about what was drawn.
+ *
  * This is the one place Colony's ramp positions are interpreted: the kit
  * stores solved stops in the order {@link COLONY_RAMP} names, and this maps
  * them onto night (white-type safe) or dawn (ink-type safe) slices. The two
@@ -168,16 +178,26 @@ export function inkRgb(): [number, number, number] {
 export function resolveGroundHues(
   family: GroundFamily,
   hues: string[],
+  kit: BrandKit = COLONY_KIT,
 ): ResolvedGroundHue[] {
   return hues.map((name) => {
-    const entry = COLONY_KIT.hues.find((hue) => hue.name === name);
+    const entry = kit.hues.find((hue) => hue.name === name);
     if (!entry) {
-      throw new Error(`colony kit: no hue named ${name}`);
+      throw new Error(
+        `brand kit ${kit.id}: no hue named ${name}. It has ${kit.hues
+          .map((hue) => hue.name)
+          .join(", ")}`,
+      );
     }
     const stop = (index: number): string => {
       const value = entry.ramp[index];
       if (!value) {
-        throw new Error(`colony kit: hue ${name} has no ramp stop ${index}`);
+        throw new Error(
+          `brand kit ${kit.id}: hue ${name} has ${entry.ramp.length} ramp ` +
+            `stops, and the ground needs stop ${index}. A kit whose ramp was ` +
+            `sampled rather than solved does not carry the named positions ` +
+            `COLONY_RAMP reads.`,
+        );
       }
       return value;
     };
