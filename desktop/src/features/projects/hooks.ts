@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
+import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
-import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import {
@@ -65,6 +65,11 @@ import {
   type FetchProjectEventsExhaustively,
   fetchProjectEventsExhaustively,
 } from "./projectEnumeration";
+import {
+  markProjectCollectionAuthoritative,
+  persistProjectSnapshot,
+  PROJECT_QUERY_STRUCTURAL_SHARING,
+} from "./projectSnapshot";
 import { projectMatchesRouteId } from "./projectRoutes";
 
 export type {
@@ -78,6 +83,23 @@ export type {
 export type ProjectPullRequestCommentDecision = "request-changes";
 
 const HIDDEN_PROJECT_CARDS_KEY = "buzz.projects.hidden-cards.v1";
+
+function readHiddenProjectCards(): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(HIDDEN_PROJECT_CARDS_KEY) ?? "[]",
+    );
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 export type RepoState = {
   branches: Array<{ name: string; commit: string }>;
@@ -126,23 +148,6 @@ export type ProjectIssueListItem = {
   repository: Repository;
   issue: ProjectIssue;
 };
-
-function readHiddenProjectCards(): string[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(HIDDEN_PROJECT_CARDS_KEY) ?? "[]",
-    );
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Converts a kind:30617 repo announcement into a `Project`.
@@ -646,24 +651,43 @@ export const PROJECT_ACTIVITY_STALE_TIME_MS = 2 * 60_000;
 export const PROJECT_LOCAL_REPOS_STALE_TIME_MS = 2 * 60_000;
 
 export function useProjectsQuery(options?: { enabled?: boolean }) {
+  const queryClient = useQueryClient();
   return useQuery({
     enabled: options?.enabled ?? true,
     queryKey: projectsQueryKey,
-    queryFn: ({ signal }) => fetchProjects(undefined, signal),
+    queryFn: async ({ signal }) => {
+      const projects = await fetchProjects(undefined, signal);
+      markProjectCollectionAuthoritative(queryClient);
+      persistProjectSnapshot(queryClient, projects);
+      return projects;
+    },
     staleTime: PROJECTS_STALE_TIME_MS,
     gcTime: PROJECTS_GC_TIME_MS,
+    structuralSharing: PROJECT_QUERY_STRUCTURAL_SHARING,
   });
 }
 
+// Upstream's per-channel project-home query is not ported: it reads through
+// `projectFetch.ts` and renders via `ProjectChannelHome` / `projectHomeChannel`,
+// all of which Colony has deleted. Colony resolves a channel's project from the
+// enumerated collection instead.
+
 export function useProjectQuery(projectId: string) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: projectsQueryKey,
-    queryFn: ({ signal }) => fetchProjects(undefined, signal),
+    queryFn: async ({ signal }) => {
+      const projects = await fetchProjects(undefined, signal);
+      markProjectCollectionAuthoritative(queryClient);
+      persistProjectSnapshot(queryClient, projects);
+      return projects;
+    },
     select: (projects) =>
       projects.find((project) => projectMatchesRouteId(project, projectId)) ??
       null,
     staleTime: PROJECTS_STALE_TIME_MS,
     gcTime: PROJECTS_GC_TIME_MS,
+    structuralSharing: PROJECT_QUERY_STRUCTURAL_SHARING,
   });
 }
 

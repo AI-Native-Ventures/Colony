@@ -21,6 +21,7 @@ import {
 import { removeSelfProfileCachesForRelay } from "@/features/profile/lib/selfProfileStorage";
 import { removeUserLabelCacheForRelay } from "@/features/profile/lib/userLabelStorage";
 import { removeChannelSnapshotForRelay } from "@/features/channels/channelSnapshot";
+import { removeProjectSnapshotForRelay } from "@/features/projects/projectSnapshot";
 import { clearChannelHeadCache } from "@/shared/api/tauriChannelHeadCache";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { clearSavedCommunitySnapshot } from "@/features/agents/activeAgentTurnsStore";
@@ -245,6 +246,7 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
       removeSelfProfileCachesForRelay(removed.relayUrl);
       removeUserLabelCacheForRelay(removed.relayUrl);
       removeChannelSnapshotForRelay(removed.relayUrl);
+      removeProjectSnapshotForRelay(removed.relayUrl);
       void getIdentity()
         .then((identity) =>
           clearChannelHeadCache({

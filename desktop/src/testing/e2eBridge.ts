@@ -1484,6 +1484,8 @@ declare global {
     __BUZZ_E2E_REJECT_PROJECT_QUERY_KINDS__?: number[];
     /** Captured aggregate project-history filters for request-count assertions. */
     __BUZZ_E2E_PROJECT_QUERY_FILTERS__?: MockFilter[];
+    /** Withhold community-wide project queries so a scoped lookup is provable. */
+    __BUZZ_E2E_DEFER_FULL_PROJECT_QUERIES__?: boolean;
     __BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__?: {
       local_path: string | null;
       local_branch: string | null;
@@ -11249,6 +11251,17 @@ function sendToMockSocket(args: {
           subId,
           "mock project query failure",
         ]);
+        return;
+      }
+      if (
+        window.__BUZZ_E2E_DEFER_FULL_PROJECT_QUERIES__ &&
+        !filter.authors &&
+        !filter["#a"] &&
+        !filter["#buzz-channel"] &&
+        !filter["#d"] &&
+        !filter["#e"] &&
+        !filter.ids
+      ) {
         return;
       }
       for (const event of filterMockProjectEvents(filter)) {
