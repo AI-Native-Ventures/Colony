@@ -210,13 +210,60 @@ pub fn ink_canvas_lightness(h: f64, s: f64) -> f64 {
 
 // ── the solved ramp ───────────────────────────────────────────────────────
 
-/// The wash tones that complete a ramp, as (saturation factor, lightness
+/// The wash tones that close a ramp, as (saturation factor, lightness
 /// percent). These mirror Colony's canvas-mid and canvas-light treatment:
 /// same hue pushed paler for grounds that carry no body text of their own.
 /// They are derived deterministically from the hue rather than solved against
-/// type because nothing is set in them; the two stops that carry text are
-/// both bisection solves.
-const WASH_TONES: [(f64, f64); 2] = [(0.70, 90.0), (0.55, 96.0)];
+/// type because nothing is set in them; every stop that carries text is a
+/// bisection solve.
+const WASH_TONES: [(f64, f64); 2] = [(0.55, 96.0), (0.70, 90.0)];
+
+/// The ratios white type is solved against, darkest ground first.
+///
+/// Three rather than one, because the renderer's ground is banded: the
+/// darkest stop carries the type, the middle one carries the mass of the
+/// field, and the lightest still has to hold a word that drifts onto it.
+const WHITE_SAFE_RATIOS: [f64; 3] = [11.0, 7.5, 5.8];
+
+/// The ratios near-black ink is solved against, darkest ground first. Mirrors
+/// [`WHITE_SAFE_RATIOS`] for the light family.
+const INK_SAFE_RATIOS: [f64; 3] = [5.5, 7.5, 11.0];
+
+/// The lightest lightness of `h`/`s` at which white type clears `ratio`.
+///
+/// Generalises [`white_text_lightness`], which is this at 4.5. The ramp needs
+/// several ratios rather than one because the ground is banded rather than
+/// flat.
+fn white_lightness_at(h: f64, s: f64, ratio: f64) -> f64 {
+    let clears = |l: f64| contrast_ratio(WHITE, hsl_to_rgb(h, s, l / 100.0)) >= ratio;
+    let mut lo = 0.0f64;
+    let mut hi = 100.0f64;
+    while hi - lo > SOLVE_EPSILON {
+        let mid = (lo + hi) / 2.0;
+        if clears(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// The darkest lightness of `h`/`s` on which ink clears `ratio`.
+fn ink_lightness_at(h: f64, s: f64, ratio: f64) -> f64 {
+    let clears = |l: f64| contrast_ratio(INK, hsl_to_rgb(h, s, l / 100.0)) >= ratio;
+    let mut lo = 0.0f64;
+    let mut hi = 100.0f64;
+    while hi - lo > SOLVE_EPSILON {
+        let mid = (lo + hi) / 2.0;
+        if clears(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
 
 /// Build one hue's ramp from its base colour.
 ///
@@ -227,37 +274,30 @@ const WASH_TONES: [(f64, f64); 2] = [(0.70, 90.0), (0.55, 96.0)];
 /// that already sits on a solve boundary appears once.
 pub fn solved_ramp(base_hex: &str) -> Option<Vec<String>> {
     let rgb = hex_to_rgb(base_hex)?;
-    let (h, s, l) = rgb_to_hsl(rgb);
+    let (h, s, _l) = rgb_to_hsl(rgb);
     // Near-greys carry no hue to solve; a ramp of them would be noise.
     if s < 0.08 {
         return None;
     }
 
-    let mut stops: Vec<(f64, String)> = Vec::with_capacity(5);
-    stops.push((l, rgb_to_hex(rgb)));
-    let white_solve = white_text_lightness(h, s);
-    stops.push((
-        white_solve / 100.0,
-        rgb_to_hex(hsl_to_rgb(h, s, white_solve / 100.0)),
-    ));
-    let ink_solve = ink_canvas_lightness(h, s);
-    stops.push((
-        ink_solve / 100.0,
-        rgb_to_hex(hsl_to_rgb(h, s, ink_solve / 100.0)),
-    ));
-    for (sat_factor, lightness) in WASH_TONES {
-        stops.push((
-            lightness / 100.0,
-            rgb_to_hex(hsl_to_rgb(h, s * sat_factor, lightness / 100.0)),
-        ));
+    // Positional, not sorted. The renderer reads this ramp by named index
+    // (`COLONY_RAMP` in colonyKit.ts): three white-safe stops, three ink-safe
+    // stops, then the two washes. A ramp that was sorted and deduplicated -
+    // which this was - has no stable positions at all, so the ground read the
+    // wrong stop or ran off the end of a short ramp and threw. Every stop is
+    // emitted even when two solves land on the same hex, because a missing
+    // stop shifts every stop after it.
+    let mut ramp: Vec<String> = Vec::with_capacity(8);
+    for ratio in WHITE_SAFE_RATIOS {
+        let l = white_lightness_at(h, s, ratio);
+        ramp.push(rgb_to_hex(hsl_to_rgb(h, s, l / 100.0)));
     }
-
-    stops.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let mut ramp: Vec<String> = Vec::with_capacity(stops.len());
-    for (_, hex) in stops {
-        if ramp.last() != Some(&hex) {
-            ramp.push(hex);
-        }
+    for ratio in INK_SAFE_RATIOS {
+        let l = ink_lightness_at(h, s, ratio);
+        ramp.push(rgb_to_hex(hsl_to_rgb(h, s, l / 100.0)));
+    }
+    for (sat_factor, lightness) in WASH_TONES {
+        ramp.push(rgb_to_hex(hsl_to_rgb(h, s * sat_factor, lightness / 100.0)));
     }
     Some(ramp)
 }
@@ -576,17 +616,20 @@ pub struct ProposedMark {
 ///
 /// The two formats the launch build actually rendered, plus the square both
 /// platforms accept.
-const DEFAULT_CANVASES: [(&str, u64, u64); 3] = [
-    ("ig-portrait", 1080, 1350),
-    ("ig-square", 1080, 1080),
-    ("li-landscape", 1200, 627),
-];
+/// Only the canvas the renderer can actually draw. `CANVAS_W` x `CANVAS_H` in
+/// `compositions.ts` is a constant, so a kit that advertised a square or a
+/// landscape promised a size no card can be produced at, and the canvas gate
+/// would refuse every one of them.
+const DEFAULT_CANVASES: [(&str, u64, u64); 1] = [("ig-portrait", 1080, 1350)];
 
-/// The fixed composition pack a derived kit allows.
+/// The layouts a derived kit allows.
 ///
-/// The running order the launch build corrected everything around; templates
-/// are kit-referenced ids today, so derivation lists the ids that exist.
-const DEFAULT_TEMPLATES: [&str; 5] = ["who", "what", "why", "proof", "when"];
+/// These are layout ids the renderer implements (`LAYOUTS` in
+/// `compositions.ts`), not jobs in a running order. This list used to be
+/// `who, what, why, proof, when`, which are the *jobs* a week's cards do; an
+/// agent reading the kit for a template would write `layout: "who"` and every
+/// card would throw `unknown layout who` after passing every text gate.
+const DEFAULT_TEMPLATES: [&str; 2] = ["statement", "poster"];
 
 /// Derive a brand kit proposal body from aggregated scan branding.
 ///
@@ -877,26 +920,51 @@ mod tests {
         assert!(lighter < WHITE_TEXT_RATIO);
     }
 
+    /// A ramp is read by position, not scanned as a gradient.
+    ///
+    /// This test used to assert dark-to-light and no duplicate neighbours,
+    /// which sounds right and is not: the renderer reads named indices
+    /// (`COLONY_RAMP`), and Colony's own ramp is not monotone either, because
+    /// the palest canvas tint sits at index 6 and the fuller one at 7. Sorting
+    /// and deduplicating destroyed the positions, so the ground read the wrong
+    /// stop or ran off the end of a short ramp. The property that actually
+    /// matters is that each position clears the ratio it was solved for.
     #[test]
-    fn ramps_are_ordered_dark_to_light_without_duplicate_neighbours() {
+    fn every_ramp_position_clears_the_ratio_it_was_solved_for() {
         for base in ["#c026d3", "#f59f0a", "#72a5f8", "#33cc99", "#1d9bf0"] {
             let ramp = solved_ramp(base).expect("saturated hue");
-            assert!(ramp.len() >= 3, "{base} produced {ramp:?}");
-            let lightnesses: Vec<f64> = ramp
-                .iter()
-                .map(|hex| rgb_to_hsl(hex_to_rgb(hex).expect("parse")).2)
-                .collect();
-            for pair in lightnesses.windows(2) {
-                assert!(
-                    pair[0] <= pair[1],
-                    "{base} ramp not dark-to-light: {ramp:?}"
-                );
-            }
+            assert_eq!(ramp.len(), 8, "{base} produced {ramp:?}");
             for hex in &ramp {
                 assert_eq!(*hex, hex.to_ascii_lowercase());
             }
-            // The base colour survives verbatim: it is what the site uses.
-            assert!(ramp.contains(&base.to_owned()), "{ramp:?} lost {base}");
+
+            // Solved by bisection to the boundary, so allow the epsilon the
+            // solver stops at rather than demanding the exact ratio.
+            const SLACK: f64 = 0.05;
+            for (index, ratio) in WHITE_SAFE_RATIOS.iter().enumerate() {
+                let rgb = hex_to_rgb(&ramp[index]).expect("parse");
+                let measured = contrast_ratio(WHITE, rgb);
+                assert!(
+                    measured >= ratio - SLACK,
+                    "{base} stop {index} measures {measured} against a {ratio} white bar"
+                );
+            }
+            for (offset, ratio) in INK_SAFE_RATIOS.iter().enumerate() {
+                let rgb = hex_to_rgb(&ramp[3 + offset]).expect("parse");
+                let measured = contrast_ratio(INK, rgb);
+                assert!(
+                    measured >= ratio - SLACK,
+                    "{base} stop {} measures {measured} against a {ratio} ink bar",
+                    3 + offset
+                );
+            }
+
+            // The two washes close the ramp and carry no type, so they are
+            // only required to be pale.
+            for (offset, wash) in ramp[6..8].iter().enumerate() {
+                let (_, _, l) = rgb_to_hsl(hex_to_rgb(wash).expect("parse"));
+                assert!(l > 0.8, "{base} wash {} is not pale: {wash:?}", 6 + offset);
+            }
         }
     }
 
@@ -1139,22 +1207,23 @@ mod tests {
         assert_eq!(kit_type.families, vec!["Inter".to_owned()]);
         assert_eq!(parsed.marks.len(), 1);
         assert_eq!(parsed.marks[0].role, MarkRole::Icon);
-        // Every ramp stop is a solved or observed colour by construction, but
-        // verify the property downstream relies on: dark to light, unique.
+        // The property the renderer relies on is positional: eight stops, so
+        // every named index in COLONY_RAMP resolves. Ordering is not it - the
+        // washes that close the ramp are deliberately out of lightness order.
         for hue in &parsed.hues {
-            let mut lightnesses = hue
-                .ramp
-                .iter()
-                .map(|hex| rgb_to_hsl(hex_to_rgb(hex).expect("valid colour")).2);
-            let mut previous = lightnesses.next().expect("non-empty ramp");
-            for l in lightnesses {
+            assert_eq!(
+                hue.ramp.len(),
+                8,
+                "{} ramp has no named positions: {:?}",
+                hue.name,
+                hue.ramp
+            );
+            for hex in &hue.ramp {
                 assert!(
-                    l >= previous,
-                    "{} ramp not ordered: {:?}",
-                    hue.name,
-                    hue.ramp
+                    hex_to_rgb(hex).is_some(),
+                    "{} ramp stop is not a colour: {hex}",
+                    hue.name
                 );
-                previous = l;
             }
         }
     }

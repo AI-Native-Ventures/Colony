@@ -81,6 +81,85 @@ test("every layout the kit advertises actually draws", async ({ page }) => {
   }
 });
 
+test("a customer's own kit changes the pixels, not just the record", async ({
+  page,
+}) => {
+  // The whole point of storing a brand kit. Until resolveGroundHues took a
+  // kit, a derived one changed nothing: cards still rendered, always in
+  // Colony's colours, which looks identical to working.
+  const TEAL = {
+    canvases: [{ h: 1350, name: "ig-portrait", w: 1080 }],
+    hues: [
+      {
+        base: "#0f766e",
+        name: "violet",
+        ramp: [
+          "#04241f",
+          "#07463d",
+          "#0a675a",
+          "#3fbfae",
+          "#7fd6cb",
+          "#bfeae4",
+          "#eff9f7",
+          "#33ccb9",
+        ],
+      },
+    ],
+    id: "customer",
+    marks: [],
+    rules: { claim_strictness: "strict", contrast_floor: 4.5, raw: {} },
+    source: { type: "manual" },
+    templates: ["statement"],
+    type: null,
+    version: "1",
+  };
+
+  const colony = await page.evaluate(
+    (card) => window.__COLONY_RENDER_SLIDE__(card),
+    { ...CARD, hues: ["violet"], slug: "kit-colony" },
+  );
+  const customer = await page.evaluate(
+    ([card, kit]) => window.__COLONY_RENDER_SLIDE__(card as never, kit),
+    [{ ...CARD, hues: ["violet"], slug: "kit-colony" }, TEAL] as const,
+  );
+
+  // Same card, same slug, same seed: only the kit differs, so identical bytes
+  // would mean the kit was ignored.
+  expect(customer.sha256).not.toBe(colony.sha256);
+  expect(customer.pixelVariance).toBeGreaterThan(100);
+  expect(
+    Math.min(...customer.contrast.map((run) => run.ratio)),
+  ).toBeGreaterThanOrEqual(4.5);
+});
+
+test("a kit straight out of kit-derive draws a card that passes its gates", async ({
+  page,
+}) => {
+  // The end of the chain this ticket exists for: scan a site, store what the
+  // command produced, draw a card from it, with nothing corrected by hand.
+  // Before the derive fix this threw `unknown layout who`, and before that the
+  // ramp had no named positions for the ground to read.
+  const fs = await import("node:fs");
+  const kit = JSON.parse(
+    fs.readFileSync(
+      new URL("./fixtures-derived-kit.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  expect(kit.templates).toContain("statement");
+
+  const slide = await page.evaluate(
+    ([card, derived]) => window.__COLONY_RENDER_SLIDE__(card as never, derived),
+    [{ ...CARD, hues: ["violet"], slug: "derived-kit" }, kit] as const,
+  );
+
+  expect(slide.pixelVariance).toBeGreaterThan(100);
+  expect(slide.font.pass).toBe(true);
+  expect(
+    Math.min(...slide.contrast.map((run) => run.ratio)),
+  ).toBeGreaterThanOrEqual(4.5);
+});
+
 test("a card rasterises to pixels rather than to a blank canvas", async ({
   page,
 }) => {

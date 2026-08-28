@@ -1,0 +1,26 @@
+{
+  "id": "derived",
+  "source": { "type": "manual" },
+  "hues": [
+    {
+      "base": "#895af6",
+      "name": "violet",
+      "ramp": [
+        "#3d0ab5",
+        "#5715f2",
+        "#7239f4",
+        "#9e77f8",
+        "#b598f9",
+        "#d3c2fc",
+        "#f3f0fa",
+        "#dfd5f6"
+      ]
+    }
+  ],
+  "type": null,
+  "marks": [],
+  "canvases": [{ "h": 1350, "name": "ig-portrait", "w": 1080 }],
+  "templates": ["statement", "poster"],
+  "rules": { "claim_strictness": "strict", "contrast_floor": 4.5, "raw": {} },
+  "version": "1"
+}
