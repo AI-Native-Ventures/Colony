@@ -112,6 +112,23 @@ export type PostAsset = {
 
 export type PostStatus = "draft" | "ready";
 
+/**
+ * The post's style parameters, verbatim.
+ *
+ * `content.rs` stores this block opaquely on purpose: `family`, `hues`,
+ * `layout` and `variant` mean something to the brand kit that renders the
+ * card and nothing to the relay. The renderer is the consumer that reads
+ * them, so this parse keeps the shape and refuses nothing beyond types.
+ */
+export type CardStyle = {
+  family: string | null;
+  hues: string[];
+  layout: string | null;
+  variant: string | null;
+  /** Every other key the kit's templates may read, verbatim. */
+  raw: Record<string, unknown>;
+};
+
 export type ContentPost = {
   eventId: string;
   author: string;
@@ -127,6 +144,7 @@ export type ContentPost = {
   alt: string | null;
   hashtags: string[];
   styleVersion: string | null;
+  style: CardStyle | null;
   images: PostImage[];
   assets: PostAsset[];
   claims: ContentClaim[];
@@ -206,6 +224,18 @@ export type PostApprovalState =
 function tagValue(event: RelayEvent, name: string): string | null {
   const found = event.tags.find((tag) => tag[0] === name);
   return found?.[1] ?? null;
+}
+
+/**
+ * An event's content as a JSON object, or null when it is not one.
+ *
+ * Exported because the brand kit is read by `render/kit.ts` rather than here:
+ * the kit's reader is the renderer's, and it takes a parsed body.
+ */
+export function parseEventBody(
+  event: RelayEvent,
+): Record<string, unknown> | null {
+  return readJson(event);
 }
 
 function readJson(event: RelayEvent): Record<string, unknown> | null {
@@ -453,6 +483,31 @@ export function parseCampaign(event: RelayEvent): ContentCampaign | null {
 }
 
 /** Parse a post head (kind 30196). Returns null when unreadable. */
+/**
+ * Read the opaque `style` block off a post body.
+ *
+ * Returns null when the post carries no block at all, which is a draft the
+ * renderer has nothing to draw from rather than a malformed one.
+ */
+export function parseCardStyle(
+  content: Record<string, unknown>,
+): CardStyle | null {
+  const raw = content.style;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  return {
+    family: str(record, "family"),
+    hues: list(record, "hues").filter(
+      (hue): hue is string => typeof hue === "string" && hue.length > 0,
+    ),
+    layout: str(record, "layout"),
+    raw: record,
+    variant: str(record, "variant"),
+  };
+}
+
 export function parsePost(event: RelayEvent): ContentPost | null {
   const address = tagValue(event, "d");
   const content = readJson(event);
@@ -563,6 +618,7 @@ export function parsePost(event: RelayEvent): ContentPost | null {
     job: str(content, "job"),
     scheduledFor,
     slug: address.slice(separator + 1),
+    style: parseCardStyle(content),
     status: str(content, "status") === "ready" ? "ready" : "draft",
     styleVersion: str(content, "style_version"),
     updatedAt: event.created_at,

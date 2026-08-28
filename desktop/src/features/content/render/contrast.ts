@@ -90,8 +90,17 @@ export function parseRgb(color: string): Rgb {
  *
  * Called before rasterising, because it needs layout: the boxes come from
  * `getBoundingClientRect`, and the colours from computed style.
+ *
+ * `view` is the window the card is laid out in. The card is mounted in an
+ * isolated document rather than in the app's own, so computed style must be
+ * read through that document's window; the app's `getComputedStyle` is not
+ * required to answer for an element it does not own. Defaults to the ambient
+ * window so a test can pass a plain DOM.
  */
-export function collectRuns(host: ParentNode): ContrastRun[] {
+export function collectRuns(
+  host: ParentNode,
+  view: { getComputedStyle: (el: Element) => CSSStyleDeclaration } = globalThis,
+): ContrastRun[] {
   const runs: ContrastRun[] = [];
   for (const node of Array.from(host.querySelectorAll("[data-contrast]"))) {
     const el = node as HTMLElement;
@@ -99,13 +108,13 @@ export function collectRuns(host: ParentNode): ContrastRun[] {
     let alpha = 1;
     for (
       let walk: HTMLElement | null = el;
-      walk && walk !== document.documentElement;
+      walk && walk !== el.ownerDocument.documentElement;
       walk = walk.parentElement
     ) {
-      const own = Number.parseFloat(getComputedStyle(walk).opacity);
+      const own = Number.parseFloat(view.getComputedStyle(walk).opacity);
       alpha *= Number.isNaN(own) ? 1 : own;
     }
-    const color = getComputedStyle(el).color;
+    const color = view.getComputedStyle(el).color;
     const parts = color.match(/\d+(\.\d+)?/g);
     if (parts && parts.length > 3) {
       alpha *= Number(parts[3]);

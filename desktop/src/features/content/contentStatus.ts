@@ -145,6 +145,14 @@ export function postChip(
  * sentence, and a person deciding whether to publish deserves the sentence.
  */
 export function unverifiedSummary(post: ContentPost): string | null {
+  // A card nobody has drawn has no gates missing, it has no gates. Listing all
+  // six as "not reported" read as six failures on a post whose only state is
+  // that it is still a plan, and the checks panel says the same thing one line
+  // below. Absence is a state with a name here, but only once there was
+  // something to measure.
+  if (post.gateReports.length === 0) {
+    return null;
+  }
   const missing = missingGates(post.gateReports);
   if (missing.length > 0) {
     return `Not reported at all: ${missing.join(", ")}.`;
