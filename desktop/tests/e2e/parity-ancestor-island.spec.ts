@@ -46,7 +46,13 @@ test.beforeAll(async () => {
 test("live relay: an ancestor island does not strand the history frontier", async ({
   page,
 }, testInfo) => {
-  testInfo.setTimeout(180_000);
+  // Sized so a completely silent run still reaches the parity assertion and
+  // fails on the assertion rather than on the clock: the paging loop below can
+  // spend STALL_LIMIT * PAGE_SETTLE_MS (about 136s including the wheel gesture)
+  // waiting before it concludes history has stopped arriving. A test that dies
+  // on its own timeout reports "Test timeout exceeded" and hides which of the
+  // two states it was in.
+  testInfo.setTimeout(300_000);
 
   // Per-run isolation: the suite seeds into shared `general`, which accumulates
   // rows across runs. A generic `gap \d+` match lets a prior run's rows inflate
@@ -126,6 +132,22 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
     for (const content of await renderedGapContents()) seen.add(content);
   };
 
+  // How long paging is allowed to go quiet before this is called a stall.
+  //
+  // A stalled pass costs PAGE_SETTLE_MS, so the old budget of 8 passes at 4s
+  // gave pagination about 36s of patience inside a 180s test. That is not
+  // enough on a loaded CI runner: a run failed with 86 of 100 rows reached and
+  // passed on retry, which is nowhere near the RED signature this test exists
+  // to catch (the pager anchors on the island and reaches ~0). It gave up
+  // early rather than finding history stranded.
+  //
+  // These only change how long the test waits for pages it already expects.
+  // The parity assertion below is untouched, so a genuine RED still fails —
+  // it now takes about STALL_LIMIT * PAGE_SETTLE_MS to say so, which is why
+  // the per-test timeout above is sized to cover an entirely silent run.
+  const PAGE_SETTLE_MS = 6_000;
+  const STALL_LIMIT = 20;
+
   await timeline.hover();
   let stallStreak = 0;
   for (let attempt = 0; attempt < 200 && seen.size < GAP_COUNT; attempt += 1) {
@@ -138,7 +160,7 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
             await collect();
             return seen.size;
           },
-          { timeout: 4_000 },
+          { timeout: PAGE_SETTLE_MS },
         )
         .toBeGreaterThan(before);
     } catch {
@@ -149,7 +171,7 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
       stallStreak = 0;
     } else {
       stallStreak += 1;
-      if (stallStreak > 8) break;
+      if (stallStreak > STALL_LIMIT) break;
     }
   }
 
@@ -157,5 +179,15 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
   // pager anchors on the injected island (old root) and pages backward from it,
   // skipping the entire gap span (reaches ~0 of GAP_COUNT). GREEN on the
   // windowed read model, whose relay-owned cursor an ancestor merge can't move.
-  expect(seen.size).toBeGreaterThan(GAP_COUNT * 0.9);
+  // The count is in the message because the two failure modes look identical
+  // in a bare `expected > 90, received N`: near zero is the stranded frontier
+  // this test guards, while just short of the bar is paging that ran out of
+  // patience. Reading the number decides which without re-running anything.
+  expect(
+    seen.size,
+    `reached ${seen.size} of ${GAP_COUNT} seeded gap rows; ` +
+      "near zero means the pager anchored on the ancestor island and stranded " +
+      "the frontier, just short of the bar means paging was still arriving " +
+      `when it gave up after ${STALL_LIMIT} silent passes`,
+  ).toBeGreaterThan(GAP_COUNT * 0.9);
 });
