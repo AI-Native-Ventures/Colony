@@ -295,7 +295,28 @@ async fn ensure_profile(
     result
 }
 
+/// Retries on conflict, because the tests in this suite run concurrently
+/// against one community and therefore one profile. Two of them reading the
+/// same head and editing it is an ordinary compare-and-set race: the loser
+/// re-reads and re-applies, which is what any concurrent editor has to do
+/// and what the Settings form does when it reloads after a conflict.
 async fn ensure_profile_on(
+    client: &mut BuzzTestClient,
+    owner: &Keys,
+    relay: &str,
+    profile: CompanyProfile,
+) -> (CompanyReceiptOutcome, Option<String>) {
+    for _ in 0..8 {
+        let attempt = ensure_profile_once(client, owner, relay, profile.clone()).await;
+        if attempt.0 != CompanyReceiptOutcome::Conflict {
+            return attempt;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    panic!("the community profile stayed contended across every attempt")
+}
+
+async fn ensure_profile_once(
     client: &mut BuzzTestClient,
     owner: &Keys,
     relay: &str,

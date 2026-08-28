@@ -400,48 +400,57 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
         &relay,
         COMMUNITY_PROFILE_ID,
     );
-    let existing = head(
-        client,
-        &relay,
-        buzz_core::kind::KIND_COMPANY_PROFILE,
-        COMMUNITY_PROFILE_ID,
-    )
-    .await;
-    let outcome = match existing {
-        Some(current) => {
-            // A replacement keeps the original `createdAt` and must move
-            // `updatedAt` forward; the relay refuses anything else. The
-            // profile being replaced is the one the relay wrote at startup,
-            // so its timestamps are not this suite's.
-            let previous =
-                buzz_sdk::company::parse_company_event(&current).expect("stored profile parses");
-            let mut replacement = company.clone();
-            replacement.created_at = previous.created_at;
-            replacement.updated_at = previous.updated_at + 1;
-            let mut edit = action(
-                &relay,
-                CompanyActionOperation::Update,
-                CompanyActionPayload::Company(replacement),
-                profile_coordinate,
-            );
-            edit.expected_head = Some(current.id.to_hex());
-            broker(client, &owner, &relay, &edit).await
-        }
-        None => {
-            broker(
-                client,
-                &owner,
-                &relay,
-                &action(
+    // Retries on conflict: these suites run concurrently against one
+    // community and therefore one profile, so two of them reading the same
+    // head and editing it is an ordinary compare-and-set race. The loser
+    // re-reads and re-applies, which is what any concurrent editor has to do.
+    let mut outcome = CompanyReceiptOutcome::Conflict;
+    for _ in 0..8 {
+        let existing = head(
+            client,
+            &relay,
+            buzz_core::kind::KIND_COMPANY_PROFILE,
+            COMMUNITY_PROFILE_ID,
+        )
+        .await;
+        outcome = match existing {
+            Some(current) => {
+                // A replacement keeps the original `createdAt` and must move
+                // `updatedAt` forward; the relay refuses anything else.
+                let previous = buzz_sdk::company::parse_company_event(&current)
+                    .expect("stored profile parses");
+                let mut replacement = company.clone();
+                replacement.created_at = previous.created_at;
+                replacement.updated_at = previous.updated_at + 1;
+                let mut edit = action(
                     &relay,
-                    CompanyActionOperation::Create,
-                    CompanyActionPayload::Company(company.clone()),
-                    profile_coordinate,
-                ),
-            )
-            .await
+                    CompanyActionOperation::Update,
+                    CompanyActionPayload::Company(replacement),
+                    profile_coordinate.clone(),
+                );
+                edit.expected_head = Some(current.id.to_hex());
+                broker(client, &owner, &relay, &edit).await
+            }
+            None => {
+                broker(
+                    client,
+                    &owner,
+                    &relay,
+                    &action(
+                        &relay,
+                        CompanyActionOperation::Create,
+                        CompanyActionPayload::Company(company.clone()),
+                        profile_coordinate.clone(),
+                    ),
+                )
+                .await
+            }
+        };
+        if outcome != CompanyReceiptOutcome::Conflict {
+            break;
         }
-    };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
     assert_eq!(
         outcome,
         CompanyReceiptOutcome::Applied,
