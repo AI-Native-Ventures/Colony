@@ -132,6 +132,34 @@ test("a customer's own kit changes the pixels, not just the record", async ({
   ).toBeGreaterThanOrEqual(4.5);
 });
 
+test("a kit straight out of kit-derive draws a card that passes its gates", async ({
+  page,
+}) => {
+  // The end of the chain this ticket exists for: scan a site, store what the
+  // command produced, draw a card from it, with nothing corrected by hand.
+  // Before the derive fix this threw `unknown layout who`, and before that the
+  // ramp had no named positions for the ground to read.
+  const fs = await import("node:fs");
+  const kit = JSON.parse(
+    fs.readFileSync(
+      new URL("./fixtures-derived-kit.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  expect(kit.templates).toContain("statement");
+
+  const slide = await page.evaluate(
+    ([card, derived]) => window.__COLONY_RENDER_SLIDE__(card as never, derived),
+    [{ ...CARD, hues: ["violet"], slug: "derived-kit" }, kit] as const,
+  );
+
+  expect(slide.pixelVariance).toBeGreaterThan(100);
+  expect(slide.font.pass).toBe(true);
+  expect(
+    Math.min(...slide.contrast.map((run) => run.ratio)),
+  ).toBeGreaterThanOrEqual(4.5);
+});
+
 test("a card rasterises to pixels rather than to a blank canvas", async ({
   page,
 }) => {
