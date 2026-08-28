@@ -127,18 +127,36 @@ test("the calendar shows the week, and the day detail resizes like every other p
   const handle = page.getByTestId("content-day-detail-resize");
   await expect(handle).toBeVisible();
 
+  // The panel slides in. Measuring the handle mid-animation reads a position
+  // it has already left, so the press lands beside it and the drag does
+  // nothing - which fails as "the panel did not resize" rather than as
+  // "nothing was dragged". Settle first, then measure.
+  await waitForAnimations(page);
+
   const before = (await panel.boundingBox())?.width ?? 0;
   const box = await handle.boundingBox();
   if (!box) {
     throw new Error("the resize handle has no box to drag");
   }
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const startX = box.x + box.width / 2;
+  const startY = box.y + box.height / 2;
+  await page.mouse.move(startX, startY);
   await page.mouse.down();
-  await page.mouse.move(box.x - 160, box.y + box.height / 2, { steps: 12 });
+  // Separate move calls rather than one with `steps`, matching the drag in
+  // threadpane-ultrawide.spec.ts that has survived this CI. The drag's move
+  // listener is attached in the pointerdown handler, and a single call can
+  // outrun it.
+  for (let x = startX; x >= startX - 200; x -= 40) {
+    await page.mouse.move(x, startY);
+  }
   await page.mouse.up();
 
-  const after = (await panel.boundingBox())?.width ?? 0;
-  expect(after).toBeGreaterThan(before + 80);
+  // Polled rather than asserted once: the width lands after a paint. The
+  // callback returns a value and never throws, because expect.poll rethrows on
+  // the first call instead of retrying.
+  await expect
+    .poll(async () => (await panel.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(before + 80);
 
   await waitForAnimations(page);
   await page.screenshot({
