@@ -237,6 +237,45 @@ export function createCompanyRepository(
       );
     },
 
+    /**
+     * The profile together with the event id of the head it came from.
+     *
+     * Editing is a read-modify-write against a record the onboarding
+     * interview also writes, so a form has to be able to say which version it
+     * was populated from. Without that the owner's Save would silently
+     * discard whatever an agent wrote while the form was open.
+     */
+    async getActiveCompanyHead(): Promise<
+      CompanyParseResult<{ profile: CompanyProfile; headEventId: string }>
+    > {
+      return read<{ profile: CompanyProfile; headEventId: string }>(
+        (relaySelfPubkey) => ({
+          kinds: [KIND_COMPANY_PROFILE],
+          authors: [relaySelfPubkey],
+          "#d": [COMMUNITY_PROFILE_ID],
+          limit: 8,
+        }),
+        (events, relaySelfPubkey) => {
+          const head = newestHead(
+            events.filter(
+              (event) =>
+                normalizeHex(event.pubkey) === normalizeHex(relaySelfPubkey),
+            ),
+          );
+          if (!head) {
+            return companyFailure("missing-head", "No community profile yet.");
+          }
+          const parsed = parseCompanyHead(head, relaySelfPubkey);
+          return parsed.ok
+            ? {
+                ok: true,
+                value: { profile: parsed.value, headEventId: head.id },
+              }
+            : parsed;
+        },
+      );
+    },
+
     async listInitiatives(): Promise<CompanyParseResult<Initiative[]>> {
       return read<Initiative[]>(
         (relaySelfPubkey) => ({

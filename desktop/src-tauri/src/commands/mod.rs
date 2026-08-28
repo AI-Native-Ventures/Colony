@@ -23,6 +23,7 @@ mod channel_templates;
 mod channel_window;
 mod channels;
 mod clipboard;
+pub mod community_profile;
 pub mod company_blueprint;
 mod company_scan;
 pub mod discovery_export;

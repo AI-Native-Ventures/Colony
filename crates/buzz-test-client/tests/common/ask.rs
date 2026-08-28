@@ -10,8 +10,8 @@ use std::time::Duration;
 use buzz_cli::{build_ask_event, AskEventFields};
 use buzz_core::company::{
     CommercialPurpose, CompanyProfile, CompanyService, CompanyTask, CompanyTeamRef, CostCentre,
-    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMMUNITY_PROFILE_ID,
-    COMPANY_SCHEMA, INITIATIVE_SCHEMA,
+    CostCentreKind, DoerKind, Initiative, InitiativeStatus, TaskStatus, COMPANY_SCHEMA,
+    INITIATIVE_SCHEMA,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
@@ -288,7 +288,7 @@ fn company_profile(stamp: i64) -> CompanyProfile {
         }],
         customer_segments: vec!["small business".to_string()],
         cost_centres: vec![CostCentre {
-            id: "cc-coordination".to_string(),
+            id: "general".to_string(),
             name: "Company coordination".to_string(),
             kind: CostCentreKind::Internal,
             service_id: None,
@@ -307,7 +307,7 @@ fn proposed_initiative(id: &str, owner_persona_id: &str, stamp: i64) -> Initiati
         summary: "Ship the premium build.".to_string(),
         status: InitiativeStatus::Proposed,
         owner_persona_id: owner_persona_id.to_string(),
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::ClientDelivery,
         client_organization_id: None,
         expected_cost_usd: None,
@@ -334,7 +334,7 @@ fn chat_task(id: &str, team: &CompanyTeamRef, stamp: i64) -> CompanyTask {
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
         qa_persona_id: team.lead_persona_id.clone(),
         reviewer_team_id: None,
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
         client_organization_id: None,
         source_channel_id: "engineering".to_string(),
@@ -388,42 +388,20 @@ pub async fn workspace(client: &mut BuzzTestClient, owner: Keys) -> Workspace {
     };
     publish_team(client, &owner, &team).await;
 
-    let company = company_profile(now());
-    let outcome = broker(
-        client,
-        &owner,
-        &relay,
-        &action(
-            &relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(company.clone()),
-            coordinate(
-                buzz_core::kind::KIND_COMPANY_PROFILE,
-                &relay,
-                COMMUNITY_PROFILE_ID,
-            ),
-        ),
-    )
-    .await;
-    // Applied on the first workspace in this community, Conflict on every one
-    // after it. The profile is a singleton at a fixed coordinate now, so a
-    // second Create is refused rather than making a second company - and the
-    // precondition these tests actually need is that a profile EXISTS, not
-    // that this particular call is what created it. Every workspace builds
-    // the same profile (same cost centre id, same services), so an existing
-    // one is equivalent for everything downstream.
-    assert!(
-        matches!(
-            outcome,
-            CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-        ),
-        "the community profile must exist before any work can hang off it, got {outcome:?}"
-    );
-
+    // The relay writes every community a default profile at startup, so the
+    // profile already exists here and carries the default cost centre rather
+    // than this suite's. Create it if somehow absent, otherwise EDIT it: the
+    // Tasks below charge to `cc-coordination`, and `validate_task` refuses a
+    // Nothing here writes the community profile. The relay writes every
+    // community its own at startup, carrying the `general` cost centre these
+    // fixtures charge to, and that profile is shared across every
+    // concurrently-running test — so each one editing it was an ordinary
+    // compare-and-set race the relay was right to refuse. Reading what is
+    // already there removes the contention instead of retrying through it.
     Workspace {
         owner,
         relay,
-        company,
+        company: company_profile(now()),
         team,
     }
 }

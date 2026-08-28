@@ -1287,7 +1287,7 @@ async fn resolve_onboarding_for_channel(rest: &RestClient, cid: Uuid) -> Onboard
     // Bounded -- same shape as the core-memory fetch: a stalled relay must
     // not block session creation on this lookup.
     const ONBOARDING_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
-    let fetch = crate::work_context::fetch_community_profile_exists(rest);
+    let fetch = crate::work_context::fetch_community_profile_unconfigured(rest);
     match tokio::time::timeout(ONBOARDING_FETCH_TIMEOUT, fetch).await {
         Ok(Ok(status)) => OnboardingResolution::Settled(status),
         Ok(Err(error)) => {
