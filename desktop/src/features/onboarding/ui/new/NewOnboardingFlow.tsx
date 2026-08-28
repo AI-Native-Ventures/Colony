@@ -8,6 +8,7 @@ import {
   setStorageItem,
 } from "@/shared/lib/safeStorage";
 import type { AuthFailure } from "../../authService";
+import { applyBrainChoice } from "../../applyBrainChoice";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
 import { createWiredScrapeService } from "../../lib/wiredScrapeService";
 import { createWiredPaymentsService } from "../../lib/wiredPaymentsService";
@@ -403,6 +404,17 @@ export function NewOnboardingFlow({
     if (!chosen) return;
     const updated: OnboardingAnswers = { ...answers, brain: chosen };
     setAnswers(updated);
+    // Write the choice into the agent config the workspace actually starts
+    // agents from. Recording it in `answers` alone left founders who picked
+    // Claude Code with defaults still set to another runtime and no model, and
+    // a Chief of Staff that never answered. Best effort: a failed config write
+    // must not trap someone on this screen, and Agent defaults can fix it.
+    void applyBrainChoice(chosen).catch((error: unknown) => {
+      console.warn(
+        "Could not apply the selected brain to agent defaults.",
+        error,
+      );
+    });
     goTo(nextStep("brain", updated));
   };
 
