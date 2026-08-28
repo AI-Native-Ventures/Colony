@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 426,
-    "rust_lines": 165771,
-    "tauri_coupled": 171,
+    "rust_total": 427,
+    "rust_lines": 165827,
+    "tauri_coupled": 172,
     "portable": 255,
-    "portable_lines": 93681,
+    "portable_lines": 93682,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -37,6 +37,7 @@
       "src-tauri/src/commands/channel_window.rs",
       "src-tauri/src/commands/channels.rs",
       "src-tauri/src/commands/clipboard.rs",
+      "src-tauri/src/commands/community_profile.rs",
       "src-tauri/src/commands/company_blueprint.rs",
       "src-tauri/src/commands/company_scan.rs",
       "src-tauri/src/commands/discovery_export.rs",
@@ -440,10 +441,10 @@
     ]
   },
   "commands": {
-    "registered": 345,
-    "defined": 345,
+    "registered": 346,
+    "defined": 346,
     "by_reach": {
-      "frontend": 339,
+      "frontend": 340,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -456,7 +457,7 @@
   },
   "params": {
     "AppHandle": 354,
-    "State": 259,
+    "State": 260,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
@@ -464,7 +465,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 351,
-      "State": 259,
+      "State": 260,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -634,6 +635,7 @@
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
+    "src-tauri/src/commands/community_profile.rs": 1,
     "src-tauri/src/huddle/agents.rs": 1,
     "src-tauri/src/commands/personas/update.rs": 1
   },
@@ -3485,6 +3487,15 @@
       "example_sites": [
         "src/features/notifications/lib/desktop.ts:371",
         "src/parity/session/script.ts:1526"
+      ]
+    },
+    "sign_community_profile_update": {
+      "defining_file": "src-tauri/src/commands/community_profile.rs",
+      "module": "community_profile",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/companyProfileEdit.ts:30"
       ]
     },
     "sign_event": {
