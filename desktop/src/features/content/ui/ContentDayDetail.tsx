@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { invokeTauri } from "@/shared/api/tauri";
 import { copyTextToSystemClipboard } from "@/shared/api/tauriMedia";
 import { KIND_CONTENT_POST } from "@/shared/constants/kinds";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
@@ -15,6 +16,7 @@ import {
   unverifiedSummary,
 } from "../contentStatus";
 import { useClaimVerification, useContentClaimStrictness } from "../hooks";
+import { packFilename, postPackText } from "../postPack";
 import { ContentChecksPanel } from "./ContentChecksPanel";
 import { ContentClaimsList } from "./ContentClaimsList";
 import { ContentRenderPanel } from "./ContentRenderPanel";
@@ -98,13 +100,33 @@ export function ContentDayDetail({
     return draft.ok ? null : draft.reason;
   }, [post]);
 
-  const handleCopyCaption = React.useCallback(async () => {
-    if (!post.caption) {
+  // Copies the whole pack, not just the caption: hashtags and alt text are
+  // both going into the posting box too, and copying them one at a time is
+  // three round trips through this panel for one post.
+  const handleCopyPack = React.useCallback(async () => {
+    const text = postPackText(post);
+    if (text.length === 0) {
       return;
     }
-    await copyTextToSystemClipboard(post.caption);
+    await copyTextToSystemClipboard(text);
     setCopied(true);
-  }, [post.caption]);
+  }, [post]);
+
+  const handleDownload = React.useCallback(async () => {
+    setError(null);
+    try {
+      for (const [index, image] of post.images.entries()) {
+        // Sequential: each opens a save dialog, and two dialogs at once is a
+        // fight over the same window.
+        await invokeTauri("download_image", {
+          filename: packFilename(post, index, post.images.length),
+          url: image.url,
+        });
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [post]);
 
   const handleApprove = React.useCallback(async () => {
     setError(null);
@@ -215,11 +237,35 @@ export function ContentDayDetail({
         </div>
       ) : null}
 
+      {post.images.length > 0 ? (
+        // The handover. An approved card that cannot leave the app was never
+        // published, however well it measured, and until now the only way out
+        // was selecting the caption by hand.
+        <div className="rounded-lg border border-border/60 p-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-sm font-medium">Take it away</p>
+            <div className="flex gap-2">
+              <Button onClick={handleDownload} size="sm" variant="outline">
+                {post.images.length > 1
+                  ? `Save ${post.images.length} slides`
+                  : "Save the card"}
+              </Button>
+              <Button onClick={handleCopyPack} size="sm">
+                {copied ? "Copied" : "Copy the words"}
+              </Button>
+            </div>
+          </div>
+          <p className="mt-1 text-2xs text-muted-foreground">
+            Caption, hashtags and alt text, in posting order.
+          </p>
+        </div>
+      ) : null}
+
       {post.caption ? (
         <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
           <div className="flex items-baseline justify-between gap-3">
             <p className="text-sm font-medium">Caption</p>
-            <Button onClick={handleCopyCaption} size="sm" variant="ghost">
+            <Button onClick={handleCopyPack} size="sm" variant="ghost">
               {copied ? "Copied" : "Copy"}
             </Button>
           </div>
