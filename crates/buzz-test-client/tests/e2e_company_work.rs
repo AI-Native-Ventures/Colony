@@ -278,6 +278,24 @@ fn superseding_action_id_ignores_every_other_answer() {
 /// every test here has to EDIT the profile rather than create it — which is
 /// exactly the read-modify-write a real owner does from Settings.
 async fn ensure_profile(
+    owner: &Keys,
+    relay: &str,
+    profile: CompanyProfile,
+) -> (CompanyReceiptOutcome, Option<String>) {
+    // Its own connection on purpose. This runs at the top of tests that then
+    // spend a long budget of subscriptions and actions on their own client,
+    // and the head read plus the edit here are pure setup - charging them to
+    // the test's connection made a later `send_event` hang once the test had
+    // done enough work of its own.
+    let mut client = BuzzTestClient::connect(&relay_url(), owner)
+        .await
+        .expect("connect for the profile ensure");
+    let result = ensure_profile_on(&mut client, owner, relay, profile).await;
+    client.disconnect().await.ok();
+    result
+}
+
+async fn ensure_profile_on(
     client: &mut BuzzTestClient,
     owner: &Keys,
     relay: &str,
@@ -752,7 +770,7 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
     // create it, or the Tasks below charge to a cost centre the profile does
     // not have and `validate_task` refuses them.
     assert_eq!(
-        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone())
+        ensure_profile(&fixture.owner, &fixture.relay, profile.clone())
             .await
             .0,
         CompanyReceiptOutcome::Applied
@@ -1183,8 +1201,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     // the default cost centre rather than this suite's. Edit it rather than
     // create it, or the Tasks below charge to a cost centre the profile does
     // not have and `validate_task` refuses them.
-    let (outcome, head_id) =
-        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone()).await;
+    let (outcome, head_id) = ensure_profile(&fixture.owner, &fixture.relay, profile.clone()).await;
     assert_eq!(
         outcome,
         CompanyReceiptOutcome::Applied,
@@ -1382,8 +1399,7 @@ async fn nobody_but_the_owner_can_change_company_state() {
     // the default cost centre rather than this suite's. Edit it rather than
     // create it, or the Tasks below charge to a cost centre the profile does
     // not have and `validate_task` refuses them.
-    let (outcome, _) =
-        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone()).await;
+    let (outcome, _) = ensure_profile(&fixture.owner, &fixture.relay, profile.clone()).await;
     assert_eq!(outcome, CompanyReceiptOutcome::Applied);
 
     // --- A member who is not the owner cannot replace the company -----------
@@ -1484,7 +1500,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
     // create it, or the Tasks below charge to a cost centre the profile does
     // not have and `validate_task` refuses them.
     assert_eq!(
-        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile)
+        ensure_profile(&fixture.owner, &fixture.relay, profile)
             .await
             .0,
         CompanyReceiptOutcome::Applied
@@ -1666,8 +1682,7 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
     // the default cost centre rather than this suite's. Edit it rather than
     // create it, or the Tasks below charge to a cost centre the profile does
     // not have and `validate_task` refuses them.
-    let (outcome, _) =
-        ensure_profile(&mut client, &fixture.owner, &fixture.relay, profile.clone()).await;
+    let (outcome, _) = ensure_profile(&fixture.owner, &fixture.relay, profile.clone()).await;
     assert_eq!(outcome, CompanyReceiptOutcome::Applied);
 
     let initiative_id = format!("launch-{}", fixture.token);
@@ -1980,9 +1995,7 @@ async fn seed_live_work_context() {
     // default profile at startup, and the seeded Task charges to this
     // suite's cost centre rather than the default one.
     assert_eq!(
-        ensure_profile(&mut client, &owner, &relay, company(stamp))
-            .await
-            .0,
+        ensure_profile(&owner, &relay, company(stamp)).await.0,
         CompanyReceiptOutcome::Applied,
         "the live seed needs its own cost centre on the profile"
     );
