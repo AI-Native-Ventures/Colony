@@ -428,6 +428,133 @@ mod tests {
         }
     }
 
+    fn blueprint_manifest() -> BlockManifest {
+        core_block_manifests()
+            .expect("bundled manifests")
+            .into_iter()
+            .find(|manifest| manifest.handle == "company-blueprint")
+            .expect("company-blueprint is bundled")
+    }
+
+    /// Creating the company is the most consequential thing the owner ever
+    /// decides, so an unapproved blueprint has to sit in their queue until they
+    /// decide it. `buzz blocks invoke` reads exactly this flag to choose
+    /// between `BlockAttention::Required` and `BlockAttention::None`, so with it
+    /// false every blueprint an agent published was posted with no attention at
+    /// all and never reached the owner's Needs action list.
+    #[test]
+    fn an_unapproved_blueprint_stays_in_the_owners_queue() {
+        assert!(
+            blueprint_manifest().validation.requires_attention,
+            "an undecided company blueprint must require attention"
+        );
+    }
+
+    /// "Ask for changes" is worthless without the words, and a control that
+    /// cannot collect them is worse than no control: it renders permanently
+    /// disabled. The renderer refuses to click any action declaring required
+    /// inputs it cannot supply, so the request has to arrive through the
+    /// question primitive that collects them, exactly as `deliverable` does.
+    #[test]
+    fn asking_the_blueprint_for_changes_goes_through_the_question() {
+        let assets = raw_assets();
+        let manifest = manifest_for_handle(&assets, "company-blueprint");
+        let controls: BTreeSet<_> = manifest
+            .pointer("/tree/children")
+            .and_then(Value::as_array)
+            .expect("blueprint children")
+            .iter()
+            .filter(|node| node.get("type").and_then(Value::as_str) == Some("actions"))
+            .flat_map(|node| {
+                node.get("controls")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .filter_map(|control| {
+                control
+                    .pointer("/interaction/action_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(
+            !controls.contains("company-blueprint.revise"),
+            "a revise button cannot supply the words it requires, so it renders disabled forever"
+        );
+
+        let submits: BTreeSet<_> = manifest
+            .pointer("/tree/children")
+            .and_then(Value::as_array)
+            .expect("blueprint children")
+            .iter()
+            .filter_map(|node| node.get("submit_action").and_then(Value::as_str))
+            .collect();
+        assert!(
+            submits.contains("company-blueprint.revise"),
+            "the change request must be reachable through a question that collects the words"
+        );
+    }
+
+    /// The form the owner types into and the contract the relay checks have to
+    /// be the same thing, or the card collects an answer the relay throws away.
+    /// The question primitive submits `selected` plus `custom_input`, so the
+    /// action has to accept precisely that, and has to refuse ticked areas with
+    /// no words rather than let the request degrade into a second Deny button.
+    #[test]
+    fn the_blueprint_change_request_accepts_what_the_question_submits() {
+        let manifest = blueprint_manifest();
+        let schema = deliverable_action_schema(&manifest, "company-blueprint.revise");
+
+        validate_instance(&schema, &json!({ "selected": ["people"] }))
+            .expect_err("ticked areas with no words are a rejection with extra steps");
+        validate_instance(&schema, &json!({ "selected": [], "custom_input": "" }))
+            .expect_err("empty words are not words");
+        validate_instance(
+            &schema,
+            &json!({
+                "selected": [],
+                "custom_input": "Drop the second designer, we do not sell design."
+            }),
+        )
+        .expect("words on their own are a complete request");
+        validate_instance(
+            &schema,
+            &json!({ "selected": ["people", "teams"], "custom_input": "Too many people." }),
+        )
+        .expect("ticked areas plus words");
+        validate_instance(
+            &schema,
+            &json!({ "selected": ["not-an-area"], "custom_input": "anything" }),
+        )
+        .expect_err("areas the card never offered are refused");
+
+        let assets = raw_assets();
+        let offered: BTreeSet<_> = manifest_for_handle(&assets, "company-blueprint")
+            .pointer("/tree/children")
+            .and_then(Value::as_array)
+            .expect("blueprint children")
+            .iter()
+            .find(|node| node.get("submit_action").is_some())
+            .and_then(|node| node.get("options"))
+            .and_then(Value::as_array)
+            .expect("the question offers options")
+            .iter()
+            .filter_map(|option| option.get("id").and_then(Value::as_str))
+            .collect();
+        let accepted: BTreeSet<_> = schema
+            .pointer("/properties/selected/items/enum")
+            .and_then(Value::as_array)
+            .expect("the action enumerates the areas it accepts")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            offered, accepted,
+            "an area the card offers but the action refuses is an answer thrown away"
+        );
+    }
+
     #[test]
     fn handover_carries_both_ends_of_the_link_and_one_resolving_pickup() {
         let assets = raw_assets();
