@@ -24,6 +24,7 @@ mod channel_window;
 mod channels;
 mod clipboard;
 pub mod company_blueprint;
+pub mod community_profile;
 mod company_scan;
 pub mod discovery_export;
 mod dms;
