@@ -26,6 +26,46 @@ understanding the hang would make it green for a reason nobody can defend.
 This file exists so the cause is on record rather than living in one agent's
 context.
 
+## What the recurrence narrows it to: delivery, not repair
+
+The fourth occurrence (run 32997225536) is the first one with `8efee72438` in
+the tree, and that changes what its evidence means.
+
+After that commit **both** subscriptions dispatch `onLiveMention`, and
+`useLiveMentionFeedRepair` merges the item into the home-feed query cache
+*synchronously* with the dispatch, before it requests any refetch. So a single
+delivery on either subscription is enough to put the row in the list with no
+relay round trip involved.
+
+The attempt-0 screenshot shows the same Inbox as all three earlier
+occurrences, down to its contents: the previous test's `#general` mention and
+the old `dm dedupe probe` DM, and no forum ping. Only the timestamps differ.
+
+That rules the repair machinery out. Whatever fails, fails **before**
+`onLiveMention`, which is a different place to look than every previous round
+of this investigation. Two candidates remain:
+
+1. **No live subscription covers the channel for the target at that moment.**
+   Both subscription sets are built from `sidebarChannels`, which is member
+   channels. Worth checking that the target is actually a member of
+   `watercooler` when the mention lands: the test has *alice* join it
+   (`joinChannel(senderPage, "watercooler")`) and never has tyler join
+   anything.
+2. **The event arrives and `appendPendingLiveMention` returns unchanged.**
+   `toMentionItem` returns null when no channel matches the `h` tag, or when
+   the matched channel's `channelType` is not `"forum"`, and the hook then
+   returns early without merging or refetching.
+
+These are cheap to separate, because they differ in whether the desktop
+notification fires. Candidate 1 means no live delivery at all, so no
+notification either. Candidate 2 means the event was delivered and only the
+mention conversion rejected it, so the notification fires normally. The
+notification log on a failing attempt therefore discriminates between them
+outright, and the retained trace from `9ee886642a` carries it.
+
+Do not add a third theory before reading that trace. This ticket already has
+one confident inference that turned out to be incomplete.
+
 ## Observed
 
 `desktop/tests/e2e/integration.spec.ts` >> `live forum mentions refetch the
@@ -133,7 +173,7 @@ If the mention subscription's REQ is timestamped after the event's
 `created_at` second, the mechanism above is confirmed. If it opened before,
 the cause is something else and this file is wrong.
 
-## Two candidate fixes, neither applied
+## Two candidate fixes, one applied and disproven
 
 1. **Test-side, needs new product surface.** Give the relay bridge a readiness
    signal for live subscriptions, the way the mock bridge has
@@ -147,7 +187,10 @@ the cause is something else and this file is wrong.
    `seenMentionEventIdsRef` / `trackSeenEvent` already deduplicate across both
    paths, so the repair would become exactly as reliable as the notification.
 
-Option 2 is small and defensible on its own merits regardless of this test.
+Option 2 was applied in `8efee72438` and did not close the flake. It is kept
+because it is correct on its own merits: a notification with an empty Inbox
+for thirty seconds is wrong however this test behaves. Option 1 is still
+unbuilt.
 
 ## Prior art in the same area
 
