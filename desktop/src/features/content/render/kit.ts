@@ -215,11 +215,12 @@ export function contrastFloor(kit: BrandKit): number {
 /**
  * The grain bar this kit's gates enforce, from `rules.raw.grain` when the
  * kit declares one: `{ min, max }` in quiet-region RMS luminance units.
- * A kit that says nothing gets the launch build's measured band, so an
- * unconfigured kit still gates instead of passing everything.
+ * A kit that says nothing — and a workspace with no kit at all — gets the
+ * launch build's measured band, so an unconfigured workspace still gates
+ * instead of passing everything.
  */
-export function grainRange(kit: BrandKit): GrainRange {
-  const grain = kit.rules.raw.grain;
+export function grainRange(kit: BrandKit | null): GrainRange {
+  const grain = kit?.rules.raw.grain;
   if (isRecord(grain)) {
     const min = typeof grain.min === "number" ? grain.min : null;
     const max = typeof grain.max === "number" ? grain.max : null;

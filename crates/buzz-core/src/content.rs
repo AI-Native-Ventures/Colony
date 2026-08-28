@@ -2020,6 +2020,69 @@ mod tests {
         post_event_from(post_body(status, gates, image))
     }
 
+    /// The post an agent is told to write, parsed by the relay that will
+    /// receive it.
+    ///
+    /// `company_roster.rs` tells the Content & Campaign Specialist to write
+    /// the words and the style parameters, to leave `images` and
+    /// `gate_reports` to whatever draws the card, and to source every claim.
+    /// This is that exact shape. If the instructions and the parser ever
+    /// disagree, an agent following its own system prompt writes a post the
+    /// relay refuses, and the failure surfaces as an agent that appears to do
+    /// nothing.
+    fn agent_authored_draft() -> serde_json::Value {
+        serde_json::json!({
+            "schema": SCHEMA_CONTENT_POST,
+            "week": 1,
+            "scheduled_for": "2026-09-07",
+            "job": "who",
+            "channel": "linkedin",
+            "style": { "family": "night", "hues": ["violet", "pink"], "layout": "statement" },
+            "headline": "Run a company without the headcount",
+            "caption": "Most tools give you a faster way to do your own work.",
+            "alt": "A violet card reading: Run a company without the headcount.",
+            "hashtags": ["agents"],
+            "claims": [{
+                "id": "clm_hero",
+                "asserts": "Run a company without the headcount",
+                "kind": "verbatim",
+                "source": {
+                    "type": "page",
+                    "url": "https://colony.ainative.ventures/",
+                    "selector": "h1"
+                }
+            }],
+            "claim_fields": { "headline": ["clm_hero"] },
+            "status": "draft"
+        })
+    }
+
+    #[test]
+    fn the_draft_the_content_role_is_told_to_write_is_accepted() {
+        let parsed = parse_content_post(&post_event_from(agent_authored_draft())).expect("parse");
+        assert_eq!(parsed.status, PostStatus::Draft);
+        // The agent writes neither, and a post carrying reports without images
+        // is refused, so writing one and not the other would fail at ingest.
+        assert!(parsed.images.is_empty());
+        assert!(parsed.gate_reports.is_empty());
+        assert_eq!(parsed.claims.len(), 1);
+    }
+
+    #[test]
+    fn that_same_draft_cannot_call_itself_ready() {
+        // The instruction not to declare `ready` on an undrawn post is the
+        // relay's own rule, not a style preference: a ready post needs a
+        // rendered image and a passing report for it.
+        let mut body = agent_authored_draft();
+        body["status"] = serde_json::json!("ready");
+        let error = parse_content_post(&post_event_from(body))
+            .expect_err("a ready post with no image must be refused");
+        assert!(
+            matches!(error, ContentParseError::ReadyWithoutImage),
+            "unexpected refusal: {error:?}"
+        );
+    }
+
     #[test]
     fn a_ready_post_round_trips_with_the_real_report_shape() {
         let parsed =

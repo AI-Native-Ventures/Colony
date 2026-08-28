@@ -17,6 +17,7 @@ import {
 import { useClaimVerification, useContentClaimStrictness } from "../hooks";
 import { ContentChecksPanel } from "./ContentChecksPanel";
 import { ContentClaimsList } from "./ContentClaimsList";
+import { ContentRenderPanel } from "./ContentRenderPanel";
 
 /**
  * One day, everything about it, and the two things the owner can do.
@@ -135,9 +136,8 @@ export function ContentDayDetail({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-lg font-semibold">
-            {post.headline ?? post.slug}
-          </h2>
+          {/* The headline is the panel header's title; repeating it here cost a
+              line of vertical space and said the same thing twice. */}
           <p className="text-xs text-muted-foreground">
             Week {post.week} · {post.scheduledFor}
             {post.job ? ` · ${post.job}` : ""}
@@ -161,16 +161,32 @@ export function ContentDayDetail({
       </div>
 
       {post.images.length > 0 ? (
-        <img
-          alt={post.alt ?? post.headline ?? "Rendered card"}
-          className="w-full rounded-lg border border-border/60 object-contain"
-          src={rewriteRelayUrl(post.images[0].url)}
-        />
+        // Every slide, not the first: a carousel's running order is the thing
+        // a grid of independent cards cannot show, and showing one of four
+        // hides three quarters of what is being approved.
+        <div className="flex flex-col gap-2">
+          {post.images.map((image, index) => (
+            <figure key={image.sha256}>
+              <img
+                alt={post.alt ?? post.headline ?? "Rendered card"}
+                className="w-full rounded-lg border border-border/60 object-contain"
+                src={rewriteRelayUrl(image.url)}
+              />
+              {post.images.length > 1 ? (
+                <figcaption className="mt-1 text-2xs text-muted-foreground">
+                  Slide {index + 1} of {post.images.length}
+                </figcaption>
+              ) : null}
+            </figure>
+          ))}
+        </div>
       ) : (
         <div className="rounded-lg border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
           Nothing rendered yet.
         </div>
       )}
+
+      <ContentRenderPanel communityId={communityId} post={post} />
 
       {unverified ? (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">

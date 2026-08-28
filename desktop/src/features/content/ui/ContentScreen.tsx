@@ -6,6 +6,13 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { cn } from "@/shared/lib/cn";
 import { Badge } from "@/shared/ui/badge";
 import { PageHeader } from "@/shared/ui/PageHeader";
+import {
+  AuxiliaryPanel,
+  AuxiliaryPanelHeader,
+  AuxiliaryPanelHeaderGroup,
+  AuxiliaryPanelTitle,
+} from "@/shared/layout/AuxiliaryPanel";
+import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
 
 import type {
   ContentCampaign,
@@ -90,8 +97,17 @@ function DayCard({
           src={rewriteRelayUrl(post.images[0].url)}
         />
       ) : (
-        <div className="flex aspect-[4/5] w-full items-center justify-center rounded-md border border-dashed border-border/50 text-xs text-muted-foreground">
-          Not rendered
+        // An undrawn card shows its own words rather than a grey box saying
+        // it has none. A week of unrendered posts was five identical
+        // placeholders, which made a planned week look like an empty one and
+        // gave the eye nothing to pick a day by.
+        <div className="flex aspect-[4/5] w-full flex-col justify-between rounded-md border border-dashed border-border/50 p-2">
+          <p className="line-clamp-5 text-xs font-medium leading-snug">
+            {post.headline ?? post.slug}
+          </p>
+          <p className="text-2xs uppercase tracking-wide text-muted-foreground">
+            Not drawn yet
+          </p>
         </div>
       )}
       <div className="min-w-0">
@@ -126,22 +142,25 @@ function WeekRow({
   selectedAddress: string | null;
   week: number;
 }) {
+  // The campaign's own label when it has one; the label already carries the
+  // week number, so printing "Week 1" beside "Week 1 - first contact" said it
+  // twice.
   const label =
     campaign.weeks.find((entry) => entry.index === week)?.label ??
     `Week ${week}`;
 
   return (
     <section className="mt-4">
-      <h3 className="text-sm font-medium">
-        Week {week}
-        <span className="ml-2 font-normal text-muted-foreground">{label}</span>
-      </h3>
+      <h3 className="text-sm font-medium">{label}</h3>
       {posts.length === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">
           Nothing planned for this week yet.
         </p>
       ) : (
-        <div className="mt-2 flex gap-3 overflow-x-auto pb-2">
+        // Wraps rather than scrolling sideways: a five-day week clipped its
+        // last card off the right edge of a normal window, and a horizontal
+        // scrollbar under one row is not a thing anyone finds.
+        <div className="mt-2 flex flex-wrap gap-3 pb-2">
           {posts.map((post) => (
             <DayCard
               decisions={decisions}
@@ -188,6 +207,11 @@ export function ContentScreen() {
   );
   const styleQuery = useContentStyle(communityId);
   const submitDecision = useSubmitContentDecision(communityId);
+  // The same panel width every other right-hand pane in the app uses, so the
+  // day detail drags, resets and remembers exactly like a thread does. It was
+  // pinned at 26rem, which on a narrow window clipped the approve controls off
+  // the right edge with no way to widen it.
+  const panelWidth = useThreadPanelWidth();
 
   const selectedPost =
     posts.find((post) => post.address === selectedAddress) ?? null;
@@ -280,16 +304,34 @@ export function ContentScreen() {
           </div>
 
           {selectedPost ? (
-            <aside className="flex w-[26rem] shrink-0 flex-col border-l border-border/60">
+            <AuxiliaryPanel
+              canResetWidth={panelWidth.canReset}
+              header={
+                <AuxiliaryPanelHeader bordered>
+                  <AuxiliaryPanelHeaderGroup>
+                    <AuxiliaryPanelTitle>
+                      {selectedPost.headline ?? selectedPost.slug}
+                    </AuxiliaryPanelTitle>
+                  </AuxiliaryPanelHeaderGroup>
+                </AuxiliaryPanelHeader>
+              }
+              key={selectedPost.address}
+              onClose={() => setSelectedAddress(null)}
+              onResetWidth={panelWidth.onResetWidth}
+              onResizeStart={panelWidth.onResizeStart}
+              resizeHandleAriaLabel="Resize the day detail"
+              resizeHandleTestId="content-day-detail-resize"
+              testId="content-day-detail-panel"
+              widthPx={panelWidth.widthPx}
+            >
               <ContentDayDetail
                 communityId={communityId}
                 decisions={decisions}
-                key={selectedPost.address}
                 onSubmit={handleSubmit}
                 post={selectedPost}
                 submitting={submitDecision.isPending}
               />
-            </aside>
+            </AuxiliaryPanel>
           ) : null}
         </>
       )}

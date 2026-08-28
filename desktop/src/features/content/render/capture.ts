@@ -41,6 +41,16 @@ export type CaptureResult = {
    * painted card against 0 on a blank one.
    */
   pixelVariance: number;
+  /**
+   * The RGBA pixels the variance was taken from, straight off the capture
+   * canvas.
+   *
+   * Every post-render gate needs pixels, not bytes: contrast measures runs
+   * against the plate, grain scores the ground, and the font gate diffs two
+   * frames. Decoding them back out of the PNG would be a second rasterisation
+   * of bytes this path already holds, so they travel with the result.
+   */
+  pixels: Uint8ClampedArray;
 };
 
 // ---------------------------------------------------------------------------
@@ -433,6 +443,7 @@ export async function captureCard(
     const png = await toPngBytes(canvas);
     return {
       height,
+      pixels,
       png,
       pixelVariance: variance,
       sha256: sha256Hex(png),
