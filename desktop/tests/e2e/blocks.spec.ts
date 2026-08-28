@@ -233,7 +233,14 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
     ),
   ).toBeVisible();
 
-  const question = page.locator('[data-block-primitive="question"]');
+  // Scoped to the Block that owns it. An unscoped question locator only ever
+  // worked because brainstorm was the single composite rendering one, so the
+  // moment company-blueprint grew its own change-request question the shared
+  // "Something else" custom input matched twice and this failed on strict
+  // mode, naming the fill rather than the second card that caused it.
+  const question = page.locator(
+    '[data-block-handle="brainstorm"] [data-block-primitive="question"]',
+  );
   const premium = question.getByRole("button", {
     name: "Premium editorial",
   });

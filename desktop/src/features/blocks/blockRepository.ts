@@ -53,7 +53,7 @@ export const BUNDLED_CORE_MANIFEST_DIGESTS: ReadonlySet<string> = new Set([
   "629d6ca7eaa203506e163ea82ae09527c32f1c585b9a750d3b45fa96d342fc89",
   "831124bc552ece44081713a5d2cf74806ebe28f1315fabc76137e1c6e8db88bd",
   // company-blueprint
-  "da2b06b956d238ca21425665b3f2ef98681bb4fc108c5ec4aa5d75af3f27ec45",
+  "96c4546f9dc862a2057cd57c0b1d74c62d30168842500f55ab8a3ede4b64997d",
   // interview
   "44f7517a011316af12f5057128851b885e23842fb14cedbcd4a75578c76e7ff7",
   // company-brief
