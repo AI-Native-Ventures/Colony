@@ -48,7 +48,15 @@ export function useChannelIntro({
 
     const actions: ChannelIntroAction[] = [];
     if (isWelcomeExperienceChannel(activeChannel)) {
-      if (onBrowseChannels) {
+      // The private Welcome channel has exactly one first action: answer the
+      // Chief of Staff, who is already mid-sentence above these cards. Three
+      // buttons offering to browse, create a channel and create an agent
+      // compete with that, and every one of them is the wrong next step for a
+      // founder who has not yet told anyone what the business does. The public
+      // welcome channel keeps them: there is no conversation there to interrupt.
+      const suppressForConversation = isWelcomeChannel(activeChannel);
+
+      if (onBrowseChannels && !suppressForConversation) {
         actions.push({
           icon: <HashSearch aria-hidden className="h-6 w-6" />,
           label: "Browse channels",
@@ -57,7 +65,7 @@ export function useChannelIntro({
         });
       }
 
-      if (onCreateChannel) {
+      if (onCreateChannel && !suppressForConversation) {
         actions.push({
           icon: <Plus aria-hidden className="h-6 w-6" />,
           label: "Create a channel",
@@ -66,7 +74,7 @@ export function useChannelIntro({
         });
       }
 
-      if (onWelcomeAddAgent) {
+      if (onWelcomeAddAgent && !suppressForConversation) {
         actions.push({
           icon: <Bot aria-hidden className="h-6 w-6" />,
           label: "Create an agent",
