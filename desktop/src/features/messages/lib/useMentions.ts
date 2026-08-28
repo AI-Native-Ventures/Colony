@@ -912,8 +912,14 @@ export function useMentions(
     });
 
   const handleMentionKeyDown = React.useCallback(
-    (event: React.KeyboardEvent) =>
+    (
+      event: React.KeyboardEvent,
+      // Consulted for Space only: inside code the typed text stays literal,
+      // so Space never resolves a mention there (#6862).
+      opts?: { isCodeContext?: () => boolean },
+    ) =>
       handleMentionKeyDownWith(event, {
+        isCodeContext: opts?.isCodeContext,
         activePersonaIds,
         cancelMentionAutocomplete,
         candidates: mentionCandidatesWithTeams,
