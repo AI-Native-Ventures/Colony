@@ -651,14 +651,48 @@ export async function settleTimelineAtLatest(page: Page) {
   // while-loop so a timeline that re-raises the pill forever fails the floor
   // assertion below with a real measurement instead of hanging until the test
   // times out somewhere unrelated.
+  //
+  // Three states, not two, and conflating any pair of them breaks the helper
+  // in a different place:
+  //
+  //   no pill              nothing to dismiss, the timeline is already pinned
+  //   pill, not yet ready  must be waited for, because clicking it is what
+  //                        admits the withheld rows
+  //   pill that just left  the timeline re-pinned itself, same outcome as
+  //                        having clicked it
+  //
+  // `isVisible()` then `click()` conflates the last two: the pill can drop
+  // between the two calls, and the click then sees a detaching element rather
+  // than a missing one, so it does not fail fast, it retries "element was
+  // detached from the DOM" until the whole test times out and blames the click
+  // (run 33154385191, Desktop Smoke E2E shard 1, all three attempts).
+  //
+  // A short bounded click conflates the first two, which is worse: a pill that
+  // needs a moment to become actionable is read as no pill at all, the queued
+  // rows are never admitted, and the test dies later on a row that is missing
+  // from the DOM with nothing pointing back here. Locally that failed 2 runs
+  // in 5, each on a different assertion.
+  //
+  // So: wait for the pill on its own terms, click it with room to land, and
+  // treat only a click that fails against a departing element as already done.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (!(await jumpToLatest.isVisible())) {
+    const raised = await jumpToLatest
+      .waitFor({ state: "visible", timeout: 2_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!raised) {
       break;
     }
-    await jumpToLatest.click();
+    await jumpToLatest.click({ timeout: 10_000 }).catch(() => {
+      // It left between appearing and the click. That is the state the click
+      // was there to produce, so there is nothing to recover.
+    });
     await expect(jumpToLatest).toBeHidden();
     await pinTimelineToFloor(timeline);
   }
+  // Never leave with rows still queued behind the pill. Reaching the floor
+  // does not prove they were admitted, so assert the pill is gone as well.
+  await expect(jumpToLatest).toBeHidden();
   await pinTimelineToFloor(timeline);
   await page.evaluate(
     () =>
