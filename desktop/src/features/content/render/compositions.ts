@@ -36,6 +36,8 @@ export type CardSpec = {
   /** Trailing phrase set in the card's lead hue. Must appear in headline. */
   accent?: string;
   family: GroundFamily;
+  /** Status pill above the headline. Poster only; ignored elsewhere. */
+  badge?: string;
   /** The small caps line under the mark on countdown cards. */
   footLine?: string;
   headline: string;
@@ -103,6 +105,20 @@ const headSize = (card: CardSpec, fallback: number): number =>
   card.size ?? fallback;
 
 /**
+ * The status pill.
+ *
+ * Tagged for its own contrast run: it sits higher on the card than the
+ * headline, which on a card whose light source is up there is exactly where a
+ * colour that reads fine at the centre stops clearing the bar.
+ */
+function badge(card: CardSpec, color: string): string {
+  if (!card.badge) {
+    return "";
+  }
+  return `<div class="badge" data-contrast="badge" style="color:${color};border-color:${color}">${esc(card.badge)}</div>`;
+}
+
+/**
  * Layouts. Each one is the same three elements (ground, one phrase, lockup) in
  * a different arrangement; nothing is added to a card to make it look
  * different from the one before it.
@@ -120,6 +136,16 @@ export const LAYOUTS: Record<
     <div class="page">
       <div class="spacer"></div>
       <h1 style="font-size:${headSize(card, 108)}px">${headline(card, p.type, p.accent)}</h1>
+      <div class="spacer"></div>
+      ${lockup(card, p.lockup, markSvg)}
+    </div>`,
+
+  // The one scale break the rest of the set cannot make.
+  poster: (card, p, markSvg) => `
+    <div class="page">
+      <div class="spacer"></div>
+      ${badge(card, p.type)}
+      <h1 class="big" style="font-size:${headSize(card, 156)}px">${headline(card, p.type, p.accent)}</h1>
       <div class="spacer"></div>
       ${lockup(card, p.lockup, markSvg)}
     </div>`,
@@ -144,6 +170,11 @@ ${ATMOSPHERE_CSS}
    tracking, not at black weight: at poster scale a 700 face closes up its own
    counters and the phrase stops being readable at thumbnail size. */
 h1{font-weight:600;letter-spacing:-.035em;line-height:1.06;text-wrap:balance}
+h1.big{font-weight:650;letter-spacing:-.048em;line-height:.98}
+
+/* Status pill. Sits above the headline with the same weight of presence as
+   the lockup line below it: uppercase, tracked out, no fill. */
+.badge{flex:none;margin-bottom:28px;padding:10px 26px;border:1.5px solid;border-radius:999px;font-size:22px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
 
 /* Lockup: the mark, centred, the way Sierra closes every card. */
 .lockup{flex:none;display:flex;flex-direction:column;align-items:center;gap:26px}

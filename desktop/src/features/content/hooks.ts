@@ -10,14 +10,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import { relayClient } from "@/shared/api/relayClient";
-import { signRelayEvent } from "@/shared/api/tauri";
+import { signRelayEvent, uploadMediaBytes } from "@/shared/api/tauri";
 
-import { verifyClaims } from "./claimVerifier";
+import { evaluateClaimGate, verifyClaims } from "./claimVerifier";
 import { claimVerifierDependencies } from "./claimVerifierRuntime";
 import { contentRepository, HOUSE_STYLE_SCOPE } from "./contentRepository";
 import type { ContentPost } from "./contracts";
 import type { DecisionInput } from "./contentDecisions";
 import { buildDecisionEvent } from "./contentDecisions";
+import { loadKitFontFace } from "./render/fontKit";
+import type { PipelineOutcome } from "./render/pipeline";
+import { renderPost } from "./renderPost";
+import { buildRenderedPostEvent } from "./renderedPostEvent";
 
 const CONTENT_ROOT = "colony-content" as const;
 
@@ -39,6 +43,25 @@ export function claimStrictnessQueryKey(communityId: string) {
 
 export function decisionsQueryKey(communityId: string) {
   return [CONTENT_ROOT, communityId, "decisions"] as const;
+}
+
+export function brandKitQueryKey(communityId: string) {
+  return [CONTENT_ROOT, communityId, "brand-kit"] as const;
+}
+
+/**
+ * The workspace's brand kit.
+ *
+ * Cached a minute alongside strictness, which is read out of the same record:
+ * the renderer asks for it once per card and a kit changes rarely.
+ */
+export function useContentBrandKit(communityId: string, enabled = true) {
+  return useQuery({
+    enabled: enabled && communityId.length > 0,
+    queryFn: () => contentRepository.getBrandKit(),
+    queryKey: brandKitQueryKey(communityId),
+    staleTime: 60_000,
+  });
 }
 
 export function useContentCampaigns(communityId: string, enabled = true) {
@@ -153,6 +176,112 @@ export function useSubmitContentDecision(communityId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: decisionsQueryKey(communityId),
+      });
+    },
+  });
+}
+
+/** What a render attempt reports back to the screen. */
+export type RenderPostOutcome = {
+  outcome: PipelineOutcome;
+  /** The published event id, absent when the text gates blocked the render. */
+  eventId: string | null;
+};
+
+/**
+ * Render one post's cards, upload them, and write the result onto the post.
+ *
+ * The order is the product, and it is enforced by `renderCard` rather than
+ * here: the text gates run first, and a card they block never costs a
+ * rasterisation or an upload. A blocked outcome is a successful call that
+ * produced no images, not an error, because the screen needs the blocking
+ * gates in order to say what to fix.
+ *
+ * Claims are verified fresh rather than read from the day detail's cache. A
+ * render binds a report to bytes; binding it to a verdict that was true ten
+ * minutes ago is how a stale claim ships.
+ */
+export function useRenderContentPost(communityId: string) {
+  const queryClient = useQueryClient();
+  const ownersQuery = useCommunityOwnersQuery(communityId);
+  return useMutation({
+    mutationFn: async (post: ContentPost): Promise<RenderPostOutcome> => {
+      const [kit, style, strictness, fontFaceCss, body] = await Promise.all([
+        contentRepository.getBrandKit(),
+        contentRepository.getStyle(HOUSE_STYLE_SCOPE),
+        contentRepository.getClaimStrictness(),
+        loadKitFontFace(),
+        contentRepository.getPostBody(post.address),
+      ]);
+      if (!body) {
+        throw new Error(
+          "This post is no longer on the relay, so there is nothing to render onto.",
+        );
+      }
+      const verdicts = await verifyClaims(
+        post.claims,
+        claimVerifierDependencies(ownersQuery.data ?? new Set()),
+      );
+      const { outcome, slides } = await renderPost({
+        claimGate: evaluateClaimGate(post.claims, verdicts, strictness),
+        fontFaceCss,
+        kit,
+        post,
+        renderedAt: new Date().toISOString(),
+        // Recorded verbatim on every report: two engine builds do not agree
+        // on subpixel output, and contrast is measured in pixels.
+        renderer: {
+          engine: navigator.userAgent,
+          name: "colony-desktop",
+        },
+        style,
+      });
+      if (outcome.status === "blocked") {
+        return { eventId: null, outcome };
+      }
+
+      const images = [];
+      for (const slide of slides) {
+        // Sequentially, so a carousel does not open four uploads at once
+        // against a relay that meters them.
+        const blob = await uploadMediaBytes(
+          Array.from(slide.png),
+          `${post.slug}-${slide.sha256.slice(0, 8)}.png`,
+        );
+        if (blob.sha256.toLowerCase().replace(/\.png$/, "") !== slide.sha256) {
+          throw new Error(
+            "The relay stored different bytes than were measured, so no report can name them.",
+          );
+        }
+        images.push({
+          height: slide.height,
+          sha256: slide.sha256,
+          url: blob.url,
+          width: slide.width,
+        });
+      }
+
+      const draft = buildRenderedPostEvent(
+        post.address,
+        body,
+        images,
+        outcome.reports,
+        style?.version ?? null,
+      );
+      if (!draft.ok) {
+        throw new Error(draft.reason);
+      }
+      const signed = await signRelayEvent(draft.event);
+      const published = await relayClient.publishEvent(
+        signed,
+        "Timed out while publishing the rendered card.",
+        "Failed to publish the rendered card.",
+      );
+      return { eventId: published?.id ?? signed.id, outcome };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: [CONTENT_ROOT, communityId, "posts"],
       });
     },
   });

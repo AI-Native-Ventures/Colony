@@ -43,6 +43,7 @@ export default defineConfig({
       name: "smoke",
       testMatch: [
         "**/smoke.spec.ts",
+        "**/content-screenshots.spec.ts",
         "**/onboarding-tour.spec.ts",
         "**/blocks.spec.ts",
         "**/timeline-settle-helper.spec.ts",
@@ -242,14 +243,20 @@ export default defineConfig({
     // harness costs a full release rebuild.
     {
       name: "engine-chromium",
-      testMatch: ["**/workspace-web-input.spec.ts"],
+      testMatch: [
+        "**/workspace-web-input.spec.ts",
+        "**/content-render.spec.ts",
+      ],
       use: {
         ...devices["Desktop Chrome"],
       },
     },
     {
       name: "engine-webkit",
-      testMatch: ["**/workspace-web-input.spec.ts"],
+      testMatch: [
+        "**/workspace-web-input.spec.ts",
+        "**/content-render.spec.ts",
+      ],
       use: {
         ...devices["Desktop Safari"],
       },

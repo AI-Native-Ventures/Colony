@@ -284,3 +284,12 @@ test("unverifiedSummary_namesUnsourcedClaims", () => {
 test("unverifiedSummary_isNullWhenEverythingChecksOut", () => {
   assert.equal(unverifiedSummary(post()), null);
 });
+
+test("a card nobody has drawn is not reported as six failed gates", () => {
+  // It has no gates missing; it has no gates. Listing all six read as six
+  // failures on a post whose only state is that it is still a plan.
+  assert.equal(
+    unverifiedSummary(post({ gateReports: [], images: [], status: "draft" })),
+    null,
+  );
+});

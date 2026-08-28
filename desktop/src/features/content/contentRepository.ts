@@ -28,8 +28,11 @@ import type {
   ContentPost,
   ContentStyle,
 } from "./contracts";
+import type { BrandKit } from "./render/kit";
+import { readBrandKit } from "./render/kit";
 import {
   parseCampaign,
+  parseEventBody,
   parseClaimStrictness,
   parseDecision,
   parsePost,
@@ -152,6 +155,25 @@ export function createContentRepository(
         );
     },
 
+    /**
+     * One post's head as the relay stores it, body unparsed.
+     *
+     * The renderer writes its result back onto the post, and a body rebuilt
+     * from the parsed record would drop every field the relay stores
+     * opaquely. So the write path merges into this rather than into a
+     * `ContentPost`.
+     */
+    async getPostBody(
+      address: string,
+    ): Promise<Record<string, unknown> | null> {
+      const heads = await read(
+        { kinds: [KIND_CONTENT_POST], "#d": [address], limit: 8 },
+        (events) => newestHeads(events),
+      );
+      const head = heads?.at(0);
+      return head ? parseEventBody(head) : null;
+    },
+
     /** The house style, or a named campaign's override. */
     async getStyle(
       scope: string = HOUSE_STYLE_SCOPE,
@@ -181,6 +203,35 @@ export function createContentRepository(
       );
       const head = heads?.at(0);
       return (head && parseClaimStrictness(head)) ?? "strict";
+    },
+
+    /**
+     * The workspace's brand kit, as the renderer reads it.
+     *
+     * One kit per workspace at launch, so the newest kind-30198 head is the
+     * kit. `readBrandKit` throws on a kit the renderer cannot interpret, and
+     * that throw is deliberate: rendering against a half-read kit would
+     * produce cards measured against the wrong bars.
+     */
+    async getBrandKit(): Promise<BrandKit | null> {
+      const heads = await read(
+        { kinds: [KIND_CONTENT_BRAND_KIT], limit: MAX_RECORDS },
+        (events) => newestHeads(events),
+      );
+      const head = heads?.at(0);
+      if (!head) {
+        return null;
+      }
+      const body = parseEventBody(head);
+      if (!body) {
+        return null;
+      }
+      // The relay carries the kit id in the `d` tag; a body written by an
+      // older CLI may not repeat it, and the reader needs one.
+      return readBrandKit({
+        id: head.tags.find((tag) => tag[0] === "d")?.[1],
+        ...body,
+      });
     },
 
     /**
