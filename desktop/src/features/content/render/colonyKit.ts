@@ -101,7 +101,12 @@ function hue(
   base: string;
   ramp: string[];
 } {
-  return { base, name, ramp: [...solvedRamp(base), CANVAS[base]] };
+  // `solvedRamp` already ends with the canvas tint at the position
+  // `COLONY_RAMP.canvas` names. Appending it again made a ninth stop that is a
+  // duplicate of the eighth: harmless only because nothing reads past index 7,
+  // which is exactly why it survived. A ramp whose length disagrees with its
+  // named positions is the shape that made a derived kit unreadable.
+  return { base, name, ramp: solvedRamp(base) };
 }
 
 /**

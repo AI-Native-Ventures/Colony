@@ -66,3 +66,22 @@ test("a sampled ramp fails naming the reason, not an index", () => {
     /has 3 ramp stops, and the ground needs stop 3/,
   );
 });
+
+test("every hue's ramp is exactly the eight positions COLONY_RAMP names", () => {
+  // A ramp longer than its named positions is a ramp whose length disagrees
+  // with how it is read. Colony's own carried a duplicated ninth stop, unread
+  // and therefore unnoticed, while a derived kit was rejected for having the
+  // wrong count.
+  for (const hue of COLONY_KIT.hues) {
+    assert.equal(
+      hue.ramp.length,
+      8,
+      `${hue.name} has ${hue.ramp.length} stops`,
+    );
+    assert.equal(
+      new Set(hue.ramp).size,
+      hue.ramp.length,
+      `${hue.name} repeats a stop`,
+    );
+  }
+});
