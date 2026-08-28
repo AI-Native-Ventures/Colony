@@ -425,23 +425,23 @@ async function expectWelcomeView(page: Page) {
   await expect(page.getByTestId("message-channel-intro")).toContainText(
     "private welcome channel",
   );
-  // The private Welcome channel offers exactly one first action: answer the
-  // Chief of Staff. Browse / create channel / create agent cards competed with
-  // a conversation that was already underway, and each was the wrong next step
-  // for a founder who had not yet said what the business does. Both routes
-  // survive in the sidebar and the command palette.
-  await expect(
-    page.getByTestId("message-channel-intro").getByRole("button"),
-  ).toHaveCount(0);
+  // The intro cards ship. Suppressing them here was tried and reverted in
+  // bdda2ea6b9: they are the only entry point to chat-first agent creation in
+  // this channel, which welcome-agent-modal-screenshots.spec.ts covers in two
+  // tests, and gating them on "the channel has no messages" hid them in
+  // exactly the state that spec exercises, because the Chief of Staff posts
+  // immediately. They do compete with a half-finished question about the
+  // business; the agreed fix is to move them below the conversation, which is
+  // a timeline layout change rather than a flag. Assert what ships until then.
   await expect(
     page.getByTestId("welcome-intro-action-browse-channels"),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     page.getByTestId("welcome-intro-action-create-channel"),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     page.getByTestId("welcome-intro-action-create-agent"),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(page.getByTestId("message-composer")).toBeVisible();
   await expect(page.getByTestId("welcome-composer-guide-banner")).toBeVisible();
   await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
