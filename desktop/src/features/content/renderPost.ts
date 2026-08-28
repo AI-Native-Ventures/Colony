@@ -209,7 +209,9 @@ export async function renderPost({
         // Sequential rather than concurrent: each slide warms the kit face on
         // the shared document and removes it again afterwards, so two running
         // at once would race over the same registration.
-        captured.push(await renderSlide(spec, { fontFaceCss }));
+        captured.push(
+          await renderSlide(spec, { fontFaceCss, kit: kit ?? undefined }),
+        );
       }
       return captured;
     },
