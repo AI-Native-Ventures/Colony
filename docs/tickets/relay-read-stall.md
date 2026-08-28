@@ -150,6 +150,54 @@ Two notes for whoever picks this up:
   client timeout would change what the test can see; that is a reason to fix
   the stall rather than tune either number.
 
+## Occurrence 4: thirty seconds of silence across the whole process
+
+Test `seed_live_work_context` (same file), CI runs `33141821364` and
+`33150455736` on branch `feat/community-profile-by-default`. Both times the
+same line: `publish_team` at `e2e_company_work.rs:414`, failing
+`relay accepts team: Timeout`.
+
+This is the widest capture so far, and the first with the relay's own log
+pulled from the job artifact rather than inferred:
+
+```
+07:46:39.898  INFO  NIP-42 auth successful
+              <- 30.0 seconds, no log lines at all
+07:47:09.935  INFO  WebSocket connection closed
+```
+
+Two things this adds.
+
+**It is not one connection.** The gap is the whole relay: no line of any
+level, for any connection, for thirty seconds. Occurrences 1 and 2 were
+reported as silence on the affected connection, which left open the reading
+that one connection's task had wedged. It had not; nothing at all was
+running.
+
+**It hits the write path with nothing pending.** The connection had just
+authenticated and had made no prior request on that socket — no writes to
+race a read against, no subscription open. Occurrence 3 already moved this
+past reads; this moves it past read-after-write entirely. A freshly
+authenticated connection whose very first frame is a write is enough.
+
+The affected write never reached ingest: the relay logged no `Event
+ingested` for kind 30178, and the client's 30-second timeout expired
+before the relay resumed. Traffic on other connections resumes normally at
+`07:47:10.15` and the suite's remaining tests pass.
+
+### It reads as a regression, and is not one
+
+This cost three wrong diagnoses on the branch above before the relay log
+was pulled. Each was an attempt to explain a failure that looked
+deterministic: the same test, the same line, twice in a row, while the same
+job passed on `develop`.
+
+Passing once on `develop` is consistent with an intermittent stall. It is
+not evidence of a regression, and treating it as evidence is what sent
+three rounds of CI after causes that were not there. **Pull
+`relay-e2e-artifacts` and look for a gap in the relay's own timestamps
+before concluding a branch caused a timeout in this suite.**
+
 ## Workaround in place, not a fix
 
 As of commits `1d580e4a84` (initial fix, `broker()`'s receipt poll) and

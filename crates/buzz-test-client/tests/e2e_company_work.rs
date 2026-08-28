@@ -103,7 +103,7 @@ fn company(now: i64) -> CompanyProfile {
         }],
         customer_segments: vec!["small business".to_string()],
         cost_centres: vec![CostCentre {
-            id: "cc-coordination".to_string(),
+            id: "general".to_string(),
             name: "Company coordination".to_string(),
             kind: CostCentreKind::Internal,
             service_id: None,
@@ -122,7 +122,7 @@ fn initiative(id: &str, owner_persona_id: &str, now: i64) -> Initiative {
         summary: "Open a first outbound channel.".to_string(),
         status: InitiativeStatus::Proposed,
         owner_persona_id: owner_persona_id.to_string(),
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::Sales,
         client_organization_id: None,
         expected_cost_usd: None,
@@ -147,7 +147,7 @@ fn task(id: &str, team: &CompanyTeamRef, now: i64) -> CompanyTask {
         assignee_persona_ids: vec![team.lead_persona_id.clone()],
         qa_persona_id: team.lead_persona_id.clone(),
         reviewer_team_id: None,
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::Administration,
         client_organization_id: None,
         source_channel_id: "welcome".to_string(),
@@ -729,24 +729,11 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
+    // Nothing here writes the community profile: the relay wrote it at
+    // startup with the `general` cost centre these fixtures charge to, and it
+    // is shared across every concurrently-running test.
+    // The local fixture is only what `plan_implicit_task` computes against.
     let profile = company(stamp);
-    let create_company = action(
-        &fixture.relay,
-        CompanyActionOperation::Create,
-        CompanyActionPayload::Company(profile.clone()),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-        None,
-    );
-    // Applied the first time this community sees a profile, Conflict after:
-    // the profile is a singleton at a fixed coordinate, so a second Create is
-    // refused rather than making a second company. Every fixture builds the
-    // same profile, so an existing one is equivalent for what follows.
-    assert!(matches!(
-        broker(&mut client, &fixture.owner, &fixture.relay, &create_company,)
-            .await
-            .0,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
 
     // The chat thread lives in a channel this test provisions itself. The
     // old hardcoded UUID only existed in the abandoned isolated harness's
@@ -1167,27 +1154,9 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
-    // --- Create the company -------------------------------------------------
-    let profile = company(stamp);
-    let create = action(
-        &fixture.relay,
-        CompanyActionOperation::Create,
-        CompanyActionPayload::Company(profile.clone()),
-        coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-        None,
-    );
-    let (outcome, head_id) = broker(&mut client, &fixture.owner, &fixture.relay, &create).await;
-    // Applied the first time this community sees a profile, Conflict after:
-    // the profile is a singleton at a fixed coordinate, so a second Create is
-    // refused rather than making a second company. Every fixture builds the
-    // same profile, so an existing one is equivalent for what follows.
-    assert!(
-        matches!(
-            outcome,
-            CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-        ),
-        "the community profile must exist, got {outcome:?}"
-    );
+    // --- The relay's own profile head ---------------------------------------
+    // Nothing here writes the community profile: the relay wrote it at
+    // startup, and it is shared across every concurrently-running test.
 
     let stored = head(
         &mut client,
@@ -1197,15 +1166,9 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     )
     .await
     .expect("the community profile head exists");
-    // Only an Applied receipt names a head; a Conflict created nothing, so
-    // there is no receipt-to-head correspondence left to check.
-    if let Some(head_id) = head_id {
-        assert_eq!(
-            stored.id.to_hex(),
-            head_id,
-            "the receipt names the real head"
-        );
-    }
+    // No receipt to correlate: this test no longer writes the profile, so the
+    // relay's authorship of it is proven below rather than by a receipt. The
+    // initiative and task writes further down still prove the receipt path.
     assert_eq!(
         stored.pubkey.to_hex(),
         fixture.relay,
@@ -1375,34 +1338,15 @@ async fn nobody_but_the_owner_can_change_company_state() {
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
-    let profile = company(stamp);
-    let (outcome, _) = broker(
-        &mut client,
-        &fixture.owner,
-        &fixture.relay,
-        &action(
-            &fixture.relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(profile.clone()),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
-    )
-    .await;
-    // Applied the first time this community sees a profile, Conflict after:
-    // the profile is a singleton at a fixed coordinate, so a second Create is
-    // refused rather than making a second company. Every fixture builds the
-    // same profile, so an existing one is equivalent for what follows.
-    assert!(matches!(
-        outcome,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+    // Nothing here writes the community profile: the relay wrote it at
+    // startup, and it is shared across every concurrently-running test.
 
     // --- A member who is not the owner cannot replace the company -----------
     let stranger = Keys::generate();
     let mut stranger_client = BuzzTestClient::connect(&relay_url(), &stranger)
         .await
         .expect("connect as stranger");
+    let profile = company(stamp);
     let mut hijack = profile.clone();
     hijack.trading_name = "Somebody Else".to_string();
     hijack.updated_at = profile.updated_at + 1;
@@ -1490,25 +1434,9 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
     let stamp = now();
 
     // --- Company and two tasks: A human-doer InProgress, B Blocked on A ----
-    let profile = company(stamp);
-    let profile_outcome = broker(
-        &mut client,
-        &fixture.owner,
-        &fixture.relay,
-        &action(
-            &fixture.relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(profile),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
-    )
-    .await
-    .0;
-    assert!(matches!(
-        profile_outcome,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+    // Nothing here writes the community profile: the relay wrote it at
+    // startup with the `general` cost centre these fixtures charge to, and it
+    // is shared across every concurrently-running test.
 
     let task_a_id = format!("call-the-client-{}", fixture.token);
     let task_b_id = format!("send-the-followup-{}", fixture.token);
@@ -1681,25 +1609,9 @@ async fn the_activation_ladder_the_desktop_drives_is_accepted_end_to_end() {
     let fixture = setup(&mut client, owner.clone()).await;
     let stamp = now();
 
-    let profile = company(stamp);
-    let (outcome, _) = broker(
-        &mut client,
-        &fixture.owner,
-        &fixture.relay,
-        &action(
-            &fixture.relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(profile.clone()),
-            coordinate(KIND_COMPANY_PROFILE, &fixture.relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
-    )
-    .await;
-    // Applied first, Conflict after: the profile is a community singleton.
-    assert!(matches!(
-        outcome,
-        CompanyReceiptOutcome::Applied | CompanyReceiptOutcome::Conflict
-    ));
+    // Nothing here writes the community profile: the relay wrote it at
+    // startup with the `general` cost centre these fixtures charge to, and it
+    // is shared across every concurrently-running test.
 
     let initiative_id = format!("launch-{}", fixture.token);
     let proposed = initiative(&initiative_id, &fixture.team.lead_persona_id, stamp);
@@ -1843,7 +1755,7 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
         task_id: format!("co{}:chat:0001", &suffix[..12]),
         initiative_id: Some(format!("co{}:launch", &suffix[..12])),
         owning_team_id: format!("team-{}", &suffix[..12]),
-        cost_centre_id: "cc-coordination".to_string(),
+        cost_centre_id: "general".to_string(),
         commercial_purpose: CommercialPurpose::ClientDelivery,
         cost_classification: buzz_core::company::classify_cost(
             CommercialPurpose::ClientDelivery,
@@ -1988,6 +1900,11 @@ async fn an_attributed_turn_metric_round_trips_through_the_relay() {
 #[ignore = "seeds live fixtures; run explicitly before a live agent turn"]
 async fn seed_live_work_context() {
     let owner = owner_keys();
+    // Every other test in this file seeds the owner before writing as one.
+    // This is the only one that did not, and the only one whose first write
+    // times out — the suites in this job share one community, so what an
+    // earlier suite happened to leave behind was carrying it.
+    seed_company_owner(&owner).await;
     let mut client = BuzzTestClient::connect(&relay_url(), &owner)
         .await
         .expect("connect as owner");
@@ -2007,14 +1924,10 @@ async fn seed_live_work_context() {
 
     publish_team(&mut client, &owner, &team).await;
 
+    // The relay wrote this community's profile at startup with the `general`
+    // cost centre the seeded records charge to.
+
     for action in [
-        action(
-            &relay,
-            CompanyActionOperation::Create,
-            CompanyActionPayload::Company(company(stamp)),
-            coordinate(KIND_COMPANY_PROFILE, &relay, COMMUNITY_PROFILE_ID),
-            None,
-        ),
         action(
             &relay,
             CompanyActionOperation::Create,

@@ -448,19 +448,26 @@ pub async fn resolve_for_event(
 /// existed to say whether an owner had approved a separate Company record;
 /// with no such record, "has this community described its business yet" is
 /// the only question left, and a profile existing answers it.
-fn community_profile_exists(events: &[Event], relay_pubkey: &nostr::PublicKey) -> bool {
-    events.iter().any(|event| {
-        relay_authored(event, relay_pubkey, "community profile").is_ok()
-            && parse_company_event(event).is_ok()
-    })
+fn community_profile_is_unconfigured(events: &[Event], relay_pubkey: &nostr::PublicKey) -> bool {
+    events
+        .iter()
+        .filter(|event| relay_authored(event, relay_pubkey, "community profile").is_ok())
+        .filter_map(|event| parse_company_event(event).ok())
+        .any(|profile| buzz_core::company::is_unconfigured_profile(&profile))
 }
 
-/// Fetch this community's operating profile head, if it has one.
+/// Whether this community's operating profile is still unconfigured, and so
+/// whether the onboarding interview still has something to establish.
+///
+/// Every community has a profile now, so absence is no longer the question:
+/// a brand-new community has a valid profile with a real trading name and a
+/// usable cost centre, and nothing the owner has said about their business.
+/// That gap is what the interview fills.
 ///
 /// Queried by kind and author only. The profile sits at a fixed `d` tag, but
 /// querying without one keeps this readable against heads written before that
 /// was true and costs nothing at this cardinality.
-pub async fn fetch_community_profile_exists(
+pub async fn fetch_community_profile_unconfigured(
     rest: &crate::relay::RestClient,
 ) -> Result<bool, String> {
     let relay_pubkey = rest
@@ -481,7 +488,7 @@ pub async fn fetch_community_profile_exists(
         .await
         .map_err(|error| format!("could not read the community profile: {error}"))?;
 
-    Ok(community_profile_exists(&events, &relay_pubkey))
+    Ok(community_profile_is_unconfigured(&events, &relay_pubkey))
 }
 
 fn purpose_label(purpose: CommercialPurpose) -> &'static str {
@@ -1332,21 +1339,39 @@ mod tests {
     }
 
     #[test]
-    fn no_profile_heads_means_the_community_has_no_profile() {
+    fn no_profile_heads_means_nothing_to_offer_the_interview() {
         let keys = relay();
-        assert!(!community_profile_exists(&[], &keys.public_key()));
+        // Nothing to read is not the same as a profile with gaps. Withhold
+        // rather than inject a protocol against a community whose profile
+        // could not be read at all.
+        assert!(!community_profile_is_unconfigured(&[], &keys.public_key()));
     }
 
-    /// Presence is the whole signal now. An earlier version read an
-    /// `onboardingStatus` off the head to decide whether an owner had
-    /// approved a separate Company record; there is no such record and no
-    /// such approval, so a profile existing is what "onboarding is done"
-    /// means.
+    /// The gate moved from "does a profile exist" to "does it say anything
+    /// about the business". Every community has a profile now, so absence
+    /// stopped being the question the moment defaults started shipping —
+    /// gating on absence would have retired the interview entirely.
     #[test]
-    fn one_relay_authored_profile_head_means_the_community_has_one() {
+    fn a_default_profile_still_wants_the_interview() {
         let keys = relay();
-        let profile = company();
-        assert!(community_profile_exists(
+        let mut profile = company();
+        profile.summary = String::new();
+        profile.services.clear();
+        profile.customer_segments.clear();
+        profile.website = None;
+        assert!(community_profile_is_unconfigured(
+            &[company_head_for(&profile, &keys)],
+            &keys.public_key()
+        ));
+    }
+
+    /// Once an owner or an agent has described the business, re-injecting
+    /// would tell an agent to re-run an interview that already happened.
+    #[test]
+    fn a_filled_in_profile_retires_the_interview() {
+        let keys = relay();
+        let profile = company(); // fixture carries services and a summary
+        assert!(!community_profile_is_unconfigured(
             &[company_head_for(&profile, &keys)],
             &keys.public_key()
         ));
@@ -1355,26 +1380,16 @@ mod tests {
     #[test]
     fn heads_not_authored_by_the_relay_are_ignored() {
         let relay_keys = relay();
-        let forged = company_head_for(&company(), &impostor());
+        let mut unconfigured = company();
+        unconfigured.summary = String::new();
+        unconfigured.services.clear();
+        unconfigured.customer_segments.clear();
+        unconfigured.website = None;
+        let forged = company_head_for(&unconfigured, &impostor());
         assert!(
-            !community_profile_exists(&[forged], &relay_keys.public_key()),
-            "an impostor-authored head must not count as this community's profile"
+            !community_profile_is_unconfigured(&[forged], &relay_keys.public_key()),
+            "an impostor-authored head must not decide whether the interview runs"
         );
-    }
-
-    /// "More than one company is ambiguous" was a real hazard while a
-    /// workspace could hold several Company records. It cannot: there is one
-    /// profile per community, at one fixed coordinate, and NIP-33 replacement
-    /// is enforced at write time. Duplicates at that coordinate are the same
-    /// record, so presence is unambiguous by construction.
-    #[test]
-    fn several_relay_authored_heads_still_mean_one_profile() {
-        let keys = relay();
-        let heads = [
-            company_head_for(&company(), &keys),
-            company_head_for(&company(), &keys),
-        ];
-        assert!(community_profile_exists(&heads, &keys.public_key()));
     }
 }
 
@@ -1453,8 +1468,8 @@ mod pool_wiring_tests {
             "the pool must consult the onboarding gate before composing a session's prompt"
         );
         assert!(
-            POOL.contains("crate::work_context::fetch_community_profile_exists"),
-            "the pool must check whether the community has a profile, not assume one"
+            POOL.contains("crate::work_context::fetch_community_profile_unconfigured"),
+            "the pool must check whether the profile is still unconfigured, not assume it"
         );
 
         let definition_start = POOL
