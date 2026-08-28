@@ -288,6 +288,180 @@ mod tests {
         "deliverable",
     ];
 
+    /// Every bundled manifest, pinned by content digest against the
+    /// `created_at` it was published with.
+    ///
+    /// A Core manifest's catalog head is a NIP-33 replaceable event whose
+    /// `created_at` comes from the manifest itself, so editing a manifest
+    /// without moving that timestamp leaves the new head tied with the old
+    /// one. `replace_parameterized_event_tx` breaks a tie by event id, taking
+    /// the incoming write only when its id sorts below the stored one. That is
+    /// a coin flip on a sha256: on a relay that already seeded the old head,
+    /// deploying the edit keeps serving the old manifest roughly half the
+    /// time, and nothing reports it. The image rolls out, seeding is
+    /// idempotent by design, and every check stays green while owners keep
+    /// getting the manifest that was supposed to be replaced.
+    ///
+    /// It already happened once. company-blueprint shipped `requires_attention`
+    /// corrected and a dead action removed while `created_at` stayed at
+    /// 1785369600, so the fix could not have reached any relay that had seeded
+    /// the block before.
+    ///
+    /// Editing a manifest therefore fails this test until the timestamp moves
+    /// with it. Update both fields together: that is the point, not a chore.
+    const MANIFEST_PUBLICATIONS: [(&str, i64, &str); 24] = [
+        (
+            "actions",
+            1785369600,
+            "d9a3804173fb77c5c3a084889b528519188f48a5520bc3fcea3a39fffb3c78fb",
+        ),
+        (
+            "card-list",
+            1785369600,
+            "af36e6867922c4fafd00ed6280a56d720fb1ab6f312fb6d4be0c72ca953f5fa5",
+        ),
+        (
+            "card",
+            1785369600,
+            "8ca4e9fe46e49cbad93dbfd3b375790995432898273810568275f6166a8fc7ac",
+        ),
+        (
+            "chart",
+            1785369600,
+            "a619ca960e77e1aade371bb5e10dcff8d22105abfc778f6237ecb635517bf7c2",
+        ),
+        (
+            "details",
+            1785369600,
+            "ca17325975b2d7d37a5ed5786728d3e7992e0dce02bb5f9962ff655255a4af0b",
+        ),
+        (
+            "media",
+            1785369600,
+            "985799c0b35ea2660326c7021750324eba9f04a5b2bf0912549b8976c960e0ca",
+        ),
+        (
+            "metric",
+            1785369600,
+            "68e8009a3268889b45ee16b4c166b906934a06b924420360c5134294e1d3592c",
+        ),
+        (
+            "question",
+            1785369600,
+            "ac4ac00924546181a4771c652340a9c861f36e99a3a62803ffacf8fdb84d51b8",
+        ),
+        (
+            "section",
+            1785369600,
+            "1b304e8462becddfb008209bcca017c8618e872a5b2d82b1b6ddf86c4faec3a3",
+        ),
+        (
+            "status",
+            1785369600,
+            "629d6ca7eaa203506e163ea82ae09527c32f1c585b9a750d3b45fa96d342fc89",
+        ),
+        (
+            "table",
+            1785369600,
+            "831124bc552ece44081713a5d2cf74806ebe28f1315fabc76137e1c6e8db88bd",
+        ),
+        (
+            "agent-proposal",
+            1785369600,
+            "613baba8284b6e0a474b621de8d3444d62cafc709ab9b7c4d41b1f0e7025ef8f",
+        ),
+        (
+            "approval",
+            1785369600,
+            "0cc52eb39da3700731b60de102b42cb0efdefc38327f4dc562346a8d4918ff5d",
+        ),
+        (
+            "artifact",
+            1785369600,
+            "4672923e3d54245a44b2d9722a0e89e1bd109268cb425c4a861a50605bcb5b52",
+        ),
+        (
+            "brainstorm",
+            1785369600,
+            "78cd3ac006f93b01c521c726b3dd5de070452d99045e877060b0722f9f4b2da3",
+        ),
+        (
+            "company-blueprint",
+            1787875200,
+            "aabdc030ae647df430ba28651aa127cc350e1441abaf30eedc84029443938595",
+        ),
+        (
+            "company-brief",
+            1785369600,
+            "6936a3f3b147ad3739dc19fae71df77fb2010de6953fb4039e6d7f06e359b2a5",
+        ),
+        (
+            "deliverable",
+            1785369600,
+            "341c6999607295c49c161785eaed12ac8480e8594dfb9a4d7e2a0b356298057e",
+        ),
+        (
+            "handover",
+            1785369600,
+            "542e2eefd8e515e35fb1d72063271b90d7975bedfc59afb98594a5216dd43198",
+        ),
+        (
+            "initiative",
+            1785369600,
+            "1e350094a920530ccaf8ee6d521ab0dc8bf2a3103b6a0200ab578aba77d36967",
+        ),
+        (
+            "interview",
+            1785369600,
+            "44f7517a011316af12f5057128851b885e23842fb14cedbcd4a75578c76e7ff7",
+        ),
+        (
+            "lead-card",
+            1785369600,
+            "7230932d4988e12b766fef18dfd833e39bc38d480bca4aefef15e41b5b258680",
+        ),
+        (
+            "receipt",
+            1785369600,
+            "3f90a6f201e52fa35b9ebb7e5fd75d394e398d1cd391a7c8f77d37b9704cfb40",
+        ),
+        (
+            "report",
+            1785369600,
+            "d7c03f0a0f3d4b603394cfcf388efeebfb1b6bcae080f24fb9291ddc19e3c885",
+        ),
+    ];
+
+    /// The digest is over the same canonical bytes the desktop pins for Core
+    /// trust, so a manifest edit that forgets its timestamp is caught here
+    /// rather than by a client that silently drops the block to untrusted.
+    fn manifest_digest(manifest: &Value) -> String {
+        use sha2::{Digest as _, Sha256};
+        let canonical = buzz_core::block::canonical_json(manifest)
+            .expect("a bundled manifest is always canonicalizable");
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    }
+
+    #[test]
+    fn editing_a_manifest_moves_the_timestamp_its_catalog_head_is_ordered_by() {
+        let assets = raw_assets();
+        for (handle, created_at, digest) in MANIFEST_PUBLICATIONS {
+            let manifest = manifest_for_handle(&assets, handle);
+            assert_eq!(
+                manifest.get("created_at").and_then(Value::as_i64),
+                Some(created_at),
+                "{handle}: created_at moved without updating MANIFEST_PUBLICATIONS"
+            );
+            assert_eq!(
+                manifest_digest(manifest),
+                digest,
+                "{handle} changed. Its catalog head is ordered by created_at, so \
+                 bump created_at as well or the new head cannot replace the one \
+                 already seeded on every running relay. Then update this table."
+            );
+        }
+    }
+
     fn raw_assets() -> BTreeMap<String, Value> {
         CORE_BLOCK_ASSETS
             .iter()
