@@ -19,21 +19,13 @@ export function actionCenterSourceDestination(
       threadRootId: item.source.ask.threadId,
     };
   }
-  if (item.source.kind === "message" || item.source.kind === "block") {
+  if (item.source.kind === "block") {
     const channelId = item.source.item.channelId;
     if (!channelId) return null;
     return {
       channelId,
       messageId: item.source.item.id,
       threadRootId: item.source.threadRootId,
-    };
-  }
-  if (item.source.kind === "task") {
-    if (!item.source.channelId || !item.source.threadId) return null;
-    return {
-      channelId: item.source.channelId,
-      messageId: item.source.threadId,
-      threadRootId: item.source.threadId,
     };
   }
   return null;

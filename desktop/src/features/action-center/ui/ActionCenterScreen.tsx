@@ -27,11 +27,9 @@ type ActionCenterScreenProps = {
   openCount: number;
   selectedItemId: string | null;
   onFilterChange: (filter: ActionCenterFilter) => void;
-  onMarkDone: (item: ActionItem) => void;
   onOpenSource: (item: ActionItem) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSelectItem: (itemId: string | null) => void;
-  onUndoDone: (item: ActionItem) => void;
   allItems: ActionItem[];
   workflowsEnabled: boolean;
 };
@@ -47,11 +45,9 @@ export function ActionCenterScreen({
   openCount,
   selectedItemId,
   onFilterChange,
-  onMarkDone,
   onOpenSource,
   onRefresh,
   onSelectItem,
-  onUndoDone,
   workflowsEnabled,
 }: ActionCenterScreenProps) {
   const isMobile = useIsMobile();
@@ -229,10 +225,8 @@ export function ActionCenterScreen({
                 currentPubkey={currentPubkey}
                 item={selectedItem}
                 onBack={() => onSelectItem(null)}
-                onMarkDone={onMarkDone}
                 onOpenSource={(item) => void onOpenSource(item)}
                 onRefresh={handleRefresh}
-                onUndoDone={onUndoDone}
                 unavailableItemId={unavailableItemId}
               />
             )}

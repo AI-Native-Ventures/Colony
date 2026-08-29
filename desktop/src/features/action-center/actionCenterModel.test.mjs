@@ -9,7 +9,8 @@ import {
 
 const PUBKEY = "a".repeat(64);
 
-function message(
+/** A generic `needsAction` feed row, not a Block instance. */
+function feedItem(
   id,
   createdAt,
   category = "needs_action",
@@ -19,7 +20,7 @@ function message(
     id,
     kind: 9,
     pubkey: PUBKEY,
-    content: `Message ${id}`,
+    content: `Feed item ${id}`,
     createdAt,
     channelId,
     channelName: "general",
@@ -28,7 +29,7 @@ function message(
   };
 }
 
-function reminder(id, eventId = `${id}-event`) {
+function reminder(id, eventId = `${id}-event`, overrides = {}) {
   return {
     id,
     eventId,
@@ -44,10 +45,11 @@ function reminder(id, eventId = `${id}-event`) {
         authorPubkey: PUBKEY,
       },
     },
+    ...overrides,
   };
 }
 
-function ask(id = "ask-1") {
+function ask(id = "ask-1", overrides = {}) {
   return {
     id,
     askType: "decision",
@@ -56,6 +58,17 @@ function ask(id = "ask-1") {
     filerPubkey: PUBKEY,
     createdAt: 100,
     rawContent: "{}",
+    channelId: null,
+    threadId: null,
+    audiencePubkey: null,
+    priorAskId: null,
+    originalFilerPubkey: null,
+    taskIds: ["task-1"],
+    category: null,
+    defaultOption: null,
+    defaultWindowSecs: null,
+    initiativeId: "no-initiative",
+    ...overrides,
   };
 }
 
@@ -92,180 +105,90 @@ function resolution(eventId, askId, createdAt, content, pubkey = PUBKEY) {
 test("projects actionable sources into stable, sorted items", () => {
   const items = buildActionCenterItems({
     asks: [ask()],
-    feed: {
-      mentions: [message("message-1", 200, "mention")],
-      needsAction: [message("approval-1", 300)],
-      activity: [],
-      agentActivity: [],
-    },
     reminders: [reminder("reminder-1")],
+    now: 400,
   });
 
+  // The ask (no `default_option`) is tier 2 (blocked work); the reminder is
+  // tier 3 (everything else) — tier 2 outranks tier 3 regardless of age.
   assert.deepEqual(
     items.map((item) => item.id),
-    [
-      "reminder:reminder-1",
-      "message:approval-1",
-      "message:message-1",
-      "ask:ask-1",
-    ],
+    ["ask:ask-1", "reminder:reminder-1"],
   );
   assert.equal(filterActionCenterItems(items, "asks").length, 1);
-  assert.equal(filterActionCenterItems(items, "needs-action").length, 4);
-  assert.equal(countActionableItems(items), 4);
-  assert.equal(items[1]?.source.kind, "message");
-  assert.deepEqual(
-    items[1]?.source.kind === "message" ? items[1].source.threadRootId : null,
-    "root-1",
-  );
+  assert.equal(filterActionCenterItems(items, "needs-action").length, 2);
+  assert.equal(countActionableItems(items), 2);
 });
 
-test("keeps stream reminders while deduplicating local reminders and job records", () => {
+test("only due reminders enter the queue — pending alone is not enough", () => {
+  // Reuses `isDue` (the same logic backing the Home badge's
+  // `countDueReminders`) rather than a second definition of "due": a pending
+  // reminder whose `notBefore` has not arrived yet must not inflate the
+  // queue, and a cancelled reminder never belongs here even once its
+  // `notBefore` has passed.
+  const now = 1_000;
+  const due = reminder("due-1", "due-1-event", { notBefore: 900 });
+  const dueAtBoundary = reminder("boundary-1", "boundary-1-event", {
+    notBefore: now,
+  });
+  const notYetDue = reminder("future-1", "future-1-event", {
+    notBefore: 1_100,
+  });
+  const cancelled = reminder("cancelled-1", "cancelled-1-event", {
+    notBefore: 500,
+    content: {
+      status: "cancelled",
+      note: "Follow up",
+    },
+  });
+
+  const items = buildActionCenterItems({
+    asks: [],
+    reminders: [due, dueAtBoundary, notYetDue, cancelled],
+    now,
+  });
+
+  assert.deepEqual(items.map((item) => item.id).sort(), [
+    "reminder:boundary-1",
+    "reminder:due-1",
+  ]);
+});
+
+test("filters structured feed kinds and stream-duplicated reminders out of the needsAction feed", () => {
   const items = buildActionCenterItems({
     asks: [],
     feed: {
-      mentions: [
-        { ...message("stream-reminder", 700), kind: 40007 },
-        { ...message("reminder-1-event", 400, "mention") },
-        { ...message("job-1", 500), kind: 43003 },
-        { ...message("approval-1", 600), kind: 46010 },
+      needsAction: [
+        { ...feedItem("stream-reminder", 700), kind: 40007 },
+        feedItem("reminder-1-event", 400),
+        { ...feedItem("job-1", 500), kind: 43003 },
+        { ...feedItem("approval-1", 600), kind: 46010 },
       ],
-      needsAction: [],
-      activity: [],
-      agentActivity: [],
     },
     reminders: [reminder("reminder-1", "reminder-1-event")],
+    now: 400,
   });
 
+  // None of the structured rows, nor the row already surfaced by the
+  // dedicated reminders read, becomes a queue item — and none of them parse
+  // as a Block instance, so nothing else is produced either.
   assert.deepEqual(
     items.map((item) => item.id),
-    ["message:stream-reminder", "reminder:reminder-1"],
+    ["reminder:reminder-1"],
   );
-  assert.equal(items[0]?.source.kind, "message");
-});
-
-test("uses local done state for message actions without hiding all activity", () => {
-  const items = buildActionCenterItems({
-    asks: [],
-    feed: {
-      mentions: [message("message-1", 100, "mention")],
-      needsAction: [],
-      activity: [],
-      agentActivity: [],
-    },
-    reminders: [],
-    doneIds: new Set(["message-1"]),
-  });
-
-  assert.equal(items[0]?.state, "completed");
-  assert.deepEqual(items[0]?.capabilities, ["open-source", "undo-done"]);
-  assert.equal(filterActionCenterItems(items, "needs-action").length, 0);
-  assert.equal(filterActionCenterItems(items, "all").length, 1);
-});
-
-test("projects durable tasks and real workflow recovery records", () => {
-  const items = buildActionCenterItems({
-    asks: [],
-    reminders: [],
-    tasks: [
-      {
-        kind: "task",
-        task: {
-          id: "task-1",
-          title: "Review launch brief",
-          status: "ready",
-          createdAt: 100,
-          updatedAt: 120,
-          sourceChannelId: "channel-1",
-          sourceEventId: "thread-1",
-        },
-        run: null,
-        channelId: "channel-1",
-        threadId: "thread-1",
-      },
-    ],
-    workflows: [
-      {
-        kind: "workflow",
-        workflow: { id: "workflow-1", name: "Release checks" },
-        run: {
-          id: "run-1",
-          status: "failed",
-          createdAt: 200,
-          completedAt: 220,
-          executionTrace: [],
-        },
-        approval: null,
-      },
-    ],
-  });
-
-  assert.deepEqual(
-    items.map((item) => item.id),
-    ["workflow:workflow-1:run-1", "task:task-1"],
-  );
-  assert.equal(filterActionCenterItems(items, "tasks").length, 1);
-  assert.equal(items[0]?.state, "failed");
-  assert.equal(items[0]?.capabilities.includes("run-again"), true);
-  assert.equal(items[1]?.capabilities.includes("open-source"), true);
-});
-
-test("treats recoverable task runs as actionable rather than in progress", () => {
-  const [item] = buildActionCenterItems({
-    asks: [],
-    reminders: [],
-    tasks: [
-      {
-        kind: "task",
-        task: {
-          id: "task-recoverable",
-          title: "Resume the interrupted task",
-          status: "ready",
-          createdAt: 100,
-          updatedAt: 120,
-          sourceChannelId: "channel-1",
-          sourceEventId: "thread-1",
-        },
-        run: {
-          eventId: "head-1",
-          jobId: "job-1",
-          employeePubkey: PUBKEY,
-          originatorPubkey: PUBKEY,
-          filedByPubkey: PUBKEY,
-          taskId: "task-recoverable",
-          channelId: "channel-1",
-          threadId: "thread-1",
-          runStatus: "recoverable",
-          attempts: 1,
-          leaseHolderPubkey: null,
-          leaseExpiresAt: null,
-          instruction: "Resume",
-          result: null,
-          failure: null,
-          checkpoint: null,
-          artifacts: [],
-          outcomeEventId: null,
-          createdAt: 200,
-        },
-        channelId: "channel-1",
-        threadId: "thread-1",
-      },
-    ],
-  });
-
-  assert.equal(item?.state, "needs-action");
-  assert.equal(filterActionCenterItems([item], "needs-action").length, 1);
 });
 
 test("applies optional state filters without changing the default queue", () => {
   const items = buildActionCenterItems({
     asks: [ask("ask-open")],
-    feed: {
-      mentions: [message("message-active", 300, "activity")],
-      needsAction: [],
-      activity: [],
-      agentActivity: [],
-    },
+    resolvedAsks: [
+      {
+        resolution: resolution("res-1", CLOSED_ASK_HEX, 400, {
+          answer: { decision: "Done" },
+        }),
+        ask: closedAsk(),
+      },
+    ],
     reminders: [],
   });
 
@@ -274,13 +197,183 @@ test("applies optional state filters without changing the default queue", () => 
     ["ask:ask-open"],
   );
   assert.deepEqual(
-    filterActionCenterItems(items, "all", "active").map((item) => item.id),
-    ["message:message-active"],
+    filterActionCenterItems(items, "all", "completed").map((item) => item.id),
+    [`resolved-ask:${CLOSED_ASK_HEX}`],
   );
   assert.equal(
     filterActionCenterItems(items, "needs-action", "completed").length,
     0,
   );
+});
+
+test("an owner-addressed pending workflow approval is a needs-action item", () => {
+  const items = buildActionCenterItems({
+    asks: [],
+    reminders: [],
+    workflows: [
+      {
+        kind: "workflow",
+        workflow: { id: "workflow-1", name: "Release checks" },
+        run: {
+          id: "run-1",
+          status: "waiting_approval",
+          createdAt: 200,
+          completedAt: null,
+          executionTrace: [],
+        },
+        approval: {
+          token: "token-1",
+          stepId: "notify-legal",
+          status: "pending",
+          approverSpec: PUBKEY,
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ["workflow:workflow-1:run-1"],
+  );
+  assert.equal(items[0]?.state, "needs-action");
+  assert.deepEqual(items[0]?.capabilities, [
+    "open-details",
+    "open-source",
+    "approve",
+    "deny",
+  ]);
+});
+
+test("ranks strictly by tier — deadline, then blocked work, then everything else, then settled rows", () => {
+  const workflowSource = (id, createdAt) => ({
+    kind: "workflow",
+    workflow: { id, name: `Workflow ${id}` },
+    run: {
+      id: `run-${id}`,
+      status: "waiting_approval",
+      createdAt,
+      completedAt: null,
+      executionTrace: [],
+    },
+    approval: {
+      token: `token-${id}`,
+      stepId: "step",
+      status: "pending",
+      approverSpec: PUBKEY,
+    },
+  });
+
+  const items = buildActionCenterItems({
+    asks: [
+      // Tier 2 (blocked work): no default_option. Filed last (createdAt 500)
+      // but a blocked-work item still outranks every tier-3 item.
+      ask("ask-blocked", { createdAt: 500, taskIds: ["task-1", "task-2"] }),
+      // Tier 1 (deadline): has a default_option, so it ranks first no
+      // matter how recently it was filed.
+      ask("ask-deadline", {
+        createdAt: 900,
+        defaultOption: "Ship it",
+        defaultWindowSecs: 60,
+      }),
+    ],
+    resolvedAsks: [
+      {
+        resolution: resolution("res-1", CLOSED_ASK_HEX, 1_000, {
+          answer: { decision: "Done" },
+        }),
+        ask: closedAsk(),
+      },
+    ],
+    // Tier 3 items are ranked by "how long has this been waiting"
+    // (`updatedAt`: a reminder's is its `notBefore`, a workflow's is its
+    // run's `createdAt`) — the workflow's 20 predates the reminder's
+    // `notBefore` of 380, so the workflow is the older of the two.
+    reminders: [reminder("reminder-1", "reminder-1-event", { notBefore: 380 })],
+    workflows: [workflowSource("wf-1", 20)],
+    now: 400,
+  });
+
+  assert.deepEqual(
+    items.map((item) => item.id),
+    [
+      "ask:ask-deadline", // tier 1: deadline
+      "ask:ask-blocked", // tier 2: blocked work
+      "workflow:wf-1:run-wf-1", // tier 3: everything else, older
+      "reminder:reminder-1", // tier 3: everything else, newer
+      `resolved-ask:${CLOSED_ASK_HEX}`, // settled sink, last regardless of tier
+    ],
+  );
+});
+
+test("tier 2 ranks asks by blast radius descending, Block instances always last, ties broken by age", () => {
+  const MANIFEST_ID = "b".repeat(64);
+  const feedBlock = (id, createdAt) => ({
+    id,
+    kind: 9,
+    pubkey: PUBKEY,
+    content: "## Approve the spend\nDetails",
+    createdAt,
+    channelId: "channel-1",
+    channelName: "general",
+    tags: [
+      ["e", MANIFEST_ID, "", "block"],
+      [
+        "block",
+        "1",
+        "approval",
+        MANIFEST_ID,
+        "11111111-1111-4111-8111-111111111111",
+      ],
+      ["block-data", '{"amount":500}'],
+      ["block-attention", "1", "required"],
+      ["p", "c".repeat(64)],
+      ["block-processor", "1", PUBKEY],
+    ],
+    category: "needs_action",
+  });
+
+  const items = buildActionCenterItems({
+    asks: [
+      ask("ask-wide", { createdAt: 300, taskIds: ["t1", "t2", "t3"] }),
+      ask("ask-narrow", { createdAt: 100, taskIds: ["t1"] }),
+      ask("ask-narrow-newer", { createdAt: 200, taskIds: ["t1"] }),
+    ],
+    feed: {
+      needsAction: [feedBlock("block-old", 50), feedBlock("block-new", 150)],
+    },
+    reminders: [],
+  });
+
+  assert.deepEqual(
+    items.map((item) => item.id),
+    [
+      "ask:ask-wide", // blast radius 3
+      "ask:ask-narrow", // blast radius 1, older of the two ties
+      "ask:ask-narrow-newer", // blast radius 1, newer
+      "block:block-old", // no blast-radius signal: always after every ask
+      "block:block-new",
+    ],
+  );
+});
+
+test("isHardList matches the hard list case-insensitively, mirroring is_hard_list_category", () => {
+  const items = buildActionCenterItems({
+    asks: [
+      ask("ask-spend", { category: "SPEND" }),
+      ask("ask-mixed-case", { category: "External_Send" }),
+      ask("ask-ordinary", { category: "onboarding" }),
+      ask("ask-none", { category: null }),
+    ],
+    reminders: [],
+  });
+
+  const isHardListById = new Map(
+    items.map((item) => [item.id, item.source.isHardList]),
+  );
+  assert.equal(isHardListById.get("ask:ask-spend"), true);
+  assert.equal(isHardListById.get("ask:ask-mixed-case"), true);
+  assert.equal(isHardListById.get("ask:ask-ordinary"), false);
+  assert.equal(isHardListById.get("ask:ask-none"), false);
 });
 
 test("a resolved ask appears as a completed item whose summary accounts for the answer", () => {
@@ -295,7 +388,6 @@ test("a resolved ask appears as a completed item whose summary accounts for the 
       },
     ],
     resolverLabelsByPubkey: new Map([[PUBKEY, "Basheer"]]),
-    feed: { mentions: [], needsAction: [], activity: [], agentActivity: [] },
     reminders: [],
   });
 
@@ -332,7 +424,6 @@ test("an executed default is visibly distinct and names the applied option", () 
       },
     ],
     resolverLabelsByPubkey: new Map(),
-    feed: { mentions: [], needsAction: [], activity: [], agentActivity: [] },
     reminders: [],
   });
 
@@ -359,7 +450,6 @@ test("resolved asks show under the asks filter alongside open ones", () => {
         ask: closedAsk(),
       },
     ],
-    feed: { mentions: [], needsAction: [], activity: [], agentActivity: [] },
     reminders: [],
   });
 

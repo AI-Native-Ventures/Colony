@@ -28,6 +28,36 @@ export type OpenAsk = {
    * agent. Null on ordinary asks.
    */
   originalFilerPubkey: string | null;
+  /**
+   * All `task` tag values, one or more per the relay's `MissingTaskTag`
+   * requirement (`parse_ask`). Blast radius (Ranking tier 2) is this array's
+   * length: the relay's own dedupe means one ask can carry several `task`
+   * tags when it blocks several tasks/agents on the same need, and the
+   * count is read raw here exactly as `ParsedAsk.task_ids` is (no dedup at
+   * parse time on either side).
+   */
+  taskIds: readonly string[];
+  /**
+   * The optional `category` tag, case PRESERVED as filed (NIP-IQ: matched
+   * case-insensitively against the hard list, never case-folded at parse
+   * time for an ask). Null when absent or ambiguous (2+ occurrences).
+   */
+  category: string | null;
+  /** The content `default_option` field: the answer the relay applies if the
+   * deadline passes with nobody answering. Null when this ask has none. */
+  defaultOption: string | null;
+  /** The content `default_window_secs` field: seconds from filing until the
+   * default applies. Null when absent -- the broker falls back to the
+   * community's `ask_window_secs`, then 3600s; see `lib/askDeadline.ts`. */
+  defaultWindowSecs: number | null;
+  /**
+   * The `initiative` tag value. The relay requires exactly one, using the
+   * reserved value `"no-initiative"` (`buzz_core::interrupt::NO_INITIATIVE`)
+   * for chat-derived work with no initiative -- so this is only null when an
+   * ask cannot be read at all through some other malformation, never a
+   * legitimate "no initiative" state.
+   */
+  initiativeId: string | null;
 };
 
 type AskEventShape = {
@@ -68,6 +98,36 @@ function singleRoutingTag(tags: string[][], name: string): string | null {
   );
   if (matches.length !== 1) return null;
   return matches[0][1]?.trim().toLowerCase() ?? null;
+}
+
+/**
+ * Read a single-valued tag whose case matters (`category`, `initiative`),
+ * mirroring `optional_tag_value`'s cardinality rule (exactly one occurrence,
+ * else unreadable) without `singleRoutingTag`'s lowercasing -- the relay
+ * never case-folds these tags at parse time, only at comparison time.
+ */
+function singleTagPreservingCase(
+  tags: string[][],
+  name: string,
+): string | null {
+  const matches = tags.filter(
+    (tag) =>
+      tag[0] === name && typeof tag[1] === "string" && tag[1].trim() !== "",
+  );
+  if (matches.length !== 1) return null;
+  return matches[0][1]?.trim() ?? null;
+}
+
+/**
+ * All values of an exact two-element tag named `name`, mirroring the
+ * relay's `tag_values` (`buzz_core::interrupt`): no dedup, no trimming, no
+ * cardinality limit. Used for `task`, where the relay's own ask dedupe means
+ * a legitimate ask carries several.
+ */
+function allTagValues(tags: string[][], name: string): string[] {
+  return tags
+    .filter((tag) => tag.length === 2 && tag[0] === name)
+    .map((tag) => tag[1]);
 }
 
 /**
@@ -114,6 +174,15 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
       : typeof fields.type === "string" && ASK_TYPES.has(fields.type)
         ? fields.type
         : "question";
+  const defaultOption =
+    typeof fields.default_option === "string" ? fields.default_option : null;
+  const defaultWindowSecsRaw = fields.default_window_secs;
+  const defaultWindowSecs =
+    typeof defaultWindowSecsRaw === "number" &&
+    Number.isInteger(defaultWindowSecsRaw) &&
+    defaultWindowSecsRaw >= 0
+      ? defaultWindowSecsRaw
+      : null;
   return {
     id: event.id,
     askType,
@@ -130,6 +199,11 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
     priorAskId: priorTag !== null && HEX64.test(priorTag) ? priorTag : null,
     originalFilerPubkey:
       filerTag !== null && HEX64.test(filerTag) ? filerTag : null,
+    taskIds: allTagValues(tags, "task"),
+    category: singleTagPreservingCase(tags, "category"),
+    defaultOption,
+    defaultWindowSecs,
+    initiativeId: singleTagPreservingCase(tags, "initiative"),
   };
 }
 

@@ -9,19 +9,20 @@ import {
 } from "@/features/asks/lib/askRouting";
 import { useOpenAsks } from "@/features/asks/useOpenAsks";
 import { useResolvedAsks } from "@/features/asks/useAskResolutions";
-import { useCompanyTasks } from "@/features/company/hooks";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { useRemindersQuery } from "@/features/reminders/hooks";
+import { relayClient } from "@/shared/api/relayClient";
 import {
   getChannelsWorkflows,
   getRunApprovals,
   getWorkflowRuns,
 } from "@/shared/api/tauriWorkflows";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { KIND_COMPANY_PROFILE } from "@/shared/constants/kinds";
 import { useFeatureEnabled } from "@/shared/features";
-import { relayClient } from "@/shared/api/relayClient";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type {
@@ -30,7 +31,6 @@ import type {
   WorkflowApproval,
   WorkflowRun,
 } from "@/shared/api/types";
-import { KIND_JOB_HEAD } from "@/shared/constants/kinds";
 
 import {
   buildActionCenterItems,
@@ -39,16 +39,16 @@ import {
 } from "./actionCenterModel";
 import {
   actionCenterApprovalsQueryKey,
-  actionCenterTaskRunsQueryKey,
+  actionCenterCompanyProfileQueryKey,
   actionCenterWorkflowQueryKey,
   actionCenterWorkflowRunsQueryKey,
 } from "./lib/actionCenterQueryKeys";
-import { buildTaskSources } from "./lib/taskActionCenter";
+import { readCompanyAskWindowSecs } from "./lib/companyAskWindow";
+import { selectOwnerWorkflowApprovalSources } from "./lib/workflowApprovals";
 import type {
   ActionCenterFilter,
   ActionCenterStateFilter,
   ActionItem,
-  ActionWorkflowSource,
 } from "./contracts";
 
 export type ActionCenterItemsOptions = {
@@ -76,6 +76,7 @@ export function useActionCenterItems({
   state,
 }: ActionCenterItemsOptions = {}) {
   const identityQuery = useIdentityQuery();
+  const ownerPubkey = identityQuery.data?.pubkey ?? null;
   const { activeCommunity } = useCommunities();
   const workflowsEnabled = useFeatureEnabled("workflows");
   const communityId = activeCommunity?.id ?? "";
@@ -94,29 +95,12 @@ export function useActionCenterItems({
   );
   const channelIdKey = memberChannelIds.join(",");
 
-  const tasksQuery = useCompanyTasks(communityId, {});
-  const tasks = tasksQuery.data?.ok ? tasksQuery.data.value : [];
-  const taskIds = React.useMemo(
-    () => tasks.map((task) => task.id).sort(),
-    [tasks],
-  );
-  const taskRunsQuery = useQuery({
-    queryKey: actionCenterTaskRunsQueryKey(communityId, taskIds),
-    queryFn: () =>
-      relayClient.fetchEvents({
-        kinds: [KIND_JOB_HEAD],
-        "#task": taskIds,
-        limit: 500,
-      }),
-    enabled: communityId !== "" && taskIds.length > 0,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
-  });
-  const taskSources = React.useMemo(
-    () => buildTaskSources(tasks, taskRunsQuery.data ?? []),
-    [tasks, taskRunsQuery.data],
-  );
-
+  // The only way to discover a pending approval is to walk each workflow's
+  // latest run and, when it is waiting on one, fetch that run's approvals —
+  // there is no bulk "pending approvals for this owner" endpoint. This fan-out
+  // is therefore kept; what changed is the output: `selectOwnerWorkflowApprovalSources`
+  // below narrows it to runs whose approval names this owner specifically,
+  // instead of surfacing every run state as a queue item.
   const workflowsQuery = useQuery<Workflow[]>({
     queryKey: actionCenterWorkflowQueryKey(communityId, channelIdKey),
     queryFn: () => getChannelsWorkflows(memberChannelIds),
@@ -157,35 +141,56 @@ export function useActionCenterItems({
       };
     }),
   });
-  const workflowSources = React.useMemo<ActionWorkflowSource[]>(
+  const pendingApprovals = React.useMemo(
     () =>
-      workflows.flatMap((workflow, index) => {
-        const run = latestRuns[index];
-        if (!run) return [];
-        const approvalQuery = workflowApprovalQueries[index];
-        const approvals =
-          (approvalQuery?.data as WorkflowApproval[] | undefined) ?? [];
-        const approval =
-          approvals.find((candidate) => candidate.status === "pending") ?? null;
-        // A waiting run is only actionable when the backend returned a real
-        // approval record. Do not manufacture an inert workflow row while the
-        // approval read is loading, failed, or empty.
-        if (
-          run.status === "waiting_approval" &&
-          (approvalQuery?.isLoading || approvalQuery?.isError || !approval)
-        ) {
-          return [];
-        }
-        return [
-          {
-            kind: "workflow" as const,
-            workflow,
-            run,
-            approval,
-          },
-        ];
+      workflowApprovalQueries.map((query) => {
+        const approvals = (query.data as WorkflowApproval[] | undefined) ?? [];
+        return (
+          approvals.find((candidate) => candidate.status === "pending") ?? null
+        );
       }),
-    [latestRuns, workflowApprovalQueries, workflows],
+    [workflowApprovalQueries],
+  );
+  const workflowSources = React.useMemo(
+    () =>
+      selectOwnerWorkflowApprovalSources({
+        latestRuns,
+        ownerPubkey,
+        pendingApprovals,
+        workflows,
+        workflowsEnabled,
+      }),
+    [latestRuns, ownerPubkey, pendingApprovals, workflows, workflowsEnabled],
+  );
+
+  // The community's ask-window override feeds every ask's ranking deadline
+  // (tier 1). A missing/unreachable value never blocks the queue -- it just
+  // falls back to `DEFAULT_ASK_WINDOW_SECS` inside `computeAskDeadline`,
+  // mirroring the broker's own "never fails" company-default read -- so
+  // this query's own errors are deliberately not surfaced or awaited.
+  const relaySelfQuery = useQuery({
+    queryKey: ["action-center-relay-self"],
+    queryFn: () => getRelaySelf(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const relayPubkey = relaySelfQuery.data ?? null;
+  const companyProfileQuery = useQuery({
+    queryKey: actionCenterCompanyProfileQueryKey(
+      communityId,
+      relayPubkey ?? "",
+    ),
+    queryFn: () =>
+      relayClient.fetchEvents({
+        kinds: [KIND_COMPANY_PROFILE],
+        authors: [relayPubkey ?? ""],
+        limit: 1,
+      }),
+    enabled: communityId !== "" && relayPubkey !== null,
+    staleTime: 5 * 60_000,
+  });
+  const companyAskWindowSecs = React.useMemo(
+    () => readCompanyAskWindowSecs(companyProfileQuery.data ?? [], relayPubkey),
+    [companyProfileQuery.data, relayPubkey],
   );
 
   const feed = homeFeedQuery.data?.feed;
@@ -239,27 +244,20 @@ export function useActionCenterItems({
         resolverLabelsByPubkey,
         askRoutingNotesByAskId,
         doneIds: localDoneIds,
-        feed: feed
-          ? {
-              mentions: feed.mentions,
-              needsAction: feed.needsAction,
-              activity: feed.activity,
-              agentActivity: feed.agentActivity,
-            }
-          : undefined,
+        feed: feed ? { needsAction: feed.needsAction } : undefined,
         reminders,
-        tasks: taskSources,
         workflows: workflowSources,
+        companyAskWindowSecs,
       }),
     [
       askRoutingNotesByAskId,
+      companyAskWindowSecs,
       feed,
       localDoneIds,
       openAsks.asks,
       reminders,
       resolvedAsks,
       resolverLabelsByPubkey,
-      taskSources,
       workflowSources,
     ],
   );
@@ -271,9 +269,8 @@ export function useActionCenterItems({
   const refetchHomeFeed = homeFeedQuery.refetch;
   const refetchAsks = openAsks.refetch;
   const refetchReminders = remindersQuery.refetch;
-  const refetchTasks = tasksQuery.refetch;
-  const refetchTaskRuns = taskRunsQuery.refetch;
   const refetchWorkflows = workflowsQuery.refetch;
+  const refetchCompanyProfile = companyProfileQuery.refetch;
   const refetchWorkflowRuns = React.useMemo(
     () => workflowRunQueries.map((query) => query.refetch),
     [workflowRunQueries],
@@ -287,18 +284,16 @@ export function useActionCenterItems({
       refetchHomeFeed(),
       refetchAsks(),
       refetchReminders(),
-      refetchTasks(),
-      refetchTaskRuns(),
       refetchWorkflows(),
+      refetchCompanyProfile(),
       ...refetchWorkflowRuns.map((refetchOne) => refetchOne()),
       ...refetchWorkflowApprovals.map((refetchOne) => refetchOne()),
     ]);
   }, [
     refetchAsks,
+    refetchCompanyProfile,
     refetchHomeFeed,
     refetchReminders,
-    refetchTaskRuns,
-    refetchTasks,
     refetchWorkflowApprovals,
     refetchWorkflowRuns,
     refetchWorkflows,
@@ -308,8 +303,6 @@ export function useActionCenterItems({
     homeFeedQuery.error,
     openAsks.error,
     remindersQuery.error,
-    tasksQuery.error,
-    taskRunsQuery.error,
     workflowsQuery.error,
     channelsQuery.error,
     ...workflowRunQueries.map((query) => query.error),
@@ -323,8 +316,6 @@ export function useActionCenterItems({
     remindersQuery.isLoading;
   const isOptionalSourceLoading =
     channelsQuery.isLoading ||
-    tasksQuery.isLoading ||
-    taskRunsQuery.isLoading ||
     workflowsQuery.isLoading ||
     workflowRunQueries.some((query) => query.isLoading) ||
     workflowApprovalQueries.some((query) => query.isLoading);

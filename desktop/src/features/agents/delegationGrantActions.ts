@@ -47,7 +47,9 @@ export type DelegationGrantDraft = {
   capNanoUsd: number | null;
 };
 
-function isHardListCategory(category: string): boolean {
+/** Mirror of `is_hard_list_category`: folds ASCII case before comparing, so
+ * callers never need a second definition of the hard-list check. */
+export function isHardListCategory(category: string): boolean {
   return HARD_LIST_CATEGORIES.includes(category.toLowerCase());
 }
 
