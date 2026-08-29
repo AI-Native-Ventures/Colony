@@ -243,6 +243,20 @@ pub fn ensure_persona_in_coordination_team(
     save_teams(app, &teams)
 }
 
+/// Call [`ensure_persona_in_coordination_team`] after a hire, logging (not
+/// propagating) any failure so agent creation is never blocked by it.
+///
+/// Lives next to `ensure_persona_in_coordination_team` rather than inline at
+/// the `commands/agents.rs` call site so the hire hook there stays a single
+/// call — see `create_managed_agent_with_creation_request`.
+pub fn enrol_persona_in_coordination_team_after_hire(app: &AppHandle, persona_id: &str) {
+    if let Err(error) = ensure_persona_in_coordination_team(app, persona_id) {
+        eprintln!(
+            "buzz-desktop: failed to add persona {persona_id} to the coordination team: {error}"
+        );
+    }
+}
+
 /// Backfill every already-hired agent's persona onto the coordination team,
 /// for installs that hired employees before this device started seeding a
 /// default one. Runs once at launch; [`ensure_persona_in_coordination_team`]
