@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
-import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { signRelayEvent } from "@/shared/api/tauri";
@@ -60,11 +59,8 @@ import {
   type Project,
   type Repository,
 } from "./projectModels";
-import {
-  buildProjectsFromFetcher,
-  type FetchProjectEventsExhaustively,
-  fetchProjectEventsExhaustively,
-} from "./projectEnumeration";
+export { fetchProjects } from "./projectFetch";
+import { fetchProjects } from "./projectFetch";
 import {
   markProjectCollectionAuthoritative,
   persistProjectSnapshot,
@@ -81,25 +77,6 @@ export type {
 };
 
 export type ProjectPullRequestCommentDecision = "request-changes";
-
-const HIDDEN_PROJECT_CARDS_KEY = "buzz.projects.hidden-cards.v1";
-
-function readHiddenProjectCards(): string[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(
-      window.localStorage.getItem(HIDDEN_PROJECT_CARDS_KEY) ?? "[]",
-    );
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
 
 export type RepoState = {
   branches: Array<{ name: string; commit: string }>;
@@ -166,24 +143,6 @@ export function eventToProject(
     throw new Error("Invalid repository announcement.");
   }
   return repository;
-}
-
-export async function fetchProjects(
-  fetchExhaustively?: FetchProjectEventsExhaustively,
-  signal?: AbortSignal,
-): Promise<Project[]> {
-  // Delegates to `buildProjectsFromFetcher` in `projectEnumeration.ts`, which
-  // is the pure, Tauri-free core of this operation. That helper's javadoc
-  // explains the fail-closed tombstone contract and the NIP-OA owner-deletion
-  // relay-side-suppression decision.
-  const fetcher: FetchProjectEventsExhaustively =
-    fetchExhaustively ??
-    ((kinds, extraFilter) =>
-      fetchProjectEventsExhaustively(kinds, extraFilter, undefined, signal));
-  return buildProjectsFromFetcher(fetcher, {
-    relayOrigin: getCachedRelayOrigin(),
-    hiddenAddresses: new Set(readHiddenProjectCards()),
-  });
 }
 
 function eventToRepoState(event: RelayEvent): RepoState {
