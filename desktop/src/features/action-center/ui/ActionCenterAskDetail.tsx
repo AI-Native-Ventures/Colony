@@ -25,13 +25,13 @@ export function ActionCenterAskDetail({
 }: {
   ask: OpenAsk;
   /** True once a threaded reply for this ask (or a sibling ask bound to the
-   * same origin thread — the relay resolves every one of them from a single
+   * same origin thread, the relay resolves every one of them from a single
    * reply) has been sent and is waiting for confirmation. */
   isResolving: boolean;
   onOpenSource?: () => void;
   /** Called with the ask's origin thread id right after a threaded reply is
    * sent, so the caller can mark every ask bound to that thread as
-   * resolving — a reply can close more than this one ask. */
+   * resolving: a reply can close more than this one ask. */
   onThreadReplySent: (threadId: string) => void;
 }) {
   const queryClient = useQueryClient();
@@ -57,21 +57,13 @@ export function ActionCenterAskDetail({
           onThreadReplySent(route.threadId);
           toast.success("Reply sent");
         } else {
-          await answerAsk(
-            ask,
-            { ...answer, optionLabel: null },
-            {
-              invalidateQueries: (queryKey) =>
-                queryClient.invalidateQueries({ queryKey }),
-              publishEvent: (event, timeoutMessage, sendErrorMessage) =>
-                relayClient.publishEvent(
-                  event,
-                  timeoutMessage,
-                  sendErrorMessage,
-                ),
-              signRelayEvent,
-            },
-          );
+          await answerAsk(ask, answer, {
+            invalidateQueries: (queryKey) =>
+              queryClient.invalidateQueries({ queryKey }),
+            publishEvent: (event, timeoutMessage, sendErrorMessage) =>
+              relayClient.publishEvent(event, timeoutMessage, sendErrorMessage),
+            signRelayEvent,
+          });
           toast.success("Ask answered");
         }
       } catch (cause) {
