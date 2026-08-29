@@ -94,7 +94,6 @@ function ActionCenterRouteView({
   actionCenter: ActionCenterDataSource;
 }) {
   const search = Route.useSearch();
-  const { feedItemState } = useAppShell();
   const identityQuery = useIdentityQuery();
   const { goActionCenter, goChannel, goWorkflow } = useAppNavigation();
   const filter = search.filter ?? "needs-action";
@@ -146,23 +145,6 @@ function ActionCenterRouteView({
     },
     [goChannel, goWorkflow],
   );
-  const markDone = React.useCallback(
-    (item: ActionItem) => {
-      if (item.source.kind === "message") {
-        feedItemState.markDone(item.source.item.id);
-      }
-    },
-    [feedItemState],
-  );
-  const undoDone = React.useCallback(
-    (item: ActionItem) => {
-      if (item.source.kind === "message") {
-        feedItemState.undoDone(item.source.item.id);
-      }
-    },
-    [feedItemState],
-  );
-
   return (
     <ActionCenterScreen
       allItems={actionCenter.allItems}
@@ -173,11 +155,9 @@ function ActionCenterRouteView({
       isSettled={actionCenter.isSettled}
       items={items}
       onFilterChange={changeFilter}
-      onMarkDone={markDone}
       onOpenSource={openSource}
       onRefresh={actionCenter.refetch}
       onSelectItem={selectItem}
-      onUndoDone={undoDone}
       openCount={actionCenter.openCount}
       selectedItemId={search.item ?? null}
       workflowsEnabled={actionCenter.workflowsEnabled}

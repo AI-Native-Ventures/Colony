@@ -1,11 +1,3 @@
-/** Key for the bounded durable-task run projection. */
-export function actionCenterTaskRunsQueryKey(
-  communityId: string,
-  taskIds: readonly string[],
-) {
-  return ["action-center-task-runs", communityId, taskIds] as const;
-}
-
 /** Key for the community-scoped workflow list projection. */
 export function actionCenterWorkflowQueryKey(
   communityId: string,

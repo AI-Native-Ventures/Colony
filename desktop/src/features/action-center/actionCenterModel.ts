@@ -10,6 +10,7 @@ import {
   KIND_APPROVAL_REQUEST,
 } from "@/shared/constants/kinds";
 import { describeAskResolution } from "@/features/asks/lib/askResolution";
+import { isDue } from "@/features/reminders/lib/reminderFilters";
 import { projectBlockFeedItem } from "./lib/blockActionCenter";
 import type {
   ActionCenterFilter,
@@ -19,7 +20,6 @@ import type {
   ActionItemKind,
   ActionItemState,
   ActionSource,
-  ActionTaskSource,
   ActionWorkflowSource,
 } from "./contracts";
 
@@ -29,12 +29,12 @@ const FILTER_KIND: Record<
 > = {
   asks: "ask",
   blocks: "block",
-  tasks: "task",
-  messages: "message",
   reminders: "reminder",
   workflows: "workflow",
 };
 
+/** Feed kinds that are never a plain Block row (structured surfaces render
+ * them directly), so they never enter the Action Center projection. */
 const STRUCTURED_FEED_KINDS = new Set([
   KIND_APPROVAL_REQUEST,
   KIND_EVENT_REMINDER,
@@ -58,29 +58,14 @@ export function actionItemId(kind: ActionItemKind, sourceId: string): string {
   return `${kind}:${sourceId}`;
 }
 
-function feedState(
-  category: "mention" | "needs_action" | "activity" | "agent_activity",
-  kind: number,
-  isDone: boolean,
-): ActionItemState {
-  if (isDone) return "completed";
-  if (kind === KIND_JOB_ERROR) return "failed";
-  return category === "activity" || category === "agent_activity"
-    ? "active"
-    : "needs-action";
-}
-
 function sourceUpdatedAt(source: ActionSource): number {
   switch (source.kind) {
     case "ask":
       return source.ask.createdAt;
     case "block":
-    case "message":
       return source.item.createdAt;
     case "reminder":
       return source.reminder.notBefore ?? source.reminder.createdAt;
-    case "task":
-      return source.run?.createdAt ?? source.task.updatedAt;
     case "workflow":
       return source.run.completedAt ?? source.run.createdAt;
   }
@@ -96,7 +81,7 @@ function compareItems(left: ActionItem, right: ActionItem): number {
 
 type FeedSourceItem = NonNullable<
   ActionCenterProjectionInput["feed"]
->["mentions"][number];
+>["needsAction"][number];
 
 /** `e` markers that reference Block plumbing, never a thread. */
 const BLOCK_E_MARKERS = new Set([
@@ -123,10 +108,15 @@ function feedThreadRootId(item: FeedSourceItem): string | null {
 }
 
 /**
- * A feed row that carries Block instance tags becomes a Block item, so the
- * queue can render the Block itself and offer its declared decision instead of
- * the plain-text fallback sentence the relay happens to have stored.
- * Anything that does not parse as a Block instance falls through unchanged.
+ * A `needsAction` feed row that carries Block instance tags becomes a Block
+ * item, so the queue can render the Block itself and offer its declared
+ * decision. Returns `null` for anything that does not parse as a Block
+ * instance, or that the relay no longer counts as waiting on this person
+ * (`relayStillWaiting` false): a resolved or never-actionable Block is not a
+ * "needs me" item and does not belong in the queue at all. A row hidden
+ * locally (`isDone`) while the relay still counts it as open stays in,
+ * because the local hide never actually closed it — see
+ * `blockActionCenter.ts`'s `blockStatusLine`.
  */
 function blockItem(
   item: FeedSourceItem,
@@ -135,14 +125,14 @@ function blockItem(
   const isDone = doneIds.has(item.id);
   const projection = projectBlockFeedItem(item, feedThreadRootId(item), isDone);
   if (!projection) return null;
+  const { instance } = projection.source;
+  const relayStillWaiting =
+    instance.attentionRequired && item.category === "needs_action";
+  if (!relayStillWaiting) return null;
   return {
     id: actionItemId("block", item.id),
     kind: "block",
-    state: isDone
-      ? "completed"
-      : projection.source.awaitingDecision
-        ? "needs-action"
-        : feedState(item.category, item.kind, false),
+    state: isDone ? "completed" : "needs-action",
     title: projection.title,
     summary: projection.summary,
     createdAt: item.createdAt,
@@ -152,118 +142,24 @@ function blockItem(
   };
 }
 
-function messageItem(
-  item: FeedSourceItem,
-  doneIds: ReadonlySet<string>,
-): ActionItem {
-  const isDone = doneIds.has(item.id);
-  const threadRootId = feedThreadRootId(item);
-  const source: ActionSource = {
-    kind: "message",
-    item,
-    threadRootId,
-    isDone,
-  };
-  const state = feedState(item.category, item.kind, isDone);
-  return {
-    id: actionItemId("message", item.id),
-    kind: "message",
-    state,
-    title:
-      item.category === "mention"
-        ? "Mention"
-        : item.category === "agent_activity"
-          ? "Agent update"
-          : item.category === "activity"
-            ? "Activity"
-            : "Needs action",
-    summary:
-      item.content.trim() ||
-      "No additional details were attached to this event.",
-    createdAt: item.createdAt,
-    updatedAt: item.createdAt,
-    source,
-    capabilities: [
-      ...(item.channelId ? (["open-source"] as const) : []),
-      ...(isDone ? (["undo-done"] as const) : (["mark-done"] as const)),
-    ],
-  };
-}
-
-function taskItem(source: ActionTaskSource): ActionItem {
-  const isCompleted =
-    source.task.status === "completed" || source.task.status === "cancelled";
-  const isFailed =
-    source.run?.runStatus === "failed" || source.run?.runStatus === "abandoned";
-  const isActive =
-    source.run?.runStatus === "queued" ||
-    source.run?.runStatus === "executing" ||
-    source.task.status === "inProgress" ||
-    source.task.status === "inReview";
-  const state: ActionItemState = isCompleted
-    ? "completed"
-    : isFailed
-      ? "failed"
-      : isActive
-        ? "active"
-        : "needs-action";
-  const runLabel = source.run
-    ? source.run.runStatus.replace(/_/g, " ")
-    : source.task.status;
-  return {
-    id: actionItemId("task", source.task.id),
-    kind: "task",
-    state,
-    title: source.task.title,
-    summary: `${source.task.status} · ${runLabel}`,
-    createdAt: source.task.createdAt,
-    updatedAt: Math.max(source.task.updatedAt, source.run?.createdAt ?? 0),
-    source,
-    capabilities: [
-      ...(source.channelId && source.threadId
-        ? (["open-source"] as const)
-        : []),
-      "open-details",
-      ...(source.run?.runStatus === "delivered" &&
-      source.run.artifacts.length > 0
-        ? (["open-workspace"] as const)
-        : []),
-    ],
-  };
-}
-
+/**
+ * Every `ActionWorkflowSource` reaching here already passed
+ * `selectOwnerWorkflowApprovalSources`: a run waiting on a pending approval
+ * that names the owner specifically. Other run states (running, completed,
+ * failed) and approvals open to anyone never become sources at all, so this
+ * item is always the one thing left: an approval waiting on this person.
+ */
 function workflowItem(source: ActionWorkflowSource): ActionItem {
-  const approvalPending = source.approval?.status === "pending";
-  const isFailed =
-    source.run.status === "failed" || source.run.status === "cancelled";
-  const isActive =
-    source.run.status === "pending" ||
-    source.run.status === "running" ||
-    source.run.status === "waiting_approval";
-  const state: ActionItemState = approvalPending
-    ? "needs-action"
-    : isFailed
-      ? "failed"
-      : isActive
-        ? "active"
-        : "completed";
   return {
     id: actionItemId("workflow", `${source.workflow.id}:${source.run.id}`),
     kind: "workflow",
-    state,
+    state: "needs-action",
     title: source.workflow.name,
-    summary: approvalPending
-      ? `Approval required · ${source.approval?.stepId ?? "workflow step"}`
-      : `Run ${source.run.status.replace(/_/g, " ")}`,
+    summary: `Approval required · ${source.approval?.stepId ?? "workflow step"}`,
     createdAt: source.run.createdAt,
     updatedAt: source.run.completedAt ?? source.run.createdAt,
     source,
-    capabilities: [
-      "open-details",
-      "open-source",
-      ...(approvalPending ? (["approve", "deny"] as const) : []),
-      ...(isFailed ? (["run-again"] as const) : []),
-    ],
+    capabilities: ["open-details", "open-source", "approve", "deny"],
   };
 }
 
@@ -275,9 +171,9 @@ export function buildActionCenterItems({
   askRoutingNotesByAskId,
   feed,
   reminders,
-  tasks = [],
   workflows = [],
   doneIds = new Set(),
+  now = Math.floor(Date.now() / 1_000),
 }: ActionCenterProjectionInput): ActionItem[] {
   const items: ActionItem[] = asks.map((ask) => {
     const source: ActionSource = { kind: "ask", ask };
@@ -321,13 +217,17 @@ export function buildActionCenterItems({
     });
   }
 
-  items.push(...tasks.map(taskItem), ...workflows.map(workflowItem));
+  items.push(...workflows.map(workflowItem));
 
+  // Only reminders that are due (pending and `notBefore <= now`) enter the
+  // queue — the same definition `countDueReminders` uses for the Home badge,
+  // reused via `isDue` rather than redefined here so the two surfaces can
+  // never disagree about what "due" means.
   const reminderEventIds = new Set(
     reminders.map((reminder) => reminder.eventId),
   );
   for (const reminder of reminders) {
-    if (reminder.content.status !== "pending") continue;
+    if (!isDue(reminder, now)) continue;
     const source: ActionSource = { kind: "reminder", reminder };
     items.push({
       id: actionItemId("reminder", reminder.id),
@@ -350,19 +250,16 @@ export function buildActionCenterItems({
     });
   }
 
-  const feedItems = [
-    ...(feed?.needsAction ?? []),
-    ...(feed?.mentions ?? []),
-    ...(feed?.agentActivity ?? []),
-    ...(feed?.activity ?? []),
-  ];
+  const feedItems = feed?.needsAction ?? [];
   const seenFeedIds = new Set<string>();
   for (const item of feedItems) {
     if (seenFeedIds.has(item.id) || STRUCTURED_FEED_KINDS.has(item.kind))
       continue;
     if (reminderEventIds.has(item.id)) continue;
+    const block = blockItem(item, doneIds);
+    if (!block) continue;
     seenFeedIds.add(item.id);
-    items.push(blockItem(item, doneIds) ?? messageItem(item, doneIds));
+    items.push(block);
   }
 
   const unique = new Map<string, ActionItem>();

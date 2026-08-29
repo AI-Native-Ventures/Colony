@@ -16,8 +16,6 @@ const FILTER_LABELS: Record<ActionCenterFilter, string> = {
   all: "All",
   asks: "Asks",
   blocks: "Blocks",
-  tasks: "Tasks",
-  messages: "Messages",
   reminders: "Reminders",
   workflows: "Workflows",
 };

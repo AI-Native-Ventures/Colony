@@ -1,12 +1,9 @@
 import {
   Bell,
   Blocks,
-  Bot,
   CircleAlert,
   CircleHelp,
   ExternalLink,
-  ListChecks,
-  MessageSquare,
   Workflow,
 } from "lucide-react";
 
@@ -16,8 +13,6 @@ import { Badge, type BadgeProps } from "@/shared/ui/badge";
 
 const KIND_ICON: Record<ActionItemKind, typeof CircleHelp> = {
   ask: CircleHelp,
-  task: ListChecks,
-  message: MessageSquare,
   reminder: Bell,
   workflow: Workflow,
   block: Blocks,
@@ -54,16 +49,10 @@ export function sourceLabel(item: ActionItem): string {
       if (item.source.resolution?.defaultExecuted) return "Default executed";
       if (item.source.resolution) return "Answered";
       return item.source.ask.channelId ? "Ask from a thread" : "Global ask";
-    case "message":
-      return item.source.item.channelName
-        ? `#${item.source.item.channelName}`
-        : "Message";
     case "reminder":
       return item.source.reminder.content.target
         ? "Message reminder"
         : "Personal reminder";
-    case "task":
-      return "Durable task";
     case "workflow":
       return item.source.approval ? "Approval required" : "Workflow run";
     case "block":
@@ -84,9 +73,6 @@ export function ActionCenterRow({
   onSelect: () => void;
 }) {
   const Icon = KIND_ICON[item.kind];
-  const isAgent =
-    item.source.kind === "message" &&
-    item.source.item.category === "agent_activity";
   return (
     <button
       aria-current={isSelected ? "true" : undefined}
@@ -106,7 +92,7 @@ export function ActionCenterRow({
           item.state === "needs-action" && "bg-primary/10 text-primary",
         )}
       >
-        {isAgent ? <Bot className="size-4" /> : <Icon className="size-4" />}
+        <Icon className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-start gap-2">

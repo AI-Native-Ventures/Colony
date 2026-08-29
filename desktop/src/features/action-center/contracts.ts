@@ -4,8 +4,6 @@ import type {
   ResolvedAsk,
 } from "@/features/asks/lib/askResolution";
 import type { BlockInstanceRef } from "@/features/blocks/contracts";
-import type { CompanyTask } from "@/features/company/contracts";
-import type { TaskRunHead } from "@/features/company/taskRunContracts";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
 import type {
   FeedItem,
@@ -19,8 +17,6 @@ export const ACTION_CENTER_FILTERS = [
   "all",
   "asks",
   "blocks",
-  "tasks",
-  "messages",
   "reminders",
   "workflows",
 ] as const;
@@ -36,13 +32,7 @@ export const ACTION_CENTER_STATES = [
 
 export type ActionCenterStateFilter = (typeof ACTION_CENTER_STATES)[number];
 
-export type ActionItemKind =
-  | "ask"
-  | "block"
-  | "task"
-  | "message"
-  | "reminder"
-  | "workflow";
+export type ActionItemKind = "ask" | "block" | "reminder" | "workflow";
 
 export type ActionItemState =
   | "needs-action"
@@ -83,13 +73,6 @@ export type ActionAskSource = {
   resolution?: AskResolution;
 };
 
-export type ActionMessageSource = {
-  kind: "message";
-  item: FeedItem;
-  threadRootId: string | null;
-  isDone: boolean;
-};
-
 export type ActionBlockSource = {
   kind: "block";
   item: FeedItem;
@@ -112,14 +95,6 @@ export type ActionReminderSource = {
   reminder: Reminder;
 };
 
-export type ActionTaskSource = {
-  kind: "task";
-  task: CompanyTask;
-  run: TaskRunHead | null;
-  channelId: string | null;
-  threadId: string | null;
-};
-
 export type ActionWorkflowSource = {
   kind: "workflow";
   workflow: Workflow;
@@ -130,9 +105,7 @@ export type ActionWorkflowSource = {
 export type ActionSource =
   | ActionAskSource
   | ActionBlockSource
-  | ActionMessageSource
   | ActionReminderSource
-  | ActionTaskSource
   | ActionWorkflowSource;
 
 export type ActionItem = {
@@ -145,11 +118,6 @@ export type ActionItem = {
   updatedAt: number;
   source: ActionSource;
   capabilities: readonly ActionCapability[];
-};
-
-export type ActionMessageItem = Omit<ActionItem, "kind" | "source"> & {
-  kind: "message";
-  source: ActionMessageSource;
 };
 
 export type ActionBlockItem = Omit<ActionItem, "kind" | "source"> & {
@@ -173,14 +141,20 @@ export type ActionCenterProjectionInput = {
    * manager", ...). Absent means the summary stays as it was.
    */
   askRoutingNotesByAskId?: ReadonlyMap<string, string>;
+  /**
+   * Only the `needsAction` home-feed category is read here. `mentions`,
+   * `activity`, and `agentActivity` fed a generic "message" row that is not
+   * an actionable item under the v2 queue model (Home is where those live
+   * now); `needsAction` survives because it is also where Block instances
+   * awaiting a decision are found.
+   */
   feed?: {
-    mentions: readonly FeedItem[];
     needsAction: readonly FeedItem[];
-    activity: readonly FeedItem[];
-    agentActivity: readonly FeedItem[];
   };
   reminders: readonly Reminder[];
-  tasks?: readonly ActionTaskSource[];
   workflows?: readonly ActionWorkflowSource[];
   doneIds?: ReadonlySet<string>;
+  /** Unix seconds used to decide which reminders are due. Defaults to now;
+   * overridable so tests can pin the clock. */
+  now?: number;
 };
