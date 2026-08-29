@@ -39,6 +39,18 @@ export type ExecuteCompanyBlueprintInput = {
   expectedHash: string;
   relayPubkey: string;
   channelId: string;
+  /**
+   * The community profile head read just before calling.
+   *
+   * The relay mints one for every community at boot, so approval always
+   * edits that head rather than creating a fresh one. This command has no
+   * relay connection of its own to discover it, so the caller reads it
+   * (`companyRepository.getActiveCompanyHead()`) and passes it through, the
+   * same shape the Settings profile edit already takes.
+   */
+  expectedHeadEventId: string;
+  expectedHeadCreatedAt: number;
+  expectedHeadUpdatedAt: number;
 };
 
 /**
@@ -62,6 +74,9 @@ export async function executeCompanyBlueprint(
       expectedHash: input.expectedHash,
       relayPubkey: input.relayPubkey,
       channelId: input.channelId,
+      expectedHeadEventId: input.expectedHeadEventId,
+      expectedHeadCreatedAt: input.expectedHeadCreatedAt,
+      expectedHeadUpdatedAt: input.expectedHeadUpdatedAt,
     },
   );
 }

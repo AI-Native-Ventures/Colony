@@ -12,6 +12,11 @@ const INPUT = {
   expectedHash: "b".repeat(64),
   relayPubkey: "c".repeat(64),
   channelId: "3f6c1a2e-1111-4000-8000-000000000009",
+  // What the relay minted at boot; approval edits this head rather than
+  // creating a fresh one.
+  expectedHeadEventId: "d".repeat(64),
+  expectedHeadCreatedAt: 1_800_000_000,
+  expectedHeadUpdatedAt: 1_800_000_100,
 };
 
 function execution(overrides = {}) {

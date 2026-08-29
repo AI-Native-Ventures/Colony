@@ -6,8 +6,8 @@
 use super::{
     agents_referencing_personas, agents_referencing_team, ensure_default_coordination_team,
     load_teams_readonly, merge_teams, merge_teams_impl, other_teams_referencing_personas,
-    sort_teams, team_references_persona, validate_team_deletion, validate_team_membership,
-    BuiltInTeam, DEFAULT_COORDINATION_TEAM_ID,
+    retire_default_coordination_team, sort_teams, team_references_persona, validate_team_deletion,
+    validate_team_membership, BuiltInTeam, DEFAULT_COORDINATION_TEAM_ID,
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
@@ -682,5 +682,117 @@ fn default_coordination_team_survives_repeated_merges_without_losing_is_builtin(
     assert!(
         coordination.is_builtin,
         "must stay builtin across reloads, like Welcome Team"
+    );
+}
+
+// ── retire_default_coordination_team ────────────────────────────────────
+
+fn blueprint_seeded_coordination_team() -> TeamRecord {
+    let mut real = team(
+        "company-team:abc123:horizon-labs:company-coordination",
+        "Coordination",
+    );
+    real.lead_persona_id = Some("company:abc123:horizon-labs:chief-of-staff".to_string());
+    real.persona_ids = vec!["company:abc123:horizon-labs:chief-of-staff".to_string()];
+    real
+}
+
+/// The bug this function exists to fix: the device seeded the default
+/// before ever approving a blueprint, then a blueprint was approved and
+/// seeded the real team. Both are now `is_valid_coordination_team`, but
+/// `sort_teams` always puts the `is_builtin` default ahead of the
+/// user-owned real one, so `owning_team_for_chat`'s fallback (`.find`, first
+/// match wins) would pick the default forever unless the default is
+/// retired.
+#[test]
+fn the_default_is_retired_once_a_blueprint_seeded_coordination_team_exists() {
+    let mut default = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
+    default.is_builtin = true;
+    default.lead_persona_id = Some("builtin:fizz".to_string());
+    default.persona_ids = vec!["builtin:fizz".to_string()];
+    let mut records = vec![default, blueprint_seeded_coordination_team()];
+
+    let changed = retire_default_coordination_team(&mut records);
+
+    assert!(changed);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].id,
+        "company-team:abc123:horizon-labs:company-coordination"
+    );
+}
+
+/// Confirms the fix actually closes the shadowing path: after retirement,
+/// the sorted list `company_team_refs` reads from carries only the real
+/// team, so `owning_team_for_chat`'s fallback has nothing else to pick.
+#[test]
+fn after_retirement_sort_order_no_longer_favours_the_default() {
+    let mut default = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
+    default.is_builtin = true;
+    default.lead_persona_id = Some("builtin:fizz".to_string());
+    default.persona_ids = vec!["builtin:fizz".to_string()];
+    let mut records = vec![default, blueprint_seeded_coordination_team()];
+
+    retire_default_coordination_team(&mut records);
+    sort_teams(&mut records);
+
+    let first_coordination_match = records
+        .iter()
+        .find(|team| team.id.ends_with("company-coordination"))
+        .map(|team| team.id.as_str());
+    assert_eq!(
+        first_coordination_match,
+        records.first().map(|team| team.id.as_str()),
+        "the real team must be the only, and therefore first, coordination match"
+    );
+}
+
+/// Retirement must never fire when the default is the only valid
+/// coordination team, or ambiguous chat work loses its fallback entirely.
+#[test]
+fn retirement_does_not_fire_when_the_default_is_the_only_coordination_team() {
+    let mut default = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
+    default.is_builtin = true;
+    default.lead_persona_id = Some("builtin:fizz".to_string());
+    default.persona_ids = vec!["builtin:fizz".to_string()];
+    let mut records = vec![default];
+
+    let changed = retire_default_coordination_team(&mut records);
+
+    assert!(!changed);
+    assert_eq!(records.len(), 1);
+}
+
+/// The end-to-end path: `merge_teams` (what `load_teams` actually calls)
+/// retires the default the moment a real coordination team appears in the
+/// store, without a caller having to know either function exists.
+#[test]
+fn merge_teams_retires_the_default_once_blueprint_seeding_lands() {
+    let (seeded, _) = merge_teams(Vec::new(), "2026-08-01T00:00:00Z");
+    assert!(
+        seeded
+            .iter()
+            .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID),
+        "the default should exist before any blueprint is approved"
+    );
+
+    let mut with_real_team = seeded;
+    with_real_team.push(blueprint_seeded_coordination_team());
+    let (merged, changed) = merge_teams(with_real_team, "2026-08-02T00:00:00Z");
+
+    assert!(changed);
+    assert!(
+        !merged
+            .iter()
+            .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID),
+        "the default must not survive alongside a real coordination team"
+    );
+    assert_eq!(
+        merged
+            .iter()
+            .filter(|team| team.id.ends_with("company-coordination"))
+            .count(),
+        1,
+        "exactly one coordination team must remain"
     );
 }

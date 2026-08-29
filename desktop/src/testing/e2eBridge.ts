@@ -507,6 +507,17 @@ type E2eConfig = {
      * them and a spec that had to keep the two in sync by hand would drift.
      */
     companyWorkContext?: CompanyWorkContextConfig;
+    /**
+     * Seed the community profile head every relay now mints at boot
+     * (`run_profile_backfill`), independent of `companyWorkContext`.
+     *
+     * `companyWorkContext` also turns on the task/team broker in
+     * `brokerMockCompanyAction`, which answers every kind-40013 event as if
+     * it created a Task, which is wrong for a spec whose action is a company profile
+     * edit or an initiative create. This seeds only the read side: the head
+     * a Blueprint approval reads before it can edit it.
+     */
+    communityProfileHead?: CommunityProfileHeadSeed;
     oaOwnerIsMe?: boolean;
     /** Whether the mock relay advertises NIP-43 membership support. Defaults to false. */
     relayRequiresMembership?: boolean;
@@ -3284,6 +3295,27 @@ export type CompanyWorkContextConfig = {
   refuseWith?: "rejected" | "failed" | "no-receipt";
 };
 
+/**
+ * Seeds just the community profile head, without the task/team routing
+ * `CompanyWorkContextConfig` also wires up. Mirrors what
+ * `run_profile_backfill`'s default profile looks like on a fresh relay.
+ */
+export type CommunityProfileHeadSeed = {
+  tradingName?: string;
+  summary?: string;
+  businessType?: string;
+  costCentreId?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  /**
+   * Hex-encoded secret to sign the head with. Defaults to the fixed mock
+   * relay key. Set this when the spec also sets `relaySelf` to a different
+   * identity: `getActiveCompanyHead` filters heads to `authors:
+   * [relaySelfPubkey]`, so a head signed by anyone else is invisible to it.
+   */
+  signerSecretHex?: string;
+};
+
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockBlockEvents: RelayEvent[] = [];
 const mockDelegationGrantEvents: RelayEvent[] = [];
@@ -3423,22 +3455,75 @@ function mockTaskRecord(config: CompanyWorkContextConfig, title: string) {
   };
 }
 
+function mockCommunityProfileHeadRecord(seed: CommunityProfileHeadSeed) {
+  return {
+    schema: "colony.company/v1",
+    tradingName: seed.tradingName ?? "Horizon Labs",
+    legalName: null,
+    website: null,
+    summary: seed.summary ?? "",
+    businessType: seed.businessType ?? "unspecified",
+    services: [],
+    customerSegments: [],
+    costCentres: [
+      {
+        id: seed.costCentreId ?? "general",
+        name: "General",
+        kind: "internal",
+        serviceId: null,
+      },
+    ],
+    sourceReportEventId: null,
+    createdAt: seed.createdAt ?? 1_780_000_000,
+    updatedAt: seed.updatedAt ?? 1_780_000_000,
+  };
+}
+
 /** Seed the company (and its initiative). The Task is not seeded on purpose. */
-function seedMockCompanyRecords(config: CompanyWorkContextConfig | undefined) {
+function seedMockCompanyRecords(
+  config: CompanyWorkContextConfig | undefined,
+  profileHeadSeed: CommunityProfileHeadSeed | undefined,
+) {
   mockCompanyHeads.length = 0;
   mockCompanyReceipts.length = 0;
   mockCompanyActions.length = 0;
-  if (!config) return;
 
-  const company = mockCompanyRecord(config);
-  mockCompanyHeads.push(signAsMockRelay(30179, company, [["d", "profile"]]));
-  if (config.initiativeId) {
-    const initiative = mockInitiativeRecord(config);
+  if (config) {
+    const company = mockCompanyRecord(config);
+    mockCompanyHeads.push(signAsMockRelay(30179, company, [["d", "profile"]]));
+    if (config.initiativeId) {
+      const initiative = mockInitiativeRecord(config);
+      mockCompanyHeads.push(
+        signAsMockRelay(30180, initiative, [
+          ["d", initiative.id],
+          ["cost-centre", initiative.costCentreId],
+        ]),
+      );
+    }
+    return;
+  }
+
+  // No `companyWorkContext`, so the task/team broker stays off, but the
+  // relay mints a profile for every community at boot regardless
+  // (`run_profile_backfill`). A spec proving Blueprint approval needs one to
+  // edit, without the task-broker semantics `companyWorkContext` also turns
+  // on.
+  if (profileHeadSeed) {
+    const secret = profileHeadSeed.signerSecretHex
+      ? hexToBytes(profileHeadSeed.signerSecretHex)
+      : MOCK_RELAY_SECRET;
     mockCompanyHeads.push(
-      signAsMockRelay(30180, initiative, [
-        ["d", initiative.id],
-        ["cost-centre", initiative.costCentreId],
-      ]),
+      finalizeEvent(
+        {
+          kind: 30179,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [["d", "profile"]],
+          content: canonicalCompanyMockJson(
+            mockCommunityProfileHeadRecord(profileHeadSeed),
+          ),
+        },
+        secret,
+      ) as unknown as RelayEvent,
     );
   }
 }
@@ -11389,7 +11474,10 @@ export function maybeInstallE2eTauriMocks() {
   resetMockManagedAgents(config);
   resetMockPersonas(config);
   resetMockTeams(config);
-  seedMockCompanyRecords(config.mock?.companyWorkContext);
+  seedMockCompanyRecords(
+    config.mock?.companyWorkContext,
+    config.mock?.communityProfileHead,
+  );
   seedMockSearchProfiles(config);
   resetMockWorkflows();
   seedMockWorkflowRuns(config.mock?.workflowRunSeeds);

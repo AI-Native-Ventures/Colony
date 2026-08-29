@@ -249,6 +249,22 @@ type MockBridgeOptions = {
     tradingName?: string;
     refuseWith?: "rejected" | "failed" | "no-receipt";
   };
+  /**
+   * Seed just the community profile head every relay now mints at boot
+   * (`run_profile_backfill`), independent of `companyWorkContext`'s
+   * task/team broker wiring. Set `signerSecretHex` to a `TEST_IDENTITIES`
+   * private key when `relaySelf` is also set to that identity, or
+   * `getActiveCompanyHead`'s author filter will not see the seeded head.
+   */
+  communityProfileHead?: {
+    tradingName?: string;
+    summary?: string;
+    businessType?: string;
+    costCentreId?: string;
+    createdAt?: number;
+    updatedAt?: number;
+    signerSecretHex?: string;
+  };
   /** Native-like huddle state seeded from authoritative role-bearing membership. */
   huddle?: MockHuddleSeed;
   /** Optional policy returned by the native join-policy discovery command. */

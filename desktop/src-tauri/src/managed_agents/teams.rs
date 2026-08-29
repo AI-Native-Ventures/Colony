@@ -107,7 +107,12 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
     let (mut records, mut changed) =
         merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now);
-    if ensure_default_coordination_team(&mut records, now) {
+    // Retire before ensuring: once a real coordination team exists the
+    // default has to go, and ensuring first would just find the default
+    // itself still valid and leave it in place. Order matters here.
+    if retire_default_coordination_team(&mut records) {
+        changed = true;
+    } else if ensure_default_coordination_team(&mut records, now) {
         changed = true;
     }
     (records, changed)
@@ -142,10 +147,11 @@ fn is_valid_coordination_team(team: &TeamRecord) -> bool {
 /// never-fight-a-customization reason built-ins elsewhere in this file are
 /// preserved rather than repaired.
 ///
-/// Known gap: if a device seeds this default (having hired agents before ever
-/// approving a blueprint) and *later* approves one, both teams stay valid —
-/// retiring the default once a real coordination team exists belongs to
-/// whatever fixes blueprint approval, not to this seeder.
+/// If a device seeds this default (having hired agents before ever approving
+/// a blueprint) and *later* approves one, [`retire_default_coordination_team`]
+/// removes it on the next load: two valid coordination teams would leave
+/// `owning_team_for_chat`'s fallback picking whichever sorts first, forever,
+/// which is exactly the failure mode this pair of functions exists to close.
 fn ensure_default_coordination_team(stored: &mut Vec<TeamRecord>, now: &str) -> bool {
     if stored.iter().any(is_valid_coordination_team) {
         return false;
@@ -176,6 +182,37 @@ fn ensure_default_coordination_team(stored: &mut Vec<TeamRecord>, now: &str) -> 
         updated_at: now.to_string(),
     });
     true
+}
+
+/// Retire the device-local default coordination team once a real one exists.
+///
+/// The default's own description says its job ends "until a company
+/// blueprint is approved". Once blueprint approval seeds a real
+/// `company-team:{scope}:{company}:company-coordination` team
+/// (`company/seed.rs::seed_teams`), leaving the default in place is not
+/// neutral: `sort_teams` puts every `is_builtin` team ahead of every
+/// user-owned one, so the default (`is_builtin: true`) always sorts before
+/// the real team (`is_builtin: false`), and `owning_team_for_chat`'s
+/// fallback takes the first team whose id ends in the coordination slug. The
+/// real team would be valid, present, and permanently unreachable through
+/// that fallback.
+///
+/// Only removes the default itself, and only when some OTHER team already
+/// satisfies the coordination contract. This must never fire when the
+/// default is the only valid coordination team, or ambiguous chat work would
+/// have nowhere to land. Runs on every `load_teams()`, so it self-heals a
+/// device that seeded the default before ever approving a blueprint, without
+/// blueprint approval itself needing to know this default exists.
+fn retire_default_coordination_team(stored: &mut Vec<TeamRecord>) -> bool {
+    let real_team_exists = stored
+        .iter()
+        .any(|team| team.id != DEFAULT_COORDINATION_TEAM_ID && is_valid_coordination_team(team));
+    if !real_team_exists {
+        return false;
+    }
+    let before = stored.len();
+    stored.retain(|team| team.id != DEFAULT_COORDINATION_TEAM_ID);
+    stored.len() != before
 }
 
 /// Add `persona_id` to the coordination team, if one exists and does not
