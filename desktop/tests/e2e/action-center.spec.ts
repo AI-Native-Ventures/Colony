@@ -99,9 +99,17 @@ test("opens the native Action Center with URL-backed filters and selection", asy
     }),
   ]);
 
-  const selectedItem = page.getByTestId(
-    "action-center-item-reminder:rem-ac-01",
-  );
+  // The badge count reflects the same query the row renders from; waiting on
+  // it first (generous timeout -- CI has landed the refetch just past a
+  // tighter one before) proves the seed has actually landed before the row
+  // assertion below, rather than racing it. The row is located by kind
+  // prefix, not the exact d-tag id, so this only depends on "a reminder item
+  // exists," not on an id staying in lockstep with the seed helper.
+  await expect(page.getByTestId("action-center-open-count")).toHaveText("1", {
+    timeout: 30_000,
+  });
+
+  const selectedItem = page.getByTestId(/^action-center-item-reminder:/);
   await expect(selectedItem).toBeVisible();
   await selectedItem.click();
   await expect(selectedItem).toHaveAttribute("aria-current", "true");
