@@ -26,6 +26,7 @@ import { usePreviewFeatureWarning } from "@/shared/features";
 
 export type ActionCenterRouteSearch = {
   filter?: ActionCenterFilter;
+  initiative?: string;
   item?: string;
   state?: ActionCenterStateFilter;
 };
@@ -40,6 +41,14 @@ function validateActionCenterSearch(
       typeof filter === "string" &&
       ACTION_CENTER_FILTERS.includes(filter as ActionCenterFilter)
         ? (filter as ActionCenterFilter)
+        : undefined,
+    // No fixed vocabulary to validate against, unlike `filter`/`state` --
+    // initiative ids are whatever agents wrote on the `initiative` tag, so
+    // this only rejects the shapes that can never be a real id (non-string,
+    // empty/whitespace-only).
+    initiative:
+      typeof search.initiative === "string" && search.initiative.trim() !== ""
+        ? search.initiative
         : undefined,
     item:
       typeof search.item === "string" && search.item.trim() !== ""
@@ -121,6 +130,17 @@ function ActionCenterRouteView({
     },
     [goActionCenter],
   );
+  const changeInitiative = React.useCallback(
+    (nextInitiative: string | null) => {
+      void goActionCenter({
+        filter: filter === "needs-action" ? undefined : filter,
+        initiative: nextInitiative ?? undefined,
+        item: undefined,
+        state: search.state,
+      });
+    },
+    [filter, goActionCenter, search.state],
+  );
   const openSource = React.useCallback(
     async (item: ActionItem) => {
       if (item.source.kind === "workflow") {
@@ -151,11 +171,13 @@ function ActionCenterRouteView({
       currentPubkey={identityQuery.data?.pubkey ?? ""}
       error={actionCenter.error}
       filter={filter}
+      initiative={search.initiative ?? null}
       isLoading={actionCenter.isLoading}
       isSettled={actionCenter.isSettled}
       items={items}
       onDismissPing={actionCenter.dismissPing}
       onFilterChange={changeFilter}
+      onInitiativeChange={changeInitiative}
       onOpenSource={openSource}
       onRefresh={actionCenter.refetch}
       onSelectItem={selectItem}
