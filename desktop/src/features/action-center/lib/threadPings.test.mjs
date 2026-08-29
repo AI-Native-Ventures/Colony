@@ -111,15 +111,16 @@ test("selectAllRootIds includes self-rooted candidates' own ids", () => {
   );
 });
 
-test("a ping surfaces: reply in a thread the owner did not start, no owner reply or reaction", () => {
+// --- Qualification: "sits in a thread the owner participates in" ---
+// This is a positive requirement (spec: surface only when ALL hold), not a
+// suppression -- a candidate that fails it is not a ping at all, regardless
+// of replies or reactions.
+
+test("qualifies and surfaces: the owner authored the thread root, no reply or reaction yet", () => {
   const rootId = "1".repeat(64);
   const pingId = "2".repeat(64);
-  const ping = candidate({
-    id: pingId,
-    tags: threadTags(rootId),
-    createdAt: 1_000,
-  });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const ping = candidate({ id: pingId, tags: threadTags(rootId) });
+  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER });
 
   const pings = selectUnansweredPings([ping], {
     ownerPubkey: OWNER,
@@ -134,10 +135,36 @@ test("a ping surfaces: reply in a thread the owner did not start, no owner reply
   assert.equal(pings[0].threadId, rootId);
 });
 
-test("suppressed: the owner authored the thread root", () => {
+test("qualifies and surfaces: the owner posted in the thread before the ping, and hasn't since", () => {
+  const rootId = "1".repeat(64);
+  const ping = candidate({
+    id: "2".repeat(64),
+    tags: threadTags(rootId),
+    createdAt: 1_000,
+  });
+  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const olderOwnerPost = relayEvent({
+    id: "3".repeat(64),
+    pubkey: OWNER,
+    created_at: 500, // before the ping -- still counts as "has posted here"
+    tags: threadTags(rootId),
+  });
+
+  const pings = selectUnansweredPings([ping], {
+    ownerPubkey: OWNER,
+    relaySelfPubkey: RELAY_SELF,
+    rootEvents: [rootEvent],
+    replyEvents: [olderOwnerPost],
+    reactionEvents: [],
+  });
+
+  assert.equal(pings.length, 1);
+});
+
+test("NOT qualified: a reply in a thread the owner has never posted in or started", () => {
   const rootId = "1".repeat(64);
   const ping = candidate({ id: "2".repeat(64), tags: threadTags(rootId) });
-  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER });
+  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
 
   const pings = selectUnansweredPings([ping], {
     ownerPubkey: OWNER,
@@ -150,8 +177,8 @@ test("suppressed: the owner authored the thread root", () => {
   assert.equal(pings.length, 0);
 });
 
-test("suppressed: a self-rooted ping the owner themselves authored (degenerate, still correct)", () => {
-  const ping = candidate({ id: "2".repeat(64), pubkey: OWNER, tags: [] });
+test("NOT qualified: a self-rooted mention by someone else -- an ordinary mention, not a ping", () => {
+  const ping = candidate({ id: "2".repeat(64), pubkey: PINGER, tags: [] });
 
   const pings = selectUnansweredPings([ping], {
     ownerPubkey: OWNER,
@@ -164,6 +191,22 @@ test("suppressed: a self-rooted ping the owner themselves authored (degenerate, 
   assert.equal(pings.length, 0);
 });
 
+test("qualifies (degenerate) and surfaces: a self-rooted message the owner themselves authored", () => {
+  const ping = candidate({ id: "2".repeat(64), pubkey: OWNER, tags: [] });
+
+  const pings = selectUnansweredPings([ping], {
+    ownerPubkey: OWNER,
+    relaySelfPubkey: RELAY_SELF,
+    rootEvents: [],
+    replyEvents: [],
+    reactionEvents: [],
+  });
+
+  assert.equal(pings.length, 1);
+});
+
+// --- Suppression: only reached once qualified ---
+
 test("suppressed: the owner replied in the thread after the ping", () => {
   const rootId = "1".repeat(64);
   const ping = candidate({
@@ -171,7 +214,7 @@ test("suppressed: the owner replied in the thread after the ping", () => {
     tags: threadTags(rootId),
     createdAt: 1_000,
   });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER }); // qualifies
   const ownerReply = relayEvent({
     id: "3".repeat(64),
     pubkey: OWNER,
@@ -190,37 +233,11 @@ test("suppressed: the owner replied in the thread after the ping", () => {
   assert.equal(pings.length, 0);
 });
 
-test("NOT suppressed: an owner reply exists but is OLDER than the ping", () => {
-  const rootId = "1".repeat(64);
-  const ping = candidate({
-    id: "2".repeat(64),
-    tags: threadTags(rootId),
-    createdAt: 1_000,
-  });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
-  const staleOwnerReply = relayEvent({
-    id: "3".repeat(64),
-    pubkey: OWNER,
-    created_at: 500, // before the ping -- does not answer it
-    tags: threadTags(rootId),
-  });
-
-  const pings = selectUnansweredPings([ping], {
-    ownerPubkey: OWNER,
-    relaySelfPubkey: RELAY_SELF,
-    rootEvents: [rootEvent],
-    replyEvents: [staleOwnerReply],
-    reactionEvents: [],
-  });
-
-  assert.equal(pings.length, 1);
-});
-
 test("suppressed: any owner reaction on the ping, not only the dismiss emoji", () => {
   const rootId = "1".repeat(64);
   const pingId = "2".repeat(64);
   const ping = candidate({ id: pingId, tags: threadTags(rootId) });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER }); // qualifies
   const ownerReaction = relayEvent({
     id: "3".repeat(64),
     kind: 7,
@@ -244,7 +261,7 @@ test("NOT suppressed: a reaction from someone other than the owner", () => {
   const rootId = "1".repeat(64);
   const pingId = "2".repeat(64);
   const ping = candidate({ id: pingId, tags: threadTags(rootId) });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER }); // qualifies
   const someoneElsesReaction = relayEvent({
     id: "3".repeat(64),
     kind: 7,
@@ -283,7 +300,7 @@ test("a reaction targeting a different event does not suppress this ping", () =>
   const rootId = "1".repeat(64);
   const pingId = "2".repeat(64);
   const ping = candidate({ id: pingId, tags: threadTags(rootId) });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER }); // qualifies
   const reactionOnSomethingElse = relayEvent({
     id: "3".repeat(64),
     kind: 7,
@@ -303,7 +320,7 @@ test("a reaction targeting a different event does not suppress this ping", () =>
   assert.equal(pings.length, 1);
 });
 
-test("a reply to a different thread root does not suppress this ping", () => {
+test("a reply to a different thread root neither qualifies nor suppresses this ping", () => {
   const rootId = "1".repeat(64);
   const otherRootId = "9".repeat(64);
   const ping = candidate({
@@ -311,7 +328,7 @@ test("a reply to a different thread root does not suppress this ping", () => {
     tags: threadTags(rootId),
     createdAt: 1_000,
   });
-  const rootEvent = relayEvent({ id: rootId, pubkey: PINGER });
+  const rootEvent = relayEvent({ id: rootId, pubkey: OWNER }); // qualifies
   const replyInOtherThread = relayEvent({
     id: "3".repeat(64),
     pubkey: OWNER,

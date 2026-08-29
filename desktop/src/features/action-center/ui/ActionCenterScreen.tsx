@@ -26,6 +26,7 @@ type ActionCenterScreenProps = {
   items: ActionItem[];
   openCount: number;
   selectedItemId: string | null;
+  onDismissPing: (pingId: string) => Promise<void>;
   onFilterChange: (filter: ActionCenterFilter) => void;
   onOpenSource: (item: ActionItem) => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -44,6 +45,7 @@ export function ActionCenterScreen({
   items,
   openCount,
   selectedItemId,
+  onDismissPing,
   onFilterChange,
   onOpenSource,
   onRefresh,
@@ -225,6 +227,7 @@ export function ActionCenterScreen({
                 currentPubkey={currentPubkey}
                 item={selectedItem}
                 onBack={() => onSelectItem(null)}
+                onDismissPing={onDismissPing}
                 onOpenSource={(item) => void onOpenSource(item)}
                 onRefresh={handleRefresh}
                 unavailableItemId={unavailableItemId}

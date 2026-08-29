@@ -45,6 +45,7 @@ import {
 } from "./lib/actionCenterQueryKeys";
 import { readCompanyAskWindowSecs } from "./lib/companyAskWindow";
 import { selectOwnerWorkflowApprovalSources } from "./lib/workflowApprovals";
+import { useThreadPings } from "./useThreadPings";
 import type {
   ActionCenterFilter,
   ActionCenterStateFilter,
@@ -194,6 +195,16 @@ export function useActionCenterItems({
   );
 
   const feed = homeFeedQuery.data?.feed;
+  const mentions = React.useMemo(() => feed?.mentions ?? [], [feed]);
+  // Reuses this hook's own homeFeedQuery/identityQuery/relaySelfQuery rather
+  // than letting useThreadPings mount its own copies -- a second observer on
+  // the same query key polls on its own schedule (see
+  // ActionCenterContext.tsx's doc comment on why this hook exists at all).
+  const threadPings = useThreadPings({
+    mentions,
+    ownerPubkey,
+    relaySelfPubkey: relayPubkey,
+  });
   const reminders = remindersQuery.data ?? [];
   const { lookup: reportingLineLookup } = useReportingLineLookup(communityId);
   const resolvedAsks = resolvedAsksResult.resolvedAsks;
@@ -247,6 +258,7 @@ export function useActionCenterItems({
         feed: feed ? { needsAction: feed.needsAction } : undefined,
         reminders,
         workflows: workflowSources,
+        pings: threadPings.pings,
         companyAskWindowSecs,
       }),
     [
@@ -258,6 +270,7 @@ export function useActionCenterItems({
       reminders,
       resolvedAsks,
       resolverLabelsByPubkey,
+      threadPings.pings,
       workflowSources,
     ],
   );
@@ -279,6 +292,7 @@ export function useActionCenterItems({
     () => workflowApprovalQueries.map((query) => query.refetch),
     [workflowApprovalQueries],
   );
+  const refetchThreadPings = threadPings.refetch;
   const refetch = React.useCallback(async () => {
     await Promise.all([
       refetchHomeFeed(),
@@ -286,6 +300,7 @@ export function useActionCenterItems({
       refetchReminders(),
       refetchWorkflows(),
       refetchCompanyProfile(),
+      refetchThreadPings(),
       ...refetchWorkflowRuns.map((refetchOne) => refetchOne()),
       ...refetchWorkflowApprovals.map((refetchOne) => refetchOne()),
     ]);
@@ -294,6 +309,7 @@ export function useActionCenterItems({
     refetchCompanyProfile,
     refetchHomeFeed,
     refetchReminders,
+    refetchThreadPings,
     refetchWorkflowApprovals,
     refetchWorkflowRuns,
     refetchWorkflows,
@@ -318,10 +334,12 @@ export function useActionCenterItems({
     channelsQuery.isLoading ||
     workflowsQuery.isLoading ||
     workflowRunQueries.some((query) => query.isLoading) ||
-    workflowApprovalQueries.some((query) => query.isLoading);
+    workflowApprovalQueries.some((query) => query.isLoading) ||
+    threadPings.isLoading;
 
   return {
     allItems,
+    dismissPing: threadPings.dismiss,
     error: firstError(queryErrors),
     isLoading: isCoreLoading,
     isSettled: !isCoreLoading && !isOptionalSourceLoading,
@@ -331,6 +349,7 @@ export function useActionCenterItems({
     workflowsEnabled,
   } satisfies {
     allItems: ActionItem[];
+    dismissPing: (pingId: string) => Promise<void>;
     error: Error | null;
     isLoading: boolean;
     isSettled: boolean;

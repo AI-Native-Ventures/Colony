@@ -1,8 +1,7 @@
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { useHomeFeedQuery } from "@/features/home/hooks";
-import { useRelaySelfQuery } from "@/features/moderation/hooks";
+import { dismissThreadPing } from "@/features/action-center/lib/dismissThreadPing";
 import {
   THREAD_PINGS_QUERY_KEY,
   selectAllRootIds,
@@ -12,7 +11,7 @@ import {
   type PingCandidate,
   type ThreadPing,
 } from "@/features/action-center/lib/threadPings";
-import { useIdentityQuery } from "@/shared/api/hooks";
+import { addReaction } from "@/shared/api/tauri";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   buildChannelReactionAuxFilter,
@@ -33,25 +32,31 @@ type ThreadPingData = {
  * candidate -- because this hook is mounted permanently for the sidebar
  * badge, not only while Action Center is open (see PING_CANDIDATE_LIMIT).
  *
- * Candidates come from the home feed's `mentions` category, already polled
- * on its own 30s cadence by useHomeFeedQuery; this hook adds no new polling
- * of its own and only re-queries reply/reaction state when the candidate set
- * itself changes.
+ * Takes `mentions`/`ownerPubkey`/`relaySelfPubkey` as plain values rather
+ * than calling useHomeFeedQuery/useIdentityQuery/useRelaySelfQuery itself:
+ * useActionCenterItems already mounts all three, and a second mount of the
+ * same query key runs its own polling schedule independently of the first
+ * (see ActionCenterContext.tsx's doc comment -- this is exactly the
+ * double-mount bug that context exists to prevent). Only the three
+ * ping-specific queries below are genuinely new.
  */
-export function useThreadPings(): {
+export function useThreadPings(input: {
+  mentions: readonly PingCandidate[];
+  ownerPubkey: string | null;
+  relaySelfPubkey: string | null;
+}): {
   pings: ThreadPing[];
   isLoading: boolean;
   refetch: () => Promise<void>;
+  dismiss: (pingId: string) => Promise<void>;
 } {
-  const identityQuery = useIdentityQuery();
-  const ownerPubkey = identityQuery.data?.pubkey ?? null;
-  const relaySelfQuery = useRelaySelfQuery();
-  const homeFeedQuery = useHomeFeedQuery();
+  const { mentions, ownerPubkey, relaySelfPubkey } = input;
+  const queryClient = useQueryClient();
 
-  const candidates = React.useMemo<PingCandidate[]>(() => {
-    const mentions = homeFeedQuery.data?.feed.mentions ?? [];
-    return selectPingCandidates(mentions);
-  }, [homeFeedQuery.data]);
+  const candidates = React.useMemo<PingCandidate[]>(
+    () => selectPingCandidates(mentions),
+    [mentions],
+  );
 
   // Keys the data query on the actual candidate set, not on every home-feed
   // poll tick -- most ticks return the same mentions, and re-running the
@@ -100,20 +105,67 @@ export function useThreadPings(): {
     gcTime: 5 * 60_000,
   });
 
+  // Optimistic removal on dismiss (spec: "optimistic removal, reconciled by
+  // refetch"), same shape as ActionCenterScreen's resolvingAskIds -- a
+  // transient in-memory set, never persisted, reconciled below once the
+  // candidate set itself changes underneath it.
+  const [dismissedIds, setDismissedIds] = React.useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  React.useEffect(() => {
+    setDismissedIds((previous) => {
+      if (previous.size === 0) return previous;
+      const stillCandidateIds = new Set(
+        candidates.map((candidate) => candidate.id),
+      );
+      const next = new Set(
+        [...previous].filter((id) => stillCandidateIds.has(id)),
+      );
+      return next.size === previous.size ? previous : next;
+    });
+  }, [candidates]);
+
   const pings = React.useMemo(() => {
     if (!ownerPubkey || !dataQuery.data) return [];
     return selectUnansweredPings(candidates, {
       ownerPubkey,
-      relaySelfPubkey: relaySelfQuery.data ?? null,
+      relaySelfPubkey,
       ...dataQuery.data,
-    });
-  }, [candidates, ownerPubkey, relaySelfQuery.data, dataQuery.data]);
+    }).filter((ping) => !dismissedIds.has(ping.id));
+  }, [candidates, ownerPubkey, relaySelfPubkey, dataQuery.data, dismissedIds]);
+
+  const dismiss = React.useCallback(
+    async (pingId: string) => {
+      setDismissedIds((previous) => new Set(previous).add(pingId));
+      try {
+        await dismissThreadPing(
+          { id: pingId },
+          {
+            addReaction,
+            invalidateQueries: (queryKey) =>
+              queryClient.invalidateQueries({ queryKey: [...queryKey] }),
+          },
+        );
+      } catch (error) {
+        // The reaction never landed -- undo the optimistic hide so the ping
+        // reappears rather than silently vanishing from the owner's queue.
+        setDismissedIds((previous) => {
+          const next = new Set(previous);
+          next.delete(pingId);
+          return next;
+        });
+        throw error;
+      }
+    },
+    [queryClient],
+  );
 
   return {
     pings,
-    isLoading: homeFeedQuery.isLoading || dataQuery.isLoading,
+    isLoading: dataQuery.isLoading,
     refetch: async () => {
       await dataQuery.refetch();
     },
+    dismiss,
   };
 }

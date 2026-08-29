@@ -154,6 +154,7 @@ function ActionCenterRouteView({
       isLoading={actionCenter.isLoading}
       isSettled={actionCenter.isSettled}
       items={items}
+      onDismissPing={actionCenter.dismissPing}
       onFilterChange={changeFilter}
       onOpenSource={openSource}
       onRefresh={actionCenter.refetch}

@@ -286,10 +286,21 @@ test("ranks strictly by tier — deadline, then blocked work, then everything el
     ],
     // Tier 3 items are ranked by "how long has this been waiting"
     // (`updatedAt`: a reminder's is its `notBefore`, a workflow's is its
-    // run's `createdAt`) — the workflow's 20 predates the reminder's
-    // `notBefore` of 380, so the workflow is the older of the two.
+    // run's `createdAt`, a ping's is its own `createdAt`) — the ping's 10
+    // predates the workflow's 20 and the reminder's `notBefore` of 380, so
+    // the ping is the oldest of the three.
     reminders: [reminder("reminder-1", "reminder-1-event", { notBefore: 380 })],
     workflows: [workflowSource("wf-1", 20)],
+    pings: [
+      {
+        id: "ping-1",
+        channelId: "channel-1",
+        channelName: "general",
+        threadId: "root-1",
+        createdAt: 10,
+        content: "hey @owner can you take a look",
+      },
+    ],
     now: 400,
   });
 
@@ -298,11 +309,48 @@ test("ranks strictly by tier — deadline, then blocked work, then everything el
     [
       "ask:ask-deadline", // tier 1: deadline
       "ask:ask-blocked", // tier 2: blocked work
-      "workflow:wf-1:run-wf-1", // tier 3: everything else, older
-      "reminder:reminder-1", // tier 3: everything else, newer
+      "ping:ping-1", // tier 3: everything else, oldest
+      "workflow:wf-1:run-wf-1", // tier 3: everything else, next oldest
+      "reminder:reminder-1", // tier 3: everything else, newest
       `resolved-ask:${CLOSED_ASK_HEX}`, // settled sink, last regardless of tier
     ],
   );
+});
+
+test("a ping's title names the channel, summary is its content, dismiss/open-source are its only capabilities", () => {
+  const items = buildActionCenterItems({
+    asks: [],
+    reminders: [],
+    pings: [
+      {
+        id: "ping-1",
+        channelId: "channel-1",
+        channelName: "engineering",
+        threadId: "root-1",
+        createdAt: 500,
+        content: "can you approve this before EOD?",
+      },
+    ],
+  });
+
+  assert.equal(items.length, 1);
+  const [item] = items;
+  assert.equal(item.kind, "ping");
+  assert.equal(item.state, "needs-action");
+  assert.equal(item.title, "asked in #engineering");
+  assert.equal(item.summary, "can you approve this before EOD?");
+  assert.deepEqual(item.capabilities, ["dismiss", "open-source"]);
+  assert.deepEqual(item.source, {
+    kind: "ping",
+    ping: {
+      id: "ping-1",
+      channelId: "channel-1",
+      channelName: "engineering",
+      threadId: "root-1",
+      createdAt: 500,
+      content: "can you approve this before EOD?",
+    },
+  });
 });
 
 test("tier 2 ranks asks by blast radius descending, Block instances always last, ties broken by age", () => {

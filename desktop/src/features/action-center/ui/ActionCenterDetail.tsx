@@ -3,6 +3,7 @@ import { ClipboardList } from "lucide-react";
 import type { ActionBlockItem, ActionItem } from "../contracts";
 import { ActionCenterAskDetail } from "./ActionCenterAskDetail";
 import { ActionCenterBlockDetail } from "./ActionCenterBlockDetail";
+import { ActionCenterPingDetail } from "./ActionCenterPingDetail";
 import { ActionCenterReminderDetail } from "./ActionCenterReminderDetail";
 import { ActionCenterResolvedAskDetail } from "./ActionCenterResolvedAskDetail";
 import { ActionCenterWorkflowDetail } from "./ActionCenterWorkflowDetail";
@@ -12,6 +13,7 @@ export function ActionCenterDetail({
   currentPubkey,
   item,
   onBack,
+  onDismissPing,
   onOpenSource,
   onRefresh,
   unavailableItemId,
@@ -19,6 +21,7 @@ export function ActionCenterDetail({
   currentPubkey: string;
   item: ActionItem | null;
   onBack: () => void;
+  onDismissPing: (pingId: string) => Promise<void>;
   onOpenSource: (item: ActionItem) => void;
   onRefresh: () => Promise<void>;
   unavailableItemId: string | null;
@@ -131,6 +134,20 @@ export function ActionCenterDetail({
         <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
           <ActionCenterWorkflowDetail
             onOpenSource={() => onOpenSource(item)}
+            source={item.source}
+          />
+        </section>
+      );
+    case "ping":
+      return (
+        <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
+          <ActionCenterPingDetail
+            onDismiss={() => onDismissPing(item.source.ping.id)}
+            onOpenSource={
+              item.capabilities.includes("open-source")
+                ? () => onOpenSource(item)
+                : undefined
+            }
             source={item.source}
           />
         </section>

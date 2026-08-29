@@ -125,6 +125,21 @@ export type ThreadPingContext = {
  * fetches anything itself -- see useThreadPings for the three bounded
  * queries this consumes (root lookup, reply lookup, reaction lookup).
  *
+ * Two independent gates, both must pass:
+ *
+ * 1. Qualification (spec: "sits in a thread the owner participates in") --
+ *    owner authored the root, OR owner has posted in the thread at any time.
+ *    This is a positive requirement, not a suppression: a fresh mention in a
+ *    thread the owner has never touched does not qualify at all, regardless
+ *    of replies or reactions. That is deliberate (spec ruling): it is what
+ *    keeps an ordinary "hey @owner, can you look at this" from flooding this
+ *    lane with plain mentions Home already surfaces -- real first-contact
+ *    questions arrive as Asks (kind:44300), tier 1, not here. A self-rooted
+ *    candidate (no thread to have posted in yet) only qualifies in the
+ *    degenerate case where the owner is themselves the root's author.
+ * 2. Suppression, only reached once qualified -- no owner reply newer than
+ *    the ping, and no owner reaction on the ping (any emoji).
+ *
  * Fail-closed by design (spec: "prefer under-surfacing"): a candidate whose
  * root event the batched lookup could not find (relay miss, not "no lookup
  * needed") is dropped rather than guessed at, since its authorship can no
@@ -152,11 +167,15 @@ export function selectUnansweredPings(
     const rootId = resolvePingRootId(candidate);
 
     let ownerAuthoredRoot: boolean;
+    let ownerRepliesInThread: RelayEvent[];
     if (rootId === candidate.id) {
-      // Self-rooted: the candidate IS the root, so its own signer is the
-      // root author. No fetch needed, and no attribution resolution either
-      // -- a top-level ping's signer is reliably its visible author.
+      // Self-rooted: the candidate IS the root, there is no separate thread
+      // the owner could already have posted in. Owner participation can only
+      // come from the degenerate case of the owner being the root's own
+      // signer -- checked directly, no fetch or attribution resolution
+      // needed, since a top-level event's signer is reliably its author.
       ownerAuthoredRoot = candidate.pubkey.toLowerCase() === normalizedOwner;
+      ownerRepliesInThread = [];
     } else {
       const rootEvent = rootEventsById.get(rootId);
       if (!rootEvent) continue; // cannot cheaply verify -> drop, not guess
@@ -165,15 +184,20 @@ export function selectUnansweredPings(
         ownerPubkey,
         relaySelfPubkey,
       );
+      ownerRepliesInThread = replyEvents.filter(
+        (reply) =>
+          resolvePingRootId(reply) === rootId &&
+          isAuthoredByOwner(reply, ownerPubkey, relaySelfPubkey),
+      );
     }
 
-    if (ownerAuthoredRoot) continue;
+    const ownerParticipates =
+      ownerAuthoredRoot || ownerRepliesInThread.length > 0;
+    if (!ownerParticipates) continue; // not a thread the owner is already in
 
-    const ownerRepliedSince = replyEvents.some((reply) => {
-      if (reply.created_at <= candidate.createdAt) return false;
-      if (resolvePingRootId(reply) !== rootId) return false;
-      return isAuthoredByOwner(reply, ownerPubkey, relaySelfPubkey);
-    });
+    const ownerRepliedSince = ownerRepliesInThread.some(
+      (reply) => reply.created_at > candidate.createdAt,
+    );
     if (ownerRepliedSince) continue;
 
     const ownerReacted = reactionEvents.some((reaction) => {

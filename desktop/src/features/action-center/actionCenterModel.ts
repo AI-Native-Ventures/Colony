@@ -14,6 +14,7 @@ import { describeAskResolution } from "@/features/asks/lib/askResolution";
 import { isDue } from "@/features/reminders/lib/reminderFilters";
 import { computeAskDeadline } from "./lib/askDeadline";
 import { projectBlockFeedItem } from "./lib/blockActionCenter";
+import type { ThreadPing } from "./lib/threadPings";
 import type {
   ActionAskSource,
   ActionCenterFilter,
@@ -80,6 +81,8 @@ function sourceUpdatedAt(source: ActionSource): number {
       return source.reminder.notBefore ?? source.reminder.createdAt;
     case "workflow":
       return source.run.completedAt ?? source.run.createdAt;
+    case "ping":
+      return source.ping.createdAt;
   }
 }
 
@@ -91,7 +94,7 @@ function itemTier(item: ActionItem): Tier {
       : TIER_BLOCKED_WORK;
   }
   if (item.source.kind === "block") return TIER_BLOCKED_WORK;
-  return TIER_EVERYTHING_ELSE; // reminder, workflow
+  return TIER_EVERYTHING_ELSE; // reminder, workflow, ping
 }
 
 /**
@@ -224,6 +227,27 @@ function workflowItem(source: ActionWorkflowSource): ActionItem {
   };
 }
 
+/**
+ * A ping's title names where it happened (spec wireframe: "asked in
+ * #channel"), not what it says -- the summary carries the content preview.
+ * `capabilities` omits `answer`: dismissing is the only in-place action
+ * (spec, "out of scope: the reply composer"); `open-source` navigates to the
+ * thread for anyone who wants to actually reply.
+ */
+function pingItem(ping: ThreadPing): ActionItem {
+  return {
+    id: actionItemId("ping", ping.id),
+    kind: "ping",
+    state: "needs-action",
+    title: `asked in #${ping.channelName}`,
+    summary: ping.content,
+    createdAt: ping.createdAt,
+    updatedAt: ping.createdAt,
+    source: { kind: "ping", ping },
+    capabilities: ["dismiss", "open-source"],
+  };
+}
+
 /** Build the global queue from source records without creating new records. */
 export function buildActionCenterItems({
   asks,
@@ -233,6 +257,7 @@ export function buildActionCenterItems({
   feed,
   reminders,
   workflows = [],
+  pings = [],
   doneIds = new Set(),
   now = Math.floor(Date.now() / 1_000),
   companyAskWindowSecs = null,
@@ -291,6 +316,7 @@ export function buildActionCenterItems({
   }
 
   items.push(...workflows.map(workflowItem));
+  items.push(...pings.map(pingItem));
 
   // Only reminders that are due (pending and `notBefore <= now`) enter the
   // queue — the same definition `countDueReminders` uses for the Home badge,
