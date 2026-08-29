@@ -5,6 +5,7 @@ type NavigationCommandTarget = () => unknown;
 type DiscoveryCommandTarget = (options: { surface: "leads" }) => unknown;
 
 export type NavigationCommandTargets = {
+  actionCenterEnabled: boolean;
   createAgent: NavigationCommandTarget;
   createChannel: NavigationCommandTarget;
   goActionCenter: NavigationCommandTarget;
@@ -40,14 +41,6 @@ export function buildNavigationCommands(
         void targets.goHome();
       },
       title: "Open inbox",
-    },
-    {
-      description: "Answer asks and open actionable work",
-      id: "open-action-center",
-      onSelect: () => {
-        void targets.goActionCenter();
-      },
-      title: "Open Action Center",
     },
     {
       description: "Manage agents and view their activity",
@@ -139,6 +132,16 @@ export function buildNavigationCommands(
     },
   ];
 
+  if (targets.actionCenterEnabled) {
+    actions.push({
+      description: "Answer asks and open actionable work",
+      id: "open-action-center",
+      onSelect: () => {
+        void targets.goActionCenter();
+      },
+      title: "Open Action Center",
+    });
+  }
   if (targets.pulseEnabled) {
     actions.push({
       description: "Open the activity feed",
@@ -188,6 +191,7 @@ export function useNavigationCommands(
   targets: NavigationCommandTargets,
 ): SearchCommand[] {
   const {
+    actionCenterEnabled,
     contentEnabled,
     createAgent,
     createChannel,
@@ -214,6 +218,7 @@ export function useNavigationCommands(
   return React.useMemo(
     () =>
       buildNavigationCommands({
+        actionCenterEnabled,
         contentEnabled,
         createAgent,
         createChannel,
@@ -237,6 +242,7 @@ export function useNavigationCommands(
         workflowsEnabled,
       }),
     [
+      actionCenterEnabled,
       contentEnabled,
       createAgent,
       createChannel,

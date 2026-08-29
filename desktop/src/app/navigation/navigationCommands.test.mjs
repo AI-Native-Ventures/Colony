@@ -7,6 +7,7 @@ const target = () => undefined;
 
 function targets(overrides = {}) {
   return {
+    actionCenterEnabled: true,
     createAgent: target,
     createChannel: target,
     goActionCenter: target,
@@ -35,7 +36,6 @@ test("buildNavigationCommands includes enabled destinations", () => {
     buildNavigationCommands(targets()).map((command) => command.id),
     [
       "open-home",
-      "open-action-center",
       "open-agents",
       "open-people",
       "new-message",
@@ -47,6 +47,7 @@ test("buildNavigationCommands includes enabled destinations", () => {
       "open-spend",
       "open-credits",
       "open-discovery",
+      "open-action-center",
       "open-pulse",
       "open-projects",
       "open-workflows",
@@ -57,12 +58,17 @@ test("buildNavigationCommands includes enabled destinations", () => {
 test("buildNavigationCommands omits disabled preview destinations", () => {
   const commands = buildNavigationCommands(
     targets({
+      actionCenterEnabled: false,
       pulseEnabled: false,
       projectsEnabled: false,
       workflowsEnabled: false,
     }),
   );
 
+  assert.equal(
+    commands.some((command) => command.id === "open-action-center"),
+    false,
+  );
   assert.equal(
     commands.some((command) => command.id === "open-pulse"),
     false,

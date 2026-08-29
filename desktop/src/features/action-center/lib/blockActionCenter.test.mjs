@@ -65,12 +65,7 @@ test("a block-attention feed item becomes a block row that waits on this person"
   const feedItem = blockFeedItem();
   const items = buildActionCenterItems({
     asks: [],
-    feed: {
-      mentions: [],
-      needsAction: [feedItem],
-      activity: [],
-      agentActivity: [],
-    },
+    feed: { needsAction: [feedItem] },
     reminders: [],
   });
 
@@ -94,12 +89,7 @@ test("a block-attention feed item becomes a block row that waits on this person"
 test("a block row never mistakes its manifest reference for a thread root", () => {
   const standalone = buildActionCenterItems({
     asks: [],
-    feed: {
-      mentions: [],
-      needsAction: [blockFeedItem()],
-      activity: [],
-      agentActivity: [],
-    },
+    feed: { needsAction: [blockFeedItem()] },
     reminders: [],
   });
   assert.equal(standalone[0]?.source.kind, "block");
@@ -114,7 +104,6 @@ test("a block row never mistakes its manifest reference for a thread root", () =
   const reply = buildActionCenterItems({
     asks: [],
     feed: {
-      mentions: [],
       needsAction: [
         blockFeedItem({
           tags: [
@@ -128,8 +117,6 @@ test("a block row never mistakes its manifest reference for a thread root", () =
           ],
         }),
       ],
-      activity: [],
-      agentActivity: [],
     },
     reminders: [],
   });
@@ -142,11 +129,13 @@ test("a block row never mistakes its manifest reference for a thread root", () =
   );
 });
 
-test("an ordinary message, and a malformed block, stay ordinary messages", () => {
+test("an ordinary message, and a malformed block, are not queue items at all", () => {
+  // The v2 queue model dropped the generic feed-message projection entirely
+  // (mentions/activity/agentActivity live in Home now); a `needsAction` row
+  // that does not parse as a Block instance simply never becomes an item.
   const items = buildActionCenterItems({
     asks: [],
     feed: {
-      mentions: [],
       needsAction: [
         plainMessageItem(),
         blockFeedItem({
@@ -154,43 +143,55 @@ test("an ordinary message, and a malformed block, stay ordinary messages", () =>
           tags: [["block", "1"]],
         }),
       ],
-      activity: [],
-      agentActivity: [],
     },
     reminders: [],
   });
 
-  assert.equal(items.length, 2);
-  assert.ok(items.every((item) => item.kind === "message"));
-  const malformed = items.find((item) => item.id.endsWith("9".repeat(64)));
-  assert.ok(malformed);
-  assert.deepEqual(malformed.capabilities, ["open-source", "mark-done"]);
+  assert.equal(items.length, 0);
 });
 
-test("an instance the relay resolved leaves the needs-action queue", () => {
-  // The relay's needs-action feed subtracts resolved receipts, so the resolved
-  // instance only reaches the client through another category.
+test("a block instance the relay no longer counts as open is dropped from the queue", () => {
+  // No `block-attention required` tag means `attentionRequired` is false, so
+  // even though the row arrived via `needsAction`, the relay is not waiting
+  // on this person for it — it is informational and does not belong here.
   const items = buildActionCenterItems({
     asks: [],
     feed: {
-      mentions: [],
-      needsAction: [],
-      activity: [blockFeedItem({ category: "activity" })],
-      agentActivity: [],
+      needsAction: [
+        blockFeedItem({
+          tags: [
+            ["e", MANIFEST_ID, "", "block"],
+            ["block", "1", "approval", MANIFEST_ID, INSTANCE_ID],
+            ["block-data", '{"amount":500}'],
+            ["p", DECISION_MAKER],
+            ["block-processor", "1", PROCESSOR],
+          ],
+        }),
+      ],
     },
     reminders: [],
   });
 
+  assert.equal(items.length, 0);
+  assert.equal(filterActionCenterItems(items, "needs-action").length, 0);
+});
+
+test("a row hidden locally stays in the queue while the relay still waits on it", () => {
+  // Local `doneIds` hides the row (state: completed) but must not drop it —
+  // hiding never actually resolves the relay-side decision.
+  const feedItem = blockFeedItem();
+  const items = buildActionCenterItems({
+    asks: [],
+    feed: { needsAction: [feedItem] },
+    reminders: [],
+    doneIds: new Set([feedItem.id]),
+  });
+
+  assert.equal(items.length, 1);
   const [item] = items;
   assert.equal(item.kind, "block");
+  assert.equal(item.state, "completed");
   assert.equal(item.source.awaitingDecision, false);
-  assert.equal(item.state, "active");
-  assert.deepEqual(item.capabilities, [
-    "decide-inline",
-    "open-source",
-    "mark-done",
-  ]);
-  assert.equal(filterActionCenterItems(items, "needs-action").length, 0);
 });
 
 test("a locally hidden row says it is hidden, never that it is resolved", () => {
@@ -409,11 +410,5 @@ test("sourceLabel names a block row by what it is waiting on", () => {
   assert.equal(
     sourceLabel({ source: { kind: "block", awaitingDecision: false } }),
     "Block",
-  );
-  assert.equal(
-    sourceLabel({
-      source: { kind: "message", item: { channelName: "general" } },
-    }),
-    "#general",
   );
 });

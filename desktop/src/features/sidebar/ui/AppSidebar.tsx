@@ -1,7 +1,5 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
-import { useAppShell } from "@/app/AppShellContext";
-import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 import type { Community } from "@/features/communities/types";
@@ -252,10 +250,6 @@ export function AppSidebar({
   onStarChannel,
   onUnstarChannel,
 }: AppSidebarProps) {
-  const { feedItemState } = useAppShell();
-  const actionCenter = useActionCenterItems({
-    localDoneIds: feedItemState.doneSet,
-  });
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
@@ -589,7 +583,6 @@ export function AppSidebar({
               data-testid="sidebar-scroll-content"
             >
               <AppSidebarPrimaryMenu
-                actionCenterBadgeCount={actionCenter.openCount}
                 homeBadgeCount={homeBadgeCount}
                 onSelectActionCenter={onSelectActionCenter}
                 onSelectAgents={onSelectAgents}

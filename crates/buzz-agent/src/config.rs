@@ -851,6 +851,32 @@ pub struct Config {
     /// Databricks gateway does not auto-cache, so without this the surfaced
     /// `cache_read_input_tokens` is structurally always 0.
     pub prompt_caching: bool,
+    /// Ordered OpenRouter fallback models, from `OPENROUTER_FALLBACK_MODELS`
+    /// (comma-separated). Sent as the `models` array so OpenRouter tries each in
+    /// turn when the one ahead of it errors on context length, moderation, rate
+    /// limiting, or downtime. Only whichever model actually runs is billed.
+    ///
+    /// The configured `model` is always first; these follow it. Empty by
+    /// default, which sends no `models` array and leaves routing unchanged.
+    ///
+    /// Ordering rule that is not OpenRouter's to enforce: a paid model must
+    /// never sit below a free one. Free entries 429 together when the account's
+    /// shared daily quota is spent, so a paid model underneath them silently
+    /// starts billing at the moment the user believed they were on the free
+    /// tier. Put paid models above free ones or use an all-free chain.
+    pub openrouter_fallback_models: Vec<String>,
+    /// Restrict OpenRouter routing to providers that do not train on request
+    /// data, via `provider.data_collection: "deny"`. Off by default; enable with
+    /// `OPENROUTER_DENY_TRAINING=1`.
+    ///
+    /// This is a real filter, not a hint: OpenRouter answers `404 No endpoints
+    /// found matching your data policy (Free model training)` when every
+    /// endpoint behind a model trains. Measured on 2026-08-29, 8 of 17 free
+    /// tool-calling models survive it — including the highest-ranked one — so
+    /// the quality cost is small, but models served only by training providers
+    /// (Nemotron 3 Ultra, both Poolside Laguna variants) disappear entirely.
+    /// Pair it with a fallback chain built from models known to pass.
+    pub openrouter_deny_training: bool,
 }
 
 impl Config {
@@ -976,6 +1002,10 @@ impl Config {
                 env("BUZZ_AGENT_THINKING_SUMMARY").as_deref(),
             )?,
             prompt_caching: parse_env("BUZZ_AGENT_PROMPT_CACHING", 1u8)? != 0,
+            openrouter_fallback_models: parse_model_list(
+                env("OPENROUTER_FALLBACK_MODELS").as_deref(),
+            ),
+            openrouter_deny_training: parse_env("OPENROUTER_DENY_TRAINING", 0u8)? != 0,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -1019,6 +1049,8 @@ impl Config {
             thinking_effort: None,
             thinking_summary: ThinkingSummary::Auto,
             prompt_caching: false,
+            openrouter_fallback_models: Vec::new(),
+            openrouter_deny_training: false,
         }
     }
 
@@ -1184,6 +1216,24 @@ fn parse_openai_api(raw: Option<&str>) -> Result<OpenAiApi, String> {
             "config: OPENAI_COMPAT_API={other} not supported (use auto|chat|responses)"
         )),
     }
+}
+
+/// Parse a comma-separated OpenRouter model list into an ordered, de-duplicated
+/// vector. Blank entries are dropped and surrounding whitespace is trimmed, so a
+/// trailing comma or a line wrapped for readability in a `.env` is harmless.
+///
+/// Order is the contract — OpenRouter tries the models in exactly the sequence
+/// given — so de-duplication keeps the *first* occurrence rather than the last.
+fn parse_model_list(raw: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.unwrap_or_default().split(',') {
+        let part = part.trim();
+        if part.is_empty() || out.iter().any(|m| m == part) {
+            continue;
+        }
+        out.push(part.to_string());
+    }
+    out
 }
 
 /// `true` when `base_url` is an official OpenAI host. Hosts on
@@ -3045,6 +3095,45 @@ mod tests {
                 entry.provider, entry.model,
             );
         }
+    }
+
+    /// Unset and empty both mean "no chain", which must reach `llm.rs` as an
+    /// empty vector so no `models` array is emitted.
+    #[test]
+    fn parse_model_list_empty_inputs_yield_no_chain() {
+        assert!(parse_model_list(None).is_empty());
+        assert!(parse_model_list(Some("")).is_empty());
+        assert!(parse_model_list(Some("  ")).is_empty());
+        assert!(parse_model_list(Some(",,,")).is_empty());
+    }
+
+    /// Whitespace and trailing commas are tolerated: this value is hand-edited
+    /// in a `.env` or an agent config field, and a stray space must not create a
+    /// model id that 404s.
+    #[test]
+    fn parse_model_list_trims_and_drops_blanks() {
+        assert_eq!(
+            parse_model_list(Some(
+                " z-ai/glm-5.2:free , minimax/minimax-m3:free ,, inclusionai/ling-3.0-flash-fin:free ,"
+            )),
+            vec![
+                "z-ai/glm-5.2:free",
+                "minimax/minimax-m3:free",
+                "inclusionai/ling-3.0-flash-fin:free",
+            ]
+        );
+    }
+
+    /// De-duplication keeps the FIRST occurrence. Order is the contract —
+    /// OpenRouter tries the chain in sequence — so keeping the last would
+    /// silently demote a model the operator put at the front.
+    #[test]
+    fn parse_model_list_dedupes_keeping_first_position() {
+        assert_eq!(
+            parse_model_list(Some("a/one,b/two,a/one,c/three")),
+            vec!["a/one", "b/two", "c/three"],
+            "a repeated id must not move to the back of the chain"
+        );
     }
 
     #[test]

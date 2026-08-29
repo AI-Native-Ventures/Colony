@@ -9,7 +9,6 @@ import { remindersQueryKey } from "../reminders/hooks.ts";
 import { reminderWatermarkStorageKey } from "../reminders/useReminderNotifications.ts";
 import {
   actionCenterApprovalsQueryKey,
-  actionCenterTaskRunsQueryKey,
   actionCenterWorkflowQueryKey,
   actionCenterWorkflowRunsQueryKey,
 } from "./lib/actionCenterQueryKeys.ts";
@@ -22,9 +21,6 @@ function assertCommunityScoped(keyFor) {
 }
 
 test("Action Center source query keys separate communities", () => {
-  assertCommunityScoped((communityId) =>
-    actionCenterTaskRunsQueryKey(communityId, ["task-1"]),
-  );
   assertCommunityScoped((communityId) =>
     actionCenterWorkflowQueryKey(communityId, "channel-1"),
   );

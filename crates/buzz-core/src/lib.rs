@@ -52,6 +52,8 @@ pub mod invite;
 pub mod job;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+/// Ranking OpenRouter models into an ordered fallback chain.
+pub mod model_ranking;
 /// Channel workspace tab action parsing and ownership protocol kinds.
 pub mod workspace_tab;
 

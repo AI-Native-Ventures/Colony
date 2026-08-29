@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
 import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { AppShellProvider } from "@/app/AppShellContext";
+import { ActionCenterProvider } from "@/features/action-center/ActionCenterContext";
 import { AppShellOverlays } from "@/app/AppShellOverlays";
 import { AppShellChannelSurface } from "@/app/AppShellChannelSurface";
 import { AppHuddleShell } from "@/app/AppHuddleShell";
@@ -101,6 +102,7 @@ import { AppProfilePanelProvider } from "@/app/AppProfilePanelProvider";
 import { LazySettingsScreen } from "@/app/LazySettingsScreen";
 
 const EMPTY_CHANNELS: Channel[] = [];
+// biome-ignore format: keep compact to stay within file size limit
 export function AppShell() {
   useWebviewZoomShortcuts();
   useTauriWindowDrag();
@@ -123,6 +125,7 @@ export function AppShell() {
     viewHuddleChannel,
   } = useHuddlePresentation();
   const hasCommunityRail = communitiesHook.communities.length > 1;
+  const actionCenterEnabled = useFeatureEnabled("actionCenter");
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
@@ -654,6 +657,7 @@ export function AppShell() {
     [],
   );
   const commandActions = useNavigationCommands({
+    actionCenterEnabled,
     createAgent: requestOpenCreateAgent,
     createChannel: handleOpenCreateChannel,
     goActionCenter,
@@ -741,251 +745,253 @@ export function AppShell() {
             onOpenSettings: handleOpenSettings,
           }}
         >
-          <AppHuddleShell
-            currentPubkey={identityQuery.data?.pubkey}
-            isCompanionOpen={isHuddleCompanionOpen}
-            isDrawerOpen={isHuddleDrawerOpen}
-            isRoom={isHuddleRoom}
-            onCompanionOpen={handleHuddleCompanionOpen}
-            onHuddleStartPendingChange={handleHuddleStartPendingChange}
-            onHuddleStarted={handleHuddleStarted}
-            onShowHuddleInMainApp={showHuddleInMainApp}
-            onViewHuddleChannel={viewHuddleChannel}
-            onVisibilityChange={handleHuddleVisibilityChange}
-          >
-            {effectiveCommunityRail ? (
-              <CommunityRail
-                activeCommunityId={communitiesHook.activeCommunity?.id ?? null}
-                onAddCommunity={addCommunityDialog.openDialog}
-                onReorderCommunities={communitiesHook.reorderCommunities}
-                onSwitchCommunity={handleSwitchCommunity}
-                onUpdateCommunity={communitiesHook.updateCommunity}
-                communities={communitiesHook.communities}
-                onRemoveCommunity={(id) => void handleRemoveCommunity(id)}
-              />
-            ) : null}
-            <SidebarProvider
-              className="relative z-10 min-h-0 flex-1 flex-col overflow-visible"
-              data-testid="app-sidebar-layer"
-              onOpenChange={(nextOpen) => {
-                if (!workspaceOpen) setSidebarOpen(nextOpen);
-              }}
-              open={effectiveSidebarOpen}
+          <ActionCenterProvider>
+            <AppHuddleShell
+              currentPubkey={identityQuery.data?.pubkey}
+              isCompanionOpen={isHuddleCompanionOpen}
+              isDrawerOpen={isHuddleDrawerOpen}
+              isRoom={isHuddleRoom}
+              onCompanionOpen={handleHuddleCompanionOpen}
+              onHuddleStartPendingChange={handleHuddleStartPendingChange}
+              onHuddleStarted={handleHuddleStarted}
+              onShowHuddleInMainApp={showHuddleInMainApp}
+              onViewHuddleChannel={viewHuddleChannel}
+              onVisibilityChange={handleHuddleVisibilityChange}
             >
-              <AppProfilePanelProvider>
-                {!settingsOpen && !isHuddleRoom ? (
-                  <AppTopChrome
-                    canGoBack={canGoBack}
-                    canGoForward={canGoForward}
-                    hasCommunityRail={effectiveCommunityRail}
-                    onGoBack={goBack}
-                    onGoForward={goForward}
-                  />
-                ) : null}
-                {settingsOpen ? (
-                  <div className="flex min-h-0 flex-1 overflow-hidden">
-                    <React.Suspense fallback={null}>
-                      <LazySettingsScreen
-                        currentPubkey={identityQuery.data?.pubkey}
-                        fallbackDisplayName={identityQuery.data?.displayName}
-                        isUpdatingDesktopNotifications={
-                          notificationSettings.isUpdatingDesktopEnabled
-                        }
-                        notificationErrorMessage={
-                          notificationSettings.errorMessage
-                        }
-                        notificationPermission={notificationSettings.permission}
-                        notificationSettings={notificationSettings.settings}
-                        onClose={handleCloseSettings}
-                        onSectionChange={handleSettingsSectionChange}
-                        onSetDesktopNotificationsEnabled={
-                          notificationSettings.setDesktopEnabled
-                        }
-                        onSetHomeBadgeEnabled={
-                          notificationSettings.setHomeBadgeEnabled
-                        }
-                        onSetSlotAlertsEnabled={
-                          notificationSettings.setSlotAlertsEnabled
-                        }
-                        onSetNotifyWhileViewing={
-                          notificationSettings.setNotifyWhileViewing
-                        }
-                        onSetAllSlotAlertsEnabled={
-                          notificationSettings.setAllSlotAlertsEnabled
-                        }
-                        onSetSoundForSlot={notificationSettings.setSoundForSlot}
-                        section={settingsSection}
-                      />
-                    </React.Suspense>
-                  </div>
-                ) : (
-                  <div className="relative flex min-h-0 flex-1 overflow-visible">
-                    {!isHuddleRoom ? (
-                      <div
-                        className={workspaceOpen ? "hidden" : "contents"}
-                        inert={workspaceOpen ? true : undefined}
-                      >
-                        <AppSidebar
-                          activeCommunity={communitiesHook.activeCommunity}
-                          channels={sidebarChannels}
+              {effectiveCommunityRail ? (
+                <CommunityRail
+                  activeCommunityId={communitiesHook.activeCommunity?.id ?? null}
+                  onAddCommunity={addCommunityDialog.openDialog}
+                  onReorderCommunities={communitiesHook.reorderCommunities}
+                  onSwitchCommunity={handleSwitchCommunity}
+                  onUpdateCommunity={communitiesHook.updateCommunity}
+                  communities={communitiesHook.communities}
+                  onRemoveCommunity={(id) => void handleRemoveCommunity(id)}
+                />
+              ) : null}
+              <SidebarProvider
+                className="relative z-10 min-h-0 flex-1 flex-col overflow-visible"
+                data-testid="app-sidebar-layer"
+                onOpenChange={(nextOpen) => {
+                  if (!workspaceOpen) setSidebarOpen(nextOpen);
+                }}
+                open={effectiveSidebarOpen}
+              >
+                <AppProfilePanelProvider>
+                  {!settingsOpen && !isHuddleRoom ? (
+                    <AppTopChrome
+                      canGoBack={canGoBack}
+                      canGoForward={canGoForward}
+                      hasCommunityRail={effectiveCommunityRail}
+                      onGoBack={goBack}
+                      onGoForward={goForward}
+                    />
+                  ) : null}
+                  {settingsOpen ? (
+                    <div className="flex min-h-0 flex-1 overflow-hidden">
+                      <React.Suspense fallback={null}>
+                        <LazySettingsScreen
                           currentPubkey={identityQuery.data?.pubkey}
-                          errorMessage={channelsErrorMessage}
                           fallbackDisplayName={identityQuery.data?.displayName}
-                          homeBadgeCount={homeBadgeCount + dueReminderBadge}
-                          addCommunityPrefill={addCommunityDialog.prefill}
-                          isAddCommunityOpen={addCommunityDialog.open}
-                          relayConnectionCard={relayConnectionCard}
-                          isCreatingChannel={createChannelMutation.isPending}
-                          isCreatingForum={createForumMutation.isPending}
-                          isLoading={channelsQuery.isLoading}
-                          isCreateChannelOpen={isCreateChannelOpen}
-                          isHuddleCompanionOpen={isHuddleCompanionOpen}
-                          isPresencePending={presenceSession.isPending}
-                          onAddCommunity={(community) => {
-                            const id = communitiesHook.addCommunity({
-                              ...community,
-                              pubkey:
-                                community.pubkey ?? identityQuery.data?.pubkey,
-                            });
-                            handleSwitchCommunity(id);
-                          }}
-                          onAddCommunityOpenChange={
-                            addCommunityDialog.onOpenChange
+                          isUpdatingDesktopNotifications={
+                            notificationSettings.isUpdatingDesktopEnabled
                           }
-                          onNewMessage={handleOpenNewDm}
-                          onBackgroundClick={requestFocusedThreadClose}
-                          onCreateChannelOpenChange={setIsCreateChannelOpen}
-                          onOpenAddCommunity={addCommunityDialog.openDialog}
-                          onSendFeedback={() => setIsSendFeedbackOpen(true)}
-                          onUpdateCommunity={communitiesHook.updateCommunity}
-                          onRemoveCommunity={handleRemoveCommunity}
-                          onSwitchCommunity={handleSwitchCommunity}
-                          onCreateAgent={() => requestOpenCreateAgent()}
-                          commandActions={commandActions}
-                          selfPresenceStatus={presenceSession.currentStatus}
-                          communities={communitiesHook.communities}
-                          onCreateChannel={handleCreateChannel}
-                          onCreateForum={handleCreateForum}
-                          onHideDm={handleHideDm}
-                          onHuddleEnded={handleHuddleEnded}
-                          onMarkAllChannelsRead={markAllChannelsRead}
-                          onMarkChannelRead={markChannelRead}
-                          onMarkChannelUnread={markChannelUnread}
-                          onBrowseChannels={handleOpenBrowseChannels}
-                          onOpenDm={async ({ pubkeys }) => {
-                            const directMessage =
-                              await openDmMutation.mutateAsync({
-                                pubkeys,
-                              });
-                            await goChannel(directMessage.id);
-                          }}
-                          onSelectActionCenter={() => void goActionCenter()}
-                          onSelectAgents={() => void goAgents()}
-                          onSelectPeople={() => void goPeople()}
-                          onSelectDiscovery={() =>
-                            void goDiscovery({ surface: "leads" })
+                          notificationErrorMessage={
+                            notificationSettings.errorMessage
                           }
-                          onSelectChannel={handleSidebarChannelSelect}
-                          onOpenSearchResult={handleOpenSearchResult}
-                          searchChannels={channels}
-                          searchFocusRequest={searchFocusRequest}
-                          scopeSearchFocusRequest={scopeSearchFocusRequest}
-                          onSelectHome={() => void goHome()}
-                          onSelectProjects={() => void goProjects()}
-                          onSelectContent={() => void goContent()}
-                          onSelectPulse={() => void goPulse()}
-                          onSelectSettings={handleOpenSettings}
-                          onSelectCredits={() => void goCredits()}
-                          onSelectSpend={() => void goSpend()}
-                          onSelectWork={() => void goWork()}
-                          onSelectWorkflows={() => void goWorkflows()}
-                          onSetPresenceStatus={(status) =>
-                            presenceSession.setStatus(status)
+                          notificationPermission={notificationSettings.permission}
+                          notificationSettings={notificationSettings.settings}
+                          onClose={handleCloseSettings}
+                          onSectionChange={handleSettingsSectionChange}
+                          onSetDesktopNotificationsEnabled={
+                            notificationSettings.setDesktopEnabled
                           }
-                          onSetUserStatus={(text, emoji) =>
-                            setUserStatusMutation.mutate({ text, emoji })
+                          onSetHomeBadgeEnabled={
+                            notificationSettings.setHomeBadgeEnabled
                           }
-                          onClearUserStatus={() =>
-                            setUserStatusMutation.mutate({
-                              text: "",
-                              emoji: "",
-                            })
+                          onSetSlotAlertsEnabled={
+                            notificationSettings.setSlotAlertsEnabled
                           }
-                          profile={profileQuery.data}
-                          selfUserStatus={
-                            deferredPubkey
-                              ? (selfStatusQuery.data?.[
-                                  deferredPubkey.toLowerCase()
-                                ] ?? undefined)
-                              : undefined
+                          onSetNotifyWhileViewing={
+                            notificationSettings.setNotifyWhileViewing
                           }
-                          selectedChannelId={selectedChannelId}
-                          selectedView={selectedView}
-                          unreadChannelIds={unreadChannelIds}
-                          unreadChannelCounts={unreadChannelCounts}
-                          mutedChannelIds={mutedChannelIds}
-                          onMuteChannel={muteChannel}
-                          onUnmuteChannel={unmuteChannel}
-                          starredChannelIds={starredChannelIds}
-                          onStarChannel={starChannel}
-                          onUnstarChannel={unstarChannel}
+                          onSetAllSlotAlertsEnabled={
+                            notificationSettings.setAllSlotAlertsEnabled
+                          }
+                          onSetSoundForSlot={notificationSettings.setSoundForSlot}
+                          section={settingsSection}
                         />
-                      </div>
-                    ) : null}
-                    <AppShellChannelSurface
-                      isHuddleRoom={isHuddleRoom}
-                      isHuddleRoomStarting={isHuddleRoomStarting}
-                      mainInsetRef={mainInsetRef}
-                    >
-                      <Outlet />
-                    </AppShellChannelSurface>
-                    {!isHuddleRoom ? (
-                      <RelayConnectionOverlay
-                        card={relayConnectionCard}
-                        errorMessage={channelsErrorMessage}
-                        hasCommunityRail={effectiveCommunityRail}
-                        isHuddleDrawerOpen={isHuddleDrawerOpen}
-                      />
-                    ) : null}
-                  </div>
-                )}
-                <RequestedAgentCreateDialogs />
-                <AgentManagementDialogs />
-                <AppShellOverlays
-                  activeChannel={managedChannel}
-                  browseDialogType={browseDialogType}
-                  channels={channels}
-                  currentPubkey={identityQuery.data?.pubkey}
-                  isChannelManagementOpen={isChannelManagementOpen}
-                  isCreatingBrowseChannel={
-                    createChannelMutation.isPending ||
-                    createForumMutation.isPending
-                  }
-                  onBrowseChannelJoin={handleBrowseChannelJoin}
-                  onBrowseChannelCreate={handleBrowseChannelCreate}
-                  onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
-                  onChannelManagementOpenChange={(open) => {
-                    setIsChannelManagementOpen(open);
-                    if (!open) {
-                      setManagedChannelId(null);
+                      </React.Suspense>
+                    </div>
+                  ) : (
+                    <div className="relative flex min-h-0 flex-1 overflow-visible">
+                      {!isHuddleRoom ? (
+                        <div
+                          className={workspaceOpen ? "hidden" : "contents"}
+                          inert={workspaceOpen ? true : undefined}
+                        >
+                          <AppSidebar
+                            activeCommunity={communitiesHook.activeCommunity}
+                            channels={sidebarChannels}
+                            currentPubkey={identityQuery.data?.pubkey}
+                            errorMessage={channelsErrorMessage}
+                            fallbackDisplayName={identityQuery.data?.displayName}
+                            homeBadgeCount={homeBadgeCount + dueReminderBadge}
+                            addCommunityPrefill={addCommunityDialog.prefill}
+                            isAddCommunityOpen={addCommunityDialog.open}
+                            relayConnectionCard={relayConnectionCard}
+                            isCreatingChannel={createChannelMutation.isPending}
+                            isCreatingForum={createForumMutation.isPending}
+                            isLoading={channelsQuery.isLoading}
+                            isCreateChannelOpen={isCreateChannelOpen}
+                            isHuddleCompanionOpen={isHuddleCompanionOpen}
+                            isPresencePending={presenceSession.isPending}
+                            onAddCommunity={(community) => {
+                              const id = communitiesHook.addCommunity({
+                                ...community,
+                                pubkey:
+                                  community.pubkey ?? identityQuery.data?.pubkey,
+                              });
+                              handleSwitchCommunity(id);
+                            }}
+                            onAddCommunityOpenChange={
+                              addCommunityDialog.onOpenChange
+                            }
+                            onNewMessage={handleOpenNewDm}
+                            onBackgroundClick={requestFocusedThreadClose}
+                            onCreateChannelOpenChange={setIsCreateChannelOpen}
+                            onOpenAddCommunity={addCommunityDialog.openDialog}
+                            onSendFeedback={() => setIsSendFeedbackOpen(true)}
+                            onUpdateCommunity={communitiesHook.updateCommunity}
+                            onRemoveCommunity={handleRemoveCommunity}
+                            onSwitchCommunity={handleSwitchCommunity}
+                            onCreateAgent={() => requestOpenCreateAgent()}
+                            commandActions={commandActions}
+                            selfPresenceStatus={presenceSession.currentStatus}
+                            communities={communitiesHook.communities}
+                            onCreateChannel={handleCreateChannel}
+                            onCreateForum={handleCreateForum}
+                            onHideDm={handleHideDm}
+                            onHuddleEnded={handleHuddleEnded}
+                            onMarkAllChannelsRead={markAllChannelsRead}
+                            onMarkChannelRead={markChannelRead}
+                            onMarkChannelUnread={markChannelUnread}
+                            onBrowseChannels={handleOpenBrowseChannels}
+                            onOpenDm={async ({ pubkeys }) => {
+                              const directMessage =
+                                await openDmMutation.mutateAsync({
+                                  pubkeys,
+                                });
+                              await goChannel(directMessage.id);
+                            }}
+                            onSelectActionCenter={() => void goActionCenter()}
+                            onSelectAgents={() => void goAgents()}
+                            onSelectPeople={() => void goPeople()}
+                            onSelectDiscovery={() =>
+                              void goDiscovery({ surface: "leads" })
+                            }
+                            onSelectChannel={handleSidebarChannelSelect}
+                            onOpenSearchResult={handleOpenSearchResult}
+                            searchChannels={channels}
+                            searchFocusRequest={searchFocusRequest}
+                            scopeSearchFocusRequest={scopeSearchFocusRequest}
+                            onSelectHome={() => void goHome()}
+                            onSelectProjects={() => void goProjects()}
+                            onSelectContent={() => void goContent()}
+                            onSelectPulse={() => void goPulse()}
+                            onSelectSettings={handleOpenSettings}
+                            onSelectCredits={() => void goCredits()}
+                            onSelectSpend={() => void goSpend()}
+                            onSelectWork={() => void goWork()}
+                            onSelectWorkflows={() => void goWorkflows()}
+                            onSetPresenceStatus={(status) =>
+                              presenceSession.setStatus(status)
+                            }
+                            onSetUserStatus={(text, emoji) =>
+                              setUserStatusMutation.mutate({ text, emoji })
+                            }
+                            onClearUserStatus={() =>
+                              setUserStatusMutation.mutate({
+                                text: "",
+                                emoji: "",
+                              })
+                            }
+                            profile={profileQuery.data}
+                            selfUserStatus={
+                              deferredPubkey
+                                ? (selfStatusQuery.data?.[
+                                    deferredPubkey.toLowerCase()
+                                  ] ?? undefined)
+                                : undefined
+                            }
+                            selectedChannelId={selectedChannelId}
+                            selectedView={selectedView}
+                            unreadChannelIds={unreadChannelIds}
+                            unreadChannelCounts={unreadChannelCounts}
+                            mutedChannelIds={mutedChannelIds}
+                            onMuteChannel={muteChannel}
+                            onUnmuteChannel={unmuteChannel}
+                            starredChannelIds={starredChannelIds}
+                            onStarChannel={starChannel}
+                            onUnstarChannel={unstarChannel}
+                          />
+                        </div>
+                      ) : null}
+                      <AppShellChannelSurface
+                        isHuddleRoom={isHuddleRoom}
+                        isHuddleRoomStarting={isHuddleRoomStarting}
+                        mainInsetRef={mainInsetRef}
+                      >
+                        <Outlet />
+                      </AppShellChannelSurface>
+                      {!isHuddleRoom ? (
+                        <RelayConnectionOverlay
+                          card={relayConnectionCard}
+                          errorMessage={channelsErrorMessage}
+                          hasCommunityRail={effectiveCommunityRail}
+                          isHuddleDrawerOpen={isHuddleDrawerOpen}
+                        />
+                      ) : null}
+                    </div>
+                  )}
+                  <RequestedAgentCreateDialogs />
+                  <AgentManagementDialogs />
+                  <AppShellOverlays
+                    activeChannel={managedChannel}
+                    browseDialogType={browseDialogType}
+                    channels={channels}
+                    currentPubkey={identityQuery.data?.pubkey}
+                    isChannelManagementOpen={isChannelManagementOpen}
+                    isCreatingBrowseChannel={
+                      createChannelMutation.isPending ||
+                      createForumMutation.isPending
                     }
-                  }}
-                  onDeleteActiveChannel={() => {
-                    setIsChannelManagementOpen(false);
-                    setManagedChannelId(null);
-                    void goHome({ replace: true });
-                  }}
-                  onSelectChannel={(channelId) => {
-                    void goChannel(channelId);
-                  }}
-                />
-                <SendFeedbackController
-                  onOpenChange={setIsSendFeedbackOpen}
-                  open={isSendFeedbackOpen}
-                />
-              </AppProfilePanelProvider>
-            </SidebarProvider>
-          </AppHuddleShell>
+                    onBrowseChannelJoin={handleBrowseChannelJoin}
+                    onBrowseChannelCreate={handleBrowseChannelCreate}
+                    onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
+                    onChannelManagementOpenChange={(open) => {
+                      setIsChannelManagementOpen(open);
+                      if (!open) {
+                        setManagedChannelId(null);
+                      }
+                    }}
+                    onDeleteActiveChannel={() => {
+                      setIsChannelManagementOpen(false);
+                      setManagedChannelId(null);
+                      void goHome({ replace: true });
+                    }}
+                    onSelectChannel={(channelId) => {
+                      void goChannel(channelId);
+                    }}
+                  />
+                  <SendFeedbackController
+                    onOpenChange={setIsSendFeedbackOpen}
+                    open={isSendFeedbackOpen}
+                  />
+                </AppProfilePanelProvider>
+              </SidebarProvider>
+            </AppHuddleShell>
+          </ActionCenterProvider>
         </AppShellProvider>
       </ChannelNavigationProvider>
     </PreventSleepProvider>

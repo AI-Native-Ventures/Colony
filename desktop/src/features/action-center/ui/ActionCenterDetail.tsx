@@ -1,16 +1,10 @@
 import { ClipboardList } from "lucide-react";
 
-import type {
-  ActionBlockItem,
-  ActionItem,
-  ActionMessageItem,
-} from "../contracts";
+import type { ActionBlockItem, ActionItem } from "../contracts";
 import { ActionCenterAskDetail } from "./ActionCenterAskDetail";
 import { ActionCenterBlockDetail } from "./ActionCenterBlockDetail";
-import { ActionCenterMessageDetail } from "./ActionCenterMessageDetail";
 import { ActionCenterReminderDetail } from "./ActionCenterReminderDetail";
 import { ActionCenterResolvedAskDetail } from "./ActionCenterResolvedAskDetail";
-import { ActionCenterTaskDetail } from "./ActionCenterTaskDetail";
 import { ActionCenterWorkflowDetail } from "./ActionCenterWorkflowDetail";
 import { Button } from "@/shared/ui/button";
 
@@ -18,19 +12,19 @@ export function ActionCenterDetail({
   currentPubkey,
   item,
   onBack,
-  onMarkDone,
   onOpenSource,
   onRefresh,
-  onUndoDone,
+  onThreadReplySent,
+  resolvingAskIds,
   unavailableItemId,
 }: {
   currentPubkey: string;
   item: ActionItem | null;
   onBack: () => void;
-  onMarkDone: (item: ActionItem) => void;
   onOpenSource: (item: ActionItem) => void;
   onRefresh: () => Promise<void>;
-  onUndoDone: (item: ActionItem) => void;
+  onThreadReplySent: (threadId: string) => void;
+  resolvingAskIds: ReadonlySet<string>;
   unavailableItemId: string | null;
 }) {
   if (!item) {
@@ -105,26 +99,13 @@ export function ActionCenterDetail({
         <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
           <ActionCenterAskDetail
             ask={item.source.ask}
+            isResolving={resolvingAskIds.has(item.source.ask.id)}
             onOpenSource={
               item.capabilities.includes("open-source")
                 ? () => onOpenSource(item)
                 : undefined
             }
-          />
-        </section>
-      );
-    case "message":
-      return (
-        <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
-          <ActionCenterMessageDetail
-            item={item as ActionMessageItem}
-            onMarkDone={() => onMarkDone(item)}
-            onOpenSource={
-              item.capabilities.includes("open-source")
-                ? () => onOpenSource(item)
-                : undefined
-            }
-            onUndoDone={() => onUndoDone(item)}
+            onThreadReplySent={onThreadReplySent}
           />
         </section>
       );
@@ -148,19 +129,6 @@ export function ActionCenterDetail({
             onBack={onBack}
             pubkey={currentPubkey}
             reminder={item.source.reminder}
-          />
-        </section>
-      );
-    case "task":
-      return (
-        <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
-          <ActionCenterTaskDetail
-            onOpenSource={
-              item.capabilities.includes("open-source")
-                ? () => onOpenSource(item)
-                : undefined
-            }
-            source={item.source}
           />
         </section>
       );
