@@ -138,19 +138,26 @@ export function ActionCenterDetail({
           />
         </section>
       );
-    case "ping":
+    case "ping": {
+      // Bound to a const so the closures below capture an already-narrowed
+      // value: narrowing `item.source.kind` does not survive into a closure
+      // over the wider `item.source` property-access chain, since TS cannot
+      // prove `item` stays what it was between the switch check and whenever
+      // the closure actually runs.
+      const source = item.source;
       return (
         <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
           <ActionCenterPingDetail
-            onDismiss={() => onDismissPing(item.source.ping.id)}
+            onDismiss={() => onDismissPing(source.ping.id)}
             onOpenSource={
               item.capabilities.includes("open-source")
                 ? () => onOpenSource(item)
                 : undefined
             }
-            source={item.source}
+            source={source}
           />
         </section>
       );
+    }
   }
 }
