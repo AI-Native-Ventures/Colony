@@ -1,4 +1,5 @@
 import * as React from "react";
+import { CheckCircle2 } from "lucide-react";
 
 import { VirtualizedList } from "@/shared/ui/VirtualizedList";
 
@@ -48,17 +49,24 @@ export function ActionCenterList({
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   if (items.length === 0) {
+    // Zero is the design goal of this surface, not an error or an accident
+    // (spec: "the owner clears the queue to zero in one sitting"), so this
+    // reads as a celebration, not an empty-data placeholder.
     return (
       <div
         className="flex min-h-64 flex-1 items-center justify-center px-6 text-center"
         data-testid="action-center-empty"
       >
         <div>
-          <p className="text-sm font-medium text-foreground">
-            Nothing needs your attention
+          <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-6" />
+          </div>
+          <p className="mt-4 text-base font-semibold text-foreground">
+            Nothing needs you
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            New asks, reminders, and actionable work will appear here.
+            The queue is clear. New asks, pings, and reminders will show up
+            here.
           </p>
         </div>
       </div>

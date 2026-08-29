@@ -163,26 +163,34 @@ export function ActionCenterRow({
         <Icon className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-start gap-2">
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="min-w-0 truncate text-sm font-semibold text-foreground">
-              {item.title}
-            </span>
-            {isHardListAsk &&
-            item.source.kind === "ask" &&
-            item.source.ask.category ? (
-              <Badge
-                className="shrink-0"
-                data-testid="action-center-hard-list-badge"
-                variant="destructive"
-              >
-                {item.source.ask.category.toUpperCase()}
-              </Badge>
-            ) : null}
+        {/* Title and meta each get their own full-width line rather than
+            sharing one: proven by screenshot that sharing does not work at
+            this row's real width (384px, list-pane). The title uses flex-1
+            (flex-basis: 0%), so a meta sibling whose own content already
+            overflows the row leaves flex-grow nothing to distribute and the
+            title renders at effectively zero width -- capping the meta's
+            max-width only made both unreadably short, not fixed the
+            problem. A countdown or an escalation-heavy title needs real
+            room, and this row already has several lines below it, so one
+            more line is cheap. */}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+            {item.title}
           </span>
-          <span className="shrink-0">
-            <RowMeta item={item} />
-          </span>
+          {isHardListAsk &&
+          item.source.kind === "ask" &&
+          item.source.ask.category ? (
+            <Badge
+              className="shrink-0"
+              data-testid="action-center-hard-list-badge"
+              variant="destructive"
+            >
+              {item.source.ask.category.toUpperCase()}
+            </Badge>
+          ) : null}
+        </span>
+        <span className="mt-0.5 block truncate">
+          <RowMeta item={item} />
         </span>
         <span
           className={cn(

@@ -31,10 +31,14 @@ type ActionCenterScreenProps = {
   isSettled: boolean;
   items: ActionItem[];
   openCount: number;
+  /** Whether the `pulse` feature flag is on. The link renders only then --
+   * absent entirely when off, never a disabled/greyed-out link. */
+  pulseEnabled: boolean;
   selectedItemId: string | null;
   onDismissPing: (pingId: string) => Promise<void>;
   onFilterChange: (filter: ActionCenterFilter) => void;
   onInitiativeChange: (initiative: string | null) => void;
+  onOpenPulse: () => void;
   onOpenSource: (item: ActionItem) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSelectItem: (itemId: string | null) => void;
@@ -52,10 +56,12 @@ export function ActionCenterScreen({
   isSettled,
   items,
   openCount,
+  pulseEnabled,
   selectedItemId,
   onDismissPing,
   onFilterChange,
   onInitiativeChange,
+  onOpenPulse,
   onOpenSource,
   onRefresh,
   onSelectItem,
@@ -212,6 +218,16 @@ export function ActionCenterScreen({
                 <Badge data-testid="action-center-open-count" variant="warning">
                   {Math.min(openCount, 99)}
                 </Badge>
+              ) : null}
+              {pulseEnabled ? (
+                <button
+                  className="shrink-0 text-2xs font-medium text-primary hover:underline"
+                  data-testid="action-center-pulse-link"
+                  onClick={onOpenPulse}
+                  type="button"
+                >
+                  Watch streams in Pulse →
+                </button>
               ) : null}
             </div>
             <p className="truncate text-xs text-muted-foreground">

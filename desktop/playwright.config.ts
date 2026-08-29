@@ -190,6 +190,7 @@ export default defineConfig({
         "**/huddle-transcription.spec.ts",
         "**/ask-card.spec.ts",
         "**/ask-resolution-screenshots.spec.ts",
+        "**/action-center-v2-screenshots.spec.ts",
         "**/delegation-grant-screenshots.spec.ts",
       ],
       use: {

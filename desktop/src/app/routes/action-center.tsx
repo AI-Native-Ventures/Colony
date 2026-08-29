@@ -22,7 +22,7 @@ import {
 import { ActionCenterScreen } from "@/features/action-center/ui/ActionCenterScreen";
 import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { usePreviewFeatureWarning } from "@/shared/features";
+import { useFeatureEnabled, usePreviewFeatureWarning } from "@/shared/features";
 
 export type ActionCenterRouteSearch = {
   filter?: ActionCenterFilter;
@@ -104,7 +104,8 @@ function ActionCenterRouteView({
 }) {
   const search = Route.useSearch();
   const identityQuery = useIdentityQuery();
-  const { goActionCenter, goChannel, goWorkflow } = useAppNavigation();
+  const { goActionCenter, goChannel, goPulse, goWorkflow } = useAppNavigation();
+  const pulseEnabled = useFeatureEnabled("pulse");
   const filter = search.filter ?? "needs-action";
   const items = React.useMemo(
     () => filterActionCenterItems(actionCenter.allItems, filter, search.state),
@@ -141,6 +142,9 @@ function ActionCenterRouteView({
     },
     [filter, goActionCenter, search.state],
   );
+  const openPulse = React.useCallback(() => {
+    void goPulse();
+  }, [goPulse]);
   const openSource = React.useCallback(
     async (item: ActionItem) => {
       if (item.source.kind === "workflow") {
@@ -178,10 +182,12 @@ function ActionCenterRouteView({
       onDismissPing={actionCenter.dismissPing}
       onFilterChange={changeFilter}
       onInitiativeChange={changeInitiative}
+      onOpenPulse={openPulse}
       onOpenSource={openSource}
       onRefresh={actionCenter.refetch}
       onSelectItem={selectItem}
       openCount={actionCenter.openCount}
+      pulseEnabled={pulseEnabled}
       selectedItemId={search.item ?? null}
       workflowsEnabled={actionCenter.workflowsEnabled}
     />
