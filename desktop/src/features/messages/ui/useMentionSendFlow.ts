@@ -539,6 +539,15 @@ export function useMentionSendFlow({
             new Set(draft.savedSpoileredAttachmentUrls),
           );
         };
+        // finishSend attaches work context (a Task charge on the relay) before
+        // sending. That attach step can fail for reasons the user needs to
+        // read and act on ("this community has no coordination team...",
+        // "the message has not been sent."), so a caught failure here always
+        // surfaces the underlying message, not just a silent draft restore.
+        const handleFinishSendFailure = (error: unknown) => {
+          restoreComposerAfterFailure();
+          toast.error(getErrorMessage(error, "The message could not be sent."));
+        };
         const finishSend = async (
           uploaded: ImetaMedia[],
           signal?: AbortSignal,
@@ -597,8 +606,8 @@ export function useMentionSendFlow({
             onComplete: async (uploaded, signal) => {
               try {
                 await finishSend(uploaded, signal);
-              } catch {
-                restoreComposerAfterFailure();
+              } catch (error) {
+                handleFinishSendFailure(error);
               }
             },
             onError: (error) => {
@@ -630,8 +639,8 @@ export function useMentionSendFlow({
         if (!preparedUpload) {
           try {
             await finishSend([]);
-          } catch {
-            restoreComposerAfterFailure();
+          } catch (error) {
+            handleFinishSendFailure(error);
           }
         }
       } finally {
