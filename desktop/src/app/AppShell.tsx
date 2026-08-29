@@ -123,6 +123,7 @@ export function AppShell() {
     viewHuddleChannel,
   } = useHuddlePresentation();
   const hasCommunityRail = communitiesHook.communities.length > 1;
+  const actionCenterEnabled = useFeatureEnabled("actionCenter");
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
@@ -654,6 +655,7 @@ export function AppShell() {
     [],
   );
   const commandActions = useNavigationCommands({
+    actionCenterEnabled,
     createAgent: requestOpenCreateAgent,
     createChannel: handleOpenCreateChannel,
     goActionCenter,

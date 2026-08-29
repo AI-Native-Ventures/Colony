@@ -12,6 +12,8 @@ import {
   Zap,
 } from "lucide-react";
 
+import { useAppShell } from "@/app/AppShellContext";
+import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import type { SearchCommand } from "@/features/search/ui/SearchResultItem";
 import { FeatureGate } from "@/shared/features";
@@ -44,7 +46,6 @@ export type AppSidebarPinnedHeaderProps = {
 };
 
 type AppSidebarPrimaryMenuProps = {
-  actionCenterBadgeCount: number;
   homeBadgeCount: number;
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
@@ -101,8 +102,49 @@ export function AppSidebarPinnedHeader({
   );
 }
 
+/**
+ * Owns its own `useActionCenterItems` mount so the badge query only runs
+ * while this component is rendered. Kept behind `<FeatureGate feature="actionCenter">`
+ * in `AppSidebarPrimaryMenu` rather than a top-level hook call in `AppSidebar`,
+ * so disabling the flag actually unmounts the poll instead of merely hiding
+ * the button.
+ */
+function ActionCenterMenuItem({
+  onSelectActionCenter,
+  selectedView,
+}: {
+  onSelectActionCenter: () => void;
+  selectedView: SidebarSelectedView;
+}) {
+  const { feedItemState } = useAppShell();
+  const actionCenter = useActionCenterItems({
+    localDoneIds: feedItemState.doneSet,
+  });
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        data-testid="open-action-center-view"
+        isActive={selectedView === "action-center"}
+        onClick={onSelectActionCenter}
+        tooltip="Action Center"
+        type="button"
+      >
+        <ListChecks className="h-4 w-4" />
+        <SidebarMenuLabel>Action Center</SidebarMenuLabel>
+      </SidebarMenuButton>
+      {actionCenter.openCount > 0 ? (
+        <SidebarMenuBadge
+          className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+          data-testid="sidebar-action-center-count"
+        >
+          {Math.min(actionCenter.openCount, 99)}
+        </SidebarMenuBadge>
+      ) : null}
+    </SidebarMenuItem>
+  );
+}
+
 export function AppSidebarPrimaryMenu({
-  actionCenterBadgeCount,
   homeBadgeCount,
   onSelectActionCenter,
   onSelectAgents,
@@ -152,26 +194,12 @@ export function AppSidebarPrimaryMenu({
             </SidebarMenuBadge>
           ) : null}
         </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            data-testid="open-action-center-view"
-            isActive={selectedView === "action-center"}
-            onClick={onSelectActionCenter}
-            tooltip="Action Center"
-            type="button"
-          >
-            <ListChecks className="h-4 w-4" />
-            <SidebarMenuLabel>Action Center</SidebarMenuLabel>
-          </SidebarMenuButton>
-          {actionCenterBadgeCount > 0 ? (
-            <SidebarMenuBadge
-              className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-              data-testid="sidebar-action-center-count"
-            >
-              {Math.min(actionCenterBadgeCount, 99)}
-            </SidebarMenuBadge>
-          ) : null}
-        </SidebarMenuItem>
+        <FeatureGate feature="actionCenter">
+          <ActionCenterMenuItem
+            onSelectActionCenter={onSelectActionCenter}
+            selectedView={selectedView}
+          />
+        </FeatureGate>
         <FeatureGate feature="pulse">
           <SidebarMenuItem>
             <SidebarMenuButton

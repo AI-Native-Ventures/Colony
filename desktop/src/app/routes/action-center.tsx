@@ -17,6 +17,7 @@ import {
 import { ActionCenterScreen } from "@/features/action-center/ui/ActionCenterScreen";
 import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { usePreviewFeatureWarning } from "@/shared/features";
 
 export type ActionCenterRouteSearch = {
   filter?: ActionCenterFilter;
@@ -53,6 +54,7 @@ export const Route = createFileRoute("/action-center")({
 });
 
 function ActionCenterRouteComponent() {
+  usePreviewFeatureWarning("actionCenter");
   const search = Route.useSearch();
   const { feedItemState } = useAppShell();
   const identityQuery = useIdentityQuery();

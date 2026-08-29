@@ -3,6 +3,15 @@ import { expect, test } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 
 test.beforeEach(async ({ page }) => {
+  // Action Center is an experimental feature (defaultEnabled: false in
+  // preview-features.json); addInitScript must run before installMockBridge
+  // so the override is in localStorage before React mounts.
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "buzz-feature-overrides-v1",
+      JSON.stringify({ actionCenter: true }),
+    );
+  });
   await installMockBridge(page);
 });
 
