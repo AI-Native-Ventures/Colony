@@ -538,13 +538,22 @@ export function useMentionSendFlow({
               ),
             ]),
           );
-          const finalOutgoingTags = await attachOutgoingWorkContext(
-            sendChannelId ?? draft.capturedChannelId ?? "",
-            finalContent,
-            agentMentionPubkeys,
-            mediaTags,
-            outgoingTags,
-          );
+          // Unlike send() below, this step has no surface of its own, so it
+          // toasts here rather than at the outer catch (avoids double-reporting
+          // a send() failure a caller like sendFirstMessage already shows).
+          let finalOutgoingTags: string[][] | undefined;
+          try {
+            finalOutgoingTags = await attachOutgoingWorkContext(
+              sendChannelId ?? draft.capturedChannelId ?? "",
+              finalContent,
+              agentMentionPubkeys,
+              mediaTags,
+              outgoingTags,
+            );
+          } catch (error) {
+            handleFinishSendFailure(error);
+            return;
+          }
           if (signal?.aborted) return;
           await send(
             finalContent,
@@ -580,8 +589,10 @@ export function useMentionSendFlow({
             onComplete: async (uploaded, signal) => {
               try {
                 await finishSend(uploaded, signal);
-              } catch (error) {
-                handleFinishSendFailure(error);
+              } catch {
+                // Attach failure already toasted inside finishSend; anything
+                // else is send()'s to report, so just restore the draft.
+                restoreComposerAfterFailure();
               }
             },
             onError: (error) => {
@@ -613,8 +624,9 @@ export function useMentionSendFlow({
         if (!preparedUpload) {
           try {
             await finishSend([]);
-          } catch (error) {
-            handleFinishSendFailure(error);
+          } catch {
+            // Same split as above: attach toasted inside finishSend already.
+            restoreComposerAfterFailure();
           }
         }
       } finally {

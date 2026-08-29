@@ -1,17 +1,26 @@
 /**
  * Unit tests for getErrorMessage, the extraction helper that
- * finishSend's failure handler (useMentionSendFlow.ts, handleFinishSendFailure)
- * uses to put the underlying work-context error in front of the user via
+ * createFinishSendFailureHandler (useMentionSendFlow.helpers.ts) uses to put
+ * a failed attachOutgoingWorkContext call in front of the user via
  * toast.error, instead of the message silently disappearing.
  *
+ * In useMentionSendFlow.ts, finishSend catches only around the
+ * attachOutgoingWorkContext call and calls this handler there; a failure
+ * from send() itself (or anything after it) propagates to the two outer
+ * catch sites, which restore the draft only and leave reporting to send()'s
+ * own caller. That split exists because some callers (e.g. the new-DM
+ * screen's sendFirstMessage) already show their own inline error for a
+ * failed send before rethrowing, and toasting there too would report the
+ * same failure twice.
+ *
  * What is NOT tested here (and why): mounting useMentionSendFlow itself to
- * assert that toast.error and restoreComposerAfterFailure are both called
- * from the two finishSend catch sites. That hook depends on Tiptap, Tauri,
+ * assert that toast.error and restoreComposerAfterFailure are called from
+ * the right site for each failure kind. That hook depends on Tiptap, Tauri,
  * relayClient, and React Query context not available in the node:test
  * harness (see MessageComposerAutoSend.test.mjs for the same constraint on
- * a sibling hook). This test instead proves the seam both catch sites
- * actually rely on: that the specific, human-written error strings thrown by
- * attachWorkContext / workContext.ts survive extraction unchanged, so the
+ * a sibling hook). This test instead proves the seam the attach-failure
+ * handler relies on: that the specific, human-written error strings thrown
+ * by attachWorkContext / workContext.ts survive extraction unchanged, so the
  * toast reads the real cause rather than a generic fallback.
  */
 
