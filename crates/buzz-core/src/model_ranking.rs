@@ -131,8 +131,12 @@ pub enum Placement {
 /// One entry in the resolved chain.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChainEntry {
+    /// OpenRouter model id, as sent in the `models` array.
     pub model_id: String,
+    /// Coding index at the time the chain was built, carried for display.
+    /// `None` for a pinned model nobody has benchmarked.
     pub coding_index: Option<f64>,
+    /// Whether the score or an operator put this entry here.
     pub placement: Placement,
 }
 
@@ -154,14 +158,19 @@ pub enum Rejection {
 /// A rejected candidate and its reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RejectedModel {
+    /// OpenRouter model id that was considered and left out.
     pub model_id: String,
+    /// Which gate excluded it.
     pub reason: Rejection,
 }
 
 /// A resolved chain plus everything needed to explain it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankedChain {
+    /// The chain itself, best first. Capped at [`MAX_CHAIN_LEN`].
     pub entries: Vec<ChainEntry>,
+    /// Every candidate that did not make it, with its reason — the input an
+    /// admin view needs to explain the chain and to decide what to pin.
     pub rejected: Vec<RejectedModel>,
 }
 
