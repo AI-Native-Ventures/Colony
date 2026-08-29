@@ -44,6 +44,13 @@
       "description": "Attach a workspace tab to a local Chromium DevTools page",
       "defaultEnabled": false,
       "platforms": ["desktop"]
+    },
+    {
+      "id": "actionCenter",
+      "name": "Action Center",
+      "description": "Ranked queue of asks, pings, and reminders waiting on the owner",
+      "defaultEnabled": false,
+      "platforms": ["desktop"]
     }
   ]
 }

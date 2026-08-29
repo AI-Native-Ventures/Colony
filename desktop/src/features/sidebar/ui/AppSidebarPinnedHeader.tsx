@@ -12,6 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 
+import { useActionCenterContext } from "@/features/action-center/ActionCenterContext";
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import type { SearchCommand } from "@/features/search/ui/SearchResultItem";
 import { FeatureGate } from "@/shared/features";
@@ -44,7 +45,6 @@ export type AppSidebarPinnedHeaderProps = {
 };
 
 type AppSidebarPrimaryMenuProps = {
-  actionCenterBadgeCount: number;
   homeBadgeCount: number;
   onSelectActionCenter: () => void;
   onSelectAgents: () => void;
@@ -101,8 +101,49 @@ export function AppSidebarPinnedHeader({
   );
 }
 
+/**
+ * Reads from the single `useActionCenterItems` instance mounted by
+ * `ActionCenterProvider` (in `AppShell`) instead of mounting its own copy —
+ * the route mounted the same hook a second time, doubling every query's
+ * request rate while the screen was open. See `ActionCenterContext.tsx`.
+ * `<FeatureGate feature="actionCenter">` in `AppSidebarPrimaryMenu` keeps
+ * this item (and thus this context read) out of the tree entirely while
+ * the flag is off.
+ */
+function ActionCenterMenuItem({
+  onSelectActionCenter,
+  selectedView,
+}: {
+  onSelectActionCenter: () => void;
+  selectedView: SidebarSelectedView;
+}) {
+  const actionCenter = useActionCenterContext();
+  const openCount = actionCenter?.openCount ?? 0;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        data-testid="open-action-center-view"
+        isActive={selectedView === "action-center"}
+        onClick={onSelectActionCenter}
+        tooltip="Action Center"
+        type="button"
+      >
+        <ListChecks className="h-4 w-4" />
+        <SidebarMenuLabel>Action Center</SidebarMenuLabel>
+      </SidebarMenuButton>
+      {openCount > 0 ? (
+        <SidebarMenuBadge
+          className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+          data-testid="sidebar-action-center-count"
+        >
+          {Math.min(openCount, 99)}
+        </SidebarMenuBadge>
+      ) : null}
+    </SidebarMenuItem>
+  );
+}
+
 export function AppSidebarPrimaryMenu({
-  actionCenterBadgeCount,
   homeBadgeCount,
   onSelectActionCenter,
   onSelectAgents,
@@ -152,26 +193,12 @@ export function AppSidebarPrimaryMenu({
             </SidebarMenuBadge>
           ) : null}
         </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            data-testid="open-action-center-view"
-            isActive={selectedView === "action-center"}
-            onClick={onSelectActionCenter}
-            tooltip="Action Center"
-            type="button"
-          >
-            <ListChecks className="h-4 w-4" />
-            <SidebarMenuLabel>Action Center</SidebarMenuLabel>
-          </SidebarMenuButton>
-          {actionCenterBadgeCount > 0 ? (
-            <SidebarMenuBadge
-              className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-              data-testid="sidebar-action-center-count"
-            >
-              {Math.min(actionCenterBadgeCount, 99)}
-            </SidebarMenuBadge>
-          ) : null}
-        </SidebarMenuItem>
+        <FeatureGate feature="actionCenter">
+          <ActionCenterMenuItem
+            onSelectActionCenter={onSelectActionCenter}
+            selectedView={selectedView}
+          />
+        </FeatureGate>
         <FeatureGate feature="pulse">
           <SidebarMenuItem>
             <SidebarMenuButton

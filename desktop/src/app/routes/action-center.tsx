@@ -14,9 +14,15 @@ import {
   actionCenterSourceDestination,
   reminderSourceDestination,
 } from "@/features/action-center/lib/actionCenterNavigation";
+import { filterActionCenterItems } from "@/features/action-center/actionCenterModel";
+import {
+  type ActionCenterDataSource,
+  useActionCenterContext,
+} from "@/features/action-center/ActionCenterContext";
 import { ActionCenterScreen } from "@/features/action-center/ui/ActionCenterScreen";
 import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { usePreviewFeatureWarning } from "@/shared/features";
 
 export type ActionCenterRouteSearch = {
   filter?: ActionCenterFilter;
@@ -52,17 +58,50 @@ export const Route = createFileRoute("/action-center")({
   component: ActionCenterRouteComponent,
 });
 
+/**
+ * `ActionCenterProvider` (mounted once in `AppShell`, alongside the sidebar)
+ * owns the single `useActionCenterItems` instance while the flag is on — the
+ * sidebar badge is always mounted, so reusing its data here rather than
+ * mounting a second instance is what keeps the request rate the same
+ * whether or not this screen is open. See `ActionCenterContext.tsx`.
+ *
+ * When the flag is off the provider does not mount (context is `null`), so
+ * this falls back to a standalone instance — matching how every other
+ * gated route (pulse, workflows, content) still works for a direct link
+ * while merely warning that the feature is a preview.
+ */
 function ActionCenterRouteComponent() {
+  usePreviewFeatureWarning("actionCenter");
+  const shared = useActionCenterContext();
+  return shared ? (
+    <ActionCenterRouteView actionCenter={shared} />
+  ) : (
+    <ActionCenterRouteStandalone />
+  );
+}
+
+function ActionCenterRouteStandalone() {
+  const { feedItemState } = useAppShell();
+  const actionCenter = useActionCenterItems({
+    localDoneIds: feedItemState.doneSet,
+  });
+  return <ActionCenterRouteView actionCenter={actionCenter} />;
+}
+
+function ActionCenterRouteView({
+  actionCenter,
+}: {
+  actionCenter: ActionCenterDataSource;
+}) {
   const search = Route.useSearch();
   const { feedItemState } = useAppShell();
   const identityQuery = useIdentityQuery();
   const { goActionCenter, goChannel, goWorkflow } = useAppNavigation();
   const filter = search.filter ?? "needs-action";
-  const actionCenter = useActionCenterItems({
-    filter,
-    localDoneIds: feedItemState.doneSet,
-    state: search.state,
-  });
+  const items = React.useMemo(
+    () => filterActionCenterItems(actionCenter.allItems, filter, search.state),
+    [actionCenter.allItems, filter, search.state],
+  );
 
   const selectItem = React.useCallback(
     (itemId: string | null) => {
@@ -132,7 +171,7 @@ function ActionCenterRouteComponent() {
       filter={filter}
       isLoading={actionCenter.isLoading}
       isSettled={actionCenter.isSettled}
-      items={actionCenter.items}
+      items={items}
       onFilterChange={changeFilter}
       onMarkDone={markDone}
       onOpenSource={openSource}
