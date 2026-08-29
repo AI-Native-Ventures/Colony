@@ -14,6 +14,8 @@ export function ActionCenterDetail({
   onBack,
   onOpenSource,
   onRefresh,
+  onThreadReplySent,
+  resolvingAskIds,
   unavailableItemId,
 }: {
   currentPubkey: string;
@@ -21,6 +23,8 @@ export function ActionCenterDetail({
   onBack: () => void;
   onOpenSource: (item: ActionItem) => void;
   onRefresh: () => Promise<void>;
+  onThreadReplySent: (threadId: string) => void;
+  resolvingAskIds: ReadonlySet<string>;
   unavailableItemId: string | null;
 }) {
   if (!item) {
@@ -95,11 +99,13 @@ export function ActionCenterDetail({
         <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
           <ActionCenterAskDetail
             ask={item.source.ask}
+            isResolving={resolvingAskIds.has(item.source.ask.id)}
             onOpenSource={
               item.capabilities.includes("open-source")
                 ? () => onOpenSource(item)
                 : undefined
             }
+            onThreadReplySent={onThreadReplySent}
           />
         </section>
       );

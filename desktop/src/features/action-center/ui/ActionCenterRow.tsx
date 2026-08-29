@@ -64,10 +64,14 @@ export function sourceLabel(item: ActionItem): string {
 }
 
 export function ActionCenterRow({
+  isResolving = false,
   isSelected,
   item,
   onSelect,
 }: {
+  /** True while a threaded reply just answered this ask and it is waiting
+   * for the relay's auto-resolve to confirm on the next open-asks refetch. */
+  isResolving?: boolean;
   isSelected: boolean;
   item: ActionItem;
   onSelect: () => void;
@@ -80,6 +84,7 @@ export function ActionCenterRow({
       className={cn(
         "group flex w-full items-start gap-3 border-b border-border/45 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         isSelected && "bg-muted/45",
+        isResolving && "opacity-60",
       )}
       data-testid={`action-center-item-${item.id}`}
       onClick={onSelect}
@@ -112,7 +117,7 @@ export function ActionCenterRow({
               : "text-muted-foreground",
           )}
         >
-          {sourceLabel(item)}
+          {isResolving ? "Reply sent · resolving…" : sourceLabel(item)}
         </span>
         <span className="mt-1 block truncate text-sm text-muted-foreground">
           {item.summary}
