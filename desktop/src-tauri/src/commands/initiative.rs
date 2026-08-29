@@ -44,15 +44,16 @@ pub struct InitiativeStepResult {
     pub settled: bool,
 }
 
-/// This device's teams, projected into what the company contract validates.
+/// Project stored team records into what the company contract validates.
 ///
-/// These are the same records published as the Team projection the relay
-/// checks against. If they have drifted, the relay refuses the Task and says
-/// so in its receipt rather than this process guessing.
-fn company_team_refs(
-    app: &AppHandle,
-) -> Result<Vec<buzz_core_pkg::company::CompanyTeamRef>, String> {
-    Ok(load_teams(app)?
+/// Pulled out of `company_team_refs` so the pure mapping is testable without
+/// an `AppHandle` — a fresh install's default set (`load_teams_readonly` on a
+/// path that does not exist) is exactly the input the empty-teams regression
+/// test below needs.
+fn teams_to_company_refs(
+    teams: Vec<crate::managed_agents::TeamRecord>,
+) -> Vec<buzz_core_pkg::company::CompanyTeamRef> {
+    teams
         .into_iter()
         .filter_map(|team| {
             let lead = team.lead_persona_id?;
@@ -63,7 +64,18 @@ fn company_team_refs(
             })
         })
         .filter(|team| buzz_core_pkg::company::validate_team_ref(team).is_ok())
-        .collect())
+        .collect()
+}
+
+/// This device's teams, projected into what the company contract validates.
+///
+/// These are the same records published as the Team projection the relay
+/// checks against. If they have drifted, the relay refuses the Task and says
+/// so in its receipt rather than this process guessing.
+fn company_team_refs(
+    app: &AppHandle,
+) -> Result<Vec<buzz_core_pkg::company::CompanyTeamRef>, String> {
+    Ok(teams_to_company_refs(load_teams(app)?))
 }
 
 /// Read a relay-signed head, refusing anything the tenant relay did not write.
@@ -268,4 +280,48 @@ pub async fn ensure_chat_task(
         owning_team_id: plan.owning_team_id,
         signed_action: sign_action(&plan.action, &keys)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::teams_to_company_refs;
+    use buzz_sdk_pkg::implicit_task::owning_team_for_chat;
+
+    /// Reproduces the send-blocking bug directly: a fresh install (teams.json
+    /// does not exist yet) that has never approved a company blueprint must
+    /// still resolve *some* owning team for an agent whose persona is a
+    /// member of nothing, or every `@mention` send in `ensure_chat_task`
+    /// fails with "this company has no coordination team to own ambiguous
+    /// work" and is silently swallowed by `useMentionSendFlow`.
+    ///
+    /// Before the fix: only the Welcome Team is seeded (id
+    /// `builtin-team:welcome`, no lead), which neither matches the
+    /// coordination suffix nor validates as a `CompanyTeamRef` at all, so
+    /// `teams_to_company_refs` returns an empty list and this fails.
+    #[test]
+    fn fresh_install_has_a_coordination_team_for_ambiguous_chat_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("teams.json");
+        assert!(
+            !path.exists(),
+            "this test needs a store that has never been written"
+        );
+
+        let teams = crate::managed_agents::load_teams_readonly(&path).unwrap();
+        let refs = teams_to_company_refs(teams);
+
+        let owner = owning_team_for_chat(&refs, "some-hired-agent-persona");
+
+        assert!(
+            owner.is_ok(),
+            "a fresh install with no approved blueprint must still have a coordination team: {:?}",
+            owner.err()
+        );
+        let owner = owner.unwrap();
+        assert!(
+            owner.id.ends_with("company-coordination"),
+            "fallback team must be the coordination team, got {}",
+            owner.id
+        );
+    }
 }

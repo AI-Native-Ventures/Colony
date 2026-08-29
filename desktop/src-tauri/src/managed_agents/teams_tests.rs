@@ -4,9 +4,10 @@
 //! `#[path]`-included from there.
 
 use super::{
-    agents_referencing_personas, agents_referencing_team, load_teams_readonly, merge_teams,
-    merge_teams_impl, other_teams_referencing_personas, sort_teams, team_references_persona,
-    validate_team_deletion, validate_team_membership, BuiltInTeam,
+    agents_referencing_personas, agents_referencing_team, ensure_default_coordination_team,
+    load_teams_readonly, merge_teams, merge_teams_impl, other_teams_referencing_personas,
+    sort_teams, team_references_persona, validate_team_deletion, validate_team_membership,
+    BuiltInTeam, DEFAULT_COORDINATION_TEAM_ID,
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
@@ -454,8 +455,13 @@ fn welcome_team_is_seeded_and_idempotent() {
     let (records, changed) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z");
 
     assert!(changed);
-    assert_eq!(records.len(), 1);
-    let welcome = &records[0];
+    // Welcome Team plus the default coordination team seeded by
+    // `ensure_default_coordination_team` — see the dedicated tests below.
+    assert_eq!(records.len(), 2);
+    let welcome = records
+        .iter()
+        .find(|team| team.id == "builtin-team:welcome")
+        .expect("welcome team should be seeded");
     assert_eq!(welcome.id, "builtin-team:welcome");
     assert_eq!(welcome.name, "Welcome Team");
     assert_eq!(
@@ -520,9 +526,13 @@ fn load_teams_readonly_absent_file_performs_no_write() {
 
     let records = load_teams_readonly(&path).unwrap();
 
-    // Returns the merged built-in list without persisting it.
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, "builtin-team:welcome");
+    // Returns the merged built-in list (Welcome Team plus the default
+    // coordination team) without persisting it.
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().any(|team| team.id == "builtin-team:welcome"));
+    assert!(records
+        .iter()
+        .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID));
 
     // The file must still NOT exist — no write-on-load side effect.
     assert!(
@@ -563,5 +573,114 @@ fn load_teams_readonly_surfaces_read_error() {
     assert!(
         result.unwrap_err().contains("failed to read teams store"),
         "read error must be surfaced"
+    );
+}
+
+// ── ensure_default_coordination_team ────────────────────────────────────
+
+#[test]
+fn default_coordination_team_is_seeded_on_an_empty_store() {
+    let mut records = Vec::new();
+
+    let changed = ensure_default_coordination_team(&mut records, "2026-08-01T00:00:00Z");
+
+    assert!(changed);
+    let coordination = records
+        .iter()
+        .find(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+        .expect("default coordination team should be seeded");
+    assert!(coordination.id.ends_with("company-coordination"));
+    assert_eq!(
+        coordination.lead_persona_id.as_deref(),
+        Some("builtin:fizz")
+    );
+    assert!(coordination
+        .persona_ids
+        .iter()
+        .any(|persona| persona == "builtin:fizz"));
+    assert!(coordination.is_builtin);
+}
+
+#[test]
+fn default_coordination_team_is_not_duplicated_once_seeded() {
+    let mut records = Vec::new();
+    assert!(ensure_default_coordination_team(
+        &mut records,
+        "2026-08-01T00:00:00Z"
+    ));
+
+    let changed = ensure_default_coordination_team(&mut records, "2026-08-02T00:00:00Z");
+
+    assert!(!changed);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn default_coordination_team_is_never_seeded_alongside_a_blueprint_seeded_one() {
+    // Simulates a company-team materialized from an approved blueprint
+    // (`company/seed.rs::seed_teams`, `materialized_team_id` in
+    // `buzz-core/src/company_roster.rs`) — same coordination suffix, an
+    // entirely different id namespace.
+    let mut records = vec![team(
+        "company-team:abc123:horizon-labs:company-coordination",
+        "Coordination",
+    )];
+    records[0].lead_persona_id = Some("company:abc123:horizon-labs:chief-of-staff".to_string());
+    records[0].persona_ids = vec!["company:abc123:horizon-labs:chief-of-staff".to_string()];
+
+    let changed = ensure_default_coordination_team(&mut records, "2026-08-01T00:00:00Z");
+
+    assert!(!changed, "a valid coordination team already exists");
+    assert!(
+        !records
+            .iter()
+            .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID),
+        "must never add a second coordination team"
+    );
+}
+
+#[test]
+fn default_coordination_team_does_not_fight_a_user_edit_that_invalidated_it() {
+    // The device already seeded the default once, and the owner has since
+    // cleared its lead (e.g. via `update_team`). Built-ins elsewhere in this
+    // file are never force-repaired once customized; this mirrors that.
+    let mut invalidated = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
+    invalidated.is_builtin = true;
+    invalidated.lead_persona_id = None;
+    let mut records = vec![invalidated];
+
+    let changed = ensure_default_coordination_team(&mut records, "2026-08-01T00:00:00Z");
+
+    assert!(!changed);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].lead_persona_id, None);
+}
+
+#[test]
+fn default_coordination_team_survives_repeated_merges_without_losing_is_builtin() {
+    // Regression pin: `built_in_team_order` must exempt
+    // `DEFAULT_COORDINATION_TEAM_ID`, or the generic "demote whatever isn't
+    // in `built_ins`" pass in `merge_teams_impl` strips `is_builtin` from it
+    // on the very next load after it is seeded.
+    let (records, _) = merge_teams(Vec::new(), "2026-08-01T00:00:00Z");
+    let (records, changed) = merge_teams(records, "2026-08-02T00:00:00Z");
+
+    assert!(
+        !changed,
+        "a stable store must not report a change on reload"
+    );
+    let coordination = records
+        .iter()
+        .find(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+        .expect("default coordination team should persist");
+    assert!(
+        coordination.is_builtin,
+        "must stay builtin across reloads, like Welcome Team"
     );
 }

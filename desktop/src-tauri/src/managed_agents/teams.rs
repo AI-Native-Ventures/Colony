@@ -1,8 +1,9 @@
 use std::{collections::HashSet, fs, path::PathBuf};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::{
+    app_state::AppState,
     managed_agents::{managed_agents_base_dir, ManagedAgentRecord, TeamRecord},
     util::now_iso,
 };
@@ -40,6 +41,20 @@ const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     lead_persona_id: None,
 }];
 
+/// Suffix `owning_team_for_chat` (`buzz-sdk/src/implicit_task.rs`) matches an
+/// id against to find the team that owns ambiguous chat work. Duplicated here
+/// rather than shared across crates because this is the only other place that
+/// needs it.
+const COORDINATION_TEAM_SLUG: &str = "company-coordination";
+
+/// This device's own coordination team, seeded by [`ensure_default_coordination_team`]
+/// so implicit chat tasks have somewhere to land before any company blueprint
+/// is approved. Deliberately outside `BUILT_IN_TEAMS`: unlike Welcome, whether
+/// this one gets (re)seeded depends on whether some *other* team already
+/// satisfies the coordination contract, which the fixed reseed-by-id loop
+/// below can't express.
+const DEFAULT_COORDINATION_TEAM_ID: &str = "builtin-team:company-coordination";
+
 // Built-in teams that have been retired. A stored copy that still exactly
 // matches its seed is purged on load (the user never touched it); customized
 // copies are demoted to user-owned teams by the retirement loop in
@@ -74,6 +89,14 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
 }
 
 fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
+    if id == DEFAULT_COORDINATION_TEAM_ID {
+        // Owned and (re)seeded by `ensure_default_coordination_team`, not by
+        // the fixed `built_ins` list this function walks — exempt it from the
+        // generic "demote whatever isn't in `built_ins`" pass in
+        // `merge_teams_impl`, or it would lose `is_builtin` on the very next
+        // load.
+        return Some(usize::MAX);
+    }
     built_ins.iter().position(|team| team.id == id)
 }
 
@@ -82,7 +105,151 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 /// (name, description, persona membership). Returns the merged list and whether
 /// the store changed.
 fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
-    merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now)
+    let (mut records, mut changed) =
+        merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now);
+    if ensure_default_coordination_team(&mut records, now) {
+        changed = true;
+    }
+    (records, changed)
+}
+
+/// Whether `team` satisfies what `owning_team_for_chat`'s fallback and
+/// `company_team_refs`'s filter both require of a coordination team: an id
+/// ending in the coordination slug, with a lead who is also a member.
+fn is_valid_coordination_team(team: &TeamRecord) -> bool {
+    team.id.ends_with(COORDINATION_TEAM_SLUG)
+        && team
+            .lead_persona_id
+            .as_deref()
+            .is_some_and(|lead| team.persona_ids.iter().any(|member| member == lead))
+}
+
+/// Guarantee at least one valid coordination team exists, so implicit chat
+/// tasks always have somewhere to land — even on a device that has hired
+/// agents through the ordinary UI but never approved a company blueprint.
+///
+/// Blueprint approval seeds its own
+/// `company-team:{scope}:{company}:company-coordination` team once that path
+/// works (`company/seed.rs::seed_teams`, via `materialized_team_id` in
+/// `buzz-core/src/company_roster.rs`). This must never add a second one
+/// alongside it: `owning_team_for_chat`'s fallback just takes the first team
+/// whose id ends in the coordination slug, and built-ins sort ahead of user
+/// teams, so a stray default here could silently shadow the real one. So this
+/// only acts when NO stored team already satisfies the coordination contract
+/// — it reuses whatever is already there instead of creating a second one,
+/// and never touches an existing `DEFAULT_COORDINATION_TEAM_ID` record even
+/// if it has since been edited into invalidity, for the same
+/// never-fight-a-customization reason built-ins elsewhere in this file are
+/// preserved rather than repaired.
+///
+/// Known gap: if a device seeds this default (having hired agents before ever
+/// approving a blueprint) and *later* approves one, both teams stay valid —
+/// retiring the default once a real coordination team exists belongs to
+/// whatever fixes blueprint approval, not to this seeder.
+fn ensure_default_coordination_team(stored: &mut Vec<TeamRecord>, now: &str) -> bool {
+    if stored.iter().any(is_valid_coordination_team) {
+        return false;
+    }
+    if stored
+        .iter()
+        .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+    {
+        return false;
+    }
+
+    stored.push(TeamRecord {
+        id: DEFAULT_COORDINATION_TEAM_ID.to_string(),
+        name: "Company Coordination".to_string(),
+        description: Some(
+            "Owns chat work with no more specific team, until a company blueprint is approved."
+                .to_string(),
+        ),
+        instructions: None,
+        persona_ids: vec!["builtin:fizz".to_string()],
+        lead_persona_id: Some("builtin:fizz".to_string()),
+        is_builtin: true,
+        source_dir: None,
+        is_symlink: false,
+        symlink_target: None,
+        version: None,
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+    });
+    true
+}
+
+/// Add `persona_id` to the coordination team, if one exists and does not
+/// already have it as a member.
+///
+/// Called on every hire (`commands/agents.rs`) so a newly hired agent's
+/// persona can be assigned chat work through `owning_team_for_chat`'s
+/// membership branch, rather than only ever reaching it as ambiguous fallback
+/// work with no assignee. Best-effort and idempotent: a missing coordination
+/// team (should not happen once `load_teams` has run at least once) is a
+/// silent no-op, not an error that should block agent creation.
+pub fn ensure_persona_in_coordination_team(
+    app: &AppHandle,
+    persona_id: &str,
+) -> Result<(), String> {
+    let mut teams = load_teams(app)?;
+    let Some(team) = teams
+        .iter_mut()
+        .find(|team| is_valid_coordination_team(team))
+    else {
+        return Ok(());
+    };
+    if team.persona_ids.iter().any(|member| member == persona_id) {
+        return Ok(());
+    }
+    team.persona_ids.push(persona_id.to_string());
+    team.updated_at = now_iso();
+    save_teams(app, &teams)
+}
+
+/// Backfill every already-hired agent's persona onto the coordination team,
+/// for installs that hired employees before this device started seeding a
+/// default one. Runs once at launch; [`ensure_persona_in_coordination_team`]
+/// covers everything hired afterward.
+///
+/// Takes `managed_agents_store_lock` itself (unlike the two functions above,
+/// which run inside a command that already holds it) since it runs standalone
+/// during launch, alongside `backfill_persona_snapshots`.
+pub fn backfill_coordination_team_membership(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| error.to_string())?;
+
+    let agents = crate::managed_agents::load_managed_agents(app)?;
+    let persona_ids: Vec<&str> = agents
+        .iter()
+        .filter_map(|agent| agent.persona_id.as_deref())
+        .collect();
+    if persona_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut teams = load_teams(app)?;
+    let Some(team) = teams
+        .iter_mut()
+        .find(|team| is_valid_coordination_team(team))
+    else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    for persona_id in persona_ids {
+        if !team.persona_ids.iter().any(|member| member == persona_id) {
+            team.persona_ids.push(persona_id.to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        team.updated_at = now_iso();
+        save_teams(app, &teams)?;
+    }
+    Ok(())
 }
 
 fn merge_teams_impl(

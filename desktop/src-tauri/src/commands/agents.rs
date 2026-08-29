@@ -793,6 +793,20 @@ pub(crate) async fn create_managed_agent_with_creation_request(
 
         save_managed_agents(&app, &records)?;
 
+        // Best-effort: a hired agent's persona should be able to have chat
+        // work assigned to it (`owning_team_for_chat`'s membership branch)
+        // rather than only ever reaching the coordination team as ambiguous
+        // fallback work. A failure here must not block agent creation.
+        if let Some(persona_id) = requested_persona_id.as_deref() {
+            if let Err(error) =
+                crate::managed_agents::ensure_persona_in_coordination_team(&app, persona_id)
+            {
+                eprintln!(
+                    "buzz-desktop: failed to add persona {persona_id} to the coordination team: {error}"
+                );
+            }
+        }
+
         let record = records
             .iter()
             .find(|record| record.pubkey == pubkey)
