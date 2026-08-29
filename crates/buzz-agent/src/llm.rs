@@ -101,6 +101,8 @@ impl Llm {
                     cfg.thinking_effort,
                     effective_model,
                     cfg.prompt_caching,
+                    &cfg.openrouter_fallback_models,
+                    cfg.openrouter_deny_training,
                 );
                 self.post_openrouter(cfg, &body)
                     .await
@@ -2474,8 +2476,47 @@ fn apply_openrouter_mutations(
     effort: Option<ThinkingEffort>,
     effective_model: &str,
     prompt_caching: bool,
+    fallback_models: &[String],
+    deny_training: bool,
 ) {
     if let Some(obj) = body.as_object_mut() {
+        // Ordered fallback chain. OpenRouter tries `models` in sequence and
+        // falls through on context-length errors, moderation flags, rate
+        // limiting, and downtime, billing only the model that actually ran.
+        //
+        // `model` stays set as well: it is what the response echoes back when no
+        // fallback was needed, and every parse path downstream reads it. The
+        // chain leads with the configured model so an empty
+        // `OPENROUTER_FALLBACK_MODELS` is a no-op rather than a reordering.
+        //
+        // Measured 2026-08-29: OpenRouter 429s are frequently per-endpoint
+        // rather than account-wide — `z-ai/glm-5.2:free` was throttled while
+        // `minimax/minimax-m3:free` served fine on the same key in the same
+        // minute — so a chain recovers the common failure, not just the rare one.
+        if !fallback_models.is_empty() {
+            let mut chain = vec![effective_model.to_string()];
+            for m in fallback_models {
+                if !chain.iter().any(|existing| existing == m) {
+                    chain.push(m.clone());
+                }
+            }
+            obj.insert("models".into(), json!(chain));
+        }
+
+        // Training opt-out. Merged into any existing `provider` object rather
+        // than replacing it, so this composes with future provider-routing
+        // fields instead of silently dropping them.
+        if deny_training {
+            match obj.get_mut("provider").and_then(Value::as_object_mut) {
+                Some(provider) => {
+                    provider.insert("data_collection".into(), json!("deny"));
+                }
+                None => {
+                    obj.insert("provider".into(), json!({ "data_collection": "deny" }));
+                }
+            }
+        }
+
         // OpenRouter's Chat Completions API spells the output cap `max_tokens`;
         // `max_completion_tokens` is OpenAI-native and only 53 of 274
         // tools-capable OpenRouter models advertise it. Sending the OpenAI
@@ -2615,6 +2656,8 @@ mod tests {
             thinking_effort: None,
             thinking_summary: ThinkingSummary::Auto,
             prompt_caching: true,
+            openrouter_fallback_models: Vec::new(),
+            openrouter_deny_training: false,
         }
     }
 
@@ -5944,6 +5987,8 @@ mod tests {
             c.thinking_effort,
             "anthropic/claude-opus-4-7",
             true,
+            &[],
+            false,
         );
         assert_eq!(body["reasoning"]["effort"], "high");
         // `openai_body` is always called with `effort=None` on the OpenRouter
@@ -5982,7 +6027,14 @@ mod tests {
             "anthropic/claude-opus-4-7",
             None,
         );
-        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7", true);
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "anthropic/claude-opus-4-7",
+            true,
+            &[],
+            false,
+        );
         assert!(
             body.get("reasoning").is_none(),
             "reasoning must be absent when effort is None"
@@ -6014,6 +6066,8 @@ mod tests {
             c.thinking_effort,
             "anthropic/claude-opus-4-7",
             true,
+            &[],
+            false,
         );
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert!(
@@ -6034,7 +6088,14 @@ mod tests {
             "anthropic/claude-opus-4-7",
             None,
         );
-        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7", true);
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "anthropic/claude-opus-4-7",
+            true,
+            &[],
+            false,
+        );
         assert!(body.get("reasoning").is_none());
         assert!(
             body.get("provider").is_none(),
@@ -6058,7 +6119,14 @@ mod tests {
             "anthropic/claude-opus-4-7",
             None,
         );
-        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7", false);
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "anthropic/claude-opus-4-7",
+            false,
+            &[],
+            false,
+        );
         assert!(
             !body.to_string().contains("cache_control"),
             "BUZZ_AGENT_PROMPT_CACHING=0 must suppress every breakpoint: {body}"
@@ -6086,7 +6154,14 @@ mod tests {
             "anthropic/claude-opus-4-7",
             None,
         );
-        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7", true);
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "anthropic/claude-opus-4-7",
+            true,
+            &[],
+            false,
+        );
         assert!(
             body.to_string().contains("cache_control"),
             "caching on must still emit breakpoints: {body}"
@@ -6098,7 +6173,7 @@ mod tests {
     #[test]
     fn openrouter_body_without_token_limit_gains_none() {
         let mut body = json!({ "model": "vendor/model", "messages": [] });
-        apply_openrouter_mutations(&mut body, None, "vendor/model", true);
+        apply_openrouter_mutations(&mut body, None, "vendor/model", true, &[], false);
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("max_completion_tokens").is_none());
     }
@@ -6143,6 +6218,127 @@ mod tests {
         assert!(
             body.get("provider").is_none(),
             "summary body must not carry provider"
+        );
+    }
+
+    // ---- OpenRouter fallback chain + data policy ---------------------------
+
+    /// An empty fallback list must be a true no-op: no `models` key at all.
+    /// Sending `models` with a single entry would be harmless but would change
+    /// the request shape for every existing deployment, so the absence is the
+    /// contract.
+    #[test]
+    fn openrouter_no_fallbacks_omits_models_array() {
+        let mut body = json!({ "model": "z-ai/glm-5.2:free" });
+        apply_openrouter_mutations(&mut body, None, "z-ai/glm-5.2:free", false, &[], false);
+        assert!(
+            body.get("models").is_none(),
+            "empty chain must not emit a models array: {body}"
+        );
+    }
+
+    /// The chain leads with the model actually being requested, then the
+    /// configured fallbacks in order. Order is the entire contract — OpenRouter
+    /// tries them in sequence — so this asserts the exact vector.
+    #[test]
+    fn openrouter_fallback_chain_leads_with_effective_model() {
+        let mut body = json!({ "model": "z-ai/glm-5.2:free" });
+        let fallbacks = vec![
+            "minimax/minimax-m3:free".to_string(),
+            "minimax/minimax-m2.7:free".to_string(),
+        ];
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "z-ai/glm-5.2:free",
+            false,
+            &fallbacks,
+            false,
+        );
+        assert_eq!(
+            body["models"],
+            json!([
+                "z-ai/glm-5.2:free",
+                "minimax/minimax-m3:free",
+                "minimax/minimax-m2.7:free"
+            ])
+        );
+        assert_eq!(
+            body["model"], "z-ai/glm-5.2:free",
+            "`model` must survive: it is what the response echoes when no fallback was needed"
+        );
+    }
+
+    /// A fallback list that repeats the primary model must not duplicate it.
+    /// Config-driven chains are hand-edited, and a duplicate entry would waste a
+    /// retry on a model that just failed.
+    #[test]
+    fn openrouter_fallback_chain_dedupes_the_primary() {
+        let mut body = json!({ "model": "z-ai/glm-5.2:free" });
+        let fallbacks = vec![
+            "z-ai/glm-5.2:free".to_string(),
+            "minimax/minimax-m3:free".to_string(),
+        ];
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "z-ai/glm-5.2:free",
+            false,
+            &fallbacks,
+            false,
+        );
+        assert_eq!(
+            body["models"],
+            json!(["z-ai/glm-5.2:free", "minimax/minimax-m3:free"])
+        );
+    }
+
+    /// `OPENROUTER_DENY_TRAINING` reaches the wire as `provider.data_collection`.
+    /// OpenRouter enforces this rather than treating it as a hint — a model whose
+    /// every endpoint trains answers `404 No endpoints found matching your data
+    /// policy (Free model training)` — so the field's presence is load-bearing.
+    #[test]
+    fn openrouter_deny_training_sets_provider_data_collection() {
+        let mut body = json!({ "model": "minimax/minimax-m3:free" });
+        apply_openrouter_mutations(&mut body, None, "minimax/minimax-m3:free", false, &[], true);
+        assert_eq!(body["provider"]["data_collection"], "deny");
+    }
+
+    /// Off by default. Paired with the existing assertion that `provider` stays
+    /// absent when only `reasoning` is configured, this pins the default request
+    /// shape for every deployment that never sets the variable.
+    #[test]
+    fn openrouter_deny_training_absent_when_disabled() {
+        let mut body = json!({ "model": "minimax/minimax-m3:free" });
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "minimax/minimax-m3:free",
+            false,
+            &[],
+            false,
+        );
+        assert!(
+            body.get("provider").is_none(),
+            "no provider object when the policy is off: {body}"
+        );
+    }
+
+    /// The policy merges into an existing `provider` object instead of replacing
+    /// it. Nothing sets sibling provider fields today, so without this test the
+    /// difference between insert-and-merge and overwrite is invisible — and the
+    /// first future field to land there would be silently dropped.
+    #[test]
+    fn openrouter_deny_training_preserves_sibling_provider_fields() {
+        let mut body = json!({
+            "model": "minimax/minimax-m3:free",
+            "provider": { "sort": "throughput" },
+        });
+        apply_openrouter_mutations(&mut body, None, "minimax/minimax-m3:free", false, &[], true);
+        assert_eq!(body["provider"]["data_collection"], "deny");
+        assert_eq!(
+            body["provider"]["sort"], "throughput",
+            "merging must not clobber sibling provider-routing fields: {body}"
         );
     }
 
@@ -6433,7 +6629,14 @@ mod tests {
             "anthropic/claude-opus-4-7",
             None,
         );
-        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7", true);
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "anthropic/claude-opus-4-7",
+            true,
+            &[],
+            false,
+        );
         let messages = body["messages"].as_array().unwrap();
 
         // System message should have cache_control
@@ -6530,7 +6733,14 @@ mod tests {
             "anthropic/claude-opus-4-7",
             None,
         );
-        apply_openrouter_mutations(&mut body, None, "anthropic/claude-opus-4-7", true);
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "anthropic/claude-opus-4-7",
+            true,
+            &[],
+            false,
+        );
         let messages = body["messages"].as_array().unwrap();
 
         // Count text user messages that got cache_control
