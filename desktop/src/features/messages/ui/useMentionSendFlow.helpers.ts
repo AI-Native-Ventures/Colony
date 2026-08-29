@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import type { ManagedAgent } from "@/shared/api/types";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
@@ -6,7 +7,10 @@ import { attachWorkContext } from "@/features/company/attachWorkContext";
 import { mergeOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { QueuedMediaAttachment } from "@/features/messages/lib/backgroundMediaUploadStore";
-import type { DraftMentionRef } from "@/features/messages/lib/useDrafts";
+import type {
+  DraftMentionRef,
+  UseDraftsResult,
+} from "@/features/messages/lib/useDrafts";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { MENTION_REFERENCE_TAG } from "@/shared/lib/resolveMentionNames";
 
@@ -126,6 +130,62 @@ export function buildTypedMentionRouting({
 
 export function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/**
+ * finishSend attaches work context (a Task charge on the relay) before
+ * sending. That attach step can fail for reasons the user needs to read and
+ * act on ("this community has no coordination team...", "the message has
+ * not been sent."), so a caught failure here always surfaces the underlying
+ * message, not just a silent draft restore.
+ *
+ * Takes `restoreComposerAfterFailure` as a parameter rather than closing
+ * over it, so the handler can live here with the rest of this hook's
+ * extracted logic instead of inline in the hook body.
+ */
+export function createFinishSendFailureHandler(
+  restoreComposerAfterFailure: () => void,
+) {
+  return (error: unknown) => {
+    restoreComposerAfterFailure();
+    toast.error(getErrorMessage(error, "The message could not be sent."));
+  };
+}
+
+/**
+ * Re-persist a draft that a completeSend attempt bailed out of (channel
+ * changed mid-flight, upload canceled, work-context attach failed) so it is
+ * not lost. Skips the write if whatever is currently stored under
+ * `recoveryDraftKey` no longer matches what completeSend captured at the
+ * start of the attempt, so this never clobbers a newer edit made in the
+ * meantime.
+ */
+export function persistCanceledDraftIfUnchanged(
+  draft: PendingNonMemberMentionSend,
+  drafts: Pick<UseDraftsResult, "loadDraft" | "persistDraft">,
+) {
+  if (!draft.recoveryDraftKey) return;
+  const existing = drafts.loadDraft(draft.recoveryDraftKey);
+  if (
+    existing &&
+    (existing.content !== draft.savedContent ||
+      existing.channelId !==
+        (draft.capturedChannelId ?? draft.recoveryDraftKey) ||
+      JSON.stringify(existing.pendingImeta) !==
+        JSON.stringify(draft.savedImeta) ||
+      JSON.stringify(existing.spoileredAttachmentUrls) !==
+        JSON.stringify([...draft.savedSpoileredAttachmentUrls]))
+  ) {
+    return;
+  }
+  drafts.persistDraft(
+    draft.recoveryDraftKey,
+    draft.savedContent,
+    draft.capturedChannelId ?? draft.recoveryDraftKey,
+    draft.savedImeta,
+    [...draft.savedSpoileredAttachmentUrls],
+    draft.savedMentionRefs,
+  );
 }
 
 export function uniqueNormalizedPubkeys(pubkeys: Iterable<string>) {
