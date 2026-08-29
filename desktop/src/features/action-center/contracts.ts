@@ -71,6 +71,20 @@ export type ActionAskSource = {
    * never render it like an ordinary human answer.
    */
   resolution?: AskResolution;
+  /**
+   * The deadline computed exactly as the broker does (see
+   * `lib/askDeadline.ts`), for the countdown UI a later ticket renders.
+   * Only meaningful (drives an auto-execution) when `ask.defaultOption` is
+   * set, but computed for every ask row for a uniform contract.
+   */
+  deadlineAt: number;
+  /**
+   * `ask.category` matched case-insensitively against the hard list (spend,
+   * external_send, hiring, legal, pricing, deletion, vendor) — categories
+   * that can never carry a default-on-timeout and so wait on the owner
+   * forever. `false` when the ask carries no category.
+   */
+  isHardList: boolean;
 };
 
 export type ActionBlockSource = {
@@ -157,4 +171,10 @@ export type ActionCenterProjectionInput = {
   /** Unix seconds used to decide which reminders are due. Defaults to now;
    * overridable so tests can pin the clock. */
   now?: number;
+  /**
+   * The community's `ask_window_secs` override (kind 30179 content), or
+   * `null` when there is none yet — see `lib/companyAskWindow.ts`. Feeds
+   * every ask's computed deadline (tier 1 ranking).
+   */
+  companyAskWindowSecs?: number | null;
 };

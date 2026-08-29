@@ -49,7 +49,7 @@ function reminder(id, eventId = `${id}-event`, overrides = {}) {
   };
 }
 
-function ask(id = "ask-1") {
+function ask(id = "ask-1", overrides = {}) {
   return {
     id,
     askType: "decision",
@@ -58,6 +58,17 @@ function ask(id = "ask-1") {
     filerPubkey: PUBKEY,
     createdAt: 100,
     rawContent: "{}",
+    channelId: null,
+    threadId: null,
+    audiencePubkey: null,
+    priorAskId: null,
+    originalFilerPubkey: null,
+    taskIds: ["task-1"],
+    category: null,
+    defaultOption: null,
+    defaultWindowSecs: null,
+    initiativeId: "no-initiative",
+    ...overrides,
   };
 }
 
@@ -98,9 +109,11 @@ test("projects actionable sources into stable, sorted items", () => {
     now: 400,
   });
 
+  // The ask (no `default_option`) is tier 2 (blocked work); the reminder is
+  // tier 3 (everything else) — tier 2 outranks tier 3 regardless of age.
   assert.deepEqual(
     items.map((item) => item.id),
-    ["reminder:reminder-1", "ask:ask-1"],
+    ["ask:ask-1", "reminder:reminder-1"],
   );
   assert.equal(filterActionCenterItems(items, "asks").length, 1);
   assert.equal(filterActionCenterItems(items, "needs-action").length, 2);
@@ -229,6 +242,138 @@ test("an owner-addressed pending workflow approval is a needs-action item", () =
     "approve",
     "deny",
   ]);
+});
+
+test("ranks strictly by tier — deadline, then blocked work, then everything else, then settled rows", () => {
+  const workflowSource = (id, createdAt) => ({
+    kind: "workflow",
+    workflow: { id, name: `Workflow ${id}` },
+    run: {
+      id: `run-${id}`,
+      status: "waiting_approval",
+      createdAt,
+      completedAt: null,
+      executionTrace: [],
+    },
+    approval: {
+      token: `token-${id}`,
+      stepId: "step",
+      status: "pending",
+      approverSpec: PUBKEY,
+    },
+  });
+
+  const items = buildActionCenterItems({
+    asks: [
+      // Tier 2 (blocked work): no default_option. Filed last (createdAt 500)
+      // but a blocked-work item still outranks every tier-3 item.
+      ask("ask-blocked", { createdAt: 500, taskIds: ["task-1", "task-2"] }),
+      // Tier 1 (deadline): has a default_option, so it ranks first no
+      // matter how recently it was filed.
+      ask("ask-deadline", {
+        createdAt: 900,
+        defaultOption: "Ship it",
+        defaultWindowSecs: 60,
+      }),
+    ],
+    resolvedAsks: [
+      {
+        resolution: resolution("res-1", CLOSED_ASK_HEX, 1_000, {
+          answer: { decision: "Done" },
+        }),
+        ask: closedAsk(),
+      },
+    ],
+    // Tier 3 items are ranked by "how long has this been waiting"
+    // (`updatedAt`: a reminder's is its `notBefore`, a workflow's is its
+    // run's `createdAt`) — the workflow's 20 predates the reminder's
+    // `notBefore` of 380, so the workflow is the older of the two.
+    reminders: [reminder("reminder-1", "reminder-1-event", { notBefore: 380 })],
+    workflows: [workflowSource("wf-1", 20)],
+    now: 400,
+  });
+
+  assert.deepEqual(
+    items.map((item) => item.id),
+    [
+      "ask:ask-deadline", // tier 1: deadline
+      "ask:ask-blocked", // tier 2: blocked work
+      "workflow:wf-1:run-wf-1", // tier 3: everything else, older
+      "reminder:reminder-1", // tier 3: everything else, newer
+      `resolved-ask:${CLOSED_ASK_HEX}`, // settled sink, last regardless of tier
+    ],
+  );
+});
+
+test("tier 2 ranks asks by blast radius descending, Block instances always last, ties broken by age", () => {
+  const MANIFEST_ID = "b".repeat(64);
+  const feedBlock = (id, createdAt) => ({
+    id,
+    kind: 9,
+    pubkey: PUBKEY,
+    content: "## Approve the spend\nDetails",
+    createdAt,
+    channelId: "channel-1",
+    channelName: "general",
+    tags: [
+      ["e", MANIFEST_ID, "", "block"],
+      [
+        "block",
+        "1",
+        "approval",
+        MANIFEST_ID,
+        "11111111-1111-4111-8111-111111111111",
+      ],
+      ["block-data", '{"amount":500}'],
+      ["block-attention", "1", "required"],
+      ["p", "c".repeat(64)],
+      ["block-processor", "1", PUBKEY],
+    ],
+    category: "needs_action",
+  });
+
+  const items = buildActionCenterItems({
+    asks: [
+      ask("ask-wide", { createdAt: 300, taskIds: ["t1", "t2", "t3"] }),
+      ask("ask-narrow", { createdAt: 100, taskIds: ["t1"] }),
+      ask("ask-narrow-newer", { createdAt: 200, taskIds: ["t1"] }),
+    ],
+    feed: {
+      needsAction: [feedBlock("block-old", 50), feedBlock("block-new", 150)],
+    },
+    reminders: [],
+  });
+
+  assert.deepEqual(
+    items.map((item) => item.id),
+    [
+      "ask:ask-wide", // blast radius 3
+      "ask:ask-narrow", // blast radius 1, older of the two ties
+      "ask:ask-narrow-newer", // blast radius 1, newer
+      "block:block-old", // no blast-radius signal: always after every ask
+      "block:block-new",
+    ],
+  );
+});
+
+test("isHardList matches the hard list case-insensitively, mirroring is_hard_list_category", () => {
+  const items = buildActionCenterItems({
+    asks: [
+      ask("ask-spend", { category: "SPEND" }),
+      ask("ask-mixed-case", { category: "External_Send" }),
+      ask("ask-ordinary", { category: "onboarding" }),
+      ask("ask-none", { category: null }),
+    ],
+    reminders: [],
+  });
+
+  const isHardListById = new Map(
+    items.map((item) => [item.id, item.source.isHardList]),
+  );
+  assert.equal(isHardListById.get("ask:ask-spend"), true);
+  assert.equal(isHardListById.get("ask:ask-mixed-case"), true);
+  assert.equal(isHardListById.get("ask:ask-ordinary"), false);
+  assert.equal(isHardListById.get("ask:ask-none"), false);
 });
 
 test("a resolved ask appears as a completed item whose summary accounts for the answer", () => {

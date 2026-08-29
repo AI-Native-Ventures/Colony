@@ -1,3 +1,12 @@
+/** Key for the community's company-profile head, read for `ask_window_secs`
+ * (the ranking deadline's community-default fallback). */
+export function actionCenterCompanyProfileQueryKey(
+  communityId: string,
+  relayPubkey: string,
+) {
+  return ["action-center-company-profile", communityId, relayPubkey] as const;
+}
+
 /** Key for the community-scoped workflow list projection. */
 export function actionCenterWorkflowQueryKey(
   communityId: string,

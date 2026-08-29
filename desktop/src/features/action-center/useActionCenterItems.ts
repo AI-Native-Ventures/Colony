@@ -12,13 +12,16 @@ import { useResolvedAsks } from "@/features/asks/useAskResolutions";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { useRemindersQuery } from "@/features/reminders/hooks";
+import { relayClient } from "@/shared/api/relayClient";
 import {
   getChannelsWorkflows,
   getRunApprovals,
   getWorkflowRuns,
 } from "@/shared/api/tauriWorkflows";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { KIND_COMPANY_PROFILE } from "@/shared/constants/kinds";
 import { useFeatureEnabled } from "@/shared/features";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -36,9 +39,11 @@ import {
 } from "./actionCenterModel";
 import {
   actionCenterApprovalsQueryKey,
+  actionCenterCompanyProfileQueryKey,
   actionCenterWorkflowQueryKey,
   actionCenterWorkflowRunsQueryKey,
 } from "./lib/actionCenterQueryKeys";
+import { readCompanyAskWindowSecs } from "./lib/companyAskWindow";
 import { selectOwnerWorkflowApprovalSources } from "./lib/workflowApprovals";
 import type {
   ActionCenterFilter,
@@ -158,6 +163,36 @@ export function useActionCenterItems({
     [latestRuns, ownerPubkey, pendingApprovals, workflows, workflowsEnabled],
   );
 
+  // The community's ask-window override feeds every ask's ranking deadline
+  // (tier 1). A missing/unreachable value never blocks the queue -- it just
+  // falls back to `DEFAULT_ASK_WINDOW_SECS` inside `computeAskDeadline`,
+  // mirroring the broker's own "never fails" company-default read -- so
+  // this query's own errors are deliberately not surfaced or awaited.
+  const relaySelfQuery = useQuery({
+    queryKey: ["action-center-relay-self"],
+    queryFn: () => getRelaySelf(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const relayPubkey = relaySelfQuery.data ?? null;
+  const companyProfileQuery = useQuery({
+    queryKey: actionCenterCompanyProfileQueryKey(
+      communityId,
+      relayPubkey ?? "",
+    ),
+    queryFn: () =>
+      relayClient.fetchEvents({
+        kinds: [KIND_COMPANY_PROFILE],
+        authors: [relayPubkey ?? ""],
+        limit: 1,
+      }),
+    enabled: communityId !== "" && relayPubkey !== null,
+    staleTime: 5 * 60_000,
+  });
+  const companyAskWindowSecs = React.useMemo(
+    () => readCompanyAskWindowSecs(companyProfileQuery.data ?? [], relayPubkey),
+    [companyProfileQuery.data, relayPubkey],
+  );
+
   const feed = homeFeedQuery.data?.feed;
   const reminders = remindersQuery.data ?? [];
   const { lookup: reportingLineLookup } = useReportingLineLookup(communityId);
@@ -212,9 +247,11 @@ export function useActionCenterItems({
         feed: feed ? { needsAction: feed.needsAction } : undefined,
         reminders,
         workflows: workflowSources,
+        companyAskWindowSecs,
       }),
     [
       askRoutingNotesByAskId,
+      companyAskWindowSecs,
       feed,
       localDoneIds,
       openAsks.asks,
@@ -233,6 +270,7 @@ export function useActionCenterItems({
   const refetchAsks = openAsks.refetch;
   const refetchReminders = remindersQuery.refetch;
   const refetchWorkflows = workflowsQuery.refetch;
+  const refetchCompanyProfile = companyProfileQuery.refetch;
   const refetchWorkflowRuns = React.useMemo(
     () => workflowRunQueries.map((query) => query.refetch),
     [workflowRunQueries],
@@ -247,11 +285,13 @@ export function useActionCenterItems({
       refetchAsks(),
       refetchReminders(),
       refetchWorkflows(),
+      refetchCompanyProfile(),
       ...refetchWorkflowRuns.map((refetchOne) => refetchOne()),
       ...refetchWorkflowApprovals.map((refetchOne) => refetchOne()),
     ]);
   }, [
     refetchAsks,
+    refetchCompanyProfile,
     refetchHomeFeed,
     refetchReminders,
     refetchWorkflowApprovals,

@@ -9,16 +9,18 @@ import {
   KIND_JOB_HEAD,
   KIND_APPROVAL_REQUEST,
 } from "@/shared/constants/kinds";
+import { isHardListCategory } from "@/features/agents/delegationGrantActions";
 import { describeAskResolution } from "@/features/asks/lib/askResolution";
 import { isDue } from "@/features/reminders/lib/reminderFilters";
+import { computeAskDeadline } from "./lib/askDeadline";
 import { projectBlockFeedItem } from "./lib/blockActionCenter";
 import type {
+  ActionAskSource,
   ActionCenterFilter,
   ActionCenterProjectionInput,
   ActionCenterStateFilter,
   ActionItem,
   ActionItemKind,
-  ActionItemState,
   ActionSource,
   ActionWorkflowSource,
 } from "./contracts";
@@ -47,12 +49,22 @@ const STRUCTURED_FEED_KINDS = new Set([
   KIND_JOB_HEAD,
 ]);
 
-const STATE_RANK: Record<ActionItemState, number> = {
-  failed: 0,
-  "needs-action": 1,
-  active: 2,
-  completed: 3,
-};
+/**
+ * Ranking tiers (spec "Ranking"). Strict order; within a tier, oldest first.
+ * A row that has left "needs-action" (answered, resolved, executed) sinks
+ * below all three real tiers — none of them describe a settled item, and the
+ * old state-rank sort already put completed rows last, newest first, so that
+ * ordering is preserved rather than redesigned here.
+ */
+const TIER_DEADLINE = 0;
+const TIER_BLOCKED_WORK = 1;
+const TIER_EVERYTHING_ELSE = 2;
+const TIER_SETTLED = 3;
+type Tier =
+  | typeof TIER_DEADLINE
+  | typeof TIER_BLOCKED_WORK
+  | typeof TIER_EVERYTHING_ELSE
+  | typeof TIER_SETTLED;
 
 export function actionItemId(kind: ActionItemKind, sourceId: string): string {
   return `${kind}:${sourceId}`;
@@ -71,12 +83,61 @@ function sourceUpdatedAt(source: ActionSource): number {
   }
 }
 
+function itemTier(item: ActionItem): Tier {
+  if (item.state !== "needs-action") return TIER_SETTLED;
+  if (item.source.kind === "ask") {
+    return item.source.ask.defaultOption !== null
+      ? TIER_DEADLINE
+      : TIER_BLOCKED_WORK;
+  }
+  if (item.source.kind === "block") return TIER_BLOCKED_WORK;
+  return TIER_EVERYTHING_ELSE; // reminder, workflow
+}
+
+/**
+ * Tier 2's ranking signal: the ask's own blast radius (its `task` tag count)
+ * for an ask, or a sentinel below any real count for a Block — Blocks carry
+ * no blast-radius signal at all (spec: "ranked by age among themselves").
+ * Every open ask carries at least one `task` tag (the relay refuses
+ * `MissingTaskTag` otherwise), so `-1` always sorts after every ask and a
+ * Block never outranks one on this axis; ties (any two Blocks, or two asks
+ * with equal counts) fall through to the shared oldest-first tie-break.
+ */
+function blastRadiusScore(item: ActionItem): number {
+  return item.source.kind === "ask" ? item.source.ask.taskIds.length : -1;
+}
+
+function askDeadlineAt(item: ActionItem): number {
+  return item.source.kind === "ask" ? item.source.deadlineAt : Infinity;
+}
+
 function compareItems(left: ActionItem, right: ActionItem): number {
-  return (
-    STATE_RANK[left.state] - STATE_RANK[right.state] ||
-    right.updatedAt - left.updatedAt ||
-    left.id.localeCompare(right.id)
-  );
+  const leftTier = itemTier(left);
+  const rightTier = itemTier(right);
+  if (leftTier !== rightTier) return leftTier - rightTier;
+  switch (leftTier) {
+    case TIER_DEADLINE:
+      return (
+        askDeadlineAt(left) - askDeadlineAt(right) ||
+        left.updatedAt - right.updatedAt ||
+        left.id.localeCompare(right.id)
+      );
+    case TIER_BLOCKED_WORK:
+      return (
+        blastRadiusScore(right) - blastRadiusScore(left) ||
+        left.updatedAt - right.updatedAt ||
+        left.id.localeCompare(right.id)
+      );
+    case TIER_EVERYTHING_ELSE:
+      return (
+        left.updatedAt - right.updatedAt || left.id.localeCompare(right.id)
+      );
+    default:
+      // Settled rows: unchanged from the old state-rank sort — newest first.
+      return (
+        right.updatedAt - left.updatedAt || left.id.localeCompare(right.id)
+      );
+  }
 }
 
 type FeedSourceItem = NonNullable<
@@ -174,9 +235,21 @@ export function buildActionCenterItems({
   workflows = [],
   doneIds = new Set(),
   now = Math.floor(Date.now() / 1_000),
+  companyAskWindowSecs = null,
 }: ActionCenterProjectionInput): ActionItem[] {
+  const askSource = (
+    ask: ActionAskSource["ask"],
+    resolution?: ActionAskSource["resolution"],
+  ): ActionAskSource => ({
+    kind: "ask",
+    ask,
+    resolution,
+    deadlineAt: computeAskDeadline(ask, companyAskWindowSecs),
+    isHardList: ask.category !== null && isHardListCategory(ask.category),
+  });
+
   const items: ActionItem[] = asks.map((ask) => {
-    const source: ActionSource = { kind: "ask", ask };
+    const source = askSource(ask);
     const baseSummary = ask.costOfDelay ?? `Answer requested · ${ask.askType}`;
     const routingNote = askRoutingNotesByAskId?.get(ask.id) ?? null;
     return {
@@ -199,7 +272,7 @@ export function buildActionCenterItems({
   // of what happened, and the source carries the full resolution so every
   // surface can render an executed default differently from a human answer.
   for (const { resolution, ask } of resolvedAsks) {
-    const source: ActionSource = { kind: "ask", ask, resolution };
+    const source = askSource(ask, resolution);
     items.push({
       id: `resolved-ask:${ask.id}`,
       kind: "ask",

@@ -173,3 +173,92 @@ test("malformed routing tags degrade to null rather than throwing", () => {
   assert.equal(ask.priorAskId, null);
   assert.equal(ask.originalFilerPubkey, null);
 });
+
+test("reads every `task` tag, raw and undeduplicated, for blast radius", () => {
+  const ask = readAsk({
+    ...askEvent("ask-tasks", { headline: "Fix the outage" }),
+    tags: [
+      ["task", "task-1"],
+      ["task", "task-2"],
+      ["task", "task-1"],
+    ],
+  });
+  assert.deepEqual(ask.taskIds, ["task-1", "task-2", "task-1"]);
+});
+
+test("an ask with no task tags has an empty blast radius", () => {
+  const ask = readAsk(
+    askEvent("ask-no-tasks", { headline: "Need a decision" }),
+  );
+  assert.deepEqual(ask.taskIds, []);
+});
+
+test("category preserves its filed case; the hard list is matched elsewhere, case-insensitively", () => {
+  const ask = readAsk({
+    ...askEvent("ask-category", { headline: "Approve the spend" }),
+    tags: [["category", "SPEND"]],
+  });
+  assert.equal(ask.category, "SPEND");
+});
+
+test("an ambiguous category tag reads as no category", () => {
+  const ask = readAsk({
+    ...askEvent("ask-category-dupe", { headline: "Need a decision" }),
+    tags: [
+      ["category", "spend"],
+      ["category", "legal"],
+    ],
+  });
+  assert.equal(ask.category, null);
+});
+
+test("default_option and default_window_secs come off the content, not tags", () => {
+  const ask = readAsk(
+    askEvent("ask-default", {
+      headline: "Ship the deploy window?",
+      default_option: "Friday 6pm",
+      default_window_secs: 3_600,
+    }),
+  );
+  assert.equal(ask.defaultOption, "Friday 6pm");
+  assert.equal(ask.defaultWindowSecs, 3_600);
+});
+
+test("an ask with no default fields reads both as null", () => {
+  const ask = readAsk(
+    askEvent("ask-no-default", { headline: "Need a decision" }),
+  );
+  assert.equal(ask.defaultOption, null);
+  assert.equal(ask.defaultWindowSecs, null);
+});
+
+test("a negative or non-integer default_window_secs reads as null rather than a bad number", () => {
+  const negative = readAsk(
+    askEvent("ask-negative-window", {
+      headline: "Need a decision",
+      default_window_secs: -1,
+    }),
+  );
+  assert.equal(negative.defaultWindowSecs, null);
+  const fractional = readAsk(
+    askEvent("ask-fractional-window", {
+      headline: "Need a decision",
+      default_window_secs: 12.5,
+    }),
+  );
+  assert.equal(fractional.defaultWindowSecs, null);
+});
+
+test("initiative id is read from its tag, the reserved no-initiative value included", () => {
+  const scoped = readAsk({
+    ...askEvent("ask-initiative", { headline: "Need a decision" }),
+    tags: [["initiative", "website-relaunch"]],
+  });
+  assert.equal(scoped.initiativeId, "website-relaunch");
+
+  const unscoped = readAsk({
+    ...askEvent("ask-no-initiative", { headline: "Need a decision" }),
+    tags: [["initiative", "no-initiative"]],
+  });
+  assert.equal(unscoped.initiativeId, "no-initiative");
+});
