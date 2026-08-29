@@ -107,14 +107,18 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
     let (mut records, mut changed) =
         merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now);
-    // Retire before ensuring: once a real coordination team exists the
-    // default has to go, and ensuring first would just find the default
-    // itself still valid and leave it in place. Order matters here.
-    if retire_default_coordination_team(&mut records) {
-        changed = true;
-    } else if ensure_default_coordination_team(&mut records, now) {
-        changed = true;
-    }
+    // Short-circuiting `||`, deliberately, not both calls unconditionally.
+    // Retire before ensure: once retiring has run, a real coordination team
+    // is already in `records`, so `ensure_default_coordination_team`'s own
+    // "a valid coordination team already exists" guard makes calling it a
+    // safe no-op either way - the short-circuit is a cheap skip of that
+    // redundant scan, not a correctness requirement. One `||` expression
+    // rather than the original `if`/`else if` because clippy's
+    // `if-same-then-else` flagged them as identical: both arms produced the
+    // same `changed = true`, even though the calls they guard are not
+    // interchangeable.
+    changed |= retire_default_coordination_team(&mut records)
+        || ensure_default_coordination_team(&mut records, now);
     (records, changed)
 }
 
