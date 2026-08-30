@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import {
   blockTags,
   canonicalJson,
@@ -106,6 +106,13 @@ async function showBlueprint(
   await installMockBridge(page, {
     blockEvents: [manifestEvent],
     relaySelf: OWNER_PUBKEY,
+    // The relay mints a community profile head for every community at boot
+    // (`run_profile_backfill`), so approval always edits that head. Without
+    // this, `getActiveCompanyHead()` finds nothing and the approve flow
+    // never reaches `execute_company_blueprint` at all.
+    communityProfileHead: {
+      signerSecretHex: TEST_IDENTITIES.tyler.privateKey,
+    },
   });
   await openChannel(page, "general");
   // Without a live subscription the mock bridge silently drops the message.
@@ -169,6 +176,13 @@ test("approving sends the exact document the block carries", async ({
   expect(payload.expectedHash).toBe(sha256Text(BLUEPRINT));
   // The relay's own key addresses the company's records.
   expect(payload.relayPubkey).toBe(OWNER_PUBKEY);
+  // The bug this spec exists to catch: approval must read the profile head
+  // the relay already minted at boot and carry it through as the
+  // compare-and-set token, rather than asserting a fresh head into
+  // existence (which the relay refuses unconditionally once one exists).
+  expect(payload.expectedHeadEventId).toMatch(/^[0-9a-f]{64}$/);
+  expect(payload.expectedHeadCreatedAt).toBe(1_780_000_000);
+  expect(payload.expectedHeadUpdatedAt).toBe(1_780_000_000);
 });
 
 // The dangerous half. By the time publishing runs the employees exist, so a

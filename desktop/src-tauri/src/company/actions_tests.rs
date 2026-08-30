@@ -15,6 +15,16 @@ const RELAY: &str = "5f2b1c8d4e7a90b3c6d1e4f7a0b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f
 const CHANNEL: &str = "3f6c1a2e-1111-4000-8000-000000000009";
 const NOW: i64 = 1_785_369_600;
 
+/// What `run_profile_backfill` has already minted at boot by the time an
+/// approval runs. Every community has one; approval edits it.
+fn existing_head() -> ExistingProfileHead {
+    ExistingProfileHead {
+        event_id: "2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+        created_at: NOW - 500,
+        updated_at: NOW - 100,
+    }
+}
+
 fn blueprint() -> ValidatedBlueprint {
     CompanyBlueprint {
         schema: buzz_core_pkg::company_roster::BLUEPRINT_SCHEMA.to_string(),
@@ -78,19 +88,27 @@ fn blueprint() -> ValidatedBlueprint {
 
 #[test]
 fn the_company_action_targets_the_relay_authored_coordinate() {
-    let action = company_action(&blueprint(), RELAY, NOW).expect("build");
+    let head = existing_head();
+    let action = company_action(&blueprint(), RELAY, NOW, &head).expect("build");
     // One profile per community, at one fixed slot; the blueprint's own
     // company id no longer names anything.
     assert_eq!(action.target, format!("30179:{RELAY}:profile"));
     assert_eq!(action.relay_pubkey, RELAY);
-    assert_eq!(action.operation, CompanyActionOperation::Create);
+    // The relay always has a profile head by boot time
+    // (`run_profile_backfill`), so approval edits it rather than creating a
+    // second one; a `Create` here is refused on every community, every time.
+    assert_eq!(action.operation, CompanyActionOperation::Update);
+    assert_eq!(
+        action.expected_head.as_deref(),
+        Some(head.event_id.as_str())
+    );
 }
 
 /// Reaching here means the owner approved it. A draft company would leave the
 /// owner having approved something the system still treats as unapproved.
 #[test]
 fn the_company_is_recorded_as_approved() {
-    let action = company_action(&blueprint(), RELAY, NOW).expect("build");
+    let action = company_action(&blueprint(), RELAY, NOW, &existing_head()).expect("build");
     match action.payload {
         CompanyActionPayload::Company(profile) => {
             assert_eq!(profile.trading_name, "Horizon Labs");
@@ -128,8 +146,9 @@ fn every_initiative_is_proposed_and_costs_nothing_yet() {
 /// recognises the second attempt as one it already applied.
 #[test]
 fn idempotency_keys_are_stable_across_rebuilds() {
-    let first = company_action(&blueprint(), RELAY, NOW).expect("build");
-    let again = company_action(&blueprint(), RELAY, NOW + 5_000).expect("build");
+    let head = existing_head();
+    let first = company_action(&blueprint(), RELAY, NOW, &head).expect("build");
+    let again = company_action(&blueprint(), RELAY, NOW + 5_000, &head).expect("build");
     assert_eq!(
         first.idempotency_key, again.idempotency_key,
         "a retry must reuse the key, even at a later time"
@@ -188,7 +207,7 @@ fn an_initiative_owner_resolves_to_the_persona_that_gets_created() {
 #[test]
 fn a_signed_action_round_trips_through_the_shared_parser() {
     let keys = nostr::Keys::generate();
-    let action = company_action(&blueprint(), RELAY, NOW).expect("build");
+    let action = company_action(&blueprint(), RELAY, NOW, &existing_head()).expect("build");
     let json = sign_action(&action, &keys).expect("sign");
 
     let event: nostr::Event = nostr::JsonUtil::from_json(json.as_str()).expect("parse event");
@@ -208,6 +227,6 @@ fn a_request_id_that_is_not_a_uuid_is_refused() {
     let mut raw = blueprint().inner().clone();
     raw.request_id = "not-a-uuid".to_string();
     let blueprint: ValidatedBlueprint = raw.try_into().expect("still structurally valid");
-    assert!(company_action(&blueprint, RELAY, NOW).is_err());
+    assert!(company_action(&blueprint, RELAY, NOW, &existing_head()).is_err());
     assert!(initiative_actions(&blueprint, SCOPE, RELAY, CHANNEL, NOW).is_err());
 }

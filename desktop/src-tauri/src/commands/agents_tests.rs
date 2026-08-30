@@ -1,5 +1,5 @@
 use super::*;
-use crate::managed_agents::AgentDefinition;
+use crate::managed_agents::{AgentDefinition, ManagedAgentRecord};
 
 fn bare_agent_record(
     persona_id: Option<&str>,

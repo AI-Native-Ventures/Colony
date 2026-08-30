@@ -261,6 +261,73 @@ struct RunOutcome {
     duplicates: usize,
 }
 
+/// Read the community profile head's id and timestamps off the relay.
+///
+/// The relay mints one for every community at boot
+/// (`run_profile_backfill`), so this exists before `publish_company` ever
+/// runs. Reading it is what lets approval build an `Update` carrying the
+/// real compare-and-set token, the same way the app does, instead of the
+/// `Create` the relay refuses unconditionally once a head already exists.
+async fn fetch_profile_head(
+    http: &str,
+    relay_pubkey: &str,
+    keys: &nostr::Keys,
+) -> super::actions::ExistingProfileHead {
+    let client = reqwest::Client::new();
+    let url = format!("{http}/query");
+    let body = serde_json::json!([{
+        "kinds": [30179],
+        "authors": [relay_pubkey],
+        "#d": ["profile"],
+        "limit": 1,
+    }])
+    .to_string();
+    let response = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("authorization", nip98(keys, "POST", &url, body.as_bytes()))
+        .body(body)
+        .send()
+        .await
+        .expect("query reaches the relay");
+    let raw = response.text().await.unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let events = parsed
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            parsed
+                .get("events")
+                .and_then(|events| events.as_array())
+                .cloned()
+        })
+        .unwrap_or_default();
+    let event = events
+        .first()
+        .expect("the relay has already minted a community profile at boot");
+    let event_id = event
+        .get("id")
+        .and_then(|id| id.as_str())
+        .expect("head event carries an id")
+        .to_string();
+    let content: serde_json::Value = event
+        .get("content")
+        .and_then(|content| content.as_str())
+        .and_then(|content| serde_json::from_str(content).ok())
+        .unwrap_or(serde_json::Value::Null);
+    super::actions::ExistingProfileHead {
+        event_id,
+        created_at: content
+            .get("createdAt")
+            .and_then(|value| value.as_i64())
+            .expect("head content carries createdAt"),
+        updated_at: content
+            .get("updatedAt")
+            .and_then(|value| value.as_i64())
+            .expect("head content carries updatedAt"),
+    }
+}
+
 /// Build, sign, and publish the company and its initiatives.
 async fn publish_company(
     blueprint: &ValidatedBlueprint,
@@ -270,8 +337,13 @@ async fn publish_company(
     relay_pubkey: &str,
 ) -> RunOutcome {
     let created_at = approval_timestamp(&blueprint.request_id);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let existing_head = fetch_profile_head(http, relay_pubkey, keys).await;
     let mut signed = vec![super::actions::sign_action(
-        &super::actions::company_action(blueprint, relay_pubkey, created_at)
+        &super::actions::company_action(blueprint, relay_pubkey, now, &existing_head)
             .expect("build company action"),
         keys,
     )

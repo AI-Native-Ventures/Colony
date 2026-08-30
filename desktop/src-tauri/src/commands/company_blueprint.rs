@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::{
     app_state::AppState,
     company::{
-        actions::{company_action, initiative_actions, sign_action},
+        actions::{company_action, initiative_actions, sign_action, ExistingProfileHead},
         seed::{seed_personas, seed_teams},
         transaction::{
             advance, begin, is_event_id, journal_path, load_journal, needs, planned_initiative_ids,
@@ -55,6 +55,14 @@ pub struct CompanyBlueprintExecutionResult {
 /// `blueprint` is the exact JSON the owner approved. It is parsed here rather
 /// than trusted from the caller, so the trusted-catalog and closed-payload
 /// rules apply to what actually executes, not to some earlier copy.
+///
+/// `expected_head_*` name the community profile head the caller read just
+/// before calling. The relay mints one for every community at boot
+/// (`run_profile_backfill`), so approval always edits that head rather than
+/// creating a fresh one; this command has no relay connection of its own to
+/// discover it, so the frontend reads it (`getActiveCompanyHead`) and passes
+/// it through, the same shape `sign_community_profile_update` already takes
+/// for the Settings edit.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_company_blueprint(
@@ -65,6 +73,9 @@ pub async fn execute_company_blueprint(
     expected_hash: String,
     relay_pubkey: String,
     channel_id: String,
+    expected_head_event_id: String,
+    expected_head_created_at: i64,
+    expected_head_updated_at: i64,
     state: State<'_, AppState>,
 ) -> Result<CompanyBlueprintExecutionResult, String> {
     // Approving a company is an owner action. Reading the signing key proves
@@ -78,6 +89,9 @@ pub async fn execute_company_blueprint(
 
     if !is_event_id(&relay_pubkey) {
         return Err("relay pubkey is not a valid public key".to_string());
+    }
+    if !is_event_id(&expected_head_event_id) {
+        return Err("community profile head is not a valid event id".to_string());
     }
 
     let parsed = buzz_core_pkg::company_roster::parse_blueprint(&blueprint)
@@ -169,13 +183,27 @@ pub async fn execute_company_blueprint(
     // Signed only after the local half, so the caller never holds publishable
     // actions for a company whose employees do not exist yet.
     //
-    // The timestamp is derived from the approval rather than read from the
-    // clock: a retry has to produce the same bytes as the first attempt, and
-    // `now` would make every attempt a different event.
+    // The three Initiatives are still `Create`s with nothing to conflict
+    // with, so their timestamp stays derived from the approval rather than
+    // read from the clock: a retry has to produce the same bytes as the
+    // first attempt, and `now` would make every attempt a different event.
+    // The company profile action is different: it replaces a head the relay
+    // already minted at boot (`run_profile_backfill`), and that replacement
+    // contract requires `updatedAt` to be strictly newer than what is
+    // stored, which a fixed derived timestamp cannot promise. It gets the
+    // real clock instead; `company_action` floors it against the existing
+    // head's own `updatedAt`, so a retry still produces a valid write even
+    // if the wall clock has not visibly moved.
     let created_at = approval_timestamp(&journal.request_id);
+    let now = chrono::Utc::now().timestamp();
+    let existing_head = ExistingProfileHead {
+        event_id: expected_head_event_id,
+        created_at: expected_head_created_at,
+        updated_at: expected_head_updated_at,
+    };
     let mut signed_actions = Vec::with_capacity(1 + for_actions.proposed_initiatives.len());
     signed_actions.push(sign_action(
-        &company_action(&for_actions, &relay_pubkey, created_at)?,
+        &company_action(&for_actions, &relay_pubkey, now, &existing_head)?,
         &keys,
     )?);
     for action in initiative_actions(

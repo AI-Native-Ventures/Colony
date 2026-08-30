@@ -30,6 +30,17 @@ export type ApproveBlueprintInput = {
   expectedHash: string;
   relayPubkey: string;
   channelId: string;
+  /**
+   * The community profile head this approval was prepared against.
+   *
+   * The relay mints one for every community at boot, so approval always
+   * edits that head; a stale one (e.g. an onboarding interview wrote the
+   * profile between the read and the click) surfaces as a `pending-publish`
+   * outcome, and re-approving reads a fresh head and finishes the write.
+   */
+  expectedHeadEventId: string;
+  expectedHeadCreatedAt: number;
+  expectedHeadUpdatedAt: number;
 };
 
 type ApproveDependencies = {
