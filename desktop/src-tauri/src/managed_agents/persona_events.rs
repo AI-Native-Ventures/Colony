@@ -301,33 +301,57 @@ async fn flush_pending_events_at(
         let event = nostr::Event::from_json(&current.raw_event)
             .map_err(|e| format!("failed to parse retained event '{}': {e}", current.d_tag))?;
 
-        // NIP-IA requests are freshness-checked by the relay (±120s on
-        // `created_at`), so a request retained while the relay was
-        // unreachable would be permanently stale. Re-sign with a fresh
-        // timestamp at publish time; kind, tags, and content are preserved,
-        // and `mark_synced` below still compares against the retained row's
+        // Every event the relay accepts must be timestamped within its drift
+        // window (`MAX_TIMESTAMP_DRIFT_SECS`, ±15 minutes, in
+        // `handlers/ingest.rs`), and this queue exists precisely because the
+        // relay was unreachable. Any outage longer than that window used to
+        // strand everything queued during it FOREVER: the row stayed pending,
+        // every sweep re-sent the same stale `created_at`, and the relay
+        // refused it with "event timestamp too far from server time" until
+        // something happened to rewrite the row. A 1h45m canary outage on
+        // 2026-08-30 left a coordination team unpublishable that way, and
+        // every chat Task in that community was then refused with "missing
+        // reference in task.owningTeamId".
+        //
+        // Re-signing at publish time is what the NIP-IA archive path already
+        // did for exactly this reason; the hazard was never specific to that
+        // kind, only noticed there first. Kind, tags and content are
+        // preserved, so the event means the same thing — only the timestamp
+        // moves, which is the field the relay is actually complaining about.
+        // `mark_synced` below still compares against the retained row's
         // original `created_at`/`content`, which are untouched.
-        let is_archive_request =
-            buzz_core_pkg::kind::is_identity_archive_request_kind(current.kind);
-        let event = if is_archive_request {
+        //
+        // Everything queued here is addressable (kind, pubkey, d_tag), so a
+        // fresh id supersedes rather than duplicates under NIP-33 latest-wins.
+        let needs_fresh_timestamp = buzz_core_pkg::kind::is_identity_archive_request_kind(
+            current.kind,
+        ) || is_outside_publish_freshness_window(current.created_at);
+        let event = if needs_fresh_timestamp {
             resign_with_fresh_timestamp(&event, state)?
         } else {
             event
         };
 
-        if crate::relay::submit_signed_event_at_with_keys(
+        if let Err(error) = crate::relay::submit_signed_event_at_with_keys(
             &event,
             state,
             &relay_api_base,
             owner_keys,
         )
         .await
-        .is_err()
         {
+            // Logged rather than swallowed: a permanently REFUSED event and an
+            // unreachable relay both leave the row pending, and without the
+            // reason the two are indistinguishable from outside. The stale
+            // timestamp above went unnoticed for exactly that long.
+            eprintln!(
+                "buzz-desktop: event-flush: relay refused kind {} '{}': {error}",
+                current.kind, current.d_tag
+            );
             if current.kind == 5 {
                 failed_tombstones.insert((current.pubkey.clone(), current.d_tag.clone()));
             }
-            continue; // relay unreachable — stays pending for the next sweep
+            continue; // stays pending for the next sweep
         }
 
         let conn = open_retention_db(db_path)?;
@@ -343,6 +367,30 @@ async fn flush_pending_events_at(
     }
 
     Ok(flushed)
+}
+
+/// How stale a retained event may be before publishing re-signs it.
+///
+/// Deliberately well inside the relay's own ±15 minute
+/// `MAX_TIMESTAMP_DRIFT_SECS` (`buzz-relay/src/handlers/ingest.rs`): the
+/// margin covers clock skew between this device and the relay, plus the time
+/// between this check and the request actually landing. Matching the relay's
+/// window exactly would leave a row that is 14 minutes old to be sent as-is
+/// and arrive over the line.
+const PUBLISH_FRESHNESS_MARGIN_SECS: i64 = 300;
+
+/// Whether a retained `created_at` is far enough from now that the relay would
+/// refuse it on timestamp alone.
+///
+/// Absolute difference, not elapsed time: `monotonic_created_at` bumps past a
+/// future-dated head, so a retained row can sit ahead of the clock as easily as
+/// behind it, and the relay rejects both directions.
+fn is_outside_publish_freshness_window(created_at: i64) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(created_at);
+    (created_at - now).abs() > PUBLISH_FRESHNESS_MARGIN_SECS
 }
 
 /// Re-sign a retained event with the current owner keys and a fresh
@@ -556,3 +604,6 @@ pub fn preview_prospective_persona_snapshot(
 mod stale_pin_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod freshness_tests;
