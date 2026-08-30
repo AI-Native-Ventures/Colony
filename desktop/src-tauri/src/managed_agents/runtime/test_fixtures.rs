@@ -45,6 +45,7 @@ pub(super) fn fixture(
         private_key_nsec: "nsec1fake".into(),
         auth_tag,
         relay_url: "ws://localhost:3000".into(),
+        owner_pubkey: None,
         avatar_url: None,
         acp_command: "buzz-acp".into(),
         agent_command: "goose".into(),

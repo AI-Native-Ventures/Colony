@@ -211,7 +211,7 @@ fn hydrate_fills_key_from_keyring_when_reachable() {
         FakeKeyStore::reachable().with_key(&agent_keyring_name("agent-pubkey"), "nsec1stored");
     let mut records = vec![record_with_key("")];
 
-    hydrate_keys_with(&store, &mut records);
+    hydrate_keys_with(&store, None::<&FakeKeyStore>, &mut records);
 
     assert_eq!(records[0].private_key_nsec, "nsec1stored");
 }
@@ -224,7 +224,7 @@ fn hydrate_leaves_key_empty_on_keyring_outage() {
     let store = FakeKeyStore::unreachable();
     let mut records = vec![record_with_key("")];
 
-    hydrate_keys_with(&store, &mut records);
+    hydrate_keys_with(&store, None::<&FakeKeyStore>, &mut records);
 
     assert!(
         records[0].private_key_nsec.is_empty(),

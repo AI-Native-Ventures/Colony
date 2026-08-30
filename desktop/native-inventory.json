@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 431,
-    "rust_lines": 168119,
+    "rust_total": 434,
+    "rust_lines": 168832,
     "tauri_coupled": 173,
-    "portable": 258,
-    "portable_lines": 95279,
+    "portable": 261,
+    "portable_lines": 95958,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -354,6 +354,7 @@
       "src-tauri/src/managed_agents/mod.rs",
       "src-tauri/src/managed_agents/model_effort.rs",
       "src-tauri/src/managed_agents/nest/tests.rs",
+      "src-tauri/src/managed_agents/owner_scope.rs",
       "src-tauri/src/managed_agents/parallelism.rs",
       "src-tauri/src/managed_agents/persona_avatars.rs",
       "src-tauri/src/managed_agents/persona_events/stale_pin_tests.rs",
@@ -387,6 +388,8 @@
       "src-tauri/src/managed_agents/spawn_snapshot.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff/tests.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/tests.rs",
+      "src-tauri/src/managed_agents/storage_legacy_keys.rs",
+      "src-tauri/src/managed_agents/storage_legacy_keys_tests.rs",
       "src-tauri/src/managed_agents/storage_tests.rs",
       "src-tauri/src/managed_agents/subscriptions.rs",
       "src-tauri/src/managed_agents/team_events.rs",
