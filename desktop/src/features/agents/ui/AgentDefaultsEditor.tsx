@@ -7,7 +7,7 @@
  *
  * Precedence: baked floor < GLOBAL (this card) < persona < per-agent.
  */
-import { AlertCircle, Check, Loader } from "lucide-react";
+import { AlertCircle, Check, Loader, X } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 
@@ -38,6 +38,7 @@ import {
   EMPTY_GLOBAL_CONFIG,
 } from "@/features/agents/ui/AgentConfigFields";
 import { ColonyCreditsCredentialChoice } from "@/features/agents/ui/ColonyCreditsCredentialChoice";
+import { revalidateColonyCreditsCredentialMode } from "@/features/agents/ui/colonyCreditsEligibility";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 
@@ -88,6 +89,12 @@ export function AgentDefaultsEditor({
   const [configIsValid, setConfigIsValid] = React.useState(true);
   const [isCustomProvider, setIsCustomProvider] = React.useState(false);
   const [isCustomModelEditing, setIsCustomModelEditing] = React.useState(false);
+  // Set whenever a draft edit forces credential_mode back to "byok" because
+  // the resulting runtime/provider pair can no longer serve Colony Credits
+  // (see revalidateColonyCreditsCredentialMode). Never mutate this silently —
+  // this is what makes that downgrade visible to the user.
+  const [credentialModeDowngradeReason, setCredentialModeDowngradeReason] =
+    React.useState<string | null>(null);
   const savedTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -178,11 +185,18 @@ export function AgentDefaultsEditor({
     (!configSurfaceLoading && sortedRuntimes.length === 0);
 
   function handleConfigChange(next: GlobalAgentConfig) {
-    configRef.current = next;
-    setConfig(next);
+    // Single revalidation gate for every draft edit: a harness, provider, or
+    // provider-env-var change can leave credential_mode: "colony_credits"
+    // pointed at a pair the backend refuses to spawn (see
+    // revalidateColonyCreditsCredentialMode for why this must live here).
+    const { config: revalidated, downgradeReason } =
+      revalidateColonyCreditsCredentialMode(next);
+    configRef.current = revalidated;
+    setConfig(revalidated);
     setDirty(true);
     setSaveState("idle");
     setSaveError(null);
+    setCredentialModeDowngradeReason(downgradeReason);
   }
 
   function handleHarnessChange(runtimeId: string) {
@@ -202,13 +216,22 @@ export function AgentDefaultsEditor({
     submittedConfig: GlobalAgentConfig,
     options?: { forceSync?: boolean },
   ) {
+    // Final revalidation gate before the config reaches the backend. Every
+    // draft edit already passes through handleConfigChange's gate, but the
+    // auto-save path (Connect OpenRouter) calls performSave directly with a
+    // config it built itself — revalidate again here so nothing that writes
+    // provider/credential_mode/preferred_runtime can skip this check by
+    // saving without going through handleConfigChange first.
+    const { config: revalidatedConfig, downgradeReason } =
+      revalidateColonyCreditsCredentialMode(submittedConfig);
+    if (downgradeReason) setCredentialModeDowngradeReason(downgradeReason);
     // Snapshot the config being submitted so we can detect edits that arrive
     // during the IPC round-trip and avoid clobbering the user's newer input.
     onSavingChange?.(true);
     setSaveState("saving");
     setSaveError(null);
     try {
-      const result = await setGlobalAgentConfig(submittedConfig);
+      const result = await setGlobalAgentConfig(revalidatedConfig);
       // Apply the backend's canonical config ONLY if nothing changed during the
       // IPC window. If the user edited, keep their newer value and leave dirty=true
       // so they can save again. setDirty(false) runs inside the updater so both
@@ -327,6 +350,26 @@ export function AgentDefaultsEditor({
             onConfigChange={handleConfigChange}
             runtimeId={selectedRuntime?.id ?? ""}
           />
+          {credentialModeDowngradeReason && (
+            <div
+              className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-300"
+              data-testid="colony-credits-downgrade-notice"
+              role="status"
+            >
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1">
+                Switched to Bring your own key. {credentialModeDowngradeReason}
+              </span>
+              <button
+                aria-label="Dismiss"
+                className="shrink-0 rounded p-0.5 hover:bg-amber-500/20"
+                onClick={() => setCredentialModeDowngradeReason(null)}
+                type="button"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           {flatLayout ? (
             <AnimatePresence initial={false}>
               {configFields ? (
