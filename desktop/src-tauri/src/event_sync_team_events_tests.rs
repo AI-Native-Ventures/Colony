@@ -76,6 +76,48 @@ fn migrate_teams_skips_builtins() {
     .is_none());
 }
 
+/// Reproduces the "conflict: missing reference in task.owningTeamId" bug: the
+/// default coordination team is `is_builtin: true` (so devices don't need to
+/// sync it from each other), but the RELAY still validates `Task.owningTeamId`
+/// against the owner's published `KIND_TEAM` events
+/// (`company_broker::load_team_refs`). If this team is skipped like every
+/// other built-in, `ensure_chat_task` can hand out a Task naming a team the
+/// relay has never heard of.
+#[test]
+fn migrate_teams_publishes_default_coordination_team_despite_builtin() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use crate::managed_agents::DEFAULT_COORDINATION_TEAM_ID;
+    use buzz_core_pkg::kind::KIND_TEAM;
+
+    let base = tempfile::tempdir().unwrap();
+    write_base_teams(
+        base.path(),
+        &serde_json::json!([{
+            "id": DEFAULT_COORDINATION_TEAM_ID,
+            "name": "Company Coordination",
+            "description": "Owns chat work with no more specific team, until a company blueprint is approved.",
+            "persona_ids": ["builtin:fizz"],
+            "lead_persona_id": "builtin:fizz",
+            "is_builtin": true,
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-01T00:00:00Z"
+        }]),
+    );
+    let keys = nostr::Keys::generate();
+    let pubkey = keys.public_key().to_hex();
+
+    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+
+    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
+    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, DEFAULT_COORDINATION_TEAM_ID)
+        .unwrap()
+        .unwrap();
+    let event: nostr::Event = nostr::JsonUtil::from_json(&row.raw_event).unwrap();
+    assert!(event.verify().is_ok());
+    assert!(row.pending_sync);
+    assert!(row.content.contains("builtin:fizz"));
+}
+
 #[test]
 fn migrate_teams_unchanged_second_run_is_noop() {
     let base = tempfile::tempdir().unwrap();

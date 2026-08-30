@@ -53,7 +53,15 @@ const COORDINATION_TEAM_SLUG: &str = "company-coordination";
 /// this one gets (re)seeded depends on whether some *other* team already
 /// satisfies the coordination contract, which the fixed reseed-by-id loop
 /// below can't express.
-const DEFAULT_COORDINATION_TEAM_ID: &str = "builtin-team:company-coordination";
+///
+/// `pub(crate)` so `event_sync.rs` can except this one id from the generic
+/// "built-ins are always available from code, so never publish them" skip —
+/// unlike every other built-in, the *relay* (not just other devices) must be
+/// able to resolve it: `company_broker::load_team_refs` validates a Task's
+/// `owningTeamId` against the owner's own published `KIND_TEAM` events, and
+/// this is the only team that can own chat work before a company blueprint
+/// seeds a real one.
+pub(crate) const DEFAULT_COORDINATION_TEAM_ID: &str = "builtin-team:company-coordination";
 
 // Built-in teams that have been retired. A stored copy that still exactly
 // matches its seed is purged on load (the user never touched it); customized
