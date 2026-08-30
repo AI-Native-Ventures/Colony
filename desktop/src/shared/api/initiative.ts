@@ -77,3 +77,56 @@ export async function ensureChatTask(
     relayPubkey: input.relayPubkey,
   });
 }
+
+/** The Task a human created directly, e.g. from a "New Task" affordance. */
+export type UserTaskResult = {
+  taskId: string;
+  owningTeamId: string;
+  /** The signed Company Action that creates it. */
+  signedAction: string;
+};
+
+export type CreateUserTaskInput = {
+  /** The relay-signed company head, exactly as it was read. */
+  companyHead: string;
+  /**
+   * This client's stable identity for this create attempt. A retry (a lost
+   * receipt) reuses it and asks for the same Task; two attempts sharing every
+   * other field, including title, still need distinct ids here to become two
+   * Tasks - mint a fresh one (e.g. `crypto.randomUUID()`) per "create" click,
+   * not per title.
+   */
+  requestId: string;
+  /**
+   * Home channel the Task's work happens and is discussed in. Required -
+   * there is no company-wide default the backend can safely fall back to.
+   */
+  channelId: string;
+  title: string;
+  /** Defaults to the company's coordination team when omitted. */
+  owningTeamId?: string | null;
+  /** Defaults to the company's internal cost centre when omitted. */
+  costCentreId?: string | null;
+  /** The relay-signed initiative head, when this Task belongs to one. */
+  initiativeHead?: string | null;
+  assigneePersonaIds?: string[];
+  clientOrganizationId?: string | null;
+  relayPubkey: string;
+};
+
+export async function createUserTask(
+  input: CreateUserTaskInput,
+): Promise<UserTaskResult> {
+  return await invokeTauri<UserTaskResult>("create_user_task", {
+    companyHead: input.companyHead,
+    requestId: input.requestId,
+    channelId: input.channelId,
+    title: input.title,
+    owningTeamId: input.owningTeamId ?? null,
+    costCentreId: input.costCentreId ?? null,
+    initiativeHead: input.initiativeHead ?? null,
+    assigneePersonaIds: input.assigneePersonaIds ?? [],
+    clientOrganizationId: input.clientOrganizationId ?? null,
+    relayPubkey: input.relayPubkey,
+  });
+}

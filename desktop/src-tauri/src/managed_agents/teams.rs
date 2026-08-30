@@ -125,7 +125,12 @@ fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
 /// Whether `team` satisfies what `owning_team_for_chat`'s fallback and
 /// `company_team_refs`'s filter both require of a coordination team: an id
 /// ending in the coordination slug, with a lead who is also a member.
-fn is_valid_coordination_team(team: &TeamRecord) -> bool {
+///
+/// `pub(crate)` so `commands/initiative.rs` can enrol a backfilled persona
+/// onto the same team this module already treats as authoritative, rather
+/// than re-deriving (and risking drifting from) the definition of "valid"
+/// here.
+pub(crate) fn is_valid_coordination_team(team: &TeamRecord) -> bool {
     team.id.ends_with(COORDINATION_TEAM_SLUG)
         && team
             .lead_persona_id

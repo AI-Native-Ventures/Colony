@@ -9,6 +9,7 @@ import {
 } from "@/features/company/hooks";
 import { queueActioner } from "@/features/company/queueActions";
 import { selectTaskRuns } from "@/features/company/taskRuns";
+import { NewTaskDialog } from "@/features/company/ui/NewTaskDialog";
 import { TaskListScreen } from "@/features/company/ui/TaskListScreen";
 import { TaskBoardScreen } from "@/features/company/ui/TaskBoardScreen";
 import { TaskQueueScreen } from "@/features/company/ui/TaskQueueScreen";
@@ -22,6 +23,7 @@ import {
   filterWorkRows,
   type WorkListRow,
 } from "@/features/company/workListModel";
+import { useChannelsQuery } from "@/features/channels/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { RelayEvent } from "@/shared/api/types";
@@ -112,6 +114,19 @@ export function WorkRouteScreen() {
   const queryClient = useQueryClient();
   const [pendingTaskId, setPendingTaskId] = React.useState<string | null>(null);
 
+  const channelsQuery = useChannelsQuery();
+  const memberChannels = React.useMemo(
+    () => (channelsQuery.data ?? []).filter((channel) => channel.isMember),
+    [channelsQuery.data],
+  );
+  const [isNewTaskOpen, setIsNewTaskOpen] = React.useState(false);
+  const handleOpenNewTask = React.useCallback(() => setIsNewTaskOpen(true), []);
+  const handleTaskCreated = React.useCallback(() => {
+    void queryClient.invalidateQueries({
+      queryKey: tasksQueryKey(communityId, {}),
+    });
+  }, [queryClient, communityId]);
+
   const runQueueAction = React.useCallback(
     async (
       taskId: string,
@@ -200,8 +215,15 @@ export function WorkRouteScreen() {
           initiative={initiative}
           initiatives={initiatives}
           isLoading={isLoading}
+          onNewTask={handleOpenNewTask}
           rows={boardRows}
           tasksById={tasksById}
+        />
+        <NewTaskDialog
+          channels={memberChannels}
+          onCreated={handleTaskCreated}
+          onOpenChange={setIsNewTaskOpen}
+          open={isNewTaskOpen}
         />
       </div>
     );
@@ -213,7 +235,14 @@ export function WorkRouteScreen() {
         error={error}
         initiatives={initiatives}
         isLoading={isLoading}
+        onNewTask={handleOpenNewTask}
         rows={rows}
+      />
+      <NewTaskDialog
+        channels={memberChannels}
+        onCreated={handleTaskCreated}
+        onOpenChange={setIsNewTaskOpen}
+        open={isNewTaskOpen}
       />
     </div>
   );

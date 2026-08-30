@@ -790,6 +790,7 @@ pub fn run() {
             commands::ledger::ledger_add_price,
             commands::initiative::advance_initiative,
             commands::initiative::ensure_chat_task,
+            commands::initiative::create_user_task,
             commands::task_transition::complete_queue_task,
             commands::task_transition::snooze_queue_task,
             commands::task_transition::bounce_queue_task,
