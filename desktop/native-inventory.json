@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 427,
-    "rust_lines": 166797,
+    "rust_lines": 166902,
     "tauri_coupled": 172,
     "portable": 255,
     "portable_lines": 94006,
@@ -441,10 +441,10 @@
     ]
   },
   "commands": {
-    "registered": 346,
-    "defined": 346,
+    "registered": 347,
+    "defined": 347,
     "by_reach": {
-      "frontend": 340,
+      "frontend": 341,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -456,16 +456,16 @@
     ]
   },
   "params": {
-    "AppHandle": 357,
-    "State": 260,
+    "AppHandle": 358,
+    "State": 261,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 354,
-      "State": 260,
+      "AppHandle": 355,
+      "State": 261,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -572,6 +572,7 @@
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
+    "src-tauri/src/commands/initiative.rs": 3,
     "src-tauri/src/commands/task_transition.rs": 3,
     "src-tauri/src/commands/media_raw.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
@@ -587,7 +588,6 @@
     "src-tauri/src/commands/workspace_files.rs": 3,
     "src-tauri/src/commands/agent_settings.rs": 3,
     "src-tauri/src/deep_link.rs": 2,
-    "src-tauri/src/commands/initiative.rs": 2,
     "src-tauri/src/huddle/window.rs": 2,
     "src-tauri/src/commands/company_blueprint.rs": 2,
     "src-tauri/src/commands/personas/snapshot/import.rs": 2,
@@ -1140,6 +1140,15 @@
       "example_sites": [
         "src/parity/session/script.ts:858",
         "src/shared/api/tauriTeams.ts:48"
+      ]
+    },
+    "create_user_task": {
+      "defining_file": "src-tauri/src/commands/initiative.rs",
+      "module": "initiative",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/initiative.ts:120"
       ]
     },
     "create_workflow": {

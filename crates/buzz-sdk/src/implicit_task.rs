@@ -12,8 +12,8 @@
 
 use buzz_core::{
     company::{
-        CommercialPurpose, CompanyProfile, CompanyTask, CompanyTeamRef, CostCentreKind, DoerKind,
-        TaskStatus,
+        validate_task, CommercialPurpose, CompanyProfile, CompanyTask, CompanyTeamRef,
+        CostCentreKind, DoerKind, Initiative, TaskStatus,
     },
     company_roster::step_idempotency_key,
     kind::KIND_TASK,
@@ -187,6 +187,183 @@ pub fn plan_implicit_task(
     Ok(ImplicitTaskPlan {
         task_id,
         owning_team_id: team.id.clone(),
+        action: Box::new(action),
+    })
+}
+
+/// The stable identity of one directly-created Task.
+///
+/// Derived from the caller's own request token, not from the title or any
+/// other field a human typed: two Tasks created with the same title are
+/// legitimately different work, and nothing about their content may collapse
+/// them onto the same coordinate. Retrying the exact same create request (a
+/// lost receipt, a doubled click guarded by the same token) asks for the same
+/// Task; two distinct creations - even with every field identical - are two
+/// Tasks.
+pub fn user_task_id(request_id: &str) -> String {
+    let derived = step_idempotency_key("user-task", request_id);
+    format!("user-task:{derived}")
+}
+
+/// What a human supplies when creating a Task directly, rather than one
+/// Colony infers from chat or an initiative's kickoff.
+///
+/// Everything not listed here - the identifier, status, timestamps, whether
+/// the Task is implicit - is derived rather than asked for: a "New Task" form
+/// that also had to explain cost centres or task identifiers would defeat the
+/// point of letting a human create one at all.
+#[derive(Debug, Clone, Copy)]
+pub struct UserTaskRequest<'a> {
+    /// Stable per-attempt token the caller mints once per genuine create and
+    /// replays only to retry that exact attempt. This, not the title, is what
+    /// makes retries idempotent - see [`user_task_id`].
+    pub request_id: &'a str,
+    /// Home channel the Task's work happens and is discussed in. Required:
+    /// the relay's job filing (`buzz-relay/src/job_broker.rs`) and interrupt
+    /// sweep both key off this exact value, so there is no company-wide
+    /// default safe to fall back to the way there is for team or cost centre.
+    pub channel_id: &'a str,
+    /// What the human typed as the Task's title.
+    pub title: &'a str,
+    /// Team accountable for delivery. `None` defaults to the company's
+    /// coordination team, so creating a Task never requires understanding
+    /// team ownership first.
+    pub owning_team_id: Option<&'a str>,
+    /// Cost centre to charge. `None` defaults to the company's internal cost
+    /// centre, for the same reason.
+    pub cost_centre_id: Option<&'a str>,
+    /// Initiative this Task belongs to, when the human placed it in one.
+    pub initiative: Option<&'a Initiative>,
+    /// Personas to assign the work to, when the human named any up front.
+    pub assignee_persona_ids: &'a [String],
+    /// Explicit client-delivery context, when the human tied this work to a
+    /// client. Mirrors [`plan_implicit_task`]'s rule: absent it, the work is
+    /// administration, because claiming a client's delivery cost for work
+    /// nobody tied to a client would misstate the company's margin.
+    pub client_organization_id: Option<&'a str>,
+    /// Tenant relay public key that must author the resulting head.
+    pub relay_pubkey: &'a str,
+    /// Timestamp to stamp the Task with.
+    pub now: i64,
+}
+
+/// A Task a human created directly, and the action that creates it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserTaskPlan {
+    /// The stable Task identifier.
+    pub task_id: String,
+    /// The single team accountable for it.
+    pub owning_team_id: String,
+    /// The action to sign and publish.
+    pub action: Box<CompanyAction>,
+}
+
+/// Plan and build the Task for one direct, human-initiated creation.
+///
+/// Rejects everything the relay's own [`validate_task`] would reject - an
+/// unknown team, an unknown cost centre, an assignee who belongs to no
+/// supplied team - before anything is signed, so a bad request fails locally
+/// instead of round-tripping to the relay for the same answer.
+pub fn plan_user_task(
+    company: &CompanyProfile,
+    teams: &[CompanyTeamRef],
+    request: UserTaskRequest,
+) -> Result<UserTaskPlan, String> {
+    if request.request_id.trim().is_empty() {
+        return Err("a task needs a stable request id to be created safely".to_string());
+    }
+    if request.channel_id.trim().is_empty() {
+        return Err("a task needs a home channel".to_string());
+    }
+    if request.title.trim().is_empty() {
+        return Err("a task needs a title".to_string());
+    }
+
+    let owning_team = match request.owning_team_id {
+        Some(id) => teams
+            .iter()
+            .find(|team| team.id == id)
+            .ok_or_else(|| "that team does not exist".to_string())?,
+        None => teams
+            .iter()
+            .find(|team| team.id.ends_with(COORDINATION_TEAM_SLUG))
+            .ok_or_else(|| "this company has no coordination team to default to".to_string())?,
+    };
+
+    let cost_centre_id = match request.cost_centre_id {
+        Some(id) => {
+            if !company.cost_centres.iter().any(|centre| centre.id == id) {
+                return Err("that cost centre does not exist".to_string());
+            }
+            id.to_owned()
+        }
+        None => internal_cost_centre(company)?.to_owned(),
+    };
+
+    let task_id = user_task_id(request.request_id);
+    let initiative_id = request.initiative.map(|initiative| initiative.id.clone());
+
+    let commercial_purpose = match request.client_organization_id {
+        Some(id) if !id.trim().is_empty() => CommercialPurpose::ClientDelivery,
+        _ => CommercialPurpose::Administration,
+    };
+
+    let task = CompanyTask {
+        schema: TASK_SCHEMA.to_string(),
+        id: task_id.clone(),
+        initiative_id,
+        title: clamp_title(request.title),
+        // A human created this deliberately, right now: nobody has started it
+        // and nothing inferred that it should wait. Ready is the one status
+        // that says exactly that - the same one initiative kickoff uses for
+        // the same reason.
+        status: TaskStatus::Ready,
+        owning_team_id: owning_team.id.clone(),
+        assignee_persona_ids: request.assignee_persona_ids.to_vec(),
+        qa_persona_id: owning_team.lead_persona_id.clone(),
+        reviewer_team_id: None,
+        cost_centre_id,
+        commercial_purpose,
+        client_organization_id: request
+            .client_organization_id
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_owned),
+        source_channel_id: request.channel_id.to_owned(),
+        source_event_id: None,
+        // A human asked for this by name; Colony did not infer it from chat.
+        implicit: false,
+        depends_on: Vec::new(),
+        subject: None,
+        stage: None,
+        thread_root: None,
+        doer_kind: DoerKind::Agent,
+        wake_at: None,
+        outcome_reason: None,
+        bounce_reason: None,
+        bounce_count: 0,
+        created_at: request.now,
+        updated_at: request.now,
+    };
+
+    validate_task(&task, company, request.initiative, teams).map_err(|error| error.to_string())?;
+
+    let action = CompanyAction {
+        relay_pubkey: request.relay_pubkey.to_string(),
+        operation: CompanyActionOperation::Create,
+        request_id: step_idempotency_key(&task_id, "user-task-request"),
+        idempotency_key: step_idempotency_key(&task_id, "user-task-create"),
+        target: format!("{KIND_TASK}:{}:{task_id}", request.relay_pubkey),
+        // Creating a Task that already exists is what the relay's idempotency
+        // claim is for; asserting a head here would turn a safe retry into a
+        // conflict.
+        expected_head: None,
+        expected_references: Vec::new(),
+        payload: CompanyActionPayload::Task(task),
+    };
+
+    Ok(UserTaskPlan {
+        task_id,
+        owning_team_id: owning_team.id.clone(),
         action: Box::new(action),
     })
 }
@@ -429,5 +606,195 @@ mod tests {
             )
             .expect_err("a task with no stable send identity cannot be retried safely");
         }
+    }
+
+    fn user_request<'a>(
+        request_id: &'a str,
+        title: &'a str,
+        assignees: &'a [String],
+    ) -> UserTaskRequest<'a> {
+        UserTaskRequest {
+            request_id,
+            channel_id: "engineering",
+            title,
+            owning_team_id: None,
+            cost_centre_id: None,
+            initiative: None,
+            assignee_persona_ids: assignees,
+            client_organization_id: None,
+            relay_pubkey: RELAY,
+            now: 1_780_000_500,
+        }
+    }
+
+    fn user_plan(teams: &[CompanyTeamRef], request: UserTaskRequest) -> UserTaskPlan {
+        plan_user_task(&company(), teams, request).expect("plan")
+    }
+
+    fn user_task_of(plan: &UserTaskPlan) -> &CompanyTask {
+        match &plan.action.payload {
+            CompanyActionPayload::Task(task) => task,
+            other => panic!("expected a task payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_user_created_task_lands_on_coordination_and_starts_ready() {
+        let assignees = Vec::new();
+        let plan = user_plan(
+            &[coordination()],
+            user_request("req-0001", "Fix the footer", &assignees),
+        );
+        assert_eq!(
+            plan.owning_team_id,
+            "company-team:abc:horizonlabs:company-coordination"
+        );
+        let task = user_task_of(&plan);
+        assert_eq!(task.status, TaskStatus::Ready);
+        assert!(!task.implicit);
+        assert_eq!(task.title, "Fix the footer");
+        assert_eq!(
+            task.qa_persona_id,
+            "company-role:abc:horizonlabs:chief-of-staff"
+        );
+        assert_eq!(task.cost_centre_id, "cc-coordination");
+        assert_eq!(task.source_channel_id, "engineering");
+        assert_eq!(task.assignee_persona_ids, Vec::<String>::new());
+    }
+
+    // The relay's own contract must accept whatever this planner signs -
+    // otherwise a valid-looking plan would still bounce at the relay.
+    #[test]
+    fn the_planned_user_task_satisfies_the_company_contract() {
+        let teams = [engineering(), coordination()];
+        let plan = user_plan(&teams, user_request("req-0002", "Ship the release", &[]));
+        buzz_core::company::validate_task(user_task_of(&plan), &company(), None, &teams)
+            .expect("a user-created task must satisfy the same contract as any other");
+    }
+
+    // The same request id must always ask for the same Task, so a lost
+    // receipt retries safely instead of creating a duplicate.
+    #[test]
+    fn the_same_request_id_always_asks_for_the_same_task() {
+        let teams = [coordination()];
+        let first = user_plan(&teams, user_request("req-0003", "Same title", &[]));
+        let second = user_plan(&teams, user_request("req-0003", "Same title", &[]));
+        assert_eq!(first, second);
+    }
+
+    // Two genuine creations sharing a title are still two different pieces of
+    // work - the id must not collapse them onto the same coordinate.
+    #[test]
+    fn two_distinct_requests_with_the_same_title_are_two_tasks() {
+        assert_ne!(user_task_id("req-0004"), user_task_id("req-0005"));
+        let teams = [coordination()];
+        let first = user_plan(&teams, user_request("req-0004", "Same title", &[]));
+        let second = user_plan(&teams, user_request("req-0005", "Same title", &[]));
+        assert_ne!(first.task_id, second.task_id);
+    }
+
+    #[test]
+    fn an_explicit_owning_team_and_cost_centre_are_honoured() {
+        let teams = [engineering(), coordination()];
+        let mut request = user_request("req-0006", "Refactor the pipeline", &[]);
+        request.owning_team_id = Some("company-team:abc:horizonlabs:engineering");
+        request.cost_centre_id = Some("cc-web");
+        let plan = user_plan(&teams, request);
+        assert_eq!(
+            plan.owning_team_id,
+            "company-team:abc:horizonlabs:engineering"
+        );
+        let task = user_task_of(&plan);
+        assert_eq!(task.cost_centre_id, "cc-web");
+        assert_eq!(task.qa_persona_id, "company-role:abc:horizonlabs:cto");
+    }
+
+    #[test]
+    fn an_assignee_who_belongs_to_a_supplied_team_is_accepted() {
+        let teams = [engineering()];
+        let assignees = vec!["company-role:abc:horizonlabs:engineer".to_string()];
+        let mut request = user_request("req-0007", "Pair on the deploy", &assignees);
+        request.owning_team_id = Some("company-team:abc:horizonlabs:engineering");
+        let plan = user_plan(&teams, request);
+        assert_eq!(
+            user_task_of(&plan).assignee_persona_ids,
+            vec!["company-role:abc:horizonlabs:engineer".to_string()]
+        );
+    }
+
+    // The relay refuses this with `AssigneeNotTeamMember`; the planner must
+    // catch it locally instead of signing a request bound to lose.
+    #[test]
+    fn an_assignee_outside_every_supplied_team_is_rejected_before_signing() {
+        let teams = [engineering()];
+        let assignees = vec!["company-role:abc:horizonlabs:outsider".to_string()];
+        let mut request = user_request("req-0008", "Do the thing", &assignees);
+        request.owning_team_id = Some("company-team:abc:horizonlabs:engineering");
+        let error = plan_user_task(&company(), &teams, request)
+            .expect_err("an assignee outside every supplied team must be refused");
+        assert!(error.contains("assignee"), "unexpected: {error}");
+    }
+
+    // The relay refuses this with `MissingReference` on `task.owningTeamId`;
+    // catch an unknown team name locally with a clearer message.
+    #[test]
+    fn an_unknown_owning_team_is_rejected_before_signing() {
+        let teams = [coordination()];
+        let mut request = user_request("req-0009", "Do the thing", &[]);
+        request.owning_team_id = Some("company-team:abc:horizonlabs:nonexistent");
+        let error =
+            plan_user_task(&company(), &teams, request).expect_err("unknown team must be refused");
+        assert!(error.contains("team does not exist"), "unexpected: {error}");
+    }
+
+    // The relay refuses this with `MissingReference` on `task.costCentreId`;
+    // catch an unknown cost centre locally with a clearer message.
+    #[test]
+    fn an_unknown_cost_centre_is_rejected_before_signing() {
+        let teams = [coordination()];
+        let mut request = user_request("req-0010", "Do the thing", &[]);
+        request.cost_centre_id = Some("cc-nonexistent");
+        let error = plan_user_task(&company(), &teams, request)
+            .expect_err("unknown cost centre must be refused");
+        assert!(
+            error.contains("cost centre does not exist"),
+            "unexpected: {error}"
+        );
+    }
+
+    #[test]
+    fn a_user_task_with_no_channel_title_or_request_id_is_refused() {
+        let teams = [coordination()];
+        for (request_id, channel_id, title) in [
+            ("", "engineering", "Do the thing"),
+            ("req-0011", "", "Do the thing"),
+            ("req-0011", "engineering", "  "),
+        ] {
+            let request = UserTaskRequest {
+                request_id,
+                channel_id,
+                title,
+                owning_team_id: None,
+                cost_centre_id: None,
+                initiative: None,
+                assignee_persona_ids: &[],
+                client_organization_id: None,
+                relay_pubkey: RELAY,
+                now: 1_780_000_500,
+            };
+            plan_user_task(&company(), &teams, request)
+                .expect_err("a task with no request id, channel, or title cannot be created");
+        }
+    }
+
+    #[test]
+    fn a_user_task_can_be_tied_to_a_client() {
+        let teams = [coordination()];
+        let mut request = user_request("req-0012", "Build the client's landing page", &[]);
+        request.client_organization_id = Some("acme");
+        let plan = user_plan(&teams, request);
+        let task = user_task_of(&plan);
+        assert_eq!(task.commercial_purpose, CommercialPurpose::ClientDelivery);
+        assert_eq!(task.client_organization_id.as_deref(), Some("acme"));
     }
 }

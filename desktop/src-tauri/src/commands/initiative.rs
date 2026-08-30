@@ -9,9 +9,9 @@
 //! signature on it.
 
 use buzz_sdk_pkg::{
-    company::parse_company_event,
+    company::{parse_company_event, parse_initiative_event},
     company_blueprint::sign_action,
-    implicit_task::plan_implicit_task,
+    implicit_task::{plan_implicit_task, plan_user_task, UserTaskRequest},
     initiative_activation::{next_step, InitiativeIntent, InitiativeStep},
 };
 use nostr::JsonUtil;
@@ -428,6 +428,102 @@ pub async fn ensure_chat_task(
     )?;
 
     Ok(ChatTaskResult {
+        task_id: plan.task_id,
+        owning_team_id: plan.owning_team_id,
+        signed_action: sign_action(&plan.action, &keys)?,
+    })
+}
+
+/// The Task a human created directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserTaskResult {
+    /// The stable Task identifier.
+    pub task_id: String,
+    /// The single team accountable for it.
+    pub owning_team_id: String,
+    /// The signed Company Action that creates it.
+    pub signed_action: String,
+}
+
+/// Build the Task for one human-initiated "create a Task" request.
+///
+/// `request_id` is the caller's stable identity for this create attempt, not
+/// for the Task's content: retrying the same attempt (a lost receipt) asks
+/// for the same Task, but two attempts sharing every visible field, including
+/// title, are still two Tasks a human meant to create separately - see
+/// [`buzz_sdk_pkg::implicit_task::user_task_id`].
+///
+/// `owning_team_id` and `cost_centre_id` default to the company's
+/// coordination team and internal cost centre when omitted, so a caller never
+/// has to resolve either before a human can create a Task.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn create_user_task(
+    app: AppHandle,
+    company_head: String,
+    request_id: String,
+    channel_id: String,
+    title: String,
+    owning_team_id: Option<String>,
+    cost_centre_id: Option<String>,
+    initiative_head: Option<String>,
+    assignee_persona_ids: Vec<String>,
+    client_organization_id: Option<String>,
+    relay_pubkey: String,
+    state: State<'_, AppState>,
+) -> Result<UserTaskResult, String> {
+    let keys = state
+        .signing_keys()
+        .map_err(|_| "creating a task requires the community owner".to_string())?;
+
+    if !is_event_id(&relay_pubkey) {
+        return Err("relay pubkey is not a valid public key".to_string());
+    }
+
+    let company_event = relay_head(&company_head, &relay_pubkey, "company")?;
+    let company = parse_company_event(&company_event)
+        .map_err(|error| format!("the company head is unreadable: {error}"))?;
+
+    // Re-derived from the relay-signed head the caller read, exactly like
+    // `advance_initiative` does with `initiative_head` - never trusted from a
+    // hand-built object, so an initiative reference can only ever name a
+    // record the tenant relay itself wrote.
+    let initiative = match initiative_head.as_deref() {
+        Some(head_json) => {
+            let event = relay_head(head_json, &relay_pubkey, "initiative")?;
+            Some(
+                parse_initiative_event(&event)
+                    .map_err(|error| format!("the initiative head is unreadable: {error}"))?,
+            )
+        }
+        None => None,
+    };
+
+    let teams = company_team_refs(&app)?;
+
+    // Derived from the request id rather than read from the clock, so a
+    // retry produces the same bytes and the relay recognises the replay.
+    let now = buzz_core_pkg::company_roster::approval_timestamp(&request_id);
+
+    let plan = plan_user_task(
+        &company,
+        &teams,
+        UserTaskRequest {
+            request_id: &request_id,
+            channel_id: &channel_id,
+            title: &title,
+            owning_team_id: owning_team_id.as_deref(),
+            cost_centre_id: cost_centre_id.as_deref(),
+            initiative: initiative.as_ref(),
+            assignee_persona_ids: &assignee_persona_ids,
+            client_organization_id: client_organization_id.as_deref(),
+            relay_pubkey: &relay_pubkey,
+            now,
+        },
+    )?;
+
+    Ok(UserTaskResult {
         task_id: plan.task_id,
         owning_team_id: plan.owning_team_id,
         signed_action: sign_action(&plan.action, &keys)?,
