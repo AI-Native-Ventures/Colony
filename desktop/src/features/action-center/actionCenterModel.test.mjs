@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  actionItemAccent,
   buildActionCenterItems,
   countActionableItems,
   filterActionCenterItems,
@@ -511,4 +512,129 @@ test("resolved asks show under the asks filter alongside open ones", () => {
     1,
     "the state filter reaches closed asks too",
   );
+});
+
+test("actionItemAccent: countdown for tier 1, blocked for tier 2, none for everything else or settled", () => {
+  const countdownItem = buildActionCenterItems({
+    asks: [
+      ask("ask-deadline", { defaultOption: "Ship it", defaultWindowSecs: 60 }),
+    ],
+    reminders: [],
+  })[0];
+  assert.equal(actionItemAccent(countdownItem), "countdown");
+
+  const blockedItem = buildActionCenterItems({
+    asks: [ask("ask-blocked")],
+    reminders: [],
+  })[0];
+  assert.equal(actionItemAccent(blockedItem), "blocked");
+
+  const everythingElseItem = buildActionCenterItems({
+    asks: [],
+    reminders: [reminder("reminder-1")],
+    now: 400,
+  })[0];
+  assert.equal(actionItemAccent(everythingElseItem), null);
+
+  const settledItem = buildActionCenterItems({
+    asks: [],
+    resolvedAsks: [
+      {
+        resolution: resolution("res-1", CLOSED_ASK_HEX, 400, {
+          answer: { decision: "Done" },
+        }),
+        ask: closedAsk(),
+      },
+    ],
+    reminders: [],
+  })[0];
+  assert.equal(actionItemAccent(settledItem), null);
+});
+
+test("an ask's context line names the asker, initiative, and blast radius once the label resolves", () => {
+  const items = buildActionCenterItems({
+    asks: [
+      ask("ask-1", {
+        filerPubkey: PUBKEY,
+        initiativeId: "website-relaunch",
+        taskIds: ["task-1", "task-2"],
+      }),
+    ],
+    reminders: [],
+    contextLabelsByPubkey: new Map([[PUBKEY, "Atlas"]]),
+  });
+
+  assert.equal(
+    items[0].contextLine,
+    "Ask from Atlas · initiative: Website Relaunch · blocks 2 tasks",
+  );
+});
+
+test("an ask's context line is null until its asker label resolves -- never a raw pubkey", () => {
+  const items = buildActionCenterItems({
+    asks: [ask("ask-1", { filerPubkey: PUBKEY })],
+    reminders: [],
+  });
+  assert.equal(items[0].contextLine, null);
+});
+
+test("a promoted ask's escalation line names the prior audience and how long it waited, from one batched prior-ask fetch", () => {
+  const audiencePubkey = "c".repeat(64);
+  const items = buildActionCenterItems({
+    asks: [
+      ask("ask-2", {
+        priorAskId: CLOSED_ASK_HEX,
+        createdAt: 1_000 + 2 * 86_400,
+      }),
+    ],
+    reminders: [],
+    contextLabelsByPubkey: new Map([[audiencePubkey, "Rivet"]]),
+    priorAsksById: new Map([
+      [CLOSED_ASK_HEX, { audiencePubkey, createdAt: 1_000 }],
+    ]),
+  });
+
+  assert.equal(
+    items[0].escalationLine,
+    "escalated automatically; sat with Rivet for 2d",
+  );
+});
+
+test("an ask with no prior tag has no escalation line", () => {
+  const items = buildActionCenterItems({
+    asks: [ask("ask-1")],
+    reminders: [],
+  });
+  assert.equal(items[0].escalationLine, null);
+});
+
+test("a promoted ask whose prior-ask fetch has not landed yet has no escalation line, not a guess", () => {
+  const items = buildActionCenterItems({
+    asks: [ask("ask-2", { priorAskId: CLOSED_ASK_HEX })],
+    reminders: [],
+    priorAsksById: new Map(), // the batched fetch missed this id
+  });
+  assert.equal(items[0].escalationLine, null);
+});
+
+test("every non-ask item kind carries null context and escalation lines", () => {
+  const items = buildActionCenterItems({
+    asks: [],
+    reminders: [reminder("reminder-1")],
+    pings: [
+      {
+        id: "ping-1",
+        channelId: "channel-1",
+        channelName: "general",
+        threadId: "root-1",
+        createdAt: 500,
+        content: "hey",
+      },
+    ],
+    now: 400,
+  });
+  for (const item of items) {
+    assert.equal(item.contextLine, null);
+    assert.equal(item.escalationLine, null);
+  }
 });

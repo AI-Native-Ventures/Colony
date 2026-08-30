@@ -5,6 +5,7 @@ import type {
 } from "@/features/asks/lib/askResolution";
 import type { BlockInstanceRef } from "@/features/blocks/contracts";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
+import type { PriorAskProvenance } from "./lib/askContextLine";
 import type { ThreadPing } from "./lib/threadPings";
 import type {
   FeedItem,
@@ -146,6 +147,22 @@ export type ActionItem = {
   updatedAt: number;
   source: ActionSource;
   capabilities: readonly ActionCapability[];
+  /**
+   * "Who asked, initiative, blast radius" (spec, "Layout"). Only asks carry
+   * this: it names concepts (filer, initiative, blocked tasks) that have no
+   * meaning for a reminder, workflow approval, block instance, or ping. Null
+   * for every other kind, and null for an ask whose asker label has not
+   * resolved yet.
+   */
+  contextLine: string | null;
+  /**
+   * Escalation provenance (spec, resolved question 5): "escalated
+   * automatically; sat with <name> for <duration>". Set only on a
+   * relay-signed ask carrying `prior`, and only once the prior ask itself
+   * has been fetched -- null otherwise, including while that fetch is
+   * still in flight.
+   */
+  escalationLine: string | null;
 };
 
 export type ActionBlockItem = Omit<ActionItem, "kind" | "source"> & {
@@ -166,9 +183,26 @@ export type ActionCenterProjectionInput = {
   resolverLabelsByPubkey?: ReadonlyMap<string, string>;
   /**
    * Short routing phrases by ask id ("Auto-routed to the filer's
-   * manager", ...). Absent means the summary stays as it was.
+   * manager", ...). Absent means the summary stays as it was. Never set for
+   * a promoted ask (`priorAskId` present): the escalation line below says
+   * the same thing with more detail, and printing both would repeat
+   * ourselves on the same row.
    */
   askRoutingNotesByAskId?: ReadonlyMap<string, string>;
+  /**
+   * Display labels for context/escalation lines, keyed by pubkey: an ask's
+   * asker (see `lib/askContextLine.ts`'s `askContextSubjectPubkey`) and a
+   * promoted ask's prior audience. Absent means those lines render without
+   * a name (falls back to a truncated pubkey or a generic phrase).
+   */
+  contextLabelsByPubkey?: ReadonlyMap<string, string>;
+  /**
+   * One relay-signed prior ask per promoted ask, keyed by `ask.priorAskId`
+   * -- a single batched `ids` fetch upstream (see `useActionCenterItems`),
+   * never one fetch per row. Absent or missing an entry means that ask's
+   * escalation line stays null rather than guessed at.
+   */
+  priorAsksById?: ReadonlyMap<string, PriorAskProvenance>;
   /**
    * Only the `needsAction` home-feed category is read here. `mentions`,
    * `activity`, and `agentActivity` fed a generic "message" row that is not

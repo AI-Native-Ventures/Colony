@@ -13,6 +13,12 @@ import { isHardListCategory } from "@/features/agents/delegationGrantActions";
 import { describeAskResolution } from "@/features/asks/lib/askResolution";
 import { isDue } from "@/features/reminders/lib/reminderFilters";
 import { computeAskDeadline } from "./lib/askDeadline";
+import {
+  askContextSubjectPubkey,
+  buildAskContextLine,
+  buildEscalationLine,
+  type PriorAskProvenance,
+} from "./lib/askContextLine";
 import { projectBlockFeedItem } from "./lib/blockActionCenter";
 import type { ThreadPing } from "./lib/threadPings";
 import type {
@@ -95,6 +101,22 @@ function itemTier(item: ActionItem): Tier {
   }
   if (item.source.kind === "block") return TIER_BLOCKED_WORK;
   return TIER_EVERYTHING_ELSE; // reminder, workflow, ping
+}
+
+/**
+ * The accent border a row renders (spec "Layout": `.item.countdown` /
+ * `.item.blocked`), named after what the tier means rather than its numeric
+ * rank so the UI layer never imports the tier constants directly. Tier 3
+ * and settled rows get no accent -- the wireframe only marks the two tiers
+ * a countdown or a hard deadline can apply to.
+ */
+export type ActionItemAccent = "countdown" | "blocked" | null;
+
+export function actionItemAccent(item: ActionItem): ActionItemAccent {
+  const tier = itemTier(item);
+  if (tier === TIER_DEADLINE) return "countdown";
+  if (tier === TIER_BLOCKED_WORK) return "blocked";
+  return null;
 }
 
 /**
@@ -203,6 +225,8 @@ function blockItem(
     updatedAt: item.createdAt,
     source: projection.source,
     capabilities: projection.capabilities,
+    contextLine: null,
+    escalationLine: null,
   };
 }
 
@@ -224,6 +248,8 @@ function workflowItem(source: ActionWorkflowSource): ActionItem {
     updatedAt: source.run.completedAt ?? source.run.createdAt,
     source,
     capabilities: ["open-details", "open-source", "approve", "deny"],
+    contextLine: null,
+    escalationLine: null,
   };
 }
 
@@ -245,6 +271,8 @@ function pingItem(ping: ThreadPing): ActionItem {
     updatedAt: ping.createdAt,
     source: { kind: "ping", ping },
     capabilities: ["dismiss", "open-source"],
+    contextLine: null,
+    escalationLine: null,
   };
 }
 
@@ -254,6 +282,8 @@ export function buildActionCenterItems({
   resolvedAsks = [],
   resolverLabelsByPubkey,
   askRoutingNotesByAskId,
+  contextLabelsByPubkey,
+  priorAsksById,
   feed,
   reminders,
   workflows = [],
@@ -273,6 +303,33 @@ export function buildActionCenterItems({
     isHardList: ask.category !== null && isHardListCategory(ask.category),
   });
 
+  // Context and escalation lines share the same label map (asker, prior
+  // audience) but resolve to two different facts about the ask -- computed
+  // once per ask here rather than duplicated at each item-construction site.
+  const contextAndEscalationLines = (
+    ask: ActionAskSource["ask"],
+  ): { contextLine: string | null; escalationLine: string | null } => {
+    const askerPubkey = askContextSubjectPubkey(ask);
+    const askerLabel = contextLabelsByPubkey?.get(askerPubkey);
+    const contextLine = askerLabel
+      ? buildAskContextLine(ask, askerLabel)
+      : null;
+
+    const priorAsk: PriorAskProvenance | null = ask.priorAskId
+      ? (priorAsksById?.get(ask.priorAskId) ?? null)
+      : null;
+    const priorAudienceLabel = priorAsk?.audiencePubkey
+      ? (contextLabelsByPubkey?.get(priorAsk.audiencePubkey) ?? null)
+      : null;
+    const escalationLine = buildEscalationLine(
+      ask.createdAt,
+      priorAsk,
+      priorAudienceLabel,
+    );
+
+    return { contextLine, escalationLine };
+  };
+
   const items: ActionItem[] = asks.map((ask) => {
     const source = askSource(ask);
     const baseSummary = ask.costOfDelay ?? `Answer requested · ${ask.askType}`;
@@ -290,6 +347,7 @@ export function buildActionCenterItems({
         "answer",
         ...(ask.channelId && ask.threadId ? (["open-source"] as const) : []),
       ],
+      ...contextAndEscalationLines(ask),
     };
   });
 
@@ -312,6 +370,7 @@ export function buildActionCenterItems({
       source,
       capabilities:
         ask.channelId && ask.threadId ? (["open-source"] as const) : [],
+      ...contextAndEscalationLines(ask),
     });
   }
 
@@ -346,6 +405,8 @@ export function buildActionCenterItems({
         "cancel",
         ...(reminder.content.target ? (["open-source"] as const) : []),
       ],
+      contextLine: null,
+      escalationLine: null,
     });
   }
 

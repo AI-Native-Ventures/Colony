@@ -26,6 +26,7 @@ type NavigationBehavior = {
 
 export type ActionCenterNavigationOptions = NavigationBehavior & {
   filter?: ActionCenterFilter;
+  initiative?: string;
   item?: string;
   state?: ActionCenterStateFilter;
 };
@@ -141,6 +142,7 @@ export function useAppNavigation() {
           to: "/action-center",
           search: {
             ...(options?.filter ? { filter: options.filter } : {}),
+            ...(options?.initiative ? { initiative: options.initiative } : {}),
             ...(options?.item ? { item: options.item } : {}),
             ...(options?.state ? { state: options.state } : {}),
           },
