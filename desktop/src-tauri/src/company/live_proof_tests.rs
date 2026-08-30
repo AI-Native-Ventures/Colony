@@ -127,8 +127,14 @@ async fn the_app_creates_a_company_against_a_running_relay() {
     let relay_pubkey = env("BUZZ_LIVE_RELAY_PUBKEY").expect("BUZZ_LIVE_RELAY_PUBKEY is required");
     let keys = nostr::Keys::parse(&owner_key).expect("owner key parses");
 
-    // A fresh company per run, so a rerun proves idempotency rather than
-    // colliding with a previous run's records.
+    // The community profile head lives at one fixed coordinate per
+    // community (`COMMUNITY_PROFILE_ID`), so every run collides there by
+    // design - that is the point, since approving twice must update the
+    // same head rather than create a second one. The suffix still earns its
+    // keep for everything keyed off `company_id` instead: persona ids, team
+    // ids, and the three initiative ids all embed it, so a rerun's
+    // initiatives land on fresh coordinates instead of colliding with a
+    // previous run's.
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -187,10 +193,10 @@ async fn the_app_creates_a_company_against_a_running_relay() {
     let first = publish_company(&blueprint, &scope, &http, &keys, &relay_pubkey).await;
     assert_eq!(
         first.accepted, 4,
-        "one company head and three initiatives, accepted"
+        "the company head (updated) and three initiatives (created), accepted"
     );
 
-    let stored = fetch_company(&http, &relay_pubkey, &company_id, &keys).await;
+    let stored = fetch_company(&http, &relay_pubkey, &keys).await;
     assert_eq!(
         stored.get("tradingName").and_then(|value| value.as_str()),
         Some("Horizon Labs Café"),
@@ -212,8 +218,11 @@ async fn the_app_creates_a_company_against_a_running_relay() {
         "each is recognised as a repeat, not refused as a conflict"
     );
 
-    let after = fetch_company(&http, &relay_pubkey, &company_id, &keys).await;
-    assert_eq!(after, stored, "the company is unchanged by re-approval");
+    let after = fetch_company(&http, &relay_pubkey, &keys).await;
+    assert_eq!(
+        after, stored,
+        "re-reading the same head returns the same content the first approval stored"
+    );
 
     // And seeding is a no-op once the employees exist.
     let mut now_present = fizz.clone();
@@ -380,19 +389,18 @@ async fn publish_company(
 }
 
 /// Read the company head back off the relay.
-async fn fetch_company(
-    http: &str,
-    relay_pubkey: &str,
-    company_id: &str,
-    keys: &nostr::Keys,
-) -> serde_json::Value {
+///
+/// The head lives at the one fixed `COMMUNITY_PROFILE_ID` coordinate per
+/// community, not at `company_id` - `fetch_profile_head` above reads the
+/// same coordinate for the same reason.
+async fn fetch_company(http: &str, relay_pubkey: &str, keys: &nostr::Keys) -> serde_json::Value {
     let client = reqwest::Client::new();
     let url = format!("{http}/query");
     // The relay takes a list of filters, the same shape a REQ carries.
     let body = serde_json::json!([{
         "kinds": [30179],
         "authors": [relay_pubkey],
-        "#d": [company_id],
+        "#d": [buzz_core_pkg::company::COMMUNITY_PROFILE_ID],
         "limit": 1,
     }])
     .to_string();
