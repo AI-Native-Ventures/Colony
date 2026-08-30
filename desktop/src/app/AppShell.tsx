@@ -145,6 +145,9 @@ export function AppShell() {
   const location = useLocation();
   const queryClient = useQueryClient();
   useManagedAgentRuntimeReconciliation(communitiesHook.communities); // sync storage snapshot
+  // Captured whole, not just destructured: the command-palette wiring below
+  // spreads it rather than re-listing every `go*` target by hand.
+  const nav = useAppNavigation();
   const {
     goActionCenter,
     goAgents,
@@ -163,7 +166,7 @@ export function AppShell() {
     goWorkflows,
     closeSettings,
     openSearchHit,
-  } = useAppNavigation();
+  } = nav;
   const { canGoBack, canGoForward, goBack, goForward } =
     useBackForwardControls();
   const { selectedChannelId, selectedView } = React.useMemo(
@@ -656,27 +659,19 @@ export function AppShell() {
     () => setIsCreateChannelOpen(true),
     [],
   );
+  // Spread `nav` for every plain `go*` target; only the ones that need an
+  // AppShell-local wrapper (a settings section, a dialog opener) are listed.
   const commandActions = useNavigationCommands({
+    ...nav,
     actionCenterEnabled,
+    contentEnabled,
     createAgent: requestOpenCreateAgent,
     createChannel: handleOpenCreateChannel,
-    goActionCenter,
-    goAgents,
     goBlocksSettings: () => handleOpenSettings("blocks"),
-    goDiscovery,
-    goHome,
     goNewMessage: handleOpenNewDm,
-    goPeople,
-    goProjects,
-    goPulse,
     goSettings: handleOpenSettings,
-    goCredits,
-    goSpend,
-    goWorkflows,
     openBrowseChannels: handleOpenBrowseChannels,
     projectsEnabled,
-    contentEnabled,
-    goContent,
     pulseEnabled,
     workflowsEnabled,
   });
