@@ -3,6 +3,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { dismissThreadPing } from "@/features/action-center/lib/dismissThreadPing";
 import {
+  createTrailingDebounce,
+  type TrailingDebounce,
+} from "@/shared/lib/trailingDebounce";
+import {
   THREAD_PINGS_QUERY_KEY,
   selectAllRootIds,
   selectPingCandidates,
@@ -25,6 +29,18 @@ type ThreadPingData = {
   replyEvents: RelayEvent[];
   reactionEvents: RelayEvent[];
 };
+
+// A live mention lands in the home feed the instant it's received, and this
+// hook is mounted permanently alongside it (see docstring below). Without a
+// debounce, every single new mention -- one at a time, mid-render, on the
+// same tick the feed updates -- commits a brand new candidateSetKey and
+// fires three fresh relay queries. That is a lot of always-on background
+// work to trigger from a single incoming message, and it was found racing
+// Home's scroll-position preservation logic in inbox-live-update.spec.ts
+// (2px-tolerant assertion, observed ~28px off under load). Coalescing a
+// burst of arrivals into one settle-then-fetch keeps the badge live enough
+// without firing mid-stream.
+const THREAD_PINGS_DEBOUNCE_MS = 500;
 
 /**
  * Thread-ping detection, wired to live relay data. Three bounded, kinds-
@@ -58,26 +74,54 @@ export function useThreadPings(input: {
     [mentions],
   );
 
-  // Keys the data query on the actual candidate set, not on every home-feed
+  // Debounced snapshot of `candidates`: the data query, and everything
+  // derived from it below, reacts to this rather than to the raw, every-
+  // mention-tick value. Applied immediately on first mount (nothing to
+  // coalesce yet) so cold load isn't delayed; only a live update in
+  // progress waits out the quiet window. See THREAD_PINGS_DEBOUNCE_MS.
+  const latestCandidatesRef = React.useRef<PingCandidate[]>(candidates);
+  latestCandidatesRef.current = candidates;
+  const [settledCandidates, setSettledCandidates] =
+    React.useState<PingCandidate[]>(candidates);
+  const isFirstCandidatesRef = React.useRef(true);
+  const debounceRef = React.useRef<TrailingDebounce | null>(null);
+  React.useEffect(() => {
+    if (isFirstCandidatesRef.current) {
+      isFirstCandidatesRef.current = false;
+      setSettledCandidates(candidates);
+      return;
+    }
+    if (!debounceRef.current) {
+      debounceRef.current = createTrailingDebounce(
+        () => setSettledCandidates(latestCandidatesRef.current),
+        THREAD_PINGS_DEBOUNCE_MS,
+      );
+    }
+    debounceRef.current.trigger();
+  }, [candidates]);
+  React.useEffect(() => () => debounceRef.current?.cancel(), []);
+
+  // Keys the data query on the settled candidate set, not on every home-feed
   // poll tick -- most ticks return the same mentions, and re-running the
   // three batched fetches for an unchanged set would be the exact always-on
   // cost this lane must avoid.
   const candidateSetKey = React.useMemo(
     () =>
-      candidates
+      settledCandidates
         .map((candidate) => candidate.id)
         .sort()
         .join(","),
-    [candidates],
+    [settledCandidates],
   );
 
   const dataQuery = useQuery({
     queryKey: [...THREAD_PINGS_QUERY_KEY, candidateSetKey, ownerPubkey ?? ""],
-    enabled: ownerPubkey !== null && candidates.length > 0,
+    enabled: ownerPubkey !== null && settledCandidates.length > 0,
     queryFn: async (): Promise<ThreadPingData> => {
-      const rootIdsNeedingLookup = selectRootIdsNeedingLookup(candidates);
-      const allRootIds = selectAllRootIds(candidates);
-      const candidateIds = candidates.map((candidate) => candidate.id);
+      const rootIdsNeedingLookup =
+        selectRootIdsNeedingLookup(settledCandidates);
+      const allRootIds = selectAllRootIds(settledCandidates);
+      const candidateIds = settledCandidates.map((candidate) => candidate.id);
 
       const [rootEvents, replyEvents, reactionEvents] = await Promise.all([
         rootIdsNeedingLookup.length > 0
@@ -127,12 +171,22 @@ export function useThreadPings(input: {
 
   const pings = React.useMemo(() => {
     if (!ownerPubkey || !dataQuery.data) return [];
-    return selectUnansweredPings(candidates, {
+    // settledCandidates, not the raw live candidates: dataQuery.data was
+    // fetched for exactly that set, and pairing it with a candidate that
+    // arrived after the fetch started would read as "no reply found yet"
+    // for a candidate we haven't actually checked.
+    return selectUnansweredPings(settledCandidates, {
       ownerPubkey,
       relaySelfPubkey,
       ...dataQuery.data,
     }).filter((ping) => !dismissedIds.has(ping.id));
-  }, [candidates, ownerPubkey, relaySelfPubkey, dataQuery.data, dismissedIds]);
+  }, [
+    settledCandidates,
+    ownerPubkey,
+    relaySelfPubkey,
+    dataQuery.data,
+    dismissedIds,
+  ]);
 
   const dismiss = React.useCallback(
     async (pingId: string) => {
