@@ -34,17 +34,27 @@ export function clearFreshIdentity(
   storage?.removeItem(freshIdentityKey(pubkey));
 }
 
-/** Should this boot run the canvas first run instead of WelcomeSetup? */
+/**
+ * Should this boot run the canvas first run instead of WelcomeSetup?
+ *
+ * `hasOwnCommunity` must be scoped to the pubkey signing up, not to the
+ * machine as a whole: a machine can carry a community from an entirely
+ * different, earlier identity, and that must not disqualify a second,
+ * genuinely new identity from the canvas flow. A previous version of this
+ * check took a machine-wide community count, which meant a second signup on
+ * a non-empty machine fell through to the legacy OnboardingFlow even though
+ * the signing-up pubkey had never been onboarded.
+ */
 export function isFreshFounder({
   pubkey,
-  communitiesCount,
+  hasOwnCommunity,
   storage = ambientStorage(),
 }: {
   pubkey: string | null;
-  communitiesCount: number;
+  hasOwnCommunity: boolean;
   storage?: StorageLike | null;
 }): boolean {
-  if (!pubkey || communitiesCount > 0 || !storage) return false;
+  if (!pubkey || hasOwnCommunity || !storage) return false;
   if (storage.getItem(freshIdentityKey(pubkey)) !== "true") return false;
   return storage.getItem(onboardingCompletionStorageKey(pubkey)) !== "true";
 }
