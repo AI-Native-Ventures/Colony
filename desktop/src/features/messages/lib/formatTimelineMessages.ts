@@ -123,7 +123,8 @@ export function countTopLevelTimelineRows(events: RelayEvent[]): number {
   return count;
 }
 
-function getReactionTargetId(tags: string[][]) {
+/** The event id a NIP-25 reaction (kind:7) targets: its last valid `e` tag. */
+export function getReactionTargetId(tags: string[][]) {
   for (let index = tags.length - 1; index >= 0; index -= 1) {
     const tag = tags[index];
     if (

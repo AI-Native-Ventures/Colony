@@ -1,4 +1,5 @@
 import {
+  AtSign,
   Bell,
   Blocks,
   CircleAlert,
@@ -16,6 +17,7 @@ const KIND_ICON: Record<ActionItemKind, typeof CircleHelp> = {
   reminder: Bell,
   workflow: Workflow,
   block: Blocks,
+  ping: AtSign,
 };
 
 const STATE_LABEL: Record<ActionItemState, string> = {
@@ -60,6 +62,8 @@ export function sourceLabel(item: ActionItem): string {
       // The meta line only has to say what KIND of thing this is without
       // protocol vocabulary.
       return item.source.awaitingDecision ? "Block waiting on you" : "Block";
+    case "ping":
+      return "Waiting on you in a thread";
   }
 }
 

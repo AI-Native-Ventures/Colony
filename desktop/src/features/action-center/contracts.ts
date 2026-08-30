@@ -5,6 +5,7 @@ import type {
 } from "@/features/asks/lib/askResolution";
 import type { BlockInstanceRef } from "@/features/blocks/contracts";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
+import type { ThreadPing } from "./lib/threadPings";
 import type {
   FeedItem,
   Workflow,
@@ -32,7 +33,7 @@ export const ACTION_CENTER_STATES = [
 
 export type ActionCenterStateFilter = (typeof ACTION_CENTER_STATES)[number];
 
-export type ActionItemKind = "ask" | "block" | "reminder" | "workflow";
+export type ActionItemKind = "ask" | "block" | "reminder" | "workflow" | "ping";
 
 export type ActionItemState =
   | "needs-action"
@@ -59,7 +60,14 @@ export type ActionCapability =
   | "open-workspace"
   | "approve"
   | "deny"
-  | "run-again";
+  | "run-again"
+  /**
+   * Dismisses a thread ping by publishing a kind:7 reaction on it -- distinct
+   * from `mark-done`, which this epic's v2 queue no longer backs with any
+   * local state (see ranked-queue-model). A dismissed ping's "done" state
+   * lives entirely at the relay, not here.
+   */
+  | "dismiss";
 
 export type ActionAskSource = {
   kind: "ask";
@@ -116,11 +124,17 @@ export type ActionWorkflowSource = {
   approval: WorkflowApproval | null;
 };
 
+export type ActionPingSource = {
+  kind: "ping";
+  ping: ThreadPing;
+};
+
 export type ActionSource =
   | ActionAskSource
   | ActionBlockSource
   | ActionReminderSource
-  | ActionWorkflowSource;
+  | ActionWorkflowSource
+  | ActionPingSource;
 
 export type ActionItem = {
   id: string;
@@ -167,6 +181,12 @@ export type ActionCenterProjectionInput = {
   };
   reminders: readonly Reminder[];
   workflows?: readonly ActionWorkflowSource[];
+  /**
+   * Unanswered thread pings, already detected and suppression-checked (see
+   * `lib/threadPings.ts`, `useThreadPings`). Absent means the surface reads
+   * no pings, same convention as `workflows`.
+   */
+  pings?: readonly ThreadPing[];
   doneIds?: ReadonlySet<string>;
   /** Unix seconds used to decide which reminders are due. Defaults to now;
    * overridable so tests can pin the clock. */

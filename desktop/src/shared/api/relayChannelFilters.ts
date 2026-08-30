@@ -135,6 +135,22 @@ export function buildChannelReactionAuxFilter(
   return buildChannelAuxKindFilter(messageIds, [KIND_REACTION]);
 }
 
+/**
+ * Reply-message filter for a bounded set of thread roots: pulls message
+ * kinds (not reactions, not job/huddle/system rows) `#e`-referencing those
+ * roots, so a caller can check "has anyone replied since" across many
+ * threads in one query rather than one per thread. Same kind set
+ * useInboxThreadContext.ts already uses for reply/descendant fetching.
+ * Used by thread-ping detection, which batches the check across an owner's
+ * candidate mentions instead of walking each one.
+ */
+export function buildChannelReplyAuxFilter(
+  _channelId: string,
+  rootIds: string[],
+): RelaySubscriptionFilter {
+  return buildChannelAuxKindFilter(rootIds, [...HOME_MENTION_EVENT_KINDS]);
+}
+
 export function buildChannelAuxDeletionFilter(
   _channelId: string,
   auxEventIds: string[],
