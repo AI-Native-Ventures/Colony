@@ -5,6 +5,7 @@ import {
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 
+import { companyRepository } from "./companyRepository";
 import { createBlueprintApprover } from "./approveBlueprint";
 import { postInitiativeCards } from "./postInitiativeCards";
 
@@ -48,6 +49,18 @@ export async function approveCompanyBlueprint(
     );
   }
 
+  // The relay mints a community profile head for every community at boot, so
+  // approval always edits that head rather than creating a fresh one.
+  // Reading it fresh on every call (rather than caching it) is what makes a
+  // retry after a stale-head conflict resolve on its own: the next attempt
+  // reads whatever is there now.
+  const head = await companyRepository.getActiveCompanyHead();
+  if (!head.ok) {
+    throw new Error(
+      `This community has no profile to approve into yet: ${head.message}`,
+    );
+  }
+
   const outcome = await approve({
     blueprint: input.blueprint,
     requestId: input.requestId,
@@ -55,6 +68,9 @@ export async function approveCompanyBlueprint(
     expectedHash: input.expectedHash,
     relayPubkey,
     channelId: input.channelId,
+    expectedHeadEventId: head.value.headEventId,
+    expectedHeadCreatedAt: head.value.profile.createdAt,
+    expectedHeadUpdatedAt: head.value.profile.updatedAt,
   });
 
   // The employees exist by now. Saying "failed" would invite approving a

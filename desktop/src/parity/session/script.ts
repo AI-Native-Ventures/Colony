@@ -1275,6 +1275,11 @@ export const SESSION_STEPS: SessionStep[] = [
       expectedHash: "0".repeat(64),
       relayPubkey: BOGUS_PUBKEY,
       channelId: BOGUS_UUID,
+      // Valid-shaped so `is_event_id` passes and the probe still fails where
+      // it always did: parsing the bogus blueprint string, not here.
+      expectedHeadEventId: BOGUS_PUBKEY,
+      expectedHeadCreatedAt: 0,
+      expectedHeadUpdatedAt: 0,
     }),
   ),
   step("blueprint-complete-bogus", "complete_company_blueprint", () =>

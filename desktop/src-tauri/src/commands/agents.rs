@@ -11,8 +11,8 @@ use crate::{
         resolve_provider_binary, save_managed_agents, stop_managed_agent_process,
         stop_managed_agent_workspace_pair, sync_managed_agent_processes, try_regenerate_nest,
         validate_provider_config, BackendKind, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentRecord, ManagedAgentSummary, RelayMeshConfig,
-        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        CreateManagedAgentResponse, ManagedAgentSummary, RelayMeshConfig, DEFAULT_ACP_COMMAND,
+        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
     relay::{
         creation_relay_pin, effective_agent_relay_url, relay_ws_url_with_override,
@@ -28,39 +28,13 @@ pub(super) fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
-/// Retain a freshly authored managed-agent event in the local store, flagged
-/// for relay sync. MUST be called inside the `managed_agents_store_lock`-held
-/// body after `save_managed_agents`, NEVER across an `.await`: it acquires
-/// `state.keys` and a retention-db connection, both `std::sync` guards, and
-/// drops them before returning.
-///
-/// Owner-authored, mirroring `commands::personas::retain_persona_pending`: the
-/// owner keys sign, the d_tag is the agent's pubkey, so the coordinate is
-/// `30177:<owner>:<agent_pubkey>`. The event content is the opt-IN
-/// [`agent_event_content`] projection — the retention upsert's content-equality
-/// guard compares this projection, so an operational start/stop that mutates
-/// only runtime fields produces an identical row and never re-enqueues a
-/// publish. Best-effort: a failure here is logged and swallowed so a retention
-/// hiccup never blocks the disk-authoritative write.
-pub(super) fn retain_managed_agent_pending(
-    app: &AppHandle,
-    state: &AppState,
-    record: &ManagedAgentRecord,
-) {
-    use crate::managed_agents::{reconcile::retain_agent_record, retention::open_retention_db};
-
-    let result = (|| -> Result<(), String> {
-        let scope = crate::managed_agents::retention::active_retention_scope(app, state)?;
-        let conn = open_retention_db(&scope.db_path)?;
-        // Shared engine with the boot-time reconcile: projection content diff
-        // (no republish for runtime-only churn) + monotonic created_at bump
-        // past the retained head (NIP-AP step 3).
-        retain_agent_record(&conn, &scope.owner_keys, record).map(|_| ())
-    })();
-    if let Err(e) = result {
-        eprintln!("buzz-desktop: agent-retain: {e}");
-    }
-}
+// Retain-on-save moved to `managed_agents::reconcile`, next to the
+// content-diff engine it delegates to. Re-exported under its old name and
+// path so every existing call site in `commands/` (including
+// `super::agents::retain_managed_agent_pending` and
+// `crate::commands::agents::retain_managed_agent_pending` references
+// elsewhere) keeps working unchanged.
+pub(super) use crate::managed_agents::reconcile::retain_managed_agent_pending;
 
 /// Purge a deleted agent's pending row and enqueue a NIP-09 tombstone, both
 /// inside the `managed_agents_store_lock`-held delete body and NEVER across an
@@ -792,6 +766,13 @@ pub(crate) async fn create_managed_agent_with_creation_request(
         records.push(record);
 
         save_managed_agents(&app, &records)?;
+
+        // Best-effort hire hook: enrol the persona in the coordination team.
+        // See `enrol_persona_in_coordination_team_after_hire` for why this
+        // must never block agent creation.
+        if let Some(persona_id) = requested_persona_id.as_deref() {
+            crate::managed_agents::enrol_persona_in_coordination_team_after_hire(&app, persona_id);
+        }
 
         let record = records
             .iter()

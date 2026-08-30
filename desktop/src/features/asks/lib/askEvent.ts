@@ -1,4 +1,5 @@
 import { KIND_ASK } from "@/shared/constants/kinds";
+import type { AskState, AskStateStatus } from "./askState";
 
 /** An open ask addressed to the signed-in owner. */
 export type OpenAsk = {
@@ -208,8 +209,40 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
 }
 
 /**
- * The asks still waiting on the owner: everything with no closure event
- * naming it, newest first.
+ * Ask-state statuses that mean the relay itself no longer considers the ask
+ * open. `promoted` is included deliberately: the old row's audience is no
+ * longer the person to act on it, and the relay files a successor addressed
+ * one rung up as its own new open ask.
+ */
+const CLOSED_ASK_STATE_STATUSES: ReadonlySet<AskStateStatus> = new Set([
+  "resolved",
+  "withdrawn",
+  "promoted",
+]);
+
+/**
+ * The asks still waiting on the owner, newest first. Excluded by two
+ * independent signals, kept both rather than either alone:
+ *
+ * - `closureEventIds`: a kind 44301/44302 event naming the ask (the card
+ *   resolution/withdrawal path, which always publishes one of these).
+ * - `askStatesById`: the ask's relay-signed state head (kind 30200),
+ *   status `resolved`/`withdrawn`/`promoted`. This is the ONLY signal an
+ *   ask closed by an owner's thread reply produces
+ *   (`buzz-relay/src/ask_broker.rs`'s `try_auto_resolve_from_reply` closes
+ *   the row and republishes the state head, but never publishes a 44301 or
+ *   44302 — the reply itself, not a resolution card, is the record). A
+ *   caller that skips `askStatesById` will keep showing a thread-resolved
+ *   ask as open forever.
+ *
+ * `askStatesById` MUST already be trust-filtered to heads authored by the
+ * relay's own pubkey before it reaches here (see `askStatesFromEvents` in
+ * `./askState.ts`, which every caller of this function goes through) — this
+ * function does no pubkey check of its own. A head from any other signer is
+ * a forgery claiming a state the relay never set: trusting one here would
+ * let any authenticated member hide an ask from the owner's queue simply by
+ * publishing a state head naming it closed, defeating the exact protocol
+ * boundary this surface exists to enforce.
  *
  * An ask a leader or executive already answered must never appear here. That
  * absorption is the entire point of the ladder, and showing an answered ask
@@ -218,9 +251,16 @@ export function readAsk(event: AskEventShape): OpenAsk | null {
 export function selectOpenAsks(
   asks: OpenAsk[],
   closureEventIds: string[],
+  askStatesById: ReadonlyMap<string, AskState> = new Map(),
 ): OpenAsk[] {
   const closed = new Set(closureEventIds);
   return asks
     .filter((ask) => !closed.has(ask.id))
+    .filter((ask) => {
+      const state = askStatesById.get(ask.id);
+      return (
+        state === undefined || !CLOSED_ASK_STATE_STATUSES.has(state.status)
+      );
+    })
     .sort((a, b) => b.createdAt - a.createdAt);
 }

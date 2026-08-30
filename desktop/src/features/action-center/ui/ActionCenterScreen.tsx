@@ -72,6 +72,55 @@ export function ActionCenterScreen({
     string | null
   >(null);
 
+  // Optimistic "resolving" marks for asks answered by an in-thread reply
+  // (spec: "Optimistically mark the item resolving; reconcile from the
+  // open-asks refetch"). Keyed by ask id, but a single thread reply can
+  // close every open ask bound to that thread root
+  // (`try_auto_resolve_from_reply` resolves all of them, not just one), so
+  // marking happens by thread id across every open ask sharing it, not by
+  // the one ask the composer was open on.
+  const [resolvingAskIds, setResolvingAskIds] = React.useState<
+    ReadonlySet<string>
+  >(new Set());
+  const markThreadResolving = React.useCallback(
+    (threadId: string) => {
+      setResolvingAskIds((previous) => {
+        const next = new Set(previous);
+        for (const candidate of allItems) {
+          if (
+            candidate.source.kind === "ask" &&
+            !candidate.source.resolution &&
+            candidate.source.ask.threadId === threadId
+          ) {
+            next.add(candidate.source.ask.id);
+          }
+        }
+        return next;
+      });
+    },
+    [allItems],
+  );
+  // Reconcile from the open-asks refetch: once an ask no longer appears as
+  // an open ask row at all (the relay's auto-resolve landed and
+  // `selectOpenAsks` excluded it), its optimistic mark is stale and must
+  // drop, whether or not the refetch was the one that closed it.
+  React.useEffect(() => {
+    setResolvingAskIds((previous) => {
+      if (previous.size === 0) return previous;
+      const stillOpenAskIds = new Set(
+        allItems.flatMap((item) =>
+          item.source.kind === "ask" && !item.source.resolution
+            ? [item.source.ask.id]
+            : [],
+        ),
+      );
+      const next = new Set(
+        [...previous].filter((askId) => stillOpenAskIds.has(askId)),
+      );
+      return next.size === previous.size ? previous : next;
+    });
+  }, [allItems]);
+
   React.useEffect(() => {
     if (refreshRequestedFor && refreshRequestedFor !== selectedItemId) {
       setRefreshRequestedFor(null);
@@ -199,6 +248,7 @@ export function ActionCenterScreen({
               <ActionCenterList
                 items={items}
                 onSelect={onSelectItem}
+                resolvingAskIds={resolvingAskIds}
                 selectedId={selectedItemId}
               />
             )}
@@ -230,6 +280,8 @@ export function ActionCenterScreen({
                 onDismissPing={onDismissPing}
                 onOpenSource={(item) => void onOpenSource(item)}
                 onRefresh={handleRefresh}
+                onThreadReplySent={markThreadResolving}
+                resolvingAskIds={resolvingAskIds}
                 unavailableItemId={unavailableItemId}
               />
             )}

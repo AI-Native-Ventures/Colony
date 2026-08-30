@@ -12,7 +12,7 @@ import { useResolvedAsks } from "@/features/asks/useAskResolutions";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
-import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
+import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import { useRemindersQuery } from "@/features/reminders/hooks";
 import { relayClient } from "@/shared/api/relayClient";
 import {
@@ -169,11 +169,7 @@ export function useActionCenterItems({
   // falls back to `DEFAULT_ASK_WINDOW_SECS` inside `computeAskDeadline`,
   // mirroring the broker's own "never fails" company-default read -- so
   // this query's own errors are deliberately not surfaced or awaited.
-  const relaySelfQuery = useQuery({
-    queryKey: ["action-center-relay-self"],
-    queryFn: () => getRelaySelf(),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
+  const relaySelfQuery = useRelaySelfQuery();
   const relayPubkey = relaySelfQuery.data ?? null;
   const companyProfileQuery = useQuery({
     queryKey: actionCenterCompanyProfileQueryKey(

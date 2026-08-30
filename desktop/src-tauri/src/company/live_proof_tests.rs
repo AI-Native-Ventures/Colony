@@ -127,8 +127,14 @@ async fn the_app_creates_a_company_against_a_running_relay() {
     let relay_pubkey = env("BUZZ_LIVE_RELAY_PUBKEY").expect("BUZZ_LIVE_RELAY_PUBKEY is required");
     let keys = nostr::Keys::parse(&owner_key).expect("owner key parses");
 
-    // A fresh company per run, so a rerun proves idempotency rather than
-    // colliding with a previous run's records.
+    // The community profile head lives at one fixed coordinate per
+    // community (`COMMUNITY_PROFILE_ID`), so every run collides there by
+    // design - that is the point, since approving twice must update the
+    // same head rather than create a second one. The suffix still earns its
+    // keep for everything keyed off `company_id` instead: persona ids, team
+    // ids, and the three initiative ids all embed it, so a rerun's
+    // initiatives land on fresh coordinates instead of colliding with a
+    // previous run's.
     let suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -187,10 +193,10 @@ async fn the_app_creates_a_company_against_a_running_relay() {
     let first = publish_company(&blueprint, &scope, &http, &keys, &relay_pubkey).await;
     assert_eq!(
         first.accepted, 4,
-        "one company head and three initiatives, accepted"
+        "the company head (updated) and three initiatives (created), accepted"
     );
 
-    let stored = fetch_company(&http, &relay_pubkey, &company_id, &keys).await;
+    let stored = fetch_company(&http, &relay_pubkey, &keys).await;
     assert_eq!(
         stored.get("tradingName").and_then(|value| value.as_str()),
         Some("Horizon Labs Café"),
@@ -212,8 +218,11 @@ async fn the_app_creates_a_company_against_a_running_relay() {
         "each is recognised as a repeat, not refused as a conflict"
     );
 
-    let after = fetch_company(&http, &relay_pubkey, &company_id, &keys).await;
-    assert_eq!(after, stored, "the company is unchanged by re-approval");
+    let after = fetch_company(&http, &relay_pubkey, &keys).await;
+    assert_eq!(
+        after, stored,
+        "re-reading the same head returns the same content the first approval stored"
+    );
 
     // And seeding is a no-op once the employees exist.
     let mut now_present = fizz.clone();
@@ -261,6 +270,73 @@ struct RunOutcome {
     duplicates: usize,
 }
 
+/// Read the community profile head's id and timestamps off the relay.
+///
+/// The relay mints one for every community at boot
+/// (`run_profile_backfill`), so this exists before `publish_company` ever
+/// runs. Reading it is what lets approval build an `Update` carrying the
+/// real compare-and-set token, the same way the app does, instead of the
+/// `Create` the relay refuses unconditionally once a head already exists.
+async fn fetch_profile_head(
+    http: &str,
+    relay_pubkey: &str,
+    keys: &nostr::Keys,
+) -> super::actions::ExistingProfileHead {
+    let client = reqwest::Client::new();
+    let url = format!("{http}/query");
+    let body = serde_json::json!([{
+        "kinds": [30179],
+        "authors": [relay_pubkey],
+        "#d": ["profile"],
+        "limit": 1,
+    }])
+    .to_string();
+    let response = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("authorization", nip98(keys, "POST", &url, body.as_bytes()))
+        .body(body)
+        .send()
+        .await
+        .expect("query reaches the relay");
+    let raw = response.text().await.unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let events = parsed
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            parsed
+                .get("events")
+                .and_then(|events| events.as_array())
+                .cloned()
+        })
+        .unwrap_or_default();
+    let event = events
+        .first()
+        .expect("the relay has already minted a community profile at boot");
+    let event_id = event
+        .get("id")
+        .and_then(|id| id.as_str())
+        .expect("head event carries an id")
+        .to_string();
+    let content: serde_json::Value = event
+        .get("content")
+        .and_then(|content| content.as_str())
+        .and_then(|content| serde_json::from_str(content).ok())
+        .unwrap_or(serde_json::Value::Null);
+    super::actions::ExistingProfileHead {
+        event_id,
+        created_at: content
+            .get("createdAt")
+            .and_then(|value| value.as_i64())
+            .expect("head content carries createdAt"),
+        updated_at: content
+            .get("updatedAt")
+            .and_then(|value| value.as_i64())
+            .expect("head content carries updatedAt"),
+    }
+}
+
 /// Build, sign, and publish the company and its initiatives.
 async fn publish_company(
     blueprint: &ValidatedBlueprint,
@@ -270,8 +346,13 @@ async fn publish_company(
     relay_pubkey: &str,
 ) -> RunOutcome {
     let created_at = approval_timestamp(&blueprint.request_id);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let existing_head = fetch_profile_head(http, relay_pubkey, keys).await;
     let mut signed = vec![super::actions::sign_action(
-        &super::actions::company_action(blueprint, relay_pubkey, created_at)
+        &super::actions::company_action(blueprint, relay_pubkey, now, &existing_head)
             .expect("build company action"),
         keys,
     )
@@ -308,19 +389,18 @@ async fn publish_company(
 }
 
 /// Read the company head back off the relay.
-async fn fetch_company(
-    http: &str,
-    relay_pubkey: &str,
-    company_id: &str,
-    keys: &nostr::Keys,
-) -> serde_json::Value {
+///
+/// The head lives at the one fixed `COMMUNITY_PROFILE_ID` coordinate per
+/// community, not at `company_id` - `fetch_profile_head` above reads the
+/// same coordinate for the same reason.
+async fn fetch_company(http: &str, relay_pubkey: &str, keys: &nostr::Keys) -> serde_json::Value {
     let client = reqwest::Client::new();
     let url = format!("{http}/query");
     // The relay takes a list of filters, the same shape a REQ carries.
     let body = serde_json::json!([{
         "kinds": [30179],
         "authors": [relay_pubkey],
-        "#d": [company_id],
+        "#d": [buzz_core_pkg::company::COMMUNITY_PROFILE_ID],
         "limit": 1,
     }])
     .to_string();

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { LayoutGrid } from "lucide-react";
+import { LayoutGrid, Plus } from "lucide-react";
 
 import type { CompanyTask, Initiative } from "@/features/company/contracts";
 import {
@@ -20,6 +20,7 @@ import {
   StatusPill,
 } from "@/features/company/ui/taskStatusPresentation";
 import { ToolbarSelect } from "@/features/company/ui/ToolbarSelect";
+import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -148,6 +149,7 @@ export function TaskBoardScreen({
   initiative,
   initiatives,
   isLoading,
+  onNewTask,
   rows,
   tasksById,
 }: {
@@ -155,6 +157,7 @@ export function TaskBoardScreen({
   initiative: Initiative | null;
   initiatives: Initiative[];
   isLoading: boolean;
+  onNewTask: () => void;
   rows: WorkListRow[];
   tasksById: ReadonlyMap<string, CompanyTask>;
 }) {
@@ -182,6 +185,12 @@ export function TaskBoardScreen({
     >
       <div className="mx-auto w-full max-w-6xl">
         <PageHeader
+          action={
+            <Button data-testid="task-board-new-task" onClick={onNewTask}>
+              <Plus aria-hidden />
+              New task
+            </Button>
+          }
           description={
             initiative
               ? "Where this initiative's tasks are stuck, one column per stage."
@@ -237,6 +246,15 @@ export function TaskBoardScreen({
                   <p className="text-sm text-muted-foreground">
                     No tasks yet for this initiative.
                   </p>
+                  <Button
+                    className="mt-4"
+                    data-testid="task-board-empty-new-task"
+                    onClick={onNewTask}
+                    size="sm"
+                  >
+                    <Plus aria-hidden />
+                    New task
+                  </Button>
                 </div>
               ) : null}
 
