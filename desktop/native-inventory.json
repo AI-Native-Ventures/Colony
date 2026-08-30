@@ -3216,6 +3216,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/onboarding/ui/ProviderLaneChoice.tsx:212",
         "src/shared/api/tauriSubscriptions.ts:68"
       ]
     },
