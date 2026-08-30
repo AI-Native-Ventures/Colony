@@ -12,11 +12,11 @@ function memoryStorage(seed = {}) {
   };
 }
 
-test("fresh marker + no completion + no communities = founder", () => {
+test("fresh marker + no completion + no own community = founder", () => {
   const storage = memoryStorage();
   markFreshIdentity("pk1", storage);
   assert.equal(
-    isFreshFounder({ pubkey: "pk1", communitiesCount: 0, storage }),
+    isFreshFounder({ pubkey: "pk1", hasOwnCommunity: false, storage }),
     true,
   );
 });
@@ -24,7 +24,7 @@ test("fresh marker + no completion + no communities = founder", () => {
 test("no marker (imported identity) is never a fresh founder", () => {
   const storage = memoryStorage();
   assert.equal(
-    isFreshFounder({ pubkey: "pk1", communitiesCount: 0, storage }),
+    isFreshFounder({ pubkey: "pk1", hasOwnCommunity: false, storage }),
     false,
   );
 });
@@ -35,17 +35,31 @@ test("a completed pubkey is never a fresh founder", () => {
   });
   markFreshIdentity("pk1", storage);
   assert.equal(
-    isFreshFounder({ pubkey: "pk1", communitiesCount: 0, storage }),
+    isFreshFounder({ pubkey: "pk1", hasOwnCommunity: false, storage }),
     false,
   );
 });
 
-test("existing communities suppress the canvas run", () => {
+test("this pubkey already having its own community suppresses the canvas run", () => {
   const storage = memoryStorage();
   markFreshIdentity("pk1", storage);
   assert.equal(
-    isFreshFounder({ pubkey: "pk1", communitiesCount: 1, storage }),
+    isFreshFounder({ pubkey: "pk1", hasOwnCommunity: true, storage }),
     false,
+  );
+});
+
+// Regression test: this is the exact bug the owner reported. A second,
+// genuinely new identity on a machine that already carries a DIFFERENT
+// identity's community must still be a fresh founder. Fails against the
+// previous machine-wide `communitiesCount > 0` check, which had no way to
+// express "not this pubkey's community."
+test("another identity's existing community does not suppress this pubkey's canvas run", () => {
+  const storage = memoryStorage();
+  markFreshIdentity("pk2", storage);
+  assert.equal(
+    isFreshFounder({ pubkey: "pk2", hasOwnCommunity: false, storage }),
+    true,
   );
 });
 
@@ -53,7 +67,7 @@ test("null pubkey is never a fresh founder", () => {
   assert.equal(
     isFreshFounder({
       pubkey: null,
-      communitiesCount: 0,
+      hasOwnCommunity: false,
       storage: memoryStorage(),
     }),
     false,

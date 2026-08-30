@@ -263,10 +263,29 @@ function AppReady({
   }
 
   if (onboarding.stage === "onboarding") {
-    // The redesigned flow runs above this boundary now (CanvasFirstRunHost in
-    // CommunityApp), because claiming a workspace is one of its own steps.
-    // What reaches here is the residue: identity-lost recovery and dev
-    // force-fresh runs, where a community is already applied.
+    // The redesigned flow owns every "Start with Colony" fresh-identity
+    // signup (CanvasFirstRunHost in CommunityApp, gated by isFreshFounder,
+    // which claims the workspace as one of its own steps) -- including a
+    // second identity signing up on a machine that already has a different
+    // identity's community (isFreshFounder scopes its community check to the
+    // signing-up pubkey; see freshFounder.ts).
+    //
+    // What legitimately still reaches this legacy flow, none of which is an
+    // ordinary signup:
+    //   - identity-lost recovery (onboarding.identityLost): the keyring was
+    //     cleared after a migration, and OnboardingFlow's key-import page has
+    //     no canvas equivalent to re-enter an existing nsec.
+    //   - dev-only forced-fresh replay (VITE_BUZZ_FORCE_FRESH_ONBOARDING),
+    //     which reruns onboarding against an EXISTING identity and never
+    //     ships to production.
+    //   - an imported identity (never marked fresh -- see freshFounder.ts)
+    //     that has no relay profile yet after creating or joining a
+    //     community through WelcomeSetup/CommunityOnboardingFlow. This is
+    //     "bring your own key", not "sign up", and predates the canvas
+    //     project; it is not covered by CanvasFirstRunHost.
+    //   - VITE_NEW_ONBOARDING=0 (the redesign's kill switch): when the
+    //     canvas flow is disabled entirely, this IS the onboarding path, by
+    //     design, for every signup.
     return (
       <OnboardingFlow
         actions={onboarding.flow.actions}
@@ -565,7 +584,14 @@ function CommunityApp({
     (canvasRunState === "active" ||
       isFreshFounder({
         pubkey: currentPubkey,
-        communitiesCount: communities.length,
+        // Scoped to this identity: a community stamped with a DIFFERENT
+        // pubkey (an earlier account on this machine) must not disqualify a
+        // genuinely new signup from the canvas flow. `community.pubkey` is
+        // display-only, but it is the only local signal of "which identity
+        // already has a workspace here" — see Community.pubkey's doc.
+        hasOwnCommunity: communities.some(
+          (community) => community.pubkey === currentPubkey,
+        ),
       }));
   useEffect(() => {
     if (canvasEligible && canvasRunState === "unstarted") {
