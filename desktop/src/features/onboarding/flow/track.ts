@@ -15,6 +15,13 @@ export const PROBE_BUDGET_MS = 8000;
 export type BrainStatus = "ready" | "needs-login" | "not-installed";
 
 export type BrainCandidate = {
+  /**
+   * Catalog id, which is what installing, signing in and writing the config
+   * all key off. The screen used to carry labels alone, which was enough
+   * while it could only pick an already-ready runtime; now that it installs
+   * and signs in, a label is not addressable.
+   */
+  id: string;
   label: string;
   status: BrainStatus;
 };
@@ -54,7 +61,11 @@ export function orderBrains(
 
 export type TrackResult = {
   track: OnboardingTrack;
-  /** Labels of runtimes the user can actually use, for screen 5a. */
+  /**
+   * Catalog ids of runtimes the user can actually use, for screen 5a. Ids
+   * rather than labels because the screen now installs and signs in as well
+   * as picking, and every one of those calls is keyed by id.
+   */
   installed: string[];
   /**
    * Every brain Colony knows about, ready or not.
@@ -79,15 +90,42 @@ export function resolveTrack(
         (runtime.authStatus.status === "logged_in" ||
           runtime.authStatus.status === "not_applicable"),
     )
-    .map((runtime) => runtime.label);
+    .map((runtime) => runtime.id);
 
   const readiness = resolveAgentReadiness(runtimes, config, "any");
   const colonyAgent = runtimes.find(
     (runtime) => runtime.id === COLONY_AGENT_RUNTIME_ID,
   );
+  const track: OnboardingTrack =
+    readiness.ready && readiness.reason === "cli" ? "byo" : "colony";
+
+  return {
+    track: installed.length ? track : "colony",
+    installed,
+    brains: brainsFromRuntimes(runtimes, colonyAgent?.label),
+  };
+}
+
+/**
+ * The brain list, derived from the runtime catalog alone.
+ *
+ * Split out of `resolveTrack` because the brain screen now installs and signs
+ * in, so it has to recompute statuses as the catalog changes rather than
+ * render the snapshot probing took. `resolveTrack` needs the agent config to
+ * decide the track; this does not, so the screen can refresh without one.
+ */
+export function brainsFromRuntimes(
+  runtimes: readonly AcpRuntimeCatalogEntry[],
+  colonyAgentLabel?: string,
+): BrainCandidate[] {
   const hosted: BrainCandidate[] = [
     {
-      label: colonyAgent?.label ?? COLONY_AGENT_LABEL,
+      id: COLONY_AGENT_RUNTIME_ID,
+      label:
+        colonyAgentLabel ??
+        runtimes.find((runtime) => runtime.id === COLONY_AGENT_RUNTIME_ID)
+          ?.label ??
+        COLONY_AGENT_LABEL,
       // Hosted: there is nothing to install and nothing to sign in to, so it
       // is the one option that is ready on every computer.
       status: "ready" as const,
@@ -97,23 +135,21 @@ export function resolveTrack(
     .filter((runtime) => runtime.id !== COLONY_AGENT_RUNTIME_ID)
     .map((runtime) => {
       if (runtime.availability !== "available") {
-        return { label: runtime.label, status: "not-installed" as const };
+        return {
+          id: runtime.id,
+          label: runtime.label,
+          status: "not-installed" as const,
+        };
       }
       const signedIn =
         runtime.authStatus.status === "logged_in" ||
         runtime.authStatus.status === "not_applicable";
       return {
+        id: runtime.id,
         label: runtime.label,
         status: signedIn ? ("ready" as const) : ("needs-login" as const),
       };
     });
 
-  const track: OnboardingTrack =
-    readiness.ready && readiness.reason === "cli" ? "byo" : "colony";
-
-  return {
-    track: installed.length ? track : "colony",
-    installed,
-    brains: orderBrains([...hosted, ...detected]),
-  };
+  return orderBrains([...hosted, ...detected]);
 }

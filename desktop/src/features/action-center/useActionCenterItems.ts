@@ -2,6 +2,7 @@ import * as React from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { useReportingLineLookup } from "@/features/agents/reportingLine";
+import { readAsk } from "@/features/asks/lib/askEvent";
 import {
   askRoutingSummary,
   classifyAskRouting,
@@ -21,7 +22,7 @@ import {
   getWorkflowRuns,
 } from "@/shared/api/tauriWorkflows";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { KIND_COMPANY_PROFILE } from "@/shared/constants/kinds";
+import { KIND_ASK, KIND_COMPANY_PROFILE } from "@/shared/constants/kinds";
 import { useFeatureEnabled } from "@/shared/features";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -38,13 +39,19 @@ import {
   filterActionCenterItems,
 } from "./actionCenterModel";
 import {
+  askContextSubjectPubkey,
+  type PriorAskProvenance,
+} from "./lib/askContextLine";
+import {
   actionCenterApprovalsQueryKey,
   actionCenterCompanyProfileQueryKey,
+  actionCenterPriorAsksQueryKey,
   actionCenterWorkflowQueryKey,
   actionCenterWorkflowRunsQueryKey,
 } from "./lib/actionCenterQueryKeys";
 import { readCompanyAskWindowSecs } from "./lib/companyAskWindow";
 import { selectOwnerWorkflowApprovalSources } from "./lib/workflowApprovals";
+import { useThreadPings } from "./useThreadPings";
 import type {
   ActionCenterFilter,
   ActionCenterStateFilter,
@@ -190,28 +197,87 @@ export function useActionCenterItems({
   );
 
   const feed = homeFeedQuery.data?.feed;
+  const mentions = React.useMemo(() => feed?.mentions ?? [], [feed]);
+  // Reuses this hook's own homeFeedQuery/identityQuery/relaySelfQuery rather
+  // than letting useThreadPings mount its own copies -- a second observer on
+  // the same query key polls on its own schedule (see
+  // ActionCenterContext.tsx's doc comment on why this hook exists at all).
+  const threadPings = useThreadPings({
+    mentions,
+    ownerPubkey,
+    relaySelfPubkey: relayPubkey,
+  });
   const reminders = remindersQuery.data ?? [];
   const { lookup: reportingLineLookup } = useReportingLineLookup(communityId);
   const resolvedAsks = resolvedAsksResult.resolvedAsks;
-  const humanResolverPubkeys = React.useMemo(
+
+  // Escalation provenance (spec, resolved question 5): one batched `ids`
+  // fetch for every distinct `priorAskId` the current open asks name, never
+  // one fetch per row. `priorAskId`s are immutable once minted (a prior ask
+  // never changes after being superseded), so this can cache aggressively.
+  const priorAskIds = React.useMemo(
     () =>
       [
         ...new Set(
-          resolvedAsks
-            .filter((entry) => !entry.resolution.defaultExecuted)
-            .map((entry) => entry.resolution.resolverPubkey),
+          openAsks.asks
+            .map((ask) => ask.priorAskId)
+            .filter((id): id is string => id !== null),
         ),
       ].sort(),
-    [resolvedAsks],
+    [openAsks.asks],
   );
-  const resolverLabelsQuery = useUsersBatchQuery(humanResolverPubkeys, {
-    enabled: humanResolverPubkeys.length > 0,
+  const priorAsksQuery = useQuery({
+    queryKey: actionCenterPriorAsksQueryKey(communityId, priorAskIds.join(",")),
+    queryFn: () =>
+      relayClient.fetchEvents({
+        ids: priorAskIds,
+        kinds: [KIND_ASK],
+        limit: priorAskIds.length,
+      }),
+    enabled: priorAskIds.length > 0,
+    staleTime: 5 * 60_000,
   });
-  const resolverLabelsByPubkey = React.useMemo(() => {
+  const priorAsksById = React.useMemo(() => {
+    const byId = new Map<string, PriorAskProvenance>();
+    for (const event of priorAsksQuery.data ?? []) {
+      const parsed = readAsk(event);
+      if (parsed) {
+        byId.set(parsed.id, {
+          audiencePubkey: parsed.audiencePubkey,
+          createdAt: parsed.createdAt,
+        });
+      }
+    }
+    return byId;
+  }, [priorAsksQuery.data]);
+
+  // One combined pubkey-to-display-name batch, shared by resolved-ask
+  // summaries, ask context lines ("Ask from <name>"), and escalation lines
+  // ("sat with <name>") -- a second useUsersBatchQuery call here would be a
+  // second network round trip for data the first one already covers.
+  const labelPubkeys = React.useMemo(() => {
+    const pubkeys = new Set<string>();
+    for (const entry of resolvedAsks) {
+      if (!entry.resolution.defaultExecuted) {
+        pubkeys.add(entry.resolution.resolverPubkey);
+      }
+    }
+    for (const ask of openAsks.asks) {
+      pubkeys.add(askContextSubjectPubkey(ask));
+    }
+    for (const prior of priorAsksById.values()) {
+      if (prior.audiencePubkey) pubkeys.add(prior.audiencePubkey);
+    }
+    return [...pubkeys].sort();
+  }, [openAsks.asks, priorAsksById, resolvedAsks]);
+  const labelsQuery = useUsersBatchQuery(labelPubkeys, {
+    enabled: labelPubkeys.length > 0,
+  });
+  const labelsByPubkey = React.useMemo(() => {
     const labels = new Map<string, string>();
-    const profiles = resolverLabelsQuery.data?.profiles;
+    const profiles = labelsQuery.data?.profiles;
     if (!profiles) return labels;
-    for (const pubkey of humanResolverPubkeys) {
+    for (const pubkey of labelPubkeys) {
       const profile = profiles[normalizePubkey(pubkey)];
       labels.set(
         pubkey,
@@ -219,7 +285,7 @@ export function useActionCenterItems({
       );
     }
     return labels;
-  }, [humanResolverPubkeys, resolverLabelsQuery.data]);
+  }, [labelPubkeys, labelsQuery.data]);
   const askRoutingNotesByAskId = React.useMemo(() => {
     const notes = new Map<string, string>();
     for (const ask of openAsks.asks) {
@@ -227,6 +293,10 @@ export function useActionCenterItems({
         ask,
         reportingLineLookup(effectiveFilerPubkey(ask)).managerPubkey,
       );
+      // A promoted ask's escalation line already says this, with more detail
+      // (audience name and duration) -- suppressing the generic note here
+      // avoids repeating the same fact twice on one row.
+      if (routing?.kind === "promoted") continue;
       const note = askRoutingSummary(routing);
       if (note) notes.set(ask.id, note);
     }
@@ -237,23 +307,28 @@ export function useActionCenterItems({
       buildActionCenterItems({
         asks: openAsks.asks,
         resolvedAsks,
-        resolverLabelsByPubkey,
+        resolverLabelsByPubkey: labelsByPubkey,
         askRoutingNotesByAskId,
+        contextLabelsByPubkey: labelsByPubkey,
+        priorAsksById,
         doneIds: localDoneIds,
         feed: feed ? { needsAction: feed.needsAction } : undefined,
         reminders,
         workflows: workflowSources,
+        pings: threadPings.pings,
         companyAskWindowSecs,
       }),
     [
       askRoutingNotesByAskId,
       companyAskWindowSecs,
       feed,
+      labelsByPubkey,
       localDoneIds,
       openAsks.asks,
+      priorAsksById,
       reminders,
       resolvedAsks,
-      resolverLabelsByPubkey,
+      threadPings.pings,
       workflowSources,
     ],
   );
@@ -275,6 +350,8 @@ export function useActionCenterItems({
     () => workflowApprovalQueries.map((query) => query.refetch),
     [workflowApprovalQueries],
   );
+  const refetchThreadPings = threadPings.refetch;
+  const refetchPriorAsks = priorAsksQuery.refetch;
   const refetch = React.useCallback(async () => {
     await Promise.all([
       refetchHomeFeed(),
@@ -282,6 +359,8 @@ export function useActionCenterItems({
       refetchReminders(),
       refetchWorkflows(),
       refetchCompanyProfile(),
+      refetchThreadPings(),
+      refetchPriorAsks(),
       ...refetchWorkflowRuns.map((refetchOne) => refetchOne()),
       ...refetchWorkflowApprovals.map((refetchOne) => refetchOne()),
     ]);
@@ -289,7 +368,9 @@ export function useActionCenterItems({
     refetchAsks,
     refetchCompanyProfile,
     refetchHomeFeed,
+    refetchPriorAsks,
     refetchReminders,
+    refetchThreadPings,
     refetchWorkflowApprovals,
     refetchWorkflowRuns,
     refetchWorkflows,
@@ -314,10 +395,12 @@ export function useActionCenterItems({
     channelsQuery.isLoading ||
     workflowsQuery.isLoading ||
     workflowRunQueries.some((query) => query.isLoading) ||
-    workflowApprovalQueries.some((query) => query.isLoading);
+    workflowApprovalQueries.some((query) => query.isLoading) ||
+    threadPings.isLoading;
 
   return {
     allItems,
+    dismissPing: threadPings.dismiss,
     error: firstError(queryErrors),
     isLoading: isCoreLoading,
     isSettled: !isCoreLoading && !isOptionalSourceLoading,
@@ -327,6 +410,7 @@ export function useActionCenterItems({
     workflowsEnabled,
   } satisfies {
     allItems: ActionItem[];
+    dismissPing: (pingId: string) => Promise<void>;
     error: Error | null;
     isLoading: boolean;
     isSettled: boolean;

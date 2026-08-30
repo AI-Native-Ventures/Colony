@@ -52,21 +52,33 @@ pub(crate) fn apply_provisioned_meter_env(
     runtime_id: &str,
     provider: Option<&str>,
 ) -> Result<(), String> {
-    let supported = match runtime_id {
-        "codex" => true,
-        "buzz-agent" | "goose" => matches!(
+    let known_runtime = matches!(runtime_id, "codex" | "buzz-agent" | "goose");
+    if !known_runtime {
+        return Err(format!(
+            "Colony Credits is available only for OpenAI-compatible runtimes; `{runtime_id}` is unsupported"
+        ));
+    }
+    if runtime_id != "codex" {
+        let provider_ok = matches!(
             provider
                 .map(str::trim)
                 .map(str::to_ascii_lowercase)
                 .as_deref(),
             Some("openai") | Some("openai-compat")
-        ),
-        _ => false,
-    };
-    if !supported {
-        return Err(format!(
-            "Colony Credits is available only for OpenAI-compatible runtimes; `{runtime_id}` is unsupported"
-        ));
+        );
+        if !provider_ok {
+            // The runtime is supported; its configured provider is not. Name
+            // the provider, not the runtime, so the fix points at the right
+            // setting.
+            return Err(match provider.map(str::trim).filter(|p| !p.is_empty()) {
+                Some(provider) => format!(
+                    "Colony Credits needs an OpenAI-compatible provider; `{runtime_id}` is configured for `{provider}`. Switch its provider to OpenAI-compatible, or pay for this agent's model with your own key instead of Credits."
+                ),
+                None => format!(
+                    "Colony Credits needs an OpenAI-compatible provider; `{runtime_id}` has no provider configured. Switch its provider to OpenAI-compatible, or pay for this agent's model with your own key instead of Credits."
+                ),
+            });
+        }
     }
     if token.trim().is_empty() {
         return Err("Colony Credits gateway returned an empty token".to_string());
@@ -212,6 +224,47 @@ mod tests {
         )
         .expect_err("Claude subscription must remain outside Phase 1 Colony Credits");
         assert!(error.contains("unsupported"));
+        assert!(error.contains("`claude`"));
         assert_eq!(env.get("OPENAI_API_KEY"), Some(&"user-key".to_string()));
+    }
+
+    #[test]
+    fn provisioned_meter_names_the_provider_not_the_runtime_for_a_supported_runtime() {
+        let mut env = std::collections::BTreeMap::new();
+        let error = apply_provisioned_meter_env(
+            &mut env,
+            "https://relay.example",
+            "replacement-token",
+            "buzz-agent",
+            Some("openrouter"),
+        )
+        .expect_err("buzz-agent supports Colony Credits only with an OpenAI-compatible provider");
+        assert!(
+            error.contains("`openrouter`"),
+            "error should name the offending provider: {error}"
+        );
+        assert!(
+            !error.contains("is unsupported"),
+            "error should not blame the runtime as unsupported: {error}"
+        );
+        assert!(env.is_empty(), "rejected call must not mutate env");
+    }
+
+    #[test]
+    fn provisioned_meter_reports_missing_provider_distinctly_from_a_wrong_one() {
+        let mut env = std::collections::BTreeMap::new();
+        let error = apply_provisioned_meter_env(
+            &mut env,
+            "https://relay.example",
+            "replacement-token",
+            "buzz-agent",
+            None,
+        )
+        .expect_err("buzz-agent with no provider configured is not OpenAI-compatible");
+        assert!(
+            error.contains("no provider configured"),
+            "error should say no provider is set, not name a wrong one: {error}"
+        );
+        assert!(env.is_empty(), "rejected call must not mutate env");
     }
 }

@@ -17,6 +17,7 @@ import { useActionCenterItems } from "./useActionCenterItems";
  */
 export type ActionCenterDataSource = {
   allItems: ActionItem[];
+  dismissPing: (pingId: string) => Promise<void>;
   error: Error | null;
   isLoading: boolean;
   isSettled: boolean;
@@ -51,6 +52,7 @@ function ActionCenterDataMount({ children }: { children: React.ReactNode }) {
   const value = React.useMemo<ActionCenterDataSource>(
     () => ({
       allItems: actionCenter.allItems,
+      dismissPing: actionCenter.dismissPing,
       error: actionCenter.error,
       isLoading: actionCenter.isLoading,
       isSettled: actionCenter.isSettled,
@@ -60,6 +62,7 @@ function ActionCenterDataMount({ children }: { children: React.ReactNode }) {
     }),
     [
       actionCenter.allItems,
+      actionCenter.dismissPing,
       actionCenter.error,
       actionCenter.isLoading,
       actionCenter.isSettled,

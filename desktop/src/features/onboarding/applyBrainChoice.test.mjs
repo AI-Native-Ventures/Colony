@@ -89,3 +89,15 @@ test("applying an unknown brain saves nothing", async () => {
   assert.equal(next, null);
   assert.deepEqual(saved, []);
 });
+
+test("the hosted agent resolves without the catalog naming it", () => {
+  // The brain screen records catalog ids now, so Colony's own agent arrives
+  // here as "buzz-agent" rather than the "colony" sentinel. It is hosted, so
+  // it must resolve even when the probe came back with nothing: a catalog
+  // lookup would return null and write no config at all, which is the exact
+  // failure that left founders with a Chief of Staff that never answered.
+  const planned = planBrainConfig([], BYOK, "buzz-agent");
+  assert.ok(planned, "a bare catalog still plans the hosted agent");
+  assert.equal(planned.preferred_runtime, "buzz-agent");
+  assert.deepEqual(planned, planBrainConfig([], BYOK, "colony"));
+});

@@ -13,7 +13,14 @@ import { isHardListCategory } from "@/features/agents/delegationGrantActions";
 import { describeAskResolution } from "@/features/asks/lib/askResolution";
 import { isDue } from "@/features/reminders/lib/reminderFilters";
 import { computeAskDeadline } from "./lib/askDeadline";
+import {
+  askContextSubjectPubkey,
+  buildAskContextLine,
+  buildEscalationLine,
+  type PriorAskProvenance,
+} from "./lib/askContextLine";
 import { projectBlockFeedItem } from "./lib/blockActionCenter";
+import type { ThreadPing } from "./lib/threadPings";
 import type {
   ActionAskSource,
   ActionCenterFilter,
@@ -80,6 +87,8 @@ function sourceUpdatedAt(source: ActionSource): number {
       return source.reminder.notBefore ?? source.reminder.createdAt;
     case "workflow":
       return source.run.completedAt ?? source.run.createdAt;
+    case "ping":
+      return source.ping.createdAt;
   }
 }
 
@@ -91,7 +100,23 @@ function itemTier(item: ActionItem): Tier {
       : TIER_BLOCKED_WORK;
   }
   if (item.source.kind === "block") return TIER_BLOCKED_WORK;
-  return TIER_EVERYTHING_ELSE; // reminder, workflow
+  return TIER_EVERYTHING_ELSE; // reminder, workflow, ping
+}
+
+/**
+ * The accent border a row renders (spec "Layout": `.item.countdown` /
+ * `.item.blocked`), named after what the tier means rather than its numeric
+ * rank so the UI layer never imports the tier constants directly. Tier 3
+ * and settled rows get no accent -- the wireframe only marks the two tiers
+ * a countdown or a hard deadline can apply to.
+ */
+export type ActionItemAccent = "countdown" | "blocked" | null;
+
+export function actionItemAccent(item: ActionItem): ActionItemAccent {
+  const tier = itemTier(item);
+  if (tier === TIER_DEADLINE) return "countdown";
+  if (tier === TIER_BLOCKED_WORK) return "blocked";
+  return null;
 }
 
 /**
@@ -200,6 +225,8 @@ function blockItem(
     updatedAt: item.createdAt,
     source: projection.source,
     capabilities: projection.capabilities,
+    contextLine: null,
+    escalationLine: null,
   };
 }
 
@@ -221,6 +248,31 @@ function workflowItem(source: ActionWorkflowSource): ActionItem {
     updatedAt: source.run.completedAt ?? source.run.createdAt,
     source,
     capabilities: ["open-details", "open-source", "approve", "deny"],
+    contextLine: null,
+    escalationLine: null,
+  };
+}
+
+/**
+ * A ping's title names where it happened (spec wireframe: "asked in
+ * #channel"), not what it says -- the summary carries the content preview.
+ * `capabilities` omits `answer`: dismissing is the only in-place action
+ * (spec, "out of scope: the reply composer"); `open-source` navigates to the
+ * thread for anyone who wants to actually reply.
+ */
+function pingItem(ping: ThreadPing): ActionItem {
+  return {
+    id: actionItemId("ping", ping.id),
+    kind: "ping",
+    state: "needs-action",
+    title: `asked in #${ping.channelName}`,
+    summary: ping.content,
+    createdAt: ping.createdAt,
+    updatedAt: ping.createdAt,
+    source: { kind: "ping", ping },
+    capabilities: ["dismiss", "open-source"],
+    contextLine: null,
+    escalationLine: null,
   };
 }
 
@@ -230,9 +282,12 @@ export function buildActionCenterItems({
   resolvedAsks = [],
   resolverLabelsByPubkey,
   askRoutingNotesByAskId,
+  contextLabelsByPubkey,
+  priorAsksById,
   feed,
   reminders,
   workflows = [],
+  pings = [],
   doneIds = new Set(),
   now = Math.floor(Date.now() / 1_000),
   companyAskWindowSecs = null,
@@ -247,6 +302,33 @@ export function buildActionCenterItems({
     deadlineAt: computeAskDeadline(ask, companyAskWindowSecs),
     isHardList: ask.category !== null && isHardListCategory(ask.category),
   });
+
+  // Context and escalation lines share the same label map (asker, prior
+  // audience) but resolve to two different facts about the ask -- computed
+  // once per ask here rather than duplicated at each item-construction site.
+  const contextAndEscalationLines = (
+    ask: ActionAskSource["ask"],
+  ): { contextLine: string | null; escalationLine: string | null } => {
+    const askerPubkey = askContextSubjectPubkey(ask);
+    const askerLabel = contextLabelsByPubkey?.get(askerPubkey);
+    const contextLine = askerLabel
+      ? buildAskContextLine(ask, askerLabel)
+      : null;
+
+    const priorAsk: PriorAskProvenance | null = ask.priorAskId
+      ? (priorAsksById?.get(ask.priorAskId) ?? null)
+      : null;
+    const priorAudienceLabel = priorAsk?.audiencePubkey
+      ? (contextLabelsByPubkey?.get(priorAsk.audiencePubkey) ?? null)
+      : null;
+    const escalationLine = buildEscalationLine(
+      ask.createdAt,
+      priorAsk,
+      priorAudienceLabel,
+    );
+
+    return { contextLine, escalationLine };
+  };
 
   const items: ActionItem[] = asks.map((ask) => {
     const source = askSource(ask);
@@ -265,6 +347,7 @@ export function buildActionCenterItems({
         "answer",
         ...(ask.channelId && ask.threadId ? (["open-source"] as const) : []),
       ],
+      ...contextAndEscalationLines(ask),
     };
   });
 
@@ -287,10 +370,12 @@ export function buildActionCenterItems({
       source,
       capabilities:
         ask.channelId && ask.threadId ? (["open-source"] as const) : [],
+      ...contextAndEscalationLines(ask),
     });
   }
 
   items.push(...workflows.map(workflowItem));
+  items.push(...pings.map(pingItem));
 
   // Only reminders that are due (pending and `notBefore <= now`) enter the
   // queue — the same definition `countDueReminders` uses for the Home badge,
@@ -320,6 +405,8 @@ export function buildActionCenterItems({
         "cancel",
         ...(reminder.content.target ? (["open-source"] as const) : []),
       ],
+      contextLine: null,
+      escalationLine: null,
     });
   }
 

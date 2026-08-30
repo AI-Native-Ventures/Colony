@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 427,
-    "rust_lines": 166910,
-    "tauri_coupled": 172,
-    "portable": 255,
-    "portable_lines": 94014,
+    "rust_total": 431,
+    "rust_lines": 168119,
+    "tauri_coupled": 173,
+    "portable": 258,
+    "portable_lines": 95279,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -23,6 +23,7 @@
       "src-tauri/src/commands/agent_proposals.rs",
       "src-tauri/src/commands/agent_providers.rs",
       "src-tauri/src/commands/agent_settings.rs",
+      "src-tauri/src/commands/agent_subscriptions.rs",
       "src-tauri/src/commands/agent_update_rollback.rs",
       "src-tauri/src/commands/agents.rs",
       "src-tauri/src/commands/agents/provider_access.rs",
@@ -181,6 +182,8 @@
     ],
     "portable_list": [
       "src-tauri/src/app_state_env.rs",
+      "src-tauri/src/app_state_identity_resolution.rs",
+      "src-tauri/src/app_state_identity_resolution_tests.rs",
       "src-tauri/src/app_state_keyring.rs",
       "src-tauri/src/app_state_tests.rs",
       "src-tauri/src/archive/agent_usage.rs",
@@ -385,6 +388,7 @@
       "src-tauri/src/managed_agents/spawn_snapshot/diff/tests.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/tests.rs",
       "src-tauri/src/managed_agents/storage_tests.rs",
+      "src-tauri/src/managed_agents/subscriptions.rs",
       "src-tauri/src/managed_agents/team_events.rs",
       "src-tauri/src/managed_agents/team_repair.rs",
       "src-tauri/src/managed_agents/team_snapshot.rs",
@@ -441,10 +445,10 @@
     ]
   },
   "commands": {
-    "registered": 347,
-    "defined": 347,
+    "registered": 348,
+    "defined": 348,
     "by_reach": {
-      "frontend": 341,
+      "frontend": 342,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -632,6 +636,7 @@
     "src-tauri/src/huddle/reconnect.rs": 1,
     "src-tauri/src/commands/discovery_export.rs": 1,
     "src-tauri/src/commands/qr_download.rs": 1,
+    "src-tauri/src/commands/agent_subscriptions.rs": 1,
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
@@ -3205,6 +3210,16 @@
       "example_sites": [
         "src/parity/session/script.ts:1565",
         "src/parity/session/script.ts:1566"
+      ]
+    },
+    "scan_agent_subscriptions": {
+      "defining_file": "src-tauri/src/commands/agent_subscriptions.rs",
+      "module": "agent_subscriptions",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/ProviderLaneChoice.tsx:212",
+        "src/shared/api/tauriSubscriptions.ts:68"
       ]
     },
     "scan_onboarding_company_website": {

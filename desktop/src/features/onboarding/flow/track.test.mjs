@@ -29,7 +29,9 @@ const emptyConfig = { agents: {}, defaults: {} };
 test("track_is_byo_when_a_logged_in_runtime_exists", () => {
   const result = resolveTrack([runtime()], emptyConfig);
   assert.equal(result.track, "byo");
-  assert.deepEqual(result.installed, ["Claude Code"]);
+  // Ids, not labels: the brain screen installs and signs in as well as
+  // picking, and every one of those calls is keyed by id.
+  assert.deepEqual(result.installed, ["claude-code"]);
 });
 
 test("track_is_colony_when_nothing_is_available", () => {
@@ -99,14 +101,14 @@ test("track_lists_every_brain_ready_ones_first", () => {
   assert.deepEqual(
     result.brains,
     [
-      { label: "Colony agent", status: "ready" },
-      { label: "Oh My Pi", status: "ready" },
-      { label: "Claude Code", status: "needs-login" },
-      { label: "Codex", status: "not-installed" },
+      { id: "buzz-agent", label: "Colony agent", status: "ready" },
+      { id: "pi", label: "Oh My Pi", status: "ready" },
+      { id: "claude", label: "Claude Code", status: "needs-login" },
+      { id: "codex", label: "Codex", status: "not-installed" },
     ],
     "every brain listed with its state, usable ones first",
   );
-  assert.deepEqual(result.installed, ["Oh My Pi"]);
+  assert.deepEqual(result.installed, ["pi"]);
 });
 
 test("track_lists_colony_agent_even_on_a_bare_computer", () => {
@@ -114,7 +116,9 @@ test("track_lists_colony_agent_even_on_a_bare_computer", () => {
   // hosted agent the screen offers a list of things you cannot use and no way
   // forward.
   const result = resolveTrack([], {});
-  assert.deepEqual(result.brains, [{ label: "Colony Agent", status: "ready" }]);
+  assert.deepEqual(result.brains, [
+    { id: "buzz-agent", label: "Colony Agent", status: "ready" },
+  ]);
   assert.equal(result.track, "colony");
 });
 

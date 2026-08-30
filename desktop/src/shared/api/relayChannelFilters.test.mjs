@@ -5,6 +5,7 @@ import {
   buildChannelAuxDeletionFilter,
   buildChannelAuxFilter,
   buildChannelReactionAuxFilter,
+  buildChannelReplyAuxFilter,
   buildChannelStructuralAuxFilter,
   buildHuddleTtsLiveFilter,
 } from "./relayChannelFilters.ts";
@@ -43,6 +44,17 @@ test("buildChannelAuxDeletionFilter keys on #e only, no #h", () => {
 test("buildChannelReactionAuxFilter fetches only kind:7 by #e", () => {
   const filter = buildChannelReactionAuxFilter(CHANNEL, IDS);
   assert.deepEqual(filter.kinds, [7]);
+  assert.deepEqual(filter["#e"], IDS);
+  assert.equal("#h" in filter, false);
+});
+
+// Thread-ping detection batches an owner-reply check across many thread
+// roots that can span multiple channels, so this must key on #e alone, same
+// as the other aux filters, and stay unbounded on kind (message kinds, not
+// reactions) so a reply after the ping is actually caught.
+test("buildChannelReplyAuxFilter fetches message kinds by #e, no #h", () => {
+  const filter = buildChannelReplyAuxFilter(CHANNEL, IDS);
+  assert.deepEqual(filter.kinds, [9, 40002, 45001, 45003]);
   assert.deepEqual(filter["#e"], IDS);
   assert.equal("#h" in filter, false);
 });

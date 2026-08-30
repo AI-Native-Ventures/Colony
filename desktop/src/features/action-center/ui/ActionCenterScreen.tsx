@@ -13,20 +13,32 @@ import {
   type ActionCenterFilter,
   type ActionItem,
 } from "../contracts";
+import {
+  filterByInitiative,
+  selectInitiativeChips,
+} from "../lib/initiativeChips";
 import { ActionCenterDetail } from "./ActionCenterDetail";
 import { ActionCenterFilterMenu } from "./ActionCenterFilterMenu";
+import { ActionCenterInitiativeChips } from "./ActionCenterInitiativeChips";
 import { ActionCenterList } from "./ActionCenterList";
 
 type ActionCenterScreenProps = {
   currentPubkey: string;
   error: Error | null;
   filter: ActionCenterFilter;
+  initiative: string | null;
   isLoading: boolean;
   isSettled: boolean;
   items: ActionItem[];
   openCount: number;
+  /** Whether the `pulse` feature flag is on. The link renders only then --
+   * absent entirely when off, never a disabled/greyed-out link. */
+  pulseEnabled: boolean;
   selectedItemId: string | null;
+  onDismissPing: (pingId: string) => Promise<void>;
   onFilterChange: (filter: ActionCenterFilter) => void;
+  onInitiativeChange: (initiative: string | null) => void;
+  onOpenPulse: () => void;
   onOpenSource: (item: ActionItem) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSelectItem: (itemId: string | null) => void;
@@ -39,12 +51,17 @@ export function ActionCenterScreen({
   currentPubkey,
   error,
   filter,
+  initiative,
   isLoading,
   isSettled,
   items,
   openCount,
+  pulseEnabled,
   selectedItemId,
+  onDismissPing,
   onFilterChange,
+  onInitiativeChange,
+  onOpenPulse,
   onOpenSource,
   onRefresh,
   onSelectItem,
@@ -64,6 +81,18 @@ export function ActionCenterScreen({
   const selectedItem = React.useMemo(
     () => allItems.find((item) => item.id === selectedItemId) ?? null,
     [allItems, selectedItemId],
+  );
+  // Chips derive from the kind/state-filtered `items`, not from the
+  // initiative-filtered result -- otherwise picking one chip would hide the
+  // others (spec: chips filter, they never regroup, and the badge/chip set
+  // stays whole-view while only what's rendered narrows).
+  const initiativeChips = React.useMemo(
+    () => selectInitiativeChips(items),
+    [items],
+  );
+  const visibleItems = React.useMemo(
+    () => filterByInitiative(items, initiative),
+    [items, initiative],
   );
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [refreshRequestedFor, setRefreshRequestedFor] = React.useState<
@@ -127,8 +156,12 @@ export function ActionCenterScreen({
 
   React.useEffect(() => {
     if (!isSettled || error || !selectedItemId) return;
-    const isVisibleInFilter =
-      filter === "all" || items.some((item) => item.id === selectedItemId);
+    // No "filter === all" shortcut here: an initiative chip can hide a
+    // selected item even under the "all" kind filter, so visibility must
+    // always be checked against what is actually rendered.
+    const isVisibleInFilter = visibleItems.some(
+      (item) => item.id === selectedItemId,
+    );
     const wasRefreshed = refreshRequestedFor === selectedItemId;
     if (
       (selectedItem === null && wasRefreshed) ||
@@ -139,13 +172,12 @@ export function ActionCenterScreen({
     }
   }, [
     error,
-    filter,
     isSettled,
-    items,
     onSelectItem,
     refreshRequestedFor,
     selectedItem,
     selectedItemId,
+    visibleItems,
   ]);
 
   React.useEffect(() => {
@@ -186,6 +218,16 @@ export function ActionCenterScreen({
                 <Badge data-testid="action-center-open-count" variant="warning">
                   {Math.min(openCount, 99)}
                 </Badge>
+              ) : null}
+              {pulseEnabled ? (
+                <button
+                  className="shrink-0 text-2xs font-medium text-primary hover:underline"
+                  data-testid="action-center-pulse-link"
+                  onClick={onOpenPulse}
+                  type="button"
+                >
+                  Watch streams in Pulse →
+                </button>
               ) : null}
             </div>
             <p className="truncate text-xs text-muted-foreground">
@@ -233,6 +275,11 @@ export function ActionCenterScreen({
                 onFilterChange={onFilterChange}
               />
             </div>
+            <ActionCenterInitiativeChips
+              chips={initiativeChips}
+              initiative={initiative}
+              onInitiativeChange={onInitiativeChange}
+            />
             {isLoading ? (
               <div
                 className="space-y-3 px-4 py-5"
@@ -244,7 +291,7 @@ export function ActionCenterScreen({
               </div>
             ) : (
               <ActionCenterList
-                items={items}
+                items={visibleItems}
                 onSelect={onSelectItem}
                 resolvingAskIds={resolvingAskIds}
                 selectedId={selectedItemId}
@@ -275,6 +322,7 @@ export function ActionCenterScreen({
                 currentPubkey={currentPubkey}
                 item={selectedItem}
                 onBack={() => onSelectItem(null)}
+                onDismissPing={onDismissPing}
                 onOpenSource={(item) => void onOpenSource(item)}
                 onRefresh={handleRefresh}
                 onThreadReplySent={markThreadResolving}
