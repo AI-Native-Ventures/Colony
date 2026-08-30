@@ -10,7 +10,7 @@ import { HUE_CANVAS, type CanvasTheme, type HueName } from "./canvasTheme";
  * read as one product, but a person only ever walks one of them at a time and
  * numbering them together would promise screens they will never see.
  */
-export const MACHINE_STEPS = ["identity", "backup", "setup", "config"] as const;
+export const MACHINE_STEPS = ["identity", "backup"] as const;
 
 export type MachineStep = (typeof MACHINE_STEPS)[number];
 
@@ -18,12 +18,15 @@ export type MachineStep = (typeof MACHINE_STEPS)[number];
  * Colour marks where you are, so neighbouring screens never repeat. The
  * sequence starts on violet because the landing screen is the first thing
  * anyone sees of Colony and violet is the brand's own hue.
+ *
+ * It used to run to amber and green as well, for a "find the brains on this
+ * computer" screen and a "choose the brain your agents think with" screen.
+ * Both asked what the canvas flow's brain screen asks, so both are gone and
+ * the ramp is two long.
  */
 const MACHINE_HUE: Record<MachineStep, HueName> = {
   identity: "violet",
   backup: "blue",
-  setup: "amber",
-  config: "green",
 };
 
 export function machineCanvasFor(step: MachineStep): CanvasTheme {
