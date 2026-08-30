@@ -253,10 +253,11 @@ fn migrate_teams_in_dir_at(
     db_path: &Path,
 ) -> Result<u32, String> {
     use crate::managed_agents::{
+        load_teams_readonly,
         persona_events::monotonic_created_at,
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
         team_events::build_team_event,
-        TeamRecord, DEFAULT_COORDINATION_TEAM_ID,
+        DEFAULT_COORDINATION_TEAM_ID,
     };
     use buzz_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
@@ -264,15 +265,24 @@ fn migrate_teams_in_dir_at(
     let pubkey = keys.public_key().to_hex();
 
     let teams_path = base_dir.join("teams.json");
-    if !teams_path.exists() {
-        return Ok(0);
-    }
-
-    let content = std::fs::read_to_string(&teams_path)
-        .map_err(|e| format!("failed to read teams.json: {e}"))?;
-
-    let records: Vec<TeamRecord> =
-        serde_json::from_str(&content).map_err(|e| format!("failed to parse teams.json: {e}"))?;
+    // Read through the same merge every other reader uses, rather than
+    // deserializing teams.json raw.
+    //
+    // The coordination team is the one built-in the RELAY has to resolve, and
+    // publishing it used to depend on it already being in teams.json at the
+    // moment THIS scope first synced. Retention is scoped per
+    // (relay, owner), so a community whose scope synced before the record was
+    // written — or a device with no teams.json at all, which returned early
+    // here — got a scope with no coordination team and no second chance until
+    // something else happened to rewrite the file. Every Task minted from chat
+    // in that community then failed with "missing reference in
+    // task.owningTeamId".
+    //
+    // `load_teams_readonly` merges the built-ins and guarantees a valid
+    // coordination team even from an absent file, and writes nothing. That
+    // makes this projection follow from code, which is where the team is
+    // actually defined, instead of from whatever the disk happened to hold.
+    let records = load_teams_readonly(&teams_path)?;
 
     if records.is_empty() {
         return Ok(0);
