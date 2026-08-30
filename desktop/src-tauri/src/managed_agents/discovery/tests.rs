@@ -313,6 +313,7 @@ fn record_with(
     override_cmd: Option<&str>,
 ) -> crate::managed_agents::types::ManagedAgentRecord {
     crate::managed_agents::types::ManagedAgentRecord {
+        tier: None,
         pubkey: String::new(),
         name: "r".to_string(),
         role_id: None,

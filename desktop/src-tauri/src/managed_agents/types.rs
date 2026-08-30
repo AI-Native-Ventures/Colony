@@ -98,6 +98,7 @@ impl AgentDefinition {
     /// event coordinate (`d_tag = slug`) across the fold.
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            tier: None,
             pubkey: String::new(),
             name: self.display_name.clone(),
             persona_id: None,
@@ -380,6 +381,18 @@ pub struct ManagedAgentRecord {
     /// Human-readable title paired with `role_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role_title: Option<String>,
+    /// The agent's interrupt-ladder rank (`worker`, `leader`, `executive`),
+    /// mirrored from the owner-authored kind:30177 head.
+    ///
+    /// The owner sets it in the rank dialog, which publishes the head
+    /// directly; this device never originates it. It is held here only so the
+    /// device's own republish carries it back rather than dropping it: the
+    /// published projection is rebuilt from this record, so a rank absent
+    /// here is a rank erased from the relay on the next rename, parallelism
+    /// change, or persona relink. `agent_tier` then reads no tier, and the
+    /// owner-contact gate treats the agent as unrestricted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
     /// Absorbed from `AgentDefinition.runtime` — the preferred ACP runtime ID
     /// (e.g. 'goose', 'claude'). Record-first command resolution reads this
     /// before falling back to legacy persona lookup; populated by the store

@@ -57,6 +57,12 @@ pub struct ManagedAgentEventContent {
     /// public keys, not secrets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub respond_to_allowlist: Vec<String>,
+    /// Interrupt-ladder rank, set by the owner's rank dialog on the head this
+    /// projection rebuilds. Public, and on the allowlist for one reason: a
+    /// republish that omits it erases the rank from the relay, and an agent
+    /// with no rank is unrestricted at the owner-contact gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 /// Project a `ManagedAgentRecord` onto the content fields published in
@@ -103,6 +109,7 @@ pub fn agent_event_content(record: &ManagedAgentRecord) -> ManagedAgentEventCont
         parallelism: record.parallelism,
         respond_to: record.respond_to,
         respond_to_allowlist: record.respond_to_allowlist.clone(),
+        tier: record.tier.clone(),
     }
 }
 
@@ -158,6 +165,7 @@ mod tests {
 
     fn sample_agent() -> ManagedAgentRecord {
         ManagedAgentRecord {
+            tier: None,
             pubkey: "agentpubkeyhex".to_string(),
             name: "Test Agent".to_string(),
             role_id: None,
