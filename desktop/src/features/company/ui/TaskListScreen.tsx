@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ListTodo } from "lucide-react";
+import { ListTodo, Plus } from "lucide-react";
 
 import type { Initiative } from "@/features/company/contracts";
 import {
@@ -22,6 +22,7 @@ import {
   StatusPill,
 } from "@/features/company/ui/taskStatusPresentation";
 import { ToolbarSelect } from "@/features/company/ui/ToolbarSelect";
+import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Switch } from "@/shared/ui/switch";
@@ -94,7 +95,13 @@ function LoadingState() {
   );
 }
 
-function EmptyState({ showingImplicit }: { showingImplicit: boolean }) {
+function EmptyState({
+  onNewTask,
+  showingImplicit,
+}: {
+  onNewTask: () => void;
+  showingImplicit: boolean;
+}) {
   return (
     <div className="rounded-2xl border border-dashed border-border/70 px-5 py-12 text-center">
       <ListTodo aria-hidden className="mx-auto size-8 text-muted-foreground" />
@@ -107,6 +114,15 @@ function EmptyState({ showingImplicit }: { showingImplicit: boolean }) {
           ? ""
           : " Chat-attributed tasks are filtered out; the toolbar toggle shows them."}
       </p>
+      <Button
+        className="mt-4"
+        data-testid="task-list-empty-new-task"
+        onClick={onNewTask}
+        size="sm"
+      >
+        <Plus aria-hidden />
+        New task
+      </Button>
     </div>
   );
 }
@@ -115,11 +131,13 @@ export function TaskListScreen({
   error,
   initiatives,
   isLoading,
+  onNewTask,
   rows,
 }: {
   error: Error | null;
   initiatives: Initiative[];
   isLoading: boolean;
+  onNewTask: () => void;
   rows: WorkListRow[];
 }) {
   const nowSeconds = useNowSeconds();
@@ -173,6 +191,12 @@ export function TaskListScreen({
     >
       <div className="mx-auto w-full max-w-6xl">
         <PageHeader
+          action={
+            <Button data-testid="task-list-new-task" onClick={onNewTask}>
+              <Plus aria-hidden />
+              New task
+            </Button>
+          }
           description="Everything this company is working on, grouped by any field on the task."
           title="All tasks"
         />
@@ -243,7 +267,7 @@ export function TaskListScreen({
           ) : null}
 
           {!isLoading && !error && visible.length === 0 ? (
-            <EmptyState showingImplicit={showImplicit} />
+            <EmptyState onNewTask={onNewTask} showingImplicit={showImplicit} />
           ) : null}
 
           {!isLoading && !error && groups.length > 0

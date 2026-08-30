@@ -1,12 +1,9 @@
 import {
   Bell,
   Blocks,
-  Bot,
   CircleAlert,
   CircleHelp,
   ExternalLink,
-  ListChecks,
-  MessageSquare,
   Workflow,
 } from "lucide-react";
 
@@ -16,8 +13,6 @@ import { Badge, type BadgeProps } from "@/shared/ui/badge";
 
 const KIND_ICON: Record<ActionItemKind, typeof CircleHelp> = {
   ask: CircleHelp,
-  task: ListChecks,
-  message: MessageSquare,
   reminder: Bell,
   workflow: Workflow,
   block: Blocks,
@@ -54,16 +49,10 @@ export function sourceLabel(item: ActionItem): string {
       if (item.source.resolution?.defaultExecuted) return "Default executed";
       if (item.source.resolution) return "Answered";
       return item.source.ask.channelId ? "Ask from a thread" : "Global ask";
-    case "message":
-      return item.source.item.channelName
-        ? `#${item.source.item.channelName}`
-        : "Message";
     case "reminder":
       return item.source.reminder.content.target
         ? "Message reminder"
         : "Personal reminder";
-    case "task":
-      return "Durable task";
     case "workflow":
       return item.source.approval ? "Approval required" : "Workflow run";
     case "block":
@@ -75,18 +64,19 @@ export function sourceLabel(item: ActionItem): string {
 }
 
 export function ActionCenterRow({
+  isResolving = false,
   isSelected,
   item,
   onSelect,
 }: {
+  /** True while a threaded reply just answered this ask and it is waiting
+   * for the relay's auto-resolve to confirm on the next open-asks refetch. */
+  isResolving?: boolean;
   isSelected: boolean;
   item: ActionItem;
   onSelect: () => void;
 }) {
   const Icon = KIND_ICON[item.kind];
-  const isAgent =
-    item.source.kind === "message" &&
-    item.source.item.category === "agent_activity";
   return (
     <button
       aria-current={isSelected ? "true" : undefined}
@@ -94,6 +84,7 @@ export function ActionCenterRow({
       className={cn(
         "group flex w-full items-start gap-3 border-b border-border/45 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         isSelected && "bg-muted/45",
+        isResolving && "opacity-60",
       )}
       data-testid={`action-center-item-${item.id}`}
       onClick={onSelect}
@@ -106,7 +97,7 @@ export function ActionCenterRow({
           item.state === "needs-action" && "bg-primary/10 text-primary",
         )}
       >
-        {isAgent ? <Bot className="size-4" /> : <Icon className="size-4" />}
+        <Icon className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-start gap-2">
@@ -126,7 +117,7 @@ export function ActionCenterRow({
               : "text-muted-foreground",
           )}
         >
-          {sourceLabel(item)}
+          {isResolving ? "Reply sent · resolving…" : sourceLabel(item)}
         </span>
         <span className="mt-1 block truncate text-sm text-muted-foreground">
           {item.summary}

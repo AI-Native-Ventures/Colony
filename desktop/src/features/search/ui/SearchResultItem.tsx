@@ -12,6 +12,7 @@ import {
   Hash,
   House,
   ListChecks,
+  ListTodo,
   MessageCircle,
   Plus,
   Receipt,
@@ -49,6 +50,7 @@ export type SearchCommandId =
   | "open-settings"
   | "open-spend"
   | "open-credits"
+  | "open-work"
   | "open-workflows";
 
 export type SearchCommand = {
@@ -136,6 +138,8 @@ export function resultIcon(
         return Receipt;
       case "open-credits":
         return CreditCard;
+      case "open-work":
+        return ListTodo;
       case "open-workflows":
         return Zap;
     }

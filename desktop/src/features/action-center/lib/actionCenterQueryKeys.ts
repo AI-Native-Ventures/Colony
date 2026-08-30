@@ -1,9 +1,10 @@
-/** Key for the bounded durable-task run projection. */
-export function actionCenterTaskRunsQueryKey(
+/** Key for the community's company-profile head, read for `ask_window_secs`
+ * (the ranking deadline's community-default fallback). */
+export function actionCenterCompanyProfileQueryKey(
   communityId: string,
-  taskIds: readonly string[],
+  relayPubkey: string,
 ) {
-  return ["action-center-task-runs", communityId, taskIds] as const;
+  return ["action-center-company-profile", communityId, relayPubkey] as const;
 }
 
 /** Key for the community-scoped workflow list projection. */

@@ -36,10 +36,12 @@ function listEntries(items: readonly ActionItem[]): ListEntry[] {
 export function ActionCenterList({
   items,
   onSelect,
+  resolvingAskIds,
   selectedId,
 }: {
   items: ActionItem[];
   onSelect: (itemId: string) => void;
+  resolvingAskIds: ReadonlySet<string>;
   selectedId: string | null;
 }) {
   const entries = React.useMemo(() => listEntries(items), [items]);
@@ -80,6 +82,10 @@ export function ActionCenterList({
             </div>
           ) : (
             <ActionCenterRow
+              isResolving={
+                entry.item.source.kind === "ask" &&
+                resolvingAskIds.has(entry.item.source.ask.id)
+              }
               isSelected={entry.item.id === selectedId}
               item={entry.item}
               onSelect={() => onSelect(entry.item.id)}

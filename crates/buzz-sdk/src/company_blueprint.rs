@@ -26,15 +26,40 @@ fn coordinate(kind: u32, relay_pubkey: &str, id: &str) -> String {
     format!("{kind}:{relay_pubkey}:{id}")
 }
 
+/// The already-stored profile head a Blueprint approval must edit.
+///
+/// The relay mints a profile for every community at boot
+/// (`run_profile_backfill` in `buzz-relay/src/community_profile.rs`), so by
+/// the time an approval runs there is always something at that coordinate to
+/// replace, so approval can never be the first write. `created_at` is carried
+/// through unchanged because the relay's replace contract treats it as
+/// immutable (`validate_replacement_timestamps`); `updated_at` is read only
+/// so the replacement can clear the "strictly newer" bar against it.
+pub struct ExistingProfileHead {
+    /// The event id of the head currently stored at the profile coordinate.
+    pub event_id: String,
+    /// The stored head's `createdAt`, immutable across a replacement.
+    pub created_at: i64,
+    /// The stored head's `updatedAt`. A replacement must exceed it.
+    pub updated_at: i64,
+}
+
 /// Build the Company profile action for an approved Blueprint.
 ///
 /// The profile is `Approved`, because reaching here means the owner approved
-/// it. `created_at` and `updated_at` are passed in rather than read, so the
-/// same approval retried produces the same bytes and the relay recognises it.
+/// it. This is always an *edit* of the relay-minted head named by
+/// `existing_head`, never a creation: asserting `Create` against a coordinate
+/// the relay already wrote is refused unconditionally
+/// (`check_expectations` in `company_broker.rs`), on every community, every
+/// time. `now` is a floor, not an assignment: the replacement's `updatedAt`
+/// is whichever is later, `now` or one past what is already stored, so a
+/// retry against a relay clock that has moved on still satisfies the
+/// strictly-increasing rule.
 pub fn company_action(
     blueprint: &ValidatedBlueprint,
     relay_pubkey: &str,
     now: i64,
+    existing_head: &ExistingProfileHead,
 ) -> Result<CompanyAction, String> {
     let profile = CompanyProfile {
         schema: COMPANY_SCHEMA.to_string(),
@@ -65,24 +90,21 @@ pub fn company_action(
             })
             .collect(),
         source_report_event_id: None,
-        // The owner approved it; that is what this action records.
-        created_at: now,
-        updated_at: now,
+        // Immutable: the relay refuses a replacement whose `createdAt` moved.
+        created_at: existing_head.created_at,
+        // Strictly newer than what is stored, never merely "now": a relay
+        // whose boot-minted head is already ahead of `now` (clock skew, or a
+        // retry queued behind another write) must still pass
+        // `validate_replacement_timestamps`.
+        updated_at: now.max(existing_head.updated_at + 1),
     };
 
-    Ok(CompanyAction {
-        relay_pubkey: relay_pubkey.to_string(),
-        operation: CompanyActionOperation::Create,
-        request_id: parse_uuid(&blueprint.request_id)?,
-        idempotency_key: step_idempotency_key(&blueprint.request_id, "company"),
-        target: coordinate(KIND_COMPANY_PROFILE, relay_pubkey, COMMUNITY_PROFILE_ID),
-        // No expected head: creating a company that already exists is what the
-        // relay's own idempotency claim is for, and asserting a head here would
-        // turn a safe retry into a conflict.
-        expected_head: None,
-        expected_references: Vec::new(),
-        payload: CompanyActionPayload::Company(profile),
-    })
+    company_profile_update_action(
+        &profile,
+        &existing_head.event_id,
+        relay_pubkey,
+        &blueprint.request_id,
+    )
 }
 
 /// Build the three Initiative actions, all `proposed`.
@@ -192,6 +214,155 @@ pub fn company_profile_update_action(
         expected_references: Vec::new(),
         payload: CompanyActionPayload::Company(profile.clone()),
     })
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+    use buzz_core::company::CommercialPurpose;
+    use buzz_core::company_roster::{
+        BaselineRoleId, BlueprintCompany, BlueprintCostCentre, BlueprintInitiative,
+        BlueprintRosterEntry, BlueprintTeam, BlueprintTeamKind, CompanyBlueprint,
+    };
+
+    const RELAY: &str = "5f2b1c8d4e7a90b3c6d1e4f7a0b3c6d9e2f5a8b1c4d7e0f3a6b9c2d5e8f1a4b7";
+    const NOW: i64 = 1_800_000_500;
+
+    fn existing_head() -> ExistingProfileHead {
+        ExistingProfileHead {
+            event_id: "2222222222222222222222222222222222222222222222222222222222222222"
+                .to_string(),
+            // What `run_profile_backfill` mints at boot: real wall-clock, not
+            // the deterministic `approval_timestamp` an approval derives.
+            created_at: 1_800_000_000,
+            updated_at: 1_800_000_400,
+        }
+    }
+
+    fn blueprint() -> ValidatedBlueprint {
+        CompanyBlueprint {
+            schema: buzz_core::company_roster::BLUEPRINT_SCHEMA.to_string(),
+            request_id: "3f6c1a2e-0000-4000-8000-000000000001".to_string(),
+            company: BlueprintCompany {
+                id: "horizon-labs".to_string(),
+                trading_name: "Horizon Labs".to_string(),
+                legal_name: None,
+                website: None,
+                summary: "Marketing websites".to_string(),
+                business_type: "agency".to_string(),
+                services: Vec::new(),
+                customer_segments: Vec::new(),
+            },
+            roster: vec![BlueprintRosterEntry {
+                role_id: BaselineRoleId::ChiefOfStaff,
+                personal_name: "Fizz".to_string(),
+                enabled: true,
+            }],
+            teams: vec![BlueprintTeam {
+                id: "engineering".to_string(),
+                name: "Engineering".to_string(),
+                description: "Builds".to_string(),
+                lead_role_id: BaselineRoleId::ChiefOfStaff,
+                member_role_ids: vec![BaselineRoleId::ChiefOfStaff],
+                kind: BlueprintTeamKind::Baseline,
+                service_id: None,
+            }],
+            cost_centres: vec![BlueprintCostCentre {
+                id: "internal".to_string(),
+                name: "Internal".to_string(),
+                kind: buzz_core::company::CostCentreKind::Internal,
+                service_id: None,
+            }],
+            readiness_gaps: vec![],
+            proposed_initiatives: (1..=3)
+                .map(|index| BlueprintInitiative {
+                    id: format!("init-{index}"),
+                    title: format!("Initiative {index}"),
+                    summary: "Worth doing first".to_string(),
+                    owner_role_id: BaselineRoleId::ChiefOfStaff,
+                    cost_centre_id: "internal".to_string(),
+                    commercial_purpose: CommercialPurpose::Administration,
+                })
+                .collect(),
+        }
+        .try_into()
+        .expect("fixture is valid")
+    }
+
+    /// The bug this module exists to fix: approval used to assert `Create`
+    /// against a coordinate the relay has already minted by boot time
+    /// (`run_profile_backfill`), which the broker refuses unconditionally
+    /// (`check_expectations`, `(Create, Some(_)) => Err("that record already
+    /// exists")`). Approval must build an `Update` carrying the real head it
+    /// was prepared against, or every approval on every community fails the
+    /// same way.
+    #[test]
+    fn approval_edits_the_relay_minted_head_instead_of_recreating_it() {
+        let head = existing_head();
+        let action = company_action(&blueprint(), RELAY, NOW, &head).expect("build");
+        assert_eq!(action.operation, CompanyActionOperation::Update);
+        assert_eq!(
+            action.expected_head.as_deref(),
+            Some(head.event_id.as_str())
+        );
+    }
+
+    /// `createdAt` is immutable across a replacement
+    /// (`validate_replacement_timestamps`); the approval must carry the
+    /// existing head's value through rather than stamping a fresh one, or
+    /// the relay refuses the whole approval as an invalid replacement.
+    #[test]
+    fn the_replacement_keeps_the_existing_heads_created_at() {
+        let head = existing_head();
+        let action = company_action(&blueprint(), RELAY, NOW, &head).expect("build");
+        match action.payload {
+            CompanyActionPayload::Company(profile) => {
+                assert_eq!(profile.created_at, head.created_at);
+            }
+            other => panic!("expected a company payload, got {other:?}"),
+        }
+    }
+
+    /// `updatedAt` must be strictly newer than what is stored
+    /// (`validate_replacement_timestamps`), even when `now` lags behind the
+    /// relay-minted head's own timestamp.
+    #[test]
+    fn the_replacement_updated_at_is_always_newer_than_the_existing_head() {
+        let head = existing_head();
+        let stale_now = head.updated_at - 1_000;
+        let action = company_action(&blueprint(), RELAY, stale_now, &head).expect("build");
+        match action.payload {
+            CompanyActionPayload::Company(profile) => {
+                assert!(profile.updated_at > head.updated_at);
+            }
+            other => panic!("expected a company payload, got {other:?}"),
+        }
+    }
+
+    /// Every call in this approval carries the same request id, so the
+    /// profile update's idempotency key must not collide with the initiative
+    /// creates that request id also produces.
+    #[test]
+    fn the_profile_updates_idempotency_key_does_not_collide_with_initiative_creates() {
+        let head = existing_head();
+        let company = company_action(&blueprint(), RELAY, NOW, &head).expect("build");
+        let initiatives =
+            initiative_actions(&blueprint(), "relay.example", RELAY, "channel-1", NOW)
+                .expect("build");
+        assert!(initiatives
+            .iter()
+            .all(|initiative| initiative.idempotency_key != company.idempotency_key));
+    }
+
+    #[test]
+    fn approval_targets_the_fixed_community_profile_coordinate() {
+        let head = existing_head();
+        let action = company_action(&blueprint(), RELAY, NOW, &head).expect("build");
+        assert_eq!(
+            action.target,
+            format!("30179:{RELAY}:{COMMUNITY_PROFILE_ID}")
+        );
+    }
 }
 
 #[cfg(test)]

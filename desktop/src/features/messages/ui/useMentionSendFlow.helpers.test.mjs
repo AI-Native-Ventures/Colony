@@ -1,0 +1,61 @@
+/**
+ * Unit tests for getErrorMessage, the extraction helper that
+ * createFinishSendFailureHandler (useMentionSendFlow.helpers.ts) uses to put
+ * a failed attachOutgoingWorkContext call in front of the user via
+ * toast.error, instead of the message silently disappearing.
+ *
+ * In useMentionSendFlow.ts, finishSend catches only around the
+ * attachOutgoingWorkContext call and calls this handler there; a failure
+ * from send() itself (or anything after it) propagates to the two outer
+ * catch sites, which restore the draft only and leave reporting to send()'s
+ * own caller. That split exists because some callers (e.g. the new-DM
+ * screen's sendFirstMessage) already show their own inline error for a
+ * failed send before rethrowing, and toasting there too would report the
+ * same failure twice.
+ *
+ * What is NOT tested here (and why): mounting useMentionSendFlow itself to
+ * assert that toast.error and restoreComposerAfterFailure are called from
+ * the right site for each failure kind. That hook depends on Tiptap, Tauri,
+ * relayClient, and React Query context not available in the node:test
+ * harness (see MessageComposerAutoSend.test.mjs for the same constraint on
+ * a sibling hook). This test instead proves the seam the attach-failure
+ * handler relies on: that the specific, human-written error strings thrown
+ * by attachWorkContext / workContext.ts survive extraction unchanged, so the
+ * toast reads the real cause rather than a generic fallback.
+ */
+
+import assert from "node:assert/strict";
+import test from "node:test";
+import { getErrorMessage } from "./useMentionSendFlow.helpers.ts";
+
+test("getErrorMessage_surfaces_the_thrown_work_context_message", () => {
+  const error = new Error(
+    "This community has no coordination team to own ambiguous work. The message has not been sent.",
+  );
+  assert.equal(
+    getErrorMessage(error, "The message could not be sent."),
+    "This community has no coordination team to own ambiguous work. The message has not been sent.",
+  );
+});
+
+test("getErrorMessage_surfaces_the_no_receipt_message", () => {
+  const error = new Error("The message has not been sent.");
+  assert.equal(
+    getErrorMessage(error, "The message could not be sent."),
+    "The message has not been sent.",
+  );
+});
+
+test("getErrorMessage_falls_back_for_a_non_error_throw", () => {
+  assert.equal(
+    getErrorMessage("boom", "The message could not be sent."),
+    "The message could not be sent.",
+  );
+});
+
+test("getErrorMessage_falls_back_for_an_error_with_an_empty_message", () => {
+  assert.equal(
+    getErrorMessage(new Error(""), "The message could not be sent."),
+    "The message could not be sent.",
+  );
+});

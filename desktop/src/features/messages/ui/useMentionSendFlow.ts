@@ -38,12 +38,14 @@ import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import {
   attachOutgoingWorkContext,
   buildTypedMentionRouting,
+  createFinishSendFailureHandler,
   getErrorMessage,
   isManagedAgentRunning,
   isProviderBackedAgent,
   MENTION_REFERENCE_TAG,
   mergeOutgoingTagsWithReferenceMentions,
   type PendingNonMemberMentionSend,
+  persistCanceledDraftIfUnchanged,
   type SendMessageWithMentionFlowInput,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
@@ -488,30 +490,8 @@ export function useMentionSendFlow({
           );
 
         const send = onSendRef.current;
-        const persistCanceledDraft = () => {
-          if (!draft.recoveryDraftKey) return;
-          const existing = drafts.loadDraft(draft.recoveryDraftKey);
-          if (
-            existing &&
-            (existing.content !== draft.savedContent ||
-              existing.channelId !==
-                (draft.capturedChannelId ?? draft.recoveryDraftKey) ||
-              JSON.stringify(existing.pendingImeta) !==
-                JSON.stringify(draft.savedImeta) ||
-              JSON.stringify(existing.spoileredAttachmentUrls) !==
-                JSON.stringify([...draft.savedSpoileredAttachmentUrls]))
-          ) {
-            return;
-          }
-          drafts.persistDraft(
-            draft.recoveryDraftKey,
-            draft.savedContent,
-            draft.capturedChannelId ?? draft.recoveryDraftKey,
-            draft.savedImeta,
-            [...draft.savedSpoileredAttachmentUrls],
-            draft.savedMentionRefs,
-          );
-        };
+        const persistCanceledDraft = () =>
+          persistCanceledDraftIfUnchanged(draft, drafts);
         const restoreComposerAfterFailure = () => {
           persistCanceledDraft();
           const canRestoreCurrentComposer =
@@ -539,6 +519,9 @@ export function useMentionSendFlow({
             new Set(draft.savedSpoileredAttachmentUrls),
           );
         };
+        const handleFinishSendFailure = createFinishSendFailureHandler(
+          restoreComposerAfterFailure,
+        );
         const finishSend = async (
           uploaded: ImetaMedia[],
           signal?: AbortSignal,
@@ -555,13 +538,22 @@ export function useMentionSendFlow({
               ),
             ]),
           );
-          const finalOutgoingTags = await attachOutgoingWorkContext(
-            sendChannelId ?? draft.capturedChannelId ?? "",
-            finalContent,
-            agentMentionPubkeys,
-            mediaTags,
-            outgoingTags,
-          );
+          // Unlike send() below, this step has no surface of its own, so it
+          // toasts here rather than at the outer catch (avoids double-reporting
+          // a send() failure a caller like sendFirstMessage already shows).
+          let finalOutgoingTags: string[][] | undefined;
+          try {
+            finalOutgoingTags = await attachOutgoingWorkContext(
+              sendChannelId ?? draft.capturedChannelId ?? "",
+              finalContent,
+              agentMentionPubkeys,
+              mediaTags,
+              outgoingTags,
+            );
+          } catch (error) {
+            handleFinishSendFailure(error);
+            return;
+          }
           if (signal?.aborted) return;
           await send(
             finalContent,
@@ -598,6 +590,8 @@ export function useMentionSendFlow({
               try {
                 await finishSend(uploaded, signal);
               } catch {
+                // Attach failure already toasted inside finishSend; anything
+                // else is send()'s to report, so just restore the draft.
                 restoreComposerAfterFailure();
               }
             },
@@ -631,6 +625,7 @@ export function useMentionSendFlow({
           try {
             await finishSend([]);
           } catch {
+            // Same split as above: attach toasted inside finishSend already.
             restoreComposerAfterFailure();
           }
         }

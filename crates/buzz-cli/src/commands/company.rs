@@ -418,13 +418,48 @@ async fn approve_blueprint(
     let relay = relay_self(client).await?.to_hex();
     let scope = scope.unwrap_or(&relay).to_owned();
 
-    // Derived from the approval, not the clock: a retry has to rebuild
-    // byte-identical events, and `now` would make every attempt a new one.
+    // The relay mints a profile for every community at boot
+    // (`run_profile_backfill`), so by the time an approval runs there is
+    // always a head at that coordinate to edit. Read it first, the same way
+    // `publish_action` reads a head before replacing anything else: the
+    // event id and its stored timestamps become the compare-and-set token
+    // and the `createdAt`/`updatedAt` floor the replacement has to honour.
+    let head_event = fetch_head(
+        client,
+        KIND_COMPANY_PROFILE,
+        COMMUNITY_PROFILE_ID,
+        "company",
+    )
+    .await
+    .map_err(|error| match error {
+        CliError::NotFound(_) => CliError::Other(
+            "this community has no profile yet; the relay should have minted one at boot"
+                .to_string(),
+        ),
+        other => other,
+    })?;
+    let head_profile = parse_company_event(&head_event)
+        .map_err(|error| CliError::Other(format!("company head is unreadable: {error}")))?;
+    let existing_head = buzz_sdk::company_blueprint::ExistingProfileHead {
+        event_id: head_event.id.to_hex(),
+        created_at: head_profile.created_at,
+        updated_at: head_profile.updated_at,
+    };
+
+    // The three Initiatives are still `Create`s with nothing to conflict
+    // with, so their timestamp stays derived from the approval: a retry has
+    // to rebuild byte-identical events, and `now` would make every attempt a
+    // new one. The company profile action replaces the head just read
+    // instead, and that replacement contract requires `updatedAt` to be
+    // strictly newer than what is stored, so it gets the real clock;
+    // `company_action` floors it against the existing head's own
+    // `updatedAt`, so a retry still produces a valid write.
     let created_at = buzz_core::company_roster::approval_timestamp(&blueprint.request_id);
+    let now = chrono::Utc::now().timestamp();
 
     let mut actions =
         vec![
-            buzz_sdk::company_blueprint::company_action(&blueprint, &relay, created_at)
+            buzz_sdk::company_blueprint::company_action(&blueprint, &relay, now, &existing_head)
                 .map_err(CliError::Usage)?,
         ];
     actions.extend(

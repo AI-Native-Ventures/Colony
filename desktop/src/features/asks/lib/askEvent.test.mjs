@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { askStatesFromEvents } from "./askState.ts";
+
 const { readAsk, selectOpenAsks } = await import("./askEvent.ts");
 
 const askEvent = (id, content) => ({
@@ -116,6 +118,112 @@ test("the open list is newest first", () => {
   );
 });
 
+function askState(askId, status) {
+  return { askId, status, defaultExecuted: false };
+}
+
+test("an ask closed only by its relay-signed state head is excluded — the auto-resolve-via-thread-reply case", () => {
+  // try_auto_resolve_from_reply (buzz-relay/src/ask_broker.rs) publishes no
+  // 44301/44302 at all: the state head is the ONLY signal this path
+  // produces, so a caller passing only closure events would show this ask
+  // as open forever.
+  const open = { ...readAsk(askEvent("open-ask", { headline: "Still open" })) };
+  const resolved = {
+    ...readAsk(askEvent("resolved-ask", { headline: "Answered in-thread" })),
+  };
+  const states = new Map([[resolved.id, askState(resolved.id, "resolved")]]);
+  assert.deepEqual(
+    selectOpenAsks([open, resolved], [], states).map((ask) => ask.id),
+    ["open-ask"],
+  );
+});
+
+test("withdrawn and promoted state-head statuses are excluded too", () => {
+  const withdrawn = readAsk(askEvent("withdrawn-ask", { headline: "A" }));
+  const promoted = readAsk(askEvent("promoted-ask", { headline: "B" }));
+  const open = readAsk(askEvent("open-ask", { headline: "C" }));
+  const states = new Map([
+    [withdrawn.id, askState(withdrawn.id, "withdrawn")],
+    [promoted.id, askState(promoted.id, "promoted")],
+  ]);
+  assert.deepEqual(
+    selectOpenAsks([withdrawn, promoted, open], [], states)
+      .map((ask) => ask.id)
+      .sort(),
+    ["open-ask"],
+  );
+});
+
+test("an ask-state head naming status open never excludes anything", () => {
+  const ask = readAsk(askEvent("ask-1", { headline: "Still open" }));
+  const states = new Map([[ask.id, askState(ask.id, "open")]]);
+  assert.deepEqual(
+    selectOpenAsks([ask], [], states).map((a) => a.id),
+    ["ask-1"],
+  );
+});
+
+const RELAY_HEX = "e".repeat(64);
+const IMPOSTOR_HEX = "f".repeat(64);
+// The `d` tag on a state head is validated as 64-char hex (`readAskState`),
+// exactly like a real ask event id — a non-hex id like the `askEvent` helper's
+// plain string ids above would fail that check and silently produce no
+// state at all, which is not what these tests are exercising.
+const HEX_ASK_ID = "1".repeat(64);
+
+function stateHeadEvent(askId, status, overrides = {}) {
+  return {
+    id: `state-${askId}`,
+    kind: 30200,
+    pubkey: RELAY_HEX,
+    created_at: 500,
+    content: JSON.stringify({ status, default_executed: false }),
+    tags: [["d", askId]],
+    sig: "",
+    ...overrides,
+  };
+}
+
+test("SECURITY: closed by a relay-authored state head end to end", () => {
+  const ask = readAsk({
+    ...askEvent(HEX_ASK_ID, { headline: "Needs a decision" }),
+    id: HEX_ASK_ID,
+  });
+  const states = askStatesFromEvents(
+    [stateHeadEvent(ask.id, "resolved")],
+    RELAY_HEX,
+  );
+  assert.deepEqual(
+    selectOpenAsks([ask], [], states).map((a) => a.id),
+    [],
+    "a state head genuinely signed by the relay must close the ask",
+  );
+});
+
+test("SECURITY: the same state head authored by anyone else is ignored end to end", () => {
+  // The forgery scenario the relay-thread-reply close path exists to guard
+  // against: a worker agent (or any other authenticated member) publishing
+  // its own kind-30200 head naming its own ask "resolved" to hide it from
+  // the owner's queue. `askStatesFromEvents` drops any head not signed by
+  // the relay's own pubkey (`readAskState`'s authorship check,
+  // `askState.test.mjs` covers that in isolation); this proves the full
+  // pipeline `selectOpenAsks` actually runs on still keeps the ask open
+  // when a forged head is all that exists.
+  const ask = readAsk({
+    ...askEvent(HEX_ASK_ID, { headline: "Needs a decision" }),
+    id: HEX_ASK_ID,
+  });
+  const states = askStatesFromEvents(
+    [stateHeadEvent(ask.id, "resolved", { pubkey: IMPOSTOR_HEX })],
+    RELAY_HEX,
+  );
+  assert.deepEqual(
+    selectOpenAsks([ask], [], states).map((a) => a.id),
+    [HEX_ASK_ID],
+    "a forged state head must never close an ask — it must be dropped before selectOpenAsks ever sees it",
+  );
+});
+
 const AUDIENCE = "a".repeat(64);
 const PRIOR = "b".repeat(64);
 const ORIGINAL_FILER = "c".repeat(64);
@@ -172,4 +280,93 @@ test("malformed routing tags degrade to null rather than throwing", () => {
   assert.equal(ask.audiencePubkey, null);
   assert.equal(ask.priorAskId, null);
   assert.equal(ask.originalFilerPubkey, null);
+});
+
+test("reads every `task` tag, raw and undeduplicated, for blast radius", () => {
+  const ask = readAsk({
+    ...askEvent("ask-tasks", { headline: "Fix the outage" }),
+    tags: [
+      ["task", "task-1"],
+      ["task", "task-2"],
+      ["task", "task-1"],
+    ],
+  });
+  assert.deepEqual(ask.taskIds, ["task-1", "task-2", "task-1"]);
+});
+
+test("an ask with no task tags has an empty blast radius", () => {
+  const ask = readAsk(
+    askEvent("ask-no-tasks", { headline: "Need a decision" }),
+  );
+  assert.deepEqual(ask.taskIds, []);
+});
+
+test("category preserves its filed case; the hard list is matched elsewhere, case-insensitively", () => {
+  const ask = readAsk({
+    ...askEvent("ask-category", { headline: "Approve the spend" }),
+    tags: [["category", "SPEND"]],
+  });
+  assert.equal(ask.category, "SPEND");
+});
+
+test("an ambiguous category tag reads as no category", () => {
+  const ask = readAsk({
+    ...askEvent("ask-category-dupe", { headline: "Need a decision" }),
+    tags: [
+      ["category", "spend"],
+      ["category", "legal"],
+    ],
+  });
+  assert.equal(ask.category, null);
+});
+
+test("default_option and default_window_secs come off the content, not tags", () => {
+  const ask = readAsk(
+    askEvent("ask-default", {
+      headline: "Ship the deploy window?",
+      default_option: "Friday 6pm",
+      default_window_secs: 3_600,
+    }),
+  );
+  assert.equal(ask.defaultOption, "Friday 6pm");
+  assert.equal(ask.defaultWindowSecs, 3_600);
+});
+
+test("an ask with no default fields reads both as null", () => {
+  const ask = readAsk(
+    askEvent("ask-no-default", { headline: "Need a decision" }),
+  );
+  assert.equal(ask.defaultOption, null);
+  assert.equal(ask.defaultWindowSecs, null);
+});
+
+test("a negative or non-integer default_window_secs reads as null rather than a bad number", () => {
+  const negative = readAsk(
+    askEvent("ask-negative-window", {
+      headline: "Need a decision",
+      default_window_secs: -1,
+    }),
+  );
+  assert.equal(negative.defaultWindowSecs, null);
+  const fractional = readAsk(
+    askEvent("ask-fractional-window", {
+      headline: "Need a decision",
+      default_window_secs: 12.5,
+    }),
+  );
+  assert.equal(fractional.defaultWindowSecs, null);
+});
+
+test("initiative id is read from its tag, the reserved no-initiative value included", () => {
+  const scoped = readAsk({
+    ...askEvent("ask-initiative", { headline: "Need a decision" }),
+    tags: [["initiative", "website-relaunch"]],
+  });
+  assert.equal(scoped.initiativeId, "website-relaunch");
+
+  const unscoped = readAsk({
+    ...askEvent("ask-no-initiative", { headline: "Need a decision" }),
+    tags: [["initiative", "no-initiative"]],
+  });
+  assert.equal(unscoped.initiativeId, "no-initiative");
 });
