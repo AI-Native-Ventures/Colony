@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 434,
-    "rust_lines": 168832,
-    "tauri_coupled": 173,
+    "rust_total": 435,
+    "rust_lines": 169047,
+    "tauri_coupled": 174,
     "portable": 261,
-    "portable_lines": 95958,
+    "portable_lines": 95960,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -64,6 +64,7 @@
       "src-tauri/src/commands/notifications.rs",
       "src-tauri/src/commands/observer_archive.rs",
       "src-tauri/src/commands/openrouter_connect.rs",
+      "src-tauri/src/commands/openrouter_quota.rs",
       "src-tauri/src/commands/os_idle.rs",
       "src-tauri/src/commands/pairing.rs",
       "src-tauri/src/commands/personas/card.rs",
@@ -448,10 +449,10 @@
     ]
   },
   "commands": {
-    "registered": 348,
-    "defined": 348,
+    "registered": 349,
+    "defined": 349,
     "by_reach": {
-      "frontend": 342,
+      "frontend": 343,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -634,6 +635,7 @@
     "src-tauri/src/commands/updater.rs": 1,
     "src-tauri/src/commands/agents_roster.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
+    "src-tauri/src/commands/openrouter_quota.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
     "src-tauri/src/huddle/reconnect.rs": 1,
@@ -2766,6 +2768,16 @@
       "example_sites": [
         "src/parity/session/script.ts:1209",
         "src/shared/api/projectGit.ts:338"
+      ]
+    },
+    "openrouter_quota": {
+      "defining_file": "src-tauri/src/commands/openrouter_quota.rs",
+      "module": "openrouter_quota",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/OpenRouterUpgradeCard.tsx:51",
+        "src/shared/api/tauriOpenRouterQuota.ts:33"
       ]
     },
     "operator_pubkey": {
