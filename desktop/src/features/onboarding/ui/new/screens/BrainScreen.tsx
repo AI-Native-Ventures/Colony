@@ -28,7 +28,7 @@ type Props = {
  */
 const STATUS_COPY: Record<BrainCandidate["status"], string> = {
   ready: "Ready to go",
-  "needs-login": "Found, needs you to sign in",
+  "needs-login": "Found, sign in with your subscription",
   "not-installed": "Not on this computer yet",
 };
 
@@ -89,7 +89,7 @@ export function BrainScreen({ brains, selected, onSelect, onContinue }: Props) {
         </h1>
         <p className="onb-sub">
           {anyReady
-            ? "Your agents need a brain to think with. Colony runs one for you, and anything already on this computer can do it instead."
+            ? "Your agents need a brain to think with. Colony runs one for you, or sign in with a subscription you already pay for, like Claude Code or Codex."
             : "Your agents need a brain to think with. Colony can set one up for you."}
         </p>
       </div>
