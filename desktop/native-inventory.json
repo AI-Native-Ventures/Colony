@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 431,
-    "rust_lines": 168119,
+    "rust_total": 433,
+    "rust_lines": 168536,
     "tauri_coupled": 173,
-    "portable": 258,
-    "portable_lines": 95279,
+    "portable": 260,
+    "portable_lines": 95674,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -387,6 +387,8 @@
       "src-tauri/src/managed_agents/spawn_snapshot.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff/tests.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/tests.rs",
+      "src-tauri/src/managed_agents/storage_legacy_keys.rs",
+      "src-tauri/src/managed_agents/storage_legacy_keys_tests.rs",
       "src-tauri/src/managed_agents/storage_tests.rs",
       "src-tauri/src/managed_agents/subscriptions.rs",
       "src-tauri/src/managed_agents/team_events.rs",
