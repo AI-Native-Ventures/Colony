@@ -687,10 +687,43 @@
 
   /* A brain that cannot think yet is still listed, so the set reads as a
      choice, but it must not look pickable. Dimmed rather than hidden: knowing
-     Colony supports it is the point. */
+     Colony supports it is the point, and the action beside it is how it stops
+     being dimmed. */
   :where(.onb-canvas) .onb-option:disabled {
     cursor: default;
     opacity: 0.45;
+  }
+
+  /* A row is the option plus whatever it takes to make it usable. The action
+     sits outside the option button rather than inside it: a button inside a
+     button is not valid markup, and the row's own click must stay "pick this
+     one" rather than "install this one". */
+  :where(.onb-canvas) .onb-option-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  :where(.onb-canvas) .onb-option-row .onb-option {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The action never dims with the row it belongs to: it is the one control on
+     an unusable row that still works. */
+  :where(.onb-canvas) .onb-option-action {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.25rem;
+    opacity: 1;
+  }
+
+  :where(.onb-canvas) .onb-option-action .onb-note-warn {
+    max-width: 14rem;
+    text-align: right;
   }
 
   :where(.onb-canvas) .onb-option[data-status="ready"] .onb-pulse {

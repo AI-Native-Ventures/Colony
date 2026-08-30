@@ -57,19 +57,24 @@ export function planBrainConfig(
   const chosen = brain?.trim();
   if (!chosen) return null;
 
-  if (chosen === COLONY_BRAIN_ANSWER) {
+  // Both spellings of "Colony does the thinking" resolve without consulting
+  // the catalog. `COLONY_BRAIN_ANSWER` is what the flow recorded while the
+  // screen dealt in labels, and older resumable drafts still carry it; the
+  // runtime id is what it records now. Neither may depend on the hosted agent
+  // being present in the catalog, because it is hosted: a probe that came back
+  // empty must still be able to write the config for it.
+  if (chosen === COLONY_BRAIN_ANSWER || chosen === COLONY_AGENT_RUNTIME_ID) {
     return defaultColonyAgentConfig(current);
   }
 
-  // The screen shows labels; ids are what the config stores. Match on either,
-  // so a future screen that passes ids keeps working.
+  // The screen deals in ids; drafts written before it did carry labels. Match
+  // on either so a resumed run is not silently ignored.
   const runtime = runtimes.find(
     (candidate) => candidate.label === chosen || candidate.id === chosen,
   );
-  if (!runtime || runtime.id === COLONY_AGENT_RUNTIME_ID) {
-    return runtime?.id === COLONY_AGENT_RUNTIME_ID
-      ? defaultColonyAgentConfig(current)
-      : null;
+  if (!runtime) return null;
+  if (runtime.id === COLONY_AGENT_RUNTIME_ID) {
+    return defaultColonyAgentConfig(current);
   }
 
   return configForAutomaticCli(current, runtime.id);

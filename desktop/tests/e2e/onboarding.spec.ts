@@ -1342,17 +1342,20 @@ test("first-community shows the scenario cards for localhost", async ({
     }),
   ).toBeVisible();
 
+  // Back out of community selection and the machine flow reopens on its
+  // landing screen. It used to reopen on an agent-config screen that asked
+  // which brain the agents think with; the canvas flow asks that on its own
+  // screen, so the machine flow ends at the key backup and has nothing else
+  // to reopen onto.
   await page.getByTestId("welcome-setup-back").click();
-  await expect(page.getByTestId("onboarding-page-config")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start with Colony" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", {
       name: "Choose the brain your agents think with.",
     }),
-  ).toBeVisible();
-  await expect(page.getByTestId("global-agent-default-harness")).toHaveText(
-    "Claude Code",
-  );
-  await expect(page.getByTestId("onboarding-finish")).toBeEnabled();
+  ).toHaveCount(0);
 });
 
 test("first-community direct join reaches founder setup", async ({ page }) => {
