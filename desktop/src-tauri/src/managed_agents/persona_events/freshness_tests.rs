@@ -52,17 +52,3 @@ fn the_freshness_window_catches_future_timestamps_too() {
     assert!(is_outside_publish_freshness_window(now + 105 * 60));
     assert!(!is_outside_publish_freshness_window(now + 60));
 }
-
-/// The margin stays inside the relay's own window with room to spare.
-///
-/// Matching ±15 minutes exactly would let a 14-minute-old row be sent as-is and
-/// go stale in flight, over clock skew between this device and the relay.
-#[test]
-fn the_publish_margin_sits_well_inside_the_relay_drift_window() {
-    const RELAY_MAX_TIMESTAMP_DRIFT_SECS: i64 = 900;
-    assert!(
-        PUBLISH_FRESHNESS_MARGIN_SECS < RELAY_MAX_TIMESTAMP_DRIFT_SECS,
-        "re-signing must trigger before the relay would refuse the event"
-    );
-    assert!(PUBLISH_FRESHNESS_MARGIN_SECS * 2 < RELAY_MAX_TIMESTAMP_DRIFT_SECS);
-}

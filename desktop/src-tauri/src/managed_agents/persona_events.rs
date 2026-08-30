@@ -379,6 +379,21 @@ async fn flush_pending_events_at(
 /// and arrive over the line.
 const PUBLISH_FRESHNESS_MARGIN_SECS: i64 = 300;
 
+/// The relay's own drift window, mirrored from
+/// `buzz-relay/src/handlers/ingest.rs`'s `MAX_TIMESTAMP_DRIFT_SECS`. Only the
+/// assertion below reads it; it is not a second source of truth for the check.
+const RELAY_MAX_TIMESTAMP_DRIFT_SECS: i64 = 900;
+
+/// Raising the margin to or past the relay's window would silently restore the
+/// bug this module exists to prevent: rows would stop being re-signed while the
+/// relay still refused them, and they would queue forever again. A compile-time
+/// assertion rather than a test, so it fails the build rather than waiting for
+/// someone to run the suite.
+const _: () = assert!(
+    PUBLISH_FRESHNESS_MARGIN_SECS * 2 < RELAY_MAX_TIMESTAMP_DRIFT_SECS,
+    "the re-sign margin must leave room for clock skew inside the relay's drift window"
+);
+
 /// Whether a retained `created_at` is far enough from now that the relay would
 /// refuse it on timestamp alone.
 ///
