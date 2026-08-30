@@ -18,6 +18,7 @@ fn bare_agent_record(
         private_key_nsec: "".to_string(),
         auth_tag: None,
         relay_url: "ws://localhost:3000".to_string(),
+        owner_pubkey: None,
         avatar_url: None,
         acp_command: "buzz-acp".to_string(),
         agent_command: "codex".to_string(),

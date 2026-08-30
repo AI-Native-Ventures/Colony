@@ -10,9 +10,10 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, current_instance_id, load_managed_agents, load_personas,
-        save_managed_agents, sync_managed_agent_processes, ManagedAgentSummary,
+        owner_scope::agent_visible_in_roster, save_managed_agents, sync_managed_agent_processes,
+        ManagedAgentSummary,
     },
-    relay::{agent_belongs_to_workspace, relay_ws_url_with_override},
+    relay::relay_ws_url_with_override,
 };
 
 // Async so the blocking body (disk reads of agent/persona records, per-agent
@@ -51,18 +52,22 @@ pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSumma
         // not re-read it per record.
         let global_config =
             crate::managed_agents::load_global_agent_config(&app).unwrap_or_default();
-        // Only what is *shown* is scoped: see `agent_belongs_to_workspace`.
-        // Blank pins are additionally excluded from the roster so unassigned
-        // agents do not leak into every community's People and roles. Runtime
-        // paths still resolve a blank pin to the workspace relay and keep the
-        // agent running; this filter is display-only.
+        // Only what is *shown* is scoped: see `agent_visible_in_roster`, which
+        // requires both a *community* match (relay_url, via
+        // `agent_belongs_to_workspace`) and an *identity* match (the signed-in
+        // owner, via `agent_belongs_to_owner`). Community alone is not enough:
+        // two identities can share a relay host, or an agent can carry a
+        // legacy blank pin that belongs to whichever community asks, and
+        // without the identity check either leaks an agent hired by one
+        // identity into another identity's roster — including after an
+        // identity rotation. Runtime paths still resolve a blank pin to the
+        // workspace relay and keep the agent running; this filter is
+        // display-only.
         let workspace_relay = relay_ws_url_with_override(&state);
+        let owner_hex = super::workspace_owner_hex(&state)?;
         records
             .iter()
-            .filter(|record| {
-                !record.relay_url.trim().is_empty()
-                    && agent_belongs_to_workspace(&record.relay_url, &workspace_relay)
-            })
+            .filter(|record| agent_visible_in_roster(record, &workspace_relay, &owner_hex))
             .map(|record| {
                 build_managed_agent_summary(&app, record, &runtimes, &personas, &global_config)
             })
