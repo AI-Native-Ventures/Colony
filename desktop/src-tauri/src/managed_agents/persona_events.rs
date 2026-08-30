@@ -323,9 +323,9 @@ async fn flush_pending_events_at(
         //
         // Everything queued here is addressable (kind, pubkey, d_tag), so a
         // fresh id supersedes rather than duplicates under NIP-33 latest-wins.
-        let needs_fresh_timestamp = buzz_core_pkg::kind::is_identity_archive_request_kind(
-            current.kind,
-        ) || is_outside_publish_freshness_window(current.created_at);
+        let needs_fresh_timestamp =
+            buzz_core_pkg::kind::is_identity_archive_request_kind(current.kind)
+                || is_outside_publish_freshness_window(current.created_at);
         let event = if needs_fresh_timestamp {
             resign_with_fresh_timestamp(&event, state)?
         } else {

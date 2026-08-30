@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 435,
-    "rust_lines": 169047,
+    "rust_total": 436,
+    "rust_lines": 169289,
     "tauri_coupled": 174,
-    "portable": 261,
-    "portable_lines": 95960,
+    "portable": 262,
+    "portable_lines": 96141,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -358,6 +358,7 @@
       "src-tauri/src/managed_agents/owner_scope.rs",
       "src-tauri/src/managed_agents/parallelism.rs",
       "src-tauri/src/managed_agents/persona_avatars.rs",
+      "src-tauri/src/managed_agents/persona_events/freshness_tests.rs",
       "src-tauri/src/managed_agents/persona_events/stale_pin_tests.rs",
       "src-tauri/src/managed_agents/persona_events/tests.rs",
       "src-tauri/src/managed_agents/personas/tests.rs",
