@@ -3,6 +3,8 @@ name: Colony Canary desktop (develop)
 # The canary desktop lane: a second, side-by-side Colony build cut from
 # `develop` every night, published to its own rolling prerelease and updating
 # on its own channel. Stable installs never see it and it never sees stable.
+# The two channels share the production relay, so they differ in the code they
+# run, never in the data they see.
 #
 # Not to be confused with linux-canary.yml, windows-canary.yml,
 # macos-intel-canary.yml or signed-macos-canary.yml. Those are CI build
@@ -13,7 +15,7 @@ name: Colony Canary desktop (develop)
 #   productName  Colony Canary            (Finder, Dock, menu bar)
 #   identifier   ventures.ainative.colony.canary
 #                                         (app support, prefs, keychain)
-#   relay        wss://relay-canary.colony.ainative.ventures
+#   relay        wss://relay.colony.ainative.ventures  (production, shared)
 #   updater      .../colony-canary-latest/latest.json
 #   version      <desktop package.json version>-canary.<run_number>
 # All of it comes from desktop/scripts/build-release-config.mjs with
@@ -48,6 +50,10 @@ on:
         description: "Build even when the ref has not moved since the last canary"
         type: boolean
         default: false
+      allow_relay_skew:
+        description: "Publish even though the relay half of this ref is not live yet (only when every relay change is backward compatible)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -77,14 +83,24 @@ env:
   # stranding the installs that already trust it.
   UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-canary-latest/latest.json
 
-  # The whole point of the channel: canary builds talk to the canary relay.
-  # The binary gate below refuses to publish a build that does not have this
-  # exact string compiled in.
-  COLONY_CANARY_RELAY_WS_URL: wss://relay-canary.colony.ainative.ventures
-  COLONY_CANARY_RELAY_HTTP_URL: https://relay-canary.colony.ainative.ventures
-
-  # Only ever used as something to look for and warn about in the binary gate.
-  COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures
+  # Canary builds talk to the PRODUCTION relay, deliberately.
+  #
+  # Canary is a beta-access channel, not a sandbox: someone who takes it wants
+  # a feature before it is promoted, and they want the workspace, the team and
+  # the credits they already have. A separate relay gave them a separate,
+  # empty world, so the channel could not be used for real work and the
+  # credits balance a tester bought on it was not the balance they owned.
+  #
+  # The trade is that `develop` may carry relay-side changes production has
+  # not been promoted yet, and a canary desktop would then call endpoints and
+  # event kinds the live relay does not serve. The `relay-parity` job below is
+  # what keeps that from shipping: it refuses the build instead of publishing
+  # an app whose relay half is missing.
+  #
+  # The binary gate further down refuses to publish a build that does not have
+  # this exact string compiled in.
+  COLONY_CANARY_RELAY_WS_URL: wss://relay.colony.ainative.ventures
+  COLONY_CANARY_RELAY_HTTP_URL: https://relay.colony.ainative.ventures
 
 jobs:
   decide:
@@ -161,9 +177,106 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "build=${SHOULD}: ${REASON}"
 
+  relay-parity:
+    name: Relay parity with production
+    needs: decide
+    if: needs.decide.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.ref || 'develop' }}
+          # Both checks below walk history back to `main`, so the default
+          # shallow clone is not enough.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Canary desktop talks to the production relay (see the env block).
+      # That only holds while the relay half of this ref is already live.
+      # Two ways it can stop holding, and they fail differently:
+      #
+      #   A. `develop` carries relay source `main` does not. The change is not
+      #      promoted, so it is certainly not deployed.
+      #   B. `main` carries relay source that is promoted but not released and
+      #      deployed. A works fine and the relay is still behind.
+      #
+      # Both end the same way for a tester - an event kind the relay rejects,
+      # a route that 404s - so both are checked.
+      - name: Refuse relay source the production relay has not been promoted
+        env:
+          ALLOW_SKEW: ${{ inputs.allow_relay_skew }}
+        run: |
+          set -euo pipefail
+          # The crates that decide what the relay actually serves. Agent-side
+          # and client-side crates (buzz-cli, buzz-agent, buzz-acp,
+          # buzz-dev-mcp, buzz-test-client, sprig) are deliberately absent:
+          # they ship inside the desktop build, so a canary carries its own
+          # copy and no skew is possible.
+          PATHS="migrations \
+            crates/buzz-relay \
+            crates/buzz-core \
+            crates/buzz-db \
+            crates/buzz-auth \
+            crates/buzz-pubsub \
+            crates/buzz-search \
+            crates/buzz-media \
+            crates/buzz-audit \
+            crates/buzz-workflow"
+          # shellcheck disable=SC2086
+          AHEAD=$(git log --oneline origin/main..HEAD -- $PATHS)
+          if [ -n "$AHEAD" ]; then
+            echo "Relay-side commits on this ref that main does not have:"
+            printf '%s\n' "$AHEAD"
+            if [ "${ALLOW_SKEW:-false}" = "true" ]; then
+              echo "::warning::Publishing anyway: allow_relay_skew was requested. Every commit listed above is a relay change the production relay does not serve. Only do this when you have confirmed each one is backward compatible with the deployed relay."
+            else
+              echo "::error::This ref changes the relay, and canary desktop \
+          talks to the PRODUCTION relay. Publishing would ship testers an app \
+          whose relay half does not exist yet. Promote these to main and \
+          deploy the relay first, or re-run with allow_relay_skew=true if you \
+          have confirmed every commit above is backward compatible."
+              exit 1
+            fi
+          else
+            echo "No relay-side commits ahead of main."
+          fi
+
+      - name: Refuse a relay version production has not deployed yet
+        env:
+          RELAY_HTTP_URL: ${{ env.COLONY_CANARY_RELAY_HTTP_URL }}
+          ALLOW_SKEW: ${{ inputs.allow_relay_skew }}
+        run: |
+          set -euo pipefail
+          # NIP-11 is the relay telling us what it is running, which is the
+          # only claim that survives a green release that never deployed.
+          LIVE=$(curl -fsS --max-time 20 -H 'Accept: application/nostr+json' \
+            "$RELAY_HTTP_URL/" | node -e \
+            'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{process.stdout.write(String(JSON.parse(s).version??""))})')
+          REPO=$(node -e \
+            'const fs=require("fs");const t=fs.readFileSync("crates/buzz-relay/Cargo.toml","utf8");process.stdout.write((t.match(/^version\s*=\s*"([^"]+)"/m)||[])[1]??"")')
+          echo "relay version live: ${LIVE:-unknown}"
+          echo "relay version here: ${REPO:-unknown}"
+          if [ -z "$LIVE" ] || [ -z "$REPO" ]; then
+            echo "::error::Could not read both relay versions (live='${LIVE}', repo='${REPO}'). Refusing to guess."
+            exit 1
+          fi
+          if [ "$LIVE" != "$REPO" ]; then
+            if [ "${ALLOW_SKEW:-false}" = "true" ]; then
+              echo "::warning::Publishing anyway: allow_relay_skew was requested, against a live relay on ${LIVE} while this ref expects ${REPO}."
+            else
+              echo "::error::The production relay is running ${LIVE} but this \
+          ref expects ${REPO}. Deploy the relay before publishing a canary \
+          that talks to it, or re-run with allow_relay_skew=true."
+              exit 1
+            fi
+          else
+            echo "Production relay is on the version this ref expects."
+          fi
+
   publish-canary-macos:
     name: Publish canary macOS (Apple Silicon)
-    needs: decide
+    needs: [decide, relay-parity]
     if: needs.decide.outputs.should_build == 'true'
     # The same self-hosted Mac the stable release uses. A canary rebuilds the
     # whole Rust workspace exactly like a release does, and the persistent
@@ -375,44 +488,33 @@ jobs:
           fi
           echo "Updater plugin present in the shipped binary"
 
-      - name: Check the CANARY relay is actually in the binary
-        # Mandatory. This is the gate that makes the channel mean something.
+      - name: Check the relay is actually in the binary
+        # Mandatory. Canary and stable now share one relay, so this no longer
+        # distinguishes the channels - the keyring check below and the
+        # identifier do that. What it still catches is the failure that has
+        # actually happened: build.rs seeing no BUZZ_RELAY_URL.
         #
-        # relay_ws_url() falls back to ws://localhost:3000 when build.rs saw no
-        # BUZZ_RELAY_URL, and if the canary relay env were ever mistyped or
-        # dropped, the run would still produce a correctly named, correctly
-        # versioned, correctly signed "Colony Canary" that points nowhere - or,
-        # worse, at production, if someone copies the stable job's env block
-        # into this one. Nothing in the dmg, the plist, the signature or the
-        # manifest reveals the difference, so it is pinned here against the
-        # compiled bytes.
+        # relay_ws_url() falls back to ws://localhost:3000 in that case, and
+        # the run still produces a correctly named, correctly versioned,
+        # correctly signed "Colony Canary" that points nowhere. Nothing in the
+        # dmg, the plist, the signature or the manifest reveals it, so it is
+        # pinned here against the compiled bytes.
         run: |
           set -euo pipefail
           BIN="$APP/Contents/MacOS/buzz-desktop"
           # `grep -c`, not `grep -q` - see the updater gate above for why.
-          CANARY=$(strings -a "$BIN" | grep -c "$COLONY_CANARY_RELAY_WS_URL" || true)
-          PROD=$(strings -a "$BIN" | grep -c "$COLONY_PRODUCTION_RELAY_WS_URL" || true)
+          RELAY=$(strings -a "$BIN" | grep -c "$COLONY_CANARY_RELAY_WS_URL" || true)
           LOOPBACK=$(strings -a "$BIN" | grep -c "ws://localhost:3000" || true)
-          echo "canary relay occurrences:     ${CANARY:-0}"
-          echo "production relay occurrences: ${PROD:-0}"
+          echo "relay occurrences:            ${RELAY:-0}"
           echo "loopback default occurrences: ${LOOPBACK:-0}"
-          if [ "${CANARY:-0}" -eq 0 ]; then
-            echo "::error::This build has no compiled-in canary relay URL \
+          if [ "${RELAY:-0}" -eq 0 ]; then
+            echo "::error::This build has no compiled-in relay URL \
           (${COLONY_CANARY_RELAY_WS_URL}), so it falls back to \
           ws://localhost:3000 and every canary tester gets a dead app. \
-          build.rs needs BUZZ_RELAY_URL in the build step's environment, set \
-          to the canary relay and not to production."
+          build.rs needs BUZZ_RELAY_URL in the build step's environment."
             exit 1
           fi
-          if [ "${PROD:-0}" -gt 0 ]; then
-            # Not fatal: the production hostname legitimately appears in the
-            # bundled frontend (links, docs, community discovery copy), and a
-            # hard failure there would block canaries for a reason that has
-            # nothing to do with the compiled default. The compiled default is
-            # what the check above proves.
-            echo "::warning::The production relay hostname also appears ${PROD} time(s) in this binary. That is expected from bundled frontend assets, but if the compiled default ever needs to be audited, this is the string to look at."
-          fi
-          echo "Canary relay compiled into the shipped binary"
+          echo "Relay compiled into the shipped binary"
           # The keyring service must be canary-scoped: the release default is
           # the stable app's "buzz-desktop", and a binary that shares it reads
           # and rewrites the stable install's identity blob (this broke
@@ -601,9 +703,11 @@ jobs:
             echo
             echo "Download: [Colony_Canary_aarch64.dmg](https://github.com/${RELEASES_REPO}/releases/download/${CANARY_ROLLING_TAG}/Colony_Canary_aarch64.dmg)"
             echo
-            echo "This is an unstable build from \`develop\`. It installs beside the"
-            echo "stable Colony app, keeps its own data, and talks to"
-            echo "${COLONY_CANARY_RELAY_WS_URL}."
+            echo "This is an early-access build from \`develop\`. It installs beside"
+            echo "the stable Colony app with its own local data and its own keychain"
+            echo "identity, but it talks to the same production relay"
+            echo "(${COLONY_CANARY_RELAY_WS_URL}), so a workspace, its team and its"
+            echo "credits are the real ones."
             echo
             # Machine-readable, and parsed by this workflow's decide job. Keep
             # the exact `canary-sha: <40 hex>` shape at the start of a line.
