@@ -29,6 +29,7 @@ mod tests {
             private_key_nsec: String::new(),
             auth_tag: None,
             relay_url: String::new(),
+            owner_pubkey: None,
             avatar_url: None,
             acp_command: "buzz-acp".to_string(),
             agent_command: "buzz-agent".to_string(),

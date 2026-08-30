@@ -448,7 +448,6 @@ pub(crate) async fn create_managed_agent_with_creation_request(
     // Snapshot the workspace owner pubkey for the legacy-record auth_tag
     // fallback. Computed outside the records lock to keep lock ordering simple.
     let owner_hex = workspace_owner_hex(state)?;
-
     let (agent_keys, private_key_nsec, pubkey, resolved_relay_url, input) = {
         let _store_guard = state
             .managed_agents_store_lock
@@ -685,6 +684,7 @@ pub(crate) async fn create_managed_agent_with_creation_request(
             private_key_nsec: private_key_nsec.clone(),
             auth_tag: auth_tag.clone(),
             relay_url: resolved_relay_url.clone(),
+            owner_pubkey: Some(owner_hex.clone()), // identity axis; see managed_agents::owner_scope
             avatar_url: resolved_avatar_url.clone(),
             acp_command: input
                 .acp_command

@@ -105,6 +105,10 @@ impl AgentDefinition {
             private_key_nsec: String::new(),
             auth_tag: None,
             relay_url: String::new(),
+            // A key-less definition is not yet a deployed instance — no
+            // identity has hired it. Stamped at hire time (`create_managed_
+            // agent_with_creation_request`, snapshot/team import), not here.
+            owner_pubkey: None,
             avatar_url: self.avatar_url,
             acp_command: DEFAULT_ACP_COMMAND.to_string(),
             agent_command: String::new(),
@@ -246,6 +250,23 @@ pub struct ManagedAgentRecord {
     #[serde(default)]
     pub auth_tag: Option<String>,
     pub relay_url: String,
+    /// Hex pubkey of the identity that hired this agent (the signed-in owner
+    /// at creation time), independent of `relay_url`. `relay_url` alone
+    /// scopes an agent to a *community*; this scopes it to the *identity*
+    /// that hired it, which is what keeps two identities sharing a relay
+    /// host from seeing each other's rosters, and what keeps a rotated
+    /// identity from inheriting a predecessor's agents.
+    ///
+    /// `#[serde(default)]` so records written before this field existed
+    /// deserialize as `None`. A record with `None` here carries no evidence
+    /// either way — display scoping falls back to `owner_pubkey_from_auth_tag`
+    /// (see `owner_scope`), and only if that also yields nothing does the
+    /// record stay visible everywhere its `relay_url` matches, exactly like
+    /// before this field existed. Never backfilled to a *guessed* value: a
+    /// wrong guess would hide the agent from the identity that actually
+    /// hired it, which is worse than the leak this field closes.
+    #[serde(default)]
+    pub owner_pubkey: Option<String>,
     /// Avatar URL resolved at creation time (user-supplied input, else the
     /// command-based fallback). Persisted so startup reconciliation compares
     /// against what was actually published rather than re-deriving it from
