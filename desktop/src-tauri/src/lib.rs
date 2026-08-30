@@ -759,6 +759,7 @@ pub fn run() {
             reconnect_colony_credits,
             connect_openrouter,
             scan_agent_subscriptions,
+            openrouter_quota,
             mesh_start_node,
             mesh_stop_node,
             mesh_node_status,
