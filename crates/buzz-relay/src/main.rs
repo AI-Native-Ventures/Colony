@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 fn log_env_filter(rust_log: Option<&str>) -> EnvFilter {
@@ -606,6 +606,29 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             buzz_relay::price_feed::run_refresh_loop(feed_state, config, http).await;
         });
+    }
+
+    // Keep the OpenRouter fallback chain current. Off unless AA_API_KEY is set:
+    // a relay without one serves the shipped default chain, which is a
+    // deployment choice rather than a misconfiguration. Failure to reach either
+    // source is warned and the last accepted chain stands — a ranking service
+    // must never sit in the critical path of an agent starting.
+    match buzz_relay::model_ranking_feed::config_from_env() {
+        Ok(Some(config)) => match buzz_relay::model_ranking_feed::build_client() {
+            Ok(http) => {
+                info!(
+                    models_interval_secs = config.models_interval.as_secs(),
+                    scores_interval_secs = config.scores_interval.as_secs(),
+                    "model ranking refresh scheduled"
+                );
+                tokio::spawn(async move {
+                    buzz_relay::model_ranking_feed::run_refresh_loop(config, http).await;
+                });
+            }
+            Err(error) => warn!(%error, "model ranking disabled: could not build an HTTP client"),
+        },
+        Ok(None) => debug!("model ranking disabled: AA_API_KEY is not set"),
+        Err(error) => warn!(%error, "model ranking disabled: bad configuration"),
     }
 
     // Inter-relay mesh (BUZZ_MESH seam). `boot_mesh` returns None when the
