@@ -32,9 +32,34 @@ pub(super) fn migration_marker_name(service: &str, default_name: &str) -> String
     }
 }
 
+/// Legacy keyring service an existing identity may still be sitting under
+/// because it predates this build's channel scoping — `None` when the
+/// current service already IS the historical default, so there is nothing
+/// to recover from.
+///
+/// Only release builds can have a baked, channel-scoped service (Canary's
+/// `colony-canary-desktop`); a debug build's own service-scoping
+/// (`BUZZ_DEV_KEYRING_SERVICE`, standalone worktrees) is a deliberate dev
+/// isolation choice, not an involuntary rename, so it has no legacy identity
+/// to recover — `None` there too.
+///
+/// This is what makes a channel-scoping change like #478 non-destructive:
+/// an install that already had an identity under `"buzz-desktop"` is found
+/// and recovered on first boot under the new service, rather than treated
+/// as a fresh install (see `recover_legacy_or_generate` in `app_state.rs`).
+pub(crate) fn legacy_keyring_service() -> Option<&'static str> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    match keyring_service() {
+        "buzz-desktop" => None,
+        _ => Some("buzz-desktop"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{dev_keyring_service, migration_marker_name};
+    use super::{dev_keyring_service, legacy_keyring_service, migration_marker_name};
 
     #[test]
     fn standalone_scope_must_remain_under_dev_service() {
@@ -62,5 +87,14 @@ mod tests {
             migration_marker_name("buzz-desktop-dev.example", "identity.migrated"),
             "identity.buzz-desktop-dev.example.migrated"
         );
+    }
+
+    #[test]
+    fn debug_builds_have_no_legacy_service_to_recover() {
+        // Test binaries are always debug builds. Legacy-identity recovery is
+        // scoped to release builds with a baked, channel-specific service
+        // (Canary); a debug build's own scoping is deliberate dev isolation,
+        // not an involuntary rename, so there is nothing to recover.
+        assert_eq!(legacy_keyring_service(), None);
     }
 }
