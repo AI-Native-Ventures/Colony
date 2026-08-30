@@ -256,7 +256,7 @@ fn migrate_teams_in_dir_at(
         persona_events::monotonic_created_at,
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
         team_events::build_team_event,
-        TeamRecord,
+        TeamRecord, DEFAULT_COORDINATION_TEAM_ID,
     };
     use buzz_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
@@ -284,8 +284,16 @@ fn migrate_teams_in_dir_at(
     let mut migrated = 0u32;
 
     for record in &records {
-        // Skip built-in teams — they're always available from code.
-        if record.is_builtin {
+        // Skip built-in teams — they're always available from code. Except
+        // the default coordination team: unlike every other built-in, the
+        // RELAY (not just other devices) must be able to resolve it —
+        // `company_broker::load_team_refs` validates a Task's
+        // `owningTeamId`/`assigneePersonaIds` against the owner's own
+        // published KIND_TEAM events, and this is the only team available to
+        // own chat work before a company blueprint seeds a real one. Skipping
+        // it here means `ensure_chat_task` can mint a Task the relay then
+        // rejects with "missing reference in task.owningTeamId".
+        if record.is_builtin && record.id != DEFAULT_COORDINATION_TEAM_ID {
             continue;
         }
 
