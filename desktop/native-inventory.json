@@ -2776,6 +2776,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
+        "src/features/onboarding/ui/OpenRouterUpgradeCard.tsx:51",
         "src/shared/api/tauriOpenRouterQuota.ts:33"
       ]
     },
