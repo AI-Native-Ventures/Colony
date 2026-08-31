@@ -101,6 +101,43 @@ test.describe("retired theme channel layout migration", () => {
       .toBeGreaterThan(0);
     await expect(threadPanel).toBeVisible();
 
+    await page.evaluate(
+      ({ channelName, parentEventId, pubkey }) => {
+        for (let index = 0; index < 24; index += 1) {
+          (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+            channelName,
+            content: `Scrollable thread reply ${index + 1}. `.repeat(4),
+            parentEventId,
+            pubkey,
+          });
+        }
+      },
+      {
+        channelName: CHANNEL_NAME,
+        parentEventId: rootId,
+        pubkey: ALICE_PUBKEY,
+      },
+    );
+
+    const threadBody = page.getByTestId("message-thread-body");
+    await expect
+      .poll(() =>
+        threadBody.evaluate(
+          (element) => element.scrollHeight > element.clientHeight,
+        ),
+      )
+      .toBe(true);
+    await threadBody.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(() => threadBody.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+
+    const paneBackdrop = page.getByTestId("auxiliary-panel-header-backdrop");
+    await expect(paneBackdrop).toHaveCount(1);
+
     const sharedBackdrop = page.getByTestId("channel-shared-header-backdrop");
     await expect(sharedBackdrop).toHaveCount(1);
 
