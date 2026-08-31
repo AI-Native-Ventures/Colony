@@ -535,6 +535,16 @@ fn spawn_agent_child_inner(
     command.env("RUST_LOG", provisioned::child_rust_log_filter());
     command.env("BUZZ_PRIVATE_KEY", &record.private_key_nsec);
     command.env("BUZZ_RELAY_URL", &effective_relay_url);
+    // Relay-recommended OpenRouter fallback chain. Absent on a cold cache or a
+    // relay that does not rank, in which case the agent keeps whatever
+    // OPENROUTER_FALLBACK_MODELS its own config supplies — the variable is left
+    // unset rather than cleared, so "no recommendation" and "recommend nothing"
+    // stay distinguishable. The refresh is scheduled, never awaited: ranking
+    // must not sit in the critical path of an agent starting.
+    if let Some(chain) = crate::managed_agents::model_chain::cached_for(&effective_relay_url) {
+        command.env("OPENROUTER_FALLBACK_MODELS", chain.join(","));
+    }
+    crate::managed_agents::model_chain::refresh_in_background(&effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });
     command.env("BUZZ_ACP_IDLE_POOL_SLEEP", idle_pool_sleep_env(lazy));
     command.env("BUZZ_ACP_AGENT_COMMAND", &resolved_agent_command);
