@@ -1348,6 +1348,37 @@ mod tests {
         assert_eq!(parse_company_action(&event).expect("round trip"), action);
     }
 
+    // `build_company_action` does not pin `created_at`: the relay's ingest
+    // pipeline rejects ANY event whose timestamp drifts more than 15 minutes
+    // from server time (`MAX_TIMESTAMP_DRIFT_SECS` in
+    // `buzz-relay/handlers/ingest.rs`), before any kind-specific handling runs,
+    // so a deterministic-but-fixed timestamp is unreachable for a retry more
+    // than 15 minutes after the first attempt. `created_at` therefore stays
+    // real wall-clock time, and two signings of the same action are NOT
+    // expected to produce the same event id.
+    //
+    // What must stay stable across retries is the idempotency key: the
+    // relay's claim is keyed on it (`find_company_action_claim` in
+    // `company_broker.rs`), and a `Superseded` response naming an earlier
+    // winner is how the desktop now recognises "this action already
+    // succeeded" (`workContext.ts`, `createTask.ts`) rather than a failure.
+    #[test]
+    fn created_at_is_real_time_but_the_idempotency_key_stays_stable_across_retries() {
+        let action = company_action(CompanyActionOperation::Create);
+        let first = signed(build_company_action(&action).expect("first attempt builds"));
+        let second = signed(build_company_action(&action).expect("retry builds"));
+        assert_eq!(
+            required_tuple_tag(&first, "company-action", 5).expect("first tuple")[4],
+            action.idempotency_key.to_string(),
+        );
+        assert_eq!(
+            required_tuple_tag(&first, "company-action", 5).expect("first tuple"),
+            required_tuple_tag(&second, "company-action", 5).expect("second tuple"),
+            "the identity tuple the relay dedupes on must be identical across retries \
+             even though created_at is not pinned",
+        );
+    }
+
     #[test]
     fn action_replacement_requires_expected_head_and_create_forbids_it() {
         for operation in [

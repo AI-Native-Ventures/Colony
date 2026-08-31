@@ -58,7 +58,10 @@ export type WorkContextDependencies = {
     relayPubkey: string;
   }) => Promise<ChatTaskResult>;
   broker: Pick<CompanyActionBroker, "submit">;
-  loadTask: (taskId: string) => ReturnType<typeof companyRepository.getTask>;
+  loadTask: (
+    taskId: string,
+    headEventId: string | null,
+  ) => ReturnType<typeof companyRepository.getTaskAfterAction>;
 };
 
 /**
@@ -115,10 +118,19 @@ export function createWorkContextResolver(
     });
 
     const outcome = await dependencies.broker.submit(planned.signedAction);
-    // A conflict here means the Task already exists, which is the state this
-    // was trying to reach. Anything else has not been recorded, and sending
-    // the instruction anyway would buy an agent turn nothing can account for.
-    if (outcome.status !== "applied" && outcome.status !== "conflict") {
+    // A conflict means the Task already exists. A superseded submission
+    // means the relay's idempotency claim on this exact send was already won
+    // — by an earlier attempt, most likely — which is the same goal state
+    // reached a different way: `planned.taskId` is derived from the send
+    // itself (channel + send id), not from which event won the claim, so it
+    // names the same Task either way. Anything else has not been recorded,
+    // and sending the instruction anyway would buy an agent turn nothing can
+    // account for.
+    if (
+      outcome.status !== "applied" &&
+      outcome.status !== "conflict" &&
+      outcome.status !== "superseded"
+    ) {
       throw new Error(
         outcome.status === "no-receipt"
           ? `${outcome.message} The message has not been sent.`
@@ -126,7 +138,17 @@ export function createWorkContextResolver(
       );
     }
 
-    const task = await dependencies.loadTask(planned.taskId);
+    // A conflict names no head — the read still goes by coordinate. An
+    // applied receipt and a superseded claim both name an event id directly,
+    // and reading that exact event sidesteps whatever indexing the `#d` tag
+    // filter otherwise waits on.
+    const headEventId =
+      outcome.status === "applied"
+        ? outcome.headEventId
+        : outcome.status === "superseded"
+          ? outcome.winnerEventId
+          : null;
+    const task = await dependencies.loadTask(planned.taskId, headEventId);
     if (!task.ok) {
       throw new Error(
         "The work record for this message could not be read back, so the message has not been sent. Trying again is safe.",
@@ -155,5 +177,6 @@ export const resolveWorkContext = createWorkContextResolver({
     ),
   ensureTask: ensureChatTask,
   broker: companyActionBroker,
-  loadTask: (taskId) => companyRepository.getTask(taskId),
+  loadTask: (taskId, headEventId) =>
+    companyRepository.getTaskAfterAction(taskId, headEventId),
 });
