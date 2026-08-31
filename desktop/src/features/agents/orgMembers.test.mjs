@@ -34,26 +34,27 @@ function managedHead(overrides = {}) {
   };
 }
 
-test("a personal agent with no rank lands in the unranked group, not the chart", () => {
+test("a personal agent with no stated rank still lands on the chart", () => {
+  // It used to drop into an Unranked group and off the chart entirely, which
+  // put the owner back on the "Set rank" button every time a fresh instance
+  // appeared. A head with no role implies Team lead.
   const { members, unrankedAgents } = orgMembersFromSources(
     [employeeHead()],
     [managedHead()],
   );
-  assert.equal(members.length, 1);
-  assert.equal(members[0]?.pubkey, EMPLOYEE);
-  assert.deepEqual(unrankedAgents, [
-    { pubkey: AGENT, name: "Scout", role: "" },
-  ]);
+  assert.equal(members.length, 2);
+  assert.equal(
+    members.find((member) => member.pubkey === AGENT)?.rank,
+    "leader",
+  );
+  assert.equal(unrankedAgents.length, 0);
 });
 
-test("an unranked agent without a display name falls back to a truncated pubkey", () => {
-  const { unrankedAgents } = orgMembersFromSources(
-    [],
-    [managedHead({ name: null })],
-  );
-  assert.equal(unrankedAgents.length, 1);
-  assert.match(unrankedAgents[0]?.name ?? "", /aa11bb22/);
-  assert.notEqual(unrankedAgents[0]?.name, AGENT);
+test("an agent without a display name falls back to a truncated pubkey", () => {
+  const { members } = orgMembersFromSources([], [managedHead({ name: null })]);
+  assert.equal(members.length, 1);
+  assert.match(members[0]?.name ?? "", /aa11bb22/);
+  assert.notEqual(members[0]?.name, AGENT);
 });
 
 test("ranking the agent moves it onto the chart as a personal agent", () => {
@@ -99,16 +100,32 @@ test("a head whose role resolves to a filled employee takes the employee's rank"
   assert.equal(agent.isPersonalAgent, true);
 });
 
-test("a head whose role names a vacancy falls through to its own tier", () => {
-  const { unrankedAgents } = orgMembersFromSources(
+test("a head whose role names a vacancy takes the rank its role implies", () => {
+  const { members, unrankedAgents } = orgMembersFromSources(
     [employeeHead()],
     [managedHead({ roleId: "nobody-fills-this", tierRank: null })],
   );
+  assert.equal(unrankedAgents.length, 0);
   assert.equal(
-    unrankedAgents.length,
-    1,
-    "no tier and no staffed role: unranked",
+    members.find((member) => member.pubkey === AGENT)?.rank,
+    "leader",
   );
+});
+
+test("a chief of staff with no stated rank is an executive, not a team lead", () => {
+  const { members } = orgMembersFromSources(
+    [],
+    [managedHead({ roleId: "chief-of-staff", tierRank: null })],
+  );
+  assert.equal(members[0]?.rank, "executive");
+});
+
+test("a stated rank always beats the role default", () => {
+  const { members } = orgMembersFromSources(
+    [],
+    [managedHead({ roleId: "chief-of-staff", tierRank: "worker" })],
+  );
+  assert.equal(members[0]?.rank, "worker");
 });
 
 test("the head's manager tag is carried onto the chart member", () => {
@@ -160,7 +177,7 @@ test("an empty archive snapshot hides nothing from either list", () => {
     [managedHead({ pubkey: OTHER_AGENT, tierRank: "leader" }), managedHead()],
   );
   assert.deepEqual(withEmptySets, withoutFilter);
-  assert.equal(withEmptySets.unrankedAgents.length, 1);
+  assert.equal(withEmptySets.unrankedAgents.length, 0);
 });
 
 test("an absent snapshot means hide nothing", () => {

@@ -894,6 +894,7 @@ pub fn run() {
             agent_access_owner_only,
             cancel_media_upload,
             upload_media_bytes_raw,
+            upload_png_verbatim,
             card_mint_key_status,
             card_mint_save_openai_key,
             list_agent_cards,

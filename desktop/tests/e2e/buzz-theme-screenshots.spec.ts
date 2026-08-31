@@ -1141,6 +1141,15 @@ test("glass background keeps the content panel solid", async ({ page }) => {
     )
     .toBe(true);
 
+  // Focus explicitly and confirm it landed before sending the key. `press`
+  // focuses as a side effect, but under CI contention the keydown can be
+  // dispatched before the slider has actually taken focus — the key then goes
+  // nowhere and `aria-valuenow` stays at its default 65, which reads as the
+  // slider ignoring Home rather than as a lost keystroke. Observed on
+  // 2026-08-31 blocking a promotion, expected "30" received "65" against the
+  // full 15s timeout, so the value never changed at all.
+  await opacitySlider.focus();
+  await expect(opacitySlider).toBeFocused();
   await opacitySlider.press("Home");
   await expect(opacitySlider).toHaveAttribute("aria-valuenow", "30");
   await expect

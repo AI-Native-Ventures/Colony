@@ -42,6 +42,10 @@ function coerce(raw: unknown): OnboardingAnswers {
           country: value.founder.country ?? "",
           gender: value.founder.gender ?? null,
           selfDescribedGender: value.founder.selfDescribedGender ?? "",
+          // Absent in every draft written before the photo was collected, so
+          // a run resumed across that upgrade keeps its answers instead of
+          // being thrown away for a missing key.
+          avatarUrl: value.founder.avatarUrl ?? "",
         }
       : null,
     recoveryAcknowledged: value.recoveryAcknowledged === true,
