@@ -9,6 +9,7 @@ import {
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useExportAgentSnapshotMutation,
+  useManagedAgentsQuery,
   usePersonasQuery,
   usePreviewAgentSnapshotImportMutation,
   useConfirmAgentSnapshotImportMutation,
@@ -62,6 +63,10 @@ import {
   type PersonaDialogState,
 } from "./personaDialogState";
 import {
+  orgPlacementForCreate,
+  resolveDefaultOrgPlacement,
+} from "@/features/agents/defaultOrgPlacement";
+import {
   resolveCreateIntent,
   type AgentCreateIntent,
 } from "./agentCreateIntent";
@@ -87,7 +92,7 @@ const ORG_RANK_POLL_MS = 1_000;
 async function rankCreatedAgent(
   agent: { pubkey: string; name: string },
   tier: AgentRank,
-  manager: string | undefined,
+  manager: string | null,
   ownerPubkeys: ReadonlySet<string>,
 ): Promise<void> {
   const deadline = Date.now() + ORG_RANK_WAIT_MS;
@@ -98,7 +103,7 @@ async function rankCreatedAgent(
           pubkey: agent.pubkey,
           name: agent.name,
           tier,
-          manager: manager ?? null,
+          manager,
         },
         ownerPubkeys,
       );
@@ -119,6 +124,9 @@ export function usePersonaActions() {
   const identityQuery = useIdentityQuery();
   const communityId = activeCommunity?.id ?? null;
   const personasQuery = usePersonasQuery();
+  // Read, never written here: the default placement needs to know which
+  // deployed agent currently holds Chief of Staff.
+  const managedAgentsQuery = useManagedAgentsQuery();
   const catalogQuery = usePersonaCatalogQuery(communityId);
   usePersonaCatalogLiveUpdates(communityId);
   const setCatalogSharedMutation =
@@ -334,12 +342,23 @@ export function usePersonaActions() {
             created,
             targetChannel,
           );
-          if (options?.orgRank && created.agent.pubkey) {
+          if (created.agent.pubkey) {
+            // Always placed. Publishing no head at all is what left every
+            // agent under UNASSIGNED with no reporting line, and an agent on
+            // no team cannot be given work at all.
+            const placement = orgPlacementForCreate(
+              { rank: options?.orgRank, manager: options?.orgManager },
+              resolveDefaultOrgPlacement({
+                roleId: persona.roleId ?? null,
+                agents: managedAgentsQuery.data,
+                personas: personasQuery.data,
+              }),
+            );
             try {
               await rankCreatedAgent(
                 { pubkey: created.agent.pubkey, name: created.agent.name },
-                options.orgRank,
-                options.orgManager,
+                placement.tier,
+                placement.manager,
                 ownersQuery.data ?? new Set<string>(),
               );
               await queryClient.invalidateQueries({
