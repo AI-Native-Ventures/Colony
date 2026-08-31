@@ -4,6 +4,12 @@ import { toast } from "sonner";
 
 const MIGRATION_TOAST_KEY = "buzz-legacy-nest-migrated-notified";
 
+interface StuckEventSyncPayload {
+  kind: number;
+  d_tag: string;
+  error: string;
+}
+
 /**
  * Surface nest-related backend events as toasts.
  *
@@ -16,6 +22,13 @@ const MIGRATION_TOAST_KEY = "buzz-legacy-nest-migrated-notified";
  *   legacy `~/.sprout` nest. Shown once per machine (deduped via
  *   localStorage); the backend re-emits each launch while `~/.sprout` exists,
  *   which also covers the event being emitted before this listener mounts.
+ * - `event-sync-stuck`: a retained persona/team/agent event has been refused
+ *   by the relay for 3 consecutive 30s sweeps (~90s). Before this, a
+ *   permanently refused event and an unreachable relay looked identical from
+ *   the UI — both just logged to a console the user never opens — which is
+ *   why a stuck coordination team (kind 30176) could sit failing silently
+ *   until every chat Task in the community broke with "missing reference in
+ *   task.owningTeamId" and nothing on screen explained why.
  *
  * Mounted at the app root ahead of the community-init effect so the listener
  * is registered before the first `apply_workspace` call.
@@ -38,9 +51,19 @@ export function useNestNotifications(): void {
       });
     });
 
+    const unlistenSyncStuck = listen<StuckEventSyncPayload>(
+      "event-sync-stuck",
+      (event) => {
+        toast.error("Couldn't sync to the relay", {
+          description: `${event.payload.d_tag}: ${event.payload.error}`,
+        });
+      },
+    );
+
     return () => {
       void unlistenReposError.then((fn) => fn());
       void unlistenMigrated.then((fn) => fn());
+      void unlistenSyncStuck.then((fn) => fn());
     };
   }, []);
 }

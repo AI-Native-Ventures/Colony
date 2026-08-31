@@ -32,6 +32,15 @@ export type OnboardingFounder = {
   country: string;
   gender: FounderGender | null;
   selfDescribedGender: string;
+  /**
+   * Profile picture, as a URL or an emoji data URL, empty when skipped.
+   *
+   * Unlike every other field here this one IS a record: it is written to the
+   * founder's profile at the end of the run. It rides along with the rest of
+   * the founder answers so a resumed run keeps a picture someone already
+   * chose, rather than making them pick again.
+   */
+  avatarUrl: string;
 };
 
 export type OnboardingAnswers = {

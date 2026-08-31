@@ -64,6 +64,8 @@ pub mod job_runtime;
 pub mod mesh_boot;
 /// Prometheus metrics: recorder, upkeep, HTTP middleware.
 pub mod metrics;
+/// Colony's signed remote price feed.
+pub mod model_ranking_feed;
 /// NIP-11 relay information document.
 pub mod nip11;
 /// Deployment-wide operator analytics rollup worker.
@@ -76,7 +78,6 @@ pub mod payments_provider;
 /// Paystack: hosted-checkout client and webhook signature verification.
 pub mod paystack;
 pub mod price_catalog;
-/// Colony's signed remote price feed.
 pub mod price_feed;
 /// NIP-01 client/relay message parsing.
 pub mod protocol;

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import {
+  parseEmojiAvatarDataUrl,
+  ProfileAvatarEditor,
+} from "@/features/profile/ui/ProfileAvatarEditor";
 import { Button } from "@/shared/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Progress } from "@/shared/ui/progress";
 import type { AuthFailure } from "../../../authService";
@@ -19,6 +25,13 @@ export type AccountValues = {
   country: string;
   gender: FounderGender | null;
   selfDescribedGender: string;
+  /**
+   * Profile picture, empty when skipped. Collected here rather than on a
+   * screen of its own: this is where the founder says who they are, and the
+   * previous flow's dedicated avatar step is one of the screens the redesign
+   * folded away.
+   */
+  avatarUrl: string;
 };
 
 /** What each gender option says on the chip. */
@@ -109,18 +122,26 @@ export function AccountScreen({
         </p>
       </div>
       <div className="onb-panel">
-        <label className="onb-field" htmlFor="onb-account-name">
-          <span className="onb-label">Your name</span>
-          <Input
-            id="onb-account-name"
-            value={values.name}
-            placeholder="Aisha Bello"
-            onChange={(e) => onChange({ name: e.target.value })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
-            }}
+        <div className="onb-identity-row">
+          <AvatarPicker
+            avatarUrl={values.avatarUrl}
+            disabled={isSubmitting}
+            name={values.name}
+            onChange={(avatarUrl) => onChange({ avatarUrl })}
           />
-        </label>
+          <label className="onb-field" htmlFor="onb-account-name">
+            <span className="onb-label">Your name</span>
+            <Input
+              id="onb-account-name"
+              value={values.name}
+              placeholder="Aisha Bello"
+              onChange={(e) => onChange({ name: e.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
+              }}
+            />
+          </label>
+        </div>
         <label className="onb-field" htmlFor="onb-account-email">
           <span className="onb-label">Email</span>
           <Input
@@ -256,5 +277,97 @@ export function AccountScreen({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Emoji-picker colours, mapped onto the onboarding canvas's own variables so
+ *  the editor does not arrive wearing the app's chat theme. */
+const ONBOARDING_EMOJI_PICKER_THEME_VARS = {
+  "--buzz-emoji-picker-rgb-background":
+    "var(--buzz-onboarding-emoji-picker-background)",
+  "--buzz-emoji-picker-rgb-color": "var(--buzz-onboarding-emoji-picker-color)",
+  "--buzz-emoji-picker-rgb-input": "var(--buzz-onboarding-emoji-picker-input)",
+} as React.CSSProperties;
+
+/**
+ * The profile picture, as a circle that opens the shared avatar editor.
+ *
+ * The same `ProfileAvatarEditor` the previous flow's avatar step and the
+ * community profile stage both used, so uploads, emoji avatars and animated
+ * previews behave identically wherever someone sets a picture. Skipping is
+ * silent and costs nothing: the circle just stays empty, and the profile is
+ * written without an avatar.
+ */
+function AvatarPicker({
+  avatarUrl,
+  disabled,
+  name,
+  onChange,
+}: {
+  avatarUrl: string;
+  disabled: boolean;
+  name: string;
+  onChange: (avatarUrl: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const emojiAvatar = parseEmojiAvatarDataUrl(avatarUrl);
+  const hasAvatar = avatarUrl.trim().length > 0;
+  const previewName = name.trim() || "Your profile";
+
+  return (
+    <>
+      <button
+        aria-label={hasAvatar ? "Change your photo" : "Add your photo"}
+        className="onb-avatar-button"
+        data-has-avatar={hasAvatar}
+        data-testid="onboarding-account-avatar"
+        disabled={disabled}
+        onClick={() => setIsOpen(true)}
+        type="button"
+      >
+        {emojiAvatar ? (
+          <span
+            aria-hidden="true"
+            className="onb-avatar-emoji"
+            style={{ backgroundColor: emojiAvatar.color }}
+          >
+            {emojiAvatar.emoji}
+          </span>
+        ) : hasAvatar ? (
+          <ProfileAvatar
+            avatarUrl={avatarUrl}
+            className="h-full w-full"
+            label={previewName}
+          />
+        ) : (
+          <span className="onb-avatar-empty">Photo</span>
+        )}
+      </button>
+      <Dialog onOpenChange={setIsOpen} open={isOpen}>
+        <DialogContent
+          className="buzz-onboarding-neutral-theme max-w-[34rem]"
+          data-testid="onboarding-account-avatar-editor"
+          surface="textured"
+        >
+          <DialogTitle className="px-2 pt-2 text-2xl font-normal">
+            Add your photo
+          </DialogTitle>
+          <ProfileAvatarEditor
+            avatarUrl={avatarUrl}
+            disabled={disabled}
+            donePending={isUploading}
+            emojiPickerTheme="auto"
+            emojiPickerThemeVars={ONBOARDING_EMOJI_PICKER_THEME_VARS}
+            onDone={() => setIsOpen(false)}
+            onUploadingChange={setIsUploading}
+            onUrlChange={onChange}
+            presentation="onboarding-modal"
+            previewName={previewName}
+            showInlineUploadPreview
+          />
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

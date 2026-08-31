@@ -9,6 +9,7 @@ import {
 } from "./actionCenterModel.ts";
 
 const PUBKEY = "a".repeat(64);
+const PINGER_PUBKEY = "b".repeat(64);
 
 /** A generic `needsAction` feed row, not a Block instance. */
 function feedItem(
@@ -295,6 +296,7 @@ test("ranks strictly by tier — deadline, then blocked work, then everything el
     pings: [
       {
         id: "ping-1",
+        authorPubkey: PINGER_PUBKEY,
         channelId: "channel-1",
         channelName: "general",
         threadId: "root-1",
@@ -318,13 +320,48 @@ test("ranks strictly by tier — deadline, then blocked work, then everything el
   );
 });
 
-test("a ping's title names the channel, summary is its content, dismiss/open-source are its only capabilities", () => {
+test("a ping's title names who asked and the channel, summary is its content, dismiss/open-source are its only capabilities", () => {
+  const ping = {
+    id: "ping-1",
+    authorPubkey: PINGER_PUBKEY,
+    channelId: "channel-1",
+    channelName: "engineering",
+    threadId: "root-1",
+    createdAt: 500,
+    content: "can you approve this before EOD?",
+  };
+  const items = buildActionCenterItems({
+    asks: [],
+    reminders: [],
+    pings: [ping],
+    pingAuthorLabelsByPubkey: new Map([[PINGER_PUBKEY, "Atlas"]]),
+    pingDelegateTargetsById: new Map([
+      ["ping-1", { pubkey: PUBKEY, label: "Nova" }],
+    ]),
+  });
+
+  assert.equal(items.length, 1);
+  const [item] = items;
+  assert.equal(item.kind, "ping");
+  assert.equal(item.state, "needs-action");
+  assert.equal(item.title, "Atlas asked in #engineering");
+  assert.equal(item.summary, "can you approve this before EOD?");
+  assert.deepEqual(item.capabilities, ["dismiss", "open-source"]);
+  assert.deepEqual(item.source, {
+    kind: "ping",
+    ping,
+    delegateTarget: { pubkey: PUBKEY, label: "Nova" },
+  });
+});
+
+test("a ping's asker name falls back to a truncated pubkey when no label resolved yet, and its delegate target is null with no lead available", () => {
   const items = buildActionCenterItems({
     asks: [],
     reminders: [],
     pings: [
       {
         id: "ping-1",
+        authorPubkey: PINGER_PUBKEY,
         channelId: "channel-1",
         channelName: "engineering",
         threadId: "root-1",
@@ -336,22 +373,31 @@ test("a ping's title names the channel, summary is its content, dismiss/open-sou
 
   assert.equal(items.length, 1);
   const [item] = items;
-  assert.equal(item.kind, "ping");
-  assert.equal(item.state, "needs-action");
-  assert.equal(item.title, "asked in #engineering");
-  assert.equal(item.summary, "can you approve this before EOD?");
-  assert.deepEqual(item.capabilities, ["dismiss", "open-source"]);
-  assert.deepEqual(item.source, {
-    kind: "ping",
-    ping: {
-      id: "ping-1",
-      channelId: "channel-1",
-      channelName: "engineering",
-      threadId: "root-1",
-      createdAt: 500,
-      content: "can you approve this before EOD?",
-    },
+  assert.equal(
+    item.title,
+    `${PINGER_PUBKEY.slice(0, 8)}…${PINGER_PUBKEY.slice(-4)} asked in #engineering`,
+  );
+  assert.equal(item.source.delegateTarget, null);
+});
+
+test("a ping with no resolvable channel name falls back to something honest, never a bare #", () => {
+  const items = buildActionCenterItems({
+    asks: [],
+    reminders: [],
+    pings: [
+      {
+        id: "ping-1",
+        authorPubkey: PINGER_PUBKEY,
+        channelId: "channel-1",
+        channelName: "", // could not be resolved either way -- see resolvePingChannelName
+        threadId: "root-1",
+        createdAt: 500,
+        content: "can you approve this before EOD?",
+      },
+    ],
   });
+
+  assert.equal(items[0].title.endsWith("asked in an unlisted channel"), true);
 });
 
 test("tier 2 ranks asks by blast radius descending, Block instances always last, ties broken by age", () => {
@@ -624,6 +670,7 @@ test("every non-ask item kind carries null context and escalation lines", () => 
     pings: [
       {
         id: "ping-1",
+        authorPubkey: PINGER_PUBKEY,
         channelId: "channel-1",
         channelName: "general",
         threadId: "root-1",

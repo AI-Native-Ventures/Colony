@@ -8,6 +8,7 @@ import {
 } from "@/shared/lib/trailingDebounce";
 import {
   THREAD_PINGS_QUERY_KEY,
+  resolvePingChannelName,
   selectAllRootIds,
   selectPingCandidates,
   selectRootIdsNeedingLookup,
@@ -60,13 +61,20 @@ export function useThreadPings(input: {
   mentions: readonly PingCandidate[];
   ownerPubkey: string | null;
   relaySelfPubkey: string | null;
+  /**
+   * Channel id -> display name, for resolving a ping's channel when the
+   * candidate itself carried none (see `resolvePingChannelName`). Absent
+   * means every ping keeps whatever `channelName` its candidate carried,
+   * which today is always empty (the relay's feed bridge never fills it).
+   */
+  channelNamesById?: ReadonlyMap<string, string>;
 }): {
   pings: ThreadPing[];
   isLoading: boolean;
   refetch: () => Promise<void>;
   dismiss: (pingId: string) => Promise<void>;
 } {
-  const { mentions, ownerPubkey, relaySelfPubkey } = input;
+  const { mentions, ownerPubkey, relaySelfPubkey, channelNamesById } = input;
   const queryClient = useQueryClient();
 
   const candidates = React.useMemo<PingCandidate[]>(
@@ -179,13 +187,20 @@ export function useThreadPings(input: {
       ownerPubkey,
       relaySelfPubkey,
       ...dataQuery.data,
-    }).filter((ping) => !dismissedIds.has(ping.id));
+    })
+      .filter((ping) => !dismissedIds.has(ping.id))
+      .map((ping) =>
+        channelNamesById
+          ? resolvePingChannelName(ping, channelNamesById)
+          : ping,
+      );
   }, [
     settledCandidates,
     ownerPubkey,
     relaySelfPubkey,
     dataQuery.data,
     dismissedIds,
+    channelNamesById,
   ]);
 
   const dismiss = React.useCallback(

@@ -156,18 +156,16 @@ export function orgMembersFromSources(
   for (const head of heads) {
     members.set(head.pubkey, employeeHeadToOrgMember(head));
   }
+  // Nothing lands here any more: `resolveManagedAgentRank` now falls back to
+  // the rank a head's role implies, so every trusted head places on the chart.
+  // The list stays in the shape callers already read, and the People section's
+  // Unranked group simply never renders. Deleting the concept touches nine
+  // files including a dialog and an e2e spec, so it is its own change rather
+  // than a rider on the behaviour fix.
   const unrankedAgents: UnrankedAgent[] = [];
   for (const trusted of trustedHeads) {
     if (members.has(trusted.pubkey)) continue;
     const rank = resolveManagedAgentRank(trusted, employeesByRole);
-    if (!rank) {
-      unrankedAgents.push({
-        pubkey: trusted.pubkey,
-        name: trusted.name || truncatePubkey(trusted.pubkey),
-        role: trusted.roleId ?? "",
-      });
-      continue;
-    }
     members.set(trusted.pubkey, managedHeadToOrgMember(trusted, rank));
   }
 
