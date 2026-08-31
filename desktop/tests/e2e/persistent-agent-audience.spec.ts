@@ -230,6 +230,13 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
     .getByTestId("mention-autocomplete")
     .getByText("Morgarita", { exact: true })
     .click();
+  // Wait for the chip's trailing space to land before typing. Selecting a
+  // mention inserts "@Morgarita " including the space, but `pressSequentially`
+  // can begin before that commit renders — the keystrokes then land against
+  // "@Morgarita" and the text concatenates to "@Morgaritahello", which never
+  // converges and burns the full 15s timeout. Observed on 2026-08-31 blocking a
+  // promotion, and it reads as a broken mention rather than a lost race.
+  await expect(input).toHaveText("@Morgarita ");
   await input.pressSequentially("hello");
   await expect(input).toHaveText("@Morgarita hello");
   await input.press("Enter");
