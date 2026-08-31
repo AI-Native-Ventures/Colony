@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 436,
-    "rust_lines": 169290,
+    "rust_total": 437,
+    "rust_lines": 169544,
     "tauri_coupled": 174,
-    "portable": 262,
-    "portable_lines": 96127,
+    "portable": 263,
+    "portable_lines": 96286,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -358,6 +358,7 @@
       "src-tauri/src/managed_agents/owner_scope.rs",
       "src-tauri/src/managed_agents/parallelism.rs",
       "src-tauri/src/managed_agents/persona_avatars.rs",
+      "src-tauri/src/managed_agents/persona_events/flush_barrier_tests.rs",
       "src-tauri/src/managed_agents/persona_events/freshness_tests.rs",
       "src-tauri/src/managed_agents/persona_events/stale_pin_tests.rs",
       "src-tauri/src/managed_agents/persona_events/tests.rs",
@@ -465,7 +466,7 @@
     ]
   },
   "params": {
-    "AppHandle": 358,
+    "AppHandle": 360,
     "State": 261,
     "Window": 7,
     "ipc::Request": 1,
@@ -473,7 +474,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 355,
+      "AppHandle": 357,
       "State": 261,
       "Window": 7,
       "ipc::Request": 1,
@@ -493,7 +494,7 @@
   },
   "apphandle_usage": {
     ".state::<": 112,
-    ".emit(": 47,
+    ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
     ".shell()": 0,
@@ -510,8 +511,8 @@
     ".exit(": 1
   },
   "events": {
-    "distinct": 33,
-    "emit_sites": 49,
+    "distinct": 34,
+    "emit_sites": 50,
     "names": [
       "acp-install-output",
       "agents-data-changed",
@@ -520,6 +521,7 @@
       "deep-link-join",
       "deep-link-message",
       "deep-link-nostr-bind",
+      "event-sync-stuck",
       "huddle-active-speakers",
       "huddle-audio-disconnected",
       "huddle-companion-returned",
@@ -740,8 +742,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/communities/useCommunityInit.ts:272",
-        "src/features/communities/useNestNotifications.ts:12",
-        "src/features/communities/useNestNotifications.ts:21"
+        "src/features/communities/useNestNotifications.ts:18",
+        "src/features/communities/useNestNotifications.ts:34"
       ]
     },
     "archive_channel": {
