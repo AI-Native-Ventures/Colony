@@ -89,6 +89,9 @@ const TASK = {
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   doerKind: "human",
   wakeAt: null,
+  outcomeReason: null,
+  bounceReason: null,
+  bounceCount: 0,
   createdAt: 1_780_000_000,
   updatedAt: 1_780_000_000,
 };
@@ -1082,4 +1085,59 @@ test("a task read-back does not retry past a community switch", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.code, "cancelled");
   assert.equal(calls, 1);
+});
+
+/** The relay writes the bounce and outcome fields on every current head. A
+ * desktop that does not declare them rejects the head on its exact field-set
+ * check, which reads as "no tasks" rather than as a parse failure: production
+ * had four task heads and Work showed an empty list. */
+test("a task head carrying the bounce and outcome fields parses", () => {
+  const parsed = parseTaskHead(
+    taskHead({
+      outcomeReason: "client went quiet",
+      bounceReason: { kind: "freeText", value: "missing the pricing table" },
+      bounceCount: 2,
+    }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.bounceCount, 2);
+  assert.deepEqual(parsed.value.bounceReason, {
+    kind: "freeText",
+    value: "missing the pricing table",
+  });
+});
+
+test("a task head predating the bounce fields still parses", () => {
+  const record = { ...TASK };
+  for (const name of ["outcomeReason", "bounceReason", "bounceCount"]) {
+    delete record[name];
+  }
+  const event = finalizeEvent(
+    {
+      kind: 30181,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", record.id],
+        ["team", record.owningTeamId],
+        ["cost-centre", record.costCentreId],
+        ["initiative", record.initiativeId],
+      ],
+      content: canonicalCompanyJson(record),
+    },
+    RELAY_SECRET,
+  );
+  const parsed = parseTaskHead(event, RELAY_PUBKEY);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.bounceCount, 0);
+  assert.equal(parsed.value.bounceReason, null);
+  assert.equal(parsed.value.outcomeReason, null);
+});
+
+test("a bounce reason of an unknown kind is refused, not coerced", () => {
+  const parsed = parseTaskHead(
+    taskHead({ bounceReason: { kind: "vibes", value: "nope" } }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, false);
 });
