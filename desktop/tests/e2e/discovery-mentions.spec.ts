@@ -32,6 +32,26 @@ async function lastSendMessagePayload(
   blockReferenceTags?: string[][] | null;
   mentionPubkeys?: string[] | null;
 }> {
+  // Pressing Enter returns as soon as the key is dispatched; the send then
+  // travels through React and the mock Tauri bridge before the payload is
+  // logged. Reading the log once raced that and failed with "no
+  // send_channel_message payload captured", which reads as the composer never
+  // having sent rather than as a read taken too early. Observed on 2026-09-01
+  // blocking the 0.15.4 promotion.
+  //
+  // Waited for with waitForFunction rather than expect.poll: poll rethrows on
+  // the first call rather than retrying, so the throw below would be a hard
+  // failure instead of a wait.
+  await page.waitForFunction(() => {
+    const log =
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
+        }
+      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [];
+    return log.some((entry) => entry.command === "send_channel_message");
+  });
+
   return page.evaluate(() => {
     const log =
       (
