@@ -33,6 +33,8 @@ export type CompleteFirstRunDeps = {
   draft: OnboardingV2Draft | null;
   /** kind:0 display name to publish; null/empty skips the profile write. */
   profileDisplayName: string | null;
+  /** kind:0 avatar to publish; null/empty leaves the profile without one. */
+  profileAvatarUrl: string | null;
 };
 
 export type CompleteFirstRunResult = {
@@ -46,7 +48,10 @@ export type CompleteFirstRunIo = {
     queryClient: unknown,
     args: { focus: boolean; pubkey: string; communityScope: string },
   ) => Promise<{ ok: boolean; reason?: string; focusChannelId?: string }>;
-  updateProfile: (input: { displayName: string }) => Promise<unknown>;
+  updateProfile: (input: {
+    displayName?: string;
+    avatarUrl?: string;
+  }) => Promise<unknown>;
   hasMarker: (args: {
     channelId: string;
     marker: string;
@@ -86,10 +91,18 @@ export async function completeFirstRun(
   }
   const focusChannelId = result.focusChannelId ?? null;
 
+  // Name and picture go up together: they are one kind:0, and writing them
+  // separately would publish two replaceable events where one will do. Each is
+  // omitted when empty rather than sent blank, so skipping the photo leaves an
+  // existing avatar alone instead of clearing it.
   const displayName = deps.profileDisplayName?.trim();
-  if (displayName) {
+  const avatarUrl = deps.profileAvatarUrl?.trim();
+  if (displayName || avatarUrl) {
     try {
-      await io.updateProfile({ displayName });
+      await io.updateProfile({
+        ...(displayName ? { displayName } : {}),
+        ...(avatarUrl ? { avatarUrl } : {}),
+      });
     } catch (error) {
       console.warn("First-run profile write failed; continuing.", error);
     }

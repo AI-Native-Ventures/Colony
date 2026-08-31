@@ -206,6 +206,7 @@ export function NewOnboardingFlow({
     country: "",
     gender: null,
     selfDescribedGender: "",
+    avatarUrl: "",
   });
   const [isSigningUp, setIsSigningUp] = useState(false);
   const [accountFailure, setAccountFailure] = useState<AuthFailure | null>(
@@ -351,6 +352,7 @@ export function NewOnboardingFlow({
           country: accountValues.country.trim(),
           gender: accountValues.gender,
           selfDescribedGender: accountValues.selfDescribedGender.trim(),
+          avatarUrl: accountValues.avatarUrl.trim(),
         },
       };
       setAnswers(updated);
