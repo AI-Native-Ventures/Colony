@@ -118,10 +118,19 @@ export function createWorkContextResolver(
     });
 
     const outcome = await dependencies.broker.submit(planned.signedAction);
-    // A conflict here means the Task already exists, which is the state this
-    // was trying to reach. Anything else has not been recorded, and sending
-    // the instruction anyway would buy an agent turn nothing can account for.
-    if (outcome.status !== "applied" && outcome.status !== "conflict") {
+    // A conflict means the Task already exists. A superseded submission
+    // means the relay's idempotency claim on this exact send was already won
+    // — by an earlier attempt, most likely — which is the same goal state
+    // reached a different way: `planned.taskId` is derived from the send
+    // itself (channel + send id), not from which event won the claim, so it
+    // names the same Task either way. Anything else has not been recorded,
+    // and sending the instruction anyway would buy an agent turn nothing can
+    // account for.
+    if (
+      outcome.status !== "applied" &&
+      outcome.status !== "conflict" &&
+      outcome.status !== "superseded"
+    ) {
       throw new Error(
         outcome.status === "no-receipt"
           ? `${outcome.message} The message has not been sent.`
@@ -129,11 +138,16 @@ export function createWorkContextResolver(
       );
     }
 
-    // A conflict receipt names no head — the read still goes by coordinate —
-    // but an applied one does, and reading that exact event sidesteps
-    // whatever indexing the `#d` tag filter otherwise waits on.
+    // A conflict names no head — the read still goes by coordinate. An
+    // applied receipt and a superseded claim both name an event id directly,
+    // and reading that exact event sidesteps whatever indexing the `#d` tag
+    // filter otherwise waits on.
     const headEventId =
-      outcome.status === "applied" ? outcome.headEventId : null;
+      outcome.status === "applied"
+        ? outcome.headEventId
+        : outcome.status === "superseded"
+          ? outcome.winnerEventId
+          : null;
     const task = await dependencies.loadTask(planned.taskId, headEventId);
     if (!task.ok) {
       throw new Error(

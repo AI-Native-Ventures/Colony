@@ -842,6 +842,58 @@ test("a receipt that never arrives is reported as unresolved, not as failure", a
   assert.equal(polls, 3);
 });
 
+// The relay's idempotency claim on this action was already won - by an
+// earlier attempt at this exact send, most likely, since `created_at` is
+// real wall-clock time and every retry signs a different event id. That is
+// the goal state a retry was trying to reach, not a failure, and the
+// winning event's id is right there in the relay's own wording.
+test("a superseded publish resolves to the winning event, not a thrown error", async () => {
+  const action = signedAction();
+  let polled = false;
+  const broker = createCompanyActionBroker({
+    publish: async () => {
+      throw new Error(
+        `conflict: superseded by original action ${"9".repeat(64)}`,
+      );
+    },
+    fetchFirstEvent: async () => {
+      polled = true;
+      return null;
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+  const outcome = await broker.submit(JSON.stringify(action));
+  assert.equal(outcome.status, "superseded");
+  assert.equal(outcome.winnerEventId, "9".repeat(64));
+  assert.equal(outcome.actionEventId, action.id);
+  // The retry's own event was never stored, so there is nothing to poll a
+  // receipt for - polling would only wait out the full attempt budget for
+  // something that can never arrive.
+  assert.equal(polled, false);
+});
+
+// Only the relay's exact "superseded by original action <id>" wording is
+// recognised - any other rejection (a network failure, a genuine refusal)
+// must still surface as an error rather than being swallowed.
+test("a publish rejection that is not a superseded claim still throws", async () => {
+  const action = signedAction();
+  const broker = createCompanyActionBroker({
+    publish: async () => {
+      throw new Error(
+        "conflict: the record changed since this request was prepared",
+      );
+    },
+    fetchFirstEvent: async () => null,
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+  await assert.rejects(
+    () => broker.submit(JSON.stringify(action)),
+    /record changed/,
+  );
+});
+
 test("only a company action can be submitted through the broker", async () => {
   const broker = createCompanyActionBroker({
     publish: async (event) => event,

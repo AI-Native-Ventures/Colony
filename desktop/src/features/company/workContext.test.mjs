@@ -190,6 +190,57 @@ test("a conflict carries no head event id to the read-back", async () => {
   assert.deepEqual(loadTaskCalls, [[TASK_ID, null]]);
 });
 
+// The relay's idempotency claim on this send was already won - by an
+// earlier attempt at this exact send, most likely, since `created_at` is
+// real wall-clock time and every retry signs a different event id.
+// `planned.taskId` is derived from the send itself (channel + send id), not
+// from which event won the claim, so it names the same Task either way:
+// this is the same goal state a "conflict" reaches, not a failure.
+test("a superseded submission means the send already succeeded, and proceeds", async () => {
+  const { resolve } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+  });
+  const context = await resolve(REQUEST);
+  assert.equal(context.taskId, TASK_ID);
+});
+
+// The relay's rejection names the exact event that won the claim, so the
+// read-back can go straight to it instead of waiting on the `#d` tag filter.
+test("a superseded claim's winning event id is handed to the read-back", async () => {
+  const { resolve, loadTaskCalls } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+  });
+  await resolve(REQUEST);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, "w".repeat(64)]]);
+});
+
+// A superseded claim is only evidence that SOME attempt won it. If the Task
+// it produced genuinely cannot be read back - a bug, a wrong community, a
+// claim for something else entirely - this must still fail honestly rather
+// than assume success it never confirmed.
+test("a superseded submission whose task never appears still fails honestly", async () => {
+  const { resolve } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+    taskResult: { ok: false, code: "missing-head", message: "gone" },
+  });
+  await assert.rejects(() => resolve(REQUEST), /has not been sent/i);
+});
+
 test("an unrecorded task stops the send rather than buying an unattributed turn", async () => {
   for (const outcome of [
     {

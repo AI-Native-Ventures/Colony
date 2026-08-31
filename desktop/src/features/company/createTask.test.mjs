@@ -144,6 +144,54 @@ test("a conflict is treated the same as applied - the task already exists", asyn
   assert.deepEqual(calls.loadTask[0], ["horizonlabs:task-1", null]);
 });
 
+// The relay's idempotency claim on this request id was already won - by an
+// earlier attempt at this exact create, most likely. `planned.taskId` is
+// derived from `requestId`, not from which event won the claim, so it names
+// the same Task either way: the same goal state a "conflict" reaches.
+test("a superseded submission is treated the same as applied - the task already exists", async () => {
+  const { creator, calls } = stack({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+  });
+  const task = await creator({
+    channelId: CHANNEL_ID,
+    title: "Ship the thing",
+    requestId: "11111111-1111-4111-8111-111111111111",
+  });
+  assert.equal(task.id, "horizonlabs:task-1");
+  assert.equal(calls.loadTask.length, 1);
+  // The relay's rejection names the exact event that won the claim, so the
+  // read-back goes straight to it.
+  assert.deepEqual(calls.loadTask[0], ["horizonlabs:task-1", "w".repeat(64)]);
+});
+
+// A superseded claim is only evidence that SOME attempt won it. If the Task
+// it produced genuinely cannot be read back, this must still fail honestly.
+test("a superseded submission whose task never appears still fails honestly", async () => {
+  const { creator } = stack({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+    loadTask: { ok: false, code: "missing-head", message: "gone" },
+  });
+  await assert.rejects(
+    () =>
+      creator({
+        channelId: CHANNEL_ID,
+        title: "Ship the thing",
+        requestId: "11111111-1111-4111-8111-111111111111",
+      }),
+    /could not be read back/i,
+  );
+});
+
 test("a rejected action surfaces the relay's message rather than pretending success", async () => {
   const { creator } = stack({
     brokerOutcome: {

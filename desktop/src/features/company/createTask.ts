@@ -82,13 +82,25 @@ export function createTaskCreator(dependencies: CreateTaskDependencies) {
     const outcome = await dependencies.broker.submit(planned.signedAction);
     // A conflict here means a Task with this request id already exists,
     // which is the state a retry was trying to reach - the same treatment
-    // resolveWorkContext gives ensure_chat_task's outcome.
-    if (outcome.status !== "applied" && outcome.status !== "conflict") {
+    // resolveWorkContext gives ensure_chat_task's outcome. A superseded
+    // submission means the relay's idempotency claim on this request id was
+    // already won, most likely by an earlier attempt at this exact create -
+    // `planned.taskId` is derived from `requestId`, not from which event won
+    // the claim, so it names the same Task either way.
+    if (
+      outcome.status !== "applied" &&
+      outcome.status !== "conflict" &&
+      outcome.status !== "superseded"
+    ) {
       throw new Error(outcome.message);
     }
 
     const headEventId =
-      outcome.status === "applied" ? outcome.headEventId : null;
+      outcome.status === "applied"
+        ? outcome.headEventId
+        : outcome.status === "superseded"
+          ? outcome.winnerEventId
+          : null;
     const task = await dependencies.loadTask(planned.taskId, headEventId);
     if (!task.ok) {
       throw new Error(
