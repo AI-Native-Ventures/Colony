@@ -24,6 +24,10 @@ import type { CompanyActionBroker } from "./workRepository";
 export type CreateTaskRequest = {
   channelId: string;
   title: string;
+  /** The single persona accountable for the work. */
+  assigneePersonaId: string;
+  /** Personas mentioned alongside the assignee. Not accountable. */
+  watcherPersonaIds?: readonly string[];
   /**
    * This client's stable identity for this create attempt. A retry (a lost
    * receipt, resubmitting after a failure) reuses it; a fresh "create" click
@@ -41,6 +45,7 @@ export type CreateTaskDependencies = {
     requestId: string;
     channelId: string;
     title: string;
+    assigneePersonaIds: string[];
     relayPubkey: string;
   }) => Promise<UserTaskResult>;
   broker: Pick<CompanyActionBroker, "submit">;
@@ -73,6 +78,10 @@ export function createTaskCreator(dependencies: CreateTaskDependencies) {
       requestId: request.requestId,
       channelId: request.channelId,
       title: validation.title,
+      // One accountable persona. Watchers are mentioned on the kickoff
+      // message instead: an assignee list of several says several people own
+      // the task, which is the state this form exists to prevent.
+      assigneePersonaIds: [validation.assigneePersonaId],
       relayPubkey,
     });
 
