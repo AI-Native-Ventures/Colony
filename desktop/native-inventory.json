@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 437,
-    "rust_lines": 169628,
-    "tauri_coupled": 174,
+    "rust_total": 438,
+    "rust_lines": 169866,
+    "tauri_coupled": 175,
     "portable": 263,
-    "portable_lines": 96286,
+    "portable_lines": 96287,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -131,6 +131,7 @@
       "src-tauri/src/linux_media.rs",
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
+      "src-tauri/src/managed_agents/model_chain.rs",
       "src-tauri/src/managed_agents/nest.rs",
       "src-tauri/src/managed_agents/persona_events.rs",
       "src-tauri/src/managed_agents/personas.rs",
