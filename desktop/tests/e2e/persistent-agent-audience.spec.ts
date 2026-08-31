@@ -98,6 +98,22 @@ async function installAudienceFixtures(
   });
 }
 
+/**
+ * Budget for assertions that must observe the editor *before* the send
+ * resolves.
+ *
+ * These assertions are bounded on purpose: they distinguish the immediate
+ * post-submit editor state from the later success-hydration pass, so an
+ * unbounded wait would let hydration land first and assert the wrong thing.
+ *
+ * The bound only has to beat `sendMessageDelayMs`, not be small. At 500ms
+ * against a 1,500ms delay the margin was 1s, which CI CPU contention closed
+ * repeatedly — it blocked a promotion three times on 2026-08-31, each run
+ * passing on retry. Widening both keeps the same before/after semantic with a
+ * margin contention cannot plausibly eat.
+ */
+const PRE_HYDRATION_MS = 2_000;
+
 test("first thread open inherits explicitly addressed agents in authored order", async ({
   page,
 }) => {
@@ -137,7 +153,7 @@ test("persistent agents transition atomically before Enter-send resolves", async
   page,
 }) => {
   await seedAudience(page, [AGENT_A]);
-  await installAudienceFixtures(page, { sendMessageDelayMs: 1_500 });
+  await installAudienceFixtures(page, { sendMessageDelayMs: 8_000 });
   await openThread(page);
 
   const composer = threadComposer(page);
@@ -148,9 +164,9 @@ test("persistent agents transition atomically before Enter-send resolves", async
 
   // The network send is still pending, so this is the first observable
   // post-submit editor state rather than the later success hydration pass.
-  await expect(input).toHaveText("@Morgarita ", { timeout: 500 });
+  await expect(input).toHaveText("@Morgarita ", { timeout: PRE_HYDRATION_MS });
   await expect(input.locator(".agent-mention-highlight")).toHaveCount(1, {
-    timeout: 500,
+    timeout: PRE_HYDRATION_MS,
   });
   await expect(input).toBeFocused();
   await page.waitForTimeout(200);
@@ -204,7 +220,7 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
   page,
 }) => {
   await seedAudience(page, [AGENT_A]);
-  await installAudienceFixtures(page, { sendMessageDelayMs: 1_500 });
+  await installAudienceFixtures(page, { sendMessageDelayMs: 8_000 });
   await openGeneral(page);
 
   const composer = channelComposer(page);
@@ -218,11 +234,11 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
   await expect(input).toHaveText("@Morgarita hello");
   await input.press("Enter");
 
-  await expect(input).toHaveText("", { timeout: 500 });
+  await expect(input).toHaveText("", { timeout: PRE_HYDRATION_MS });
   await expect(input.locator("[data-placeholder]").first()).toHaveAttribute(
     "data-placeholder",
     "Message #general",
-    { timeout: 500 },
+    { timeout: PRE_HYDRATION_MS },
   );
   await expect(input).toBeFocused();
   await expect
