@@ -32,6 +32,21 @@ async function lastSendMessagePayload(
   blockReferenceTags?: string[][] | null;
   mentionPubkeys?: string[] | null;
 }> {
+  // Waited for, not read once. Pressing Enter starts the send; the payload is
+  // logged when the command reaches the bridge, which is later. Reading
+  // immediately failed under CI load with "no send_channel_message payload
+  // captured", which reads like the composer never sent rather than like a
+  // race. `waitForFunction` rather than `expect.poll` because a poll whose
+  // callback throws is not retried at all.
+  await page.waitForFunction(() => {
+    const log =
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{ command: string }>;
+        }
+      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [];
+    return log.some((entry) => entry.command === "send_channel_message");
+  });
   return page.evaluate(() => {
     const log =
       (
