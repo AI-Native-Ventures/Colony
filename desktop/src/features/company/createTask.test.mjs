@@ -165,6 +165,7 @@ test("a superseded submission is treated the same as applied - the task already 
     channelId: CHANNEL_ID,
     title: "Ship the thing",
     requestId: "11111111-1111-4111-8111-111111111111",
+    assigneePersonaId: ASSIGNEE_PERSONA_ID,
   });
   assert.equal(task.id, "horizonlabs:task-1");
   assert.equal(calls.loadTask.length, 1);
@@ -191,6 +192,7 @@ test("a superseded submission whose task never appears still fails honestly", as
         channelId: CHANNEL_ID,
         title: "Ship the thing",
         requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: ASSIGNEE_PERSONA_ID,
       }),
     /could not be read back/i,
   );
