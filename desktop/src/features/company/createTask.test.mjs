@@ -74,8 +74,8 @@ function stack({ brokerOutcome, loadTask } = {}) {
         );
       },
     },
-    loadTask: async (taskId) => {
-      calls.loadTask.push(taskId);
+    loadTask: async (taskId, headEventId) => {
+      calls.loadTask.push([taskId, headEventId]);
       return (
         loadTask ?? {
           ok: true,
@@ -102,6 +102,10 @@ test("a valid submission publishes the signed action and reads the task back", a
   assert.equal(calls.createUserTask[0].relayPubkey, RELAY);
   assert.equal(calls.submit.length, 1);
   assert.equal(calls.loadTask.length, 1);
+  // The applied receipt's head event id reaches the read-back, so it can
+  // read the exact event the relay just wrote instead of waiting on a tag
+  // index to catch up.
+  assert.deepEqual(calls.loadTask[0], ["horizonlabs:task-1", "h".repeat(64)]);
 });
 
 test("an invalid form never reaches the network", async () => {
@@ -135,6 +139,9 @@ test("a conflict is treated the same as applied - the task already exists", asyn
   });
   assert.equal(task.id, "horizonlabs:task-1");
   assert.equal(calls.loadTask.length, 1);
+  // A conflict names no head, so the read-back falls back to its ordinary
+  // coordinate lookup rather than being handed a stale or absent id.
+  assert.deepEqual(calls.loadTask[0], ["horizonlabs:task-1", null]);
 });
 
 test("a rejected action surfaces the relay's message rather than pretending success", async () => {

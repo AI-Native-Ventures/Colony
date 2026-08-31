@@ -44,7 +44,10 @@ export type CreateTaskDependencies = {
     relayPubkey: string;
   }) => Promise<UserTaskResult>;
   broker: Pick<CompanyActionBroker, "submit">;
-  loadTask: (taskId: string) => ReturnType<typeof companyRepository.getTask>;
+  loadTask: (
+    taskId: string,
+    headEventId: string | null,
+  ) => ReturnType<typeof companyRepository.getTaskAfterAction>;
 };
 
 export function createTaskCreator(dependencies: CreateTaskDependencies) {
@@ -84,7 +87,9 @@ export function createTaskCreator(dependencies: CreateTaskDependencies) {
       throw new Error(outcome.message);
     }
 
-    const task = await dependencies.loadTask(planned.taskId);
+    const headEventId =
+      outcome.status === "applied" ? outcome.headEventId : null;
+    const task = await dependencies.loadTask(planned.taskId, headEventId);
     if (!task.ok) {
       throw new Error(
         "The task was recorded but could not be read back. Trying again is safe.",
@@ -107,5 +112,6 @@ export const createTaskFromForm = createTaskCreator({
     ),
   createUserTask,
   broker: companyActionBroker,
-  loadTask: (taskId) => companyRepository.getTask(taskId),
+  loadTask: (taskId, headEventId) =>
+    companyRepository.getTaskAfterAction(taskId, headEventId),
 });

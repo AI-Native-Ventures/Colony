@@ -62,6 +62,7 @@ function resolver({
   companyHead = COMPANY_HEAD,
 } = {}) {
   const order = [];
+  const loadTaskCalls = [];
   const resolve = createWorkContextResolver({
     relaySelf: async () => RELAY,
     fetchCompanyHead: async () => companyHead,
@@ -81,12 +82,13 @@ function resolver({
         return brokerOutcome;
       },
     },
-    loadTask: async () => {
+    loadTask: async (taskId, headEventId) => {
       order.push("read-back");
+      loadTaskCalls.push([taskId, headEventId]);
       return taskResult;
     },
   });
-  return { resolve, order };
+  return { resolve, order, loadTaskCalls };
 }
 
 test("the task is created and confirmed before the message has any tags", async () => {
@@ -155,6 +157,37 @@ test("a conflict means the task is already there, and the send proceeds", async 
   });
   const context = await resolve(REQUEST);
   assert.equal(context.taskId, TASK_ID);
+});
+
+// An applied receipt names the exact event the relay just wrote. Reading it
+// by that id, rather than waiting on the `#d` tag filter to catch up, is
+// what a single-shot `getTask` had no way to do.
+test("an applied receipt's head event id is handed to the read-back", async () => {
+  const { resolve, loadTaskCalls } = resolver({
+    brokerOutcome: {
+      status: "applied",
+      receiptEventId: "r".repeat(64),
+      headEventId: "h".repeat(64),
+      target: "t",
+    },
+  });
+  await resolve(REQUEST);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, "h".repeat(64)]]);
+});
+
+// A conflict receipt names no head, so the read-back falls back to its
+// ordinary coordinate lookup rather than being handed a stale or absent id.
+test("a conflict carries no head event id to the read-back", async () => {
+  const { resolve, loadTaskCalls } = resolver({
+    brokerOutcome: {
+      status: "conflict",
+      receiptEventId: "r".repeat(64),
+      target: "t",
+      message: "This record changed while the request was in flight.",
+    },
+  });
+  await resolve(REQUEST);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, null]]);
 });
 
 test("an unrecorded task stops the send rather than buying an unattributed turn", async () => {

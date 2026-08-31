@@ -58,7 +58,10 @@ export type WorkContextDependencies = {
     relayPubkey: string;
   }) => Promise<ChatTaskResult>;
   broker: Pick<CompanyActionBroker, "submit">;
-  loadTask: (taskId: string) => ReturnType<typeof companyRepository.getTask>;
+  loadTask: (
+    taskId: string,
+    headEventId: string | null,
+  ) => ReturnType<typeof companyRepository.getTaskAfterAction>;
 };
 
 /**
@@ -126,7 +129,12 @@ export function createWorkContextResolver(
       );
     }
 
-    const task = await dependencies.loadTask(planned.taskId);
+    // A conflict receipt names no head — the read still goes by coordinate —
+    // but an applied one does, and reading that exact event sidesteps
+    // whatever indexing the `#d` tag filter otherwise waits on.
+    const headEventId =
+      outcome.status === "applied" ? outcome.headEventId : null;
+    const task = await dependencies.loadTask(planned.taskId, headEventId);
     if (!task.ok) {
       throw new Error(
         "The work record for this message could not be read back, so the message has not been sent. Trying again is safe.",
@@ -155,5 +163,6 @@ export const resolveWorkContext = createWorkContextResolver({
     ),
   ensureTask: ensureChatTask,
   broker: companyActionBroker,
-  loadTask: (taskId) => companyRepository.getTask(taskId),
+  loadTask: (taskId, headEventId) =>
+    companyRepository.getTaskAfterAction(taskId, headEventId),
 });

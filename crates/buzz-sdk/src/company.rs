@@ -8,12 +8,13 @@ use buzz_core::{
         serde_enum_slug, validate_company, Cohort, CompanyContractError, CompanyProfile,
         CompanyTask, Initiative, Template, TemplateStage, COMMUNITY_PROFILE_ID,
     },
+    company_roster::approval_timestamp,
     kind::{
         KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
         KIND_INITIATIVE, KIND_PERSONA, KIND_TASK, KIND_TEAM, KIND_TEMPLATE,
     },
 };
-use nostr::{Event, EventBuilder, EventId, Kind, PublicKey, Tag};
+use nostr::{Event, EventBuilder, EventId, Kind, PublicKey, Tag, Timestamp};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -302,11 +303,24 @@ pub fn build_company_action(action: &CompanyAction) -> Result<EventBuilder, Comp
             &idempotency_key,
         ])?,
     ];
+    // A retry has to sign the exact same bytes as the first attempt, or its
+    // event id changes and the relay's idempotency claim — keyed on this
+    // action's own idempotency key (see `buzz-relay/company_broker.rs`'s
+    // `find_company_action_claim`) — never recognises the retry as the
+    // original: `broker_duplicate_outcome` in `buzz-relay/handlers/ingest.rs`
+    // only accepts a duplicate whose submitted event id equals the one that
+    // won the claim, and a wall-clock `created_at` makes every attempt a
+    // different id forever. Deriving it from the idempotency key instead,
+    // the same mapping `approval_timestamp` already uses for company_roster
+    // approvals, makes every signing of the same action byte-identical with
+    // no plumbing required at any of `build_company_action`'s callers.
+    let created_at = Timestamp::from(approval_timestamp(&idempotency_key) as u64);
     Ok(EventBuilder::new(
         Kind::Custom(KIND_COMPANY_ACTION as u16),
         canonical_content(&content, "company action")?,
     )
-    .tags(tags))
+    .tags(tags)
+    .custom_created_at(created_at))
 }
 
 /// Parse the exact owner-signable Company Action envelope.
@@ -1346,6 +1360,66 @@ mod tests {
         let expected = canonical(&CompanyActionContent::from_action(&action));
         assert_eq!(event.content, expected);
         assert_eq!(parse_company_action(&event).expect("round trip"), action);
+    }
+
+    // The relay's idempotency claim is keyed on this action's own idempotency
+    // key and compares the retry's event id against whichever event won the
+    // claim (`broker_duplicate_outcome` in buzz-relay). A wall-clock
+    // `created_at` would make every attempt a different event forever, so a
+    // retry has to sign the exact same bytes as the first attempt.
+    #[test]
+    fn a_retry_signs_byte_identical_events() {
+        for operation in [
+            CompanyActionOperation::Create,
+            CompanyActionOperation::Update,
+            CompanyActionOperation::Transition,
+        ] {
+            let action = company_action(operation);
+            let keys = relay_keys();
+            let first = build_company_action(&action)
+                .expect("first attempt builds")
+                .sign_with_keys(&keys)
+                .expect("first attempt signs");
+            let second = build_company_action(&action)
+                .expect("retry builds")
+                .sign_with_keys(&keys)
+                .expect("retry signs");
+            assert_eq!(
+                first.id, second.id,
+                "retry must reuse the original event id"
+            );
+            assert_eq!(first.created_at, second.created_at);
+            assert_eq!(first.content, second.content);
+            assert_eq!(first.tags, second.tags);
+        }
+    }
+
+    // A deterministic `created_at` must still be plausible: not 1970, not
+    // decades out, and not the fixed instant every action shares regardless
+    // of what it carries — only actions with an identical idempotency key
+    // may collide.
+    #[test]
+    fn the_deterministic_created_at_is_plausible_and_varies_with_the_action() {
+        const COLONY_EPOCH: u64 = 1_767_225_600; // 2026-01-01T00:00:00Z
+        const ONE_YEAR_SECS: u64 = 31_536_000;
+
+        let action = company_action(CompanyActionOperation::Create);
+        let event = signed(build_company_action(&action).expect("builds"));
+        let created_at = event.created_at.as_secs();
+        assert!(
+            (COLONY_EPOCH..COLONY_EPOCH + ONE_YEAR_SECS).contains(&created_at),
+            "created_at {created_at} is not a plausible date"
+        );
+
+        let mut other = action.clone();
+        other.idempotency_key =
+            Uuid::parse_str("017f22e2-79b0-7cc3-98c4-dc0c0c073991").expect("idempotency UUID");
+        let other_event = signed(build_company_action(&other).expect("builds"));
+        assert_ne!(
+            event.created_at, other_event.created_at,
+            "two different sends must not collide on the same timestamp"
+        );
+        assert_ne!(event.id, other_event.id);
     }
 
     #[test]
