@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 437,
-    "rust_lines": 169548,
+    "rust_lines": 169628,
     "tauri_coupled": 174,
     "portable": 263,
     "portable_lines": 96286,
@@ -451,10 +451,10 @@
     ]
   },
   "commands": {
-    "registered": 349,
-    "defined": 349,
+    "registered": 350,
+    "defined": 350,
     "by_reach": {
-      "frontend": 343,
+      "frontend": 344,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -467,7 +467,7 @@
   },
   "params": {
     "AppHandle": 360,
-    "State": 261,
+    "State": 262,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
@@ -475,7 +475,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 357,
-      "State": 261,
+      "State": 262,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -576,6 +576,7 @@
     "src-tauri/src/commands/agent_config.rs": 5,
     "src-tauri/src/commands/terminal.rs": 5,
     "src-tauri/src/commands/workspace.rs": 4,
+    "src-tauri/src/commands/media_raw.rs": 4,
     "src-tauri/src/commands/pairing.rs": 4,
     "src-tauri/src/tray_menu.rs": 4,
     "src-tauri/src/colony_provisioning.rs": 4,
@@ -585,7 +586,6 @@
     "src-tauri/src/commands/canvas.rs": 4,
     "src-tauri/src/commands/initiative.rs": 3,
     "src-tauri/src/commands/task_transition.rs": 3,
-    "src-tauri/src/commands/media_raw.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
@@ -3977,6 +3977,15 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriMedia.ts:32"
+      ]
+    },
+    "upload_png_verbatim": {
+      "defining_file": "src-tauri/src/commands/media_raw.rs",
+      "module": "media_raw",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/uploadPngVerbatim.ts:24"
       ]
     },
     "validate_repos_dir": {
