@@ -83,7 +83,7 @@ export function BlocksCatalogList({
   }
 
   return (
-    <div className="border-b border-border/50">
+    <div className="-mt-4 border-b border-border/50">
       {items.map((item) => (
         <BlockCatalogCard
           item={item}
