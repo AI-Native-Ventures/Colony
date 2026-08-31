@@ -230,20 +230,44 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
     .getByTestId("mention-autocomplete")
     .getByText("Morgarita", { exact: true })
     .click();
-  // Wait for the chip's trailing space to land before typing. Selecting a
-  // mention inserts "@Morgarita " including the space, but `pressSequentially`
-  // can begin before that commit renders — the keystrokes then land against
-  // "@Morgarita" and the text concatenates to "@Morgaritahello", which never
-  // converges and burns the full 15s timeout.
+  // Selecting a mention commits "@Morgarita " and then places the caret after
+  // the trailing space. Those are two steps, and typing between them is what
+  // makes this spec flake: the space is already present, so waiting for the
+  // text alone proves nothing, but the caret still sits *before* it, so
+  // "hello" inserts ahead of the space and the value becomes
+  // "@Morgaritahello " — which `toHaveText` then normalises to
+  // "@Morgaritahello", the exact failure observed on 2026-08-31.
   //
-  // This must read `textContent` rather than use `toHaveText`, which normalises
-  // whitespace: `toHaveText("@Morgarita ")` also matches "@Morgarita", so it
-  // passes whether or not the space arrived and guards nothing. That is exactly
-  // how a first attempt at this race shipped and kept failing. The sibling test
-  // above checks the same `endsWithSpace` property for the same reason.
+  // Two earlier attempts missed this. `toHaveText("@Morgarita ")` normalises
+  // whitespace and so also matches "@Morgarita", guarding nothing at all; the
+  // textContent poll that replaced it proved the space had landed but said
+  // nothing about where the caret was. Wait for the caret too, using the same
+  // `atDocumentEnd` probe the sibling test above already relies on.
   await expect
-    .poll(() => input.evaluate((element) => element.textContent ?? ""))
-    .toBe("@Morgarita ");
+    .poll(() =>
+      input.evaluate((element) => {
+        const selection = window.getSelection();
+        const viewDesc = (
+          element as HTMLElement & {
+            pmViewDesc?: {
+              posFromDOM: (node: Node, offset: number, bias: number) => number;
+              size: number;
+            };
+          }
+        ).pmViewDesc;
+        if (!selection?.anchorNode || !viewDesc) return null;
+        const position = viewDesc.posFromDOM(
+          selection.anchorNode,
+          selection.anchorOffset,
+          1,
+        );
+        return {
+          text: element.textContent ?? "",
+          atDocumentEnd: position + 1 === viewDesc.size - 2,
+        };
+      }),
+    )
+    .toEqual({ text: "@Morgarita ", atDocumentEnd: true });
   await input.pressSequentially("hello");
   await expect(input).toHaveText("@Morgarita hello");
   await input.press("Enter");
