@@ -46,8 +46,6 @@ export type CreateChannelFormState = {
   setEphemeral: (value: boolean) => void;
   ttlSeconds: number;
   setTtlSeconds: (value: number) => void;
-  typePopoverOpen: boolean;
-  setTypePopoverOpen: (open: boolean) => void;
   errorMessage: string | null;
   /** Optional project this channel is linked to right after it is created. */
   project: CreateChannelProjectField;
@@ -86,7 +84,6 @@ export function useCreateChannelForm({
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<
     string | null
   >(null);
-  const [typePopoverOpen, setTypePopoverOpen] = React.useState(false);
   const nameInputRef = React.useRef<HTMLInputElement>(null);
   const visibilityTouchedRef = React.useRef(false);
 
@@ -105,7 +102,6 @@ export function useCreateChannelForm({
     setTtlSeconds(DEFAULT_EPHEMERAL_TTL_SECONDS);
     setErrorMessage(null);
     setSelectedTemplateId(null);
-    setTypePopoverOpen(false);
     project.reset();
     visibilityTouchedRef.current = false;
 
@@ -224,8 +220,6 @@ export function useCreateChannelForm({
     setEphemeral,
     ttlSeconds,
     setTtlSeconds,
-    typePopoverOpen,
-    setTypePopoverOpen,
     errorMessage,
     project,
     selectedTemplateId,
