@@ -307,6 +307,9 @@ export function CommunityOnboardingFlow({
             draft: alreadyDelivered ? null : draft,
             // The legacy profile stage already published kind:0.
             profileDisplayName: null,
+            // This path already wrote the profile, avatar included, on its own
+            // profile stage; completion must not publish a second kind:0.
+            profileAvatarUrl: null,
           },
           DEFAULT_COMPLETE_FIRST_RUN_IO,
         );

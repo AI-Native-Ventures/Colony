@@ -48,6 +48,7 @@ test("happy path: channels, profile, task, gate key, navigation", async () => {
       pubkey: "pk1",
       draft,
       profileDisplayName: "Aisha Bello",
+      profileAvatarUrl: null,
     },
     io,
   );
@@ -80,6 +81,7 @@ test("a failed brief still lands the founder in Welcome", async () => {
         pubkey: "pk1",
         draft,
         profileDisplayName: null,
+        profileAvatarUrl: null,
       },
       io,
     ),
@@ -97,6 +99,7 @@ test("skips delivery when the marker already exists", async () => {
       pubkey: "pk",
       draft,
       profileDisplayName: null,
+      profileAvatarUrl: null,
     },
     io,
   );
@@ -114,6 +117,7 @@ test("skips delivery when draft is null or content empty", async () => {
       pubkey: "pk",
       draft: null,
       profileDisplayName: null,
+      profileAvatarUrl: null,
     },
     io,
   );
@@ -132,6 +136,7 @@ test("throws when starter channels fail without a focus channel", async () => {
         pubkey: "pk",
         draft: null,
         profileDisplayName: null,
+        profileAvatarUrl: null,
       },
       io,
     ),
@@ -152,9 +157,84 @@ test("profile write failure does not block completion", async () => {
       pubkey: "pk",
       draft: null,
       profileDisplayName: "Aisha",
+      profileAvatarUrl: null,
     },
     io,
   );
   assert.equal(result.focusChannelId, "chan-1");
   assert.ok(calls.includes("complete:pk:wss://r"));
+});
+
+test("the founder's photo is published with their name, in one profile write", async () => {
+  // Collected on the account screen; the previous flow had a dedicated avatar
+  // step and the redesign folded it away, which silently dropped the picture.
+  // One kind:0 carries both: writing them separately would publish two
+  // replaceable events where one will do.
+  const written = [];
+  const { io } = makeIo({
+    updateProfile: async (input) => {
+      written.push(input);
+      return {};
+    },
+  });
+  await completeFirstRun(
+    {
+      queryClient: {},
+      relayUrl: "wss://acme.test",
+      pubkey: "pk1",
+      draft,
+      profileDisplayName: "Aisha Bello",
+      profileAvatarUrl: "https://cdn.test/aisha.png",
+    },
+    io,
+  );
+  assert.deepEqual(written, [
+    { displayName: "Aisha Bello", avatarUrl: "https://cdn.test/aisha.png" },
+  ]);
+});
+
+test("skipping the photo leaves an existing avatar alone", async () => {
+  // `avatarUrl` is omitted rather than sent blank: kind:0 is replaceable, so a
+  // blank field would clear a picture the founder set on another device.
+  const written = [];
+  const { io } = makeIo({
+    updateProfile: async (input) => {
+      written.push(input);
+      return {};
+    },
+  });
+  await completeFirstRun(
+    {
+      queryClient: {},
+      relayUrl: "wss://acme.test",
+      pubkey: "pk1",
+      draft,
+      profileDisplayName: "Aisha Bello",
+      profileAvatarUrl: "   ",
+    },
+    io,
+  );
+  assert.deepEqual(written, [{ displayName: "Aisha Bello" }]);
+});
+
+test("a photo with no name still reaches the profile", async () => {
+  const written = [];
+  const { io } = makeIo({
+    updateProfile: async (input) => {
+      written.push(input);
+      return {};
+    },
+  });
+  await completeFirstRun(
+    {
+      queryClient: {},
+      relayUrl: "wss://acme.test",
+      pubkey: "pk1",
+      draft,
+      profileDisplayName: null,
+      profileAvatarUrl: "https://cdn.test/aisha.png",
+    },
+    io,
+  );
+  assert.deepEqual(written, [{ avatarUrl: "https://cdn.test/aisha.png" }]);
 });
