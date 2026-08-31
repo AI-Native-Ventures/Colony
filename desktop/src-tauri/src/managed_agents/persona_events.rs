@@ -4,6 +4,7 @@
 //! `(pubkey, kind, d_tag)` where `d_tag` is the plaintext persona slug.
 
 use std::collections::BTreeMap;
+use std::sync::{LazyLock, Mutex};
 
 use buzz_core_pkg::kind::{event_is_shared, KIND_PERSONA};
 use nostr::{EventBuilder, Kind, Tag};
@@ -11,6 +12,39 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentDefinition, ManagedAgentRecord};
 use crate::app_state::AppState;
+
+/// A retained coordinate: `(kind, pubkey, d_tag)`.
+type EventCoordinate = (u32, String, String);
+
+/// Consecutive-failure count per retained coordinate. Global to the process
+/// rather than on `AppState`: the flush loop is the sole writer/reader (one
+/// `tauri::async_runtime::spawn` in `lib.rs`, ticking every 30s), so a
+/// `Mutex` here needs no wiring through `AppState` for what is otherwise a
+/// single-loop counter.
+static SYNC_FAILURE_STREAKS: LazyLock<Mutex<std::collections::HashMap<EventCoordinate, u32>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Sweeps a row must fail before it is surfaced to the user.
+///
+/// At the 30s sweep interval this is ~90s — long enough that a single
+/// transient relay blip does not toast, short enough that a genuinely stuck
+/// row (wrong timestamp, relay-rejected content, anything that repeats
+/// identically every sweep) is surfaced fast rather than after ten reports
+/// from the user over multiple days, which is what happened before this
+/// existed: the flush only ever `eprintln!`'d the reason, so a permanently
+/// refused event and an unreachable relay looked identical from the UI —
+/// which is to say, both looked like nothing was wrong.
+const STUCK_ROW_FAILURE_THRESHOLD: u32 = 3;
+
+/// Payload for the `event-sync-stuck` event emitted the moment a row crosses
+/// [`STUCK_ROW_FAILURE_THRESHOLD`]. Emitted once per streak, not on every
+/// subsequent failing sweep, so a still-stuck row does not re-toast every 30s.
+#[derive(Debug, Clone, Serialize)]
+struct StuckRowPayload {
+    kind: u32,
+    d_tag: String,
+    error: String,
+}
 
 /// The JSON body stored in a persona event's content field.
 ///
@@ -240,7 +274,7 @@ pub async fn flush_pending_events(
 ) -> Result<u32, String> {
     let relay_url = crate::relay::relay_ws_url_with_override(state);
     let owner_keys = state.signing_keys()?;
-    flush_pending_events_at(db_path, state, &relay_url, &owner_keys).await
+    flush_pending_events_at(db_path, state, &relay_url, &owner_keys, None).await
 }
 
 /// Resolve and flush only the currently active `(relay, owner)` scope.
@@ -253,7 +287,14 @@ pub async fn flush_active_pending_events(
     state: &AppState,
 ) -> Result<u32, String> {
     let scope = crate::managed_agents::retention::active_retention_scope(app, state)?;
-    flush_pending_events_at(&scope.db_path, state, &scope.relay_url, &scope.owner_keys).await
+    flush_pending_events_at(
+        &scope.db_path,
+        state,
+        &scope.relay_url,
+        &scope.owner_keys,
+        Some(app),
+    )
+    .await
 }
 
 async fn flush_pending_events_at(
@@ -261,6 +302,7 @@ async fn flush_pending_events_at(
     state: &AppState,
     relay_url: &str,
     owner_keys: &nostr::Keys,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<u32, String> {
     use crate::managed_agents::retention::{
         deferred_behind_failed_tombstone, get_pending_sync, get_retained_event, mark_synced,
@@ -351,8 +393,11 @@ async fn flush_pending_events_at(
             if current.kind == 5 {
                 failed_tombstones.insert((current.pubkey.clone(), current.d_tag.clone()));
             }
+            record_sync_failure(app, current.kind, &current.pubkey, &current.d_tag, &error);
             continue; // stays pending for the next sweep
         }
+
+        clear_sync_failure(current.kind, &current.pubkey, &current.d_tag);
 
         let conn = open_retention_db(db_path)?;
         mark_synced(
@@ -367,6 +412,53 @@ async fn flush_pending_events_at(
     }
 
     Ok(flushed)
+}
+
+/// Bump a coordinate's consecutive-failure streak and, the moment it crosses
+/// [`STUCK_ROW_FAILURE_THRESHOLD`], emit `event-sync-stuck` so the frontend
+/// can toast it. `app` is `None` in tests (`flush_pending_events`), which
+/// still exercises the counting but never emits. Returns the streak after the
+/// bump, so tests can assert on it directly without an `AppHandle`.
+fn record_sync_failure(
+    app: Option<&tauri::AppHandle>,
+    kind: u32,
+    pubkey: &str,
+    d_tag: &str,
+    error: &str,
+) -> u32 {
+    let key = (kind, pubkey.to_string(), d_tag.to_string());
+    let mut streaks = SYNC_FAILURE_STREAKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let streak = streaks.entry(key).or_insert(0);
+    *streak += 1;
+    let streak = *streak;
+    drop(streaks);
+    if streak == STUCK_ROW_FAILURE_THRESHOLD {
+        if let Some(app) = app {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "event-sync-stuck",
+                StuckRowPayload {
+                    kind,
+                    d_tag: d_tag.to_string(),
+                    error: error.to_string(),
+                },
+            );
+        }
+    }
+    streak
+}
+
+/// Clear a coordinate's failure streak once it publishes successfully, so a
+/// later failure at the same coordinate (a fresh edit, say) starts counting
+/// from zero rather than re-toasting immediately.
+fn clear_sync_failure(kind: u32, pubkey: &str, d_tag: &str) {
+    let key = (kind, pubkey.to_string(), d_tag.to_string());
+    SYNC_FAILURE_STREAKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&key);
 }
 
 /// How stale a retained event may be before publishing re-signs it.
@@ -622,3 +714,6 @@ mod tests;
 
 #[cfg(test)]
 mod freshness_tests;
+
+#[cfg(test)]
+mod flush_barrier_tests;
