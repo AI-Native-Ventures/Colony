@@ -845,6 +845,58 @@ test("a receipt that never arrives is reported as unresolved, not as failure", a
   assert.equal(polls, 3);
 });
 
+// The relay's idempotency claim on this action was already won - by an
+// earlier attempt at this exact send, most likely, since `created_at` is
+// real wall-clock time and every retry signs a different event id. That is
+// the goal state a retry was trying to reach, not a failure, and the
+// winning event's id is right there in the relay's own wording.
+test("a superseded publish resolves to the winning event, not a thrown error", async () => {
+  const action = signedAction();
+  let polled = false;
+  const broker = createCompanyActionBroker({
+    publish: async () => {
+      throw new Error(
+        `conflict: superseded by original action ${"9".repeat(64)}`,
+      );
+    },
+    fetchFirstEvent: async () => {
+      polled = true;
+      return null;
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+  const outcome = await broker.submit(JSON.stringify(action));
+  assert.equal(outcome.status, "superseded");
+  assert.equal(outcome.winnerEventId, "9".repeat(64));
+  assert.equal(outcome.actionEventId, action.id);
+  // The retry's own event was never stored, so there is nothing to poll a
+  // receipt for - polling would only wait out the full attempt budget for
+  // something that can never arrive.
+  assert.equal(polled, false);
+});
+
+// Only the relay's exact "superseded by original action <id>" wording is
+// recognised - any other rejection (a network failure, a genuine refusal)
+// must still surface as an error rather than being swallowed.
+test("a publish rejection that is not a superseded claim still throws", async () => {
+  const action = signedAction();
+  const broker = createCompanyActionBroker({
+    publish: async () => {
+      throw new Error(
+        "conflict: the record changed since this request was prepared",
+      );
+    },
+    fetchFirstEvent: async () => null,
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+  await assert.rejects(
+    () => broker.submit(JSON.stringify(action)),
+    /record changed/,
+  );
+});
+
 test("only a company action can be submitted through the broker", async () => {
   const broker = createCompanyActionBroker({
     publish: async (event) => event,
@@ -880,6 +932,159 @@ test("no company record is written to local storage", async () => {
     else globalThis.localStorage = previous;
   }
   assert.deepEqual(writes, []);
+});
+
+// The ordinary lookup (a task board render, a thread reference someone
+// clicked) has no write it just made to wait out: a miss means the Task
+// genuinely does not exist here, so it must fail on the first try. Retrying
+// it would just make every non-existent task take a second longer to report.
+test("the ordinary task read stays single-shot even if retry options are supplied", async () => {
+  resetCompanyRepositoryState();
+  let calls = 0;
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      calls += 1;
+      return [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {
+      throw new Error("must not be reached");
+    },
+    taskReadBackAttempts: 5,
+    taskReadBackIntervalMs: 10,
+  });
+
+  const result = await repository.getTask(TASK.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "missing-head");
+  assert.equal(calls, 1);
+});
+
+// The write this reads back already happened — the caller only gets here
+// after an applied or conflicting receipt — so a miss on the first try is the
+// read lagging the write, not the Task being absent. Refusing to send on that
+// first miss is the bug: the send is safe to retry, but the retry rebuilds
+// byte-identical bytes and lands on the same idempotency claim, which is a
+// worse user experience than this read simply trying again.
+test("a task read-back retries past index lag instead of failing on the first miss", async () => {
+  resetCompanyRepositoryState();
+  const head = taskHead();
+  let calls = 0;
+  const delays = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      calls += 1;
+      return calls < 3 ? [] : [head];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+    taskReadBackAttempts: 5,
+    taskReadBackIntervalMs: 50,
+  });
+
+  const result = await repository.getTaskAfterAction(TASK.id);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.id, TASK.id);
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [50, 50]);
+});
+
+test("a task read-back gives up after its bounded attempts", async () => {
+  resetCompanyRepositoryState();
+  let calls = 0;
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      calls += 1;
+      return [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    taskReadBackAttempts: 3,
+    taskReadBackIntervalMs: 10,
+  });
+
+  const result = await repository.getTaskAfterAction(TASK.id);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "missing-head");
+  assert.equal(calls, 3);
+});
+
+// An applied receipt names the exact event the relay just wrote. Reading it
+// by id hits the event store directly rather than whatever the `#d` tag
+// filter indexes, so it is tried first when the caller has one.
+test("a task read-back with a head event id queries by id, not by coordinate", async () => {
+  resetCompanyRepositoryState();
+  const head = taskHead();
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      return [head];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+
+  const result = await repository.getTaskAfterAction(TASK.id, head.id);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.id, TASK.id);
+  assert.equal(filters.length, 1);
+  assert.deepEqual(filters[0].ids, [head.id]);
+  assert.equal(filters[0]["#d"], undefined);
+});
+
+// A head event id that has not shown up yet still recovers on retry, the
+// same way the coordinate path does.
+test("a task read-back by head event id also retries past index lag", async () => {
+  resetCompanyRepositoryState();
+  const head = taskHead();
+  let calls = 0;
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      calls += 1;
+      return calls < 2 ? [] : [head];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    taskReadBackAttempts: 5,
+    taskReadBackIntervalMs: 10,
+  });
+
+  const result = await repository.getTaskAfterAction(TASK.id, head.id);
+  assert.equal(result.ok, true);
+  assert.equal(calls, 2);
+});
+
+// A read cancelled by a community switch is not indexing lag — retrying it
+// would only risk delivering the old community's Task into the new one.
+test("a task read-back does not retry past a community switch", async () => {
+  resetCompanyRepositoryState();
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const repository = createCompanyRepository({
+    fetchEvents: async () => {
+      calls += 1;
+      await gate;
+      return [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    taskReadBackAttempts: 5,
+    taskReadBackIntervalMs: 10,
+  });
+
+  const pending = repository.getTaskAfterAction(TASK.id);
+  resetCompanyRepositoryState();
+  release();
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "cancelled");
+  assert.equal(calls, 1);
 });
 
 /** The relay writes the bounce and outcome fields on every current head. A

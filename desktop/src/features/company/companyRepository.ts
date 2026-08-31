@@ -51,7 +51,26 @@ let repositoryGeneration = 0;
 export type CompanyRepositoryDependencies = {
   fetchEvents: (filter: RelaySubscriptionFilter) => Promise<RelayEvent[]>;
   relaySelf: () => Promise<string | null>;
+  delay?: (ms: number) => Promise<void>;
+  taskReadBackAttempts?: number;
+  taskReadBackIntervalMs?: number;
 };
+
+/**
+ * How long a Task read-back retries before giving up.
+ *
+ * The write it is reading back just applied — the relay's own receipt said
+ * so — so a miss here is the read side lagging the write side, not the Task
+ * being absent. `companyActionBroker.submit` already waits up to 20 * 400ms
+ * for that receipt; this is a smaller, bounded wait on the read that follows
+ * it, not a second copy of that budget.
+ */
+const DEFAULT_TASK_READBACK_ATTEMPTS = 5;
+const DEFAULT_TASK_READBACK_INTERVAL_MS = 300;
+
+function defaultDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * How the Work surfaces narrow a task list.
@@ -143,6 +162,7 @@ export function createCompanyRepository(
       kinds: number[];
       limit: number;
       authors?: string[];
+      ids?: string[];
     },
     collect: (
       events: RelayEvent[],
@@ -421,6 +441,97 @@ export function createCompanyRepository(
               );
         },
       );
+    },
+
+    /**
+     * Read a Task back right after publishing it, tolerating index lag.
+     *
+     * Distinct from `getTask` because the two calls have different premises:
+     * an ordinary lookup that finds nothing means the Task genuinely doesn't
+     * exist (or was never this community's), so it should fail fast. This is
+     * called only once a relay receipt has already confirmed the write
+     * happened — a miss here is the read lagging the write, not the Task
+     * being gone — so it is worth retrying.
+     *
+     * `headEventId` (the relay receipt's own event id, when the caller has
+     * one) is tried first: a lookup by `ids` hits the event store directly,
+     * ahead of whatever indexes the `#d` tag filter below depends on. Absent
+     * that — a conflict outcome names no head — or once the id lookup itself
+     * comes up empty, this falls back to the ordinary coordinate read.
+     */
+    async getTaskAfterAction(
+      taskId: string,
+      headEventId: string | null = null,
+    ): Promise<CompanyParseResult<CompanyTask>> {
+      const attempts =
+        dependencies.taskReadBackAttempts ?? DEFAULT_TASK_READBACK_ATTEMPTS;
+      const intervalMs =
+        dependencies.taskReadBackIntervalMs ??
+        DEFAULT_TASK_READBACK_INTERVAL_MS;
+      const wait = dependencies.delay ?? defaultDelay;
+
+      const readByCoordinate = () =>
+        read<CompanyTask>(
+          (relaySelfPubkey) => ({
+            kinds: [KIND_TASK],
+            authors: [relaySelfPubkey],
+            "#d": [taskId],
+            limit: 8,
+          }),
+          (events, relaySelfPubkey) => {
+            const task = collectHeads(
+              events,
+              relaySelfPubkey,
+              parseTaskHead,
+            ).find((record) => record.id === taskId);
+            return task
+              ? { ok: true, value: task }
+              : companyFailure<CompanyTask>(
+                  "missing-head",
+                  "That task does not exist on this community.",
+                );
+          },
+        );
+
+      const readByHeadEventId = (eventId: string) =>
+        read<CompanyTask>(
+          (relaySelfPubkey) => ({
+            kinds: [KIND_TASK],
+            authors: [relaySelfPubkey],
+            ids: [eventId],
+            limit: 1,
+          }),
+          (events, relaySelfPubkey) => {
+            const task = collectHeads(
+              events,
+              relaySelfPubkey,
+              parseTaskHead,
+            ).find((record) => record.id === taskId);
+            return task
+              ? { ok: true, value: task }
+              : companyFailure<CompanyTask>(
+                  "missing-head",
+                  "That task does not exist on this community.",
+                );
+          },
+        );
+
+      let last: CompanyParseResult<CompanyTask> = companyFailure(
+        "missing-head",
+        "That task does not exist on this community.",
+      );
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        last = headEventId
+          ? await readByHeadEventId(headEventId)
+          : await readByCoordinate();
+        if (last.ok) return last;
+        // A cancelled read (community switch mid-flight) is not indexing lag;
+        // retrying it would just deliver a stale result into the new
+        // community once it eventually resolves.
+        if (last.code === "cancelled") return last;
+        if (attempt < attempts - 1) await wait(intervalMs);
+      }
+      return last;
     },
   };
 }

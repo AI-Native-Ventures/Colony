@@ -65,6 +65,16 @@ pub struct RelayInfo {
     /// Relay's own signing pubkey (NIP-11 `self` field, NIP-43).
     #[serde(rename = "self", skip_serializing_if = "Option::is_none")]
     pub relay_self: Option<String>,
+    /// Ordered free-tier OpenRouter fallback chain the relay currently
+    /// recommends, best first.
+    ///
+    /// Advisory, not policy: a client is free to ignore it, and the field is
+    /// omitted entirely when the ranking job is disabled or has not yet
+    /// completed its first fetch. Omission means "no opinion", never "use
+    /// nothing" — a client that sees no field keeps whatever chain it already
+    /// had rather than clearing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_fallback_chain: Option<Vec<String>>,
 }
 
 /// Protocol and resource limits advertised in the NIP-11 document.
@@ -179,6 +189,11 @@ impl RelayInfo {
             limitation: Some(relay_limitation(max_message_length)),
             pairing_relay_url: pairing_relay_url.map(str::to_string),
             relay_self: relay_self.map(|s| s.to_string()),
+            // Read at document-build time rather than cached: the ranking loop
+            // republishes hourly, and a stale chain here would outlive the
+            // reason it changed.
+            model_fallback_chain: crate::model_ranking_feed::current_chain()
+                .map(|chain| chain.model_ids()),
         }
     }
 }
@@ -562,5 +577,56 @@ mod tests {
     #[should_panic(expected = "advertise_nip43=true requires relay_self=Some")]
     fn build_nip43_without_self_panics_in_debug() {
         let _ = RelayInfo::build(None, None, true, DEFAULT_MAX_FRAME_BYTES, None);
+    }
+
+    /// `LAST_CHAIN` is process-global, so these two tests would otherwise race:
+    /// whichever ran second would observe the other's chain. Serialising them is
+    /// the fix rather than merging them, because "omitted" and "present and
+    /// ordered" are separate claims and each deserves its own failure message.
+    static CHAIN_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A relay whose ranking job has not produced a chain must omit the field
+    /// rather than serve an empty array. Clients read omission as "no opinion"
+    /// and keep their existing chain; an empty array would read as "recommend
+    /// nothing" and drop every agent to a single model.
+    #[test]
+    fn an_unranked_relay_omits_the_chain_field() {
+        let _guard = CHAIN_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        crate::model_ranking_feed::forget_chain();
+        let info = RelayInfo::build(None, None, false, DEFAULT_MAX_FRAME_BYTES, None);
+        assert_eq!(info.model_fallback_chain, None);
+        let json = serde_json::to_value(&info).expect("serialize");
+        assert!(
+            json.get("model_fallback_chain").is_none(),
+            "an absent chain must not appear in the document at all"
+        );
+    }
+
+    /// A ranked relay advertises the chain in ranked order, so a client can
+    /// hand it to OpenRouter as an ordered `models` array unchanged.
+    #[test]
+    fn a_ranked_relay_advertises_the_chain_in_order() {
+        let _guard = CHAIN_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        use buzz_core::model_ranking::{ChainEntry, Placement, RankedChain};
+
+        let entry = |id: &str| ChainEntry {
+            model_id: id.to_string(),
+            coding_index: Some(50.0),
+            placement: Placement::Ranked,
+        };
+        crate::model_ranking_feed::remember_chain(RankedChain {
+            entries: vec![entry("z-ai/glm-5.2:free"), entry("minimax/minimax-m3:free")],
+            rejected: Vec::new(),
+        });
+
+        let info = RelayInfo::build(None, None, false, DEFAULT_MAX_FRAME_BYTES, None);
+        assert_eq!(
+            info.model_fallback_chain,
+            Some(vec![
+                "z-ai/glm-5.2:free".to_string(),
+                "minimax/minimax-m3:free".to_string(),
+            ])
+        );
+        crate::model_ranking_feed::forget_chain();
     }
 }
