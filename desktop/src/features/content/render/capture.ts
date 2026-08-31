@@ -25,6 +25,8 @@
  * deterministic bytes with their hash.
  */
 
+import { canonicalizePng } from "./canonicalPng";
+
 /** The result of one capture: bytes, their hash, and the diagnostic a test
  * or gate needs to prove the canvas was not blank. */
 export type CaptureResult = {
@@ -440,7 +442,9 @@ export async function captureCard(
       );
     }
     const variance = sampledLuminanceVariance(pixels);
-    const png = await toPngBytes(canvas);
+    // Canonicalised before hashing, not after: the relay refuses the chunks
+    // WebKit's encoder emits, and the report has to name bytes it accepts.
+    const png = canonicalizePng(await toPngBytes(canvas));
     return {
       height,
       pixels,
