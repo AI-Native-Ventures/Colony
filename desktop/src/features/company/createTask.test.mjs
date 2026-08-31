@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { createTaskCreator } from "./createTask.ts";
 
 const RELAY = "a".repeat(64);
+const ASSIGNEE_PERSONA_ID = "persona-cto";
 const CHANNEL_ID = "general";
 
 function companyHeadEvent() {
@@ -93,6 +94,7 @@ test("a valid submission publishes the signed action and reads the task back", a
     channelId: CHANNEL_ID,
     title: "  Ship the thing  ",
     requestId: "11111111-1111-4111-8111-111111111111",
+    assigneePersonaId: ASSIGNEE_PERSONA_ID,
   });
   assert.equal(task.id, "horizonlabs:task-1");
   assert.equal(calls.createUserTask.length, 1);
@@ -116,6 +118,7 @@ test("an invalid form never reaches the network", async () => {
         channelId: "",
         title: "Ship the thing",
         requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: ASSIGNEE_PERSONA_ID,
       }),
     /choose a channel/i,
   );
@@ -136,6 +139,7 @@ test("a conflict is treated the same as applied - the task already exists", asyn
     channelId: CHANNEL_ID,
     title: "Ship the thing",
     requestId: "11111111-1111-4111-8111-111111111111",
+    assigneePersonaId: ASSIGNEE_PERSONA_ID,
   });
   assert.equal(task.id, "horizonlabs:task-1");
   assert.equal(calls.loadTask.length, 1);
@@ -207,6 +211,7 @@ test("a rejected action surfaces the relay's message rather than pretending succ
         channelId: CHANNEL_ID,
         title: "Ship the thing",
         requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: ASSIGNEE_PERSONA_ID,
       }),
     /refused this company change/i,
   );
@@ -226,6 +231,7 @@ test("an unanswered action is reported as unresolved, not as a create", async ()
         channelId: CHANNEL_ID,
         title: "Ship the thing",
         requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: ASSIGNEE_PERSONA_ID,
       }),
     /has not answered/i,
   );
@@ -255,6 +261,7 @@ test("a community with no relay identity cannot create anything", async () => {
         channelId: CHANNEL_ID,
         title: "Ship the thing",
         requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: ASSIGNEE_PERSONA_ID,
       }),
     /no stable identity/i,
   );
@@ -284,8 +291,37 @@ test("a missing company head stops before anything is signed", async () => {
         channelId: CHANNEL_ID,
         title: "Ship the thing",
         requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: ASSIGNEE_PERSONA_ID,
       }),
     /no company record|has not described its business/i,
   );
   assert.equal(built, false);
+});
+
+test("the chosen assignee reaches the backend as the task's only assignee", async () => {
+  const { creator, calls } = stack();
+  await creator({
+    channelId: CHANNEL_ID,
+    title: "Ship the thing",
+    requestId: "11111111-1111-4111-8111-111111111111",
+    assigneePersonaId: ASSIGNEE_PERSONA_ID,
+  });
+  assert.deepEqual(calls.createUserTask[0].assigneePersonaIds, [
+    ASSIGNEE_PERSONA_ID,
+  ]);
+});
+
+test("a task with no assignee never reaches the backend", async () => {
+  const { creator, calls } = stack();
+  await assert.rejects(
+    () =>
+      creator({
+        channelId: CHANNEL_ID,
+        title: "Ship the thing",
+        requestId: "11111111-1111-4111-8111-111111111111",
+        assigneePersonaId: "",
+      }),
+    /Choose who does this task/i,
+  );
+  assert.equal(calls.createUserTask.length, 0);
 });
