@@ -169,7 +169,7 @@ export function BlockCatalogCard({
 
   return (
     <article
-      className="grid min-w-0 gap-6 border-t border-border/50 py-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:gap-12"
+      className="grid min-w-0 gap-6 border-t border-border/50 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:items-center lg:gap-12"
       data-block-catalog-handle={item.handle}
       data-testid={`block-catalog-card-${item.handle}`}
     >
@@ -198,7 +198,7 @@ export function BlockCatalogCard({
         />
       </div>
 
-      <figure className="min-w-0 rounded-lg bg-muted/25 p-5">
+      <figure className="min-w-0">
         <figcaption className="sr-only">
           {item.name} read-only preview
         </figcaption>
