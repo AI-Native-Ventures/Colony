@@ -128,6 +128,13 @@ export type ActionWorkflowSource = {
 export type ActionPingSource = {
   kind: "ping";
   ping: ThreadPing;
+  /**
+   * Who the "hand this to my lead" action reaches -- the asker's manager,
+   * resolved by `useReportingLineLookup` -- or null when there is nobody to
+   * hand off to (no manager on file, or the asker is already the top rung).
+   * The detail surface renders no such action at all when this is null.
+   */
+  delegateTarget: { pubkey: string; label: string } | null;
 };
 
 export type ActionSource =
@@ -221,6 +228,15 @@ export type ActionCenterProjectionInput = {
    * no pings, same convention as `workflows`.
    */
   pings?: readonly ThreadPing[];
+  /** Display labels for a ping's asker, keyed by `ping.authorPubkey`. Absent
+   * or missing an entry falls back to a truncated pubkey. */
+  pingAuthorLabelsByPubkey?: ReadonlyMap<string, string>;
+  /** A ping's delegate-to-lead target, keyed by `ping.id`. Absent or missing
+   * an entry means that ping's `delegateTarget` is null. */
+  pingDelegateTargetsById?: ReadonlyMap<
+    string,
+    { pubkey: string; label: string }
+  >;
   doneIds?: ReadonlySet<string>;
   /** Unix seconds used to decide which reminders are due. Defaults to now;
    * overridable so tests can pin the clock. */

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   PING_CANDIDATE_LIMIT,
+  resolvePingChannelName,
   resolvePingRootId,
   selectAllRootIds,
   selectPingCandidates,
@@ -133,6 +134,10 @@ test("qualifies and surfaces: the owner authored the thread root, no reply or re
   assert.equal(pings.length, 1);
   assert.equal(pings[0].id, pingId);
   assert.equal(pings[0].threadId, rootId);
+  // The asker is whoever signed the ping message itself, not the thread
+  // root's author -- PINGER signed both here, but the two roles are
+  // distinct in general (see the "posted before the ping" test below).
+  assert.equal(pings[0].authorPubkey, PINGER);
 });
 
 test("qualifies and surfaces: the owner posted in the thread before the ping, and hasn't since", () => {
@@ -345,4 +350,45 @@ test("a reply to a different thread root neither qualifies nor suppresses this p
   });
 
   assert.equal(pings.length, 1);
+});
+
+// --- resolvePingChannelName: the relay's feed bridge always sends an empty
+// `channel_name` (see `feed_item_from_event` in commands/messages.rs), so
+// this is the only place a ping's channel ever gets a real name. ---
+
+function pingFixture(overrides = {}) {
+  return {
+    id: "d".repeat(64),
+    authorPubkey: PINGER,
+    channelId: "channel-1",
+    channelName: "",
+    threadId: "d".repeat(64),
+    createdAt: 1_000,
+    content: "hey",
+    ...overrides,
+  };
+}
+
+test("resolvePingChannelName resolves an empty channelName from the channels list", () => {
+  const resolved = resolvePingChannelName(
+    pingFixture({ channelId: "channel-1", channelName: "" }),
+    new Map([["channel-1", "engineering"]]),
+  );
+  assert.equal(resolved.channelName, "engineering");
+});
+
+test("resolvePingChannelName keeps a channelName the candidate already carried, never overwrites it", () => {
+  const resolved = resolvePingChannelName(
+    pingFixture({ channelId: "channel-1", channelName: "general" }),
+    new Map([["channel-1", "engineering"]]),
+  );
+  assert.equal(resolved.channelName, "general");
+});
+
+test("resolvePingChannelName leaves channelName empty (an honest gap, not a guess) when the channel isn't in the list either", () => {
+  const resolved = resolvePingChannelName(
+    pingFixture({ channelName: "" }),
+    new Map(),
+  );
+  assert.equal(resolved.channelName, "");
 });

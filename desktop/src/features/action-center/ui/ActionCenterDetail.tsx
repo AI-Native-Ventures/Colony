@@ -161,6 +161,7 @@ export function ActionCenterDetail({
                 : undefined
             }
             source={source}
+            title={item.title}
           />
         </section>
       );

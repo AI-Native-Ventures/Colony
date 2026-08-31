@@ -101,6 +101,16 @@ export function useActionCenterItems({
     [channelsQuery.data],
   );
   const channelIdKey = memberChannelIds.join(",");
+  // Ping channel-name resolution (see `resolvePingChannelName`): the relay's
+  // feed bridge never fills `channel_name` on a mention, so this is the only
+  // place a ping's channel gets a real name.
+  const channelNamesById = React.useMemo(
+    () =>
+      new Map(
+        (channelsQuery.data ?? []).map((channel) => [channel.id, channel.name]),
+      ),
+    [channelsQuery.data],
+  );
 
   // The only way to discover a pending approval is to walk each workflow's
   // latest run and, when it is waiting on one, fetch that run's approvals —
@@ -206,9 +216,11 @@ export function useActionCenterItems({
     mentions,
     ownerPubkey,
     relaySelfPubkey: relayPubkey,
+    channelNamesById,
   });
   const reminders = remindersQuery.data ?? [];
-  const { lookup: reportingLineLookup } = useReportingLineLookup(communityId);
+  const { lookup: reportingLineLookup, rankLookup: reportingLineRankLookup } =
+    useReportingLineLookup(communityId);
   const resolvedAsks = resolvedAsksResult.resolvedAsks;
 
   // Escalation provenance (spec, resolved question 5): one batched `ids`
@@ -268,8 +280,13 @@ export function useActionCenterItems({
     for (const prior of priorAsksById.values()) {
       if (prior.audiencePubkey) pubkeys.add(prior.audiencePubkey);
     }
+    // A ping's asker name ("who is waiting on you") reuses this same batch
+    // rather than a second useUsersBatchQuery call.
+    for (const ping of threadPings.pings) {
+      pubkeys.add(ping.authorPubkey);
+    }
     return [...pubkeys].sort();
-  }, [openAsks.asks, priorAsksById, resolvedAsks]);
+  }, [openAsks.asks, priorAsksById, resolvedAsks, threadPings.pings]);
   const labelsQuery = useUsersBatchQuery(labelPubkeys, {
     enabled: labelPubkeys.length > 0,
   });
@@ -302,6 +319,28 @@ export function useActionCenterItems({
     }
     return notes;
   }, [openAsks.asks, reportingLineLookup]);
+
+  // Who a ping's "hand this to my lead" button reaches, per ping (spec item
+  // 4): the asker's manager, but only when the asker isn't already the top
+  // rung -- an executive has nobody above them to hand off to. Both reads
+  // come from `useReportingLineLookup`'s already-fetched sources, so this
+  // adds no new fetch.
+  const pingDelegateTargetsById = React.useMemo(() => {
+    const targets = new Map<string, { pubkey: string; label: string }>();
+    for (const ping of threadPings.pings) {
+      if (reportingLineRankLookup(ping.authorPubkey) === "executive") continue;
+      const { managerPubkey, managerLabel } = reportingLineLookup(
+        ping.authorPubkey,
+      );
+      if (!managerPubkey) continue;
+      targets.set(ping.id, {
+        pubkey: managerPubkey,
+        label: managerLabel ?? truncatePubkey(managerPubkey),
+      });
+    }
+    return targets;
+  }, [threadPings.pings, reportingLineLookup, reportingLineRankLookup]);
+
   const allItems = React.useMemo(
     () =>
       buildActionCenterItems({
@@ -316,6 +355,8 @@ export function useActionCenterItems({
         reminders,
         workflows: workflowSources,
         pings: threadPings.pings,
+        pingAuthorLabelsByPubkey: labelsByPubkey,
+        pingDelegateTargetsById,
         companyAskWindowSecs,
       }),
     [
@@ -325,6 +366,7 @@ export function useActionCenterItems({
       labelsByPubkey,
       localDoneIds,
       openAsks.asks,
+      pingDelegateTargetsById,
       priorAsksById,
       reminders,
       resolvedAsks,

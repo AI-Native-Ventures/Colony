@@ -21,7 +21,17 @@ export type PingCandidate = {
 
 export type ThreadPing = {
   id: string;
+  /** Who p-tagged the owner -- the candidate's own signer, not the thread root's. */
+  authorPubkey: string;
   channelId: string;
+  /**
+   * The channel's display name, resolved from the channels list when the
+   * candidate itself didn't carry one (the relay's feed bridge always sends
+   * an empty `channel_name` -- see `feed_item_from_event` in
+   * `commands/messages.rs`). Empty string when it could not be resolved
+   * either way; renderers fall back to something honest rather than a bare
+   * "#", never assume this is non-empty.
+   */
   channelName: string;
   /** Resolved thread root id, for the answering + navigation paths (item 4). */
   threadId: string;
@@ -208,6 +218,7 @@ export function selectUnansweredPings(
 
     pings.push({
       id: candidate.id,
+      authorPubkey: candidate.pubkey,
       channelId: candidate.channelId,
       channelName: candidate.channelName,
       threadId: rootId,
@@ -217,4 +228,24 @@ export function selectUnansweredPings(
   }
 
   return pings;
+}
+
+/**
+ * Resolves a ping's channel name against the channels list when the
+ * candidate itself carried none -- same fallback the home feed uses
+ * (`resolveItemChannel` in `features/home/lib/inbox.ts`), applied here
+ * because the relay's feed bridge always sends an empty `channel_name` for
+ * every mention (see `feed_item_from_event`), so this is the only place a
+ * real name is ever attached. Leaves `channelName` empty (never guesses) if
+ * the channel is not in the list either -- an unlisted or since-deleted
+ * channel the owner just isn't a member of.
+ */
+export function resolvePingChannelName(
+  ping: ThreadPing,
+  channelNamesById: ReadonlyMap<string, string>,
+): ThreadPing {
+  const resolved =
+    ping.channelName.trim() || channelNamesById.get(ping.channelId)?.trim();
+  if (!resolved || resolved === ping.channelName) return ping;
+  return { ...ping, channelName: resolved };
 }

@@ -12,6 +12,7 @@ import {
 import { isHardListCategory } from "@/features/agents/delegationGrantActions";
 import { describeAskResolution } from "@/features/asks/lib/askResolution";
 import { isDue } from "@/features/reminders/lib/reminderFilters";
+import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { computeAskDeadline } from "./lib/askDeadline";
 import {
   askContextSubjectPubkey,
@@ -253,23 +254,35 @@ function workflowItem(source: ActionWorkflowSource): ActionItem {
   };
 }
 
+/** "#general", or an honest placeholder when the channel could not be
+ * resolved at all (see `resolvePingChannelName`) rather than a bare "#". */
+function pingChannelLabel(channelName: string): string {
+  return channelName ? `#${channelName}` : "an unlisted channel";
+}
+
 /**
- * A ping's title names where it happened (spec wireframe: "asked in
- * #channel"), not what it says -- the summary carries the content preview.
- * `capabilities` omits `answer`: dismissing is the only in-place action
- * (spec, "out of scope: the reply composer"); `open-source` navigates to the
- * thread for anyone who wants to actually reply.
+ * A ping's title names who asked and where (spec wireframe: "asked in
+ * #channel", sharpened by live-user feedback to also name the asker -- a
+ * row that only said "asked in #general" gave no way to tell who is
+ * waiting). The summary carries the content preview. `capabilities` omits
+ * `answer`: dismissing is the only in-place action (spec, "out of scope:
+ * the reply composer"); `open-source` navigates to the thread for anyone
+ * who wants to actually reply.
  */
-function pingItem(ping: ThreadPing): ActionItem {
+function pingItem(
+  ping: ThreadPing,
+  authorLabel: string,
+  delegateTarget: { pubkey: string; label: string } | null,
+): ActionItem {
   return {
     id: actionItemId("ping", ping.id),
     kind: "ping",
     state: "needs-action",
-    title: `asked in #${ping.channelName}`,
+    title: `${authorLabel} asked in ${pingChannelLabel(ping.channelName)}`,
     summary: ping.content,
     createdAt: ping.createdAt,
     updatedAt: ping.createdAt,
-    source: { kind: "ping", ping },
+    source: { kind: "ping", ping, delegateTarget },
     capabilities: ["dismiss", "open-source"],
     contextLine: null,
     escalationLine: null,
@@ -288,6 +301,8 @@ export function buildActionCenterItems({
   reminders,
   workflows = [],
   pings = [],
+  pingAuthorLabelsByPubkey,
+  pingDelegateTargetsById,
   doneIds = new Set(),
   now = Math.floor(Date.now() / 1_000),
   companyAskWindowSecs = null,
@@ -375,7 +390,16 @@ export function buildActionCenterItems({
   }
 
   items.push(...workflows.map(workflowItem));
-  items.push(...pings.map(pingItem));
+  items.push(
+    ...pings.map((ping) =>
+      pingItem(
+        ping,
+        pingAuthorLabelsByPubkey?.get(ping.authorPubkey) ??
+          truncatePubkey(normalizePubkey(ping.authorPubkey)),
+        pingDelegateTargetsById?.get(ping.id) ?? null,
+      ),
+    ),
+  );
 
   // Only reminders that are due (pending and `notBefore <= now`) enter the
   // queue — the same definition `countDueReminders` uses for the Home badge,

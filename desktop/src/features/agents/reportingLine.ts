@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { useQuery } from "@tanstack/react-query";
 
-import type { EmployeeHead } from "@/features/agents/employeeHeads";
+import type { AgentRank, EmployeeHead } from "@/features/agents/employeeHeads";
 import { useEmployeeHeadsQuery } from "@/features/agents/employeeHeads";
 import {
   fetchManagedAgentHeadEvents,
@@ -147,6 +147,12 @@ function useReportingLineSources(
 export function useReportingLineLookup(communityId: string): {
   isSettled: boolean;
   lookup: (pubkey: string | null | undefined) => ReportingLine;
+  /**
+   * The pubkey's own rank, read from the same two sources `lookup` already
+   * fetched (employee head first, else a trusted managed-agent head's
+   * `tier`) -- no extra fetch. Null when neither source has an opinion.
+   */
+  rankLookup: (pubkey: string | null | undefined) => AgentRank | null;
 } {
   const sources = useReportingLineSources(communityId, communityId !== "");
   const employees = sources.employees;
@@ -161,7 +167,20 @@ export function useReportingLineLookup(communityId: string): {
         : { managerPubkey: null, managerLabel: null },
     [employees, trustedHeads],
   );
-  return { isSettled: sources.isSettled, lookup };
+  const rankLookup = React.useCallback(
+    (pubkey: string | null | undefined): AgentRank | null => {
+      if (!pubkey) return null;
+      const normalized = normalizePubkey(pubkey);
+      const employeeRank = employees?.get(normalized)?.rank;
+      if (employeeRank) return employeeRank;
+      return (
+        trustedHeads.find((head) => normalizePubkey(head.pubkey) === normalized)
+          ?.tierRank ?? null
+      );
+    },
+    [employees, trustedHeads],
+  );
+  return { isSettled: sources.isSettled, lookup, rankLookup };
 }
 
 /**
