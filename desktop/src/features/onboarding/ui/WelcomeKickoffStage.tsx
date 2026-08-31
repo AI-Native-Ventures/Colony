@@ -5,8 +5,8 @@ import {
   type WelcomeKickoffStagePhase,
 } from "@/features/onboarding/useWelcomeKickoffStage";
 import { cn } from "@/shared/lib/cn";
+import { WELCOME_TEAM_STARTERS } from "@/features/onboarding/welcomeGuide";
 import {
-  STARTER_PERSONA_ORDER,
   starterPersonaAnimation,
   starterPersonaName,
 } from "@/shared/constants/starterPersonas";
@@ -16,9 +16,13 @@ type StageCharacter = {
   animationUrl: string;
 };
 
-/** Same animated APNGs the "Meet your starter team" onboarding step uses. */
-const STAGE_CHARACTERS: readonly StageCharacter[] = STARTER_PERSONA_ORDER.map(
-  (personaId) => ({
+/**
+ * The agents onboarding actually creates, not every starter persona that
+ * exists. Animating three characters while provisioning one reads as three
+ * agents arriving, and the two that never arrive are pure confusion.
+ */
+const STAGE_CHARACTERS: readonly StageCharacter[] = WELCOME_TEAM_STARTERS.map(
+  ({ personaId }) => ({
     name: starterPersonaName(personaId),
     animationUrl: starterPersonaAnimation(personaId) ?? "",
   }),
