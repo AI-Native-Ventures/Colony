@@ -128,19 +128,43 @@ export function trustedManagedAgentHeads(
 }
 
 /**
+ * The rank a role implies when nothing else has said one.
+ *
+ * A Chief of Staff is an executive by definition, so a head claiming that
+ * role and nothing else should not land beside an engineer in Unranked. Every
+ * other role defaults to Team lead: an agent that cannot escalate to the owner
+ * is worse than one that can, because a worker "may never address owners"
+ * (`buzz_core::interrupt`), so an unplaced worker's escalations have nowhere
+ * to go at all.
+ */
+function rankImpliedByRole(roleId: string | null): AgentRank {
+  return roleId === "chief-of-staff" ? "executive" : "leader";
+}
+
+/**
  * Resolve an agent's rank the way the relay's `agent_tier` does for a
  * managed agent: the employee currently filling the claimed role decides
  * first; only a role nobody fills falls through to the head's own tier.
+ *
+ * A head that resolves neither takes the rank its role implies rather than
+ * none at all. "No rank" was never a real state an owner chose: it is what a
+ * head looks like when it was written without one, and it dropped the agent
+ * off the org chart entirely until someone re-ranked it by hand. Since rank is
+ * published at agent creation and keyed to that instance, every path that
+ * produced a fresh instance sent the owner back to the Unranked list to do it
+ * again.
+ *
+ * This never overrides a stated rank; it only replaces the empty case.
  */
 export function resolveManagedAgentRank(
   head: Pick<ManagedAgentHead, "roleId" | "tierRank">,
   employeesByRole: ReadonlyMap<string, { rank: AgentRank }>,
-): AgentRank | null {
+): AgentRank {
   if (head.roleId) {
     const employee = employeesByRole.get(head.roleId);
     if (employee) return employee.rank;
   }
-  return head.tierRank;
+  return head.tierRank ?? rankImpliedByRole(head.roleId);
 }
 
 /**

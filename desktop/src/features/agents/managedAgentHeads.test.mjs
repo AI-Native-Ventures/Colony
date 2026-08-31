@@ -166,13 +166,29 @@ test("rank resolves through the role's employee before the tier field", () => {
     ),
     "leader",
   );
-  // Neither source: no rank at all.
+  // Neither source: the rank the role implies, never nothing. A head that
+  // resolves no rank used to fall off the org chart until an owner set one by
+  // hand, and rank is written at creation against one instance, so every fresh
+  // instance sent them back to do it again.
   assert.equal(
     resolveManagedAgentRank(
       { pubkey: AGENT, roleId: null, tierRank: null, manager: null },
       employeesByRole,
     ),
-    null,
+    "leader",
+  );
+  // Except a Chief of Staff, which its role already names as an executive.
+  assert.equal(
+    resolveManagedAgentRank(
+      {
+        pubkey: AGENT,
+        roleId: "chief-of-staff",
+        tierRank: null,
+        manager: null,
+      },
+      new Map(),
+    ),
+    "executive",
   );
 });
 
