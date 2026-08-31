@@ -279,6 +279,78 @@ fn unix_now_secs() -> u64 {
 }
 
 impl RestClient {
+    /// Fetch the relay's stable signing identity from its NIP-11 document.
+    ///
+    /// Relay-authored workflow attribution is trusted only when the event signer
+    /// matches this key. Missing, malformed, or unavailable identity data fails
+    /// closed by returning an error/`None` to the caller. NIP-11 is standardized
+    /// at the relay root; `/info` remains a compatibility fallback for relays
+    /// that expose the document through Buzz's explicit alias.
+    pub async fn relay_self(&self) -> Result<Option<nostr::PublicKey>, RelayError> {
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&self.base_url)
+            .map_err(|error| RelayError::Http(error.to_string()))?;
+        let mut failures = Vec::new();
+        let mut saw_document_without_self = false;
+
+        for path in ["/", "/info"] {
+            let url = format!("{}{path}", self.base_url);
+            let response = match self
+                .http
+                .get(&url)
+                .header(reqwest::header::ACCEPT, "application/nostr+json")
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    failures.push(format!("GET {path} failed: {error}"));
+                    continue;
+                }
+            };
+
+            if !response.status().is_success() {
+                failures.push(format!("GET {path} returned HTTP {}", response.status()));
+                continue;
+            }
+
+            let document: serde_json::Value = match response.json().await {
+                Ok(document) => document,
+                Err(error) => {
+                    failures.push(format!("GET {path} returned invalid NIP-11 JSON: {error}"));
+                    continue;
+                }
+            };
+            let Some(relay_self) = document.get("self") else {
+                saw_document_without_self = true;
+                continue;
+            };
+            let Some(relay_self) = relay_self.as_str() else {
+                failures.push(format!("GET {path} returned a non-string NIP-11 self key"));
+                continue;
+            };
+            let relay_self = match nostr::PublicKey::from_hex(relay_self) {
+                Ok(pubkey) => pubkey,
+                Err(error) => {
+                    failures.push(format!(
+                        "GET {path} returned an invalid NIP-11 self key: {error}"
+                    ));
+                    continue;
+                }
+            };
+            return Ok(Some(relay_self));
+        }
+
+        if saw_document_without_self {
+            Ok(None)
+        } else {
+            Err(RelayError::Http(format!(
+                "failed to fetch a usable NIP-11 document: {}",
+                failures.join("; ")
+            )))
+        }
+    }
+
     /// Sign a NIP-98 HTTP Auth event (kind:27235) for the given method/URL/body.
     ///
     /// Returns the `Authorization: Nostr <base64>` header value (without the
@@ -438,35 +510,6 @@ impl RestClient {
             .map_err(|e| RelayError::Http(e.to_string()))
     }
 
-    /// The relay's own signing key, from its NIP-11 document.
-    ///
-    /// Company records are only canonical because this key wrote them, so a
-    /// relay that advertises no usable `self` cannot have its company state
-    /// trusted at all. `None` says exactly that; it is not "not yet known".
-    pub async fn relay_self(&self) -> Result<Option<nostr::PublicKey>, RelayError> {
-        #[cfg(feature = "onboarding-fixture")]
-        buzz_ws_client::onboarding_fixture::validate_process_url(&self.base_url)
-            .map_err(|error| RelayError::Http(error.to_string()))?;
-        let response = self
-            .http
-            .get(&self.base_url)
-            .header("Accept", "application/nostr+json")
-            .send()
-            .await
-            .map_err(|error| RelayError::Http(error.to_string()))?;
-        if !response.status().is_success() {
-            return Ok(None);
-        }
-        let document: Value = response
-            .json()
-            .await
-            .map_err(|_| RelayError::Http("relay returned a malformed NIP-11 document".into()))?;
-        let Some(relay_self) = document.get("self").and_then(Value::as_str) else {
-            return Ok(None);
-        };
-        Ok(nostr::PublicKey::from_hex(&relay_self.to_ascii_lowercase()).ok())
-    }
-
     /// Read events matching the given filters, dropping anything unparseable.
     ///
     /// Every caller here is resolving a record it will treat as authoritative,
@@ -504,6 +547,10 @@ impl RestClient {
 /// Events the harness cares about.
 #[derive(Debug, Clone)]
 pub struct BuzzEvent {
+    /// Which authenticated relay connection delivered this event. Generation 0
+    /// is the initial connection; each successful reconnect increments it
+    /// before any buffered or live event from that connection is forwarded.
+    pub connection_generation: u64,
     /// Which channel this event belongs to.
     pub channel_id: Uuid,
     /// The underlying Nostr event.
@@ -1177,6 +1224,10 @@ struct BgState {
     /// A single failed channel REQ is parked here instead of aborting the whole
     /// reconnect. Drained by the main loop. Flushed on each reconnect attempt.
     resubscribe_retry: HashSet<Uuid>,
+    /// Current authenticated WebSocket generation. Incremented immediately
+    /// after each successful reconnect handshake, before buffered or live
+    /// events from the new connection are forwarded.
+    connection_generation: u64,
     /// Current position in the exponential backoff ladder.
     ///
     /// Persisted across calls to `wait_for_reconnect` so a flapping link stays at
@@ -1212,6 +1263,7 @@ impl BgState {
             observer_in_flight: VecDeque::new(),
             gated_observer_dropped: 0,
             resubscribe_retry: HashSet::new(),
+            connection_generation: 0,
             backoff_step: 0,
         }
     }
@@ -2248,6 +2300,7 @@ async fn handle_ws_message(
                         }
                         let ts = event.created_at.as_secs();
                         let buzz_event = BuzzEvent {
+                            connection_generation: state.connection_generation,
                             channel_id: channel_uuid,
                             event: *event,
                         };
@@ -2334,6 +2387,7 @@ async fn handle_ws_message(
                         let event_id_hex = event.id.to_hex();
                         if state.record_event(channel_id, &event) {
                             let buzz_event = BuzzEvent {
+                                connection_generation: state.connection_generation,
                                 channel_id,
                                 event: *event,
                             };
@@ -3160,6 +3214,7 @@ async fn try_autonomous_reconnect(
         match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
+                state.connection_generation = state.connection_generation.saturating_add(1);
                 info!("autonomous reconnect succeeded (attempt {})", attempt + 1);
                 let handshake_ok = process_handshake_buffer(
                     ws,
@@ -3300,6 +3355,7 @@ async fn wait_for_reconnect(
         match do_connect(relay_pin.url(), keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
+                state.connection_generation = state.connection_generation.saturating_add(1);
                 info!("relay reconnected to {}", relay_pin.url());
                 let handshake_ok = process_handshake_buffer(
                     ws,
@@ -4336,6 +4392,155 @@ mod tests {
             0,
             "a dial site bypasses the identity boundary"
         );
+    }
+
+    async fn nip11_test_client(
+        responses: HashMap<String, (u16, String)>,
+    ) -> (
+        RestClient,
+        std::sync::Arc<std::sync::Mutex<Vec<(String, bool)>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind NIP-11 test server");
+        let base_url = format!(
+            "http://{}",
+            listener.local_addr().expect("test server address")
+        );
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = vec![0; 8192];
+                let bytes_read = socket.read(&mut request).await.unwrap_or_default();
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                let has_nip11_accept = request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("accept: application/nostr+json"));
+                server_requests
+                    .lock()
+                    .expect("lock recorded NIP-11 requests")
+                    .push((path.clone(), has_nip11_accept));
+
+                let (status, body) = responses
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| (404, "not found".into()));
+                let reason = if status == 200 { "OK" } else { "Not Found" };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let client = RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: Keys::generate(),
+            auth_tag_json: None,
+        };
+        (client, requests, server)
+    }
+
+    #[tokio::test]
+    async fn relay_self_reads_and_normalizes_standard_root_document() {
+        let uppercase = "AB".repeat(32);
+        let responses = HashMap::from([
+            (
+                "/".to_string(),
+                (200, serde_json::json!({ "self": uppercase }).to_string()),
+            ),
+            (
+                "/info".to_string(),
+                (
+                    200,
+                    serde_json::json!({ "self": "cd".repeat(32) }).to_string(),
+                ),
+            ),
+        ]);
+        let (client, requests, server) = nip11_test_client(responses).await;
+
+        assert_eq!(
+            client
+                .relay_self()
+                .await
+                .expect("fetch relay self")
+                .map(|key| key.to_hex()),
+            Some("ab".repeat(32))
+        );
+        assert_eq!(
+            *requests.lock().expect("lock recorded requests"),
+            vec![("/".to_string(), true)],
+            "the standard root document should be preferred and request NIP-11 JSON"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn relay_self_falls_back_to_info_alias() {
+        let responses = HashMap::from([
+            ("/".to_string(), (404, "not found".into())),
+            (
+                "/info".to_string(),
+                (
+                    200,
+                    serde_json::json!({ "self": "cd".repeat(32) }).to_string(),
+                ),
+            ),
+        ]);
+        let (client, requests, server) = nip11_test_client(responses).await;
+
+        assert_eq!(
+            client
+                .relay_self()
+                .await
+                .expect("fetch relay self")
+                .map(|key| key.to_hex()),
+            Some("cd".repeat(32))
+        );
+        assert_eq!(
+            *requests.lock().expect("lock recorded requests"),
+            vec![("/".to_string(), true), ("/info".to_string(), true)]
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn relay_self_rejects_malformed_identity_at_both_endpoints() {
+        let responses = HashMap::from([
+            (
+                "/".to_string(),
+                (
+                    200,
+                    serde_json::json!({ "self": "not-a-pubkey" }).to_string(),
+                ),
+            ),
+            (
+                "/info".to_string(),
+                (200, serde_json::json!({ "self": 42 }).to_string()),
+            ),
+        ]);
+        let (client, _requests, server) = nip11_test_client(responses).await;
+
+        let error = client
+            .relay_self()
+            .await
+            .expect_err("malformed relay identities must fail closed");
+        assert!(error
+            .to_string()
+            .contains("failed to fetch a usable NIP-11 document"));
+        server.abort();
     }
 
     #[test]
