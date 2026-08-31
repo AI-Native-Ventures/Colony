@@ -10,7 +10,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
 import { relayClient } from "@/shared/api/relayClient";
-import { signRelayEvent, uploadMediaBytes } from "@/shared/api/tauri";
+import { signRelayEvent } from "@/shared/api/tauri";
+import { uploadPngVerbatim } from "@/shared/api/uploadPngVerbatim";
 
 import { evaluateClaimGate, verifyClaims } from "./claimVerifier";
 import { claimVerifierDependencies } from "./claimVerifierRuntime";
@@ -244,13 +245,17 @@ export function useRenderContentPost(communityId: string) {
       for (const slide of slides) {
         // Sequentially, so a carousel does not open four uploads at once
         // against a relay that meters them.
-        const blob = await uploadMediaBytes(
+        // Verbatim, not `uploadMediaBytes`: that command strips metadata by
+        // re-encoding the image, and the re-encoded blob hashes differently
+        // from the bytes measured here. The check below is what caught it.
+        const blob = await uploadPngVerbatim(
           Array.from(slide.png),
           `${post.slug}-${slide.sha256.slice(0, 8)}.png`,
         );
-        if (blob.sha256.toLowerCase().replace(/\.png$/, "") !== slide.sha256) {
+        const stored = blob.sha256.toLowerCase().replace(/\.png$/, "");
+        if (stored !== slide.sha256) {
           throw new Error(
-            "The relay stored different bytes than were measured, so no report can name them.",
+            `The relay stored ${stored.slice(0, 12)}… but this card measured ${slide.sha256.slice(0, 12)}…, so no report can name the stored bytes.`,
           );
         }
         images.push({

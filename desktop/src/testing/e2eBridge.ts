@@ -14245,6 +14245,11 @@ export function maybeInstallE2eTauriMocks() {
           payload as { data: number[]; filename?: string | null },
           activeConfig,
         );
+      case "upload_png_verbatim":
+        return resolveMockUploadDescriptorForBytes(
+          payload as { data: number[]; filename?: string | null },
+          activeConfig,
+        );
       case "upload_media_bytes_raw":
         return resolveMockUploadDescriptorForBytes(
           { data: payload as Uint8Array },
