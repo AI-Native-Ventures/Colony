@@ -668,11 +668,23 @@ test("selecting a persona mention creates a channel agent before sending", async
     .poll(async () => commandCount(await readCommandLog(page), "sign_event"))
     .toBeGreaterThan(commandCount(baselineCommands, "sign_event"));
 
-  const commandsAfterSend = (await readCommandLog(page)).slice(
+  // Ordered against the message's own sign_event, found by its payload.
+  // The first post-baseline sign_event is not necessarily ours: background
+  // work (read state, presence) signs too, and one of those landing before
+  // the agent spawn read as "sent before starting" on the 0.16 promotion --
+  // startIndex 14 against sendIndex somewhere in the single digits, with the
+  // agent provably started first.
+  const payloadLog = (await readCommandPayloadLog(page)).slice(
     baselineCommands.length,
   );
-  const startIndex = commandsAfterSend.indexOf("start_managed_agent");
-  const sendIndex = commandsAfterSend.indexOf("sign_event");
+  const startIndex = payloadLog.findIndex(
+    (entry) => entry.command === "start_managed_agent",
+  );
+  const sendIndex = payloadLog.findIndex(
+    (entry) =>
+      entry.command === "sign_event" &&
+      JSON.stringify(entry.payload ?? "").includes("for a hand"),
+  );
   expect(startIndex).toBeGreaterThanOrEqual(0);
   expect(sendIndex).toBeGreaterThanOrEqual(0);
   expect(startIndex).toBeLessThan(sendIndex);
