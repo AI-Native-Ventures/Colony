@@ -27,8 +27,8 @@ import {
   useContentStyle,
   useSubmitContentDecision,
 } from "../hooks";
+import { ContentBrandPanel } from "./ContentBrandPanel";
 import { ContentDayDetail } from "./ContentDayDetail";
-import { ContentStylePanel } from "./ContentStylePanel";
 
 /**
  * The content calendar.
@@ -267,12 +267,18 @@ export function ContentScreen() {
           onClick={() => setShowStyle(true)}
           type="button"
         >
-          Style
+          Brand
         </button>
       </nav>
 
       {showStyle ? (
-        <ContentStylePanel style={styleQuery.data ?? null} />
+        <ContentBrandPanel
+          communityId={communityId}
+          sampleImageUrl={
+            posts.find((post) => post.images.length > 0)?.images[0]?.url ?? null
+          }
+          style={styleQuery.data ?? null}
+        />
       ) : (
         <>
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
@@ -329,6 +335,7 @@ export function ContentScreen() {
                 decisions={decisions}
                 onSubmit={handleSubmit}
                 post={selectedPost}
+                styleVersion={styleQuery.data?.version ?? null}
                 submitting={submitDecision.isPending}
               />
             </AuxiliaryPanel>
