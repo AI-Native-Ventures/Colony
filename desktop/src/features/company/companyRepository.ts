@@ -65,8 +65,29 @@ export type CompanyRepositoryDependencies = {
  * for that receipt; this is a smaller, bounded wait on the read that follows
  * it, not a second copy of that budget.
  */
-const DEFAULT_TASK_READBACK_ATTEMPTS = 5;
-const DEFAULT_TASK_READBACK_INTERVAL_MS = 300;
+// 5 x 300ms gave up after 1.2s, and a send whose Task the relay had already
+// recorded was refused with "the work record for this message could not be
+// read back" - observed in production on 2026-09-01 at 11:57:03 and 11:57:20
+// UTC, with both Task heads present in the relay and parsing cleanly against
+// the shipped contract. The write landed; only the read that follows it timed
+// out.
+//
+// Backing off rather than adding evenly spaced attempts: indexing lag is
+// usually tens of milliseconds, so the first retries stay tight and the tail
+// is what grows. 8 attempts reach ~6.9s in the worst case and still return
+// immediately in the common one.
+const DEFAULT_TASK_READBACK_ATTEMPTS = 8;
+const DEFAULT_TASK_READBACK_INTERVAL_MS = 150;
+const MAX_TASK_READBACK_INTERVAL_MS = 2_000;
+
+/** Backoff for read-after-write: doubles, capped, never below the interval. */
+export function taskReadBackDelay(
+  attempt: number,
+  intervalMs: number,
+  maxMs: number = MAX_TASK_READBACK_INTERVAL_MS,
+): number {
+  return Math.min(intervalMs * 2 ** attempt, maxMs);
+}
 
 function defaultDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -529,7 +550,9 @@ export function createCompanyRepository(
         // retrying it would just deliver a stale result into the new
         // community once it eventually resolves.
         if (last.code === "cancelled") return last;
-        if (attempt < attempts - 1) await wait(intervalMs);
+        if (attempt < attempts - 1) {
+          await wait(taskReadBackDelay(attempt, intervalMs));
+        }
       }
       return last;
     },

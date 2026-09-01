@@ -21,13 +21,6 @@ use crate::{
     util::now_iso,
 };
 
-/// Read the workspace owner pubkey without holding the lock. Used to populate `BUZZ_ACP_AGENT_OWNER`
-/// as a fallback for legacy agent records that have no NIP-OA `auth_tag`.
-pub(super) fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
-    let keys = state.keys.lock().map_err(|e| e.to_string())?;
-    Ok(keys.public_key().to_hex())
-}
-
 // Retain-on-save moved to `managed_agents::reconcile`, next to the
 // content-diff engine it delegates to. Re-exported under its old name and
 // path so every existing call site in `commands/` (including
@@ -761,6 +754,7 @@ pub(crate) async fn create_managed_agent_with_creation_request(
             } else {
                 relay_mesh.clone()
             },
+            ..Default::default()
         };
 
         records.push(record);
@@ -1214,6 +1208,7 @@ use archive::build_agent_archive_request;
 
 #[path = "agents_profile.rs"]
 mod profile;
+pub(super) use profile::workspace_owner_hex;
 #[cfg(test)]
 use profile::{profile_needs_sync, resolve_legacy_avatar};
 pub(crate) use profile::{reconcile_agent_profile, reconcile_profile_at, ProfileReconcileData};

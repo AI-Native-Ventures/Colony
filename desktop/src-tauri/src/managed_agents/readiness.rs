@@ -644,7 +644,6 @@ fn goose_requirements(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use super::*;
     use crate::managed_agents::discovery::known_acp_runtime_exact;
@@ -1521,6 +1520,7 @@ mod tests {
             definition_respond_to_allowlist: Vec::new(),
             definition_parallelism: None,
             relay_mesh: None,
+            ..Default::default()
         };
         let runtime = known_acp_runtime_exact("buzz-agent");
         let effective = resolve_effective_agent_env(&record, &[], runtime, &Default::default());

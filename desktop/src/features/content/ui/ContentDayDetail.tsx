@@ -54,6 +54,8 @@ type Props = {
   communityId: string;
   post: ContentPost;
   decisions: ContentDecision[];
+  /** The current house style version, for the made-before-changes notice. */
+  styleVersion: string | null;
   submitting: boolean;
   onSubmit: (input: {
     post: ContentPost;
@@ -68,6 +70,7 @@ export function ContentDayDetail({
   decisions,
   onSubmit,
   post,
+  styleVersion,
   submitting,
 }: Props) {
   const [note, setNote] = React.useState("");
@@ -207,6 +210,18 @@ export function ContentDayDetail({
           Nothing rendered yet.
         </div>
       )}
+
+      {post.images.length > 0 &&
+      styleVersion !== null &&
+      post.styleVersion !== null &&
+      post.styleVersion !== styleVersion ? (
+        // Plain words on purpose: the owner never sees version numbers. The
+        // render panel right below is the "remake it" affordance.
+        <p className="rounded-lg border border-border/60 bg-muted/10 p-2 text-xs text-muted-foreground">
+          This card was made before your latest changes. Draw it again to bring
+          it up to date.
+        </p>
+      ) : null}
 
       <ContentRenderPanel communityId={communityId} post={post} />
 

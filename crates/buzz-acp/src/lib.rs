@@ -2039,7 +2039,7 @@ async fn tokio_main() -> Result<()> {
         .and_then(|hex| nostr::PublicKey::from_hex(hex).ok());
     let usage_outbox = if adapter_usage_owner.is_some() {
         Some(Arc::new(
-            usage_outbox::UsageOutbox::open(&config.relay_url, config.keys.public_key())
+            usage_outbox::UsageOutbox::open_with_keys(&config.relay_url, config.keys.clone())
                 .map_err(anyhow::Error::msg)?,
         ))
     } else {

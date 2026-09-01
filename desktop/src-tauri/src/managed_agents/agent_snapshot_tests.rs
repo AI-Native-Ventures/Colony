@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 /// relevant to snapshot export are filled; the rest use defaults.
 fn minimal_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        tier: None,
+        manager: None,
         creation_request_id: None,
         role_id: None,
         role_title: None,

@@ -163,6 +163,8 @@ const AGENT_PUBKEY: &str = "agentpubkeyhex00000000000000000000000000000000000000
 /// event must NEVER be able to overwrite.
 fn local_agent() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        tier: None,
+        manager: None,
         pubkey: AGENT_PUBKEY.to_string(),
         name: "Local Agent".to_string(),
         role_id: None,
@@ -270,7 +272,7 @@ fn inbound_managed_agent_drops_injected_secrets_and_harness() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content);
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content, None);
 
     let a = &agents[0];
     // Secrets / harness / runtime — every one preserved from the local record.
@@ -361,7 +363,7 @@ fn inbound_definition_less_agent_applies_quad() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content);
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content, None);
 
     let a = &agents[0];
     assert_eq!(a.persona_id, None);
@@ -381,7 +383,7 @@ fn inbound_managed_agent_no_match_is_noop() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, "someotheragentpubkey", content);
+    apply_inbound_managed_agent(&mut agents, "someotheragentpubkey", content, None);
 
     // No agent minted from a relay event — it would have no secret key.
     assert_eq!(agents.len(), 1);
@@ -801,4 +803,58 @@ fn inbound_gate_accepts_validly_signed_event() {
         .unwrap();
     let parsed = parse_verified_inbound_event(&event.as_json()).unwrap();
     assert_eq!(parsed.pubkey, keys.public_key());
+}
+
+/// An owner-set rank must survive a device republish.
+///
+/// `tier` reaches the relay only through the desktop's rank dialog
+/// (`publishManagedAgentRankHead`), which merges it into the owner-authored
+/// kind:30177 head. The device's own writer rebuilds that head from
+/// `ManagedAgentEventContent`, so every later edit of the agent — a rename, a
+/// parallelism change, a persona relink — republished content that had no
+/// `tier` at a newer `created_at`. `agent_tier` then fell through to `None`,
+/// which the owner-contact gate treats as unrestricted: the agent silently
+/// regained the ability to DM its owner, and nothing surfaced the loss.
+///
+/// Production carried 4 ranked heads against 255 live agents when this was
+/// found.
+#[test]
+fn inbound_managed_agent_keeps_the_owner_authored_rank() {
+    let content = serde_json::json!({
+        "name": "Ranked Agent",
+        "persona_id": "persona-local",
+        "parallelism": 1,
+        "respond_to": "anyone",
+        "tier": "worker",
+    });
+    let keys = nostr::Keys::generate();
+    let event = nostr::EventBuilder::new(nostr::Kind::Custom(30177), content.to_string())
+        .tags(vec![nostr::Tag::parse(["d", AGENT_PUBKEY]).unwrap()])
+        .sign_with_keys(&keys)
+        .unwrap();
+    let event = {
+        use nostr::JsonUtil as _;
+        nostr::Event::from_json(event.as_json()).unwrap()
+    };
+
+    let parsed =
+        crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
+    let mut agents = vec![local_agent()];
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, parsed, None);
+
+    assert_eq!(
+        agents[0].tier.as_deref(),
+        Some("worker"),
+        "the rank the owner published was not carried onto the local record, \
+         so the next device republish drops it from the relay's head"
+    );
+
+    // The record is what the device republishes from, so the rank has to make
+    // the round trip back onto the wire.
+    let republished = crate::managed_agents::agent_events::agent_event_content(&agents[0]);
+    assert_eq!(
+        republished.tier.as_deref(),
+        Some("worker"),
+        "a republish of the ranked agent drops its tier"
+    );
 }
