@@ -247,6 +247,7 @@ fn recover_legacy_or_generate(
     legacy_store: Option<&impl IdentityKeyStore>,
     legacy_path: &std::path::Path,
     data_dir: &std::path::Path,
+    clear_unparseable_keyring: bool,
 ) -> Result<ResolvedIdentity, String> {
     use crate::secret_store::KeyringProbe;
 
@@ -306,6 +307,13 @@ fn recover_legacy_or_generate(
         });
     }
 
+    // Only now, on the genuine first-launch path, is it safe to drop an
+    // unparseable keyring value: nothing else can be recovered from it.
+    if clear_unparseable_keyring {
+        if let Err(e) = store.delete(IDENTITY_KEY_NAME) {
+            eprintln!("buzz-desktop: failed to clear corrupt keyring value: {e}");
+        }
+    }
     let (keys, storage) = generate_and_persist(store, legacy_path, data_dir)?;
     Ok(ResolvedIdentity {
         keys,
@@ -314,11 +322,14 @@ fn recover_legacy_or_generate(
     })
 }
 
-/// Recover from a corrupt nsec in the keyring (parse failed). Clear the bad
-/// keyring value, then migrate a valid leftover `identity.key` if one exists.
+/// Recover from a corrupt nsec in the keyring (parse failed), preferring a
+/// valid leftover `identity.key`. The unreadable keyring value is retained
+/// until a replacement exists: if a marker proves a prior identity existed it
+/// is kept for support and manual export while `Lost` recovery is entered, and
+/// it is only cleared on the genuine first-launch generate-fresh path.
 /// Otherwise defer to [`recover_legacy_or_generate`]: recover from the legacy
 /// service if one holds a good key, else `Lost` recovery if a marker proves a
-/// prior identity existed, else generate fresh. The keyring delete is
+/// prior identity existed, else clear and generate fresh. The keyring delete is
 /// best-effort: a delete failure logs and continues — it must never block
 /// startup.
 fn recover_from_keyring(
@@ -328,10 +339,9 @@ fn recover_from_keyring(
     data_dir: &std::path::Path,
     error: &str,
 ) -> Result<ResolvedIdentity, String> {
-    eprintln!("buzz-desktop: corrupt nsec in keyring ({error}), clearing and recovering from file");
-    if let Err(e) = store.delete(IDENTITY_KEY_NAME) {
-        eprintln!("buzz-desktop: failed to clear corrupt keyring value: {e}");
-    }
+    eprintln!(
+        "buzz-desktop: corrupt nsec in keyring ({error}), looking for a recovery path before clearing"
+    );
     if legacy_path.exists() {
         if let Some(keys) = migrate_identity_file(store, legacy_path, data_dir)? {
             return Ok(ResolvedIdentity {
@@ -344,7 +354,7 @@ fn recover_from_keyring(
     // No valid file to recover from. The corrupt-scoped-keyring case
     // otherwise faces the exact same "is this really a fresh install?"
     // question as the empty-keyring case, so it shares the same answer.
-    recover_legacy_or_generate(store, legacy_store, legacy_path, data_dir)
+    recover_legacy_or_generate(store, legacy_store, legacy_path, data_dir, true)
 }
 
 #[cfg(test)]
