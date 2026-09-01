@@ -644,7 +644,6 @@ fn goose_requirements(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use super::*;
     use crate::managed_agents::discovery::known_acp_runtime_exact;
