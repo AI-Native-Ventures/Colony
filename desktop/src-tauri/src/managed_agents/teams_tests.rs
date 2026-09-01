@@ -239,6 +239,7 @@ fn persona_reference_check_includes_defensive_lead_only_records() {
 fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
+        manager: None,
         pubkey: name.to_string(),
         name: name.to_string(),
         role_id: None,

@@ -94,6 +94,7 @@ mod tests {
     fn record_with(owner_pubkey: Option<&str>, auth_tag: Option<&str>) -> ManagedAgentRecord {
         ManagedAgentRecord {
             tier: None,
+            manager: None,
             creation_request_id: None,
             role_id: None,
             role_title: None,

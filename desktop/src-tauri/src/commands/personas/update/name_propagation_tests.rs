@@ -6,6 +6,7 @@ use super::*;
 fn agent(persona_id: &str, name: &str, display_name: Option<&str>) -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
+        manager: None,
         pubkey: format!("pubkey-{name}"),
         name: name.to_string(),
         role_id: None,

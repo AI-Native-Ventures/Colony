@@ -178,10 +178,16 @@ fn reconcile_inbound_persona_event_blocking(
         }
         KIND_MANAGED_AGENT => {
             let mut agents = load_managed_agents(&app)?;
+            // The manager is a TAG on the head, not part of the content
+            // projection, so it has to be lifted here or the record never
+            // learns it and the device's own republish drops the reporting
+            // line on the next rebuild.
+            let inbound_manager = single_manager_tag(&event);
             apply_inbound_managed_agent(
                 &mut agents,
                 &d_tag,
                 managed_agent_content_from_event(&event)?,
+                inbound_manager,
             );
             save_managed_agents(&app, &agents)?;
         }
@@ -398,6 +404,7 @@ fn apply_inbound_managed_agent(
     agents: &mut [ManagedAgentRecord],
     d_tag: &str,
     inbound: ManagedAgentEventContent,
+    inbound_manager: Option<String>,
 ) {
     if let Some(local) = agents.iter_mut().find(|record| record.pubkey == d_tag) {
         local.name = inbound.name;
@@ -424,7 +431,40 @@ fn apply_inbound_managed_agent(
         if inbound.tier.is_some() {
             local.tier = inbound.tier;
         }
+        // Same rule for the role: absent is "not carried". A head from a
+        // client predating this field must not erase the role that decides
+        // whether an unranked agent is the Chief of Staff.
+        if inbound.role_id.is_some() {
+            local.role_id = inbound.role_id;
+        }
+        // Absent is "not carried" here too: a head written by a client that
+        // predates the manager tag must not read as "reports to nobody".
+        // Clearing a reporting line stays the org dialog's job.
+        if inbound_manager.is_some() {
+            local.manager = inbound_manager;
+        }
     }
+}
+
+/// The head's `manager` tag, or `None`.
+///
+/// Fail-closed on duplicates and on anything that is not a 64-char hex
+/// pubkey, mirroring the relay's own `event_single_tag` and the desktop
+/// reader in `managedAgentHeads.ts`: two managers is not a reporting line,
+/// and a malformed one must not be stored as if it were.
+fn single_manager_tag(event: &nostr::Event) -> Option<String> {
+    let mut found: Option<String> = None;
+    for tag in event.tags.iter() {
+        let slice = tag.as_slice();
+        if slice.first().map(String::as_str) != Some("manager") {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = slice.get(1).map(|value| value.trim().to_lowercase());
+    }
+    found.filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// The membership an inbound team event resolves to against local state.

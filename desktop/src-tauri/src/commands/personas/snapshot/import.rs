@@ -598,6 +598,7 @@ pub async fn confirm_agent_snapshot_import(
         // secrets, no lineage from the snapshot.
         let record = ManagedAgentRecord {
             tier: None,
+            manager: None,
             pubkey: pubkey.clone(),
             name: display_name.clone(),
             role_id: None,
