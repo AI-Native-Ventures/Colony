@@ -17,6 +17,7 @@ import {
 import {
   createCompanyRepository,
   resetCompanyRepositoryState,
+  taskReadBackDelay,
 } from "./companyRepository.ts";
 import { createCompanyActionBroker } from "./workRepository.ts";
 
@@ -988,7 +989,9 @@ test("a task read-back retries past index lag instead of failing on the first mi
   assert.equal(result.ok, true);
   assert.equal(result.value.id, TASK.id);
   assert.equal(calls, 3);
-  assert.deepEqual(delays, [50, 50]);
+  // Backoff, not evenly spaced: indexing lag is usually tens of milliseconds,
+  // so the first retry stays tight and the tail is what grows.
+  assert.deepEqual(delays, [50, 100]);
 });
 
 test("a task read-back gives up after its bounded attempts", async () => {
@@ -1140,4 +1143,13 @@ test("a bounce reason of an unknown kind is refused, not coerced", () => {
     RELAY_PUBKEY,
   );
   assert.equal(parsed.ok, false);
+});
+
+test("read-back backoff doubles and then holds at its cap", () => {
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((attempt) => taskReadBackDelay(attempt, 150, 2_000)),
+    [150, 300, 600, 1_200, 2_000],
+  );
+  // Capped, so a long tail never becomes an unbounded one.
+  assert.equal(taskReadBackDelay(20, 150, 2_000), 2_000);
 });
