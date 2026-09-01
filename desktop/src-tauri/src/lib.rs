@@ -794,6 +794,7 @@ pub fn run() {
             commands::initiative::ensure_chat_task,
             commands::initiative::create_user_task,
             commands::task_transition::complete_queue_task,
+            commands::task_transition::rename_task_from_agent,
             commands::task_transition::snooze_queue_task,
             commands::task_transition::bounce_queue_task,
             create_team,

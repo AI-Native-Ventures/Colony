@@ -22,6 +22,24 @@ export async function completeQueueTask(input: {
   });
 }
 
+/**
+ * Rename a chat-attributed task to the name its agent gave the work.
+ *
+ * Owner-signed in the backend: KIND_COMPANY_ACTION is owner-only, and the
+ * agent that wrote the name holds MessagesWrite.
+ */
+export async function renameTaskFromAgent(input: {
+  taskHead: string;
+  title: string;
+  relayPubkey: string;
+}): Promise<string> {
+  return await invokeTauri<string>("rename_task_from_agent", {
+    taskHead: input.taskHead,
+    title: input.title,
+    relayPubkey: input.relayPubkey,
+  });
+}
+
 export async function snoozeQueueTask(input: {
   taskHead: string;
   wakeAt: number;

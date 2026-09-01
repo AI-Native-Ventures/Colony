@@ -42,6 +42,32 @@ pub async fn complete_queue_task(
     sign_action(&action, &keys)
 }
 
+/// Rename a chat-attributed task to the name the agent gave its own work.
+///
+/// Owner-signed because it has to be: `KIND_COMPANY_ACTION` is owner-only, and
+/// the agent that named the work holds `MessagesWrite`. The agent supplies the
+/// name through its checkpoint summary; this is the step that applies it.
+#[tauri::command]
+pub async fn rename_task_from_agent(
+    task_head: String,
+    title: String,
+    relay_pubkey: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let keys = state
+        .signing_keys()
+        .map_err(|_| "renaming a task requires the community owner".to_string())?;
+    if !is_event_id(&relay_pubkey) {
+        return Err("relay pubkey is not a valid public key".to_string());
+    }
+    let event = relay_head(&task_head, &relay_pubkey, "task")?;
+    let task = parse_task_event(&event)
+        .map_err(|error| format!("the task head is unreadable: {error}"))?;
+    let action =
+        task_transition::plan_task_rename(&task, &event.id.to_hex(), &title, &relay_pubkey)?;
+    sign_action(&action, &keys)
+}
+
 /// Snooze a task the queue shows until `wake_at`.
 #[tauri::command]
 pub async fn snooze_queue_task(
