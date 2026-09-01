@@ -2520,6 +2520,11 @@ fn apply_openrouter_mutations(
         // rather than account-wide — `z-ai/glm-5.2:free` was throttled while
         // `minimax/minimax-m3:free` served fine on the same key in the same
         // minute — so a chain recovers the common failure, not just the rare one.
+        // The configured chain is a snapshot taken at spawn; `relay_chain`
+        // returns a newer one when the relay has re-ranked since, and returns
+        // this one untouched when the value was set by hand.
+        let live = crate::relay_chain::effective(fallback_models);
+        let fallback_models: &[String] = &live;
         if !fallback_models.is_empty() {
             let mut chain = vec![effective_model.to_string()];
             for m in fallback_models {

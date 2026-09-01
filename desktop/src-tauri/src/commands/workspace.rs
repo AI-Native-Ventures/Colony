@@ -131,6 +131,14 @@ pub async fn apply_workspace(
     agent_managed_profiles: Option<bool>,
     app: AppHandle,
 ) -> Result<(), String> {
+    // Warm the relay-recommended model chain for this community before any
+    // agent spawns. The cache is only ever *read* on the spawn path, and the
+    // refresh scheduled there lands about a second too late for agents started
+    // right after launch — so without this the first agents of a session get no
+    // chain, and long-lived ones never get one at all. Scheduled, not awaited:
+    // applying a community must not wait on a ranking service.
+    crate::managed_agents::model_chain::refresh_in_background(&relay_url);
+
     let operation_app = app.clone();
     let operation_state = operation_app.state::<AppState>();
     let community_operation_guard = operation_state.community_operation_lock.write().await;
