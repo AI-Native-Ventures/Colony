@@ -7,18 +7,33 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use nostr::{Event, Kind, PublicKey};
+use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Timestamp};
 use sha2::{Digest, Sha256};
 
 const MAX_EVENT_BYTES: u64 = 256 * 1024;
 const MAX_PENDING_EVENTS: usize = 10_000;
 const MAX_REPLAY_BATCH: usize = 8;
 const SUBMIT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Re-stamp a queued record once its envelope approaches the relay's drift
+/// limit.
+///
+/// The relay refuses any event whose `created_at` is more than 15 minutes from
+/// server time (`MAX_TIMESTAMP_DRIFT_SECS` in `handlers/ingest.rs`). A queued
+/// record keeps the `created_at` it was signed with, so an outage longer than
+/// that window makes every record in the outbox permanently unacceptable: each
+/// replay is refused, nothing is ever acknowledged, and the queue retries the
+/// same rejected bytes forever while the spend they describe is silently lost.
+///
+/// Ten minutes leaves five for the submit itself.
+const RESTAMP_AFTER: i64 = 600;
 
 #[derive(Debug, Clone)]
 pub(crate) struct UsageOutbox {
     root: PathBuf,
     agent_pubkey: PublicKey,
+    /// Signing keys, present only where a queued record may need re-stamping.
+    /// `None` keeps the stored bytes exactly as signed.
+    keys: Option<Keys>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -28,6 +43,15 @@ pub(crate) struct ReplayOutcome {
 }
 
 impl UsageOutbox {
+    /// Open with the keys that signed the records, so a record queued through
+    /// an outage longer than the relay's drift window can be re-stamped rather
+    /// than refused forever.
+    pub(crate) fn open_with_keys(relay_url: &str, keys: Keys) -> Result<Self, String> {
+        let mut outbox = Self::open(relay_url, keys.public_key())?;
+        outbox.keys = Some(keys);
+        Ok(outbox)
+    }
+
     pub(crate) fn open(relay_url: &str, agent_pubkey: PublicKey) -> Result<Self, String> {
         let base = dirs::data_dir().ok_or_else(|| {
             "Spend outbox unavailable: application data directory is unknown".to_string()
@@ -42,6 +66,14 @@ impl UsageOutbox {
             base.join("Buzz").join("spend-outbox").join(digest),
             agent_pubkey,
         )
+    }
+
+    /// `open_at` carrying signing keys. Used by `open_with_keys` and by tests
+    /// that need a re-stampable outbox in a temporary directory.
+    pub(crate) fn open_with_keys_at(root: PathBuf, keys: Keys) -> Result<Self, String> {
+        let mut outbox = Self::open_at(root, keys.public_key())?;
+        outbox.keys = Some(keys);
+        Ok(outbox)
     }
 
     pub(crate) fn open_at(root: PathBuf, agent_pubkey: PublicKey) -> Result<Self, String> {
@@ -62,7 +94,11 @@ impl UsageOutbox {
                 .map_err(|error| format!("protect Spend outbox {}: {error}", root.display()))?;
         }
 
-        let outbox = Self { root, agent_pubkey };
+        let outbox = Self {
+            root,
+            agent_pubkey,
+            keys: None,
+        };
         outbox.recover_temporary_files()?;
         outbox.pending_events()?;
         Ok(outbox)
@@ -159,8 +195,35 @@ impl UsageOutbox {
         rest: &crate::relay::RestClient,
         event: &Event,
     ) -> Result<(), String> {
-        let delivery = Self::submit_to_relay(rest, event);
-        self.finish_delivery(event, delivery).await
+        // Re-signing changes the event id, so the ORIGINAL entry is what gets
+        // acknowledged: the file is named for the id it was stored under.
+        let outgoing = self.restamped(event)?;
+        let delivery = Self::submit_to_relay(rest, &outgoing);
+        delivery.await?;
+        self.acknowledge(event)
+    }
+
+    /// The event to send: the stored one, or a fresh envelope around the same
+    /// signed-for payload once the stored one is too old for the relay.
+    ///
+    /// Only `created_at` changes. The ciphertext and tags are reused verbatim,
+    /// and the usage payload carries its own `timestamp` for when the metered
+    /// call actually happened, so re-stamping the envelope moves nothing that
+    /// Spend reads. A re-stamped duplicate is correlated by
+    /// `provider_request_id` in `credits.rs`, so a record that did land before
+    /// its acknowledgement was lost still settles once.
+    fn restamped(&self, event: &Event) -> Result<Event, String> {
+        let Some(keys) = self.keys.as_ref() else {
+            return Ok(event.clone());
+        };
+        let age = Timestamp::now().as_u64() as i64 - event.created_at.as_u64() as i64;
+        if age < RESTAMP_AFTER {
+            return Ok(event.clone());
+        }
+        EventBuilder::new(event.kind, event.content.clone())
+            .tags(event.tags.clone().to_vec())
+            .sign_with_keys(keys)
+            .map_err(|error| format!("re-stamp queued Spend record: {error}"))
     }
 
     async fn submit_to_relay(rest: &crate::relay::RestClient, event: &Event) -> Result<(), String> {
@@ -338,6 +401,61 @@ mod tests {
         .tags([Tag::parse(["p", &owner.to_hex()]).expect("owner tag")])
         .sign_with_keys(keys)
         .expect("signed event")
+    }
+
+    /// A record queued through an outage longer than the relay's drift window
+    /// must still be deliverable.
+    ///
+    /// The relay refuses anything more than 15 minutes from server time, and a
+    /// queued record keeps the `created_at` it was signed with. Without
+    /// re-stamping, a 20-minute outage makes every queued record permanently
+    /// unacceptable: refused on every replay, never acknowledged, retried
+    /// forever, and the spend it describes never lands.
+    #[test]
+    fn a_record_older_than_the_drift_window_is_restamped_before_replay() {
+        let directory = tempfile::tempdir().expect("outbox directory");
+        let agent = Keys::generate();
+        let owner = Keys::generate();
+        let outbox = UsageOutbox::open_with_keys_at(directory.path().join("outbox"), agent.clone())
+            .expect("open");
+
+        let stale_at = Timestamp::from(Timestamp::now().as_u64() - 1_800);
+        let stale = EventBuilder::new(
+            Kind::Custom(buzz_core::kind::KIND_USAGE_RECORD as u16),
+            "ciphertext",
+        )
+        .tags([
+            Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+            Tag::parse(["agent", &agent.public_key().to_hex()]).expect("agent tag"),
+        ])
+        .custom_created_at(stale_at)
+        .sign_with_keys(&agent)
+        .expect("sign stale record");
+
+        let outgoing = outbox.restamped(&stale).expect("restamp");
+        let age = Timestamp::now().as_u64() as i64 - outgoing.created_at.as_u64() as i64;
+        assert!(
+            age < 60,
+            "a re-stamped record must carry a current envelope"
+        );
+        // Only the envelope moves: the payload Spend reads is byte-identical,
+        // and it carries its own timestamp for when the call happened.
+        assert_eq!(outgoing.content, stale.content);
+        assert_eq!(outgoing.tags, stale.tags);
+        assert_eq!(outgoing.kind, stale.kind);
+        assert_eq!(outgoing.pubkey, stale.pubkey);
+        assert!(outgoing.verify().is_ok(), "re-stamped record must verify");
+    }
+
+    #[test]
+    fn a_fresh_record_is_sent_exactly_as_signed() {
+        let directory = tempfile::tempdir().expect("outbox directory");
+        let agent = Keys::generate();
+        let owner = Keys::generate();
+        let outbox = UsageOutbox::open_with_keys_at(directory.path().join("outbox"), agent.clone())
+            .expect("open");
+        let fresh = event(&agent, &owner.public_key());
+        assert_eq!(outbox.restamped(&fresh).expect("restamp"), fresh);
     }
 
     #[test]
