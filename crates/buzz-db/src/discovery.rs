@@ -312,6 +312,21 @@ pub enum DiscoveryWorkerCommandApply {
         /// Safe result signed into the receipt.
         outcome: Box<DiscoveryWorkerReceiptOutcome>,
     },
+    /// A claim that matched no eligible run, answered without being stored.
+    ///
+    /// An idle claim records nothing: the worker asked for work and there was
+    /// none. Persisting it wrote two permanent rows per poll, and a worker
+    /// polling an empty queue once a second filled 96% of a production relay
+    /// with 2.04M rows of "nothing happened". The receipt is built and
+    /// returned so the worker still gets its answer; neither event is
+    /// inserted, and no idempotency row is claimed, because there is no
+    /// mutation for a retry to collide with.
+    IdleNotStored {
+        /// Relay-signed receipt, built but never inserted.
+        receipt: Box<StoredEvent>,
+        /// Safe result signed into the receipt.
+        outcome: Box<DiscoveryWorkerReceiptOutcome>,
+    },
     /// The same logical worker command already committed.
     Duplicate {
         /// Original actor-signed action event ID.
@@ -2002,6 +2017,19 @@ impl Db {
         )
         .await?;
         let receipt_event = build_receipt(&outcome)?;
+        // An idle claim answers and stores nothing. Everything below this
+        // point writes: the action, the receipt, its mentions, and an
+        // idempotency row. None of it describes a change, because nothing
+        // changed - the worker asked for work and there was none.
+        if operation == DiscoveryWorkerOperation::Claim
+            && matches!(outcome, DiscoveryWorkerReceiptOutcome::Idle)
+        {
+            tx.commit().await?;
+            return Ok(DiscoveryWorkerCommandApply::IdleNotStored {
+                receipt: Box::new(StoredEvent::new(receipt_event, None)),
+                outcome: Box::new(outcome),
+            });
+        }
         let (stored_action, action_inserted) = crate::event::insert_event_with_thread_metadata_tx(
             &mut tx,
             community_id,
@@ -6209,11 +6237,108 @@ mod tests {
         result: DiscoveryWorkerCommandApply,
     ) -> DiscoveryWorkerReceiptOutcome {
         match result {
-            DiscoveryWorkerCommandApply::Applied { outcome, .. } => *outcome,
+            DiscoveryWorkerCommandApply::Applied { outcome, .. }
+            // An idle claim reports its outcome without storing anything, so
+            // it is as much a real answer as an applied one.
+            | DiscoveryWorkerCommandApply::IdleNotStored { outcome, .. } => *outcome,
             DiscoveryWorkerCommandApply::Duplicate { .. } => {
                 panic!("test action unexpectedly reused an idempotency key")
             }
         }
+    }
+
+    use buzz_core::kind::{KIND_DISCOVERY_WORKER_ACTION, KIND_DISCOVERY_WORKER_RECEIPT};
+
+    /// A worker polling an empty queue must leave no trace.
+    ///
+    /// Every idle claim used to persist its action AND a relay receipt, so two
+    /// workers polling once a second wrote 2.04M rows into production - 96% of
+    /// the whole events table, against 6,019 actual messages. The receipt is
+    /// still returned, so the worker is answered exactly as before.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn an_idle_claim_answers_the_worker_without_storing_anything() {
+        let _test_guard = DISCOVERY_DB_TEST_LOCK.lock().await;
+        let (db, community, _, _) = database_fixture().await;
+        db.set_discovery_entitlement(community, true)
+            .await
+            .expect("entitle workspace");
+        let actor = Keys::generate();
+        let actor_bytes = actor.public_key().to_bytes();
+        sqlx::query("INSERT INTO members (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor.public_key().to_hex())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker member");
+        sqlx::query("INSERT INTO users (community_id,pubkey) VALUES ($1,$2)")
+            .bind(community.as_uuid())
+            .bind(actor_bytes.as_slice())
+            .execute(&db.pool)
+            .await
+            .expect("insert worker identity");
+
+        let before: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM events WHERE kind IN ($1,$2) AND community_id=$3",
+        )
+        .bind(KIND_DISCOVERY_WORKER_ACTION as i32)
+        .bind(KIND_DISCOVERY_WORKER_RECEIPT as i32)
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("count worker events before");
+
+        let relay = Keys::generate();
+        let applied = apply_worker_action(
+            &db,
+            community,
+            &actor,
+            &relay,
+            DiscoveryWorkerAction::Claim(DiscoveryWorkerClaimRequest {
+                request_id: Uuid::new_v4(),
+                idempotency_key: Uuid::new_v4(),
+                worker_id: Uuid::new_v4(),
+                protocol_version: buzz_core::discovery::DISCOVERY_RELEASED_PROTOCOL_VERSION,
+                available_providers: vec![DiscoveryProvider::Outscraper],
+            }),
+            Duration::seconds(30),
+        )
+        .await
+        .expect("a claim against an empty queue is not an error");
+
+        // Answered: the worker still receives a signed receipt saying Idle.
+        match &applied {
+            DiscoveryWorkerCommandApply::IdleNotStored { outcome, receipt } => {
+                assert_eq!(**outcome, DiscoveryWorkerReceiptOutcome::Idle);
+                assert_eq!(
+                    receipt.event.kind.as_u16() as u32,
+                    KIND_DISCOVERY_WORKER_RECEIPT
+                );
+            }
+            other => panic!("an idle claim must not be stored, got {other:?}"),
+        }
+
+        let after: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM events WHERE kind IN ($1,$2) AND community_id=$3",
+        )
+        .bind(KIND_DISCOVERY_WORKER_ACTION as i32)
+        .bind(KIND_DISCOVERY_WORKER_RECEIPT as i32)
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("count worker events after");
+        assert_eq!(after, before, "an idle claim wrote rows");
+
+        // No idempotency row either: there is no mutation for a retry to
+        // collide with, and claiming one would make the next poll a Duplicate.
+        let claims: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM discovery_worker_action_claims WHERE community_id=$1",
+        )
+        .bind(community.as_uuid())
+        .fetch_one(&db.pool)
+        .await
+        .expect("count claims");
+        assert_eq!(claims, 0, "an idle claim reserved an idempotency key");
     }
 
     #[tokio::test]
