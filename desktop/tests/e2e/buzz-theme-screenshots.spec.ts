@@ -1148,10 +1148,22 @@ test("glass background keeps the content panel solid", async ({ page }) => {
   // slider ignoring Home rather than as a lost keystroke. Observed on
   // 2026-08-31 blocking a promotion, expected "30" received "65" against the
   // full 15s timeout, so the value never changed at all.
-  await opacitySlider.focus();
-  await expect(opacitySlider).toBeFocused();
-  await opacitySlider.press("Home");
-  await expect(opacitySlider).toHaveAttribute("aria-valuenow", "30");
+  // Home is idempotent — it moves the slider to its minimum — so retry focus
+  // and the key together until the value actually changes, rather than
+  // asserting focus landed and then pressing once.
+  //
+  // An earlier version did assert focus first. That turned one race into
+  // another: under CI contention `toBeFocused()` itself reported "inactive"
+  // and failed the job, which is the assertion flaking rather than the slider
+  // misbehaving. Driving to the outcome removes both, and the value assertion
+  // below is what actually carries the claim.
+  await expect
+    .poll(async () => {
+      await opacitySlider.focus();
+      await opacitySlider.press("Home");
+      return opacitySlider.getAttribute("aria-valuenow");
+    })
+    .toBe("30");
   await expect
     .poll(() =>
       page.evaluate(() =>
