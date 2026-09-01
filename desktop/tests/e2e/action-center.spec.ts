@@ -2,6 +2,14 @@ import { expect, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
 
+// Several assertions below deliberately wait 30s: CI has landed a refetch just
+// past a tighter budget. That equals `playwright.config.ts`'s per-test timeout,
+// so the test clock expired first and Playwright blamed whichever assertion was
+// in flight — a pure-clock failure that reads as a product flake and reproduced
+// on diffs as inert as a version bump. An assertion budget must sit strictly
+// inside the test budget for its timeout to mean anything.
+test.describe.configure({ timeout: 90_000 });
+
 const MOCK_PUBKEY = "deadbeef".repeat(8);
 const CHANNEL_NAME = "general";
 const CHANNEL_ID = "channel-general";
@@ -267,6 +275,13 @@ test("opens the native Action Center with URL-backed filters and selection", asy
   await expect(page.getByTestId("action-center-open-count")).toHaveText("1", {
     timeout: 30_000,
   });
+
+  // The badge proves the query resolved, not that the list pane rendered: the
+  // badge renders unconditionally while the list stays behind `isLoading`
+  // (ActionCenterScreen.tsx). Wait for the skeleton to clear before locating a
+  // row, or the row assertion races the empty->populated swap that recreates
+  // the virtualizer's scroll element.
+  await expect(page.getByTestId("action-center-loading")).toHaveCount(0);
 
   const selectedItem = page.getByTestId(/^action-center-item-reminder:/);
   await expect(selectedItem).toBeVisible();

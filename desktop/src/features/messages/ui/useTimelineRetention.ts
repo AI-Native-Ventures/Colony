@@ -37,6 +37,13 @@ export function useTimelineRetention(
     const currentKeys = keysRef.current;
     const list = listRef.current;
     if (!list || currentKeys.length === 0) return;
+    // Never recompute the band from an unmeasured viewport. `nextRetainedTimelineKeys`
+    // clamps `viewportSize` to 1, so a refresh landing before layout collapses every
+    // band to ~1px and evicts almost the whole timeline — rows then vanish and only
+    // return on a fresh settle. The scroll path already guards on this
+    // (`TimelineMessageList`'s `list.viewportSize > 0`); this path did not, which is
+    // what turned a CPU-contended frame into a wiped retention set.
+    if (list.viewportSize <= 0) return;
     setRetainedKeys((previous) =>
       nextRetainedTimelineKeys(currentKeys, previous, list),
     );

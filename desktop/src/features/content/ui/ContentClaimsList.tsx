@@ -100,20 +100,24 @@ export function ContentClaimsList({
 }) {
   if (claims.length === 0) {
     return (
-      <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-        <p className="text-sm font-medium">No claims registered</p>
-        <p className="mt-1 text-xs text-muted-foreground">
+      <section>
+        <h4 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+          No claims registered
+        </h4>
+        <p className="mt-1.5 text-xs text-muted-foreground">
           Nothing on this card has been traced to a source. That is not the same
           as the card saying nothing.
         </p>
-      </div>
+      </section>
     );
   }
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
-      <p className="text-sm font-medium">What this card claims</p>
-      <ul className="mt-2 space-y-2">
+    <section>
+      <h4 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+        What this card claims
+      </h4>
+      <ul className="mt-1.5 space-y-2">
         {claims.map((claim) => {
           const verdict = verdicts[claim.id];
           return (
@@ -144,6 +148,6 @@ export function ContentClaimsList({
           );
         })}
       </ul>
-    </div>
+    </section>
   );
 }

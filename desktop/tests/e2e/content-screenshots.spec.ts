@@ -89,7 +89,82 @@ function seededEvents() {
     tags: [["d", `${CAMPAIGN_ID}:${day.slug}`]],
   }));
 
-  return [campaign, ...posts];
+  // The logo travels as data: URIs so the mock needs no media server; the
+  // Brand page hands them to <img> unchanged.
+  const logoSvg = (fill: string) =>
+    `data:image/svg+xml;utf8,${encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="20" cy="32" r="12" fill="${fill}"/><rect x="36" y="20" width="24" height="24" rx="4" fill="${fill}"/></svg>`,
+    )}`;
+
+  const kit = {
+    content: JSON.stringify({
+      canvases: [{ h: 1350, name: "post", w: 1080 }],
+      hues: [
+        {
+          base: "#5b2ee5",
+          name: "violet",
+          ramp: ["#120b26", "#5b2ee5", "#f6f3ff"],
+        },
+        { base: "#e52ea8", name: "magenta", ramp: [] },
+      ],
+      id: "acme",
+      marks: [
+        {
+          media_hash: "f".repeat(64),
+          media_url: logoSvg("#5b2ee5"),
+          role: "logo",
+          variants: [
+            {
+              media_hash: "a".repeat(64),
+              media_url: logoSvg("#ffffff"),
+              purpose: "on-dark",
+            },
+            {
+              media_hash: "b".repeat(64),
+              media_url: logoSvg("#171717"),
+              purpose: "on-light",
+            },
+          ],
+        },
+      ],
+      rules: { claim_strictness: "strict" },
+      schema: "colony/content-brand-kit/v1",
+      source: { type: "scan", url: "https://acme.example" },
+      templates: ["statement"],
+      version: "1",
+    }),
+    created_at: 1_800_000_200,
+    id: "e".repeat(64),
+    kind: 30198,
+    pubkey: AUTHOR,
+    tags: [["d", "acme"]],
+  };
+
+  const style = {
+    content: JSON.stringify({
+      rules: [
+        {
+          active: true,
+          id: "r1-1",
+          origin: { at: 1_756_600_000, quote: "stop using exclamation marks" },
+          text: "No exclamation marks",
+        },
+      ],
+      schema: "colony/content-style/v1",
+      settings: {
+        banned_words: ["synergy"],
+        voice: { sound: "Plain and confident.", tagline: "Run the company." },
+      },
+      version: "5",
+    }),
+    created_at: 1_800_000_300,
+    id: "f".repeat(64),
+    kind: 30197,
+    pubkey: AUTHOR,
+    tags: [["d", "house"]],
+  };
+
+  return [campaign, kit, style, ...posts];
 }
 
 test.beforeEach(async ({ page }) => {
@@ -161,5 +236,27 @@ test("the calendar shows the week, and the day detail resizes like every other p
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/content/01-calendar-detail.png",
+  });
+});
+
+test("the Brand page shows the logo in its versions, each on its ground", async ({
+  page,
+}) => {
+  await page.getByTestId("content-open-style").click();
+
+  // The scanned website is named up top, in plain words.
+  await expect(page.getByText("acme.example")).toBeVisible();
+
+  // The derived versions render as labeled plates, never a lone logo.
+  await expect(page.getByText("As it is")).toBeVisible();
+  await expect(page.getByText("On dark cards")).toBeVisible();
+  await expect(page.getByText("On light cards")).toBeVisible();
+  await expect(page.getByAltText("Your logo, for dark cards")).toBeVisible();
+  await expect(page.getByAltText("Your logo, for light cards")).toBeVisible();
+
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/content/02-brand-book.png",
+    fullPage: false,
   });
 });

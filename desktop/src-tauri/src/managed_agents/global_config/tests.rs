@@ -358,6 +358,7 @@ fn default_global_config_serializes_all_fields() {
 fn bare_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
+        manager: None,
         pubkey: "agent".to_string(),
         name: "Agent".to_string(),
         role_id: None,

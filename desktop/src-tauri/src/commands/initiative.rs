@@ -541,6 +541,7 @@ mod tests {
     fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
         ManagedAgentRecord {
             tier: None,
+            manager: None,
             pubkey: pubkey.to_string(),
             name: "Legacy Bot".to_string(),
             role_id: None,

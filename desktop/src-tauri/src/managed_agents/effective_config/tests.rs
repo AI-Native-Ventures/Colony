@@ -42,6 +42,7 @@ fn record(
     use crate::managed_agents::{BackendKind, RespondTo};
     ManagedAgentRecord {
         tier: None,
+        manager: None,
         pubkey: "agent-pk".to_string(),
         name: "Agent".to_string(),
         role_id: None,

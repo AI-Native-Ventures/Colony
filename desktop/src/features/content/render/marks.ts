@@ -18,6 +18,7 @@
  */
 
 import type { BrandKit, BrandMark } from "./kit";
+import { hexToRgb, relativeLuminance } from "./color";
 import { antSvg } from "./geometry";
 
 /** Renders the `.lockup-mark` contents for one lockup colour. */
@@ -34,6 +35,39 @@ export const noMark: CardMark = () => "";
  * so the lockup colour is ignored. */
 export function imageMark(dataUri: string): CardMark {
   return () => `<img src="${dataUri}" alt="">`;
+}
+
+/** The data URIs a variant-aware mark chooses between. */
+export type MarkVariantUris = {
+  /** The original bytes, drawn when no variant fits or none exists. */
+  base: string;
+  /** The light version, for dark grounds. */
+  onDark?: string;
+  /** The ink version, for light grounds. */
+  onLight?: string;
+};
+
+/**
+ * A logo that follows the ground the way type does.
+ *
+ * The lockup colour is the tell: compositions hand the mark the same colour
+ * the type gets, white on night grounds and ink on dawn ones, so a light
+ * lockup colour means a dark ground and the on-dark version of the logo is
+ * the one that reads there. A kit without the fitting variant falls back to
+ * the original bytes, which is exactly the pre-variant behaviour.
+ */
+export function variantMark(uris: MarkVariantUris): CardMark {
+  return (lockupColor) => {
+    let uri = uris.base;
+    try {
+      const { rgb } = hexToRgb(lockupColor);
+      const lightType = relativeLuminance(rgb) > 0.5;
+      uri = (lightType ? uris.onDark : uris.onLight) ?? uris.base;
+    } catch {
+      // An unparseable lockup colour draws the original, never nothing.
+    }
+    return `<img src="${uri}" alt="">`;
+  };
 }
 
 /**

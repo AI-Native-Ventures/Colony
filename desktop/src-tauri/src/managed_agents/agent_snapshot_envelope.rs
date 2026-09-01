@@ -367,6 +367,7 @@ mod tests {
     fn record_with_keys(pubkey: String, private_key_nsec: String) -> ManagedAgentRecord {
         ManagedAgentRecord {
             tier: None,
+            manager: None,
             creation_request_id: None,
             role_id: None,
             role_title: None,

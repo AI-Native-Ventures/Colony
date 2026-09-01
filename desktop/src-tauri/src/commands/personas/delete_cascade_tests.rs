@@ -18,6 +18,7 @@ fn make_agent(
 ) -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
+        manager: None,
         pubkey: pubkey.to_string(),
         name: "Test Agent".to_string(),
         role_id: None,

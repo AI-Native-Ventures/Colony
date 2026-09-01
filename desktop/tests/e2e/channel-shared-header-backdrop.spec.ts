@@ -79,8 +79,23 @@ test.describe("channel shared header backdrop", () => {
 
     const replyButton = page.locator('[data-testid^="reply-message-"]').first();
     await expect(replyButton).toBeVisible();
-    await replyButton.click({ force: true });
-    await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+    // Retry the click until the panel opens, rather than clicking once and
+    // asserting. A visible reply button is not necessarily a wired one: under
+    // CI contention the click can land before the row's handler is attached,
+    // and it then goes nowhere. The failure reads as "message-thread-panel not
+    // found", which looks like the panel being broken rather than a click that
+    // was never received. Opening an already-open thread is a no-op, so
+    // retrying is safe.
+    const threadPanel = page.getByTestId("message-thread-panel");
+    await expect
+      .poll(async () => {
+        if ((await threadPanel.count()) === 0) {
+          await replyButton.click({ force: true });
+        }
+        return threadPanel.count();
+      })
+      .toBeGreaterThan(0);
+    await expect(threadPanel).toBeVisible();
 
     const sharedBackdrop = page.getByTestId("channel-shared-header-backdrop");
     await expect(sharedBackdrop).toHaveCount(1);

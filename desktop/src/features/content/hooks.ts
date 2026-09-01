@@ -26,7 +26,11 @@ import { loadKitFontFace } from "./render/fontKit";
 import { resolveCardMark } from "./render/marksRuntime";
 import type { PipelineOutcome } from "./render/pipeline";
 import { markDataUri } from "./render/marks";
-import { rasteriseSvgLogo } from "./render/marksRuntime";
+import {
+  deriveLogoVariants,
+  rasteriseSvgLogo,
+  type DerivedLogoVariants,
+} from "./render/marksRuntime";
 import { renderPost } from "./renderPost";
 import type { RuleOriginInput, StyleVoice } from "./styleRecord";
 import {
@@ -290,7 +294,37 @@ export function useSetBrandLogo(communityId: string) {
             ),
           )
         : input.bytes;
-      const blob = await uploadMediaBytes(bytes, input.filename);
+      // One logo in, every version the cards need out: the background
+      // lifted, a white version for dark grounds, an ink one for light.
+      // Derivation failing must not block the logo itself, so it degrades
+      // to the pre-variant single upload.
+      let derived: DerivedLogoVariants | null = null;
+      try {
+        derived = await deriveLogoVariants(Uint8Array.from(bytes));
+      } catch {
+        derived = null;
+      }
+      const blob = await uploadMediaBytes(
+        derived ? Array.from(derived.base) : bytes,
+        input.filename,
+      );
+      const variants: Record<string, string>[] = [];
+      if (derived) {
+        for (const [purpose, versionBytes] of [
+          ["on-dark", derived.onDark],
+          ["on-light", derived.onLight],
+        ] as const) {
+          const uploaded = await uploadMediaBytes(
+            Array.from(versionBytes),
+            input.filename,
+          );
+          variants.push({
+            media_hash: uploaded.sha256.toLowerCase().replace(/\.png$/, ""),
+            media_url: uploaded.url,
+            purpose,
+          });
+        }
+      }
       const marks = Array.isArray(kit.body.marks)
         ? kit.body.marks.filter(
             (entry) =>
@@ -308,6 +342,7 @@ export function useSetBrandLogo(communityId: string) {
               media_hash: blob.sha256.toLowerCase().replace(/\.png$/, ""),
               media_url: blob.url,
               role: "logo",
+              ...(variants.length > 0 ? { variants } : {}),
             },
           ],
         }),

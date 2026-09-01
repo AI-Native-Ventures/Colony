@@ -11,6 +11,7 @@ import {
   markDataUri,
   noMark,
   sniffImageMime,
+  variantMark,
 } from "./marks.ts";
 
 const kit = (overrides = {}) => ({
@@ -139,4 +140,29 @@ test("a kit image mark reaches the card as an inline img", () => {
 test("the default mark is still the ant, for Colony's own cards", () => {
   const html = cardHtml(spec, { fontFaceCss: "" });
   assert.match(html, /<svg/);
+});
+
+test("a variant-aware mark follows the ground the lockup colour names", () => {
+  const mark = variantMark({
+    base: "data:base",
+    onDark: "data:on-dark",
+    onLight: "data:on-light",
+  });
+  // White type means a dark ground: the light version of the logo.
+  assert.ok(mark("#ffffff").includes("data:on-dark"));
+  // Ink type means a light ground: the ink version.
+  assert.ok(mark("#171717").includes("data:on-light"));
+});
+
+test("a variant-aware mark falls back to the original bytes", () => {
+  const onlyBase = variantMark({ base: "data:base" });
+  assert.ok(onlyBase("#ffffff").includes("data:base"));
+  assert.ok(onlyBase("#171717").includes("data:base"));
+  // An unparseable lockup colour still draws something.
+  const withVariants = variantMark({
+    base: "data:base",
+    onDark: "data:on-dark",
+    onLight: "data:on-light",
+  });
+  assert.ok(withVariants("not-a-colour").includes("data:base"));
 });

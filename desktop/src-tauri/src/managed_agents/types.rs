@@ -99,6 +99,7 @@ impl AgentDefinition {
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
             tier: None,
+            manager: None,
             pubkey: String::new(),
             name: self.display_name.clone(),
             persona_id: None,
@@ -217,7 +218,7 @@ pub struct RelayAgentInfo {
     #[serde(default)]
     pub respond_to_allowlist: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ManagedAgentRecord {
     pub pubkey: String,
     pub name: String,
@@ -414,6 +415,17 @@ pub struct ManagedAgentRecord {
     /// owner-contact gate treats the agent as unrestricted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
+    /// Manager pubkey mirrored off the owner-authored head, for the same
+    /// reason `tier` is: the device rebuilds the published head from this
+    /// record, and the manager lives in a `manager` TAG rather than in the
+    /// content projection. A manager absent here is a reporting line erased
+    /// from the relay on the next republish, which is every rename,
+    /// parallelism change, persona relink, and app restart that rebuilds the
+    /// head. The org chart then shows the agent under UNASSIGNED, and an
+    /// agent that reports to nobody belongs to no team the company contract
+    /// accepts, so work cannot be assigned to it at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager: Option<String>,
     /// Absorbed from `AgentDefinition.runtime` — the preferred ACP runtime ID
     /// (e.g. 'goose', 'claude'). Record-first command resolution reads this
     /// before falling back to legacy persona lookup; populated by the store

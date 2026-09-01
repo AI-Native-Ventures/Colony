@@ -164,6 +164,7 @@ const AGENT_PUBKEY: &str = "agentpubkeyhex00000000000000000000000000000000000000
 fn local_agent() -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
+        manager: None,
         pubkey: AGENT_PUBKEY.to_string(),
         name: "Local Agent".to_string(),
         role_id: None,
@@ -271,7 +272,7 @@ fn inbound_managed_agent_drops_injected_secrets_and_harness() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content);
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content, None);
 
     let a = &agents[0];
     // Secrets / harness / runtime — every one preserved from the local record.
@@ -362,7 +363,7 @@ fn inbound_definition_less_agent_applies_quad() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content);
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, content, None);
 
     let a = &agents[0];
     assert_eq!(a.persona_id, None);
@@ -382,7 +383,7 @@ fn inbound_managed_agent_no_match_is_noop() {
     let content =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, "someotheragentpubkey", content);
+    apply_inbound_managed_agent(&mut agents, "someotheragentpubkey", content, None);
 
     // No agent minted from a relay event — it would have no secret key.
     assert_eq!(agents.len(), 1);
@@ -839,7 +840,7 @@ fn inbound_managed_agent_keeps_the_owner_authored_rank() {
     let parsed =
         crate::managed_agents::agent_events::managed_agent_content_from_event(&event).unwrap();
     let mut agents = vec![local_agent()];
-    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, parsed);
+    apply_inbound_managed_agent(&mut agents, AGENT_PUBKEY, parsed, None);
 
     assert_eq!(
         agents[0].tier.as_deref(),

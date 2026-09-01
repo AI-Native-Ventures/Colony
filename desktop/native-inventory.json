@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 439,
-    "rust_lines": 169994,
+    "rust_lines": 170147,
     "tauri_coupled": 175,
     "portable": 264,
-    "portable_lines": 96390,
+    "portable_lines": 96500,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -1411,7 +1411,7 @@
       "example_sites": [
         "src/features/agents/ui/AgentCardViewerDialog.tsx:72",
         "src/features/content/postPack.ts:9",
-        "src/features/content/ui/ContentDayDetail.tsx:124"
+        "src/features/content/ui/ContentDayDetail.tsx:125"
       ]
     },
     "download_voice_models": {

@@ -663,7 +663,6 @@ pub(crate) async fn create_managed_agent_with_creation_request(
         // The role two members' instances share, inherited from the linked
         // definition (docs/design/role-agents.html).
         let record = crate::managed_agents::ManagedAgentRecord {
-            tier: None,
             pubkey: pubkey.clone(),
             name: name.clone(),
             role_id: linked_persona
@@ -755,6 +754,7 @@ pub(crate) async fn create_managed_agent_with_creation_request(
             } else {
                 relay_mesh.clone()
             },
+            ..Default::default()
         };
 
         records.push(record);

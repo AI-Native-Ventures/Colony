@@ -65,6 +65,7 @@ mod tests {
     fn record_with(runtime: Option<&str>, parallelism: u32) -> ManagedAgentRecord {
         ManagedAgentRecord {
             tier: None,
+            manager: None,
             creation_request_id: None,
             role_id: None,
             role_title: None,
