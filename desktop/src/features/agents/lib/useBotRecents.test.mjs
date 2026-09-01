@@ -32,7 +32,7 @@ test("pickQuickBotPersonas prefers recents before defaults", () => {
   );
 });
 
-test("pickQuickBotPersonas seeds the three starter agents", () => {
+test("pickQuickBotPersonas leads with Scout, the one agent onboarding creates", () => {
   const personas = [
     createPersona("builtin:bumble", "Bumble"),
     createPersona("builtin:honey", "Honey"),
@@ -40,10 +40,9 @@ test("pickQuickBotPersonas seeds the three starter agents", () => {
     createPersona("builtin:reviewer", "Reviewer"),
   ];
 
-  assert.deepEqual(
-    pickQuickBotPersonas(personas, []).map((persona) => persona.id),
-    ["builtin:fizz", "builtin:honey", "builtin:bumble"],
-  );
+  // Scout first because it is seeded; the rest are ordinary personas filling
+  // the row, not a "starter team" the owner was given.
+  assert.equal(pickQuickBotPersonas(personas, [])[0]?.id, "builtin:fizz");
 });
 
 test("pickQuickBotPersonas falls back to any active personas when defaults are missing", () => {

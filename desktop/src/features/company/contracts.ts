@@ -144,6 +144,20 @@ export type SubjectRef = {
   ref: string;
 };
 
+/**
+ * Why a task's delivered output was bounced back for rework.
+ *
+ * Serialized by `BounceReason` in buzz-core as an externally tagged enum with
+ * `tag = "kind"`, `content = "value"`, so both variants are `{kind, value}`.
+ */
+export const BOUNCE_REASON_KINDS = ["criterion", "freeText"] as const;
+export type BounceReasonKind = (typeof BOUNCE_REASON_KINDS)[number];
+
+export type BounceReason = {
+  kind: BounceReasonKind;
+  value: string;
+};
+
 export type CompanyTask = {
   schema: string;
   id: string;
@@ -167,6 +181,12 @@ export type CompanyTask = {
   threadRoot: string | null;
   doerKind: DoerKind;
   wakeAt: number | null;
+  /** Why this task's outcome ended the way it did. Free text for now. */
+  outcomeReason: string | null;
+  /** Reason for the most recent bounce. Only the latest one. */
+  bounceReason: BounceReason | null;
+  /** How many times delivered output has been bounced back. */
+  bounceCount: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -395,6 +415,11 @@ const COHORT_FIELDS: Record<string, FieldKind> = {
   updatedAt: { type: "integer" },
 };
 
+const BOUNCE_REASON_FIELDS: Record<string, FieldKind> = {
+  kind: { type: "enum", values: BOUNCE_REASON_KINDS },
+  value: { type: "string" },
+};
+
 const TASK_FIELDS: Record<string, FieldKind> = {
   schema: { type: "string" },
   id: { type: "string" },
@@ -417,6 +442,9 @@ const TASK_FIELDS: Record<string, FieldKind> = {
   threadRoot: { type: "optionalString" },
   doerKind: { type: "enum", values: DOER_KINDS },
   wakeAt: { type: "optionalInteger" },
+  outcomeReason: { type: "optionalString" },
+  bounceReason: { type: "objectOrNull", fields: BOUNCE_REASON_FIELDS },
+  bounceCount: { type: "integer" },
   createdAt: { type: "integer" },
   updatedAt: { type: "integer" },
 };
@@ -440,6 +468,14 @@ const TASK_FIELD_DEFAULTS: Record<string, unknown> = {
   // would reject every head carrying it. So an absent key is the ordinary
   // case here, not only a legacy one.
   reviewerTeamId: null,
+  // Written by every current relay, absent from heads predating the bounce
+  // and outcome fields. They are defaulted rather than declared-only because
+  // the shape check matches on an EXACT field set: an undeclared key the
+  // relay does write rejects the head, and a declared key it does not write
+  // rejects it just as hard.
+  outcomeReason: null,
+  bounceReason: null,
+  bounceCount: 0,
 };
 
 function scalarTags(event: RelayEvent, name: string): string[] {

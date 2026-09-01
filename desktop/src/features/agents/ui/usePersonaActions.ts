@@ -9,6 +9,7 @@ import {
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useExportAgentSnapshotMutation,
+  useManagedAgentsQuery,
   usePersonasQuery,
   usePreviewAgentSnapshotImportMutation,
   useConfirmAgentSnapshotImportMutation,
@@ -62,6 +63,10 @@ import {
   type PersonaDialogState,
 } from "./personaDialogState";
 import {
+  orgPlacementForCreate,
+  resolveDefaultOrgPlacement,
+} from "@/features/agents/defaultOrgPlacement";
+import {
   resolveCreateIntent,
   type AgentCreateIntent,
 } from "./agentCreateIntent";
@@ -87,7 +92,7 @@ const ORG_RANK_POLL_MS = 1_000;
 async function rankCreatedAgent(
   agent: { pubkey: string; name: string },
   tier: AgentRank,
-  manager: string | undefined,
+  manager: string | null,
   ownerPubkeys: ReadonlySet<string>,
 ): Promise<void> {
   const deadline = Date.now() + ORG_RANK_WAIT_MS;
@@ -98,7 +103,7 @@ async function rankCreatedAgent(
           pubkey: agent.pubkey,
           name: agent.name,
           tier,
-          manager: manager ?? null,
+          manager,
         },
         ownerPubkeys,
       );
@@ -119,6 +124,9 @@ export function usePersonaActions() {
   const identityQuery = useIdentityQuery();
   const communityId = activeCommunity?.id ?? null;
   const personasQuery = usePersonasQuery();
+  // Read, never written here: the default placement needs to know which
+  // deployed agent currently holds Chief of Staff.
+  const managedAgentsQuery = useManagedAgentsQuery();
   const catalogQuery = usePersonaCatalogQuery(communityId);
   usePersonaCatalogLiveUpdates(communityId);
   const setCatalogSharedMutation =
@@ -334,27 +342,52 @@ export function usePersonaActions() {
             created,
             targetChannel,
           );
-          if (options?.orgRank && created.agent.pubkey) {
-            try {
+          if (created.agent.pubkey) {
+            // Every agent gets placed. Publishing no head at all is what left
+            // the whole roster under UNASSIGNED with no reporting line, and an
+            // agent on no team cannot be given work at all.
+            const chosePlacement = Boolean(options?.orgRank);
+            const placement = orgPlacementForCreate(
+              { rank: options?.orgRank, manager: options?.orgManager },
+              resolveDefaultOrgPlacement({
+                roleId: persona.roleId ?? null,
+                agents: managedAgentsQuery.data,
+                personas: personasQuery.data,
+              }),
+            );
+            const place = async () => {
               await rankCreatedAgent(
                 { pubkey: created.agent.pubkey, name: created.agent.name },
-                options.orgRank,
-                options.orgManager,
+                placement.tier,
+                placement.manager,
                 ownersQuery.data ?? new Set<string>(),
               );
               await queryClient.invalidateQueries({
                 queryKey: ["colony-managed-agent-heads"],
               });
-            } catch (rankError) {
-              // Creation succeeded; the org placement is the part that
-              // failed. Name it so the owner knows to retry from People
-              // and roles rather than re-creating the agent.
-              setPersonaErrorMessage(
-                rankError instanceof Error
-                  ? `${created.agent.name} was created, but placing it in the org failed: ${rankError.message}`
-                  : `${created.agent.name} was created, but placing it in the org failed.`,
-              );
-            }
+            };
+            // A DEFAULTED placement is never worth blocking the create on.
+            // `rankCreatedAgent` polls for up to 10s waiting on the agent's
+            // owner-authored head, so awaiting it here held "Agent created"
+            // back that long and then reported a failure for something the
+            // owner never asked for. It runs detached, and a failure leaves
+            // the agent where it always used to land: Unranked, re-placeable
+            // from People and roles.
+            if (!chosePlacement) {
+              void place().catch(() => {});
+            } else
+              try {
+                await place();
+              } catch (rankError) {
+                // Creation succeeded; the org placement the owner explicitly
+                // asked for is the part that failed. Name it so they know to
+                // retry from People and roles rather than re-creating.
+                setPersonaErrorMessage(
+                  rankError instanceof Error
+                    ? `${created.agent.name} was created, but placing it in the org failed: ${rankError.message}`
+                    : `${created.agent.name} was created, but placing it in the org failed.`,
+                );
+              }
           }
           if (created.spawnError) {
             setPersonaErrorMessage(

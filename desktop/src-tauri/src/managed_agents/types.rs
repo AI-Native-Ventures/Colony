@@ -98,6 +98,7 @@ impl AgentDefinition {
     /// event coordinate (`d_tag = slug`) across the fold.
     pub fn into_agent_record(self) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            tier: None,
             pubkey: String::new(),
             name: self.display_name.clone(),
             persona_id: None,
@@ -401,6 +402,18 @@ pub struct ManagedAgentRecord {
     /// Human-readable title paired with `role_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role_title: Option<String>,
+    /// The agent's interrupt-ladder rank (`worker`, `leader`, `executive`),
+    /// mirrored from the owner-authored kind:30177 head.
+    ///
+    /// The owner sets it in the rank dialog, which publishes the head
+    /// directly; this device never originates it. It is held here only so the
+    /// device's own republish carries it back rather than dropping it: the
+    /// published projection is rebuilt from this record, so a rank absent
+    /// here is a rank erased from the relay on the next rename, parallelism
+    /// change, or persona relink. `agent_tier` then reads no tier, and the
+    /// owner-contact gate treats the agent as unrestricted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
     /// Absorbed from `AgentDefinition.runtime` — the preferred ACP runtime ID
     /// (e.g. 'goose', 'claude'). Record-first command resolution reads this
     /// before falling back to legacy persona lookup; populated by the store
@@ -825,166 +838,8 @@ fn default_record_active() -> bool {
     true
 }
 
-// ── Inbound author gate ──────────────────────────────────────────────────────
-//
-// Mirrors `buzz-acp`'s `--respond-to` CLI flag and the related
-// `--respond-to-allowlist` option. Persisted per agent so the desktop can
-// translate the user's choice into `BUZZ_ACP_RESPOND_TO` /
-// `BUZZ_ACP_RESPOND_TO_ALLOWLIST` env vars at spawn time.
-//
-// Wire format is kebab-case (`owner-only`, `allowlist`, `anyone`) to match
-// the harness CLI vocabulary and the strings the GUI emits.
-//
-// `nobody` is intentionally NOT exposed here. The harness supports it, but
-// it's a heartbeat-only mode and the desktop has no surface for it.
-
-/// Who the agent should respond to. Defaults to `OwnerOnly`, which matches
-/// the harness default → existing agents behave identically.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum RespondTo {
-    #[default]
-    OwnerOnly,
-    Allowlist,
-    Anyone,
-}
-
-impl RespondTo {
-    /// CLI/env wire string (matches `buzz-acp`'s `--respond-to`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::OwnerOnly => "owner-only",
-            Self::Allowlist => "allowlist",
-            Self::Anyone => "anyone",
-        }
-    }
-
-    /// Parse the NIP-AP wire string. Definitions carry `respond_to` as
-    /// opaque data everywhere else; this is the single parse boundary
-    /// (instance mint), and an unrecognized mode fails LOUDLY here rather
-    /// than silently defaulting — a typo'd definition must not mint an
-    /// agent with a different audience than its author intended.
-    pub fn parse_wire(value: &str) -> Result<Self, String> {
-        match value {
-            "owner-only" => Ok(Self::OwnerOnly),
-            "allowlist" => Ok(Self::Allowlist),
-            "anyone" => Ok(Self::Anyone),
-            other => Err(format!(
-                "definition respond_to '{other}' is not a recognized mode (expected 'owner-only', 'allowlist', or 'anyone')"
-            )),
-        }
-    }
-}
-
-/// Validate and normalize a respond-to allowlist.
-///
-/// Rules mirror `buzz-acp/src/config.rs::validate_allowlist`:
-/// - Each entry is exactly 64 hex chars (any case in, lowercase out).
-/// - Duplicates removed, insertion order preserved.
-///
-/// Empty input is allowed here — the boundary check (allowlist mode requires
-/// at least one entry) is the caller's job, because an `UpdateManagedAgentRequest`
-/// may want to validate a list without yet knowing the final mode.
-pub fn validate_respond_to_allowlist(input: &[String]) -> Result<Vec<String>, String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::with_capacity(input.len());
-    for entry in input {
-        let trimmed = entry.trim();
-        if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(format!(
-                "invalid pubkey in respond-to allowlist: '{trimmed}' (must be 64 hex chars)"
-            ));
-        }
-        let lower = trimmed.to_ascii_lowercase();
-        if seen.insert(lower.clone()) {
-            out.push(lower);
-        }
-    }
-    Ok(out)
-}
-
-/// The behavioral fields resolved for a new instance at mint time.
-#[derive(Debug, PartialEq, Eq)]
-pub struct MintBehavioralDefaults {
-    pub respond_to: RespondTo,
-    pub respond_to_allowlist: Vec<String>,
-    /// Validated (1..=32) when present; caller applies its own default.
-    pub parallelism: Option<u32>,
-}
-
-/// Resolve the NIP-AP behavioral quad for a new instance: explicit input
-/// wins, then the linked definition's defaults, then client defaults.
-///
-/// This is the ONLY place definition behavioral strings are parsed — an
-/// unrecognized `respond_to` mode or out-of-range `parallelism` on a
-/// definition fails the mint loudly instead of silently substituting a
-/// default the definition author did not choose. The empty-allowlist guard
-/// fires here too, because inbound definitions bypass the dialog entirely.
-///
-/// `input_allowlist` must already be normalized via
-/// [`validate_respond_to_allowlist`]; the definition's allowlist is
-/// validated here since it arrives from the wire.
-pub fn resolve_mint_behavioral_defaults(
-    input_respond_to: Option<RespondTo>,
-    input_allowlist: Vec<String>,
-    input_parallelism: Option<u32>,
-    definition: Option<&AgentDefinition>,
-) -> Result<MintBehavioralDefaults, String> {
-    let (respond_to, respond_to_allowlist) = match input_respond_to {
-        // Explicit instance-level choice: the definition default is ignored
-        // wholesale (mode AND list travel together).
-        Some(mode) => (mode, input_allowlist),
-        None => match definition.and_then(|d| d.respond_to.as_deref()) {
-            Some(wire) => {
-                let mode = RespondTo::parse_wire(wire)?;
-                let list = if input_allowlist.is_empty() {
-                    validate_respond_to_allowlist(
-                        definition
-                            .map(|d| d.respond_to_allowlist.as_slice())
-                            .unwrap_or(&[]),
-                    )
-                    .map_err(|e| format!("definition respond-to allowlist is invalid: {e}"))?
-                } else {
-                    input_allowlist
-                };
-                (mode, list)
-            }
-            None => (RespondTo::default(), input_allowlist),
-        },
-    };
-    if respond_to == RespondTo::Allowlist && respond_to_allowlist.is_empty() {
-        return Err(
-            "respond-to mode 'allowlist' requires at least one pubkey in the allowlist".to_string(),
-        );
-    }
-
-    let parallelism = match input_parallelism {
-        // Explicit input is validated here too (not just at the command
-        // call sites) so the "validated when present" contract on
-        // `MintBehavioralDefaults.parallelism` is unskippable.
-        Some(count) if (1..=32).contains(&count) => Some(count),
-        Some(count) => {
-            return Err(format!(
-                "parallelism {count} is out of range (must be between 1 and 32)"
-            ))
-        }
-        None => match definition.and_then(|d| d.parallelism) {
-            Some(count) if (1..=32).contains(&count) => Some(count),
-            Some(count) => {
-                return Err(format!(
-                    "parallelism {count} on the linked agent definition is out of range (must be between 1 and 32)"
-                ))
-            }
-            None => None,
-        },
-    };
-
-    Ok(MintBehavioralDefaults {
-        respond_to,
-        respond_to_allowlist,
-        parallelism,
-    })
-}
+mod respond_to;
+pub use respond_to::*;
 
 mod catalog_source;
 pub use catalog_source::CatalogSource;
