@@ -68,8 +68,10 @@ impl UsageOutbox {
         )
     }
 
-    /// `open_at` carrying signing keys. Used by `open_with_keys` and by tests
-    /// that need a re-stampable outbox in a temporary directory.
+    /// `open_at` carrying signing keys, for tests that need a re-stampable
+    /// outbox in a temporary directory. The production path is
+    /// `open_with_keys`, which derives the directory from the relay URL.
+    #[cfg(test)]
     pub(crate) fn open_with_keys_at(root: PathBuf, keys: Keys) -> Result<Self, String> {
         let mut outbox = Self::open_at(root, keys.public_key())?;
         outbox.keys = Some(keys);
@@ -216,7 +218,7 @@ impl UsageOutbox {
         let Some(keys) = self.keys.as_ref() else {
             return Ok(event.clone());
         };
-        let age = Timestamp::now().as_u64() as i64 - event.created_at.as_u64() as i64;
+        let age = Timestamp::now().as_secs() as i64 - event.created_at.as_secs() as i64;
         if age < RESTAMP_AFTER {
             return Ok(event.clone());
         }
@@ -419,7 +421,7 @@ mod tests {
         let outbox = UsageOutbox::open_with_keys_at(directory.path().join("outbox"), agent.clone())
             .expect("open");
 
-        let stale_at = Timestamp::from(Timestamp::now().as_u64() - 1_800);
+        let stale_at = Timestamp::from(Timestamp::now().as_secs() - 1_800);
         let stale = EventBuilder::new(
             Kind::Custom(buzz_core::kind::KIND_USAGE_RECORD as u16),
             "ciphertext",
@@ -433,7 +435,7 @@ mod tests {
         .expect("sign stale record");
 
         let outgoing = outbox.restamped(&stale).expect("restamp");
-        let age = Timestamp::now().as_u64() as i64 - outgoing.created_at.as_u64() as i64;
+        let age = Timestamp::now().as_secs() as i64 - outgoing.created_at.as_secs() as i64;
         assert!(
             age < 60,
             "a re-stamped record must carry a current envelope"
