@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import type { AgentPersona } from "@/shared/api/types";
-import { STARTER_PERSONA_ORDER } from "@/shared/constants/starterPersonas";
+import { STARTER_PERSONA_IDS } from "@/shared/constants/starterPersonas";
 
 const STORAGE_KEY = "buzz:bot-recents";
 const MAX_RECENTS = 8;
@@ -11,7 +11,7 @@ const MAX_RECENTS = 8;
 // IDs are stable and persisted relay-side, while display names are branding
 // and can change. Matching on the name made this silently fall back to
 // catalog order the moment the starter team was renamed, with no error.
-export const DEFAULT_PERSONA_IDS = STARTER_PERSONA_ORDER;
+export const DEFAULT_PERSONA_IDS = [STARTER_PERSONA_IDS.fizz] as const;
 
 export function pickQuickBotPersonas(
   personas: readonly AgentPersona[],

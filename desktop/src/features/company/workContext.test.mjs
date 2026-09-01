@@ -62,6 +62,7 @@ function resolver({
   companyHead = COMPANY_HEAD,
 } = {}) {
   const order = [];
+  const loadTaskCalls = [];
   const resolve = createWorkContextResolver({
     relaySelf: async () => RELAY,
     fetchCompanyHead: async () => companyHead,
@@ -81,12 +82,13 @@ function resolver({
         return brokerOutcome;
       },
     },
-    loadTask: async () => {
+    loadTask: async (taskId, headEventId) => {
       order.push("read-back");
+      loadTaskCalls.push([taskId, headEventId]);
       return taskResult;
     },
   });
-  return { resolve, order };
+  return { resolve, order, loadTaskCalls };
 }
 
 test("the task is created and confirmed before the message has any tags", async () => {
@@ -155,6 +157,88 @@ test("a conflict means the task is already there, and the send proceeds", async 
   });
   const context = await resolve(REQUEST);
   assert.equal(context.taskId, TASK_ID);
+});
+
+// An applied receipt names the exact event the relay just wrote. Reading it
+// by that id, rather than waiting on the `#d` tag filter to catch up, is
+// what a single-shot `getTask` had no way to do.
+test("an applied receipt's head event id is handed to the read-back", async () => {
+  const { resolve, loadTaskCalls } = resolver({
+    brokerOutcome: {
+      status: "applied",
+      receiptEventId: "r".repeat(64),
+      headEventId: "h".repeat(64),
+      target: "t",
+    },
+  });
+  await resolve(REQUEST);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, "h".repeat(64)]]);
+});
+
+// A conflict receipt names no head, so the read-back falls back to its
+// ordinary coordinate lookup rather than being handed a stale or absent id.
+test("a conflict carries no head event id to the read-back", async () => {
+  const { resolve, loadTaskCalls } = resolver({
+    brokerOutcome: {
+      status: "conflict",
+      receiptEventId: "r".repeat(64),
+      target: "t",
+      message: "This record changed while the request was in flight.",
+    },
+  });
+  await resolve(REQUEST);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, null]]);
+});
+
+// The relay's idempotency claim on this send was already won - by an
+// earlier attempt at this exact send, most likely, since `created_at` is
+// real wall-clock time and every retry signs a different event id.
+// `planned.taskId` is derived from the send itself (channel + send id), not
+// from which event won the claim, so it names the same Task either way:
+// this is the same goal state a "conflict" reaches, not a failure.
+test("a superseded submission means the send already succeeded, and proceeds", async () => {
+  const { resolve } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+  });
+  const context = await resolve(REQUEST);
+  assert.equal(context.taskId, TASK_ID);
+});
+
+// The relay's rejection names the exact event that won the claim, so the
+// read-back can go straight to it instead of waiting on the `#d` tag filter.
+test("a superseded claim's winning event id is handed to the read-back", async () => {
+  const { resolve, loadTaskCalls } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+  });
+  await resolve(REQUEST);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, "w".repeat(64)]]);
+});
+
+// A superseded claim is only evidence that SOME attempt won it. If the Task
+// it produced genuinely cannot be read back - a bug, a wrong community, a
+// claim for something else entirely - this must still fail honestly rather
+// than assume success it never confirmed.
+test("a superseded submission whose task never appears still fails honestly", async () => {
+  const { resolve } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: "w".repeat(64),
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+    taskResult: { ok: false, code: "missing-head", message: "gone" },
+  });
+  await assert.rejects(() => resolve(REQUEST), /has not been sent/i);
 });
 
 test("an unrecorded task stops the send rather than buying an unattributed turn", async () => {
