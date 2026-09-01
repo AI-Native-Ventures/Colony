@@ -1773,6 +1773,62 @@ mod tests {
         "a".repeat(64)
     }
 
+    /// The style head exactly as the desktop's Brand page writes it.
+    ///
+    /// `styleRecord.ts` builds this shape (rule promotion from a rejection,
+    /// voice, references, picks) and the relay refuses anything this parser
+    /// refuses, so drift between the two turns the owner's "Send it back"
+    /// into a relay error. This is the parity net; the TS side has its own
+    /// tests, and this one holds the relay end still.
+    #[test]
+    fn parse_content_style_accepts_the_desktop_brand_page_shape() {
+        let body = serde_json::json!({
+            "rules": [{
+                "active": true,
+                "id": "r1756700000-1",
+                "origin": {
+                    "at": 1_756_700_000_u64,
+                    "event": "e".repeat(64),
+                    "quote": "way too much text on this one",
+                },
+                "text": "Use fewer words on the card",
+            }],
+            "schema": "colony/content-style/v1",
+            "settings": {
+                "banned_words": ["synergy"],
+                "picks": [{
+                    "at": 1_756_700_100_u64,
+                    "chosen": {"hues": ["violet"], "layout": "poster"},
+                    "post": "launch:w1-mon",
+                }],
+                "references": [{
+                    "added_at": 1_756_700_050_u64,
+                    "sha256": "a".repeat(64),
+                    "url": "https://relay.example/media/aa",
+                }],
+                "voice": {"sound": "Plain.", "tagline": "Run the company."},
+            },
+            "version": "1756700000",
+        });
+        let event = sign(
+            KIND_CONTENT_STYLE,
+            vec![t(&["d", "house"])],
+            &body.to_string(),
+        );
+        let parsed = parse_content_style(&event).expect("the desktop shape parses");
+        assert_eq!(parsed.rules.len(), 1);
+        assert_eq!(
+            parsed.rules[0].origin.quote,
+            "way too much text on this one"
+        );
+        assert!(parsed.rules[0].active);
+        assert_eq!(parsed.version.as_deref(), Some("1756700000"));
+        // Settings ride through opaquely; the agent reads them, the relay
+        // does not interpret them.
+        assert!(parsed.settings.contains_key("references"));
+        assert!(parsed.settings.contains_key("picks"));
+    }
+
     // ── dates ─────────────────────────────────────────────────────────────
 
     #[test]

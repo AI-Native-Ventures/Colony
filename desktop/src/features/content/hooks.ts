@@ -13,15 +13,32 @@ import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { uploadPngVerbatim } from "@/shared/api/uploadPngVerbatim";
 
+import { KIND_CONTENT_BRAND_KIT } from "@/shared/constants/kinds";
+import { uploadMediaBytes } from "@/shared/api/tauri";
+
 import { evaluateClaimGate, verifyClaims } from "./claimVerifier";
 import { claimVerifierDependencies } from "./claimVerifierRuntime";
 import { contentRepository, HOUSE_STYLE_SCOPE } from "./contentRepository";
-import type { ContentPost } from "./contracts";
+import type { CardStyle, ContentPost } from "./contracts";
 import type { DecisionInput } from "./contentDecisions";
 import { buildDecisionEvent } from "./contentDecisions";
 import { loadKitFontFace } from "./render/fontKit";
+import { resolveCardMark } from "./render/marksRuntime";
 import type { PipelineOutcome } from "./render/pipeline";
+import { markDataUri } from "./render/marks";
+import { rasteriseSvgLogo } from "./render/marksRuntime";
 import { renderPost } from "./renderPost";
+import type { RuleOriginInput, StyleVoice } from "./styleRecord";
+import {
+  addStyleReference,
+  appendStyleRule,
+  buildStyleEvent,
+  recordStylePick,
+  removeStyleReference,
+  revokeStyleRule,
+  setStyleVoice,
+} from "./styleRecord";
+import { variantTakes } from "./variants";
 import { buildRenderedPostEvent } from "./renderedPostEvent";
 
 const CONTENT_ROOT = "colony-content" as const;
@@ -152,12 +169,178 @@ export function useClaimVerification(communityId: string, post: ContentPost) {
   });
 }
 
+/** Publish a mutated house-style body and refresh every style reader. */
+async function publishStyleBody(
+  body: Record<string, unknown>,
+): Promise<string | null> {
+  const signed = await signRelayEvent(buildStyleEvent(HOUSE_STYLE_SCOPE, body));
+  const published = await relayClient.publishEvent(
+    signed,
+    "Timed out while saving your style.",
+    "Failed to save your style.",
+  );
+  return published?.id ?? signed.id ?? null;
+}
+
+/**
+ * Mutate the house style record.
+ *
+ * Reads the newest head fresh inside the mutation rather than from the query
+ * cache: appending a rule onto a stale body would silently drop whichever
+ * rule landed in between.
+ */
+export function useMutateHouseStyle(communityId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      mutate: (body: Record<string, unknown> | null) => Record<string, unknown>,
+    ) => {
+      const existing = await contentRepository.getStyleBody(HOUSE_STYLE_SCOPE);
+      return publishStyleBody(mutate(existing));
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: styleQueryKey(communityId, HOUSE_STYLE_SCOPE),
+      });
+    },
+  });
+}
+
+/** Revoke one house rule. The rule stays in the ledger, inactive. */
+export function useRevokeStyleRule(communityId: string) {
+  const mutateStyle = useMutateHouseStyle(communityId);
+  return useMutation({
+    mutationFn: (ruleId: string) =>
+      mutateStyle.mutateAsync((body) =>
+        revokeStyleRule(body, ruleId, Math.floor(Date.now() / 1000)),
+      ),
+  });
+}
+
+/** Save the voice block from the Brand page. */
+export function useSetStyleVoice(communityId: string) {
+  const mutateStyle = useMutateHouseStyle(communityId);
+  return useMutation({
+    mutationFn: (voice: StyleVoice) =>
+      mutateStyle.mutateAsync((body) =>
+        setStyleVoice(body, voice, Math.floor(Date.now() / 1000)),
+      ),
+  });
+}
+
+/**
+ * Save one reference screenshot the owner likes.
+ *
+ * Uploaded through the ordinary media path (sanitised: it is a person's
+ * file), then listed on the style record so the agent can find and study it.
+ */
+export function useAddStyleReference(communityId: string) {
+  const mutateStyle = useMutateHouseStyle(communityId);
+  return useMutation({
+    mutationFn: async (input: { bytes: number[]; filename?: string }) => {
+      const blob = await uploadMediaBytes(input.bytes, input.filename);
+      return mutateStyle.mutateAsync((body) =>
+        addStyleReference(body, {
+          added_at: Math.floor(Date.now() / 1000),
+          sha256: blob.sha256.toLowerCase().replace(/\.png$/, ""),
+          url: blob.url,
+        }),
+      );
+    },
+  });
+}
+
+/** Remove one reference from the board. */
+export function useRemoveStyleReference(communityId: string) {
+  const mutateStyle = useMutateHouseStyle(communityId);
+  return useMutation({
+    mutationFn: (sha256: string) =>
+      mutateStyle.mutateAsync((body) =>
+        removeStyleReference(body, sha256, Math.floor(Date.now() / 1000)),
+      ),
+  });
+}
+
+/**
+ * Set the workspace's logo on its brand kit.
+ *
+ * SVG is rasterised client-side (the relay refuses SVG uploads), everything
+ * else goes through the ordinary media path. The kit body is merged, never
+ * rebuilt, so fields the desktop does not read survive the write. Replaces
+ * the existing `logo` mark and leaves other roles alone.
+ */
+export function useSetBrandLogo(communityId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      bytes: number[];
+      filename?: string;
+      isSvg?: boolean;
+    }) => {
+      const kit = await contentRepository.getBrandKitBody();
+      if (!kit) {
+        throw new Error(
+          "Your brand has not been set up yet. Ask your agent to scan your website first.",
+        );
+      }
+      const bytes = input.isSvg
+        ? Array.from(
+            await rasteriseSvgLogo(
+              new TextDecoder().decode(Uint8Array.from(input.bytes)),
+            ),
+          )
+        : input.bytes;
+      const blob = await uploadMediaBytes(bytes, input.filename);
+      const marks = Array.isArray(kit.body.marks)
+        ? kit.body.marks.filter(
+            (entry) =>
+              typeof entry === "object" &&
+              entry !== null &&
+              (entry as { role?: unknown }).role !== "logo",
+          )
+        : [];
+      const signed = await signRelayEvent({
+        content: JSON.stringify({
+          ...kit.body,
+          marks: [
+            ...marks,
+            {
+              media_hash: blob.sha256.toLowerCase().replace(/\.png$/, ""),
+              media_url: blob.url,
+              role: "logo",
+            },
+          ],
+        }),
+        kind: KIND_CONTENT_BRAND_KIT,
+        tags: [["d", kit.kitId]],
+      });
+      return relayClient.publishEvent(
+        signed,
+        "Timed out while saving your logo.",
+        "Failed to save your logo.",
+      );
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: brandKitQueryKey(communityId),
+      });
+    },
+  });
+}
+
 /**
  * Approve a post, or send it back with a note.
  *
  * A refusal from `buildDecisionEvent` is thrown rather than silently swallowed
  * so the caller shows the reason. The refusals are the relay's own rules
  * reached one round trip early.
+ *
+ * A change request whose correction is binned "every card, from now on" also
+ * lands as a house rule, in the owner's exact sentence, citing the decision
+ * it rode in on. This is the promotion the Style ledger always promised and
+ * never had a writer for. The decision publishes first: if the rule write
+ * then fails, the change request still exists and the error says which half
+ * needs retrying.
  */
 export function useSubmitContentDecision(communityId: string) {
   const queryClient = useQueryClient();
@@ -168,17 +351,130 @@ export function useSubmitContentDecision(communityId: string) {
         throw new Error(draft.reason);
       }
       const signed = await signRelayEvent(draft.event);
-      return relayClient.publishEvent(
+      const published = await relayClient.publishEvent(
         signed,
         "Timed out while recording your decision.",
         "Failed to record your decision.",
       );
+      if (input.correction?.bin === "rule") {
+        const origin: RuleOriginInput = {
+          at: Math.floor(Date.now() / 1000),
+          event: published?.id ?? signed.id ?? null,
+          quote: input.note?.trim() || input.correction.text,
+        };
+        try {
+          const existing =
+            await contentRepository.getStyleBody(HOUSE_STYLE_SCOPE);
+          await publishStyleBody(
+            appendStyleRule(existing, input.correction.text, origin),
+          );
+          void queryClient.invalidateQueries({
+            queryKey: styleQueryKey(communityId, HOUSE_STYLE_SCOPE),
+          });
+        } catch (cause) {
+          throw new Error(
+            `Your change was sent, but saving it as a house rule failed: ${
+              cause instanceof Error ? cause.message : String(cause)
+            }`,
+          );
+        }
+      }
+      return published;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: decisionsQueryKey(communityId),
       });
     },
+  });
+}
+
+/** One drawn take: a picture to tap, and the style that tap means. */
+export type DrawnTake = {
+  label: string;
+  /** First slide of the take, as a data: URI for immediate display. */
+  imageUri: string;
+  style: CardStyle;
+};
+
+export type VariantTakesOutcome =
+  | { status: "drawn"; takes: DrawnTake[] }
+  | { status: "blocked"; blocking: { id: string; detail: string }[] };
+
+/**
+ * Draw up to three takes on one post, locally, uploading nothing.
+ *
+ * The owner picks by looking; only the picked take is then rendered for
+ * real, uploaded and recorded. The text gates run once up front: they read
+ * words, not pixels, so a claim that blocks one take blocks all of them and
+ * there is no point drawing any.
+ */
+export function useDraftVariantTakes(communityId: string) {
+  const ownersQuery = useCommunityOwnersQuery(communityId);
+  return useMutation({
+    mutationFn: async (post: ContentPost): Promise<VariantTakesOutcome> => {
+      const [kit, style, strictness, fontFaceCss] = await Promise.all([
+        contentRepository.getBrandKit(),
+        contentRepository.getStyle(HOUSE_STYLE_SCOPE),
+        contentRepository.getClaimStrictness(),
+        loadKitFontFace(),
+      ]);
+      const mark = await resolveCardMark(kit);
+      const verdicts = await verifyClaims(
+        post.claims,
+        claimVerifierDependencies(ownersQuery.data ?? new Set()),
+      );
+      const claimGate = evaluateClaimGate(post.claims, verdicts, strictness);
+      const takes: DrawnTake[] = [];
+      for (const take of variantTakes(post, kit)) {
+        const { outcome, slides } = await renderPost({
+          claimGate,
+          fontFaceCss,
+          kit,
+          mark,
+          post: { ...post, style: take.style },
+          renderedAt: new Date().toISOString(),
+          renderer: { engine: navigator.userAgent, name: "colony-desktop" },
+          style,
+        });
+        if (outcome.status === "blocked") {
+          return { blocking: outcome.blocking, status: "blocked" };
+        }
+        const first = slides[0];
+        if (!first) {
+          continue;
+        }
+        takes.push({
+          imageUri: markDataUri(first.png, "image/png"),
+          label: take.label,
+          style: take.style,
+        });
+      }
+      return { status: "drawn", takes };
+    },
+  });
+}
+
+/** Record which take the owner picked. Taste data, not prose. */
+export function useRecordStylePick(communityId: string) {
+  const mutateStyle = useMutateHouseStyle(communityId);
+  return useMutation({
+    mutationFn: (input: { post: ContentPost; style: CardStyle }) =>
+      mutateStyle.mutateAsync((body) =>
+        recordStylePick(body, {
+          at: Math.floor(Date.now() / 1000),
+          chosen: {
+            ...(input.style.family !== null
+              ? { family: input.style.family }
+              : {}),
+            hues: input.style.hues,
+            ...(input.style.layout !== null
+              ? { layout: input.style.layout }
+              : {}),
+          },
+          post: input.post.address,
+        }),
+      ),
   });
 }
 
@@ -202,11 +498,26 @@ export type RenderPostOutcome = {
  * render binds a report to bytes; binding it to a verdict that was true ten
  * minutes ago is how a stale claim ships.
  */
+export type RenderPostRequest = {
+  post: ContentPost;
+  /**
+   * A take the owner picked instead of the drafted look. The render draws it
+   * and the published head records it, so the card and its record agree.
+   */
+  style?: CardStyle;
+};
+
 export function useRenderContentPost(communityId: string) {
   const queryClient = useQueryClient();
   const ownersQuery = useCommunityOwnersQuery(communityId);
   return useMutation({
-    mutationFn: async (post: ContentPost): Promise<RenderPostOutcome> => {
+    mutationFn: async ({
+      post: basePost,
+      style: styleOverride,
+    }: RenderPostRequest): Promise<RenderPostOutcome> => {
+      const post = styleOverride
+        ? { ...basePost, style: styleOverride }
+        : basePost;
       const [kit, style, strictness, fontFaceCss, body] = await Promise.all([
         contentRepository.getBrandKit(),
         contentRepository.getStyle(HOUSE_STYLE_SCOPE),
@@ -214,6 +525,10 @@ export function useRenderContentPost(communityId: string) {
         loadKitFontFace(),
         contentRepository.getPostBody(post.address),
       ]);
+      // The workspace's own mark, fetched and inlined; Colony's ant only for
+      // Colony's own kit. Resolved fresh alongside the kit so a logo changed
+      // on the Brand page reaches the very next render.
+      const mark = await resolveCardMark(kit);
       if (!body) {
         throw new Error(
           "This post is no longer on the relay, so there is nothing to render onto.",
@@ -227,6 +542,7 @@ export function useRenderContentPost(communityId: string) {
         claimGate: evaluateClaimGate(post.claims, verdicts, strictness),
         fontFaceCss,
         kit,
+        mark,
         post,
         renderedAt: new Date().toISOString(),
         // Recorded verbatim on every report: two engine builds do not agree
@@ -268,7 +584,7 @@ export function useRenderContentPost(communityId: string) {
 
       const draft = buildRenderedPostEvent(
         post.address,
-        body,
+        styleOverride ? { ...body, style: styleOverride.raw } : body,
         images,
         outcome.reports,
         style?.version ?? null,

@@ -743,7 +743,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:272",
+        "src/features/communities/useCommunityInit.ts:274",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -1411,7 +1411,7 @@
       "example_sites": [
         "src/features/agents/ui/AgentCardViewerDialog.tsx:72",
         "src/features/content/postPack.ts:9",
-        "src/features/content/ui/ContentDayDetail.tsx:121"
+        "src/features/content/ui/ContentDayDetail.tsx:124"
       ]
     },
     "download_voice_models": {
@@ -2313,7 +2313,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:258",
+        "src/features/communities/useCommunityInit.ts:260",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:37"
       ]
