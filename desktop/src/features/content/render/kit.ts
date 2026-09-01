@@ -27,10 +27,28 @@ export type BrandKitType = {
 
 export type MarkRole = "logo" | "wordmark" | "icon";
 
+/**
+ * Which ground a derived version of a mark is for.
+ *
+ * "on-dark" is the light (usually white) version, "on-light" the ink one.
+ * The original bytes stay on the mark itself; variants are alternates the
+ * renderer may substitute so a logo never lands on a ground it cannot read
+ * on.
+ */
+export type MarkVariantPurpose = "on-dark" | "on-light";
+
+export type MarkVariant = {
+  purpose: MarkVariantPurpose;
+  media_hash: string;
+  media_url: string;
+};
+
 export type BrandMark = {
   role: MarkRole;
   media_hash: string;
   media_url: string;
+  /** Derived versions by ground; empty when the kit predates them. */
+  variants: MarkVariant[];
 };
 
 export type BrandCanvas = {
@@ -136,13 +154,43 @@ export function readBrandKit(raw: unknown): BrandKit {
       const role = str(entry.role);
       const mediaHash = str(entry.media_hash);
       const mediaUrl = str(entry.media_url);
+      // Lenient like the marks themselves: an unreadable variant entry is
+      // dropped rather than sinking the kit, because every variant has the
+      // original to fall back to.
+      const variants: MarkVariant[] = [];
+      if (Array.isArray(entry.variants)) {
+        for (const variant of entry.variants) {
+          if (!isRecord(variant)) {
+            continue;
+          }
+          const purpose = str(variant.purpose);
+          const variantHash = str(variant.media_hash);
+          const variantUrl = str(variant.media_url);
+          if (
+            variantHash &&
+            variantUrl &&
+            (purpose === "on-dark" || purpose === "on-light")
+          ) {
+            variants.push({
+              media_hash: variantHash,
+              media_url: variantUrl,
+              purpose,
+            });
+          }
+        }
+      }
       if (
         role &&
         mediaHash &&
         mediaUrl &&
         (role === "logo" || role === "wordmark" || role === "icon")
       ) {
-        marks.push({ media_hash: mediaHash, media_url: mediaUrl, role });
+        marks.push({
+          media_hash: mediaHash,
+          media_url: mediaUrl,
+          role,
+          variants,
+        });
       }
     }
   }

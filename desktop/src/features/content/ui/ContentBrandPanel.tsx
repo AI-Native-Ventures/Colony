@@ -4,7 +4,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
 
 import type { ContentStyle } from "../contracts";
-import type { BrandKit } from "../render/kit";
+import type { BrandKit, BrandMark } from "../render/kit";
 import {
   useAddStyleReference,
   useContentBrandKit,
@@ -32,18 +32,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The stored logo, if the kit carries one. */
-function kitLogoUrl(kit: BrandKit | null | undefined): string | null {
+/** The stored logo mark, if the kit carries one. */
+function kitLogoMark(kit: BrandKit | null | undefined): BrandMark | null {
   if (!kit) {
     return null;
   }
   for (const role of ["logo", "icon", "wordmark"] as const) {
     const mark = kit.marks.find((entry) => entry.role === role);
     if (mark) {
-      return rewriteRelayUrl(mark.media_url);
+      return mark;
     }
   }
   return null;
+}
+
+/** The website the kit was scanned from, if it was. */
+function kitWebsite(kit: BrandKit | null | undefined): string | null {
+  if (!kit || kit.source.type !== "scan") {
+    return null;
+  }
+  try {
+    return new URL(kit.source.url).host || kit.source.url;
+  } catch {
+    return kit.source.url;
+  }
 }
 
 /**
@@ -63,7 +75,7 @@ function logoGrounds(kit: BrandKit | null | undefined): string[] {
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h3 className="text-sm font-semibold">{children}</h3>;
+  return <h3 className="text-base font-semibold tracking-tight">{children}</h3>;
 }
 
 function LogoSection({
@@ -76,7 +88,10 @@ function LogoSection({
   const setLogo = useSetBrandLogo(communityId);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const logoUrl = kitLogoUrl(kit);
+  const mark = kitLogoMark(kit);
+  const logoUrl = mark ? rewriteRelayUrl(mark.media_url) : null;
+  const onDark = mark?.variants.find((v) => v.purpose === "on-dark") ?? null;
+  const onLight = mark?.variants.find((v) => v.purpose === "on-light") ?? null;
 
   const handleFile = React.useCallback(
     async (file: File) => {
@@ -128,11 +143,73 @@ function LogoSection({
         ref={inputRef}
         type="file"
       />
-      {logoUrl ? (
-        <div className="mt-2 flex flex-wrap gap-3">
+      {logoUrl && (onDark || onLight) ? (
+        // The derived versions, each on the ground it exists for, the way a
+        // brand book opens: the agent made these, the owner only recognises.
+        <>
+          <p className="mt-1.5 max-w-prose text-sm text-muted-foreground">
+            Your agent made these from the one you gave it, so every card gets
+            the version that reads on its background.
+          </p>
+          <div className="mt-3 grid grid-cols-3 gap-3">
+            <div className="min-w-0">
+              <div className="flex aspect-square items-center justify-center rounded-xl bg-background ring-1 ring-border/40">
+                <img
+                  alt="Your logo"
+                  className="max-h-16 max-w-16"
+                  src={logoUrl}
+                />
+              </div>
+              <p className="mt-1.5 text-center text-2xs text-muted-foreground">
+                As it is
+              </p>
+            </div>
+            {onDark ? (
+              <div className="min-w-0">
+                <div
+                  className="flex aspect-square items-center justify-center rounded-xl"
+                  style={{ backgroundColor: logoGrounds(kit)[0] }}
+                >
+                  <img
+                    alt="Your logo, for dark cards"
+                    className="max-h-16 max-w-16"
+                    src={rewriteRelayUrl(onDark.media_url)}
+                  />
+                </div>
+                <p className="mt-1.5 text-center text-2xs text-muted-foreground">
+                  On dark cards
+                </p>
+              </div>
+            ) : null}
+            {onLight ? (
+              <div className="min-w-0">
+                <div
+                  className="flex aspect-square items-center justify-center rounded-xl ring-1 ring-border/40"
+                  style={{
+                    backgroundColor:
+                      logoGrounds(kit)[logoGrounds(kit).length - 1],
+                  }}
+                >
+                  <img
+                    alt="Your logo, for light cards"
+                    className="max-h-16 max-w-16"
+                    src={rewriteRelayUrl(onLight.media_url)}
+                  />
+                </div>
+                <p className="mt-1.5 text-center text-2xs text-muted-foreground">
+                  On light cards
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : logoUrl ? (
+        // A logo without derived versions yet: shown where it will actually
+        // live, one plate per ground.
+        <div className="mt-3 flex gap-3">
           {logoGrounds(kit).map((ground) => (
             <div
-              className="flex h-28 w-28 items-center justify-center rounded-lg border border-border/40"
+              className="flex aspect-square flex-1 items-center justify-center rounded-xl ring-1 ring-border/30"
               key={ground}
               style={{ backgroundColor: ground }}
             >
@@ -145,9 +222,12 @@ function LogoSection({
           ))}
         </div>
       ) : (
-        <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-          No logo yet. Add one and every card your agent makes will carry it.
-        </p>
+        <div className="mt-3 flex aspect-[3/1] items-center justify-center rounded-xl bg-muted/40 px-6 text-center">
+          <p className="max-w-prose text-sm text-muted-foreground">
+            No logo yet. Add one, and your agent makes the versions your cards
+            need.
+          </p>
+        </div>
       )}
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </section>
@@ -161,18 +241,29 @@ function ColorsSection({ kit }: { kit: BrandKit | null | undefined }) {
   return (
     <section>
       <SectionTitle>Your colors</SectionTitle>
-      <div className="mt-2 flex flex-wrap gap-2">
+      {/* One joined strip rather than loose chips: colors read as a palette
+          when they touch, and as a settings page when they don't. */}
+      <div className="mt-3 flex h-20 overflow-hidden rounded-xl ring-1 ring-border/30">
         {kit.hues.map((hue) => (
-          <div className="flex flex-col items-center gap-1" key={hue.name}>
-            <div
-              className="h-12 w-12 rounded-lg border border-border/40"
-              style={{ backgroundColor: hue.base }}
-            />
-            <span className="text-2xs text-muted-foreground">{hue.name}</span>
-          </div>
+          <div
+            className="flex-1"
+            key={hue.name}
+            style={{ backgroundColor: hue.base }}
+            title={hue.name}
+          />
         ))}
       </div>
-      <p className="mt-2 max-w-prose text-xs text-muted-foreground">
+      <div className="mt-1.5 flex">
+        {kit.hues.map((hue) => (
+          <span
+            className="flex-1 text-center text-2xs text-muted-foreground"
+            key={hue.name}
+          >
+            {hue.name}
+          </span>
+        ))}
+      </div>
+      <p className="mt-3 max-w-prose text-xs text-muted-foreground">
         Taken from your website. Every card is drawn from these, and nothing
         goes out unreadable on them.
       </p>
@@ -339,16 +430,18 @@ function ReferencesSection({
         from anywhere. Your agent studies them and leans that way.
       </p>
       {references.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-3">
+        // A pinboard, not a row of thumbnails: three across, square, touching
+        // shoulders, the way the owner saw them in a feed.
+        <div className="mt-4 grid grid-cols-3 gap-3">
           {references.map((reference) => (
-            <figure className="group relative" key={reference.sha256}>
+            <figure className="group relative min-w-0" key={reference.sha256}>
               <img
                 alt="Something you like"
-                className="h-32 w-32 rounded-lg border border-border/40 object-cover"
+                className="aspect-square w-full rounded-xl object-cover ring-1 ring-border/30"
                 src={rewriteRelayUrl(reference.url)}
               />
               <button
-                className="absolute right-1 top-1 hidden rounded-md bg-background/90 px-1.5 py-0.5 text-xs group-hover:block"
+                className="absolute right-1.5 top-1.5 hidden rounded-md bg-background/90 px-1.5 py-0.5 text-xs shadow-sm group-hover:block"
                 onClick={() => removeReference.mutate(reference.sha256)}
                 type="button"
               >
@@ -385,12 +478,9 @@ function RulesSection({
         </p>
       ) : (
         <>
-          <ul className="mt-2 space-y-3">
+          <ul className="mt-3 space-y-3">
             {active.map((rule) => (
-              <li
-                className="rounded-lg border border-border/60 bg-muted/10 p-3"
-                key={rule.id}
-              >
+              <li className="rounded-xl bg-muted/30 p-4" key={rule.id}>
                 <div className="flex items-start justify-between gap-3">
                   <p className="text-sm font-medium">{rule.text}</p>
                   <Button
@@ -410,13 +500,13 @@ function RulesSection({
           </ul>
           {revoked.length > 0 ? (
             <>
-              <h4 className="mt-4 text-sm font-medium text-muted-foreground">
+              <h4 className="mt-5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                 No longer applied
               </h4>
               <ul className="mt-2 space-y-2">
                 {revoked.map((rule) => (
                   <li
-                    className="rounded-lg border border-border/40 p-3 opacity-60"
+                    className="rounded-xl bg-muted/20 p-4 opacity-70"
                     key={rule.id}
                   >
                     <p className="text-sm line-through">{rule.text}</p>
@@ -445,31 +535,48 @@ export function ContentBrandPanel({
   style: ContentStyle | null;
 }) {
   const kitQuery = useContentBrandKit(communityId);
+  const website = kitWebsite(kitQuery.data);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4">
-      <h2 className="text-lg font-semibold">Brand</h2>
-      <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-        What your company looks and sounds like. Your agent follows all of it,
-        and nothing goes out without your approval.
-      </p>
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* A brand book, not a settings form: one centered, unhurried column. */}
+      <div className="mx-auto w-full max-w-2xl px-6 py-8">
+        <h2 className="text-2xl font-semibold tracking-tight">Brand</h2>
+        <p className="mt-1 max-w-prose text-base text-muted-foreground">
+          What your company looks and sounds like. Your agent follows all of it,
+          and nothing goes out without your approval.
+        </p>
 
-      <div className="mt-6 grid gap-8">
-        <LogoSection communityId={communityId} kit={kitQuery.data} />
-        <ColorsSection kit={kitQuery.data} />
-        <VoiceSection communityId={communityId} style={style} />
-        <ReferencesSection communityId={communityId} style={style} />
-        <RulesSection communityId={communityId} style={style} />
-        {sampleImageUrl ? (
-          <section>
-            <SectionTitle>Posts look like this</SectionTitle>
-            <img
-              alt="Your latest card"
-              className="mt-2 w-56 rounded-lg border border-border/40"
-              src={rewriteRelayUrl(sampleImageUrl)}
+        {website ? (
+          <div className="mt-6 flex items-center gap-2.5 rounded-lg bg-muted/30 px-3 py-2.5">
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
             />
-          </section>
+            <span className="text-sm font-medium">{website}</span>
+            <span className="ml-auto text-2xs text-muted-foreground">
+              Logo, colors and words pulled from here
+            </span>
+          </div>
         ) : null}
+
+        <div className="mt-10 grid gap-12">
+          <LogoSection communityId={communityId} kit={kitQuery.data} />
+          <ColorsSection kit={kitQuery.data} />
+          <VoiceSection communityId={communityId} style={style} />
+          <ReferencesSection communityId={communityId} style={style} />
+          <RulesSection communityId={communityId} style={style} />
+          {sampleImageUrl ? (
+            <section>
+              <SectionTitle>Posts look like this</SectionTitle>
+              <img
+                alt="Your latest card"
+                className="mt-3 w-64 rounded-xl shadow-md"
+                src={rewriteRelayUrl(sampleImageUrl)}
+              />
+            </section>
+          ) : null}
+        </div>
       </div>
     </div>
   );
