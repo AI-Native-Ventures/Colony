@@ -167,6 +167,13 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
       // No growth this pass — count toward a genuine stall.
     }
     await collect();
+    // Prefer the app's own answer to "is there anything older" over counting
+    // silent passes. `message-channel-intro` renders only once the timeline has
+    // reached the start of the channel with no prepend in flight, so it ends the
+    // loop on a state rather than on patience. The stall streak below stays as a
+    // backstop for a relay that never answers, but it is no longer what decides
+    // a healthy run — timing deciding pass/fail is what made this spec flake.
+    if (await page.getByTestId("message-channel-intro").isVisible()) break;
     if (seen.size > before) {
       stallStreak = 0;
     } else {

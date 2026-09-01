@@ -82,7 +82,12 @@ const SCREENSHOTS = [
   ...CATALOG_SCREENSHOTS,
 ] as const;
 
-test.describe.configure({ mode: "serial" });
+// Serial, and generously budgeted: this spec renders 21 block types and settles
+// the timeline repeatedly, and `settleTimelineAtLatest`'s worst case alone can
+// exceed the 30s default. When the test clock expired first, Playwright blamed
+// whichever assertion was in flight, which is why this spec reported a
+// different failing line on each run.
+test.describe.configure({ mode: "serial", timeout: 120_000 });
 
 test.beforeAll(createProofDirectory);
 test.afterAll(() => assertDistinctScreenshots(SCREENSHOTS));
@@ -191,6 +196,14 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
   await page.getByTestId("channel-random").click();
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
+  // The timeline is keyed by channel, so re-entering `general` remounts it and
+  // re-derives its position instead of restoring one. Asserting straight after
+  // the round-trip races an unbounded ResizeObserver settle while tall block
+  // rows measure, and the row under test can be evicted by the retention band
+  // before it is ever asserted. Settle at the tail, and let the app's own
+  // render-pending signal clear, before locating anything.
+  await settleTimelineAtLatest(page);
+  await expect(page.locator('[data-render-pending="true"]')).toHaveCount(0);
   const cardListBlock = page
     .locator(`[data-message-id="${cardListInstance.id}"]`)
     .locator('[data-block-handle="native-card-list"]');
@@ -312,6 +325,11 @@ test("all 11 native primitives and the 10 bundled composites render through Mess
   }
   await page.getByTestId("channel-random").click();
   await page.getByTestId("channel-general").click();
+  // Same remount-and-re-derive as the first round-trip above: settle the tail
+  // and wait out the deferred render before asserting, so these assertions
+  // describe a converged timeline rather than whichever frame they landed on.
+  await settleTimelineAtLatest(page);
+  await expect(page.locator('[data-render-pending="true"]')).toHaveCount(0);
   await expect(
     question.getByRole("button", { name: "Answered" }),
   ).toBeDisabled();
