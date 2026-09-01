@@ -99,9 +99,11 @@ export function ContentRenderPanel({
   const rendered = result?.outcome.status === "rendered";
 
   return (
-    <div className="rounded-lg border border-border/60 p-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-medium">
+    // A toolbar row rather than another bordered box: drawing is an action on
+    // the card above it, not a section of its own.
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           {post.images.length > 0 ? "Re-render" : "Render"}
         </p>
         <div className="flex gap-2">
@@ -125,22 +127,25 @@ export function ContentRenderPanel({
       </div>
 
       {post.style === null ? (
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="mt-1.5 text-xs text-muted-foreground">
           This post has no style block, so there is nothing to draw. The agent
           that wrote it sets the family, hues and layout.
         </p>
       ) : null}
 
       {takes && takes.length > 0 ? (
-        <div className="mt-3">
+        // The choices moment. Three takes shoulder to shoulder, each big
+        // enough to judge, one tap to pick. The mat behind them marks this as
+        // its own little occasion without adding a border.
+        <div className="mt-3 rounded-xl bg-muted/30 p-3">
           <p className="text-xs text-muted-foreground">
             Tap the one you like. It becomes the card, and your agent learns
             from the choice.
           </p>
-          <div className="mt-2 flex flex-wrap gap-3">
+          <div className="mt-3 grid grid-cols-3 gap-3">
             {takes.map((take) => (
               <button
-                className="group w-32 text-left"
+                className="group min-w-0 text-left"
                 data-testid={`content-take-${take.label.toLowerCase().replace(/\s+/g, "-")}`}
                 disabled={render.isPending}
                 key={take.label}
@@ -149,10 +154,10 @@ export function ContentRenderPanel({
               >
                 <img
                   alt={take.label}
-                  className="w-full rounded-lg border border-border/60 transition group-hover:border-primary"
+                  className="w-full rounded-lg shadow-sm ring-1 ring-border/40 transition duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-md group-hover:ring-2 group-hover:ring-primary"
                   src={take.imageUri}
                 />
-                <span className="mt-1 block text-xs text-muted-foreground">
+                <span className="mt-1.5 block truncate text-center text-2xs text-muted-foreground group-hover:text-foreground">
                   {take.label}
                 </span>
               </button>
@@ -162,7 +167,7 @@ export function ContentRenderPanel({
       ) : null}
 
       {blocking.length > 0 ? (
-        <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 p-2">
+        <div className="mt-2 rounded-lg bg-destructive/10 px-3 py-2">
           <p className="text-xs font-medium text-destructive">
             Not drawn. Fix these first, and it costs nothing to try again.
           </p>

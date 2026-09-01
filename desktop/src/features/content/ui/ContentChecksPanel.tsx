@@ -98,12 +98,14 @@ export function ContentChecksPanel({ reports }: { reports: GateReport[] }) {
 
   if (reports.length === 0) {
     return (
-      <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-        <p className="text-sm font-medium">Nothing measured</p>
-        <p className="mt-1 text-xs text-muted-foreground">
+      <section>
+        <h4 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Checks
+        </h4>
+        <p className="mt-1.5 text-xs text-muted-foreground">
           This card has not been rendered, so no check has run on it.
         </p>
-      </div>
+      </section>
     );
   }
 
@@ -121,9 +123,11 @@ export function ContentChecksPanel({ reports }: { reports: GateReport[] }) {
       : "incomplete";
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
+    <section>
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-sm font-medium">Checks</p>
+        <h4 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Checks
+        </h4>
         {verdict === "pass" ? (
           <Badge variant="success">All passed</Badge>
         ) : verdict === "fail" ? (
@@ -133,7 +137,7 @@ export function ContentChecksPanel({ reports }: { reports: GateReport[] }) {
         )}
       </div>
 
-      <ul className="mt-2">
+      <ul className="mt-1.5">
         {allGates.map((gate) => (
           <GateRow gate={gate} key={gate.id} />
         ))}
@@ -155,11 +159,11 @@ export function ContentChecksPanel({ reports }: { reports: GateReport[] }) {
         ))}
       </ul>
 
-      <p className="mt-2 text-xs text-muted-foreground">
+      <p className="mt-2 text-2xs text-muted-foreground">
         Measured on these exact bytes
         {engine ? ` by ${engine}` : ""}
         {firstReport.renderedAt ? `, ${firstReport.renderedAt}` : ""}.
       </p>
-    </div>
+    </section>
   );
 }
