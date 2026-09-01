@@ -9,6 +9,8 @@ import {
 } from "@/features/company/hooks";
 import { queueActioner } from "@/features/company/queueActions";
 import { selectTaskRuns } from "@/features/company/taskRuns";
+import type { CompanyTask } from "@/features/company/contracts";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { NewTaskDialog } from "@/features/company/ui/NewTaskDialog";
 import { TaskListScreen } from "@/features/company/ui/TaskListScreen";
 import { TaskBoardScreen } from "@/features/company/ui/TaskBoardScreen";
@@ -121,6 +123,20 @@ export function WorkRouteScreen() {
   );
   const [isNewTaskOpen, setIsNewTaskOpen] = React.useState(false);
   const handleOpenNewTask = React.useCallback(() => setIsNewTaskOpen(true), []);
+  const { goChannel } = useAppNavigation();
+  // Open where the work is actually happening. A chat-attributed task carries
+  // the send it came from, so the row lands on that message; a task created by
+  // hand has only its channel, and lands there.
+  const handleOpenTask = React.useCallback(
+    (task: CompanyTask) => {
+      if (!task.sourceChannelId) return;
+      void goChannel(task.sourceChannelId, {
+        messageId: task.sourceEventId ?? undefined,
+        threadRootId: task.threadRoot ?? undefined,
+      });
+    },
+    [goChannel],
+  );
   const handleTaskCreated = React.useCallback(() => {
     void queryClient.invalidateQueries({
       queryKey: tasksQueryKey(communityId, {}),
@@ -236,6 +252,7 @@ export function WorkRouteScreen() {
         initiatives={initiatives}
         isLoading={isLoading}
         onNewTask={handleOpenNewTask}
+        onOpenTask={handleOpenTask}
         rows={rows}
       />
       <NewTaskDialog
