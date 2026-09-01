@@ -22,6 +22,8 @@ import {
 } from "./atmosphere.ts";
 import { INK, resolveGroundHues } from "./colonyKit.ts";
 import type { BrandKit } from "./kit.ts";
+import type { CardMark } from "./marks.ts";
+import { antMark } from "./marks.ts";
 
 /** Canvas size of the kit's launch canvas. */
 export const CANVAS_W = 1080;
@@ -81,11 +83,15 @@ function headline(card: CardSpec, color: string, accent: string): string {
   );
 }
 
-// The ant mark SVG is injected per render by geometry.ts's antSvg(); this
-// placeholder keeps the lockup box present so contrast runs can sample it.
+// The mark html comes from the kit-resolved CardMark. A card whose brand has
+// no mark and no foot line closes with nothing: an empty lockup box would
+// still register a contrast run over zero pixels.
 function lockup(card: CardSpec, color: string, markSvg: string): string {
+  if (markSvg.length === 0 && !card.footLine) {
+    return "";
+  }
   return `<div class="lockup" data-contrast="lockup" style="color:${color}">
-    <div class="lockup-mark">${markSvg}</div>
+    ${markSvg.length > 0 ? `<div class="lockup-mark">${markSvg}</div>` : ""}
     ${card.footLine ? `<div class="lockup-line" data-contrast="countdown line" style="color:${color}">${esc(card.footLine)}</div>` : ""}
   </div>`;
 }
@@ -181,22 +187,9 @@ h1.big{font-weight:650;letter-spacing:-.048em;line-height:.98}
 .lockup{flex:none;display:flex;flex-direction:column;align-items:center;gap:26px}
 .lockup-mark{width:96px}
 .lockup-mark svg{display:block;width:100%;height:auto}
+.lockup-mark img{display:block;width:100%;height:auto}
 .lockup-line{font-size:23px;font-weight:600;letter-spacing:.24em;text-transform:uppercase}
 `;
-}
-
-/** The mark as drawn on cards: currentColour follows the lockup colour. */
-function cardMark(color: string): string {
-  // Deferred import avoided: geometry.ts has no heavy dependencies.
-  return antSvgInline(color);
-}
-
-import { antSvg as antSvgImpl } from "./geometry.ts";
-
-function antSvgInline(color: string): string {
-  // geometry.ts emits viewBox-only svg; the card needs explicit pixel sizing,
-  // which the .lockup-mark css already applies.
-  return antSvgImpl({ color });
 }
 
 /**
@@ -206,7 +199,7 @@ function antSvgInline(color: string): string {
  */
 export function cardHtml(
   card: CardSpec,
-  options: { fontFaceCss: string; kit?: BrandKit },
+  options: { fontFaceCss: string; kit?: BrandKit; mark?: CardMark },
 ): string {
   const build = LAYOUTS[card.layout];
   if (!build) {
@@ -218,7 +211,10 @@ export function cardHtml(
   if (!groundBand) {
     throw new Error(`${card.slug}: no ground band for layout ${card.layout}`);
   }
-  const mark = cardMark(p.lockup);
+  // Defaults to Colony's ant so a caller that resolved nothing (tests, the
+  // built-in kit) matches the launch cards; the app's render path always
+  // passes the kit-resolved mark.
+  const mark = (options.mark ?? antMark)(p.lockup);
   return `<style>${cardCss(options.fontFaceCss)}</style><body>
 ${atmosphere({ band: groundBand.band, family: card.family, hues, reach: groundBand.reach, seed: card.slug }, CANVAS_W, CANVAS_H)}
 ${build(card, p, mark)}

@@ -8,9 +8,8 @@ use super::{
     effective_agent_command, find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
     probe_codex_acp_version, record_agent_command, BUZZ_AGENT_AVATAR_URL,
 };
-use crate::managed_agents::AcpAvailabilityStatus;
 use crate::managed_agents::{
-    effective_config::resolve_effective_harness_command, GlobalAgentConfig,
+    effective_config::resolve_effective_harness_command, AcpAvailabilityStatus, GlobalAgentConfig,
 };
 use std::path::PathBuf;
 #[test]
@@ -369,6 +368,7 @@ fn record_with(
         definition_respond_to_allowlist: Vec::new(),
         definition_parallelism: None,
         relay_mesh: None,
+        ..Default::default()
     }
 }
 

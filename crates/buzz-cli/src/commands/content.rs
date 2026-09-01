@@ -322,6 +322,9 @@ async fn derive_mark(
                 .unwrap_or(buzz_core::content_brand_kit::MarkRole::Logo),
             media_hash: hash,
             media_url: uploaded.url,
+            // Scans propose the original alone; the app derives the
+            // on-dark/on-light versions when the owner confirms a logo.
+            variants: Vec::new(),
         });
     }
     None

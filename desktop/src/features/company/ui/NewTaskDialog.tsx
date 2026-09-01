@@ -10,12 +10,24 @@ import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
 import { Dialog } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 
+import {
+  useManagedAgentsQuery,
+  usePersonasQuery,
+} from "@/features/agents/hooks";
+import { useTeamsQuery } from "@/features/agents/teamHooks";
 import { createTaskFromForm } from "@/features/company/createTask";
 import type { CompanyTask } from "@/features/company/contracts";
 import {
   MAX_TASK_TITLE_LEN,
   validateNewTaskInput,
 } from "@/features/company/newTaskModel";
+import {
+  buildAssigneeOptions,
+  buildKickoffMessage,
+} from "@/features/company/taskAssignees";
+import { TaskAssigneeFields } from "@/features/company/ui/TaskAssigneeFields";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import { useSendMessageMutation } from "@/features/messages/hooks";
 
 const FIELD_SHELL_CLASS =
   "rounded-xl border border-input bg-muted/40 transition-colors hover:border-muted-foreground/40 focus-within:border-muted-foreground/50";
@@ -33,9 +45,15 @@ type NewTaskDialogProps = {
 
 /**
  * "New task" - a Task created by hand, outside of chat and outside an
- * initiative kickoff. Channel and title only: the backend fills in every
- * other field (owning team, cost centre, QA persona, status) with its own
- * defaults, and `CompanyTask` has no description field to fill in anyway.
+ * initiative kickoff. The backend fills in owning team, cost centre, QA
+ * persona and status with its own defaults, and `CompanyTask` has no
+ * description field to fill in.
+ *
+ * An assignee is asked for rather than defaulted. `plan_user_task` accepts an
+ * empty assignee list, so a task created without one is stored, listed, and
+ * never done by anyone - a state nothing downstream reports as wrong.
+ * Creating an assigned task also posts a kickoff message mentioning them,
+ * because an agent only acts on a turn it was mentioned in.
  */
 export function NewTaskDialog({
   channels,
@@ -46,7 +64,25 @@ export function NewTaskDialog({
 }: NewTaskDialogProps) {
   const [channelId, setChannelId] = React.useState(defaultChannelId ?? "");
   const [title, setTitle] = React.useState("");
+  const [assigneePersonaId, setAssigneePersonaId] = React.useState("");
+  const [watcherPersonaIds, setWatcherPersonaIds] = React.useState<string[]>(
+    [],
+  );
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  const personasQuery = usePersonasQuery({ enabled: open });
+  const teamsQuery = useTeamsQuery();
+  const agentsQuery = useManagedAgentsQuery({ enabled: open });
+  const identityQuery = useIdentityQuery();
+  const assigneeOptions = React.useMemo(
+    () =>
+      buildAssigneeOptions(
+        personasQuery.data,
+        teamsQuery.data,
+        agentsQuery.data,
+      ),
+    [personasQuery.data, teamsQuery.data, agentsQuery.data],
+  );
   const titleInputRef = React.useRef<HTMLInputElement>(null);
   // Minted once per genuine create attempt, reused across retries of that
   // same attempt (a rejected submit, a lost receipt), cleared whenever the
@@ -58,14 +94,21 @@ export function NewTaskDialog({
     mutationFn: (input: {
       channelId: string;
       title: string;
+      assigneePersonaId: string;
       requestId: string;
     }) => createTaskFromForm(input),
   });
+  const sendMessageMutation = useSendMessageMutation(
+    null,
+    identityQuery.data ?? undefined,
+  );
 
   React.useEffect(() => {
     if (!open) return;
     setChannelId(defaultChannelId ?? "");
     setTitle("");
+    setAssigneePersonaId("");
+    setWatcherPersonaIds([]);
     setErrorMessage(null);
     requestIdRef.current = null;
     const timerId = globalThis.setTimeout(() => {
@@ -78,7 +121,12 @@ export function NewTaskDialog({
     event.preventDefault();
     if (createMutation.isPending) return;
 
-    const validation = validateNewTaskInput({ channelId, title });
+    const validation = validateNewTaskInput({
+      channelId,
+      title,
+      assigneePersonaId,
+      watcherPersonaIds,
+    });
     if (!validation.ok) {
       setErrorMessage(validation.message);
       return;
@@ -92,9 +140,42 @@ export function NewTaskDialog({
       const task = await createMutation.mutateAsync({
         channelId,
         title: validation.title,
+        assigneePersonaId: validation.assigneePersonaId,
         requestId: requestIdRef.current,
       });
-      toast.success("Task created.");
+      const assignee = assigneeOptions.find(
+        (option) => option.personaId === validation.assigneePersonaId,
+      );
+      const kickoff = assignee
+        ? buildKickoffMessage(
+            validation.title,
+            assignee,
+            assigneeOptions.filter((option) =>
+              validation.watcherPersonaIds.includes(option.personaId),
+            ),
+          )
+        : null;
+      if (kickoff) {
+        // The task is already recorded. A kickoff that fails to send leaves
+        // work nobody was told about, which is worth saying out loud, but it
+        // is not a reason to report the create itself as failed.
+        try {
+          await sendMessageMutation.mutateAsync({
+            channelId,
+            content: kickoff.content,
+            mentionPubkeys: kickoff.mentionPubkeys,
+          });
+          toast.success("Task created and assigned.");
+        } catch {
+          toast.warning(
+            "Task created, but nobody could be notified. Mention them in the channel to start it.",
+          );
+        }
+      } else {
+        toast.success(
+          "Task created. Its assignee has no deployed agent yet, so nothing will start until one is.",
+        );
+      }
       onCreated(task);
       onOpenChange(false);
     } catch (error) {
@@ -104,8 +185,12 @@ export function NewTaskDialog({
     }
   }
 
-  const isCreating = createMutation.isPending;
-  const canSubmit = channelId !== "" && title.trim().length > 0 && !isCreating;
+  const isCreating = createMutation.isPending || sendMessageMutation.isPending;
+  const canSubmit =
+    channelId !== "" &&
+    title.trim().length > 0 &&
+    assigneePersonaId !== "" &&
+    !isCreating;
 
   return (
     <Dialog
@@ -119,7 +204,7 @@ export function NewTaskDialog({
         className="max-w-lg"
         contentClassName="pt-3"
         data-testid="new-task-dialog"
-        description="Create a task directly. It starts at Ready, owned by the coordination team by default."
+        description="Create a task directly. It starts at Ready and its assignee is mentioned in the channel so they can pick it up."
         footer={
           <div className="flex w-full justify-end">
             <Button
@@ -189,6 +274,24 @@ export function NewTaskDialog({
               />
             </div>
           </div>
+
+          <TaskAssigneeFields
+            assigneePersonaId={assigneePersonaId}
+            disabled={isCreating}
+            onAssigneeChange={(personaId) => {
+              setAssigneePersonaId(personaId);
+              setWatcherPersonaIds((current) =>
+                current.filter((id) => id !== personaId),
+              );
+              setErrorMessage(null);
+            }}
+            onWatchersChange={(personaIds) => {
+              setWatcherPersonaIds(personaIds);
+              setErrorMessage(null);
+            }}
+            options={assigneeOptions}
+            watcherPersonaIds={watcherPersonaIds}
+          />
 
           {errorMessage ? (
             <p

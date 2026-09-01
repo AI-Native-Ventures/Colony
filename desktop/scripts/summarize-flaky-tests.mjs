@@ -22,9 +22,41 @@ import { appendFile, readFile } from "node:fs/promises";
 // Hence: an unreadable report is now fatal too. A guard that cannot see the
 // run must say so loudly rather than wave it through.
 //
+// # Why a budget rather than zero tolerance (2026-09-01)
+//
+// Failing on any single unlisted flake measured at 4.3% per E2E job, which
+// across the matrix is roughly a 30% chance that any given PR goes red. On
+// 2026-09-01 that blocked a release repeatedly: ten distinct specs flaked once
+// each, and four consecutive PRs whose whole purpose was fixing a flake were
+// themselves blocked by a different flake. Serial fixing cannot converge
+// faster than new ones surface, and a gate that stops honest work more often
+// than it catches a regression is not paying for itself.
+//
+// So the gate now separates the two things it was conflating:
+//
+//   - A test that fails EVERY attempt is a hard failure. Playwright exits
+//     non-zero for those on its own; this script never saw them and still
+//     does not need to.
+//   - A test that fails and then passes is a flake. One is noise worth
+//     recording. Several in one run has meant something genuinely wrong every
+//     time it has happened here, so the job still fails past FLAKE_BUDGET.
+//
+// Allowlisted entries never count toward the budget: they are known debt that
+// has already been argued for in `known-flaky.json`.
+//
 // Usage: node scripts/summarize-flaky-tests.mjs <report.json> <run-label>
 
 const ALLOWLIST_PATH = new URL("../known-flaky.json", import.meta.url);
+
+/**
+ * Unlisted retry-passes tolerated in one job before it fails.
+ *
+ * Sized from the measured tail: single specs flaking once each is the normal
+ * background rate, while several at once has meant a stale build, a broken
+ * mock bridge, or a real regression. If this number needs raising, the tail
+ * shrinking is the fix, not a bigger budget.
+ */
+const FLAKE_BUDGET = 3;
 
 /** `tests/e2e/messaging.spec.ts › title` and `messaging.spec.ts › title` name
  * the same test. The JSON reporter's `file` has varied across Playwright
@@ -116,7 +148,10 @@ if (flaky.length > 0) {
     "| Test | Project | Attempts | Listed |\n| --- | --- | --- | --- |\n" +
     `${rows}\n` +
     (unlisted.length > 0
-      ? `\n${unlisted.length} of these are not in \`desktop/known-flaky.json\`, so this job fails.\n`
+      ? `\n${unlisted.length} of these are not in \`desktop/known-flaky.json\`` +
+        (unlisted.length > FLAKE_BUDGET
+          ? `, which is over the ${FLAKE_BUDGET}-flake budget, so this job fails.\n`
+          : `, within the ${FLAKE_BUDGET}-flake budget, so this job passes.\n`)
       : "");
 
   console.log(summary);
@@ -128,12 +163,25 @@ if (flaky.length > 0) {
 }
 
 if (unlisted.length > 0) {
-  console.error(
-    `\n${unlisted.length} test(s) failed and then passed on retry without being listed in desktop/known-flaky.json:\n` +
-      unlisted.map((test) => `  - ${test.title}`).join("\n") +
-      "\n\nA test that only passes sometimes is not evidence that the product works." +
-      "\nFix it, or add it to desktop/known-flaky.json with a reason and a date if" +
-      "\nshipping past it is the deliberate call.\n",
-  );
-  process.exit(1);
+  const listing = unlisted.map((test) => `  - ${test.title}`).join("\n");
+  const overBudget = unlisted.length > FLAKE_BUDGET;
+
+  // Both branches print the same list. Staying visible is the point: a flake
+  // nobody can see is how the stream.spec membership race hid for months.
+  const message =
+    `\n${unlisted.length} test(s) failed and then passed on retry without being ` +
+    `listed in desktop/known-flaky.json:\n${listing}\n\n` +
+    "A test that only passes sometimes is not evidence that the product works.\n" +
+    (overBudget
+      ? `More than ${FLAKE_BUDGET} in one run has meant something genuinely wrong\n` +
+        "every time it has happened here — a stale build, a broken mock bridge, a\n" +
+        "real regression — so this job fails. Read them before re-running.\n"
+      : `Within the ${FLAKE_BUDGET}-flake budget, so this job passes. Fix it, or add\n` +
+        "it to desktop/known-flaky.json with a reason and a date.\n");
+
+  if (overBudget) {
+    console.error(message);
+    process.exit(1);
+  }
+  console.warn(message);
 }

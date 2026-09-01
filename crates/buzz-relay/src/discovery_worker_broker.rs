@@ -141,6 +141,24 @@ pub(crate) async fn handle_discovery_worker_action(
                 outcome,
             })
         }
+        DiscoveryWorkerCommandApply::IdleNotStored { receipt, outcome } => {
+            // Fanned out so the worker gets its answer, never persisted. The
+            // action is not dispatched at all: nothing subscribed to it needs
+            // to learn that a poll happened.
+            dispatch_persistent_event(
+                tenant,
+                state,
+                &receipt,
+                KIND_DISCOVERY_WORKER_RECEIPT,
+                &state.relay_keypair.public_key().to_hex(),
+                None,
+            )
+            .await;
+            Ok(DiscoveryWorkerBrokerOutcome::Applied {
+                receipt_event_id: receipt.event.id.as_bytes().to_vec(),
+                outcome,
+            })
+        }
         DiscoveryWorkerCommandApply::Duplicate {
             original_action_event_id,
             receipt_event_id,

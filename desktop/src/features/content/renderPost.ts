@@ -26,6 +26,7 @@ import { contrastFloor, grainRange } from "./render/kit";
 import type { CardText, HouseRules } from "./render/houseStyle";
 import type { PipelineOutcome } from "./render/pipeline";
 import { renderCard } from "./render/pipeline";
+import type { CardMark } from "./render/marks";
 import type { SlideCapture } from "./render/renderSlide";
 import { renderSlide } from "./render/renderSlide";
 
@@ -167,6 +168,8 @@ export type RenderPostInput = {
   claimGate: ClaimGateOutcome;
   /** The `@font-face` rule for the kit face, from `render/fontKit.ts`. */
   fontFaceCss: string;
+  /** The kit-resolved mark, from `render/marksRuntime.ts`. Ant when absent. */
+  mark?: CardMark;
   /** ISO timestamp stamped into every report. */
   renderedAt: string;
   /** What rendered this, recorded verbatim in the report. */
@@ -192,6 +195,7 @@ export async function renderPost({
   style,
   claimGate,
   fontFaceCss,
+  mark,
   renderedAt,
   renderer,
 }: RenderPostInput): Promise<RenderPostResult> {
@@ -210,7 +214,7 @@ export async function renderPost({
         // the shared document and removes it again afterwards, so two running
         // at once would race over the same registration.
         captured.push(
-          await renderSlide(spec, { fontFaceCss, kit: kit ?? undefined }),
+          await renderSlide(spec, { fontFaceCss, kit: kit ?? undefined, mark }),
         );
       }
       return captured;

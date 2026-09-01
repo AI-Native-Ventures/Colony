@@ -1291,6 +1291,55 @@ mod tests {
         }
     }
 
+    /// A PNG straight out of WKWebView's canvas, and the same PNG after the
+    /// desktop's `canonicalizePng` has run on it.
+    ///
+    /// WebKit writes an `eXIf` chunk, so a rendered content card was refused
+    /// here with `MetadataForbidden` -- a 422 the desktop surfaced as "media
+    /// contains metadata or a non-canonical metadata channel". Chromium emits
+    /// no such chunk, so nothing that tests in Chromium can catch this.
+    ///
+    /// These two fixtures are real engine output rather than hand-built
+    /// chunks, so this fails if either end drifts: if WebKit starts emitting
+    /// something else, or if the desktop stops stripping it.
+    const WKWEBVIEW_CANVAS_PNG: &[u8] = include_bytes!("../tests/fixtures/wkwebview-canvas.png");
+    const WKWEBVIEW_CANVAS_CANONICALIZED_PNG: &[u8] =
+        include_bytes!("../tests/fixtures/wkwebview-canvas-canonicalized.png");
+
+    #[test]
+    fn test_wkwebview_canvas_png_is_refused_until_canonicalized() {
+        assert!(
+            matches!(
+                validate_png_metadata_free(WKWEBVIEW_CANVAS_PNG),
+                Err(MediaError::MetadataForbidden)
+            ),
+            "the raw fixture must still be refused, or it stopped proving anything"
+        );
+
+        assert!(
+            validate_png_metadata_free(WKWEBVIEW_CANVAS_CANONICALIZED_PNG).is_ok(),
+            "a canonicalized card must pass the same check that refused the raw one"
+        );
+
+        // Only the metadata went. The desktop binds a gate report to the hash
+        // of these bytes, so anything that rewrote the image data would make
+        // the report describe a different picture than the one stored.
+        let idat = |bytes: &[u8]| {
+            let mut i = 8;
+            while i + 12 <= bytes.len() {
+                let len = u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+                if &bytes[i + 4..i + 8] == b"IDAT" {
+                    return bytes[i + 8..i + 8 + len].to_vec();
+                }
+                i += 12 + len;
+            }
+            Vec::new()
+        };
+        let original = idat(WKWEBVIEW_CANVAS_PNG);
+        assert!(!original.is_empty(), "the fixture must have image data");
+        assert_eq!(original, idat(WKWEBVIEW_CANVAS_CANONICALIZED_PNG));
+    }
+
     #[test]
     fn test_rejects_png_metadata_and_trailing_payload() {
         let config = test_config();

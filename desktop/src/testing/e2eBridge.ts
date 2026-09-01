@@ -11359,6 +11359,21 @@ function sendToMockSocket(args: {
       return;
     }
 
+    // Content-calendar heads (campaigns, posts, style, kit, decisions) carry
+    // `d`/`a` tags rather than a channel tag. The mock appends them to the
+    // seeded store so a refetch sees what was just published — which is how a
+    // spec proves a whole loop (send a card back as a rule, watch the rule
+    // appear on the Brand page) rather than only a write.
+    if ([30195, 30196, 30197, 30198, 40025].includes(event.kind)) {
+      window.__BUZZ_E2E_SEEDED_EVENTS__ ??= [];
+      window.__BUZZ_E2E_SEEDED_EVENTS__.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId) {
       sendWsText(socket.handler, [
@@ -14241,6 +14256,11 @@ export function maybeInstallE2eTauriMocks() {
       case "pick_and_upload_image":
         return (await resolveMockUploadDescriptors(activeConfig))[0] ?? null;
       case "upload_media_bytes":
+        return resolveMockUploadDescriptorForBytes(
+          payload as { data: number[]; filename?: string | null },
+          activeConfig,
+        );
+      case "upload_png_verbatim":
         return resolveMockUploadDescriptorForBytes(
           payload as { data: number[]; filename?: string | null },
           activeConfig,

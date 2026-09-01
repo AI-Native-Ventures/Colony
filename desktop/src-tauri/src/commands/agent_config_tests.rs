@@ -66,6 +66,8 @@ fn goose_runtime() -> &'static KnownAcpRuntime {
 
 fn agent_record() -> ManagedAgentRecord {
     ManagedAgentRecord {
+        tier: None,
+        manager: None,
         creation_request_id: None,
         role_id: None,
         role_title: None,

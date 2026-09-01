@@ -141,16 +141,32 @@ test("inbox reaction on a thread-reply mention persists after refetch", async ({
 
   await selectedMessage.hover();
   const actionBar = page.getByTestId(`message-action-bar-${replyEvent.id}`);
-  const [actionBarBox, selectedMessageBox] = await Promise.all([
-    actionBar.boundingBox(),
-    selectedMessage.boundingBox(),
-  ]);
-  expect(actionBarBox).not.toBeNull();
-  expect(selectedMessageBox).not.toBeNull();
-  if (!actionBarBox || !selectedMessageBox) {
-    throw new Error("Inbox message action bar bounds were unavailable.");
-  }
-  expect(actionBarBox.y).toBeGreaterThanOrEqual(selectedMessageBox.y);
+  await expect(actionBar).toBeVisible();
+
+  // Measure both rects inside ONE evaluate rather than two `boundingBox()`
+  // round trips. The reaction pill added just above grows the row, and a
+  // reflow landing between two separate measurements compares the action bar
+  // against the message's pre-pill position — observed on 2026-08-31 as the
+  // bar sitting 25px above a row it is nested inside, which reads as a layout
+  // bug rather than a measurement race. Polling lets the row settle; the
+  // callback only ever returns values, because `expect.poll` rethrows instead
+  // of retrying when its callback throws.
+  await expect
+    .poll(async () =>
+      page.evaluate((eventId) => {
+        const bar = document.querySelector(
+          `[data-testid="message-action-bar-${eventId}"]`,
+        );
+        const row = document.querySelector(
+          '[data-testid="home-inbox-selected-message"]',
+        );
+        if (!bar || !row) return null;
+        const barTop = bar.getBoundingClientRect().top;
+        const rowTop = row.getBoundingClientRect().top;
+        return Math.round(barTop - rowTop) >= 0;
+      }, replyEvent.id),
+    )
+    .toBe(true);
 
   await selectedMessage
     .getByRole("button", { name: "React with :+1:" })

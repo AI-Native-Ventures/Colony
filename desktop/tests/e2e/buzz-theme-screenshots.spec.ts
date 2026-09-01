@@ -1141,8 +1141,29 @@ test("glass background keeps the content panel solid", async ({ page }) => {
     )
     .toBe(true);
 
-  await opacitySlider.press("Home");
-  await expect(opacitySlider).toHaveAttribute("aria-valuenow", "30");
+  // Focus explicitly and confirm it landed before sending the key. `press`
+  // focuses as a side effect, but under CI contention the keydown can be
+  // dispatched before the slider has actually taken focus — the key then goes
+  // nowhere and `aria-valuenow` stays at its default 65, which reads as the
+  // slider ignoring Home rather than as a lost keystroke. Observed on
+  // 2026-08-31 blocking a promotion, expected "30" received "65" against the
+  // full 15s timeout, so the value never changed at all.
+  // Home is idempotent — it moves the slider to its minimum — so retry focus
+  // and the key together until the value actually changes, rather than
+  // asserting focus landed and then pressing once.
+  //
+  // An earlier version did assert focus first. That turned one race into
+  // another: under CI contention `toBeFocused()` itself reported "inactive"
+  // and failed the job, which is the assertion flaking rather than the slider
+  // misbehaving. Driving to the outcome removes both, and the value assertion
+  // below is what actually carries the claim.
+  await expect
+    .poll(async () => {
+      await opacitySlider.focus();
+      await opacitySlider.press("Home");
+      return opacitySlider.getAttribute("aria-valuenow");
+    })
+    .toBe("30");
   await expect
     .poll(() =>
       page.evaluate(() =>

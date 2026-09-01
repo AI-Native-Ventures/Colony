@@ -494,6 +494,19 @@ impl Llm {
     }
 
     async fn post_openrouter(&self, cfg: &Config, body: &Value) -> Result<Value, AgentError> {
+        // The chain exactly as sent. Read before the request so the observation
+        // is attributed to what we actually asked for, not to a later rebuild.
+        let requested: Vec<String> = body
+            .get("models")
+            .and_then(Value::as_array)
+            .map(|models| {
+                models
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
         let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
         let mut bearer = self.auth.bearer().await?;
         let mut refreshed = false;
@@ -514,7 +527,21 @@ impl Llm {
                     }
                     bearer = new_bearer;
                 }
-                result => return result,
+                result => {
+                    // A completion that came back names the model that served
+                    // it, which is the whole availability signal. Failures are
+                    // deliberately not recorded: a transport error or an
+                    // account-wide 401 says nothing about any individual
+                    // model's availability, and counting it would demote the
+                    // entire chain for a problem none of its entries caused.
+                    if let Ok(value) = &result {
+                        crate::model_availability::observe_response(
+                            &requested,
+                            value.get("model").and_then(Value::as_str),
+                        );
+                    }
+                    return result;
+                }
             }
         }
     }
@@ -2493,6 +2520,11 @@ fn apply_openrouter_mutations(
         // rather than account-wide — `z-ai/glm-5.2:free` was throttled while
         // `minimax/minimax-m3:free` served fine on the same key in the same
         // minute — so a chain recovers the common failure, not just the rare one.
+        // The configured chain is a snapshot taken at spawn; `relay_chain`
+        // returns a newer one when the relay has re-ranked since, and returns
+        // this one untouched when the value was set by hand.
+        let live = crate::relay_chain::effective(fallback_models);
+        let fallback_models: &[String] = &live;
         if !fallback_models.is_empty() {
             let mut chain = vec![effective_model.to_string()];
             for m in fallback_models {
@@ -2500,6 +2532,14 @@ fn apply_openrouter_mutations(
                     chain.push(m.clone());
                 }
             }
+            // Models observed to be persistently unavailable move to the back
+            // rather than out. A recommended ranking is built from benchmark
+            // scores, which say nothing about whether a model answers today —
+            // `z-ai/glm-5.2:free` ranked first while failing every request for
+            // two days. Reordering here keeps that from costing every turn a
+            // fallthrough, without letting one throttled minute bury a model
+            // permanently. See `model_availability`.
+            let chain = crate::model_availability::reorder(chain);
             obj.insert("models".into(), json!(chain));
         }
 
@@ -6267,6 +6307,70 @@ mod tests {
             body["model"], "z-ai/glm-5.2:free",
             "`model` must survive: it is what the response echoes when no fallback was needed"
         );
+    }
+
+    /// The chain that reaches the wire is availability-corrected, not just the
+    /// configured order. This is the end of the path the `model_availability`
+    /// unit tests cover in isolation: a model observed to never serve must be
+    /// behind one that does *in the request body itself*, or the correction
+    /// exists but never ships.
+    ///
+    /// Reproduces the production case: `z-ai/glm-5.2:free` ranked first on
+    /// benchmark scores while OpenRouter fell through it on every request.
+    #[test]
+    fn openrouter_chain_demotes_a_model_that_never_serves() {
+        use crate::model_availability;
+        let _guard = model_availability::tests::TRACKER_TESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        model_availability::reset_for_test();
+
+        let configured = vec!["minimax/minimax-m3:free".to_string()];
+        let sent = vec![
+            "z-ai/glm-5.2:free".to_string(),
+            "minimax/minimax-m3:free".to_string(),
+        ];
+
+        // Before any evidence the configured order is sent unchanged.
+        let mut body = json!({ "model": "z-ai/glm-5.2:free" });
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "z-ai/glm-5.2:free",
+            false,
+            &configured,
+            false,
+        );
+        assert_eq!(
+            body["models"],
+            json!(["z-ai/glm-5.2:free", "minimax/minimax-m3:free"]),
+            "an unobserved chain must ship exactly as configured"
+        );
+
+        // OpenRouter falls through the head every time.
+        for _ in 0..12 {
+            model_availability::observe_response(&sent, Some("minimax/minimax-m3:free"));
+        }
+
+        let mut body = json!({ "model": "z-ai/glm-5.2:free" });
+        apply_openrouter_mutations(
+            &mut body,
+            None,
+            "z-ai/glm-5.2:free",
+            false,
+            &configured,
+            false,
+        );
+        assert_eq!(
+            body["models"],
+            json!(["minimax/minimax-m3:free", "z-ai/glm-5.2:free"]),
+            "the model that actually serves must lead the chain on the wire"
+        );
+        assert_eq!(
+            body["model"], "z-ai/glm-5.2:free",
+            "`model` still echoes the configured choice — demotion reorders the chain, not the config"
+        );
+        model_availability::reset_for_test();
     }
 
     /// A fallback list that repeats the primary model must not duplicate it.

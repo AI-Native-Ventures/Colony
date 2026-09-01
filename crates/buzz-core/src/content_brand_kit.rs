@@ -61,6 +61,9 @@ pub const MAX_TYPE_FAMILIES: usize = 8;
 /// Largest number of marks (logos, wordmarks, icons) one kit may carry.
 pub const MAX_MARKS: usize = 16;
 
+/// Largest number of derived variants one mark may carry.
+pub const MAX_MARK_VARIANTS: usize = 4;
+
 /// Largest number of named canvases one kit may declare.
 pub const MAX_CANVASES: usize = 16;
 
@@ -503,6 +506,52 @@ impl MarkRole {
     }
 }
 
+/// Which ground a derived version of a mark is for.
+///
+/// `OnDark` is the light (usually white) version, `OnLight` the ink one. The
+/// original bytes stay on the mark itself; variants are alternates the
+/// renderer may substitute so a logo never lands on a ground it cannot read
+/// on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarkVariantPurpose {
+    /// The light version, drawn on dark grounds.
+    #[serde(rename = "on-dark")]
+    OnDark,
+    /// The ink version, drawn on light grounds.
+    #[serde(rename = "on-light")]
+    OnLight,
+}
+
+impl MarkVariantPurpose {
+    /// Parse the wire string.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "on-dark" => Some(Self::OnDark),
+            "on-light" => Some(Self::OnLight),
+            _ => None,
+        }
+    }
+
+    /// The wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OnDark => "on-dark",
+            Self::OnLight => "on-light",
+        }
+    }
+}
+
+/// One derived version of a mark and where its bytes live.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarkVariant {
+    /// Which ground this version is for.
+    pub purpose: MarkVariantPurpose,
+    /// SHA-256 of the version's bytes, bare lowercase hex.
+    pub media_hash: String,
+    /// Where the bytes live, as returned by `buzz upload file`.
+    pub media_url: String,
+}
+
 /// One brand mark and where its bytes live.
 ///
 /// A mark without its bytes is a name, not a mark: the renderer has nothing
@@ -515,6 +564,27 @@ pub struct BrandMark {
     pub media_hash: String,
     /// Where the bytes live, as returned by `buzz upload file`.
     pub media_url: String,
+    /// Derived versions by ground; empty when the kit predates them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<MarkVariant>,
+}
+
+fn parse_mark_variant(raw: &serde_json::Value) -> Result<MarkVariant, BrandKitParseError> {
+    let purpose_str = required_str_at(raw, "purpose", "marks[].variants[].purpose")?;
+    let purpose = MarkVariantPurpose::parse(&purpose_str).ok_or_else(|| {
+        BrandKitParseError::UnknownVariant {
+            field: "marks[].variants[].purpose".to_string(),
+            value: purpose_str,
+        }
+    })?;
+    Ok(MarkVariant {
+        purpose,
+        media_hash: require_sha256(
+            &required_str_at(raw, "media_hash", "marks[].variants[].media_hash")?,
+            "marks[].variants[].media_hash",
+        )?,
+        media_url: required_str_at(raw, "media_url", "marks[].variants[].media_url")?,
+    })
 }
 
 fn parse_mark(raw: &serde_json::Value) -> Result<BrandMark, BrandKitParseError> {
@@ -523,6 +593,21 @@ fn parse_mark(raw: &serde_json::Value) -> Result<BrandMark, BrandKitParseError> 
         field: "marks[].role".to_string(),
         value: role_str,
     })?;
+    let raw_variants = raw
+        .get("variants")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if raw_variants.len() > MAX_MARK_VARIANTS {
+        return Err(BrandKitParseError::TooManyEntries {
+            field: "marks[].variants".to_string(),
+            max: MAX_MARK_VARIANTS,
+        });
+    }
+    let mut variants = Vec::with_capacity(raw_variants.len());
+    for raw_variant in &raw_variants {
+        variants.push(parse_mark_variant(raw_variant)?);
+    }
     Ok(BrandMark {
         role,
         media_hash: require_sha256(
@@ -530,6 +615,7 @@ fn parse_mark(raw: &serde_json::Value) -> Result<BrandMark, BrandKitParseError> 
             "marks[].media_hash",
         )?,
         media_url: required_str_at(raw, "media_url", "marks[].media_url")?,
+        variants,
     })
 }
 
@@ -1127,6 +1213,102 @@ mod tests {
             Err(BrandKitParseError::EmptyField(
                 "marks[].media_hash".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn mark_variants_round_trip() {
+        let body = serde_json::json!({
+            "schema": SCHEMA_CONTENT_BRAND_KIT,
+            "source": { "type": "manual" },
+            "marks": [{
+                "role": "logo",
+                "media_hash": mark_hash(),
+                "media_url": "https://example.test/logo.png",
+                "variants": [
+                    {
+                        "purpose": "on-dark",
+                        "media_hash": mark_hash(),
+                        "media_url": "https://example.test/logo-on-dark.png"
+                    },
+                    {
+                        "purpose": "on-light",
+                        "media_hash": mark_hash(),
+                        "media_url": "https://example.test/logo-on-light.png"
+                    }
+                ]
+            }]
+        })
+        .to_string();
+        let event = sign(KIND_CONTENT_BRAND_KIT, vec![t(&["d", "acme"])], &body);
+        let parsed = parse_content_brand_kit(&event).expect("parse");
+        assert_eq!(parsed.marks[0].variants.len(), 2);
+        assert_eq!(
+            parsed.marks[0].variants[0].purpose,
+            MarkVariantPurpose::OnDark
+        );
+        assert_eq!(
+            parsed.marks[0].variants[1].purpose,
+            MarkVariantPurpose::OnLight
+        );
+        assert_eq!(parsed.marks[0].variants[0].media_hash, mark_hash());
+    }
+
+    #[test]
+    fn a_mark_without_variants_parses_with_none() {
+        let parsed = parse_content_brand_kit(&kit_event()).expect("parse");
+        assert!(parsed.marks[0].variants.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_variant_purpose_is_refused() {
+        let body = serde_json::json!({
+            "schema": SCHEMA_CONTENT_BRAND_KIT,
+            "source": { "type": "manual" },
+            "marks": [{
+                "role": "logo",
+                "media_hash": mark_hash(),
+                "media_url": "https://example.test/logo.png",
+                "variants": [{
+                    "purpose": "sideways",
+                    "media_hash": mark_hash(),
+                    "media_url": "https://example.test/logo-sideways.png"
+                }]
+            }]
+        })
+        .to_string();
+        let event = sign(KIND_CONTENT_BRAND_KIT, vec![t(&["d", "acme"])], &body);
+        assert!(matches!(
+            parse_content_brand_kit(&event),
+            Err(BrandKitParseError::UnknownVariant { .. })
+        ));
+    }
+
+    #[test]
+    fn too_many_mark_variants_are_refused() {
+        let variant = serde_json::json!({
+            "purpose": "on-dark",
+            "media_hash": mark_hash(),
+            "media_url": "https://example.test/logo-on-dark.png"
+        });
+        let body = serde_json::json!({
+            "schema": SCHEMA_CONTENT_BRAND_KIT,
+            "source": { "type": "manual" },
+            "marks": [{
+                "role": "logo",
+                "media_hash": mark_hash(),
+                "media_url": "https://example.test/logo.png",
+                "variants": vec![variant; MAX_MARK_VARIANTS + 1]
+            }]
+        })
+        .to_string();
+        let event = sign(KIND_CONTENT_BRAND_KIT, vec![t(&["d", "acme"])], &body);
+        assert_eq!(
+            parse_content_brand_kit(&event),
+            Err(BrandKitParseError::TooManyEntries {
+                field: "marks[].variants".to_string(),
+                max: MAX_MARK_VARIANTS,
+            })
         );
     }
 

@@ -57,6 +57,19 @@ pub struct ManagedAgentEventContent {
     /// public keys, not secrets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub respond_to_allowlist: Vec<String>,
+    /// Interrupt-ladder rank, set by the owner's rank dialog on the head this
+    /// projection rebuilds. Public, and on the allowlist for one reason: a
+    /// republish that omits it erases the rank from the relay, and an agent
+    /// with no rank is unrestricted at the owner-contact gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Stable company role slug, carried for the same reason `tier` is. The
+    /// desktop resolves an unranked head's rank from this
+    /// (`rankImpliedByRole`), so a head republished without it reads as an
+    /// ordinary team lead: the Chief of Staff silently stops being the Chief
+    /// of Staff on the next rename or restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
 }
 
 /// Project a `ManagedAgentRecord` onto the content fields published in
@@ -103,6 +116,8 @@ pub fn agent_event_content(record: &ManagedAgentRecord) -> ManagedAgentEventCont
         parallelism: record.parallelism,
         respond_to: record.respond_to,
         respond_to_allowlist: record.respond_to_allowlist.clone(),
+        tier: record.tier.clone(),
+        role_id: record.role_id.clone(),
     }
 }
 
@@ -113,8 +128,17 @@ pub fn agent_event_content(record: &ManagedAgentRecord) -> ManagedAgentEventCont
 pub fn build_agent_event(record: &ManagedAgentRecord) -> Result<EventBuilder, String> {
     let content = serde_json::to_string(&agent_event_content(record))
         .map_err(|e| format!("failed to serialize managed-agent content: {e}"))?;
-    let tags =
+    let mut tags =
         vec![Tag::parse(["d", record.pubkey.as_str()]).map_err(|e| format!("invalid d-tag: {e}"))?];
+    // The manager is a TAG, not part of the content projection, so rebuilding
+    // the head from the record alone published a head with no manager at a
+    // newer created_at and erased the reporting line the rank dialog had set.
+    // Carrying it here is the tag-side counterpart of `tier` on the content.
+    if let Some(manager) = record.manager.as_deref().filter(|m| !m.is_empty()) {
+        tags.push(
+            Tag::parse(["manager", manager]).map_err(|e| format!("invalid manager tag: {e}"))?,
+        );
+    }
     Ok(EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT as u16), content).tags(tags))
 }
 
@@ -152,12 +176,72 @@ pub fn build_agent_delete(d_tag: &str, owner_pubkey_hex: &str) -> Result<EventBu
 }
 
 #[cfg(test)]
+mod manager_tag_tests {
+    use super::*;
+
+    fn placed_agent() -> ManagedAgentRecord {
+        let mut record = super::tests::sample_agent();
+        record.manager = Some("f".repeat(64));
+        record.role_id = Some("chief-of-staff".to_string());
+        record.tier = Some("executive".to_string());
+        record
+    }
+
+    /// The device rebuilds the published head from its own record on every
+    /// rename, parallelism change, persona relink and restart. It used to
+    /// write only the `d` tag, so each rebuild published a head with no
+    /// manager at a newer created_at and erased the reporting line the org
+    /// dialog had set: the whole roster fell to UNASSIGNED, and an agent that
+    /// reports to nobody belongs to no team the company contract accepts.
+    #[test]
+    fn a_republished_head_carries_the_manager_tag() {
+        let builder = build_agent_event(&placed_agent()).expect("build head");
+        let event = builder
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("sign head");
+        let manager: Vec<&str> = event
+            .tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("manager"))
+            .filter_map(|tag| tag.as_slice().get(1).map(String::as_str))
+            .collect();
+        assert_eq!(manager, vec!["f".repeat(64).as_str()]);
+    }
+
+    /// An agent with no reporting line writes no tag at all, rather than an
+    /// empty one that would read as a malformed manager.
+    #[test]
+    fn an_unplaced_agent_writes_no_manager_tag() {
+        let event = build_agent_event(&super::tests::sample_agent())
+            .expect("build head")
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("sign head");
+        assert!(!event
+            .tags
+            .iter()
+            .any(|tag| tag.as_slice().first().map(String::as_str) == Some("manager")));
+    }
+
+    /// `role_id` decides whether an unranked head reads as the Chief of Staff,
+    /// so dropping it on republish silently demoted the Chief of Staff to an
+    /// ordinary team lead.
+    #[test]
+    fn a_republished_head_carries_the_role() {
+        let content = agent_event_content(&placed_agent());
+        assert_eq!(content.role_id.as_deref(), Some("chief-of-staff"));
+        assert_eq!(content.tier.as_deref(), Some("executive"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    fn sample_agent() -> ManagedAgentRecord {
+    pub(super) fn sample_agent() -> ManagedAgentRecord {
         ManagedAgentRecord {
+            tier: None,
+            manager: None,
             pubkey: "agentpubkeyhex".to_string(),
             name: "Test Agent".to_string(),
             role_id: None,

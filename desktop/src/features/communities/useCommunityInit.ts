@@ -18,6 +18,7 @@ import {
   initDraftStore,
 } from "@/features/messages/lib/useDrafts";
 import { resetContentRepositoryState } from "@/features/content/contentRepository";
+import { resetMarkCache } from "@/features/content/render/marksRuntime";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { resetChannelSurfaceModes } from "@/features/workspace/lib/channelSurfaceMode";
 import { resetWorkspaceTabs } from "@/features/workspace/lib/workspaceTabs";
@@ -88,6 +89,7 @@ function resetCommunityState({
   resetPendingHireState();
   resetCompanyRepositoryState();
   resetContentRepositoryState();
+  resetMarkCache();
   resetTaskRunRepositoryState();
   resetPartyRepositoryState();
   resetLedgerRepositoryState();

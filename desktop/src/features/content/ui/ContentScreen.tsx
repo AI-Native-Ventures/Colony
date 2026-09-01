@@ -4,7 +4,6 @@ import { useCommunities } from "@/features/communities/useCommunities";
 import { KIND_CONTENT_POST } from "@/shared/constants/kinds";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { cn } from "@/shared/lib/cn";
-import { Badge } from "@/shared/ui/badge";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import {
   AuxiliaryPanel,
@@ -27,8 +26,8 @@ import {
   useContentStyle,
   useSubmitContentDecision,
 } from "../hooks";
+import { ContentBrandPanel } from "./ContentBrandPanel";
 import { ContentDayDetail } from "./ContentDayDetail";
-import { ContentStylePanel } from "./ContentStylePanel";
 
 /**
  * The content calendar.
@@ -44,11 +43,23 @@ import { ContentStylePanel } from "./ContentStylePanel";
  * approval.
  */
 
-const TONE_VARIANT = {
-  bad: "destructive",
-  good: "success",
-  neutral: "outline",
-  warn: "warning",
+/**
+ * Status rendered as a small tinted dot plus a word, not a boxed badge: the
+ * calendar is a wall of the agent's cards, and forty badge boxes under forty
+ * images turned the gallery back into the admin table this redesign removed.
+ */
+const TONE_DOT = {
+  bad: "bg-destructive",
+  good: "bg-emerald-500",
+  neutral: "bg-muted-foreground/40",
+  warn: "bg-amber-500",
+} as const;
+
+const TONE_TEXT = {
+  bad: "text-destructive",
+  good: "text-emerald-600 dark:text-emerald-400",
+  neutral: "text-muted-foreground",
+  warn: "text-amber-600 dark:text-amber-400",
 } as const;
 
 function dayLabel(isoDate: string): string {
@@ -80,49 +91,64 @@ function DayCard({
 
   return (
     <button
-      className={cn(
-        "flex w-40 shrink-0 flex-col gap-2 rounded-lg border p-2 text-left transition",
-        selected
-          ? "border-primary bg-primary/5"
-          : "border-border/60 hover:bg-muted/40",
-      )}
+      className="group w-48 shrink-0 text-left"
       data-testid={`content-day-${post.slug}`}
       onClick={() => onSelect(post)}
       type="button"
     >
-      {post.images.length > 0 ? (
-        <img
-          alt=""
-          className="aspect-[4/5] w-full rounded-md border border-border/40 object-cover"
-          src={rewriteRelayUrl(post.images[0].url)}
-        />
-      ) : (
-        // An undrawn card shows its own words rather than a grey box saying
-        // it has none. A week of unrendered posts was five identical
-        // placeholders, which made a planned week look like an empty one and
-        // gave the eye nothing to pick a day by.
-        <div className="flex aspect-[4/5] w-full flex-col justify-between rounded-md border border-dashed border-border/50 p-2">
-          <p className="line-clamp-5 text-xs font-medium leading-snug">
-            {post.headline ?? post.slug}
-          </p>
-          <p className="text-2xs uppercase tracking-wide text-muted-foreground">
-            Not drawn yet
-          </p>
-        </div>
-      )}
-      <div className="min-w-0">
+      <div
+        className={cn(
+          "overflow-hidden rounded-xl transition-shadow",
+          selected
+            ? "shadow-md ring-2 ring-primary"
+            : "ring-1 ring-border/50 group-hover:shadow-md group-hover:ring-border",
+        )}
+      >
+        {post.images.length > 0 ? (
+          <img
+            alt=""
+            className="aspect-[4/5] w-full object-cover transition-transform duration-200 ease-out group-hover:scale-[1.02]"
+            src={rewriteRelayUrl(post.images[0].url)}
+          />
+        ) : (
+          // An undrawn card shows its own words rather than a grey box saying
+          // it has none. A week of unrendered posts was five identical
+          // placeholders, which made a planned week look like an empty one and
+          // gave the eye nothing to pick a day by.
+          <div className="flex aspect-[4/5] w-full flex-col justify-between bg-muted/40 p-3">
+            <p className="line-clamp-5 text-sm font-medium leading-snug">
+              {post.headline ?? post.slug}
+            </p>
+            <p className="text-2xs uppercase tracking-wider text-muted-foreground">
+              Not drawn yet
+            </p>
+          </div>
+        )}
+      </div>
+      {/* A gallery caption, not a card footer: date on the left, status as a
+          dot and a word on the right, the job as a whisper beneath. */}
+      <div className="mt-2 flex items-baseline justify-between gap-2 px-0.5">
         <p className="truncate text-xs font-medium">
           {dayLabel(post.scheduledFor)}
         </p>
-        {post.job ? (
-          <p className="truncate text-2xs uppercase tracking-wide text-muted-foreground">
-            {post.job}
-          </p>
-        ) : null}
+        <span
+          className="flex shrink-0 items-center gap-1.5"
+          title={chip.detail}
+        >
+          <span
+            aria-hidden
+            className={cn("h-1.5 w-1.5 rounded-full", TONE_DOT[chip.tone])}
+          />
+          <span className={cn("text-2xs", TONE_TEXT[chip.tone])}>
+            {chip.label}
+          </span>
+        </span>
       </div>
-      <Badge title={chip.detail} variant={TONE_VARIANT[chip.tone]}>
-        {chip.label}
-      </Badge>
+      {post.job ? (
+        <p className="truncate px-0.5 text-2xs uppercase tracking-wide text-muted-foreground/70">
+          {post.job}
+        </p>
+      ) : null}
     </button>
   );
 }
@@ -150,17 +176,29 @@ function WeekRow({
     `Week ${week}`;
 
   return (
-    <section className="mt-4">
-      <h3 className="text-sm font-medium">{label}</h3>
+    <section className="mt-10 first:mt-6">
+      {/* An editorial rule, not a bare heading: the label sits on a hairline
+          that runs the row's width, so the eye reads weeks as chapters. */}
+      <div className="flex items-center gap-3">
+        <h3 className="shrink-0 text-sm font-semibold tracking-tight">
+          {label}
+        </h3>
+        <div aria-hidden className="h-px flex-1 bg-border/60" />
+        {posts.length > 0 ? (
+          <p className="shrink-0 text-2xs text-muted-foreground">
+            {posts.length} {posts.length === 1 ? "card" : "cards"}
+          </p>
+        ) : null}
+      </div>
       {posts.length === 0 ? (
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-3 text-sm text-muted-foreground">
           Nothing planned for this week yet.
         </p>
       ) : (
         // Wraps rather than scrolling sideways: a five-day week clipped its
         // last card off the right edge of a normal window, and a horizontal
         // scrollbar under one row is not a thing anyone finds.
-        <div className="mt-2 flex flex-wrap gap-3 pb-2">
+        <div className="mt-4 flex flex-wrap gap-x-4 gap-y-6 pb-2">
           {posts.map((post) => (
             <DayCard
               decisions={decisions}
@@ -228,66 +266,122 @@ export function ContentScreen() {
     [submitDecision.mutateAsync],
   );
 
+  // What the calendar owes the owner in three seconds: how many cards are
+  // sitting on their call. Computed from what is already on screen, so the
+  // count can never disagree with the dots under the cards.
+  const waitingCount = React.useMemo(
+    () =>
+      posts.filter((post) => {
+        const own = decisionsForPost(post, decisions, KIND_CONTENT_POST);
+        return postChip(post, own).label === "Ready for you";
+      }).length,
+    [decisions, posts],
+  );
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
-      <nav className="flex w-56 shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-3">
-        <p className="px-2 pb-1 text-2xs uppercase tracking-wide text-muted-foreground">
+      <nav className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-border/60 p-3">
+        <p className="px-2 pb-2 text-2xs uppercase tracking-wider text-muted-foreground">
           Campaigns
         </p>
-        {campaigns.map((campaign) => (
+        <div className="flex flex-col gap-0.5">
+          {campaigns.map((campaign) => (
+            <button
+              className={cn(
+                "rounded-lg px-2.5 py-2 text-left text-sm transition",
+                !showStyle && campaign.id === activeCampaign?.id
+                  ? "bg-muted font-medium"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              )}
+              key={campaign.id}
+              onClick={() => {
+                setShowStyle(false);
+                setSelectedCampaignId(campaign.id);
+                setSelectedAddress(null);
+              }}
+              type="button"
+            >
+              <span className="block truncate">{campaign.name}</span>
+              <span className="block text-2xs text-muted-foreground">
+                {campaign.weeks.length} week
+                {campaign.weeks.length === 1 ? "" : "s"}
+                {campaign.status === "archived" ? " · archived" : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+        {/* Brand sits apart at the foot of the rail: it is the standing
+            identity, not another campaign in the list. */}
+        <div className="mt-auto border-t border-border/60 pt-2">
           <button
             className={cn(
-              "rounded-md px-2 py-1.5 text-left text-sm transition",
-              !showStyle && campaign.id === activeCampaign?.id
+              "w-full rounded-lg px-2.5 py-2 text-left text-sm transition",
+              showStyle
                 ? "bg-muted font-medium"
-                : "hover:bg-muted/60",
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
-            key={campaign.id}
-            onClick={() => {
-              setShowStyle(false);
-              setSelectedCampaignId(campaign.id);
-              setSelectedAddress(null);
-            }}
+            data-testid="content-open-style"
+            onClick={() => setShowStyle(true)}
             type="button"
           >
-            <span className="block truncate">{campaign.name}</span>
-            <span className="block text-2xs text-muted-foreground">
-              {campaign.weeks.length} week
-              {campaign.weeks.length === 1 ? "" : "s"}
-              {campaign.status === "archived" ? " · archived" : ""}
-            </span>
+            Brand
           </button>
-        ))}
-        <button
-          className={cn(
-            "mt-2 rounded-md px-2 py-1.5 text-left text-sm transition",
-            showStyle ? "bg-muted font-medium" : "hover:bg-muted/60",
-          )}
-          data-testid="content-open-style"
-          onClick={() => setShowStyle(true)}
-          type="button"
-        >
-          Style
-        </button>
+        </div>
       </nav>
 
       {showStyle ? (
-        <ContentStylePanel style={styleQuery.data ?? null} />
+        <ContentBrandPanel
+          communityId={communityId}
+          sampleImageUrl={
+            posts.find((post) => post.images.length > 0)?.images[0]?.url ?? null
+          }
+          style={styleQuery.data ?? null}
+        />
       ) : (
         <>
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
             <PageHeader
               description="Made and measured by your agent. Nothing goes out without your approval."
               title="Content"
             />
 
+            {waitingCount > 0 ? (
+              // The three-second answer, said once and quietly: a violet dot
+              // and one sentence, above everything else on the screen.
+              <p className="mt-3 flex items-center gap-2 text-sm">
+                <span
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                />
+                <span className="font-medium">
+                  {waitingCount === 1
+                    ? "1 card is waiting for your call."
+                    : `${waitingCount} cards are waiting for your call.`}
+                </span>
+              </p>
+            ) : null}
+
             {campaignsQuery.isLoading ? (
               <p className="mt-4 text-sm text-muted-foreground">Loading.</p>
             ) : !activeCampaign ? (
-              <p className="mt-4 max-w-prose text-sm text-muted-foreground">
-                No campaign yet. Ask your content agent for a week and it will
-                appear here, with every check it measured, waiting on you.
-              </p>
+              // The empty calendar reassures instead of echoing: a ghost week
+              // sketches what will be here, and the words say who is filling
+              // it. Static tiles, no pulse: an infinite animation would hang
+              // the screenshot harness's animation settle.
+              <div className="mt-10 flex flex-col items-center">
+                <div aria-hidden className="flex gap-4">
+                  {[0, 1, 2].map((ghost) => (
+                    <div
+                      className="aspect-[4/5] w-32 rounded-xl bg-muted/40"
+                      key={ghost}
+                    />
+                  ))}
+                </div>
+                <p className="mt-6 max-w-sm text-center text-sm text-muted-foreground">
+                  No campaign yet. Ask your content agent for a week and it will
+                  appear here, with every check it measured, waiting on you.
+                </p>
+              </div>
             ) : (
               weeks.map((week) => (
                 <WeekRow
@@ -329,6 +423,7 @@ export function ContentScreen() {
                 decisions={decisions}
                 onSubmit={handleSubmit}
                 post={selectedPost}
+                styleVersion={styleQuery.data?.version ?? null}
                 submitting={submitDecision.isPending}
               />
             </AuxiliaryPanel>

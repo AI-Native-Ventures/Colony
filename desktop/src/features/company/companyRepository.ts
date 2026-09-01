@@ -51,7 +51,47 @@ let repositoryGeneration = 0;
 export type CompanyRepositoryDependencies = {
   fetchEvents: (filter: RelaySubscriptionFilter) => Promise<RelayEvent[]>;
   relaySelf: () => Promise<string | null>;
+  delay?: (ms: number) => Promise<void>;
+  taskReadBackAttempts?: number;
+  taskReadBackIntervalMs?: number;
 };
+
+/**
+ * How long a Task read-back retries before giving up.
+ *
+ * The write it is reading back just applied — the relay's own receipt said
+ * so — so a miss here is the read side lagging the write side, not the Task
+ * being absent. `companyActionBroker.submit` already waits up to 20 * 400ms
+ * for that receipt; this is a smaller, bounded wait on the read that follows
+ * it, not a second copy of that budget.
+ */
+// 5 x 300ms gave up after 1.2s, and a send whose Task the relay had already
+// recorded was refused with "the work record for this message could not be
+// read back" - observed in production on 2026-09-01 at 11:57:03 and 11:57:20
+// UTC, with both Task heads present in the relay and parsing cleanly against
+// the shipped contract. The write landed; only the read that follows it timed
+// out.
+//
+// Backing off rather than adding evenly spaced attempts: indexing lag is
+// usually tens of milliseconds, so the first retries stay tight and the tail
+// is what grows. 8 attempts reach ~6.9s in the worst case and still return
+// immediately in the common one.
+const DEFAULT_TASK_READBACK_ATTEMPTS = 8;
+const DEFAULT_TASK_READBACK_INTERVAL_MS = 150;
+const MAX_TASK_READBACK_INTERVAL_MS = 2_000;
+
+/** Backoff for read-after-write: doubles, capped, never below the interval. */
+export function taskReadBackDelay(
+  attempt: number,
+  intervalMs: number,
+  maxMs: number = MAX_TASK_READBACK_INTERVAL_MS,
+): number {
+  return Math.min(intervalMs * 2 ** attempt, maxMs);
+}
+
+function defaultDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * How the Work surfaces narrow a task list.
@@ -143,6 +183,7 @@ export function createCompanyRepository(
       kinds: number[];
       limit: number;
       authors?: string[];
+      ids?: string[];
     },
     collect: (
       events: RelayEvent[],
@@ -421,6 +462,99 @@ export function createCompanyRepository(
               );
         },
       );
+    },
+
+    /**
+     * Read a Task back right after publishing it, tolerating index lag.
+     *
+     * Distinct from `getTask` because the two calls have different premises:
+     * an ordinary lookup that finds nothing means the Task genuinely doesn't
+     * exist (or was never this community's), so it should fail fast. This is
+     * called only once a relay receipt has already confirmed the write
+     * happened — a miss here is the read lagging the write, not the Task
+     * being gone — so it is worth retrying.
+     *
+     * `headEventId` (the relay receipt's own event id, when the caller has
+     * one) is tried first: a lookup by `ids` hits the event store directly,
+     * ahead of whatever indexes the `#d` tag filter below depends on. Absent
+     * that — a conflict outcome names no head — or once the id lookup itself
+     * comes up empty, this falls back to the ordinary coordinate read.
+     */
+    async getTaskAfterAction(
+      taskId: string,
+      headEventId: string | null = null,
+    ): Promise<CompanyParseResult<CompanyTask>> {
+      const attempts =
+        dependencies.taskReadBackAttempts ?? DEFAULT_TASK_READBACK_ATTEMPTS;
+      const intervalMs =
+        dependencies.taskReadBackIntervalMs ??
+        DEFAULT_TASK_READBACK_INTERVAL_MS;
+      const wait = dependencies.delay ?? defaultDelay;
+
+      const readByCoordinate = () =>
+        read<CompanyTask>(
+          (relaySelfPubkey) => ({
+            kinds: [KIND_TASK],
+            authors: [relaySelfPubkey],
+            "#d": [taskId],
+            limit: 8,
+          }),
+          (events, relaySelfPubkey) => {
+            const task = collectHeads(
+              events,
+              relaySelfPubkey,
+              parseTaskHead,
+            ).find((record) => record.id === taskId);
+            return task
+              ? { ok: true, value: task }
+              : companyFailure<CompanyTask>(
+                  "missing-head",
+                  "That task does not exist on this community.",
+                );
+          },
+        );
+
+      const readByHeadEventId = (eventId: string) =>
+        read<CompanyTask>(
+          (relaySelfPubkey) => ({
+            kinds: [KIND_TASK],
+            authors: [relaySelfPubkey],
+            ids: [eventId],
+            limit: 1,
+          }),
+          (events, relaySelfPubkey) => {
+            const task = collectHeads(
+              events,
+              relaySelfPubkey,
+              parseTaskHead,
+            ).find((record) => record.id === taskId);
+            return task
+              ? { ok: true, value: task }
+              : companyFailure<CompanyTask>(
+                  "missing-head",
+                  "That task does not exist on this community.",
+                );
+          },
+        );
+
+      let last: CompanyParseResult<CompanyTask> = companyFailure(
+        "missing-head",
+        "That task does not exist on this community.",
+      );
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        last = headEventId
+          ? await readByHeadEventId(headEventId)
+          : await readByCoordinate();
+        if (last.ok) return last;
+        // A cancelled read (community switch mid-flight) is not indexing lag;
+        // retrying it would just deliver a stale result into the new
+        // community once it eventually resolves.
+        if (last.code === "cancelled") return last;
+        if (attempt < attempts - 1) {
+          await wait(taskReadBackDelay(attempt, intervalMs));
+        }
+      }
+      return last;
     },
   };
 }

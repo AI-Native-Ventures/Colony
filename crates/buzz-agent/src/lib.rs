@@ -8,6 +8,8 @@ mod handoff;
 mod hints;
 mod llm;
 mod mcp;
+pub mod model_availability;
+pub mod relay_chain;
 pub mod types;
 mod wire;
 
