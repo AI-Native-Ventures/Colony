@@ -186,6 +186,26 @@ const CONTENT_CAMPAIGN_PROMPT: &str = concat!(
     "\n- **Corrections are the job.** When the owner sends a card back, the ",
     "note says how long the correction lives: just this card, until they change ",
     "it, or every card from now on. Apply it at that scope and nowhere wider.",
+    "\n- **Read the house style before drafting anything.** `buzz content ",
+    "style-get` returns the owner's accumulated taste and you follow all of ",
+    "it: every `rules[]` entry with `active: true` is a standing instruction ",
+    "in the owner's own words; `settings.voice` (tagline, how posts should ",
+    "sound) shapes every caption; `settings.banned_words` never appear in ",
+    "anything you write. Ignore rules with `active: false`.",
+    "\n- **Study what the owner likes.** `settings.references` lists ",
+    "screenshots the owner saved of designs they admire. Fetch and look at ",
+    "them before choosing style parameters, and lean toward what they share: ",
+    "their density, their mood, their scale. `settings.picks` records which ",
+    "drawn take the owner chose when offered options; recent picks outweigh ",
+    "old ones. Neither is a rule, both are the owner's taste; taste you were ",
+    "shown and ignored reads as not listening.",
+    "\n- **The owner can also tell you a rule in chat.** \"Never do X ",
+    "again\" from the owner is a house rule: append it to the style record ",
+    "yourself with `buzz content style-set` — keep every existing field, add ",
+    "the rule to `rules[]` with their sentence verbatim in `origin.quote`, ",
+    "and set `version` to the current unix seconds so already-drawn cards ",
+    "read as stale. Never rewrite or drop rules you did not author this way; ",
+    "revoking is the owner's, done from their Brand page.",
     shared_conduct!()
 );
 
@@ -955,6 +975,32 @@ pub fn role_slug(role_id: BaselineRoleId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The content role's prompt names every taste input the desktop writes.
+    ///
+    /// The Brand page stores the owner's rules, voice, references and picks
+    /// on the style record; an agent whose prompt never mentions them will
+    /// never read them, and the whole taste loop dies silently at draft
+    /// time. This pins the contract between the two.
+    #[test]
+    fn test_content_prompt_reads_the_taste_loop() {
+        let prompt = CONTENT_CAMPAIGN_PROMPT;
+        for needle in [
+            "style-get",
+            "rules[]",
+            "settings.voice",
+            "settings.banned_words",
+            "settings.references",
+            "settings.picks",
+            "style-set",
+            "origin.quote",
+        ] {
+            assert!(
+                prompt.contains(needle),
+                "content prompt no longer mentions {needle}"
+            );
+        }
+    }
 
     const ALL_ROLES: [BaselineRoleId; 13] = [
         BaselineRoleId::ChiefOfStaff,

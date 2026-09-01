@@ -417,6 +417,13 @@ fn apply_inbound_managed_agent(
         local.parallelism = inbound.parallelism;
         local.respond_to = inbound.respond_to;
         local.respond_to_allowlist = inbound.respond_to_allowlist;
+        // Absent means "not carried", never "clear": the rank lives on the
+        // owner-authored head, and a head published by a client that predates
+        // this field must not read as a demotion to unranked. Clearing a rank
+        // is the rank dialog's job, and it republishes a head that says so.
+        if inbound.tier.is_some() {
+            local.tier = inbound.tier;
+        }
     }
 }
 

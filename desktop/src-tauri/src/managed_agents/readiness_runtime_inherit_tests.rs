@@ -20,6 +20,7 @@ mod tests {
     /// Minimal unpinned record: no runtime, no persona link, no override.
     fn bare_record() -> ManagedAgentRecord {
         crate::managed_agents::types::ManagedAgentRecord {
+            tier: None,
             pubkey: "test-pubkey".to_string(),
             name: "test-agent".to_string(),
             role_id: None,

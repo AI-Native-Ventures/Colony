@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 438,
-    "rust_lines": 169866,
+    "rust_total": 439,
+    "rust_lines": 169994,
     "tauri_coupled": 175,
-    "portable": 263,
-    "portable_lines": 96287,
+    "portable": 264,
+    "portable_lines": 96390,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -405,6 +405,7 @@
       "src-tauri/src/managed_agents/types/catalog_source.rs",
       "src-tauri/src/managed_agents/types/catalog_source/tests.rs",
       "src-tauri/src/managed_agents/types/requests.rs",
+      "src-tauri/src/managed_agents/types/respond_to.rs",
       "src-tauri/src/managed_agents/types/tests.rs",
       "src-tauri/src/mesh_llm/catalog.rs",
       "src-tauri/src/mesh_llm/discovery.rs",
@@ -742,7 +743,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:272",
+        "src/features/communities/useCommunityInit.ts:274",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -1410,7 +1411,7 @@
       "example_sites": [
         "src/features/agents/ui/AgentCardViewerDialog.tsx:72",
         "src/features/content/postPack.ts:9",
-        "src/features/content/ui/ContentDayDetail.tsx:121"
+        "src/features/content/ui/ContentDayDetail.tsx:124"
       ]
     },
     "download_voice_models": {
@@ -2312,7 +2313,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:258",
+        "src/features/communities/useCommunityInit.ts:260",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:37"
       ]

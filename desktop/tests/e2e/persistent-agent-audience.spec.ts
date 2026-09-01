@@ -230,13 +230,56 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
     .getByTestId("mention-autocomplete")
     .getByText("Morgarita", { exact: true })
     .click();
-  // Wait for the chip's trailing space to land before typing. Selecting a
-  // mention inserts "@Morgarita " including the space, but `pressSequentially`
-  // can begin before that commit renders — the keystrokes then land against
-  // "@Morgarita" and the text concatenates to "@Morgaritahello", which never
-  // converges and burns the full 15s timeout. Observed on 2026-08-31 blocking a
-  // promotion, and it reads as a broken mention rather than a lost race.
-  await expect(input).toHaveText("@Morgarita ");
+  // Selecting a mention commits "@Morgarita " and then places the caret after
+  // the trailing space. Those are two steps, and typing between them is what
+  // makes this spec flake: the space is already present, so waiting for the
+  // text alone proves nothing, but the caret still sits *before* it, so
+  // "hello" inserts ahead of the space and the value becomes
+  // "@Morgaritahello " — which `toHaveText` then normalises to
+  // "@Morgaritahello", the exact failure observed on 2026-08-31.
+  //
+  // Two earlier attempts missed this. `toHaveText("@Morgarita ")` normalises
+  // whitespace and so also matches "@Morgarita", guarding nothing at all; the
+  // textContent poll that replaced it proved the space had landed but said
+  // nothing about where the caret was. Wait for the caret too, using the same
+  // `atDocumentEnd` probe the sibling test above already relies on.
+  await expect
+    .poll(() =>
+      input.evaluate((element) => {
+        const selection = window.getSelection();
+        const viewDesc = (
+          element as HTMLElement & {
+            pmViewDesc?: {
+              posFromDOM: (node: Node, offset: number, bias: number) => number;
+              size: number;
+            };
+          }
+        ).pmViewDesc;
+        if (!selection?.anchorNode || !viewDesc) return null;
+        const position = viewDesc.posFromDOM(
+          selection.anchorNode,
+          selection.anchorOffset,
+          1,
+        );
+        return {
+          text: element.textContent ?? "",
+          atDocumentEnd: position + 1 === viewDesc.size - 2,
+        };
+      }),
+    )
+    .toEqual({ text: "@Morgarita ", atDocumentEnd: true });
+  // Observing the caret is not the same as still having it. Under load the
+  // editor re-renders after the poll reads it and resets the selection to
+  // before the trailing space, so "hello" inserts ahead of the space no matter
+  // how long the poll waited: reproduced 6 of 8 times with
+  // `--repeat-each=8 --workers=8`, and 0 of 6 unloaded. Three earlier attempts
+  // all waited harder and none could close that window.
+  //
+  // Put the caret at the end immediately before typing instead of trusting
+  // where it was. Caret placement after a mention is the subject of the two
+  // sibling tests above; this one is about the send staying one-shot, and it
+  // should not fail for an editor re-render it never meant to exercise.
+  await input.press("End");
   await input.pressSequentially("hello");
   await expect(input).toHaveText("@Morgarita hello");
   await input.press("Enter");

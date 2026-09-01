@@ -543,6 +543,11 @@ fn spawn_agent_child_inner(
     // must not sit in the critical path of an agent starting.
     if let Some(chain) = crate::managed_agents::model_chain::cached_for(&effective_relay_url) {
         command.env("OPENROUTER_FALLBACK_MODELS", chain.join(","));
+        // Marks the chain as the relay's opinion rather than a person's, which
+        // is what lets a long-lived agent re-read it as the ranking changes.
+        // Without this flag the agent treats the value as authored and leaves
+        // it alone, so a hand-set chain is never overwritten.
+        command.env("BUZZ_MODEL_CHAIN_SOURCE", "relay");
     }
     crate::managed_agents::model_chain::refresh_in_background(&effective_relay_url);
     command.env("BUZZ_ACP_LAZY_POOL", if lazy { "true" } else { "false" });

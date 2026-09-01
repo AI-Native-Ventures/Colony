@@ -93,6 +93,7 @@ mod tests {
     /// valid placeholder.
     fn record_with(owner_pubkey: Option<&str>, auth_tag: Option<&str>) -> ManagedAgentRecord {
         ManagedAgentRecord {
+            tier: None,
             creation_request_id: None,
             role_id: None,
             role_title: None,

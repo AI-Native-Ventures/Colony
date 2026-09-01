@@ -235,6 +235,51 @@ export function createContentRepository(
     },
 
     /**
+     * The newest brand kit head as the relay stores it, body unparsed.
+     *
+     * The Brand page writes the owner's logo onto the kit, and a body
+     * rebuilt from the parsed `BrandKit` would drop every field the relay
+     * stores that the renderer does not read. Same merge-not-rebuild rule as
+     * `getPostBody`.
+     */
+    async getBrandKitBody(): Promise<{
+      body: Record<string, unknown>;
+      kitId: string;
+    } | null> {
+      const heads = await read(
+        { kinds: [KIND_CONTENT_BRAND_KIT], limit: MAX_RECORDS },
+        (events) => newestHeads(events),
+      );
+      const head = heads?.at(0);
+      if (!head) {
+        return null;
+      }
+      const kitId = head.tags.find((tag) => tag[0] === "d")?.[1];
+      const body = parseEventBody(head);
+      if (!kitId || !body) {
+        return null;
+      }
+      return { body, kitId };
+    },
+
+    /**
+     * The newest house-style head as the relay stores it, body unparsed.
+     *
+     * The rule ledger appends into this; rebuilding from the parsed
+     * `ContentStyle` would drop settings keys this build does not know.
+     */
+    async getStyleBody(
+      scope: string = HOUSE_STYLE_SCOPE,
+    ): Promise<Record<string, unknown> | null> {
+      const heads = await read(
+        { kinds: [KIND_CONTENT_STYLE], "#d": [scope], limit: 8 },
+        (events) => newestHeads(events),
+      );
+      const head = heads?.at(0);
+      return head ? parseEventBody(head) : null;
+    },
+
+    /**
      * Every owner decision in the workspace, newest first.
      *
      * Read whole rather than per post. A calendar screen needs the state of

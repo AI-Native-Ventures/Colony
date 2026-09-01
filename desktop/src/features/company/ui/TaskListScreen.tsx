@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ListTodo, Plus } from "lucide-react";
 
-import type { Initiative } from "@/features/company/contracts";
+import type { CompanyTask, Initiative } from "@/features/company/contracts";
 import {
   countLiveTasks,
   filterWorkRows,
@@ -22,6 +22,7 @@ import {
   StatusPill,
 } from "@/features/company/ui/taskStatusPresentation";
 import { ToolbarSelect } from "@/features/company/ui/ToolbarSelect";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -38,17 +39,37 @@ import { Switch } from "@/shared/ui/switch";
 function TaskRow({
   row,
   nowSeconds,
+  onOpen,
 }: {
   nowSeconds: number;
+  onOpen: ((task: CompanyTask) => void) | undefined;
   row: WorkListRow;
 }) {
   const { task, execution } = row;
   const degraded = execution.tone === "warning" || execution.tone === "danger";
+  // A task with no source channel has nowhere to open: every implicit task has
+  // one, but a hand-created task predating that field does not.
+  const openable = Boolean(onOpen && task.sourceChannelId);
   return (
     <li
-      className="flex items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/40"
+      className={cn(
+        "flex items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/40",
+        openable && "cursor-pointer",
+      )}
       data-task-id={task.id}
       data-testid="task-list-row"
+      onClick={openable ? () => onOpen?.(task) : undefined}
+      onKeyDown={
+        openable
+          ? (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              onOpen?.(task);
+            }
+          : undefined
+      }
+      role={openable ? "button" : undefined}
+      tabIndex={openable ? 0 : undefined}
     >
       <span className="mt-1.5">
         <ExecutionDot execution={execution} />
@@ -132,12 +153,15 @@ export function TaskListScreen({
   initiatives,
   isLoading,
   onNewTask,
+  onOpenTask,
   rows,
 }: {
   error: Error | null;
   initiatives: Initiative[];
   isLoading: boolean;
   onNewTask: () => void;
+  /** Open where this task's work is happening. Omitted surfaces stay inert. */
+  onOpenTask?: (task: CompanyTask) => void;
   rows: WorkListRow[];
 }) {
   const nowSeconds = useNowSeconds();
@@ -284,6 +308,7 @@ export function TaskListScreen({
                       <TaskRow
                         key={row.task.id}
                         nowSeconds={nowSeconds}
+                        onOpen={onOpenTask}
                         row={row}
                       />
                     ))}

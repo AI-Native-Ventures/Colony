@@ -17,7 +17,7 @@ mod env_vars;
 pub(crate) mod git_bash;
 pub(crate) mod global_config;
 mod managed_node_paths;
-mod model_chain;
+pub(crate) mod model_chain;
 mod model_effort;
 mod nest;
 pub(crate) mod parallelism;
