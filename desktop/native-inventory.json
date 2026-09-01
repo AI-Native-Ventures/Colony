@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 438,
-    "rust_lines": 169866,
+    "rust_total": 439,
+    "rust_lines": 169994,
     "tauri_coupled": 175,
-    "portable": 263,
-    "portable_lines": 96287,
+    "portable": 264,
+    "portable_lines": 96390,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -405,6 +405,7 @@
       "src-tauri/src/managed_agents/types/catalog_source.rs",
       "src-tauri/src/managed_agents/types/catalog_source/tests.rs",
       "src-tauri/src/managed_agents/types/requests.rs",
+      "src-tauri/src/managed_agents/types/respond_to.rs",
       "src-tauri/src/managed_agents/types/tests.rs",
       "src-tauri/src/mesh_llm/catalog.rs",
       "src-tauri/src/mesh_llm/discovery.rs",

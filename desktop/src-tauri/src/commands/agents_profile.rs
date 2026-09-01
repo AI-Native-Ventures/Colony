@@ -9,6 +9,13 @@ use crate::managed_agents::managed_agent_avatar_url;
 
 use super::*;
 
+/// Read the workspace owner pubkey without holding the lock. Used to populate `BUZZ_ACP_AGENT_OWNER`
+/// as a fallback for legacy agent records that have no NIP-OA `auth_tag`.
+pub(crate) fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+    Ok(keys.public_key().to_hex())
+}
+
 pub(crate) struct ProfileReconcileData {
     pub(crate) private_key_nsec: String,
     pub(crate) name: String,
