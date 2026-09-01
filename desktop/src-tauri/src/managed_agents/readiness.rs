@@ -644,7 +644,6 @@ fn goose_requirements(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use super::*;
     use crate::managed_agents::discovery::known_acp_runtime_exact;
@@ -1464,6 +1463,7 @@ mod tests {
         );
         // Minimal record: only the fields resolve_effective_agent_env reads.
         let record = crate::managed_agents::types::ManagedAgentRecord {
+            tier: None,
             pubkey: "test-pubkey".to_string(),
             name: "test-agent".to_string(),
             role_id: None,
