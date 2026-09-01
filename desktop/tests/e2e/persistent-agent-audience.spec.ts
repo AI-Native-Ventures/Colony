@@ -268,6 +268,18 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
       }),
     )
     .toEqual({ text: "@Morgarita ", atDocumentEnd: true });
+  // Observing the caret is not the same as still having it. Under load the
+  // editor re-renders after the poll reads it and resets the selection to
+  // before the trailing space, so "hello" inserts ahead of the space no matter
+  // how long the poll waited: reproduced 6 of 8 times with
+  // `--repeat-each=8 --workers=8`, and 0 of 6 unloaded. Three earlier attempts
+  // all waited harder and none could close that window.
+  //
+  // Put the caret at the end immediately before typing instead of trusting
+  // where it was. Caret placement after a mention is the subject of the two
+  // sibling tests above; this one is about the send staying one-shot, and it
+  // should not fail for an editor re-render it never meant to exercise.
+  await input.press("End");
   await input.pressSequentially("hello");
   await expect(input).toHaveText("@Morgarita hello");
   await input.press("Enter");

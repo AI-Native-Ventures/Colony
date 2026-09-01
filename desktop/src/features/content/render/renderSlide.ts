@@ -31,6 +31,7 @@ import { boxBlurRgba } from "./blur";
 import { captureCard } from "./capture";
 import type { CardSpec } from "./compositions";
 import type { BrandKit } from "./kit";
+import type { CardMark } from "./marks";
 import { CANVAS_H, CANVAS_W, cardHtml } from "./compositions";
 import { collectRuns, GRAIN_BLUR, measureRuns, PLATE_CSS } from "./contrast";
 import type { ContrastRun } from "./contrast";
@@ -53,6 +54,8 @@ export type RenderSlideOptions = {
   fontFaceCss: string;
   /** The workspace's brand kit. Colony's own when absent. */
   kit?: BrandKit;
+  /** The kit-resolved mark the card closes with; ant when absent. */
+  mark?: CardMark;
   width?: number;
   height?: number;
 };
@@ -148,12 +151,18 @@ function mountCard(
  */
 export async function renderSlide(
   card: CardSpec,
-  { fontFaceCss, kit, width = CANVAS_W, height = CANVAS_H }: RenderSlideOptions,
+  {
+    fontFaceCss,
+    kit,
+    mark,
+    width = CANVAS_W,
+    height = CANVAS_H,
+  }: RenderSlideOptions,
 ): Promise<SlideCapture> {
   // The face is supplied through the capture stylesheet rather than baked into
   // the markup, because the control frame is the same markup with no face at
   // all, and the two must differ in nothing else.
-  const html = cardHtml(card, { fontFaceCss: "", kit });
+  const html = cardHtml(card, { fontFaceCss: "", kit, mark });
 
   const mounted = await mountCard(html, fontFaceCss, width, height);
   let runs: ContrastRun[];
