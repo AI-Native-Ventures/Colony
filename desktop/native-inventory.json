@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 439,
-    "rust_lines": 170147,
+    "rust_lines": 170174,
     "tauri_coupled": 175,
     "portable": 264,
     "portable_lines": 96500,
@@ -453,10 +453,10 @@
     ]
   },
   "commands": {
-    "registered": 350,
-    "defined": 350,
+    "registered": 351,
+    "defined": 351,
     "by_reach": {
-      "frontend": 344,
+      "frontend": 345,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -469,7 +469,7 @@
   },
   "params": {
     "AppHandle": 360,
-    "State": 262,
+    "State": 263,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
@@ -477,7 +477,7 @@
   "params_by_context": {
     "prod": {
       "AppHandle": 357,
-      "State": 262,
+      "State": 263,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -578,6 +578,7 @@
     "src-tauri/src/commands/agent_config.rs": 5,
     "src-tauri/src/commands/terminal.rs": 5,
     "src-tauri/src/commands/workspace.rs": 4,
+    "src-tauri/src/commands/task_transition.rs": 4,
     "src-tauri/src/commands/media_raw.rs": 4,
     "src-tauri/src/commands/pairing.rs": 4,
     "src-tauri/src/tray_menu.rs": 4,
@@ -587,7 +588,6 @@
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
     "src-tauri/src/commands/initiative.rs": 3,
-    "src-tauri/src/commands/task_transition.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
@@ -804,7 +804,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/taskTransition.ts:42"
+        "src/shared/api/taskTransition.ts:60"
       ]
     },
     "build_observer_control_event": {
@@ -3132,6 +3132,15 @@
         "src/shared/api/tauriArchive.ts:293"
       ]
     },
+    "rename_task_from_agent": {
+      "defining_file": "src-tauri/src/commands/task_transition.rs",
+      "module": "task_transition",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/taskTransition.ts:36"
+      ]
+    },
     "request_notification_access": {
       "defining_file": "src-tauri/src/macos_notifications.rs",
       "module": "macos_notifications",
@@ -3596,7 +3605,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/taskTransition.ts:30"
+        "src/shared/api/taskTransition.ts:48"
       ]
     },
     "speak_agent_message": {
