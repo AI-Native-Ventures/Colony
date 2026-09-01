@@ -35,6 +35,7 @@ test("ActionCenterProvider mounts useActionCenterItems exactly once for multiple
   let mountCount = 0;
   const fakeResult = {
     allItems: [],
+    dismissPing: async () => {},
     error: null,
     isLoading: false,
     isSettled: true,

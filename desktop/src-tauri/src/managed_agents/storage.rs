@@ -32,6 +32,11 @@ fn agent_secret_store() -> Option<&'static SecretStore> {
     }
 }
 
+/// Recovery of agent keys orphaned by a keyring-service rename (PR #478),
+/// split out to stay under the file-size ratchet — see its module doc.
+#[path = "storage_legacy_keys.rs"]
+mod legacy_keys;
+
 pub fn managed_agents_base_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -306,7 +311,8 @@ fn hydrate_keys(records: &mut [ManagedAgentRecord]) {
     let Some(store) = agent_secret_store() else {
         return;
     };
-    hydrate_keys_with(store, records);
+    let legacy_store = legacy_keys::agent_legacy_secret_store();
+    hydrate_keys_with(store, legacy_store.as_ref(), records);
 }
 
 /// Testable core of [`hydrate_keys`], generic over the [`KeyStore`] seam.
@@ -317,7 +323,17 @@ fn hydrate_keys(records: &mut [ManagedAgentRecord]) {
 /// to spawn an agent whose key could not be read (see the empty-key bail in
 /// `spawn_agent_child`). Empty here never means "fine" — it means "no usable
 /// key this boot."
-fn hydrate_keys_with(store: &impl KeyStore, records: &mut [ManagedAgentRecord]) {
+///
+/// `legacy_store` is `Some` only for a channel-scoped release build (see
+/// [`legacy_keys::legacy_keyring_service`]) and is consulted ONLY when
+/// `store` has just confirmed absence (`Ok(None)`) — never on an outage, and
+/// never when `store` already holds a key — so a recovered key can never
+/// overwrite one the current service already has.
+fn hydrate_keys_with(
+    store: &impl KeyStore,
+    legacy_store: Option<&impl KeyStore>,
+    records: &mut [ManagedAgentRecord],
+) {
     for record in records.iter_mut() {
         // A key-less definition (no pubkey yet — unified agent model) has no
         // keyring entry by construction; keys are minted on first start.
@@ -328,10 +344,16 @@ fn hydrate_keys_with(store: &impl KeyStore, records: &mut [ManagedAgentRecord]) 
             match store.load(&agent_keyring_name(&record.pubkey)) {
                 Ok(Some(nsec)) => record.private_key_nsec = nsec,
                 Ok(None) => {
-                    eprintln!(
-                        "buzz-desktop: agent {} has no key in JSON or keyring",
-                        record.pubkey
-                    );
+                    match legacy_keys::recover_legacy_agent_key(store, legacy_store, &record.pubkey)
+                    {
+                        Some(nsec) => record.private_key_nsec = nsec,
+                        None => {
+                            eprintln!(
+                                "buzz-desktop: agent {} has no key in JSON or keyring",
+                                record.pubkey
+                            );
+                        }
+                    }
                 }
                 // Outage, NOT absence: the key may exist in the keyring but is
                 // unreadable this boot. Leave it empty so the spawn path

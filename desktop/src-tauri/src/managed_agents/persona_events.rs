@@ -4,6 +4,7 @@
 //! `(pubkey, kind, d_tag)` where `d_tag` is the plaintext persona slug.
 
 use std::collections::BTreeMap;
+use std::sync::{LazyLock, Mutex};
 
 use buzz_core_pkg::kind::{event_is_shared, KIND_PERSONA};
 use nostr::{EventBuilder, Kind, Tag};
@@ -11,6 +12,39 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentDefinition, ManagedAgentRecord};
 use crate::app_state::AppState;
+
+/// A retained coordinate: `(kind, pubkey, d_tag)`.
+type EventCoordinate = (u32, String, String);
+
+/// Consecutive-failure count per retained coordinate. Global to the process
+/// rather than on `AppState`: the flush loop is the sole writer/reader (one
+/// `tauri::async_runtime::spawn` in `lib.rs`, ticking every 30s), so a
+/// `Mutex` here needs no wiring through `AppState` for what is otherwise a
+/// single-loop counter.
+static SYNC_FAILURE_STREAKS: LazyLock<Mutex<std::collections::HashMap<EventCoordinate, u32>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Sweeps a row must fail before it is surfaced to the user.
+///
+/// At the 30s sweep interval this is ~90s — long enough that a single
+/// transient relay blip does not toast, short enough that a genuinely stuck
+/// row (wrong timestamp, relay-rejected content, anything that repeats
+/// identically every sweep) is surfaced fast rather than after ten reports
+/// from the user over multiple days, which is what happened before this
+/// existed: the flush only ever `eprintln!`'d the reason, so a permanently
+/// refused event and an unreachable relay looked identical from the UI —
+/// which is to say, both looked like nothing was wrong.
+const STUCK_ROW_FAILURE_THRESHOLD: u32 = 3;
+
+/// Payload for the `event-sync-stuck` event emitted the moment a row crosses
+/// [`STUCK_ROW_FAILURE_THRESHOLD`]. Emitted once per streak, not on every
+/// subsequent failing sweep, so a still-stuck row does not re-toast every 30s.
+#[derive(Debug, Clone, Serialize)]
+struct StuckRowPayload {
+    kind: u32,
+    d_tag: String,
+    error: String,
+}
 
 /// The JSON body stored in a persona event's content field.
 ///
@@ -240,7 +274,7 @@ pub async fn flush_pending_events(
 ) -> Result<u32, String> {
     let relay_url = crate::relay::relay_ws_url_with_override(state);
     let owner_keys = state.signing_keys()?;
-    flush_pending_events_at(db_path, state, &relay_url, &owner_keys).await
+    flush_pending_events_at(db_path, state, &relay_url, &owner_keys, None).await
 }
 
 /// Resolve and flush only the currently active `(relay, owner)` scope.
@@ -253,7 +287,14 @@ pub async fn flush_active_pending_events(
     state: &AppState,
 ) -> Result<u32, String> {
     let scope = crate::managed_agents::retention::active_retention_scope(app, state)?;
-    flush_pending_events_at(&scope.db_path, state, &scope.relay_url, &scope.owner_keys).await
+    flush_pending_events_at(
+        &scope.db_path,
+        state,
+        &scope.relay_url,
+        &scope.owner_keys,
+        Some(app),
+    )
+    .await
 }
 
 async fn flush_pending_events_at(
@@ -261,6 +302,7 @@ async fn flush_pending_events_at(
     state: &AppState,
     relay_url: &str,
     owner_keys: &nostr::Keys,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<u32, String> {
     use crate::managed_agents::retention::{
         deferred_behind_failed_tombstone, get_pending_sync, get_retained_event, mark_synced,
@@ -301,34 +343,61 @@ async fn flush_pending_events_at(
         let event = nostr::Event::from_json(&current.raw_event)
             .map_err(|e| format!("failed to parse retained event '{}': {e}", current.d_tag))?;
 
-        // NIP-IA requests are freshness-checked by the relay (±120s on
-        // `created_at`), so a request retained while the relay was
-        // unreachable would be permanently stale. Re-sign with a fresh
-        // timestamp at publish time; kind, tags, and content are preserved,
-        // and `mark_synced` below still compares against the retained row's
+        // Every event the relay accepts must be timestamped within its drift
+        // window (`MAX_TIMESTAMP_DRIFT_SECS`, ±15 minutes, in
+        // `handlers/ingest.rs`), and this queue exists precisely because the
+        // relay was unreachable. Any outage longer than that window used to
+        // strand everything queued during it FOREVER: the row stayed pending,
+        // every sweep re-sent the same stale `created_at`, and the relay
+        // refused it with "event timestamp too far from server time" until
+        // something happened to rewrite the row. A 1h45m canary outage on
+        // 2026-08-30 left a coordination team unpublishable that way, and
+        // every chat Task in that community was then refused with "missing
+        // reference in task.owningTeamId".
+        //
+        // Re-signing at publish time is what the NIP-IA archive path already
+        // did for exactly this reason; the hazard was never specific to that
+        // kind, only noticed there first. Kind, tags and content are
+        // preserved, so the event means the same thing — only the timestamp
+        // moves, which is the field the relay is actually complaining about.
+        // `mark_synced` below still compares against the retained row's
         // original `created_at`/`content`, which are untouched.
-        let is_archive_request =
-            buzz_core_pkg::kind::is_identity_archive_request_kind(current.kind);
-        let event = if is_archive_request {
+        //
+        // Everything queued here is addressable (kind, pubkey, d_tag), so a
+        // fresh id supersedes rather than duplicates under NIP-33 latest-wins.
+        let needs_fresh_timestamp =
+            buzz_core_pkg::kind::is_identity_archive_request_kind(current.kind)
+                || is_outside_publish_freshness_window(current.created_at);
+        let event = if needs_fresh_timestamp {
             resign_with_fresh_timestamp(&event, state)?
         } else {
             event
         };
 
-        if crate::relay::submit_signed_event_at_with_keys(
+        if let Err(error) = crate::relay::submit_signed_event_at_with_keys(
             &event,
             state,
             &relay_api_base,
             owner_keys,
         )
         .await
-        .is_err()
         {
+            // Logged rather than swallowed: a permanently REFUSED event and an
+            // unreachable relay both leave the row pending, and without the
+            // reason the two are indistinguishable from outside. The stale
+            // timestamp above went unnoticed for exactly that long.
+            eprintln!(
+                "buzz-desktop: event-flush: relay refused kind {} '{}': {error}",
+                current.kind, current.d_tag
+            );
             if current.kind == 5 {
                 failed_tombstones.insert((current.pubkey.clone(), current.d_tag.clone()));
             }
-            continue; // relay unreachable — stays pending for the next sweep
+            record_sync_failure(app, current.kind, &current.pubkey, &current.d_tag, &error);
+            continue; // stays pending for the next sweep
         }
+
+        clear_sync_failure(current.kind, &current.pubkey, &current.d_tag);
 
         let conn = open_retention_db(db_path)?;
         mark_synced(
@@ -343,6 +412,92 @@ async fn flush_pending_events_at(
     }
 
     Ok(flushed)
+}
+
+/// Bump a coordinate's consecutive-failure streak and, the moment it crosses
+/// [`STUCK_ROW_FAILURE_THRESHOLD`], emit `event-sync-stuck` so the frontend
+/// can toast it. `app` is `None` in tests (`flush_pending_events`), which
+/// still exercises the counting but never emits. Returns the streak after the
+/// bump, so tests can assert on it directly without an `AppHandle`.
+fn record_sync_failure(
+    app: Option<&tauri::AppHandle>,
+    kind: u32,
+    pubkey: &str,
+    d_tag: &str,
+    error: &str,
+) -> u32 {
+    let key = (kind, pubkey.to_string(), d_tag.to_string());
+    let mut streaks = SYNC_FAILURE_STREAKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let streak = streaks.entry(key).or_insert(0);
+    *streak += 1;
+    let streak = *streak;
+    drop(streaks);
+    if streak == STUCK_ROW_FAILURE_THRESHOLD {
+        if let Some(app) = app {
+            use tauri::Emitter;
+            let _ = app.emit(
+                "event-sync-stuck",
+                StuckRowPayload {
+                    kind,
+                    d_tag: d_tag.to_string(),
+                    error: error.to_string(),
+                },
+            );
+        }
+    }
+    streak
+}
+
+/// Clear a coordinate's failure streak once it publishes successfully, so a
+/// later failure at the same coordinate (a fresh edit, say) starts counting
+/// from zero rather than re-toasting immediately.
+fn clear_sync_failure(kind: u32, pubkey: &str, d_tag: &str) {
+    let key = (kind, pubkey.to_string(), d_tag.to_string());
+    SYNC_FAILURE_STREAKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&key);
+}
+
+/// How stale a retained event may be before publishing re-signs it.
+///
+/// Deliberately well inside the relay's own ±15 minute
+/// `MAX_TIMESTAMP_DRIFT_SECS` (`buzz-relay/src/handlers/ingest.rs`): the
+/// margin covers clock skew between this device and the relay, plus the time
+/// between this check and the request actually landing. Matching the relay's
+/// window exactly would leave a row that is 14 minutes old to be sent as-is
+/// and arrive over the line.
+const PUBLISH_FRESHNESS_MARGIN_SECS: i64 = 300;
+
+/// The relay's own drift window, mirrored from
+/// `buzz-relay/src/handlers/ingest.rs`'s `MAX_TIMESTAMP_DRIFT_SECS`. Only the
+/// assertion below reads it; it is not a second source of truth for the check.
+const RELAY_MAX_TIMESTAMP_DRIFT_SECS: i64 = 900;
+
+/// Raising the margin to or past the relay's window would silently restore the
+/// bug this module exists to prevent: rows would stop being re-signed while the
+/// relay still refused them, and they would queue forever again. A compile-time
+/// assertion rather than a test, so it fails the build rather than waiting for
+/// someone to run the suite.
+const _: () = assert!(
+    PUBLISH_FRESHNESS_MARGIN_SECS * 2 < RELAY_MAX_TIMESTAMP_DRIFT_SECS,
+    "the re-sign margin must leave room for clock skew inside the relay's drift window"
+);
+
+/// Whether a retained `created_at` is far enough from now that the relay would
+/// refuse it on timestamp alone.
+///
+/// Absolute difference, not elapsed time: `monotonic_created_at` bumps past a
+/// future-dated head, so a retained row can sit ahead of the clock as easily as
+/// behind it, and the relay rejects both directions.
+fn is_outside_publish_freshness_window(created_at: i64) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(created_at);
+    (created_at - now).abs() > PUBLISH_FRESHNESS_MARGIN_SECS
 }
 
 /// Re-sign a retained event with the current owner keys and a fresh
@@ -556,3 +711,9 @@ pub fn preview_prospective_persona_snapshot(
 mod stale_pin_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod freshness_tests;
+
+#[cfg(test)]
+mod flush_barrier_tests;

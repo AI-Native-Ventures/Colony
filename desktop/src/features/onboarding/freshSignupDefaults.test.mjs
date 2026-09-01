@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { seedFreshSignupDefaults } from "./DefaultConfigStep.tsx";
+import {
+  applyFreshSignupDefaults,
+  seedFreshSignupDefaults,
+} from "./freshSignupDefaults.ts";
 
 test("seeds Buzz Agent + OpenRouter on a completely untouched config", () => {
   const seeded = seedFreshSignupDefaults({
@@ -61,4 +64,59 @@ test("skips seeding when the build bakes a provider", () => {
     baked,
   );
   assert.equal(seeded.preferred_runtime, null);
+});
+
+test("applying seeds an untouched account exactly once", async () => {
+  const saved = [];
+  const written = await applyFreshSignupDefaults({
+    loadConfig: async () => ({
+      env_vars: {},
+      provider: null,
+      model: null,
+      preferred_runtime: null,
+    }),
+    loadBakedEnv: async () => [],
+    saveConfig: async (config) => saved.push(config),
+  });
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0], written);
+  assert.equal(saved[0].preferred_runtime, "buzz-agent");
+  assert.equal(saved[0].provider, "openrouter");
+});
+
+test("applying writes nothing to an account that already has defaults", async () => {
+  const saved = [];
+  const written = await applyFreshSignupDefaults({
+    loadConfig: async () => ({
+      env_vars: {},
+      provider: "anthropic",
+      model: "claude-opus-5",
+      preferred_runtime: "claude",
+    }),
+    loadBakedEnv: async () => [],
+    saveConfig: async (config) => saved.push(config),
+  });
+  assert.equal(written, null);
+  assert.deepEqual(saved, []);
+});
+
+test("a baked-env read that fails does not block seeding", async () => {
+  // getBakedBuildEnv is a Tauri call and can reject. Treating that as "no
+  // baked provider" is right: the check it feeds only ever suppresses seeding,
+  // so a failed read must not leave a fresh account with no defaults at all.
+  const saved = [];
+  await applyFreshSignupDefaults({
+    loadConfig: async () => ({
+      env_vars: {},
+      provider: null,
+      model: null,
+      preferred_runtime: null,
+    }),
+    loadBakedEnv: async () => {
+      throw new Error("no tauri host");
+    },
+    saveConfig: async (config) => saved.push(config),
+  });
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].preferred_runtime, "buzz-agent");
 });

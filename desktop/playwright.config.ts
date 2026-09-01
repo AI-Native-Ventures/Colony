@@ -167,6 +167,7 @@ export default defineConfig({
         "**/onboarding-agent-defaults.spec.ts",
         "**/onboarding-redesign.spec.ts",
         "**/onboarding-first-run-public.spec.ts",
+        "**/onboarding-second-identity-canvas.spec.ts",
         "**/nostr-bind.spec.ts",
         "**/mobile-pairing-qr.spec.ts",
         "**/profile-nsec-reveal.spec.ts",
@@ -189,6 +190,7 @@ export default defineConfig({
         "**/huddle-transcription.spec.ts",
         "**/ask-card.spec.ts",
         "**/ask-resolution-screenshots.spec.ts",
+        "**/action-center-v2-screenshots.spec.ts",
         "**/delegation-grant-screenshots.spec.ts",
       ],
       use: {

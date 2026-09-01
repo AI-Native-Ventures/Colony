@@ -175,6 +175,7 @@ mod tests {
             private_key_nsec: "nsec1secretdonotpublish".to_string(),
             auth_tag: Some("authtagsecret".to_string()),
             relay_url: "wss://relay.example".to_string(),
+            owner_pubkey: None,
             avatar_url: Some("https://example.com/a.png".to_string()),
             acp_command: "buzz-acp".to_string(),
             agent_command: "goose".to_string(),

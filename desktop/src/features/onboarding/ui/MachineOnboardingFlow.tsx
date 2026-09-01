@@ -20,10 +20,8 @@ import { markFreshIdentity } from "../freshFounder";
 import { resolveMachineAuthService } from "../lib/wiredAuthService";
 import { AccountSignInStep } from "./AccountSignInStep";
 import { BackupStep } from "./BackupStep";
-import { DefaultConfigStep } from "./DefaultConfigStep";
 import { DownloadKeyStep } from "./DownloadKeyStep";
 import {
-  backupSessionToPasswordEntry,
   resetEncryptedBackupSession,
   useEncryptedBackupSession,
 } from "./EncryptedBackupCreator";
@@ -41,16 +39,12 @@ import {
   type OnboardingTransitionDirection,
   OnboardingSlideTransition,
 } from "./OnboardingSlideTransition";
-import { SetupStep } from "./SetupStep";
-import type { DefaultConfigDraft } from "./types";
 
 export type MachineOnboardingPage =
   | "identity"
   | "account-signin"
   | "key-import"
-  | "backup"
-  | "setup"
-  | "config";
+  | "backup";
 
 type BackupSubview = "created" | "options" | "password";
 
@@ -67,8 +61,6 @@ const MACHINE_PAGE_STEP: Record<MachineOnboardingPage, MachineStep> = {
   "account-signin": "identity",
   "key-import": "identity",
   backup: "backup",
-  setup: "setup",
-  config: "config",
 };
 
 /** A pending navigation the parent should execute after RouterProvider mounts. */
@@ -84,7 +76,6 @@ export function MachineOnboardingFlow({
   identityLost,
   initialPage,
   queryClient,
-  navigateAfterComplete,
 }: {
   complete: (pubkey?: string) => void;
   continueWithIdentity: (pubkey: string) => void;
@@ -92,13 +83,6 @@ export function MachineOnboardingFlow({
   identityLost: boolean;
   initialPage?: MachineOnboardingPage;
   queryClient: QueryClient;
-  /**
-   * Called when the user finishes onboarding and requests navigation to a
-   * specific route (e.g. Settings → Agents). The parent owns the RouterProvider,
-   * so navigation must be deferred to it — calling router.navigate() here races
-   * with RouterProvider mounting.
-   */
-  navigateAfterComplete?: (nav: PostOnboardingNavigation) => void;
 }) {
   const [page, setPage] = React.useState<MachineOnboardingPage>(
     identityLost ? "key-import" : (initialPage ?? "identity"),
@@ -123,11 +107,6 @@ export function MachineOnboardingFlow({
   );
   const selectedPubkey: string | null = null;
   const identityStorage: IdentityStorage | undefined = undefined;
-  const [readyRuntimeIds, setReadyRuntimeIds] = React.useState<string[]>([]);
-  const [defaultConfigDraft, setDefaultConfigDraft] =
-    React.useState<DefaultConfigDraft | null>(null);
-  const [isDefaultConfigSaving, setIsDefaultConfigSaving] =
-    React.useState(false);
   const [backupSubview, setBackupSubview] =
     React.useState<BackupSubview>("created");
   const [backupDirection, setBackupDirection] = React.useState<
@@ -140,13 +119,6 @@ export function MachineOnboardingFlow({
   const backupSession = useEncryptedBackupSession();
   const reduceMotion = useReducedMotion() ?? false;
   const isSecuritySubview = page === "backup" && backupSubview !== "created";
-  const handleReadyRuntimeIdsChange = React.useCallback(
-    (runtimeIds: readonly string[]) => {
-      setReadyRuntimeIds(Array.from(new Set(runtimeIds)));
-    },
-    [],
-  );
-
   const loadFreshIdentity = React.useCallback(async () => {
     setIsPending(true);
     setError(null);
@@ -268,16 +240,6 @@ export function MachineOnboardingFlow({
     setBackupSubview("options");
   }, [backupSession]);
 
-  const backFromSetup = React.useCallback(() => {
-    if (backupSubview === "password") {
-      backupSessionToPasswordEntry(backupSession);
-    }
-    setBackupDirection("backward");
-    setTransitionDirection("backward");
-    setReturningFromSecurity(false);
-    setPage("backup");
-  }, [backupSession, backupSubview]);
-
   const chromeBackAction =
     page === "key-import" &&
     (!identityLost || keyImportStage === "backup-password")
@@ -303,17 +265,7 @@ export function MachineOnboardingFlow({
                   setPage("identity");
                 },
               }
-            : page === "setup"
-              ? { onClick: backFromSetup }
-              : page === "config"
-                ? {
-                    disabled: isDefaultConfigSaving,
-                    onClick: () => {
-                      setTransitionDirection("backward");
-                      setPage("setup");
-                    },
-                  }
-                : undefined;
+            : undefined;
 
   return (
     <MachineCanvas
@@ -547,10 +499,12 @@ export function MachineOnboardingFlow({
               <BackupStep
                 direction={backupDirection}
                 identityStorage={identityStorage}
-                onNext={() => {
-                  setTransitionDirection("forward");
-                  setPage("setup");
-                }}
+                // Backup is the machine flow's last screen. Everything that
+                // followed it - finding harnesses, choosing a provider and a
+                // model - asked the brain question the canvas flow asks on
+                // its own screen, in developer vocabulary, before the founder
+                // had said what their company was. It lives there now.
+                onNext={() => complete(selectedPubkey ?? undefined)}
                 onOpenPasswordBackup={() => {
                   resetEncryptedBackupSession(backupSession);
                   setBackupDirection("forward");
@@ -566,58 +520,7 @@ export function MachineOnboardingFlow({
                 returningFromSecurity={returningFromSecurity}
               />
             )
-          ) : page === "setup" ? (
-            <SetupStep
-              actions={{
-                // Fresh-key users return to whichever identity backup subview
-                // they used to reach setup; imported keys skip backup entirely.
-                back: () => {
-                  backFromSetup();
-                },
-                next: (runtimeIds) => {
-                  const ids = Array.from(runtimeIds);
-                  setReadyRuntimeIds(ids);
-                  // Harness install can fail (Windows/PATH/network). Don't soft-lock
-                  // onboarding — users can finish setup later in Settings → Agents.
-                  if (ids.length === 0) {
-                    complete(selectedPubkey ?? undefined);
-                    return;
-                  }
-                  setTransitionDirection("forward");
-                  setPage("config");
-                },
-                navigateToAgentSettings: () => {
-                  // Complete onboarding first, then delegate the Settings → Agents
-                  // navigation to the parent.  The parent owns RouterProvider, so
-                  // navigation from within the onboarding flow races with the
-                  // router mounting — calling router.navigate() here is unsafe.
-                  complete(selectedPubkey ?? undefined);
-                  navigateAfterComplete?.({
-                    to: "/settings",
-                    search: { section: "agents" },
-                  });
-                },
-              }}
-              direction={transitionDirection}
-              onReadyRuntimeIdsChange={handleReadyRuntimeIdsChange}
-            />
-          ) : (
-            <DefaultConfigStep
-              actions={{
-                back: () => {
-                  setTransitionDirection("backward");
-                  setPage("setup");
-                },
-                complete: () => complete(selectedPubkey ?? undefined),
-                discardDraft: () => setDefaultConfigDraft(null),
-                updateDraft: setDefaultConfigDraft,
-              }}
-              direction={transitionDirection}
-              draft={defaultConfigDraft}
-              onSavingChange={setIsDefaultConfigSaving}
-              readyRuntimeIds={readyRuntimeIds}
-            />
-          )}
+          ) : null}
         </div>
       </OnboardingFooterProvider>
     </MachineCanvas>

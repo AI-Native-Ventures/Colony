@@ -3,6 +3,7 @@ import { ClipboardList } from "lucide-react";
 import type { ActionBlockItem, ActionItem } from "../contracts";
 import { ActionCenterAskDetail } from "./ActionCenterAskDetail";
 import { ActionCenterBlockDetail } from "./ActionCenterBlockDetail";
+import { ActionCenterPingDetail } from "./ActionCenterPingDetail";
 import { ActionCenterReminderDetail } from "./ActionCenterReminderDetail";
 import { ActionCenterResolvedAskDetail } from "./ActionCenterResolvedAskDetail";
 import { ActionCenterWorkflowDetail } from "./ActionCenterWorkflowDetail";
@@ -12,6 +13,7 @@ export function ActionCenterDetail({
   currentPubkey,
   item,
   onBack,
+  onDismissPing,
   onOpenSource,
   onRefresh,
   onThreadReplySent,
@@ -21,6 +23,7 @@ export function ActionCenterDetail({
   currentPubkey: string;
   item: ActionItem | null;
   onBack: () => void;
+  onDismissPing: (pingId: string) => Promise<void>;
   onOpenSource: (item: ActionItem) => void;
   onRefresh: () => Promise<void>;
   onThreadReplySent: (threadId: string) => void;
@@ -141,5 +144,27 @@ export function ActionCenterDetail({
           />
         </section>
       );
+    case "ping": {
+      // Bound to a const so the closures below capture an already-narrowed
+      // value: narrowing `item.source.kind` does not survive into a closure
+      // over the wider `item.source` property-access chain, since TS cannot
+      // prove `item` stays what it was between the switch check and whenever
+      // the closure actually runs.
+      const source = item.source;
+      return (
+        <section className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background/60">
+          <ActionCenterPingDetail
+            onDismiss={() => onDismissPing(source.ping.id)}
+            onOpenSource={
+              item.capabilities.includes("open-source")
+                ? () => onOpenSource(item)
+                : undefined
+            }
+            source={source}
+            title={item.title}
+          />
+        </section>
+      );
+    }
   }
 }

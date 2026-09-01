@@ -9,6 +9,8 @@ import {
 } from "@/shared/lib/safeStorage";
 import type { AuthFailure } from "../../authService";
 import { applyBrainChoice } from "../../applyBrainChoice";
+import { COLONY_AGENT_RUNTIME_ID } from "../../automaticRuntime";
+import { applyFreshSignupDefaults } from "../../freshSignupDefaults";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
 import { createWiredScrapeService } from "../../lib/wiredScrapeService";
 import { createWiredPaymentsService } from "../../lib/wiredPaymentsService";
@@ -204,6 +206,7 @@ export function NewOnboardingFlow({
     country: "",
     gender: null,
     selfDescribedGender: "",
+    avatarUrl: "",
   });
   const [isSigningUp, setIsSigningUp] = useState(false);
   const [accountFailure, setAccountFailure] = useState<AuthFailure | null>(
@@ -296,6 +299,18 @@ export function NewOnboardingFlow({
     saveAnswers(answerStorage, answers);
   }, [answers]);
 
+  // The machine flow's config screen used to seed a brand-new account's agent
+  // defaults when it mounted. That screen asked the brain question a second
+  // time and is gone; the seeding was never the duplicated part, so it runs
+  // here instead, at the top of the flow rather than at the brain screen. A
+  // founder who abandons before picking still lands on a workspace whose
+  // agents can start, and a founder who does pick overwrites it below.
+  useEffect(() => {
+    void applyFreshSignupDefaults().catch((error: unknown) => {
+      console.warn("Could not seed fresh-signup agent defaults.", error);
+    });
+  }, []);
+
   const goBack = () => {
     const target = backStep(step);
     if (target) goTo(target);
@@ -303,24 +318,15 @@ export function NewOnboardingFlow({
 
   const handleProbeResolved = useCallback((result: TrackResult) => {
     setTrackResult(result);
-    if (result.installed.length === 0) {
-      // Nothing on this computer can do the thinking, so there is no choice to
-      // put in front of anyone: Colony runs it, and the credits screen is where
-      // that is spelled out. This branch used to hold the user on a progress
-      // bar for three seconds while an installer that does not exist appeared
-      // to work. Recording the answer keeps a resumed run from landing back
-      // here.
-      setSelectedBrain(null);
-      setAnswers((current) => ({
-        ...current,
-        track: result.track,
-        brain: current.brain ?? "colony",
-      }));
-      setStep("business");
-      return;
-    }
-    // Spec: one runtime preselected, by fixed catalog order not detection luck.
-    setSelectedBrain(result.installed[0] ?? null);
+    // The brain screen always runs now. It used to be skipped whenever nothing
+    // was installed, on the grounds that a list of one is not a choice — but
+    // that was only true while the screen could do nothing except pick an
+    // already-ready runtime. It installs and signs in now, so skipping it is
+    // what would remove the choice.
+    //
+    // Preselect by fixed catalog order rather than detection luck, falling back
+    // to the hosted agent, which is ready on every computer.
+    setSelectedBrain(result.installed[0] ?? COLONY_AGENT_RUNTIME_ID);
     setAnswers((current) => ({ ...current, track: result.track }));
     setStep("brain");
   }, []);
@@ -346,6 +352,7 @@ export function NewOnboardingFlow({
           country: accountValues.country.trim(),
           gender: accountValues.gender,
           selfDescribedGender: accountValues.selfDescribedGender.trim(),
+          avatarUrl: accountValues.avatarUrl.trim(),
         },
       };
       setAnswers(updated);
@@ -400,8 +407,8 @@ export function NewOnboardingFlow({
   };
 
   const handleBrainContinue = () => {
-    const chosen = selectedBrain ?? trackResult?.installed[0];
-    if (!chosen) return;
+    const chosen =
+      selectedBrain ?? trackResult?.installed[0] ?? COLONY_AGENT_RUNTIME_ID;
     const updated: OnboardingAnswers = { ...answers, brain: chosen };
     setAnswers(updated);
     // Write the choice into the agent config the workspace actually starts
@@ -539,12 +546,14 @@ export function NewOnboardingFlow({
             />
           );
         }
-        // The picker is only reached when the probe found something usable on
-        // this computer: handleProbeResolved skips the step otherwise.
         return (
           <BrainScreen
             brains={trackResult.brains}
-            selected={selectedBrain ?? trackResult.installed[0] ?? null}
+            selected={
+              selectedBrain ??
+              trackResult.installed[0] ??
+              COLONY_AGENT_RUNTIME_ID
+            }
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
           />

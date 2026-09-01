@@ -1474,6 +1474,7 @@ mod tests {
             private_key_nsec: String::new(),
             auth_tag: None,
             relay_url: String::new(),
+            owner_pubkey: None,
             avatar_url: None,
             acp_command: "buzz-acp".to_string(),
             agent_command: "buzz-agent".to_string(),
@@ -1522,7 +1523,6 @@ mod tests {
             definition_parallelism: None,
             relay_mesh: None,
         };
-
         let runtime = known_acp_runtime_exact("buzz-agent");
         let effective = resolve_effective_agent_env(&record, &[], runtime, &Default::default());
 

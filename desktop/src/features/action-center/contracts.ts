@@ -5,6 +5,8 @@ import type {
 } from "@/features/asks/lib/askResolution";
 import type { BlockInstanceRef } from "@/features/blocks/contracts";
 import type { Reminder } from "@/features/reminders/lib/reminderTypes";
+import type { PriorAskProvenance } from "./lib/askContextLine";
+import type { ThreadPing } from "./lib/threadPings";
 import type {
   FeedItem,
   Workflow,
@@ -32,7 +34,7 @@ export const ACTION_CENTER_STATES = [
 
 export type ActionCenterStateFilter = (typeof ACTION_CENTER_STATES)[number];
 
-export type ActionItemKind = "ask" | "block" | "reminder" | "workflow";
+export type ActionItemKind = "ask" | "block" | "reminder" | "workflow" | "ping";
 
 export type ActionItemState =
   | "needs-action"
@@ -59,7 +61,14 @@ export type ActionCapability =
   | "open-workspace"
   | "approve"
   | "deny"
-  | "run-again";
+  | "run-again"
+  /**
+   * Dismisses a thread ping by publishing a kind:7 reaction on it -- distinct
+   * from `mark-done`, which this epic's v2 queue no longer backs with any
+   * local state (see ranked-queue-model). A dismissed ping's "done" state
+   * lives entirely at the relay, not here.
+   */
+  | "dismiss";
 
 export type ActionAskSource = {
   kind: "ask";
@@ -116,11 +125,24 @@ export type ActionWorkflowSource = {
   approval: WorkflowApproval | null;
 };
 
+export type ActionPingSource = {
+  kind: "ping";
+  ping: ThreadPing;
+  /**
+   * Who the "hand this to my lead" action reaches -- the asker's manager,
+   * resolved by `useReportingLineLookup` -- or null when there is nobody to
+   * hand off to (no manager on file, or the asker is already the top rung).
+   * The detail surface renders no such action at all when this is null.
+   */
+  delegateTarget: { pubkey: string; label: string } | null;
+};
+
 export type ActionSource =
   | ActionAskSource
   | ActionBlockSource
   | ActionReminderSource
-  | ActionWorkflowSource;
+  | ActionWorkflowSource
+  | ActionPingSource;
 
 export type ActionItem = {
   id: string;
@@ -132,6 +154,22 @@ export type ActionItem = {
   updatedAt: number;
   source: ActionSource;
   capabilities: readonly ActionCapability[];
+  /**
+   * "Who asked, initiative, blast radius" (spec, "Layout"). Only asks carry
+   * this: it names concepts (filer, initiative, blocked tasks) that have no
+   * meaning for a reminder, workflow approval, block instance, or ping. Null
+   * for every other kind, and null for an ask whose asker label has not
+   * resolved yet.
+   */
+  contextLine: string | null;
+  /**
+   * Escalation provenance (spec, resolved question 5): "escalated
+   * automatically; sat with <name> for <duration>". Set only on a
+   * relay-signed ask carrying `prior`, and only once the prior ask itself
+   * has been fetched -- null otherwise, including while that fetch is
+   * still in flight.
+   */
+  escalationLine: string | null;
 };
 
 export type ActionBlockItem = Omit<ActionItem, "kind" | "source"> & {
@@ -152,9 +190,26 @@ export type ActionCenterProjectionInput = {
   resolverLabelsByPubkey?: ReadonlyMap<string, string>;
   /**
    * Short routing phrases by ask id ("Auto-routed to the filer's
-   * manager", ...). Absent means the summary stays as it was.
+   * manager", ...). Absent means the summary stays as it was. Never set for
+   * a promoted ask (`priorAskId` present): the escalation line below says
+   * the same thing with more detail, and printing both would repeat
+   * ourselves on the same row.
    */
   askRoutingNotesByAskId?: ReadonlyMap<string, string>;
+  /**
+   * Display labels for context/escalation lines, keyed by pubkey: an ask's
+   * asker (see `lib/askContextLine.ts`'s `askContextSubjectPubkey`) and a
+   * promoted ask's prior audience. Absent means those lines render without
+   * a name (falls back to a truncated pubkey or a generic phrase).
+   */
+  contextLabelsByPubkey?: ReadonlyMap<string, string>;
+  /**
+   * One relay-signed prior ask per promoted ask, keyed by `ask.priorAskId`
+   * -- a single batched `ids` fetch upstream (see `useActionCenterItems`),
+   * never one fetch per row. Absent or missing an entry means that ask's
+   * escalation line stays null rather than guessed at.
+   */
+  priorAsksById?: ReadonlyMap<string, PriorAskProvenance>;
   /**
    * Only the `needsAction` home-feed category is read here. `mentions`,
    * `activity`, and `agentActivity` fed a generic "message" row that is not
@@ -167,6 +222,21 @@ export type ActionCenterProjectionInput = {
   };
   reminders: readonly Reminder[];
   workflows?: readonly ActionWorkflowSource[];
+  /**
+   * Unanswered thread pings, already detected and suppression-checked (see
+   * `lib/threadPings.ts`, `useThreadPings`). Absent means the surface reads
+   * no pings, same convention as `workflows`.
+   */
+  pings?: readonly ThreadPing[];
+  /** Display labels for a ping's asker, keyed by `ping.authorPubkey`. Absent
+   * or missing an entry falls back to a truncated pubkey. */
+  pingAuthorLabelsByPubkey?: ReadonlyMap<string, string>;
+  /** A ping's delegate-to-lead target, keyed by `ping.id`. Absent or missing
+   * an entry means that ping's `delegateTarget` is null. */
+  pingDelegateTargetsById?: ReadonlyMap<
+    string,
+    { pubkey: string; label: string }
+  >;
   doneIds?: ReadonlySet<string>;
   /** Unix seconds used to decide which reminders are due. Defaults to now;
    * overridable so tests can pin the clock. */

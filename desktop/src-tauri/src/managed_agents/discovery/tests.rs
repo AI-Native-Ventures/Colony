@@ -306,7 +306,6 @@ fn effective_agent_command_explicit_override_wins() {
         "codex-acp"
     );
 }
-/// Minimal record for `record_agent_command` resolution tests.
 fn record_with(
     runtime: Option<&str>,
     persona_id: Option<&str>,
@@ -323,6 +322,7 @@ fn record_with(
         private_key_nsec: String::new(),
         auth_tag: None,
         relay_url: String::new(),
+        owner_pubkey: None,
         avatar_url: None,
         acp_command: String::new(),
         agent_command: String::new(),

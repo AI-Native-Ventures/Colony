@@ -62,7 +62,13 @@ export type CompanyActionOutcome =
       target: string;
       message: string;
     }
-  | { status: "no-receipt"; actionEventId: string; message: string };
+  | { status: "no-receipt"; actionEventId: string; message: string }
+  | {
+      status: "superseded";
+      actionEventId: string;
+      winnerEventId: string;
+      message: string;
+    };
 
 export type CompanyActionBrokerDependencies = {
   publish: (event: RelayEvent) => Promise<RelayEvent>;
@@ -228,6 +234,35 @@ export function parseCompanyReceipt(
   };
 }
 
+/**
+ * The relay's exact wording for a duplicate idempotency claim that a
+ * different event already won: `"conflict: superseded by original action
+ * <event id>"` (`broker_duplicate_result` in
+ * `buzz-relay/handlers/ingest.rs`, called with the noun `"action"` for
+ * every `KIND_COMPANY_ACTION` submission).
+ *
+ * This is a wire-message regex, not a structured field, because there is
+ * no structured field to read: a NIP-01 `OK` frame is four bare elements
+ * (`["OK", id, accepted, message]`), so the message text is the only
+ * signal the relay has to distinguish this case from any other refusal.
+ * `IngestResult::new`'s own prefix contract keeps the wording stable, but a
+ * relay-side rewording still silently stops this from matching — worth
+ * moving to a structured field (e.g. a `superseded_by` alongside `outcome`)
+ * if this pattern needs to carry more cases than this one.
+ */
+const SUPERSEDED_MESSAGE =
+  /^conflict: superseded by original action ([0-9a-f]{64})$/;
+
+/**
+ * The winning event's id, when `error` is the relay's rejection of a
+ * company action superseded by an earlier claim on the same idempotency
+ * key — otherwise `null`.
+ */
+function supersededWinnerEventId(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  return SUPERSEDED_MESSAGE.exec(error.message)?.[1] ?? null;
+}
+
 export function createCompanyActionBroker(
   dependencies: CompanyActionBrokerDependencies,
 ) {
@@ -248,7 +283,27 @@ export function createCompanyActionBroker(
         );
       }
 
-      const published = await dependencies.publish(event);
+      let published: RelayEvent;
+      try {
+        published = await dependencies.publish(event);
+      } catch (error) {
+        const winnerEventId = supersededWinnerEventId(error);
+        // The relay's idempotency claim on this action's idempotency key was
+        // already won — by an earlier attempt at this exact send, most
+        // likely. That is the goal state a retry was trying to reach, not a
+        // failure: the winning event is named, so the caller can read the
+        // Task it produced instead of refusing the send.
+        if (winnerEventId !== null) {
+          return {
+            status: "superseded",
+            actionEventId: event.id,
+            winnerEventId,
+            message:
+              "This exact change was already applied by an earlier attempt.",
+          };
+        }
+        throw error;
+      }
       const actionEventId = published.id || event.id;
 
       for (let attempt = 0; attempt < attempts; attempt += 1) {

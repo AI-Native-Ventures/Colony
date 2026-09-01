@@ -131,6 +131,7 @@ export function CanvasFirstRunHost({
           // creates one, and the brief used to vanish because of it.
           draft: draftFromAnswers(answers),
           profileDisplayName: answers.founder?.fullName ?? null,
+          profileAvatarUrl: answers.founder?.avatarUrl ?? null,
         },
         DEFAULT_COMPLETE_FIRST_RUN_IO,
       );

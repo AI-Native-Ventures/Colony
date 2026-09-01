@@ -28,6 +28,13 @@ export function actionCenterSourceDestination(
       threadRootId: item.source.threadRootId,
     };
   }
+  if (item.source.kind === "ping") {
+    return {
+      channelId: item.source.ping.channelId,
+      messageId: item.source.ping.id,
+      threadRootId: item.source.ping.threadId,
+    };
+  }
   return null;
 }
 

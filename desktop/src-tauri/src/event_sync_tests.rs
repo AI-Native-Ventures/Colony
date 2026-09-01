@@ -269,7 +269,8 @@ fn migrate_teams_supersedes_future_dated_head() {
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();
 
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+    // Two: this team, plus the coordination team the store's merge guarantees.
+    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 2);
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
     let head = get_retained_event(&conn, KIND_TEAM, &pubkey, "my-team")

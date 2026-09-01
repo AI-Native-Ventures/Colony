@@ -230,6 +230,69 @@
     gap: 0.25rem;
   }
 
+  /* Photo beside the name it illustrates, rather than on a screen of its own.
+     The field takes the remaining width so the row still reads as one input. */
+  :where(.onb-canvas) .onb-identity-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.875rem;
+    width: 100%;
+  }
+
+  :where(.onb-canvas) .onb-identity-row .onb-field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  :where(.onb-canvas) .onb-avatar-button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 3.25rem;
+    height: 3.25rem;
+    overflow: hidden;
+    border-radius: 999px;
+    border: 1px dashed var(--onb-shell-line);
+    background: var(--onb-shell);
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition:
+      border-color 200ms var(--onb-ease),
+      transform 200ms var(--onb-ease);
+  }
+
+  /* A chosen photo is content, not a placeholder, so the dashed "add me"
+     border becomes solid once there is something in the circle. */
+  :where(.onb-canvas) .onb-avatar-button[data-has-avatar="true"] {
+    border-style: solid;
+  }
+
+  :where(.onb-canvas) .onb-avatar-button:hover:not(:disabled) {
+    transform: translate3d(0, -1px, 0);
+  }
+
+  :where(.onb-canvas) .onb-avatar-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  :where(.onb-canvas) .onb-avatar-emoji {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    font-size: 1.5rem;
+  }
+
+  :where(.onb-canvas) .onb-avatar-empty {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.5rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.65;
+  }
+
   :where(.onb-canvas) .onb-label {
     font-family: "JetBrains Mono", monospace;
     font-size: 0.6875rem;
@@ -687,10 +750,43 @@
 
   /* A brain that cannot think yet is still listed, so the set reads as a
      choice, but it must not look pickable. Dimmed rather than hidden: knowing
-     Colony supports it is the point. */
+     Colony supports it is the point, and the action beside it is how it stops
+     being dimmed. */
   :where(.onb-canvas) .onb-option:disabled {
     cursor: default;
     opacity: 0.45;
+  }
+
+  /* A row is the option plus whatever it takes to make it usable. The action
+     sits outside the option button rather than inside it: a button inside a
+     button is not valid markup, and the row's own click must stay "pick this
+     one" rather than "install this one". */
+  :where(.onb-canvas) .onb-option-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  :where(.onb-canvas) .onb-option-row .onb-option {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The action never dims with the row it belongs to: it is the one control on
+     an unusable row that still works. */
+  :where(.onb-canvas) .onb-option-action {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.25rem;
+    opacity: 1;
+  }
+
+  :where(.onb-canvas) .onb-option-action .onb-note-warn {
+    max-width: 14rem;
+    text-align: right;
   }
 
   :where(.onb-canvas) .onb-option[data-status="ready"] .onb-pulse {

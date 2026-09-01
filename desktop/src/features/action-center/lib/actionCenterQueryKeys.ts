@@ -36,3 +36,15 @@ export function actionCenterApprovalsQueryKey(
     runId,
   ] as const;
 }
+
+/**
+ * Key for the batched fetch of prior asks (escalation provenance): keyed on
+ * the sorted, joined set of `priorAskId`s the current open asks name, so it
+ * only refetches when that set actually changes, not on every open-asks poll.
+ */
+export function actionCenterPriorAsksQueryKey(
+  communityId: string,
+  priorAskIdsKey: string,
+) {
+  return ["action-center-prior-asks", communityId, priorAskIdsKey] as const;
+}

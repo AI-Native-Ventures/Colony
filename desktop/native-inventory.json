@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 427,
-    "rust_lines": 166910,
-    "tauri_coupled": 172,
-    "portable": 255,
-    "portable_lines": 94014,
+    "rust_total": 438,
+    "rust_lines": 169866,
+    "tauri_coupled": 175,
+    "portable": 263,
+    "portable_lines": 96287,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -23,6 +23,7 @@
       "src-tauri/src/commands/agent_proposals.rs",
       "src-tauri/src/commands/agent_providers.rs",
       "src-tauri/src/commands/agent_settings.rs",
+      "src-tauri/src/commands/agent_subscriptions.rs",
       "src-tauri/src/commands/agent_update_rollback.rs",
       "src-tauri/src/commands/agents.rs",
       "src-tauri/src/commands/agents/provider_access.rs",
@@ -63,6 +64,7 @@
       "src-tauri/src/commands/notifications.rs",
       "src-tauri/src/commands/observer_archive.rs",
       "src-tauri/src/commands/openrouter_connect.rs",
+      "src-tauri/src/commands/openrouter_quota.rs",
       "src-tauri/src/commands/os_idle.rs",
       "src-tauri/src/commands/pairing.rs",
       "src-tauri/src/commands/personas/card.rs",
@@ -129,6 +131,7 @@
       "src-tauri/src/linux_media.rs",
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
+      "src-tauri/src/managed_agents/model_chain.rs",
       "src-tauri/src/managed_agents/nest.rs",
       "src-tauri/src/managed_agents/persona_events.rs",
       "src-tauri/src/managed_agents/personas.rs",
@@ -181,6 +184,8 @@
     ],
     "portable_list": [
       "src-tauri/src/app_state_env.rs",
+      "src-tauri/src/app_state_identity_resolution.rs",
+      "src-tauri/src/app_state_identity_resolution_tests.rs",
       "src-tauri/src/app_state_keyring.rs",
       "src-tauri/src/app_state_tests.rs",
       "src-tauri/src/archive/agent_usage.rs",
@@ -351,8 +356,11 @@
       "src-tauri/src/managed_agents/mod.rs",
       "src-tauri/src/managed_agents/model_effort.rs",
       "src-tauri/src/managed_agents/nest/tests.rs",
+      "src-tauri/src/managed_agents/owner_scope.rs",
       "src-tauri/src/managed_agents/parallelism.rs",
       "src-tauri/src/managed_agents/persona_avatars.rs",
+      "src-tauri/src/managed_agents/persona_events/flush_barrier_tests.rs",
+      "src-tauri/src/managed_agents/persona_events/freshness_tests.rs",
       "src-tauri/src/managed_agents/persona_events/stale_pin_tests.rs",
       "src-tauri/src/managed_agents/persona_events/tests.rs",
       "src-tauri/src/managed_agents/personas/tests.rs",
@@ -384,7 +392,10 @@
       "src-tauri/src/managed_agents/spawn_snapshot.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff/tests.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/tests.rs",
+      "src-tauri/src/managed_agents/storage_legacy_keys.rs",
+      "src-tauri/src/managed_agents/storage_legacy_keys_tests.rs",
       "src-tauri/src/managed_agents/storage_tests.rs",
+      "src-tauri/src/managed_agents/subscriptions.rs",
       "src-tauri/src/managed_agents/team_events.rs",
       "src-tauri/src/managed_agents/team_repair.rs",
       "src-tauri/src/managed_agents/team_snapshot.rs",
@@ -441,10 +452,10 @@
     ]
   },
   "commands": {
-    "registered": 347,
-    "defined": 347,
+    "registered": 350,
+    "defined": 350,
     "by_reach": {
-      "frontend": 341,
+      "frontend": 344,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -456,16 +467,16 @@
     ]
   },
   "params": {
-    "AppHandle": 358,
-    "State": 261,
+    "AppHandle": 360,
+    "State": 262,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 355,
-      "State": 261,
+      "AppHandle": 357,
+      "State": 262,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -484,7 +495,7 @@
   },
   "apphandle_usage": {
     ".state::<": 112,
-    ".emit(": 47,
+    ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
     ".shell()": 0,
@@ -501,8 +512,8 @@
     ".exit(": 1
   },
   "events": {
-    "distinct": 33,
-    "emit_sites": 49,
+    "distinct": 34,
+    "emit_sites": 50,
     "names": [
       "acp-install-output",
       "agents-data-changed",
@@ -511,6 +522,7 @@
       "deep-link-join",
       "deep-link-message",
       "deep-link-nostr-bind",
+      "event-sync-stuck",
       "huddle-active-speakers",
       "huddle-audio-disconnected",
       "huddle-companion-returned",
@@ -565,6 +577,7 @@
     "src-tauri/src/commands/agent_config.rs": 5,
     "src-tauri/src/commands/terminal.rs": 5,
     "src-tauri/src/commands/workspace.rs": 4,
+    "src-tauri/src/commands/media_raw.rs": 4,
     "src-tauri/src/commands/pairing.rs": 4,
     "src-tauri/src/tray_menu.rs": 4,
     "src-tauri/src/colony_provisioning.rs": 4,
@@ -574,7 +587,6 @@
     "src-tauri/src/commands/canvas.rs": 4,
     "src-tauri/src/commands/initiative.rs": 3,
     "src-tauri/src/commands/task_transition.rs": 3,
-    "src-tauri/src/commands/media_raw.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
@@ -627,11 +639,13 @@
     "src-tauri/src/commands/updater.rs": 1,
     "src-tauri/src/commands/agents_roster.rs": 1,
     "src-tauri/src/commands/observer_archive.rs": 1,
+    "src-tauri/src/commands/openrouter_quota.rs": 1,
     "src-tauri/src/commands/clipboard.rs": 1,
     "src-tauri/src/commands/personas/inbound.rs": 1,
     "src-tauri/src/huddle/reconnect.rs": 1,
     "src-tauri/src/commands/discovery_export.rs": 1,
     "src-tauri/src/commands/qr_download.rs": 1,
+    "src-tauri/src/commands/agent_subscriptions.rs": 1,
     "src-tauri/src/commands/prevent_sleep.rs": 1,
     "src-tauri/src/commands/window_vibrancy.rs": 1,
     "src-tauri/src/commands/notifications.rs": 1,
@@ -729,8 +743,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/communities/useCommunityInit.ts:272",
-        "src/features/communities/useNestNotifications.ts:12",
-        "src/features/communities/useNestNotifications.ts:21"
+        "src/features/communities/useNestNotifications.ts:18",
+        "src/features/communities/useNestNotifications.ts:34"
       ]
     },
     "archive_channel": {
@@ -2760,6 +2774,16 @@
         "src/shared/api/projectGit.ts:338"
       ]
     },
+    "openrouter_quota": {
+      "defining_file": "src-tauri/src/commands/openrouter_quota.rs",
+      "module": "openrouter_quota",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/OpenRouterUpgradeCard.tsx:51",
+        "src/shared/api/tauriOpenRouterQuota.ts:33"
+      ]
+    },
     "operator_pubkey": {
       "defining_file": "src-tauri/src/operator_console.rs",
       "module": "operator_console",
@@ -3205,6 +3229,16 @@
       "example_sites": [
         "src/parity/session/script.ts:1565",
         "src/parity/session/script.ts:1566"
+      ]
+    },
+    "scan_agent_subscriptions": {
+      "defining_file": "src-tauri/src/commands/agent_subscriptions.rs",
+      "module": "agent_subscriptions",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/onboarding/ui/ProviderLaneChoice.tsx:212",
+        "src/shared/api/tauriSubscriptions.ts:68"
       ]
     },
     "scan_onboarding_company_website": {
@@ -3944,6 +3978,15 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriMedia.ts:32"
+      ]
+    },
+    "upload_png_verbatim": {
+      "defining_file": "src-tauri/src/commands/media_raw.rs",
+      "module": "media_raw",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/uploadPngVerbatim.ts:24"
       ]
     },
     "validate_repos_dir": {
