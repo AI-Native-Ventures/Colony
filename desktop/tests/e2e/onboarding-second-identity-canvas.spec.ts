@@ -82,9 +82,7 @@ async function walkCanvasFlow(
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
   await shot("tin");
-  await page
-    .getByRole("button", { name: "I will run my own agents for now" })
-    .click();
+  await page.getByTestId("onboarding-credits-later").click();
 
   await expect(page.locator(".onb-canvas")).toHaveCount(0, {
     timeout: 30_000,

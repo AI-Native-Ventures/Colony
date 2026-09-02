@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PROBE_BUDGET_MS, resolveTrack } from "./track.ts";
+import {
+  PROBE_BUDGET_MS,
+  preselectedBrain,
+  resolveTrack,
+  trackForBrain,
+} from "./track.ts";
 
 function runtime(overrides = {}) {
   return {
@@ -156,4 +161,56 @@ test("track_orders_ready_then_needs_login_then_absent", () => {
     result.brains.map((brain) => brain.label),
     ["Colony Agent", "Goose", "Cursor", "Devin"],
   );
+});
+
+test("preselect_is_the_colony_agent_even_when_a_cli_is_ready", () => {
+  // The screen used to open on `installed[0]`, so a founder with Oh My Pi on
+  // their computer opened on a row named "Oh My Pi" while the copy beside it
+  // said Colony runs a brain for them. Detection order is not a
+  // recommendation, and those product names mean nothing to the person this
+  // flow is written for.
+  const result = resolveTrack(
+    [
+      {
+        id: "pi",
+        label: "Oh My Pi",
+        availability: "available",
+        authStatus: { status: "not_applicable" },
+      },
+      {
+        id: "buzz-agent",
+        label: "Colony Agent",
+        availability: "available",
+        authStatus: { status: "not_applicable" },
+      },
+    ],
+    {},
+  );
+  assert.deepEqual(result.installed, ["pi"]);
+  assert.equal(preselectedBrain(result.brains, result.installed), "buzz-agent");
+});
+
+test("preselect_falls_back_to_a_ready_cli_only_when_colony_is_not_listed", () => {
+  // The hosted agent is always listed today, so this is the guard rail rather
+  // than a path anyone walks: if it is ever missing, opening on something
+  // ready beats opening on an id that is not in the list at all.
+  const brains = [{ id: "pi", label: "Oh My Pi", status: "ready" }];
+  assert.equal(preselectedBrain(brains, ["pi"]), "pi");
+  assert.equal(preselectedBrain([], []), "buzz-agent");
+});
+
+test("track_follows_the_brain_choice_not_the_detection", () => {
+  // Probing answers "what could this computer do" before the founder has
+  // said anything. The pick is the answer. Keeping the hosted default on a
+  // machine with a CLI signed in used to reach a credits screen saying the
+  // founder's own tool covers the thinking, which is the opposite of what
+  // they chose.
+  assert.equal(trackForBrain("buzz-agent", ["pi"]), "colony");
+  assert.equal(trackForBrain("pi", ["pi"]), "byo");
+  // Older resumable drafts recorded the sentinel, not the runtime id.
+  assert.equal(trackForBrain("colony", ["pi"]), "colony");
+  // Nothing picked, or something that is not usable here, stays on the track
+  // that always works.
+  assert.equal(trackForBrain(null, ["pi"]), "colony");
+  assert.equal(trackForBrain("codex", ["pi"]), "colony");
 });

@@ -966,6 +966,58 @@
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
   }
 
+  /* Onboarding sells one pack, so its card is a statement rather than a
+     control: no pointer, no lift on hover, nothing that invites a click that
+     does nothing. The rest of the ladder is in Billing. */
+  :where(.onb-canvas) .onb-pack-solo {
+    cursor: default;
+    min-width: 11rem;
+  }
+
+  :where(.onb-canvas) .onb-pack-solo:hover {
+    transform: none;
+  }
+
+  /* "Later" is a real choice, so it is a real button the same size as Pay.
+     It cannot be the shared Button: the rule above paints every one of those
+     in this row as the solid ink pill, and two solid pills side by side
+     offer no primary. Outline against ink is the same control at a lower
+     volume. */
+  :where(.onb-canvas) .onb-later {
+    height: auto;
+    border-radius: 999px;
+    border: 1px solid var(--onb-ink);
+    background: transparent;
+    color: var(--onb-ink);
+    padding: 1.05rem 2.4rem;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    transition:
+      transform 280ms var(--onb-ease),
+      opacity 280ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-later:not(:disabled):hover {
+    transform: translate3d(0, -2px, 0);
+  }
+
+  :where(.onb-canvas) .onb-later:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :where(.onb-canvas) .onb-later {
+      transition: none;
+    }
+
+    :where(.onb-canvas) .onb-later:not(:disabled):hover {
+      transform: none;
+    }
+  }
+
   /* The grant leads: it is the product. The price is secondary, because it
      is the same purchase whichever currency the gateway bills. */
   :where(.onb-canvas) .onb-pack-grant {
