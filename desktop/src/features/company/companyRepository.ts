@@ -477,8 +477,10 @@ export function createCompanyRepository(
      * `headEventId` (the relay receipt's own event id, when the caller has
      * one) is tried first: a lookup by `ids` hits the event store directly,
      * ahead of whatever indexes the `#d` tag filter below depends on. Absent
-     * that — a conflict outcome names no head — or once the id lookup itself
-     * comes up empty, this falls back to the ordinary coordinate read.
+     * that - a conflict or superseded outcome names no head - or once the id
+     * lookup comes up empty, every attempt falls back to the ordinary
+     * coordinate read. Only a cancelled read stops the fallback, because a
+     * community switch mid-flight makes a second query worse, not better.
      */
     async getTaskAfterAction(
       taskId: string,
@@ -542,13 +544,20 @@ export function createCompanyRepository(
         "That task does not exist on this community.",
       );
       for (let attempt = 0; attempt < attempts; attempt += 1) {
-        last = headEventId
-          ? await readByHeadEventId(headEventId)
-          : await readByCoordinate();
+        if (headEventId) {
+          last = await readByHeadEventId(headEventId);
+          if (last.ok) return last;
+          // A cancelled read (community switch mid-flight) is not indexing
+          // lag; retrying it, or falling through to a second query, would
+          // just deliver a stale result into the new community.
+          if (last.code === "cancelled") return last;
+        }
+        // An id that names no task head can never match this filter, however
+        // many times it is tried: a superseded claim names the company action
+        // that won it, which the owner signed under a different kind. The
+        // coordinate read is the one that resolves that Task.
+        last = await readByCoordinate();
         if (last.ok) return last;
-        // A cancelled read (community switch mid-flight) is not indexing lag;
-        // retrying it would just deliver a stale result into the new
-        // community once it eventually resolves.
         if (last.code === "cancelled") return last;
         if (attempt < attempts - 1) {
           await wait(taskReadBackDelay(attempt, intervalMs));
