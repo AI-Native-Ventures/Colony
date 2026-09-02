@@ -121,13 +121,62 @@ const REPORT = {
   unreadableRecords: 0,
 };
 
-test.describe("Spend", () => {
+test.describe("Billing", () => {
+  test("the sidebar's one Billing row carries both panes", async ({ page }) => {
+    await seedActiveIdentity(page);
+    await installMockBridge(page, { ledgerReport: REPORT });
+    await page.goto("/");
+
+    // One row now, and it opens on Spend rather than asking which of two
+    // money screens was meant.
+    await page.getByTestId("open-billing-view").click();
+    await expect(page.getByTestId("ledger-page")).toBeVisible();
+    await expect(page.getByTestId("billing-top-tab-spend")).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+
+    // The Credits pane is anchored on its heading rather than
+    // `credits-balance`, which only renders once the payments service answers
+    // and so never appears under the mock bridge.
+    await page.getByTestId("billing-top-tab-credits").click();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Credits" }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/tab=credits/);
+    await expect(page.getByTestId("ledger-page")).toBeHidden();
+
+    await page.getByTestId("billing-top-tab-spend").click();
+    await expect(page.getByTestId("ledger-page")).toBeVisible();
+  });
+
+  test("the ledger's Add credits button switches tab in place", async ({
+    page,
+  }) => {
+    await seedActiveIdentity(page);
+    await installMockBridge(page, { ledgerReport: REPORT });
+    await page.goto("/");
+
+    await page.getByTestId("open-billing-view").click();
+    await page.getByTestId("ledger-open-credits").click();
+
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Credits" }),
+    ).toBeVisible();
+    await expect(page).toHaveURL(/tab=credits/);
+    // Still the Billing destination, so the sidebar row stays selected.
+    await expect(page.getByTestId("billing-top-tab-credits")).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+  });
+
   test("shows what the company spent, exactly", async ({ page }) => {
     await seedActiveIdentity(page);
     await installMockBridge(page, { ledgerReport: REPORT });
     await page.goto("/");
 
-    await page.getByTestId("open-spend-view").click();
+    await page.getByTestId("open-billing-view").click();
     const spendPage = page.getByTestId("ledger-page");
     await expect(spendPage).toBeVisible();
 
@@ -177,7 +226,7 @@ test.describe("Spend", () => {
     await installMockBridge(page);
     await page.goto("/");
 
-    await page.getByTestId("open-spend-view").click();
+    await page.getByTestId("open-billing-view").click();
     await expect(page.getByTestId("ledger-page")).toBeVisible();
     await expect(page.getByText("No agent spend recorded yet")).toBeVisible();
 
@@ -194,7 +243,7 @@ test.describe("Spend", () => {
     await installMockBridge(page, { ledgerReport: REPORT });
     await page.goto("/");
 
-    await page.getByTestId("open-spend-view").click();
+    await page.getByTestId("open-billing-view").click();
     await expect(page.getByTestId("ledger-page")).toBeVisible();
 
     // The unattributed call is the one offering to be attributed.
@@ -249,7 +298,7 @@ test.describe("Spend", () => {
     });
     await page.goto("/");
 
-    await page.getByTestId("open-spend-view").click();
+    await page.getByTestId("open-billing-view").click();
     const attention = page.getByTestId("ledger-attention");
     await expect(attention).toContainText("No price list has been published");
     // The remedy must be actionable here, not an instruction to open a

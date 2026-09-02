@@ -13,10 +13,8 @@ import { Route as remindersRouteImport } from "./routes/reminders";
 import { Route as pulseRouteImport } from "./routes/pulse";
 import { Route as projectsRouteImport } from "./routes/projects";
 import { Route as discoveryRouteImport } from "./routes/discovery";
-import { Route as creditsRouteImport } from "./routes/credits";
 import { Route as contentRouteImport } from "./routes/content";
 import { Route as agentsRouteImport } from "./routes/agents";
-import { Route as actionCenterRouteImport } from "./routes/action-center";
 import { Route as indexRouteImport } from "./routes/index";
 import { Route as workflowsDotworkflowIdRouteImport } from "./routes/workflows.$workflowId";
 import { Route as projectsDotprojectIdRouteImport } from "./routes/projects.$projectId";
@@ -64,11 +62,6 @@ const discoveryRoute = discoveryRouteImport.update({
   path: "/discovery",
   getParentRoute: () => rootRouteImport,
 } as any);
-const creditsRoute = creditsRouteImport.update({
-  id: "/credits",
-  path: "/credits",
-  getParentRoute: () => rootRouteImport,
-} as any);
 const contentRoute = contentRouteImport.update({
   id: "/content",
   path: "/content",
@@ -77,11 +70,6 @@ const contentRoute = contentRouteImport.update({
 const agentsRoute = agentsRouteImport.update({
   id: "/agents",
   path: "/agents",
-  getParentRoute: () => rootRouteImport,
-} as any);
-const actionCenterRoute = actionCenterRouteImport.update({
-  id: "/action-center",
-  path: "/action-center",
   getParentRoute: () => rootRouteImport,
 } as any);
 const indexRoute = indexRouteImport.update({
@@ -118,10 +106,8 @@ const channelsDotchannelIdDotpostsDotpostIdRoute =
 
 export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
-  "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/content": typeof contentRoute;
-  "/credits": typeof creditsRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -138,10 +124,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof indexRoute;
-  "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/content": typeof contentRoute;
-  "/credits": typeof creditsRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -159,10 +143,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof indexRoute;
-  "/action-center": typeof actionCenterRoute;
   "/agents": typeof agentsRoute;
   "/content": typeof contentRoute;
-  "/credits": typeof creditsRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -181,10 +163,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
     | "/"
-    | "/action-center"
     | "/agents"
     | "/content"
-    | "/credits"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -201,10 +181,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to:
     | "/"
-    | "/action-center"
     | "/agents"
     | "/content"
-    | "/credits"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -221,10 +199,8 @@ export interface FileRouteTypes {
   id:
     | "__root__"
     | "/"
-    | "/action-center"
     | "/agents"
     | "/content"
-    | "/credits"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -242,10 +218,8 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
-  actionCenterRoute: typeof actionCenterRoute;
   agentsRoute: typeof agentsRoute;
   contentRoute: typeof contentRoute;
-  creditsRoute: typeof creditsRoute;
   discoveryRoute: typeof discoveryRoute;
   projectsRoute: typeof projectsRoute;
   pulseRoute: typeof pulseRoute;
@@ -319,13 +293,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof discoveryRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/credits": {
-      id: "/credits";
-      path: "/credits";
-      fullPath: "/credits";
-      preLoaderRoute: typeof creditsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/content": {
       id: "/content";
       path: "/content";
@@ -338,13 +305,6 @@ declare module "@tanstack/react-router" {
       path: "/agents";
       fullPath: "/agents";
       preLoaderRoute: typeof agentsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/action-center": {
-      id: "/action-center";
-      path: "/action-center";
-      fullPath: "/action-center";
-      preLoaderRoute: typeof actionCenterRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/": {
@@ -394,10 +354,8 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
-  actionCenterRoute: actionCenterRoute,
   agentsRoute: agentsRoute,
   contentRoute: contentRoute,
-  creditsRoute: creditsRoute,
   discoveryRoute: discoveryRoute,
   projectsRoute: projectsRoute,
   pulseRoute: pulseRoute,

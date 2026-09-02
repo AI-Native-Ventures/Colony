@@ -1,110 +1,62 @@
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
 
-import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useAppShell } from "@/app/AppShellContext";
-import {
-  ACTION_CENTER_FILTERS,
-  ACTION_CENTER_STATES,
-  type ActionCenterFilter,
-  type ActionCenterStateFilter,
-  type ActionItem,
-} from "@/features/action-center/contracts";
-import {
-  actionCenterSourceDestination,
-  reminderSourceDestination,
-} from "@/features/action-center/lib/actionCenterNavigation";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import type { HomeRouteSearch } from "@/app/routes/homeSearch";
 import { filterActionCenterItems } from "@/features/action-center/actionCenterModel";
 import {
   type ActionCenterDataSource,
   useActionCenterContext,
 } from "@/features/action-center/ActionCenterContext";
+import type {
+  ActionCenterFilter,
+  ActionItem,
+} from "@/features/action-center/contracts";
+import {
+  actionCenterSourceDestination,
+  reminderSourceDestination,
+} from "@/features/action-center/lib/actionCenterNavigation";
 import { ActionCenterScreen } from "@/features/action-center/ui/ActionCenterScreen";
 import { useActionCenterItems } from "@/features/action-center/useActionCenterItems";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { useFeatureEnabled, usePreviewFeatureWarning } from "@/shared/features";
-
-export type ActionCenterRouteSearch = {
-  filter?: ActionCenterFilter;
-  initiative?: string;
-  item?: string;
-  state?: ActionCenterStateFilter;
-};
-
-function validateActionCenterSearch(
-  search: Record<string, unknown>,
-): ActionCenterRouteSearch {
-  const filter = search.filter;
-  const state = search.state;
-  return {
-    filter:
-      typeof filter === "string" &&
-      ACTION_CENTER_FILTERS.includes(filter as ActionCenterFilter)
-        ? (filter as ActionCenterFilter)
-        : undefined,
-    // No fixed vocabulary to validate against, unlike `filter`/`state` --
-    // initiative ids are whatever agents wrote on the `initiative` tag, so
-    // this only rejects the shapes that can never be a real id (non-string,
-    // empty/whitespace-only).
-    initiative:
-      typeof search.initiative === "string" && search.initiative.trim() !== ""
-        ? search.initiative
-        : undefined,
-    item:
-      typeof search.item === "string" && search.item.trim() !== ""
-        ? search.item
-        : undefined,
-    state:
-      typeof state === "string" &&
-      ACTION_CENTER_STATES.includes(state as ActionCenterStateFilter)
-        ? (state as ActionCenterStateFilter)
-        : undefined,
-  };
-}
-
-export const Route = createFileRoute("/action-center")({
-  validateSearch: validateActionCenterSearch,
-  component: ActionCenterRouteComponent,
-});
+import { useFeatureEnabled } from "@/shared/features";
 
 /**
- * `ActionCenterProvider` (mounted once in `AppShell`, alongside the sidebar)
- * owns the single `useActionCenterItems` instance while the flag is on — the
- * sidebar badge is always mounted, so reusing its data here rather than
- * mounting a second instance is what keeps the request rate the same
- * whether or not this screen is open. See `ActionCenterContext.tsx`.
+ * The Actions pane of the Inbox.
  *
- * When the flag is off the provider does not mount (context is `null`), so
- * this falls back to a standalone instance — matching how every other
- * gated route (pulse, workflows, content) still works for a direct link
- * while merely warning that the feature is a preview.
+ * `ActionCenterProvider` (mounted once in `AppShell`, alongside the sidebar)
+ * owns the single `useActionCenterItems` instance. The sidebar badge is
+ * always mounted, so reusing its data here rather than mounting a second
+ * instance is what keeps the request rate the same whether or not this pane
+ * is on screen. See `ActionCenterContext.tsx`. The standalone branch only
+ * runs if this pane is ever rendered outside that provider.
  */
-function ActionCenterRouteComponent() {
-  usePreviewFeatureWarning("actionCenter");
+export function HomeActionsPane({ search }: { search: HomeRouteSearch }) {
   const shared = useActionCenterContext();
   return shared ? (
-    <ActionCenterRouteView actionCenter={shared} />
+    <HomeActionsPaneView actionCenter={shared} search={search} />
   ) : (
-    <ActionCenterRouteStandalone />
+    <HomeActionsPaneStandalone search={search} />
   );
 }
 
-function ActionCenterRouteStandalone() {
+function HomeActionsPaneStandalone({ search }: { search: HomeRouteSearch }) {
   const { feedItemState } = useAppShell();
   const actionCenter = useActionCenterItems({
     localDoneIds: feedItemState.doneSet,
   });
-  return <ActionCenterRouteView actionCenter={actionCenter} />;
+  return <HomeActionsPaneView actionCenter={actionCenter} search={search} />;
 }
 
-function ActionCenterRouteView({
+function HomeActionsPaneView({
   actionCenter,
+  search,
 }: {
   actionCenter: ActionCenterDataSource;
+  search: HomeRouteSearch;
 }) {
-  const search = Route.useSearch();
   const identityQuery = useIdentityQuery();
-  const { goActionCenter, goChannel, goPulse, goWorkflow } = useAppNavigation();
+  const { goChannel, goHome, goPulse, goWorkflow } = useAppNavigation();
   const pulseEnabled = useFeatureEnabled("pulse");
   const filter = search.filter ?? "needs-action";
   const items = React.useMemo(
@@ -114,33 +66,37 @@ function ActionCenterRouteView({
 
   const selectItem = React.useCallback(
     (itemId: string | null) => {
-      void goActionCenter({
+      void goHome({
+        action: itemId ?? undefined,
         filter: filter === "needs-action" ? undefined : filter,
-        item: itemId ?? undefined,
+        initiative: search.initiative,
         state: search.state,
+        view: "actions",
       });
     },
-    [filter, goActionCenter, search.state],
+    [filter, goHome, search.initiative, search.state],
   );
   const changeFilter = React.useCallback(
     (nextFilter: ActionCenterFilter) => {
-      void goActionCenter({
+      void goHome({
+        action: undefined,
         filter: nextFilter === "needs-action" ? undefined : nextFilter,
-        item: undefined,
+        view: "actions",
       });
     },
-    [goActionCenter],
+    [goHome],
   );
   const changeInitiative = React.useCallback(
     (nextInitiative: string | null) => {
-      void goActionCenter({
+      void goHome({
+        action: undefined,
         filter: filter === "needs-action" ? undefined : filter,
         initiative: nextInitiative ?? undefined,
-        item: undefined,
         state: search.state,
+        view: "actions",
       });
     },
-    [filter, goActionCenter, search.state],
+    [filter, goHome, search.state],
   );
   const openPulse = React.useCallback(() => {
     void goPulse();
@@ -188,7 +144,7 @@ function ActionCenterRouteView({
       onSelectItem={selectItem}
       openCount={actionCenter.openCount}
       pulseEnabled={pulseEnabled}
-      selectedItemId={search.item ?? null}
+      selectedItemId={search.action ?? null}
       workflowsEnabled={actionCenter.workflowsEnabled}
     />
   );

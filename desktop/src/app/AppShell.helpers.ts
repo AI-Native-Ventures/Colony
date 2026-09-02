@@ -4,7 +4,6 @@ import type { SearchHit } from "@/shared/api/types";
 
 export type AppView =
   | "home"
-  | "action-center"
   | "channel"
   | "messages"
   | "agents"
@@ -13,7 +12,6 @@ export type AppView =
   | "pulse"
   | "projects"
   | "spend"
-  | "credits"
   | "content"
   | "work";
 
@@ -169,13 +167,6 @@ export function deriveShellRoute(pathname: string): {
     };
   }
 
-  if (path === "/action-center") {
-    return {
-      selectedChannelId: null,
-      selectedView: "action-center",
-    };
-  }
-
   if (path === "/agents") {
     return {
       selectedChannelId: null,
@@ -215,17 +206,6 @@ export function deriveShellRoute(pathname: string): {
     return {
       selectedChannelId: null,
       selectedView: "spend",
-    };
-  }
-
-  // Credits sits beside Spend on purpose: Spend is where the money went,
-  // Credits is where more comes from. Until this route existed the only way
-  // to buy Credits was the first-run onboarding wizard, so anyone who
-  // finished onboarding and ran out had no way to pay.
-  if (path === "/credits") {
-    return {
-      selectedChannelId: null,
-      selectedView: "credits",
     };
   }
 

@@ -9,8 +9,8 @@ import { JSDOM } from "jsdom";
 // the request rate roughly doubled while the screen was open. This test
 // mocks the underlying hook and counts real invocations while rendering
 // several context consumers under one `ActionCenterProvider`, the same
-// shape the app renders (sidebar badge + routed screen) while the flag is
-// on — a counted call, not an argument about React Query internals.
+// shape the app renders (sidebar badge + the Inbox's Actions pane) -- a
+// counted call, not an argument about React Query internals.
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
 });
@@ -27,10 +27,7 @@ before(() => {
 after(() => dom.window.close());
 
 test("ActionCenterProvider mounts useActionCenterItems exactly once for multiple consumers", async (t) => {
-  window.localStorage.setItem(
-    "buzz-feature-overrides-v1",
-    JSON.stringify({ actionCenter: true }),
-  );
+  window.localStorage.clear();
 
   let mountCount = 0;
   const fakeResult = {
@@ -98,18 +95,18 @@ test("ActionCenterProvider mounts useActionCenterItems exactly once for multiple
   cleanup();
 });
 
-test("ActionCenterProvider never mounts useActionCenterItems while the flag is off", async (t) => {
-  window.localStorage.setItem(
-    "buzz-feature-overrides-v1",
-    JSON.stringify({ actionCenter: false }),
-  );
+test("ActionCenterProvider mounts with no preview flag gating it", async (t) => {
+  // Actions is a view of the Inbox now, not a preview feature, so the badge
+  // count has to be live for every user with no override in storage. This
+  // asserts the removed `FeatureGate` cannot come back unnoticed.
+  window.localStorage.clear();
 
   let mountCount = 0;
   t.mock.module("@/features/action-center/useActionCenterItems", {
     namedExports: {
       useActionCenterItems: () => {
         mountCount += 1;
-        return { openCount: 0 };
+        return { openCount: 4 };
       },
     },
   });
@@ -130,7 +127,7 @@ test("ActionCenterProvider never mounts useActionCenterItems while the flag is o
     return React.createElement(
       "span",
       { "data-testid": "consumer" },
-      ctx === null ? "null" : "present",
+      ctx === null ? "null" : String(ctx.openCount),
     );
   }
 
@@ -147,10 +144,10 @@ test("ActionCenterProvider never mounts useActionCenterItems while the flag is o
 
   assert.equal(
     mountCount,
-    0,
-    "the hook must not mount at all while the feature flag is off",
+    1,
+    "the hook must mount with no feature override present",
   );
-  assert.equal(result.getByTestId("consumer").textContent, "null");
+  assert.equal(result.getByTestId("consumer").textContent, "4");
 
   cleanup();
 });

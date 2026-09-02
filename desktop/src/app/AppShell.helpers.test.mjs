@@ -71,10 +71,10 @@ test("markAllReadSources skips the active marker without projected activity", ()
 
   assert.deepEqual(calls, ["channels"]);
 });
-test("action center route derives the Action Center sidebar selection", () => {
-  assert.deepEqual(deriveShellRoute("/action-center?filter=all&item=ask:1"), {
+test("the Actions view of the inbox stays on the Inbox sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/?view=actions&filter=all&action=ask:1"), {
     selectedChannelId: null,
-    selectedView: "action-center",
+    selectedView: "home",
   });
 });
 
@@ -92,10 +92,17 @@ test("agents route derives the Agents sidebar selection", () => {
   });
 });
 
-test("credits route derives the Credits sidebar selection", () => {
+test("billing route derives the Billing sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/spend"), {
+    selectedChannelId: null,
+    selectedView: "spend",
+  });
+});
+
+test("the retired credits route no longer has its own selection", () => {
   assert.deepEqual(deriveShellRoute("/credits"), {
     selectedChannelId: null,
-    selectedView: "credits",
+    selectedView: "home",
   });
 });
 

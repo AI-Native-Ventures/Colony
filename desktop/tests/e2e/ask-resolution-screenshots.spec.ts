@@ -122,7 +122,7 @@ test.describe("ask resolution distinction", () => {
     await invalidateAsks(page);
 
     // Both closures sit side by side in the Action Center's asks view.
-    await page.goto("/#/action-center");
+    await page.goto("/#/?view=actions");
     await expect(page.getByTestId("action-center-screen")).toBeVisible();
     await page.getByTestId("action-center-filter-trigger").click();
     await page.getByTestId("action-center-filter-asks").click();

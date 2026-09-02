@@ -212,7 +212,7 @@ export function ActionCenterScreen({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="truncate text-base font-semibold text-foreground">
-                Action Center
+                Actions
               </h1>
               {openCount > 0 ? (
                 <Badge data-testid="action-center-open-count" variant="warning">
@@ -235,7 +235,7 @@ export function ActionCenterScreen({
             </p>
           </div>
           <Button
-            aria-label="Refresh Action Center"
+            aria-label="Refresh Actions"
             className="size-8 shrink-0"
             data-testid="action-center-refresh"
             disabled={isRefreshing}
@@ -255,7 +255,7 @@ export function ActionCenterScreen({
           className="border-b border-destructive/25 bg-destructive/5 px-5 py-2 text-sm text-destructive"
           data-testid="action-center-source-error"
         >
-          Some Action Center sources could not be refreshed: {error.message}
+          Some Actions sources could not be refreshed: {error.message}
         </div>
       ) : null}
 
@@ -315,7 +315,7 @@ export function ActionCenterScreen({
             ) : null}
             {isLoading && selectedItem === null ? (
               <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-                Loading Action Center…
+                Loading Actions…
               </div>
             ) : (
               <ActionCenterDetail

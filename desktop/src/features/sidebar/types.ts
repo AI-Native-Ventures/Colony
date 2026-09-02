@@ -10,7 +10,6 @@
  */
 export type SidebarSelectedView =
   | "home"
-  | "action-center"
   | "channel"
   | "messages"
   | "agents"
@@ -19,6 +18,5 @@ export type SidebarSelectedView =
   | "pulse"
   | "projects"
   | "spend"
-  | "credits"
   | "content"
   | "work";
