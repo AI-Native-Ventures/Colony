@@ -10,6 +10,7 @@ pub(crate) use agent_env::{
 };
 mod backend;
 pub(crate) mod config_bridge;
+mod coordination;
 pub(crate) mod custom_harnesses;
 mod discovery;
 pub(crate) mod effective_config;
@@ -59,6 +60,7 @@ pub(crate) fn lock_path_mutex() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub use backend::*;
+pub use coordination::*;
 pub use discovery::*;
 pub use env_vars::*;
 #[cfg(windows)]

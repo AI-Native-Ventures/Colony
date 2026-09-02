@@ -1,17 +1,19 @@
 //! Unit tests for the per-community coordination team in
-//! `managed_agents/teams.rs`: the id helpers, the relay pin, per-relay
+//! `managed_agents/coordination.rs`: the id helpers, the relay pin, per-relay
 //! seeding and retirement, and the split of the pre-migration device-wide
 //! record.
 //!
-//! Kept in a sibling file so `teams.rs` and `teams_tests.rs` both stay under
-//! the 1000-line gate; `#[path]`-included from `teams.rs`.
+//! Kept in a sibling file so `coordination.rs` stays under the 1000-line
+//! gate; `#[path]`-included from `coordination.rs`.
 
-use super::tests::{managed_agent, team};
 use super::{
-    built_in_team_order, coordination_team_id_for_relay, ensure_coordination_team_for_relay,
-    is_coordination_team_id, load_teams_readonly, merge_teams, retire_per_relay_defaults,
-    sort_teams, split_legacy_coordination_team, team_applies_to_relay, BUILT_IN_TEAMS,
+    coordination_team_id_for_relay, ensure_coordination_team_for_relay, is_coordination_team_id,
+    retire_per_relay_defaults, split_legacy_coordination_team, team_applies_to_relay,
     DEFAULT_COORDINATION_TEAM_ID,
+};
+use crate::managed_agents::teams::tests::{managed_agent, team};
+use crate::managed_agents::teams::{
+    built_in_team_order, load_teams_readonly, merge_teams, sort_teams, BUILT_IN_TEAMS,
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord};
 

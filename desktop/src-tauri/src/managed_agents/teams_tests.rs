@@ -12,7 +12,7 @@ use super::{
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
-pub(super) fn team(id: &str, name: &str) -> TeamRecord {
+pub(crate) fn team(id: &str, name: &str) -> TeamRecord {
     TeamRecord {
         id: id.to_string(),
         name: name.to_string(),
@@ -238,7 +238,7 @@ fn persona_reference_check_includes_defensive_lead_only_records() {
 
 // ── agents_referencing_team ─────────────────────────────────────────────
 
-pub(super) fn managed_agent(name: &str) -> ManagedAgentRecord {
+pub(crate) fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
         manager: None,
