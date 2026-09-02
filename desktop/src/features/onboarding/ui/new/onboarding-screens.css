@@ -470,17 +470,6 @@
     text-align: center;
   }
 
-  /* The key-import card centres itself against the viewport, which predates
-     this canvas: it was positioned independently of a small heading and a
-     bottom-docked action bar. Against a full-height redesign screen that
-     absolute placement lands the card underneath the headline. Inside the
-     canvas it returns to flow, and the screen's own grid spaces it. */
-  :where(.onb-canvas) .buzz-onboarding-key-import-position {
-    position: static;
-    transform: none;
-    margin-top: 2.5rem;
-  }
-
   /* Back is a quiet control on the canvas, not a grey chip from the old
      neutral shell: on a saturated field that chip read as a foreign element. */
   :where(.onb-canvas) .onb-back {
@@ -524,6 +513,12 @@
     background: transparent !important;
     box-shadow: none !important;
     padding: 0 !important;
+    /* The 224px floor exists so the nine-slice's opposing edge bands cannot
+       meet on a semi-transparent seam. With the texture off there is no seam
+       to protect, and the floor is pure dead space: on a 500px-tall window it
+       is what pushed the field down under the docked action. */
+    min-width: 0 !important;
+    min-height: 0 !important;
   }
 
   /* A solo screen is a hero: everything centres on the axis, and the sub
@@ -1125,6 +1120,49 @@
   :where(.onb-canvas) .onb-install-ant {
     width: 84px;
     margin: 0 auto 1.5rem;
+  }
+
+  /* Machine pages: "Enter your private key", "Unlock your account" and
+     "Welcome back". These three are the sign-in side of onboarding rather than
+     steps of the first-run flow, and they share a shape the main flow's
+     screens do not: one headline, one control group, and a primary action that
+     is docked at the foot of the window instead of sitting in an action row.
+     Everything below is scoped to `.onb-machine-screen` so none of it reaches
+     the flow's own screens.
+
+     The specificity here is deliberate: the right-column placement rules above
+     are four classes deep (a class plus two `:not()` attribute tests plus the
+     target), so a `:where()`-scoped rule would lose to them. */
+
+  /* Key import has nothing above its panel and nothing below it, so the
+     three-row right column would leave an empty row and a 2.5rem gap on each
+     side of the form. It takes the whole column and centres against the
+     headline instead. Sign-in keeps the standard rows: it does have an action
+     row, and a panel spanning every row would sit underneath it. */
+  .onb-canvas .onb-screen.onb-machine-screen[data-machine-page="key-import"]
+    .onb-panel {
+    grid-row: 1 / -1;
+    align-self: center;
+  }
+
+  /* Short windows. The headline is sized for a hero on a full-height screen;
+     at 720px and below it is the reason the form lands under the docked
+     action, and on the passphrase stage it pushed the heading clean off the
+     top of the window. These are the sign-in screens, so the form is the
+     subject and the type steps back to make room for it. */
+  @media (max-height: 46rem) {
+    .onb-canvas .onb-screen.onb-machine-screen {
+      row-gap: 1.25rem;
+    }
+
+    .onb-canvas .onb-screen.onb-machine-screen .onb-headline {
+      font-size: clamp(2rem, 4.6vw, 3.25rem);
+    }
+
+    .onb-canvas .onb-screen.onb-machine-screen .onb-sub {
+      margin-top: 0.75rem;
+      font-size: 1rem;
+    }
   }
 
   /* Reduced motion: one gate per mechanism. CSS-driven animation is switched

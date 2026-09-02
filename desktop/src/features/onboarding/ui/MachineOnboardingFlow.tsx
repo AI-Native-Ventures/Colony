@@ -347,146 +347,160 @@ export function MachineOnboardingFlow({
             </OnboardingSlideTransition>
           ) : page === "key-import" ? (
             <OnboardingSlideTransition
-              className="onb-screen"
-              data-solo="true"
               direction={transitionDirection}
               transitionKey={`machine-key-import-${transitionDirection}`}
             >
-              <motion.div
-                animate={{ opacity: 1, y: 0 }}
-                className="onb-col-head relative z-10 shrink-0"
-                initial={reduceMotion ? false : { opacity: 0, y: 10 }}
-                key={keyImportStage}
-                transition={{
-                  duration: reduceMotion ? 0 : 0.3,
-                  ease: "easeOut",
-                }}
+              {/* The grid lives on a div of our own rather than on the
+                  transition's `className`, because the transition spreads its
+                  remaining props onto an outer wrapper: a `data-solo` or
+                  `data-wide` passed there lands on a different element than
+                  `.onb-screen`, so the canvas grid never sees it. */}
+              <div
+                className="onb-screen onb-machine-screen"
+                data-machine-page="key-import"
               >
-                <h1 className="onb-headline">
-                  {keyImportStage === "backup-password"
-                    ? "Unlock your account"
-                    : "Enter your private key"}
-                </h1>
-                <div className="onb-sub">
-                  {keyImportStage === "backup-password" ? (
-                    "Enter your backup password to restore your identity."
-                  ) : (
-                    <p>
-                      Paste your private key to sign in to Colony. You can also
-                      use a{" "}
-                      <button
-                        className="rounded-sm font-medium underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
-                        data-testid="nostr-import-file-button"
-                        disabled={isPending}
-                        onClick={() => setKeyImportDialog("backup")}
-                        type="button"
-                      >
-                        backup file
-                      </button>
-                      , or{" "}
-                      <button
-                        className="rounded-sm font-medium underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
-                        data-testid="nostr-import-phone-link"
-                        disabled={isPending}
-                        onClick={() => setKeyImportDialog("phone")}
-                        type="button"
-                      >
-                        recover from your phone
-                      </button>
-                      .
-                    </p>
-                  )}
-                </div>
-              </motion.div>
-              <div className="onb-panel buzz-onboarding-key-import-position w-full">
-                <div className="flex flex-col items-center">
-                  <NostrKeyImportForm
-                    key={keyImportFormKey}
-                    onBack={backFromKeyImport}
-                    onImport={importExistingIdentity}
-                    onImportingChange={setIsKeyImporting}
-                    onStageChange={setKeyImportStage}
-                    showBack={false}
-                    showPasswordStageBack={false}
-                    variant="spotlight"
-                  />
-                  {identityLost && keyImportStage === "key-entry" ? (
-                    <button
-                      className="onb-quiet-action mt-2"
-                      disabled={isPending || isKeyImporting}
-                      onClick={() => void replaceLostIdentity()}
-                      type="button"
-                    >
-                      Start new identity
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              <Dialog
-                onOpenChange={(open) => {
-                  if (!open) setKeyImportDialog(null);
-                }}
-                open={keyImportDialog === "backup"}
-              >
-                <DialogContent
-                  className="buzz-onboarding-neutral-theme max-w-[47.5rem] -translate-y-5"
-                  closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
-                  data-system-color-scheme="light"
-                  data-testid="backup-recovery-dialog"
-                  surface="textured"
+                <motion.div
+                  animate={{ opacity: 1, y: 0 }}
+                  className="onb-col-head relative z-10 shrink-0"
+                  initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                  key={keyImportStage}
+                  transition={{
+                    duration: reduceMotion ? 0 : 0.3,
+                    ease: "easeOut",
+                  }}
                 >
-                  <div className="mx-auto w-full max-w-[35rem] pb-6 pt-10 text-center max-sm:pb-4 max-sm:pt-6">
-                    <DialogTitle className="text-balance px-8 text-3xl font-normal text-foreground">
-                      Restore from a backup file
-                    </DialogTitle>
-                    <DialogDescription className="mx-auto mt-4 max-w-[28rem] text-sm leading-6 text-foreground/80">
-                      Choose the encrypted backup file you saved from Colony.
-                    </DialogDescription>
+                  <h1 className="onb-headline">
+                    {keyImportStage === "backup-password"
+                      ? "Unlock your account"
+                      : "Enter your private key"}
+                  </h1>
+                  <div className="onb-sub">
+                    {keyImportStage === "backup-password" ? (
+                      "Enter your backup password to restore your identity."
+                    ) : (
+                      <p>
+                        Paste your private key to sign in to Colony. You can
+                        also use a{" "}
+                        <button
+                          className="rounded-sm font-medium underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
+                          data-testid="nostr-import-file-button"
+                          disabled={isPending}
+                          onClick={() => setKeyImportDialog("backup")}
+                          type="button"
+                        >
+                          backup file
+                        </button>
+                        , or{" "}
+                        <button
+                          className="rounded-sm font-medium underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-60"
+                          data-testid="nostr-import-phone-link"
+                          disabled={isPending}
+                          onClick={() => setKeyImportDialog("phone")}
+                          type="button"
+                        >
+                          recover from your phone
+                        </button>
+                        .
+                      </p>
+                    )}
+                  </div>
+                </motion.div>
+                {/* The card used to carry `buzz-onboarding-key-import-position`,
+                  which centres it against the viewport with `position:
+                  absolute`. That predates the canvas: against a full-height
+                  screen it took the panel out of the grid and dropped it,
+                  224px wide, past the bottom right corner of the window. The
+                  canvas grid owns this placement now. */}
+                <div className="onb-panel w-full">
+                  <div className="flex flex-col items-center">
                     <NostrKeyImportForm
-                      footerMode="inline"
-                      mode="backup"
-                      onBack={() => setKeyImportDialog(null)}
+                      key={keyImportFormKey}
+                      onBack={backFromKeyImport}
                       onImport={importExistingIdentity}
+                      onImportingChange={setIsKeyImporting}
+                      onStageChange={setKeyImportStage}
                       showBack={false}
+                      showPasswordStageBack={false}
                       variant="spotlight"
                     />
+                    {identityLost && keyImportStage === "key-entry" ? (
+                      <button
+                        className="onb-quiet-action mt-2"
+                        disabled={isPending || isKeyImporting}
+                        onClick={() => void replaceLostIdentity()}
+                        type="button"
+                      >
+                        Start new identity
+                      </button>
+                    ) : null}
                   </div>
-                </DialogContent>
-              </Dialog>
-              <Dialog
-                onOpenChange={(open) => {
-                  if (!open) setKeyImportDialog(null);
-                }}
-                open={keyImportDialog === "phone"}
-              >
-                <DialogContent
-                  className="buzz-onboarding-neutral-theme max-h-[calc(100dvh-2rem)] max-w-[47.5rem] -translate-y-5 overflow-y-auto"
-                  closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
-                  data-system-color-scheme="light"
-                  data-testid="phone-recovery-dialog"
-                  surface="textured"
+                </div>
+                <Dialog
+                  onOpenChange={(open) => {
+                    if (!open) setKeyImportDialog(null);
+                  }}
+                  open={keyImportDialog === "backup"}
                 >
-                  <div className="mx-auto flex w-full max-w-[35rem] flex-col items-center pb-6 pt-8 text-center max-sm:pb-4 max-sm:pt-4">
-                    <DialogTitle className="text-balance px-8 text-3xl font-normal text-foreground">
-                      {identityLost
-                        ? "Recover from your phone"
-                        : "Use your Colony identity"}
-                    </DialogTitle>
-                    <DialogDescription className="mt-4 text-sm leading-6 text-foreground/80">
-                      {phoneRecoveryStep === "loading" ||
-                      phoneRecoveryStep === "qr"
-                        ? "Scan this code with a signed-in Colony phone."
-                        : "Confirm the code before sharing your identity."}
-                    </DialogDescription>
-                    <div className="mt-5">
-                      <IdentityRecoveryPairing
-                        onRecovered={loadRecoveredIdentity}
-                        onStepChange={setPhoneRecoveryStep}
+                  <DialogContent
+                    className="buzz-onboarding-neutral-theme max-w-[47.5rem] -translate-y-5"
+                    closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
+                    data-system-color-scheme="light"
+                    data-testid="backup-recovery-dialog"
+                    surface="textured"
+                  >
+                    <div className="mx-auto w-full max-w-[35rem] pb-6 pt-10 text-center max-sm:pb-4 max-sm:pt-6">
+                      <DialogTitle className="text-balance px-8 text-3xl font-normal text-foreground">
+                        Restore from a backup file
+                      </DialogTitle>
+                      <DialogDescription className="mx-auto mt-4 max-w-[28rem] text-sm leading-6 text-foreground/80">
+                        Choose the encrypted backup file you saved from Colony.
+                      </DialogDescription>
+                      <NostrKeyImportForm
+                        footerMode="inline"
+                        mode="backup"
+                        onBack={() => setKeyImportDialog(null)}
+                        onImport={importExistingIdentity}
+                        showBack={false}
+                        variant="spotlight"
                       />
                     </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
+                  </DialogContent>
+                </Dialog>
+                <Dialog
+                  onOpenChange={(open) => {
+                    if (!open) setKeyImportDialog(null);
+                  }}
+                  open={keyImportDialog === "phone"}
+                >
+                  <DialogContent
+                    className="buzz-onboarding-neutral-theme max-h-[calc(100dvh-2rem)] max-w-[47.5rem] -translate-y-5 overflow-y-auto"
+                    closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
+                    data-system-color-scheme="light"
+                    data-testid="phone-recovery-dialog"
+                    surface="textured"
+                  >
+                    <div className="mx-auto flex w-full max-w-[35rem] flex-col items-center pb-6 pt-8 text-center max-sm:pb-4 max-sm:pt-4">
+                      <DialogTitle className="text-balance px-8 text-3xl font-normal text-foreground">
+                        {identityLost
+                          ? "Recover from your phone"
+                          : "Use your Colony identity"}
+                      </DialogTitle>
+                      <DialogDescription className="mt-4 text-sm leading-6 text-foreground/80">
+                        {phoneRecoveryStep === "loading" ||
+                        phoneRecoveryStep === "qr"
+                          ? "Scan this code with a signed-in Colony phone."
+                          : "Confirm the code before sharing your identity."}
+                      </DialogDescription>
+                      <div className="mt-5">
+                        <IdentityRecoveryPairing
+                          onRecovered={loadRecoveredIdentity}
+                          onStepChange={setPhoneRecoveryStep}
+                        />
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
             </OnboardingSlideTransition>
           ) : page === "backup" ? (
             backupSubview === "password" ? (

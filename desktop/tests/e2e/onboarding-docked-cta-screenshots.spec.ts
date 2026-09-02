@@ -91,55 +91,121 @@ test("machine onboarding: simple entry and account recovery", async ({
   await page.screenshot({ path: `${SHOT_DIR}/02-community-choice.png` });
 });
 
-test("machine key import remains usable in a short viewport", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 900, height: 620 });
-  await installMockBridge(page, undefined, {
-    skipCommunitySeed: true,
-    skipOnboardingSeed: true,
-  });
-  await page.goto("/");
-  await page
-    .getByRole("button", { name: "Sign in to an existing account" })
-    .click();
-  // The sign-in door now opens the email sign-in page first; key import sits
-  // behind its private-key detour.
-  await expect(
-    page.getByRole("heading", { name: "Welcome back." }),
-  ).toBeVisible();
-  await page.getByTestId("signin-use-private-key").click();
+/**
+ * Every window the key-import screen has to survive. 1280x720 is
+ * the smallest ordinary laptop window; 800x500 is the narrow-and-short corner
+ * where the canvas grid has to stack. Both used to lay the card out below the
+ * fold, and neither was covered: the old assertion only compared the input
+ * against the heading and the footer, and `toBeVisible()` says nothing about
+ * where in the window an element landed.
+ */
+const MACHINE_VIEWPORTS = [
+  { width: 1280, height: 720 },
+  { width: 800, height: 500 },
+] as const;
 
-  const heading = page.getByRole("heading", { name: "Enter your private key" });
-  const input = page.getByLabel("Private key", { exact: true });
-  const footer = page.getByTestId("onboarding-footer-slot");
-  await expect(heading).toBeVisible();
-  await expect(input).toBeVisible();
-  await expect(footer).toBeVisible();
+/** Fails with the measured box rather than a bare boolean. */
+function expectInsideViewport(
+  label: string,
+  box: { x: number; y: number; width: number; height: number } | null,
+  viewport: { width: number; height: number },
+) {
+  expect(box, `${label} has no bounding box`).not.toBeNull();
+  if (box === null) return;
+  const inside =
+    box.x >= 0 &&
+    box.y >= 0 &&
+    box.x + box.width <= viewport.width &&
+    box.y + box.height <= viewport.height;
+  expect(
+    inside,
+    `${label} must sit inside ${viewport.width}x${viewport.height}, measured ${JSON.stringify(box)}`,
+  ).toBe(true);
+}
 
-  const layout = await page.evaluate(() => {
-    const heading = document.querySelector("h1")?.getBoundingClientRect();
-    const input = document
-      .querySelector<HTMLInputElement>("#nostr-private-key")
-      ?.getBoundingClientRect();
-    const footer = document
-      .querySelector('[data-testid="onboarding-footer-slot"]')
-      ?.getBoundingClientRect();
-    return {
-      footerTop: footer?.top ?? 0,
-      headingBottom: heading?.bottom ?? 0,
-      inputBottom: input?.bottom ?? 0,
-      inputTop: input?.top ?? 0,
-      clientWidth: document.documentElement.clientWidth,
-      scrollHeight: document.documentElement.scrollHeight,
-      scrollWidth: document.documentElement.scrollWidth,
-    };
+for (const viewport of MACHINE_VIEWPORTS) {
+  const size = `${viewport.width}x${viewport.height}`;
+
+  test(`machine key import stays inside a ${size} window`, async ({ page }) => {
+    // Walk in at a comfortable size and resize once the key-import screen is
+    // up. The landing screen's own action row collides with the docked CTA
+    // below roughly 560px of height, so navigating through it at 800x500 fails
+    // on the landing rather than on the screens under test here. That overlap
+    // belongs to the canvas-fit work, not to this spec.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await installMockBridge(page, undefined, {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+    });
+    await page.goto("/");
+    // The landing hero slides in, and an action clicked through the tail of
+    // that slide never reports itself stable.
+    await waitForAnimations(page);
+    await page
+      .getByRole("button", { name: "Sign in to an existing account" })
+      .click();
+    // The sign-in door now opens the email sign-in page first; key import sits
+    // behind its private-key detour.
+    await expect(
+      page.getByRole("heading", { name: "Welcome back." }),
+    ).toBeVisible();
+    await page.getByTestId("signin-use-private-key").click();
+    await page.setViewportSize({ ...viewport });
+
+    const heading = page.getByRole("heading", {
+      name: "Enter your private key",
+    });
+    const input = page.getByLabel("Private key", { exact: true });
+    const footer = page.getByTestId("onboarding-footer-slot");
+    await expect(heading).toBeVisible();
+    await expect(input).toBeVisible();
+    await expect(footer).toBeVisible();
+    // The headline slides in over 300ms; measuring through it reads a box that
+    // is still 10px high of where it lands.
+    await waitForAnimations(page);
+
+    const nsecBox = await page
+      .getByTestId("nostr-import-nsec-input")
+      .boundingBox();
+    const cardBox = await page.getByTestId("nostr-import-card").boundingBox();
+    const panelBox = await page.locator(".onb-panel").boundingBox();
+    expectInsideViewport("nsec input", nsecBox, viewport);
+    expectInsideViewport("import card", cardBox, viewport);
+
+    const layout = await page.evaluate(() => {
+      const rect = (selector: string) =>
+        document.querySelector(selector)?.getBoundingClientRect() ?? null;
+      const headingRect = rect("h1");
+      const inputRect = rect("#nostr-private-key");
+      const footerRect = rect('[data-testid="onboarding-footer-slot"]');
+      return {
+        footerTop: footerRect?.top ?? 0,
+        headingBottom: headingRect?.bottom ?? 0,
+        headingRight: headingRect?.right ?? 0,
+        inputBottom: inputRect?.bottom ?? 0,
+        clientWidth: document.documentElement.clientWidth,
+        scrollHeight: document.documentElement.scrollHeight,
+        scrollWidth: document.documentElement.scrollWidth,
+      };
+    });
+    // The CTA is docked over the canvas, so "inside the window" is not enough:
+    // a field underneath it cannot be clicked into.
+    expect(layout.inputBottom).toBeLessThanOrEqual(layout.footerTop);
+    expect(layout.scrollHeight).toBeGreaterThanOrEqual(viewport.height);
+    expect(layout.scrollWidth).toBe(layout.clientWidth);
+
+    if (viewport.width > 900) {
+      // Two columns: the form sits in the right column, clear of the headline,
+      // and that column has to be wide enough to be a form.
+      expect(panelBox?.x ?? 0).toBeGreaterThanOrEqual(layout.headingRight);
+      expect(panelBox?.width ?? 0).toBeGreaterThanOrEqual(420);
+    } else {
+      // One column: the panel stacks under the headline instead of squeezing
+      // beside it.
+      expect(panelBox?.y ?? 0).toBeGreaterThan(layout.headingBottom);
+    }
   });
-  expect(layout.inputTop).toBeGreaterThan(layout.headingBottom);
-  expect(layout.footerTop).toBeGreaterThan(layout.inputBottom);
-  expect(layout.scrollHeight).toBeGreaterThanOrEqual(620);
-  expect(layout.scrollWidth).toBe(layout.clientWidth);
-});
+}
 
 test("simple account entry keeps one-column geometry on narrow windows", async ({
   page,
