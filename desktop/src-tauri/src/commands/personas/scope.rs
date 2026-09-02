@@ -20,7 +20,7 @@ use crate::{managed_agents::ManagedAgentRecord, relay::agent_belongs_to_workspac
 /// Projected out of `ManagedAgentRecord` so the rule can be tested without
 /// building a fifty-field record, and so it cannot quietly start depending on
 /// anything else.
-pub(super) struct AgentRow<'a> {
+pub(in crate::commands) struct AgentRow<'a> {
     pub persona_id: Option<&'a str>,
     pub pubkey: &'a str,
     pub relay_url: &'a str,
@@ -49,7 +49,7 @@ impl<'a> AgentRow<'a> {
 ///
 /// So the only definitions hidden are the ones whose agents all live in some
 /// other community, which is exactly the leak.
-pub(super) fn definition_in_workspace(
+pub(in crate::commands) fn definition_in_workspace(
     definition_id: &str,
     is_builtin: bool,
     agents: &[AgentRow<'_>],
@@ -77,6 +77,35 @@ pub(super) fn definition_in_workspace(
     }
 
     !has_any_agent
+}
+
+/// Whether a team should be listed for `workspace_relay`.
+///
+/// Teams carry no relay pin either, so a team assembled on one community
+/// showed up on every other one with all of its members flagged as "no
+/// longer in your agents". They were not gone; they were scoped out by the
+/// rule above while the team itself was not.
+///
+/// A team lists unless one of its members is a definition that exists but
+/// lives only in another community. Built-in teams always list. A member
+/// that exists nowhere is a real gap, so the team stays visible and the
+/// card's warning is for once telling the truth.
+pub(in crate::commands) fn team_in_workspace(
+    member_ids: &[String],
+    is_builtin: bool,
+    definitions: &[(&str, bool)],
+    agents: &[AgentRow<'_>],
+    workspace_relay: &str,
+) -> bool {
+    if is_builtin {
+        return true;
+    }
+    member_ids.iter().all(|member| {
+        match definitions.iter().find(|(id, _)| *id == member.as_str()) {
+            None => true,
+            Some((id, builtin)) => definition_in_workspace(id, *builtin, agents, workspace_relay),
+        }
+    })
 }
 
 #[cfg(test)]
@@ -147,5 +176,97 @@ mod tests {
     fn another_definitions_agents_do_not_qualify_this_one() {
         let rows = vec![agent("jake", HERE), agent("weaver", ELSEWHERE)];
         assert!(!definition_in_workspace("weaver", false, &rows, HERE));
+    }
+
+    fn members(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn a_team_whose_members_all_live_elsewhere_is_hidden() {
+        let rows = vec![
+            definition_row("emelia"),
+            agent("emelia", ELSEWHERE),
+            definition_row("jake"),
+            agent("jake", ELSEWHERE),
+        ];
+        let defs = [("emelia", false), ("jake", false)];
+        assert!(!team_in_workspace(
+            &members(&["emelia", "jake"]),
+            false,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    #[test]
+    fn a_team_with_one_member_elsewhere_is_hidden_here() {
+        let rows = vec![
+            definition_row("weaver"),
+            agent("weaver", HERE),
+            definition_row("jake"),
+            agent("jake", ELSEWHERE),
+        ];
+        let defs = [("weaver", false), ("jake", false)];
+        assert!(!team_in_workspace(
+            &members(&["weaver", "jake"]),
+            false,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    #[test]
+    fn a_team_whose_members_are_here_is_listed() {
+        let rows = vec![definition_row("weaver"), agent("weaver", HERE)];
+        let defs = [("weaver", false)];
+        assert!(team_in_workspace(
+            &members(&["weaver"]),
+            false,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    #[test]
+    fn a_member_deleted_everywhere_keeps_the_team_visible() {
+        let rows = vec![definition_row("weaver"), agent("weaver", HERE)];
+        let defs = [("weaver", false)];
+        assert!(team_in_workspace(
+            &members(&["weaver", "gone"]),
+            false,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    #[test]
+    fn an_unstarted_member_keeps_the_team_visible() {
+        let rows = vec![definition_row("draft")];
+        let defs = [("draft", false)];
+        assert!(team_in_workspace(
+            &members(&["draft"]),
+            false,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    #[test]
+    fn a_builtin_team_always_lists() {
+        let rows = vec![definition_row("jake"), agent("jake", ELSEWHERE)];
+        let defs = [("jake", false)];
+        assert!(team_in_workspace(
+            &members(&["jake"]),
+            true,
+            &defs,
+            &rows,
+            HERE
+        ));
     }
 }
