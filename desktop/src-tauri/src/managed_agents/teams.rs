@@ -70,7 +70,21 @@ pub(crate) const DEFAULT_COORDINATION_TEAM_ID: &str = "builtin-team:company-coor
 /// Prefix every coordination team this client seeds for itself carries.
 const BUILT_IN_TEAM_PREFIX: &str = "builtin-team:";
 
-/// The id of the coordination team for the community reachable at `relay_url`.
+/// Lead and guaranteed member of every coordination team this client seeds.
+///
+/// `builtin:fizz` is a built-in definition, so `definition_in_workspace`
+/// returns true for it unconditionally and it is present in every community.
+/// `persona_id_for` in `buzz-core/src/company_roster.rs` special-cases the
+/// Chief of Staff role to the same id for the same reason, so a blueprint's
+/// coordination team is led by this persona too.
+const COORDINATION_TEAM_LEAD: &str = "builtin:fizz";
+
+/// Description every coordination team this client seeds carries.
+const COORDINATION_TEAM_DESCRIPTION: &str =
+    "Owns chat work with no more specific team, until a company blueprint is approved.";
+
+/// The id of the coordination team for the community reachable at `relay_url`,
+/// or `None` when `relay_url` is blank.
 ///
 /// Shape: `builtin-team:<8 hex>:company-coordination`, mirroring the
 /// blueprint shape `company-team:<8 hex>:<company>:company-coordination`. The
@@ -82,14 +96,21 @@ const BUILT_IN_TEAM_PREFIX: &str = "builtin-team:";
 /// matches an id against to find the team that owns ambiguous chat work, so
 /// keeping it means that fallback needs no change. Eight hex characters keeps
 /// the whole coordinate inside the relay's 64-byte `d`-tag budget.
-// Exercised by tests here; the seeding, retirement, and publish paths that
-// call it in production land with the per-relay ensure/retire rewrite.
-#[allow(dead_code)]
-pub(crate) fn coordination_team_id_for_relay(relay_url: &str) -> String {
+///
+/// A blank relay is not a community. `agent_belongs_to_workspace` reads a
+/// blank pin as "unassigned, belongs to whoever is asking", so minting an id
+/// from one would create a team for the empty string that every community
+/// then had to ignore. Callers skip instead.
+pub(crate) fn coordination_team_id_for_relay(relay_url: &str) -> Option<String> {
+    if relay_url.trim().is_empty() {
+        return None;
+    }
     let discriminator = buzz_core_pkg::company_roster::relay_discriminator(
         &crate::relay::agent_boundary::canonical(relay_url),
     );
-    format!("{BUILT_IN_TEAM_PREFIX}{discriminator}:{COORDINATION_TEAM_SLUG}")
+    Some(format!(
+        "{BUILT_IN_TEAM_PREFIX}{discriminator}:{COORDINATION_TEAM_SLUG}"
+    ))
 }
 
 /// Whether `id` names a coordination team **this client seeds for itself**.
@@ -100,10 +121,18 @@ pub(crate) fn coordination_team_id_for_relay(relay_url: &str) -> String {
 /// but is user owned, not built in, and the whole point of retirement is that
 /// it can supersede one of ours.
 ///
+/// The slug is matched on a segment boundary, not as a bare suffix: a team a
+/// user named so its id ended `...:acme-company-coordination` would otherwise
+/// be mistaken for one of ours, made undeletable by
+/// [`built_in_team_order`]'s exemption, and published as a built-in.
+///
 /// This is the class test that replaces comparing against one literal id.
 pub(crate) fn is_coordination_team_id(id: &str) -> bool {
-    id == DEFAULT_COORDINATION_TEAM_ID
-        || (id.starts_with(BUILT_IN_TEAM_PREFIX) && id.ends_with(COORDINATION_TEAM_SLUG))
+    if !id.starts_with(BUILT_IN_TEAM_PREFIX) {
+        return false;
+    }
+    id.strip_suffix(COORDINATION_TEAM_SLUG)
+        .is_some_and(|before_slug| before_slug.ends_with(':'))
 }
 
 /// Whether `team` is in scope for the community reachable at `relay_url`.
@@ -123,6 +152,20 @@ pub(crate) fn team_applies_to_relay(team: &TeamRecord, relay_url: &str) -> bool 
                 == crate::relay::agent_boundary::canonical(relay_url)
         }
     }
+}
+
+/// Whether `team` is pinned to the community reachable at `relay_url`.
+///
+/// Stricter than [`team_applies_to_relay`]: an unpinned team is false here.
+/// Seeding and retirement both need this reading. An unpinned coordination
+/// team is one that predates the pin, so it says nothing about which
+/// community it belongs to, and treating it as this relay's would leave the
+/// community with no team of its own (seeding) or delete the only one it has
+/// (retirement).
+fn team_pinned_to_relay(team: &TeamRecord, canonical_relay: &str) -> bool {
+    team.relay_url
+        .as_deref()
+        .is_some_and(|pin| crate::relay::agent_boundary::canonical(pin) == canonical_relay)
 }
 
 // Built-in teams that have been retired. A stored copy that still exactly
@@ -176,21 +219,28 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 /// built-ins, and preserve any user customizations to existing built-in teams
 /// (name, description, persona membership). Returns the merged list and whether
 /// the store changed.
-fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
+///
+/// Deliberately does NOT seed a coordination team. Which community a
+/// coordination team belongs to is not knowable from the store alone, and a
+/// team seeded without a relay pin belongs to every community at once, which
+/// is the device-wide record this change exists to retire. Seeding is
+/// [`ensure_coordination_team_for_relay`], called by whoever knows the relay.
+///
+/// `agents` are the managed agent instances, read for their relay pins by
+/// [`split_legacy_coordination_team`] only.
+fn merge_teams(
+    stored: Vec<TeamRecord>,
+    agents: &[ManagedAgentRecord],
+    now: &str,
+) -> (Vec<TeamRecord>, bool) {
     let (mut records, mut changed) =
         merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now);
-    // Short-circuiting `||`, deliberately, not both calls unconditionally.
-    // Retire before ensure: once retiring has run, a real coordination team
-    // is already in `records`, so `ensure_default_coordination_team`'s own
-    // "a valid coordination team already exists" guard makes calling it a
-    // safe no-op either way - the short-circuit is a cheap skip of that
-    // redundant scan, not a correctness requirement. One `||` expression
-    // rather than the original `if`/`else if` because clippy's
-    // `if-same-then-else` flagged them as identical: both arms produced the
-    // same `changed = true`, even though the calls they guard are not
-    // interchangeable.
-    changed |= retire_default_coordination_team(&mut records)
-        || ensure_default_coordination_team(&mut records, now);
+    // Split before retiring, and run both unconditionally rather than
+    // short-circuiting: the split can be what makes a per-relay default
+    // retirable in the same pass, and neither call is a no-op the other
+    // covers.
+    changed |= split_legacy_coordination_team(&mut records, agents, now);
+    changed |= retire_per_relay_defaults(&mut records);
     (records, changed)
 }
 
@@ -210,91 +260,261 @@ pub(crate) fn is_valid_coordination_team(team: &TeamRecord) -> bool {
             .is_some_and(|lead| team.persona_ids.iter().any(|member| member == lead))
 }
 
-/// Guarantee at least one valid coordination team exists, so implicit chat
-/// tasks always have somewhere to land — even on a device that has hired
-/// agents through the ordinary UI but never approved a company blueprint.
+/// Guarantee the community reachable at `relay_url` has a valid coordination
+/// team, so implicit chat tasks raised in it always have somewhere to land -
+/// even on a device that has hired agents through the ordinary UI but never
+/// approved a company blueprint there.
+///
+/// One `teams.json` is shared by every community this device has joined, so
+/// "a coordination team exists" is not a device-wide question. Seeding is
+/// keyed on a team pinned to THIS relay: a team belonging to another
+/// community must not stop this one from getting its own, and an unpinned
+/// one (seeded before pins existed) says nothing about where it belongs, so
+/// it does not count either.
 ///
 /// Blueprint approval seeds its own
-/// `company-team:{scope}:{company}:company-coordination` team once that path
-/// works (`company/seed.rs::seed_teams`, via `materialized_team_id` in
-/// `buzz-core/src/company_roster.rs`). This must never add a second one
-/// alongside it: `owning_team_for_chat`'s fallback just takes the first team
-/// whose id ends in the coordination slug, and built-ins sort ahead of user
-/// teams, so a stray default here could silently shadow the real one. So this
-/// only acts when NO stored team already satisfies the coordination contract
-/// — it reuses whatever is already there instead of creating a second one,
-/// and never touches an existing `DEFAULT_COORDINATION_TEAM_ID` record even
-/// if it has since been edited into invalidity, for the same
-/// never-fight-a-customization reason built-ins elsewhere in this file are
-/// preserved rather than repaired.
+/// `company-team:{scope}:{company}:company-coordination` team
+/// (`company/seed.rs::seed_teams`, via `materialized_team_id` in
+/// `buzz-core/src/company_roster.rs`), pinned to the community it was
+/// approved on. This must never add a second one alongside it for the same
+/// relay: `owning_team_for_chat`'s fallback just takes the first team whose
+/// id ends in the coordination slug, and built-ins sort ahead of user teams,
+/// so a stray default here could silently shadow the real one.
 ///
-/// If a device seeds this default (having hired agents before ever approving
-/// a blueprint) and *later* approves one, [`retire_default_coordination_team`]
-/// removes it on the next load: two valid coordination teams would leave
-/// `owning_team_for_chat`'s fallback picking whichever sorts first, forever,
-/// which is exactly the failure mode this pair of functions exists to close.
-fn ensure_default_coordination_team(stored: &mut Vec<TeamRecord>, now: &str) -> bool {
-    if stored.iter().any(is_valid_coordination_team) {
+/// Never touches an existing record carrying this relay's id, even one edited
+/// into invalidity, for the same never-fight-a-customization reason built-ins
+/// elsewhere in this file are preserved rather than repaired.
+///
+/// A blank `relay_url` is not a community and seeds nothing.
+///
+/// Returns whether a record was pushed.
+pub(crate) fn ensure_coordination_team_for_relay(
+    stored: &mut Vec<TeamRecord>,
+    relay_url: &str,
+    now: &str,
+) -> bool {
+    let Some(id) = coordination_team_id_for_relay(relay_url) else {
         return false;
-    }
+    };
+    let pin = crate::relay::agent_boundary::canonical(relay_url);
+
     if stored
         .iter()
-        .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+        .any(|team| is_valid_coordination_team(team) && team_pinned_to_relay(team, &pin))
     {
+        return false;
+    }
+    if stored.iter().any(|team| team.id == id) {
         return false;
     }
 
     stored.push(TeamRecord {
-        id: DEFAULT_COORDINATION_TEAM_ID.to_string(),
+        id,
         name: "Company Coordination".to_string(),
-        description: Some(
-            "Owns chat work with no more specific team, until a company blueprint is approved."
-                .to_string(),
-        ),
+        description: Some(COORDINATION_TEAM_DESCRIPTION.to_string()),
         instructions: None,
-        persona_ids: vec!["builtin:fizz".to_string()],
-        lead_persona_id: Some("builtin:fizz".to_string()),
+        persona_ids: vec![COORDINATION_TEAM_LEAD.to_string()],
+        lead_persona_id: Some(COORDINATION_TEAM_LEAD.to_string()),
         is_builtin: true,
         source_dir: None,
         is_symlink: false,
         symlink_target: None,
         version: None,
-        relay_url: None,
+        relay_url: Some(pin),
         created_at: now.to_string(),
         updated_at: now.to_string(),
     });
     true
 }
 
-/// Retire the device-local default coordination team once a real one exists.
+/// Retire this client's own coordination team for a community once that
+/// community has a real one.
 ///
-/// The default's own description says its job ends "until a company
-/// blueprint is approved". Once blueprint approval seeds a real
-/// `company-team:{scope}:{company}:company-coordination` team
-/// (`company/seed.rs::seed_teams`), leaving the default in place is not
-/// neutral: `sort_teams` puts every `is_builtin` team ahead of every
-/// user-owned one, so the default (`is_builtin: true`) always sorts before
-/// the real team (`is_builtin: false`), and `owning_team_for_chat`'s
-/// fallback takes the first team whose id ends in the coordination slug. The
-/// real team would be valid, present, and permanently unreachable through
-/// that fallback.
+/// The seeded team's description says its job ends "until a company blueprint
+/// is approved". Once blueprint approval seeds a real
+/// `company-team:{scope}:{company}:company-coordination` team, leaving ours
+/// in place is not neutral: `sort_teams` puts every `is_builtin` team ahead
+/// of every user-owned one, so ours (`is_builtin: true`) always sorts before
+/// the real team (`is_builtin: false`), and `owning_team_for_chat`'s fallback
+/// takes the first team whose id ends in the coordination slug. The real team
+/// would be valid, present, and permanently unreachable through that
+/// fallback.
 ///
-/// Only removes the default itself, and only when some OTHER team already
-/// satisfies the coordination contract. This must never fire when the
-/// default is the only valid coordination team, or ambiguous chat work would
-/// have nowhere to land. Runs on every `load_teams()`, so it self-heals a
-/// device that seeded the default before ever approving a blueprint, without
-/// blueprint approval itself needing to know this default exists.
-fn retire_default_coordination_team(stored: &mut Vec<TeamRecord>) -> bool {
-    let real_team_exists = stored
+/// Retirement is per community, which is the whole point. Approving a
+/// blueprint on one community used to delete the single device-wide default
+/// that every OTHER community still depended on, leaving them with no team to
+/// own ambiguous chat work at all. So a built-in coordination team is removed
+/// only when a non-builtin valid coordination team pinned to that same relay
+/// exists.
+///
+/// An unpinned coordination team never retires anything: it belongs to no
+/// community in particular, so it cannot stand in for one.
+///
+/// Runs on every `load_teams`, so it self-heals a device that seeded a
+/// default before ever approving a blueprint, without blueprint approval
+/// itself needing to know these defaults exist.
+pub(crate) fn retire_per_relay_defaults(stored: &mut Vec<TeamRecord>) -> bool {
+    let superseded: HashSet<String> = stored
         .iter()
-        .any(|team| team.id != DEFAULT_COORDINATION_TEAM_ID && is_valid_coordination_team(team));
-    if !real_team_exists {
+        .filter(|team| !team.is_builtin && is_valid_coordination_team(team))
+        .filter_map(|team| team.relay_url.as_deref())
+        .map(crate::relay::agent_boundary::canonical)
+        .collect();
+    if superseded.is_empty() {
         return false;
     }
+
     let before = stored.len();
-    stored.retain(|team| team.id != DEFAULT_COORDINATION_TEAM_ID);
+    stored.retain(|team| {
+        let ours = team.is_builtin && is_coordination_team_id(&team.id);
+        let replaced = team
+            .relay_url
+            .as_deref()
+            .map(crate::relay::agent_boundary::canonical)
+            .is_some_and(|pin| superseded.contains(&pin));
+        !(ours && replaced)
+    });
     stored.len() != before
+}
+
+/// Split the pre-migration device-wide coordination record into one record
+/// per community, then delete it.
+///
+/// The record at [`DEFAULT_COORDINATION_TEAM_ID`] accumulated a member for
+/// every persona hired on the device, on any relay, because neither the hire
+/// hook nor the launch backfill consulted an agent's relay pin. So a
+/// community's team listed people who only ever existed in a different
+/// community, and assigning work in one community offered agents from
+/// another.
+///
+/// Which community each member belongs to is recoverable from `agents`: a
+/// managed agent record carries the relay it was created on. For each relay
+/// that owns at least one agent this creates (via
+/// [`ensure_coordination_team_for_relay`]) a pinned team whose members are
+/// the legacy members that community can actually see:
+///
+/// - personas with an agent on that relay,
+/// - personas whose agent has a blank relay pin, which
+///   `agent_belongs_to_workspace` reads as unassigned and therefore visible
+///   everywhere,
+/// - personas with no agent at all, which `definition_in_workspace` gives to
+///   whoever is looking because no community has a better claim and hiding
+///   one everywhere would leave it undeletable.
+///
+/// `builtin:fizz` leads and belongs to every split team. The legacy lead is
+/// kept where it survived into that community's membership, and the legacy
+/// description and instructions are carried onto every split team so an
+/// edited record is not silently reset.
+///
+/// With no relay-pinned agent to learn from there is nothing to split by, so
+/// a pristine legacy record is simply removed (the per-relay ensure calls
+/// will seed what each community needs) and a customized one is left alone
+/// rather than having its membership guessed at or thrown away.
+///
+/// The legacy id is deliberately not preserved on any split team. `KIND_TEAM`
+/// events already published under it stay on each relay, so Tasks minted
+/// against it keep resolving in `company_broker::load_team_refs`; keeping the
+/// id locally as well would just reintroduce one record shared by every
+/// community.
+///
+/// Idempotent: with the legacy record gone, this returns false.
+pub(crate) fn split_legacy_coordination_team(
+    stored: &mut Vec<TeamRecord>,
+    agents: &[ManagedAgentRecord],
+    now: &str,
+) -> bool {
+    let Some(legacy) = stored
+        .iter()
+        .find(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+        .cloned()
+    else {
+        return false;
+    };
+
+    // A Vec rather than a map, keyed in first-seen order, so the split pushes
+    // its records deterministically.
+    let mut personas_on_relay: Vec<(String, HashSet<&str>)> = Vec::new();
+    let mut unassigned_personas: HashSet<&str> = HashSet::new();
+    let mut personas_with_an_agent: HashSet<&str> = HashSet::new();
+
+    for agent in agents {
+        let Some(persona_id) = agent.persona_id.as_deref() else {
+            continue;
+        };
+        personas_with_an_agent.insert(persona_id);
+        let pin = agent.relay_url.trim();
+        if pin.is_empty() {
+            unassigned_personas.insert(persona_id);
+            continue;
+        }
+        let relay = crate::relay::agent_boundary::canonical(pin);
+        match personas_on_relay
+            .iter_mut()
+            .find(|(known, _)| *known == relay)
+        {
+            Some((_, members)) => {
+                members.insert(persona_id);
+            }
+            None => personas_on_relay.push((relay, HashSet::from([persona_id]))),
+        }
+    }
+
+    if personas_on_relay.is_empty() {
+        let pristine = legacy
+            .persona_ids
+            .iter()
+            .all(|member| member == COORDINATION_TEAM_LEAD);
+        if !pristine {
+            return false;
+        }
+        stored.retain(|team| team.id != DEFAULT_COORDINATION_TEAM_ID);
+        return true;
+    }
+
+    for (relay, on_this_relay) in &personas_on_relay {
+        let Some(id) = coordination_team_id_for_relay(relay) else {
+            continue;
+        };
+        ensure_coordination_team_for_relay(stored, relay, now);
+
+        let mut members: Vec<String> = Vec::new();
+        for member in &legacy.persona_ids {
+            let visible_here = on_this_relay.contains(member.as_str())
+                || unassigned_personas.contains(member.as_str())
+                || !personas_with_an_agent.contains(member.as_str());
+            if visible_here && !members.contains(member) {
+                members.push(member.clone());
+            }
+        }
+        if !members
+            .iter()
+            .any(|member| member == COORDINATION_TEAM_LEAD)
+        {
+            members.push(COORDINATION_TEAM_LEAD.to_string());
+        }
+
+        let lead = legacy
+            .lead_persona_id
+            .as_deref()
+            .filter(|lead| members.iter().any(|member| member == lead))
+            .unwrap_or(COORDINATION_TEAM_LEAD)
+            .to_string();
+
+        // Only ever writes the record this client owns for that community. A
+        // blueprint team already covering the relay made the ensure above a
+        // no-op, and it is the real team: it must not be overwritten with a
+        // legacy membership list.
+        if let Some(team) = stored.iter_mut().find(|team| team.id == id) {
+            team.persona_ids = members;
+            team.lead_persona_id = Some(lead);
+            team.description = legacy.description.clone();
+            team.instructions = legacy.instructions.clone();
+            team.updated_at = now.to_string();
+        }
+    }
+
+    stored.retain(|team| team.id != DEFAULT_COORDINATION_TEAM_ID);
+    true
 }
 
 /// Add `persona_id` to the coordination team, if one exists and does not
@@ -493,6 +713,35 @@ pub fn team_references_persona(team: &TeamRecord, persona_id: &str) -> bool {
             .any(|candidate| candidate == persona_id)
 }
 
+/// The managed agent instances stored alongside `teams_path`, best-effort.
+///
+/// [`merge_teams`] needs each agent's relay pin to split the pre-migration
+/// device-wide coordination record, and the read-only loader is handed a path
+/// rather than an `AppHandle`, so the sibling store is read directly. Both
+/// files live in `managed_agents_base_dir`.
+///
+/// Every failure yields an empty list rather than an error. This loader's
+/// contract is that it reads the team store and writes nothing, so it must
+/// not start failing on an unrelated file; and with no agents the split
+/// leaves a customized legacy record exactly as it found it, which is the
+/// same conservative outcome as not knowing. `load_managed_agents` still
+/// surfaces the parse error on every path that actually owns that store.
+fn agents_beside_teams_store(teams_path: &std::path::Path) -> Vec<ManagedAgentRecord> {
+    let Some(dir) = teams_path.parent() else {
+        return Vec::new();
+    };
+    let Ok(content) = fs::read_to_string(dir.join("managed-agents.json")) else {
+        return Vec::new();
+    };
+    let Ok(mut records) = serde_json::from_str::<Vec<ManagedAgentRecord>>(&content) else {
+        return Vec::new();
+    };
+    // Keyed instances only, matching `load_managed_agents`: a key-less record
+    // is a definition and carries no community of its own.
+    records.retain(|record| !record.pubkey.is_empty());
+    records
+}
+
 /// Read and merge built-in teams without persisting changes.
 ///
 /// Returns the merged, sorted team list. No file is written — callers that
@@ -510,7 +759,8 @@ pub(crate) fn load_teams_readonly(path: &std::path::Path) -> Result<Vec<TeamReco
         Vec::new()
     };
 
-    let (mut records, _changed) = merge_teams(records, &now);
+    let agents = agents_beside_teams_store(path);
+    let (mut records, _changed) = merge_teams(records, &agents, &now);
     sort_teams(&mut records);
     Ok(records)
 }
@@ -528,7 +778,8 @@ pub fn load_teams(app: &AppHandle) -> Result<Vec<TeamRecord>, String> {
         Vec::new()
     };
 
-    let (mut records, changed) = merge_teams(records, &now);
+    let agents = crate::managed_agents::load_managed_agents(app)?;
+    let (mut records, changed) = merge_teams(records, &agents, &now);
     sort_teams(&mut records);
 
     if changed || !path.exists() {
@@ -702,3 +953,7 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<Vec<St
 #[cfg(test)]
 #[path = "teams_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "coordination_tests.rs"]
+mod coordination_tests;
