@@ -3429,6 +3429,13 @@ function mockInitiativeRecord(config: CompanyWorkContextConfig) {
     expectedCostUsd: null,
     sourceChannelId: "welcome",
     sourceEventId: null,
+    // The relay writes these three on every head it has authored since the
+    // fields existed, and the desktop shape check matches on an exact field
+    // set. Omitting them here would have mock mode parse a head no live relay
+    // produces, so a break in the real shape would pass every e2e run.
+    templateId: null,
+    templateVersion: null,
+    cohortId: null,
     createdAt: 1_780_000_000,
     updatedAt: 1_780_000_000,
   };

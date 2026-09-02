@@ -1,6 +1,7 @@
 import * as React from "react";
 import { LayoutGrid, Plus } from "lucide-react";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import type { CompanyTask, Initiative } from "@/features/company/contracts";
 import {
   groupWorkRows,
@@ -118,6 +119,7 @@ function LoadingState() {
 }
 
 function NoInitiativeSelected({ initiatives }: { initiatives: Initiative[] }) {
+  const { goWorkInitiatives } = useAppNavigation();
   return (
     <div className="rounded-2xl border border-dashed border-border/70 px-5 py-12 text-center">
       <LayoutGrid
@@ -128,9 +130,19 @@ function NoInitiativeSelected({ initiatives }: { initiatives: Initiative[] }) {
         Pick an initiative to board
       </h2>
       <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-        The board shows one initiative's tasks as a stage funnel. Choose one
-        from the sidebar to see it.
+        The board shows one initiative's tasks as a stage funnel. Choose one on
+        the Initiatives tab to see it.
       </p>
+      <Button
+        className="mt-4"
+        data-testid="board-open-initiatives"
+        onClick={() => {
+          void goWorkInitiatives();
+        }}
+        variant="outline"
+      >
+        Browse initiatives
+      </Button>
       {initiatives.length > 0 ? (
         <p
           className="mt-3 text-xs text-muted-foreground"

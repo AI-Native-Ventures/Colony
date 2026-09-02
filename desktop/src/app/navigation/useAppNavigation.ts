@@ -270,6 +270,10 @@ export function useAppNavigation() {
       commitNavigation(
         {
           to: "/work",
+          // Named rather than left absent: the Tasks page's tab bar reads
+          // this param, and a link that omits it lands on the same pane
+          // without saying which one it meant.
+          search: { view: "list" },
         },
         behavior,
       ),
@@ -296,6 +300,18 @@ export function useAppNavigation() {
         {
           to: "/work",
           search: { view: "queue" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goWorkInitiatives = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+          search: { view: "initiatives" },
         },
         behavior,
       ),
@@ -509,6 +525,7 @@ export function useAppNavigation() {
     goWorkflow,
     goWork,
     goWorkBoard,
+    goWorkInitiatives,
     goWorkQueue,
     goWorkflows,
     openSearchHit,
