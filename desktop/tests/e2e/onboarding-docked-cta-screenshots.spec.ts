@@ -92,7 +92,7 @@ test("machine onboarding: simple entry and account recovery", async ({
 });
 
 /**
- * Every window the key-import screen has to survive. 1280x720 is
+ * Every window the key-import and unlock screens have to survive. 1280x720 is
  * the smallest ordinary laptop window; 800x500 is the narrow-and-short corner
  * where the canvas grid has to stack. Both used to lay the card out below the
  * fold, and neither was covered: the old assertion only compared the input
@@ -126,7 +126,9 @@ function expectInsideViewport(
 for (const viewport of MACHINE_VIEWPORTS) {
   const size = `${viewport.width}x${viewport.height}`;
 
-  test(`machine key import stays inside a ${size} window`, async ({ page }) => {
+  test(`machine key import and unlock stay inside a ${size} window`, async ({
+    page,
+  }) => {
     // Walk in at a comfortable size and resize once the key-import screen is
     // up. The landing screen's own action row collides with the docked CTA
     // below roughly 560px of height, so navigating through it at 800x500 fails
@@ -203,6 +205,36 @@ for (const viewport of MACHINE_VIEWPORTS) {
       // One column: the panel stacks under the headline instead of squeezing
       // beside it.
       expect(panelBox?.y ?? 0).toBeGreaterThan(layout.headingBottom);
+    }
+
+    // Unlock: pasting an encrypted backup swaps the same screen to the
+    // passphrase stage, which had been pushing its heading off the top of the
+    // window and collapsing the timeline to a sliver against the right edge.
+    await page.getByTestId("nostr-import-nsec-input").fill(NCRYPTSEC);
+    await expect(
+      page.getByRole("heading", { name: "Unlock your account" }),
+    ).toBeVisible();
+    await waitForAnimations(page);
+
+    const unlockHeadingBox = await page
+      .getByRole("heading", { name: "Unlock your account" })
+      .boundingBox();
+    expect(unlockHeadingBox?.y ?? -1).toBeGreaterThanOrEqual(0);
+    expectInsideViewport("unlock heading", unlockHeadingBox, viewport);
+
+    const passphraseBox = await page
+      .getByTestId("nostr-import-passphrase")
+      .boundingBox();
+    expectInsideViewport("passphrase input", passphraseBox, viewport);
+    expect(passphraseBox?.width ?? 0).toBeGreaterThanOrEqual(360);
+
+    // The decorative timeline hides itself under 40rem of height, so it is
+    // only measurable on the taller window.
+    const timeline = page.getByTestId("backup-password-timeline");
+    if (await timeline.isVisible()) {
+      const timelineBox = await timeline.boundingBox();
+      expectInsideViewport("password timeline", timelineBox, viewport);
+      expect(timelineBox?.width ?? 0).toBeGreaterThanOrEqual(360);
     }
   });
 }
