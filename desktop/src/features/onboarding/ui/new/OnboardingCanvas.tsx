@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 import type { OnboardingStep, OnboardingTrack } from "../../flow/steps";
-import { ONBOARDING_STEPS } from "../../flow/steps";
 import { AntScatter } from "./AntScatter";
 import { canvasFor } from "./canvasTheme";
 import "./onboarding-canvas.css";
@@ -16,6 +15,14 @@ import "./onboarding-screens.css";
 type Props = {
   step: OnboardingStep;
   track: OnboardingTrack;
+  /**
+   * Where this screen sits among the ones this founder will see, and how many
+   * that is. Both come from `visibleSteps` in flow/steps.ts: the canvas counts
+   * nothing itself, because the flow is the only thing that knows which
+   * screens the answers have taken off the path.
+   */
+  index: number;
+  total: number;
   children: ReactNode;
 };
 
@@ -56,9 +63,14 @@ function useHasContentBelow(
   return hasContentBelow;
 }
 
-export function OnboardingCanvas({ step, track, children }: Props) {
+export function OnboardingCanvas({
+  step,
+  track,
+  index,
+  total,
+  children,
+}: Props) {
   const theme = canvasFor(step, track);
-  const index = ONBOARDING_STEPS.indexOf(step);
   const stageRef = useRef<HTMLDivElement>(null);
   const hasContentBelow = useHasContentBelow(stageRef, step);
 
@@ -82,8 +94,8 @@ export function OnboardingCanvas({ step, track, children }: Props) {
     >
       <div className="onb-grain" />
       <AntScatter hue={theme.hue} />
-      <p className="onb-step">
-        {String(index + 1).padStart(2, "0")} / {ONBOARDING_STEPS.length}
+      <p className="onb-step" data-testid="onboarding-step-counter">
+        {String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}
       </p>
       <div className="onb-stage" ref={stageRef}>
         {children}
