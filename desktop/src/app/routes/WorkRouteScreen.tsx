@@ -40,6 +40,22 @@ import { workView } from "./workSearch";
 
 const NO_EVENTS: RelayEvent[] = [];
 
+/**
+ * The one Error a company query can be in, from either of the two places it
+ * can fail: a thrown transport failure React Query holds, or a refusal the
+ * repository returns as data.
+ */
+function companyQueryError(query: {
+  error: unknown;
+  data?: { ok: boolean; message?: string } | undefined;
+}): Error | null {
+  if (query.error instanceof Error) return query.error;
+  if (query.data && !query.data.ok) {
+    return new Error(query.data.message ?? "This read could not be completed.");
+  }
+  return null;
+}
+
 export function WorkRouteScreen() {
   const search = WorkRoute.useSearch();
   const view = workView(search);
@@ -81,17 +97,19 @@ export function WorkRouteScreen() {
     [tasks, runEvents],
   );
 
-  const error =
-    tasksQuery.error instanceof Error
-      ? tasksQuery.error
-      : tasksQuery.data && !tasksQuery.data.ok
-        ? new Error(tasksQuery.data.message)
-        : null;
+  const error = companyQueryError(tasksQuery);
 
   const initiatives = initiativesQuery.data?.ok
     ? initiativesQuery.data.value
     : [];
   const isLoading = communityId !== "" && tasksQuery.isLoading;
+  // The Initiatives tab reads a different query from the other three panes,
+  // and it fails on its own terms: a relay that answers tasks can still
+  // refuse the initiative read or hand back a head this build cannot parse.
+  // Handing it the tasks query's state rendered every one of those as "No
+  // initiatives yet".
+  const initiativesError = companyQueryError(initiativesQuery);
+  const initiativesLoading = communityId !== "" && initiativesQuery.isLoading;
 
   // Dependencies can reach across initiatives, so the blocked-by count
   // resolves against every fetched task, not just the board's narrowed
@@ -247,8 +265,8 @@ export function WorkRouteScreen() {
         <InitiativesScreen
           channels={memberChannels}
           communityId={communityId}
-          error={error}
-          isLoading={isLoading}
+          error={initiativesError}
+          isLoading={initiativesLoading}
           onCreated={handleInitiativeCreated}
           onOpenInitiative={handleOpenInitiative}
           rows={initiativeListRows}

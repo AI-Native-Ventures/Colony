@@ -135,6 +135,43 @@ test("tabs switch views and update the url", async ({ page }) => {
   await expect(page.getByTestId("task-list-page")).toBeVisible();
 });
 
+test("switching tabs and back keeps the board scoped to its initiative", async ({
+  page,
+}) => {
+  await installMockBridge(page, { companyWorkContext: SEEDED_LIST });
+  const scoped = new RegExp(
+    `initiativeId=${encodeURIComponent(INITIATIVE_ID)}`,
+  );
+  await page.goto(
+    `/#/work?view=board&initiativeId=${encodeURIComponent(INITIATIVE_ID)}`,
+  );
+  await expect(page.getByTestId("task-board-page")).toBeVisible();
+  // The board titles itself with the initiative it resolved and drops the
+  // "pick one" prompt, which is what proves the scope is live rather than
+  // merely present in the URL.
+  await expect(
+    page.getByRole("heading", { name: "Launch outbound" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("board-open-initiatives")).toHaveCount(0);
+
+  // Every tab carries the scope, so it survives an arbitrary detour rather
+  // than only a single hop out and back.
+  await page.getByTestId("work-top-tab-list").click();
+  await expect(page).toHaveURL(scoped);
+  await page.getByTestId("work-top-tab-queue").click();
+  await expect(page).toHaveURL(scoped);
+  await page.getByTestId("work-top-tab-initiatives").click();
+  await expect(page).toHaveURL(scoped);
+
+  await page.getByTestId("work-top-tab-board").click();
+  await expect(page).toHaveURL(scoped);
+  await expect(page.getByTestId("task-board-page")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Launch outbound" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("board-open-initiatives")).toHaveCount(0);
+});
+
 test("the board's empty prompt sends people to the Initiatives tab", async ({
   page,
 }) => {
@@ -223,6 +260,12 @@ test("creating an initiative reaches the backend and lands in the list", async (
 
   const dialog = page.getByTestId("new-initiative-dialog");
   await expect(dialog).toBeVisible();
+  // The dialog focuses its title field on a 50ms timer. Filling before that
+  // lands lets the timer move the caret between Playwright's focus and its
+  // insert, so the next field's text is inserted into the title instead:
+  // seen once in three as a title of "Open a Cape Town deskSomewhere for the
+  // two of them to sit." Waiting for the focus makes the timer fire first.
+  await expect(dialog.getByTestId("new-initiative-title")).toBeFocused();
 
   await dialog
     .getByTestId("new-initiative-title")
@@ -302,6 +345,7 @@ test("a create the relay refuses keeps the dialog open and says so", async ({
   await page.getByTestId("initiatives-new").click();
   const dialog = page.getByTestId("new-initiative-dialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("new-initiative-title")).toBeFocused();
 
   await dialog.getByTestId("new-initiative-title").fill("Buy a second pager");
   await dialog.getByTestId("new-initiative-channel").selectOption({ index: 1 });
@@ -318,4 +362,23 @@ test("a create the relay refuses keeps the dialog open and says so", async ({
     "Buy a second pager",
   );
   await expect(page.getByTestId("initiative-row")).toHaveCount(2);
+});
+
+test("an initiative read the relay refuses is shown as an error, not as an empty list", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    // Tasks still answer. Only the kind 30180 read is refused, which is the
+    // asymmetry that made this invisible: the tab was handed the tasks
+    // query's state, so a refused initiative read rendered as "none yet".
+    companyWorkContext: { ...SEEDED_LIST, refuseInitiativeRead: true },
+  });
+  await page.goto("/#/work?view=initiatives");
+
+  await expect(page.getByTestId("initiatives-error")).toBeVisible();
+  await expect(page.getByTestId("initiatives-empty")).toHaveCount(0);
+  await expect(page.getByTestId("initiative-row")).toHaveCount(0);
+  // The create affordance lives in the header, not in the empty state, so it
+  // is still reachable when the list itself could not be read.
+  await expect(page.getByTestId("initiatives-new")).toBeVisible();
 });

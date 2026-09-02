@@ -260,6 +260,8 @@ type MockBridgeOptions = {
       initiativeId?: string | null;
       status?: string;
     }>;
+    /** Refuse the kind 30180 read, so the Initiatives tab fails on its own. */
+    refuseInitiativeRead?: boolean;
     taskId: string;
     owningTeamId: string;
     qaPersonaId: string;

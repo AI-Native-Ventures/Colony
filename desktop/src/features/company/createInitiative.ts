@@ -115,10 +115,15 @@ export function createInitiativeCreator(
       throw new Error(outcome.message);
     }
 
-    // The receipt already confirms the write, so a read that comes up empty
-    // here is the relay's index lagging it rather than the initiative being
+    // The receipt already confirms the write, so a head that is not there yet
+    // is the relay's index lagging it rather than the initiative being
     // absent. Returning without waiting would refresh the list before the new
     // row exists in it, which reads as a create that silently did nothing.
+    //
+    // Only `missing-head` is that lag. A head that will not parse, a relay
+    // with no identity, and a read cancelled by a community switch are all
+    // answers that cannot change within the budget, so retrying them spends
+    // it and then reports the one thing they are not.
     const attempts = dependencies.readBackAttempts ?? DEFAULT_READBACK_ATTEMPTS;
     const intervalMs =
       dependencies.readBackIntervalMs ?? DEFAULT_READBACK_INTERVAL_MS;
@@ -127,6 +132,9 @@ export function createInitiativeCreator(
       const found = await dependencies.loadInitiative(planned.initiativeId);
       if (found.ok) {
         return found.value;
+      }
+      if (found.code !== "missing-head") {
+        throw new Error(found.message);
       }
       if (attempt + 1 < attempts) {
         await wait(intervalMs);

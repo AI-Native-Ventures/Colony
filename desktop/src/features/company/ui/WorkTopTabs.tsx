@@ -13,7 +13,11 @@ export function WorkTopTabs({
   initiativeId,
   view,
 }: {
-  /** Carried across a switch back to Board so the board keeps its scope. */
+  /**
+   * Carried by every tab, not just Board. Only the board reads it, but a
+   * switch to Tasks and back would otherwise drop it and land on an unscoped
+   * board.
+   */
   initiativeId: string | undefined;
   view: WorkView;
 }) {
@@ -28,11 +32,11 @@ export function WorkTopTabs({
           if (next === "board") {
             void goWorkBoard(initiativeId);
           } else if (next === "queue") {
-            void goWorkQueue();
+            void goWorkQueue(initiativeId);
           } else if (next === "initiatives") {
-            void goWorkInitiatives();
+            void goWorkInitiatives(initiativeId);
           } else {
-            void goWork();
+            void goWork(initiativeId);
           }
         }}
         value={view}

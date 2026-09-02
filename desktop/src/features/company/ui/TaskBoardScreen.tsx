@@ -206,7 +206,7 @@ export function TaskBoardScreen({
           description={
             initiative
               ? "Where this initiative's tasks are stuck, one column per stage."
-              : "Pick an initiative from the sidebar to see its board."
+              : "Pick an initiative on the Initiatives tab to see its board."
           }
           title={initiative ? initiative.title : "Board"}
         />

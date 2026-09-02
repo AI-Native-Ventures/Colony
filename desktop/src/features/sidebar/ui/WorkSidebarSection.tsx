@@ -72,6 +72,9 @@ export function WorkSidebarSection({
   const search = location.search as { view?: string; initiativeId?: string };
   const isBoardActive = isActive && search.view === "board";
   const isQueueActive = isActive && search.view === "queue";
+  // The Tasks page grew an Initiatives tab, which this section has no row
+  // for. Without naming it, "All tasks" lit up for it as the fall-through.
+  const isInitiativesActive = isActive && search.view === "initiatives";
   const activeInitiativeId = isBoardActive
     ? (search.initiativeId ?? null)
     : null;
@@ -128,7 +131,12 @@ export function WorkSidebarSection({
               <SidebarMenuButton
                 className="data-[active=true]:font-normal"
                 data-testid="open-work-view"
-                isActive={isActive && !isBoardActive && !isQueueActive}
+                isActive={
+                  isActive &&
+                  !isBoardActive &&
+                  !isQueueActive &&
+                  !isInitiativesActive
+                }
                 onClick={onSelect}
                 tooltip="All tasks"
                 type="button"

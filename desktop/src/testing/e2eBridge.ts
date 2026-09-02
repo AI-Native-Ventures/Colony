@@ -3308,6 +3308,12 @@ export type CompanyWorkContextConfig = {
    * send creates, so a per-initiative count above one has to be seeded.
    */
   tasks?: MockCompanyTaskSeed[];
+  /**
+   * Refuse the initiative read with a CLOSED, the way a relay refuses a
+   * filter it will not answer. The Initiatives tab is the only surface that
+   * asks for kind 30180 on its own, so this fails that pane and nothing else.
+   */
+  refuseInitiativeRead?: boolean;
   /** The Task the send flow will create and the message will reference. */
   taskId: string;
   owningTeamId: string;
@@ -3369,6 +3375,8 @@ const MOCK_RELAY_SELF_PUBKEY = getPublicKey(MOCK_RELAY_SECRET);
 const mockCompanyHeads: RelayEvent[] = [];
 const mockCompanyReceipts: RelayEvent[] = [];
 const mockCompanyActions: RelayEvent[] = [];
+/** Set from the seeded config, read by the REQ handler for kind 30180. */
+let mockRefuseInitiativeRead = false;
 /**
  * What each `create_initiative` request token has already been answered with.
  *
@@ -3544,6 +3552,7 @@ function seedMockCompanyRecords(
   mockCompanyReceipts.length = 0;
   mockCompanyActions.length = 0;
   mockUserInitiativeRequests.clear();
+  mockRefuseInitiativeRead = config?.refuseInitiativeRead ?? false;
 
   if (config) {
     const company = mockCompanyRecord(config);
@@ -11049,6 +11058,21 @@ function sendToMockSocket(args: {
       filter.kinds?.length &&
       filter.kinds.every((kind) => COMPANY_RECORD_KINDS.includes(kind))
     ) {
+      // A history subscription rejects on CLOSED, which the company
+      // repository reports as `unavailable`, which the hook rethrows so React
+      // Query holds it as an error. That is the shape a real refusal takes.
+      if (
+        mockRefuseInitiativeRead &&
+        filter.kinds.length === 1 &&
+        filter.kinds[0] === 30180
+      ) {
+        sendWsText(socket.handler, [
+          "CLOSED",
+          subId,
+          "error: this relay will not answer initiative reads",
+        ]);
+        return;
+      }
       for (const event of filterMockCompanyEvents(filter)) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
       }

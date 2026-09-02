@@ -82,7 +82,12 @@ export function InitiativesScreen({
 
         <div className="mt-6 space-y-3">
           {isLoading ? (
-            <div aria-busy="true" className="space-y-3" role="status">
+            <div
+              aria-busy="true"
+              className="space-y-3"
+              data-testid="initiatives-loading"
+              role="status"
+            >
               {[0, 1, 2].map((index) => (
                 <Skeleton className="h-16 w-full rounded-xl" key={index} />
               ))}
