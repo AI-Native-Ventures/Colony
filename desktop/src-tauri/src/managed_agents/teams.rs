@@ -235,16 +235,24 @@ pub fn team_references_persona(team: &TeamRecord, persona_id: &str) -> bool {
 /// The managed agent instances stored alongside `teams_path`, best-effort.
 ///
 /// [`merge_teams`] needs each agent's relay pin to split the pre-migration
-/// device-wide coordination record, and the read-only loader is handed a path
-/// rather than an `AppHandle`, so the sibling store is read directly. Both
-/// files live in `managed_agents_base_dir`.
+/// device-wide coordination record. Both files live in
+/// `managed_agents_base_dir`, so the sibling store is read directly.
 ///
-/// Every failure yields an empty list rather than an error. This loader's
-/// contract is that it reads the team store and writes nothing, so it must
-/// not start failing on an unrelated file; and with no agents the split
-/// leaves a customized legacy record exactly as it found it, which is the
-/// same conservative outcome as not knowing. `load_managed_agents` still
-/// surfaces the parse error on every path that actually owns that store.
+/// Deliberately NOT `load_managed_agents`, on either loader. That function
+/// hydrates every record's private key, which is one OS keychain read per
+/// agent plus an opportunistic write-verify-strip for any key still inline.
+/// Loading the team list is on the path of `list_teams`, `create_team`,
+/// `update_team`, `company_team_refs` (every chat send), `advance_initiative`,
+/// agent spawn, and the persona list, none of which want a key. The split
+/// needs two plain fields, `persona_id` and `relay_url`.
+///
+/// Every failure yields an empty list rather than an error. Loading teams
+/// must not start failing because an unrelated file is malformed, and it must
+/// not write that file's `.invalid` backup as a side effect of a team read.
+/// With no agents the split leaves a customized legacy record exactly as it
+/// found it, which is the same conservative outcome as not knowing.
+/// `load_managed_agents` still surfaces the parse error, and preserves the
+/// evidence, on every path that actually owns that store.
 fn agents_beside_teams_store(teams_path: &std::path::Path) -> Vec<ManagedAgentRecord> {
     let Some(dir) = teams_path.parent() else {
         return Vec::new();
@@ -297,7 +305,7 @@ pub fn load_teams(app: &AppHandle) -> Result<Vec<TeamRecord>, String> {
         Vec::new()
     };
 
-    let agents = crate::managed_agents::load_managed_agents(app)?;
+    let agents = agents_beside_teams_store(&path);
     let (mut records, changed) = merge_teams(records, &agents, &now);
     sort_teams(&mut records);
 

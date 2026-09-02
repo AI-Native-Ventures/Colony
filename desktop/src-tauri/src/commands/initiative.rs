@@ -23,7 +23,7 @@ use crate::{
     app_state::AppState,
     company::transaction::is_event_id,
     managed_agents::{
-        is_valid_coordination_team, load_personas, load_teams, save_personas, save_teams,
+        enrol_persona_for_relay, load_personas, load_teams, save_personas, save_teams,
         storage::{load_managed_agents, save_managed_agents},
         AgentDefinition, ManagedAgentRecord, TeamRecord,
     },
@@ -231,7 +231,8 @@ struct PersonaBackfillOutcome {
 /// none gets a persona minted from its own identity — never a shared builtin
 /// like `builtin:fizz`, which would misattribute its work to a different
 /// employee — linked onto the record, and enrolled as a member of the
-/// coordination team. Membership matters, not just a coordination team
+/// coordination team for `relay_url`, the community this send arrived in.
+/// Membership matters, not just a coordination team
 /// existing: `owning_team_for_chat`'s ambiguous-work fallback would resolve
 /// even without it (see `fresh_install_has_a_coordination_team_for_ambiguous_chat_work`
 /// below), but only a real member gets `assignee_persona_ids` populated on
@@ -243,8 +244,9 @@ struct PersonaBackfillOutcome {
 fn resolve_chat_agent_persona(
     agents: &mut [ManagedAgentRecord],
     personas: &mut Vec<AgentDefinition>,
-    teams: &mut [TeamRecord],
+    teams: &mut Vec<TeamRecord>,
     pubkey_normalized: &str,
+    relay_url: &str,
     now: &str,
 ) -> Result<PersonaBackfillOutcome, String> {
     let Some(agent) = agents
@@ -305,20 +307,13 @@ fn resolve_chat_agent_persona(
     agent.persona_id = Some(persona_id.clone());
     agent.updated_at = now.to_string();
 
-    let teams_changed = match teams
-        .iter_mut()
-        .find(|team| is_valid_coordination_team(team))
-    {
-        Some(team) if !team.persona_ids.iter().any(|member| member == &persona_id) => {
-            team.persona_ids.push(persona_id.clone());
-            team.updated_at = now.to_string();
-            true
-        }
-        // Already a member, or (should not happen once `load_teams` has run
-        // at least once) no valid coordination team at all: best-effort, not
-        // an error — mirrors `ensure_persona_in_coordination_team`.
-        _ => false,
-    };
+    // One `teams.json` serves every community this device has joined, so
+    // "the" coordination team is not a device-wide thing to look up. The
+    // repaired persona joins the team of the community this send arrived in,
+    // and seeds it when that community has none: enrolling onto whichever
+    // coordination team happened to sort first is how the pre-migration
+    // record accumulated members no community could actually see.
+    let teams_changed = enrol_persona_for_relay(teams, &persona_id, relay_url, now);
 
     Ok(PersonaBackfillOutcome {
         persona_id,
@@ -405,6 +400,7 @@ pub async fn ensure_chat_task(
     // message again. `resolve_chat_agent_persona` repairs the record in place
     // the first time this runs for it; a repeat call is a cheap read.
     let normalized = agent_pubkey.trim().to_lowercase();
+    let relay_url = crate::relay::relay_ws_url_with_override(&state);
     let agent_persona_id = {
         let _store_guard = state
             .managed_agents_store_lock
@@ -416,8 +412,14 @@ pub async fn ensure_chat_task(
         let mut teams = load_teams(&app)?;
         let now = crate::util::now_iso();
 
-        let outcome =
-            resolve_chat_agent_persona(&mut agents, &mut personas, &mut teams, &normalized, &now)?;
+        let outcome = resolve_chat_agent_persona(
+            &mut agents,
+            &mut personas,
+            &mut teams,
+            &normalized,
+            &relay_url,
+            &now,
+        )?;
 
         if outcome.agents_changed {
             save_managed_agents(&app, &agents)?;

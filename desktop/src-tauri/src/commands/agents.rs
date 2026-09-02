@@ -6,13 +6,14 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, current_instance_id, discover_provider_candidates,
-        ensure_persona_is_active, find_managed_agent_mut, load_managed_agents, load_personas,
-        load_teams, managed_agent_avatar_url, normalize_agent_args, provider_deploy,
-        resolve_provider_binary, save_managed_agents, stop_managed_agent_process,
-        stop_managed_agent_workspace_pair, sync_managed_agent_processes, try_regenerate_nest,
-        validate_provider_config, BackendKind, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentSummary, RelayMeshConfig, DEFAULT_ACP_COMMAND,
-        DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        enrol_persona_in_coordination_team_after_hire, ensure_persona_is_active,
+        find_managed_agent_mut, load_managed_agents, load_personas, load_teams,
+        managed_agent_avatar_url, normalize_agent_args, provider_deploy, resolve_provider_binary,
+        save_managed_agents, stop_managed_agent_process, stop_managed_agent_workspace_pair,
+        sync_managed_agent_processes, try_regenerate_nest, validate_provider_config, BackendKind,
+        CreateManagedAgentRequest, CreateManagedAgentResponse, ManagedAgentSummary,
+        RelayMeshConfig, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
     relay::{
         creation_relay_pin, effective_agent_relay_url, relay_ws_url_with_override,
@@ -761,11 +762,10 @@ pub(crate) async fn create_managed_agent_with_creation_request(
 
         save_managed_agents(&app, &records)?;
 
-        // Best-effort hire hook: enrol the persona in the coordination team.
-        // See `enrol_persona_in_coordination_team_after_hire` for why this
-        // must never block agent creation.
+        // Best-effort hire hook, which must never block agent creation: put
+        // the persona on the coordination team of the community hired into.
         if let Some(persona_id) = requested_persona_id.as_deref() {
-            crate::managed_agents::enrol_persona_in_coordination_team_after_hire(&app, persona_id);
+            enrol_persona_in_coordination_team_after_hire(&app, persona_id, &resolved_relay_url);
         }
 
         let record = records

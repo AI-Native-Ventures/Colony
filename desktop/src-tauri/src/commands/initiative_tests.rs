@@ -6,10 +6,20 @@ use super::{
     validated_thread_root, InitiativeDraft,
 };
 use crate::managed_agents::{
-    AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo, TeamRecord,
+    coordination_team_id_for_relay, ensure_coordination_team_for_relay, AgentDefinition,
+    BackendKind, ManagedAgentRecord, RespondTo, TeamRecord,
 };
 use buzz_sdk_pkg::implicit_task::owning_team_for_chat;
 use nostr::JsonUtil;
+
+/// The community a chat send arrives in. Every fixture below pins to it,
+/// because a coordination team belongs to one community now and a team
+/// pinned nowhere belongs to none.
+const CHAT_RELAY: &str = "wss://chat.example";
+
+fn chat_team_id() -> String {
+    coordination_team_id_for_relay(CHAT_RELAY).expect("a non-blank relay mints an id")
+}
 
 fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
@@ -77,7 +87,7 @@ fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
 
 fn coordination_team() -> TeamRecord {
     TeamRecord {
-        id: "builtin-team:company-coordination".to_string(),
+        id: chat_team_id(),
         name: "Company Coordination".to_string(),
         description: None,
         instructions: None,
@@ -88,7 +98,7 @@ fn coordination_team() -> TeamRecord {
         is_symlink: false,
         symlink_target: None,
         version: None,
-        relay_url: None,
+        relay_url: Some(CHAT_RELAY.to_string()),
         created_at: "2026-01-01T00:00:00Z".to_string(),
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     }
@@ -120,6 +130,7 @@ fn chat_agent_with_no_persona_is_repaired_onto_the_coordination_team() {
         &mut personas,
         &mut teams,
         pubkey,
+        CHAT_RELAY,
         "2026-08-30T00:00:00Z",
     )
     .expect("a persona-less agent must now be repairable, not refused");
@@ -138,10 +149,15 @@ fn chat_agent_with_no_persona_is_repaired_onto_the_coordination_team() {
     // shared builtin identity that would misattribute its work.
     assert!(personas.iter().any(|p| p.id == outcome.persona_id));
 
-    // It is an actual member of the coordination team, not just covered by
-    // the ambiguous-work fallback.
-    let team = &teams[0];
+    // It is an actual member of THIS community's coordination team, not
+    // just covered by the ambiguous-work fallback, and not of a team
+    // belonging to some other community.
+    let team = teams
+        .iter()
+        .find(|team| team.id == chat_team_id())
+        .expect("the team for this community must still be there");
     assert!(team.persona_ids.contains(&outcome.persona_id));
+    assert_eq!(teams.len(), 1, "the repair must not seed a second team");
 
     // And `owning_team_for_chat` resolves it as a member, so the Task this
     // becomes will carry a real assignee.
@@ -165,6 +181,7 @@ fn unknown_agent_still_fails_loudly() {
         &mut personas,
         &mut teams,
         "nonexistent",
+        CHAT_RELAY,
         "2026-08-30T00:00:00Z",
     )
     .unwrap_err();
@@ -192,7 +209,24 @@ fn fresh_install_has_a_coordination_team_for_ambiguous_chat_work() {
         "this test needs a store that has never been written"
     );
 
-    let teams = crate::managed_agents::load_teams_readonly(&path).unwrap();
+    // `load_teams_readonly` no longer synthesises a coordination team on
+    // its own: one teams.json serves every community this device joined,
+    // so the store alone cannot say which community a team belongs to.
+    // Whoever knows the relay seeds it, which for a chat send is the
+    // active community.
+    let mut teams = crate::managed_agents::load_teams_readonly(&path).unwrap();
+    assert!(
+        ensure_coordination_team_for_relay(&mut teams, CHAT_RELAY, "2026-08-30T00:00:00Z"),
+        "a store with no team for this community must get one seeded"
+    );
+    assert_eq!(
+        teams
+            .iter()
+            .filter(|team| team.id == chat_team_id())
+            .count(),
+        1,
+        "exactly one coordination team for this community"
+    );
     let refs = teams_to_company_refs(teams);
 
     let owner = owning_team_for_chat(&refs, "some-hired-agent-persona");
@@ -207,6 +241,48 @@ fn fresh_install_has_a_coordination_team_for_ambiguous_chat_work() {
         owner.id.ends_with("company-coordination"),
         "fallback team must be the coordination team, got {}",
         owner.id
+    );
+}
+
+/// A device that hired agents on this community but never approved a
+/// blueprint here has no coordination team for it, and every other
+/// community's team is the wrong place to put the repaired persona. The
+/// repair seeds this community's own team instead.
+#[test]
+fn chat_repair_seeds_this_communitys_team_and_leaves_another_alone() {
+    let pubkey = "abc123def456";
+    let mut agents = vec![agent_with_no_persona(pubkey)];
+    let mut personas: Vec<AgentDefinition> = Vec::new();
+
+    let mut elsewhere = coordination_team();
+    elsewhere.id = coordination_team_id_for_relay("wss://other.example").unwrap();
+    elsewhere.relay_url = Some("wss://other.example".to_string());
+    let mut teams = vec![elsewhere];
+
+    let outcome = resolve_chat_agent_persona(
+        &mut agents,
+        &mut personas,
+        &mut teams,
+        pubkey,
+        CHAT_RELAY,
+        "2026-08-30T00:00:00Z",
+    )
+    .expect("a persona-less agent must be repairable here too");
+
+    assert!(outcome.teams_changed);
+    let seeded = teams
+        .iter()
+        .find(|team| team.id == chat_team_id())
+        .expect("this community must have got its own team");
+    assert!(seeded.persona_ids.contains(&outcome.persona_id));
+
+    let other = teams
+        .iter()
+        .find(|team| team.relay_url.as_deref() == Some("wss://other.example"))
+        .expect("the other community's team must survive untouched");
+    assert!(
+        !other.persona_ids.contains(&outcome.persona_id),
+        "a repair on one community must not add members to another"
     );
 }
 

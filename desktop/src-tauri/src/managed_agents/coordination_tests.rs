@@ -19,15 +19,15 @@ use crate::managed_agents::{ManagedAgentRecord, TeamRecord};
 
 /// Two relays that canonicalize to themselves, so the fixtures below assert
 /// about the id derivation rather than about URL normalization.
-const RELAY_A: &str = "wss://a.example";
-const RELAY_B: &str = "wss://b.example";
+pub(super) const RELAY_A: &str = "wss://a.example";
+pub(super) const RELAY_B: &str = "wss://b.example";
 
-fn id_for(relay_url: &str) -> String {
+pub(super) fn id_for(relay_url: &str) -> String {
     coordination_team_id_for_relay(relay_url).expect("a non-blank relay mints an id")
 }
 
 /// The team this client seeds for `relay_url`, as `ensure` would leave it.
-fn seeded_for(relay_url: &str) -> TeamRecord {
+pub(super) fn seeded_for(relay_url: &str) -> TeamRecord {
     let mut records = Vec::new();
     assert!(ensure_coordination_team_for_relay(
         &mut records,
@@ -51,20 +51,20 @@ fn blueprint_seeded_coordination_team() -> TeamRecord {
     real
 }
 
-fn blueprint_team_pinned_to(relay_url: &str) -> TeamRecord {
+pub(super) fn blueprint_team_pinned_to(relay_url: &str) -> TeamRecord {
     let mut real = blueprint_seeded_coordination_team();
     real.relay_url = Some(relay_url.to_string());
     real
 }
 
-fn agent_on(persona_id: &str, relay_url: &str) -> ManagedAgentRecord {
+pub(super) fn agent_on(persona_id: &str, relay_url: &str) -> ManagedAgentRecord {
     let mut agent = managed_agent(&format!("{persona_id}@{relay_url}"));
     agent.persona_id = Some(persona_id.to_string());
     agent.relay_url = relay_url.to_string();
     agent
 }
 
-fn member_ids(records: &[TeamRecord], id: &str) -> Vec<String> {
+pub(super) fn member_ids(records: &[TeamRecord], id: &str) -> Vec<String> {
     let mut members = records
         .iter()
         .find(|team| team.id == id)
@@ -75,7 +75,7 @@ fn member_ids(records: &[TeamRecord], id: &str) -> Vec<String> {
     members
 }
 
-fn sorted(ids: &[&str]) -> Vec<String> {
+pub(super) fn sorted(ids: &[&str]) -> Vec<String> {
     let mut ids: Vec<String> = ids.iter().map(|id| (*id).to_string()).collect();
     ids.sort();
     ids
@@ -835,4 +835,50 @@ fn load_teams_readonly_splits_the_legacy_record_using_the_sibling_agent_store() 
         .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID));
     assert!(records.iter().any(|team| team.id == id_for(RELAY_A)));
     assert!(records.iter().any(|team| team.id == id_for(RELAY_B)));
+}
+
+/// A malformed agent store must not take the team store down with it, and
+/// must not have its `.invalid` evidence copy written as a side effect of a
+/// team read. Both loaders read the sibling store best-effort for that
+/// reason, so an unreadable one is simply "no relay pins to split by", and a
+/// customized legacy record is left exactly as it was found rather than
+/// having its membership guessed at.
+#[test]
+fn a_malformed_sibling_agent_store_leaves_the_legacy_record_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let teams_path = dir.path().join("teams.json");
+    std::fs::write(
+        &teams_path,
+        serde_json::to_vec(&vec![legacy_record_with_seventeen_members()]).unwrap(),
+    )
+    .unwrap();
+    let agents_path = dir.path().join("managed-agents.json");
+    std::fs::write(&agents_path, b"{ not json at all").unwrap();
+
+    let records =
+        load_teams_readonly(&teams_path).expect("a broken agent store must not fail a team load");
+
+    let legacy = records
+        .iter()
+        .find(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
+        .expect("with nothing to split by, the legacy record survives untouched");
+    assert_eq!(
+        legacy.persona_ids,
+        legacy_record_with_seventeen_members().persona_ids
+    );
+    assert!(!records
+        .iter()
+        .any(|team| team.id.starts_with("builtin-team:")
+            && team.id != DEFAULT_COORDINATION_TEAM_ID
+            && team.id.ends_with("company-coordination")));
+
+    assert!(
+        !dir.path().join("managed-agents.json.invalid").exists(),
+        "a team read must not write the agent store's invalid backup"
+    );
+    assert_eq!(
+        std::fs::read(&agents_path).unwrap(),
+        b"{ not json at all",
+        "the malformed store is left exactly as it was"
+    );
 }
