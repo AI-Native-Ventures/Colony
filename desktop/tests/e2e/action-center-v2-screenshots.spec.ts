@@ -77,12 +77,6 @@ function askEvent(opts: {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "buzz-feature-overrides-v1",
-      JSON.stringify({ actionCenter: true }),
-    );
-  });
   await installMockBridge(page);
 });
 
@@ -94,7 +88,7 @@ test.describe("action center v2 screenshots", () => {
     const HARD_LIST_ASK_ID = "2".repeat(64);
     const now = Math.floor(Date.now() / 1_000);
 
-    await page.goto("/#/action-center");
+    await page.goto("/#/?view=actions");
     await expect(page.getByTestId("action-center-screen")).toBeVisible();
 
     // Empty state first, before anything is seeded.

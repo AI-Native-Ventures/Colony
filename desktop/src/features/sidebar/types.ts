@@ -10,7 +10,6 @@
  */
 export type SidebarSelectedView =
   | "home"
-  | "action-center"
   | "channel"
   | "messages"
   | "agents"

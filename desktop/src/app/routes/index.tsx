@@ -2,41 +2,16 @@ import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { homeSurface, validateHomeSearch } from "@/app/routes/homeSearch";
 import { useChannelsQuery } from "@/features/channels/hooks";
+import { HomeActionsPane } from "@/features/home/ui/HomeActionsPane";
 import { HomeScreen } from "@/features/home/ui/HomeScreen";
+import { HomeTopTabs } from "@/features/home/ui/HomeTopTabs";
 import {
   consumePendingWelcomeChannel,
   WELCOME_CHANNEL_READY_EVENT,
 } from "@/features/onboarding/welcome";
 import { useIdentityQuery } from "@/shared/api/hooks";
-
-type HomeRouteSearch = {
-  item?: string;
-  profile?: string;
-  profileTab?: string;
-  profileView?: string;
-};
-
-function validateHomeSearch(search: Record<string, unknown>): HomeRouteSearch {
-  return {
-    item:
-      typeof search.item === "string" && search.item.length > 0
-        ? search.item
-        : undefined,
-    profile:
-      typeof search.profile === "string" && search.profile.length > 0
-        ? search.profile
-        : undefined,
-    profileTab:
-      typeof search.profileTab === "string" && search.profileTab.length > 0
-        ? search.profileTab
-        : undefined,
-    profileView:
-      typeof search.profileView === "string" && search.profileView.length > 0
-        ? search.profileView
-        : undefined,
-  };
-}
 
 export const Route = createFileRoute("/")({
   validateSearch: validateHomeSearch,
@@ -44,6 +19,7 @@ export const Route = createFileRoute("/")({
 });
 
 function HomeRouteComponent() {
+  const search = Route.useSearch();
   const { goChannel } = useAppNavigation();
   const channelsQuery = useChannelsQuery();
   const identityQuery = useIdentityQuery();
@@ -90,13 +66,22 @@ function HomeRouteComponent() {
     openPendingWelcomeChannel(availableChannelIds);
   }, [availableChannelIds, openPendingWelcomeChannel]);
 
+  const view = homeSurface(search);
+
   return (
-    <HomeScreen
-      availableChannelIds={availableChannelIds}
-      currentPubkey={identityQuery.data?.pubkey}
-      onOpenContext={(channelId, messageId, threadRootId) => {
-        void goChannel(channelId, { messageId, threadRootId });
-      }}
-    />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <HomeTopTabs view={view} />
+      {view === "actions" ? (
+        <HomeActionsPane search={search} />
+      ) : (
+        <HomeScreen
+          availableChannelIds={availableChannelIds}
+          currentPubkey={identityQuery.data?.pubkey}
+          onOpenContext={(channelId, messageId, threadRootId) => {
+            void goChannel(channelId, { messageId, threadRootId });
+          }}
+        />
+      )}
+    </div>
   );
 }

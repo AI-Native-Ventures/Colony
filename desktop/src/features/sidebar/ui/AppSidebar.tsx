@@ -135,7 +135,6 @@ type AppSidebarProps = {
   ) => void;
   onRemoveCommunity: (id: string) => Promise<LeaveCommunityResult | undefined>;
   onCreateAgent: () => void;
-  onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectProjects: () => void;
@@ -213,7 +212,6 @@ export function AppSidebar({
   onRemoveCommunity,
   onCreateAgent,
   commandActions,
-  onSelectActionCenter,
   onSelectAgents,
   onSelectDiscovery,
   onSelectProjects,
@@ -582,7 +580,6 @@ export function AppSidebar({
             >
               <AppSidebarPrimaryMenu
                 homeBadgeCount={homeBadgeCount}
-                onSelectActionCenter={onSelectActionCenter}
                 onSelectAgents={onSelectAgents}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}

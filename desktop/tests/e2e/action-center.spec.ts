@@ -220,31 +220,24 @@ async function seedPing(
   );
 }
 
+// Actions is a view of the Inbox at `/?view=actions`, not a preview feature
+// and not its own route, so there is no override to seed here any more.
 test.beforeEach(async ({ page }) => {
-  // Action Center is an experimental feature (defaultEnabled: false in
-  // preview-features.json); addInitScript must run before installMockBridge
-  // so the override is in localStorage before React mounts.
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "buzz-feature-overrides-v1",
-      JSON.stringify({ actionCenter: true }),
-    );
-  });
   await installMockBridge(page);
 });
 
 test("opens the native Action Center with URL-backed filters and selection", async ({
   page,
 }) => {
-  await page.goto("/#/action-center");
+  await page.goto("/#/?view=actions");
 
   await expect(page.getByTestId("action-center-screen")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Action Center" }),
   ).toBeVisible();
-  await expect(page.getByTestId("open-action-center-view")).toHaveAttribute(
-    "data-active",
-    "true",
+  await expect(page.getByTestId("home-top-tab-actions")).toHaveAttribute(
+    "data-state",
+    "active",
   );
   await expect(page.getByTestId("action-center-filter-trigger")).toBeVisible();
 
@@ -292,10 +285,10 @@ test("opens the native Action Center with URL-backed filters and selection", asy
       .getByTestId("action-center-reminder-detail")
       .getByText("Review the release checklist"),
   ).toBeVisible();
-  await expect(page).toHaveURL(/item=reminder/);
+  await expect(page).toHaveURL(/action=reminder/);
 
   // Switching to a filter the reminder is not part of clears the selection,
-  // and item= with it -- the URL-selection reconciliation this spec always
+  // and action= with it -- the URL-selection reconciliation this spec always
   // exercised. Also where the filter menu itself is exercised (options
   // visible, closes on choice): checking that before any data existed
   // opened the menu right as the list transitioned from its empty state to
@@ -309,10 +302,10 @@ test("opens the native Action Center with URL-backed filters and selection", asy
   await expect(page.getByTestId("action-center-filter-all")).toBeVisible();
   await page.getByTestId("action-center-filter-asks").click();
   await expect(page).toHaveURL(/filter=asks/);
-  await expect(page).not.toHaveURL(/item=/);
+  await expect(page).not.toHaveURL(/action=/);
   await expect(page.getByTestId("action-center-list-pane")).toBeVisible();
 
-  await page.goto("/#/action-center?item=reminder%3Amissing-reminder");
+  await page.goto("/#/?view=actions&action=reminder%3Amissing-reminder");
   await expect(
     page.getByTestId("action-center-detail-unavailable"),
   ).toBeVisible();
@@ -324,7 +317,7 @@ test("shows the inbox-zero empty state when nothing needs the owner", async ({
 }) => {
   // No seeding at all: a fresh mock bridge starts with an empty queue, and
   // zero is the design goal of this surface (spec), not an error state.
-  await page.goto("/#/action-center");
+  await page.goto("/#/?view=actions");
   await expect(page.getByTestId("action-center-screen")).toBeVisible();
   await expect(page.getByTestId("action-center-open-count")).toHaveCount(0);
   await expect(page.getByTestId("action-center-empty")).toBeVisible();
@@ -339,7 +332,7 @@ test("ranks a countdown ask before a blocked-work ask before a reminder, with a 
   const BLOCKED_ASK_ID = "2".repeat(64);
   const now = Math.floor(Date.now() / 1_000);
 
-  await page.goto("/#/action-center");
+  await page.goto("/#/?view=actions");
   await expect(page.getByTestId("action-center-screen")).toBeVisible();
 
   await emitEvent(
@@ -410,7 +403,7 @@ test("initiative chips filter the list without changing the badge", async ({
   const RELAUNCH_ASK_ID = "3".repeat(64);
   const HIRING_ASK_ID = "4".repeat(64);
 
-  await page.goto("/#/action-center");
+  await page.goto("/#/?view=actions");
   await expect(page.getByTestId("action-center-screen")).toBeVisible();
 
   await emitEvent(
@@ -474,7 +467,7 @@ test("dismissing a thread ping publishes a reaction and removes it from the queu
   const PINGER_PUBKEY = "b".repeat(64);
   const now = Math.floor(Date.now() / 1_000);
 
-  await page.goto("/#/action-center");
+  await page.goto("/#/?view=actions");
   await expect(page.getByTestId("action-center-screen")).toBeVisible();
 
   await seedPing(page, {

@@ -125,7 +125,6 @@ export function AppShell() {
     viewHuddleChannel,
   } = useHuddlePresentation();
   const hasCommunityRail = communitiesHook.communities.length > 1;
-  const actionCenterEnabled = useFeatureEnabled("actionCenter");
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
@@ -149,7 +148,6 @@ export function AppShell() {
   // spreads it rather than re-listing every `go*` target by hand.
   const nav = useAppNavigation();
   const {
-    goActionCenter,
     goAgents,
     goChannel,
     goContent,
@@ -662,7 +660,6 @@ export function AppShell() {
   // AppShell-local wrapper (a settings section, a dialog opener) are listed.
   const commandActions = useNavigationCommands({
     ...nav,
-    actionCenterEnabled,
     contentEnabled,
     createAgent: requestOpenCreateAgent,
     createChannel: handleOpenCreateChannel,
@@ -878,7 +875,6 @@ export function AppShell() {
                                 });
                               await goChannel(directMessage.id);
                             }}
-                            onSelectActionCenter={() => void goActionCenter()}
                             onSelectAgents={() => void goAgents()}
                             onSelectDiscovery={() =>
                               void goDiscovery({ surface: "leads" })

@@ -12,6 +12,7 @@ import type {
   ActionCenterFilter,
   ActionCenterStateFilter,
 } from "@/features/action-center/contracts";
+import type { HomeSurface } from "@/app/routes/homeSearch";
 import type {
   DiscoverySearch,
   DiscoverySurface,
@@ -24,11 +25,18 @@ type NavigationBehavior = {
   resetScroll?: boolean;
 };
 
-export type ActionCenterNavigationOptions = NavigationBehavior & {
+/**
+ * `/` carries both panes' state. `item` is the Inbox row; `action` is the
+ * Actions row, named apart so switching panes cannot carry one pane's
+ * selection into the other.
+ */
+export type HomeNavigationOptions = NavigationBehavior & {
+  action?: string;
   filter?: ActionCenterFilter;
   initiative?: string;
   item?: string;
   state?: ActionCenterStateFilter;
+  view?: HomeSurface;
 };
 
 type NewMessageNavigationOptions = NavigationBehavior & {
@@ -102,12 +110,20 @@ export function useAppNavigation() {
   );
 
   const goHome = React.useCallback(
-    (behavior?: NavigationBehavior) =>
+    (options?: HomeNavigationOptions) =>
       commitNavigation(
         {
           to: "/",
+          search: {
+            ...(options?.action ? { action: options.action } : {}),
+            ...(options?.filter ? { filter: options.filter } : {}),
+            ...(options?.initiative ? { initiative: options.initiative } : {}),
+            ...(options?.item ? { item: options.item } : {}),
+            ...(options?.state ? { state: options.state } : {}),
+            ...(options?.view ? { view: options.view } : {}),
+          },
         },
-        behavior,
+        options,
       ),
     [commitNavigation],
   );
@@ -123,21 +139,11 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  /** The Actions pane of the Inbox. Kept named for the command palette. */
   const goActionCenter = React.useCallback(
-    (options?: ActionCenterNavigationOptions) =>
-      commitNavigation(
-        {
-          to: "/action-center",
-          search: {
-            ...(options?.filter ? { filter: options.filter } : {}),
-            ...(options?.initiative ? { initiative: options.initiative } : {}),
-            ...(options?.item ? { item: options.item } : {}),
-            ...(options?.state ? { state: options.state } : {}),
-          },
-        },
-        options,
-      ),
-    [commitNavigation],
+    (options?: Omit<HomeNavigationOptions, "view">) =>
+      goHome({ ...options, view: "actions" }),
+    [goHome],
   );
 
   const goSpend = React.useCallback(

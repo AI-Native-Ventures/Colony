@@ -5,7 +5,6 @@ import {
   Compass,
   FolderGit2,
   Inbox,
-  ListChecks,
   CreditCard,
   Receipt,
   Zap,
@@ -45,7 +44,6 @@ export type AppSidebarPinnedHeaderProps = {
 
 type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
-  onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
@@ -100,41 +98,50 @@ export function AppSidebarPinnedHeader({
 }
 
 /**
- * Reads from the single `useActionCenterItems` instance mounted by
- * `ActionCenterProvider` (in `AppShell`) instead of mounting its own copy —
- * the route mounted the same hook a second time, doubling every query's
- * request rate while the screen was open. See `ActionCenterContext.tsx`.
- * `<FeatureGate feature="actionCenter">` in `AppSidebarPrimaryMenu` keeps
- * this item (and thus this context read) out of the tree entirely while
- * the flag is off.
+ * The Inbox row and its one badge.
+ *
+ * The count sums the home feed, due reminders, and the Actions pane's open
+ * queue, because Actions is a view of the Inbox rather than its own
+ * destination -- two badges next to each other named one thing twice. The
+ * open count is read from the single `useActionCenterItems` instance mounted
+ * by `ActionCenterProvider` (in `AppShell`) instead of a second copy of the
+ * hook. See `ActionCenterContext.tsx`.
  */
-function ActionCenterMenuItem({
-  onSelectActionCenter,
+function InboxMenuItem({
+  homeBadgeCount,
+  onSelectHome,
   selectedView,
 }: {
-  onSelectActionCenter: () => void;
+  homeBadgeCount: number;
+  onSelectHome: () => void;
   selectedView: SidebarSelectedView;
 }) {
   const actionCenter = useActionCenterContext();
-  const openCount = actionCenter?.openCount ?? 0;
+  const badgeCount = homeBadgeCount + (actionCenter?.openCount ?? 0);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        data-testid="open-action-center-view"
-        isActive={selectedView === "action-center"}
-        onClick={onSelectActionCenter}
-        tooltip="Action Center"
+        className="data-[active=true]:font-normal"
+        isActive={selectedView === "home"}
+        onClick={onSelectHome}
+        tooltip="Inbox"
         type="button"
       >
-        <ListChecks className="h-4 w-4" />
-        <SidebarMenuLabel>Action Center</SidebarMenuLabel>
+        <Inbox
+          className={selectedView !== "home" ? "h-4 w-4 opacity-80" : "h-4 w-4"}
+        />
+        <SidebarMenuLabel
+          className={selectedView !== "home" ? "opacity-80" : undefined}
+        >
+          Inbox
+        </SidebarMenuLabel>
       </SidebarMenuButton>
-      {openCount > 0 ? (
+      {badgeCount > 0 ? (
         <SidebarMenuBadge
           className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-          data-testid="sidebar-action-center-count"
+          data-testid="sidebar-home-count"
         >
-          {Math.min(openCount, 99)}
+          {Math.min(badgeCount, 99)}
         </SidebarMenuBadge>
       ) : null}
     </SidebarMenuItem>
@@ -143,7 +150,6 @@ function ActionCenterMenuItem({
 
 export function AppSidebarPrimaryMenu({
   homeBadgeCount,
-  onSelectActionCenter,
   onSelectAgents,
   onSelectDiscovery,
   onSelectHome,
@@ -162,40 +168,11 @@ export function AppSidebarPrimaryMenu({
       data-testid="sidebar-primary-menu"
     >
       <SidebarMenu className="pb-2">
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            className="data-[active=true]:font-normal"
-            isActive={selectedView === "home"}
-            onClick={onSelectHome}
-            tooltip="Inbox"
-            type="button"
-          >
-            <Inbox
-              className={
-                selectedView !== "home" ? "h-4 w-4 opacity-80" : "h-4 w-4"
-              }
-            />
-            <SidebarMenuLabel
-              className={selectedView !== "home" ? "opacity-80" : undefined}
-            >
-              Inbox
-            </SidebarMenuLabel>
-          </SidebarMenuButton>
-          {homeBadgeCount > 0 ? (
-            <SidebarMenuBadge
-              className="right-2 rounded-full bg-primary/15 px-1.5 text-2xs text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-              data-testid="sidebar-home-count"
-            >
-              {Math.min(homeBadgeCount, 99)}
-            </SidebarMenuBadge>
-          ) : null}
-        </SidebarMenuItem>
-        <FeatureGate feature="actionCenter">
-          <ActionCenterMenuItem
-            onSelectActionCenter={onSelectActionCenter}
-            selectedView={selectedView}
-          />
-        </FeatureGate>
+        <InboxMenuItem
+          homeBadgeCount={homeBadgeCount}
+          onSelectHome={onSelectHome}
+          selectedView={selectedView}
+        />
         <FeatureGate feature="pulse">
           <SidebarMenuItem>
             <SidebarMenuButton

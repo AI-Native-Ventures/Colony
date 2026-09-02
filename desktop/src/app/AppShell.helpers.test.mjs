@@ -71,10 +71,10 @@ test("markAllReadSources skips the active marker without projected activity", ()
 
   assert.deepEqual(calls, ["channels"]);
 });
-test("action center route derives the Action Center sidebar selection", () => {
-  assert.deepEqual(deriveShellRoute("/action-center?filter=all&item=ask:1"), {
+test("the Actions view of the inbox stays on the Inbox sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/?view=actions&filter=all&action=ask:1"), {
     selectedChannelId: null,
-    selectedView: "action-center",
+    selectedView: "home",
   });
 });
 
