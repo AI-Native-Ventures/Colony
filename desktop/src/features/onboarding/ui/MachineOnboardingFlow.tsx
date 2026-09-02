@@ -329,21 +329,27 @@ export function MachineOnboardingFlow({
             </OnboardingSlideTransition>
           ) : page === "account-signin" ? (
             <OnboardingSlideTransition
-              className="onb-screen"
-              data-solo="true"
               direction={transitionDirection}
               transitionKey={`machine-account-signin-${transitionDirection}`}
             >
-              <AccountSignInStep
-                auth={auth}
-                onCompleteIdentity={finishAccountSignIn}
-                onBusyChange={setIsSigningIn}
-                onUsePrivateKey={() => {
-                  setKeyImportStage("key-entry");
-                  setTransitionDirection("forward");
-                  setPage("key-import");
-                }}
-              />
+              {/* See key import below for why the grid class and its data
+                  attribute live on a div here rather than on the transition's
+                  props. */}
+              <div
+                className="onb-screen onb-machine-screen"
+                data-machine-page="account-signin"
+              >
+                <AccountSignInStep
+                  auth={auth}
+                  onCompleteIdentity={finishAccountSignIn}
+                  onBusyChange={setIsSigningIn}
+                  onUsePrivateKey={() => {
+                    setKeyImportStage("key-entry");
+                    setTransitionDirection("forward");
+                    setPage("key-import");
+                  }}
+                />
+              </div>
             </OnboardingSlideTransition>
           ) : page === "key-import" ? (
             <OnboardingSlideTransition
