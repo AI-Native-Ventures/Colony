@@ -25,11 +25,31 @@
  */
 
 import assert from "node:assert/strict";
-import test from "node:test";
-import {
+import test, { beforeEach, mock } from "node:test";
+
+/** Every message passed to `toast.error`, in order. */
+const toasts = [];
+
+mock.module("sonner", {
+  namedExports: {
+    toast: {
+      error: (message) => toasts.push(message),
+      success: () => {},
+    },
+  },
+});
+
+const {
+  createFinishSendFailureHandler,
   getErrorMessage,
+  markSendFailureReported,
+  runReportingFinishSendFailures,
   threadRootForWorkContext,
-} from "./useMentionSendFlow.helpers.ts";
+} = await import("./useMentionSendFlow.helpers.ts");
+
+beforeEach(() => {
+  toasts.length = 0;
+});
 
 test("getErrorMessage_surfaces_the_thrown_work_context_message", () => {
   const error = new Error(
@@ -61,6 +81,42 @@ test("getErrorMessage_falls_back_for_an_error_with_an_empty_message", () => {
     getErrorMessage(new Error(""), "The message could not be sent."),
     "The message could not be sent.",
   );
+});
+
+/**
+ * A failed send is reported once, whoever owns the surface it is reported on.
+ *
+ * The new-message screen's `onSend` sets an inline banner and rethrows, so the
+ * outer catch toasting the same string as well printed it twice: the smoke
+ * spec's strict locator for "Mock first DM send failed." resolved to two
+ * elements. A marked error restores the composer and leaves the reporting to
+ * that caller; every other send path keeps the toast, which is the whole
+ * point of the change that added it.
+ */
+test("a failed first DM restores the composer without a second report", async () => {
+  const restored = [];
+  await runReportingFinishSendFailures(
+    async () => {
+      throw markSendFailureReported(new Error("Mock first DM send failed."));
+    },
+    createFinishSendFailureHandler(() => restored.push("restored")),
+  );
+
+  assert.deepEqual(toasts, []);
+  assert.deepEqual(restored, ["restored"]);
+});
+
+test("a failed channel send is still toasted", async () => {
+  const restored = [];
+  await runReportingFinishSendFailures(
+    async () => {
+      throw new Error("Mock channel send failed.");
+    },
+    createFinishSendFailureHandler(() => restored.push("restored")),
+  );
+
+  assert.deepEqual(toasts, ["Mock channel send failed."]);
+  assert.deepEqual(restored, ["restored"]);
 });
 
 const THREAD_HEAD = "5910f909".padEnd(64, "a");
