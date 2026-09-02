@@ -406,4 +406,75 @@ test.describe("edit agent dialog", () => {
       "Edit E2E Persona",
     );
   });
+
+  test("shows org placement and publishes a rank change", async ({ page }) => {
+    await installMockBridge(page, {
+      // The org chart only trusts a kind-30177 head authored by a community
+      // owner, and only reads owners when the member table is served.
+      relayMembers: true,
+      managedAgents: [
+        {
+          pubkey: AGENT_PUBKEY,
+          name: AGENT_NAME,
+          status: "stopped",
+          channelNames: ["agents"],
+        },
+      ],
+      managedAgentHeads: [
+        { pubkey: AGENT_PUBKEY, name: AGENT_NAME, tier: "worker" },
+      ],
+    });
+
+    await openEditDialog(page);
+
+    // Seeded from the chart, not from the managed-agent record: the record
+    // carries no rank at all.
+    const rankSelect = page.getByTestId("agent-org-rank-select");
+    await expect(rankSelect).toBeVisible();
+    await expect(rankSelect).toHaveAttribute("data-value", "worker", {
+      timeout: 10_000,
+    });
+    await expect(
+      page.getByTestId("edit-agent-org-placement-pending"),
+    ).toHaveCount(0);
+
+    await rankSelect.click();
+    await page.getByTestId("agent-org-rank-select-option-leader").click();
+    await expect(rankSelect).toHaveAttribute("data-value", "leader");
+
+    await page.getByTestId("edit-agent-dialog-submit").click();
+    await expect(page.getByTestId("edit-agent-dialog")).not.toBeVisible();
+
+    // The rank is a second write on the relay, so the proof is the published
+    // head, not anything the update mutation echoed back.
+    const published = await page.waitForFunction(
+      (pubkey) => {
+        type PublishedEvent = {
+          kind: number;
+          content: string;
+          tags: string[][];
+        };
+        const events =
+          (
+            window as unknown as {
+              __BUZZ_E2E_PUBLISHED_EVENTS__?: PublishedEvent[];
+            }
+          ).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
+        return (
+          events.find(
+            (event) =>
+              event.kind === 30177 &&
+              event.tags.some((tag) => tag[0] === "d" && tag[1] === pubkey),
+          ) ?? null
+        );
+      },
+      AGENT_PUBKEY,
+      { timeout: 10_000 },
+    );
+    const head = await published.jsonValue();
+    expect(JSON.parse(head.content).tier).toBe("leader");
+    // A team lead reports to a chief of staff, and none is seeded, so the
+    // head must carry no reporting line rather than an invented one.
+    expect(head.tags.some((tag) => tag[0] === "manager")).toBe(false);
+  });
 });

@@ -31,9 +31,24 @@ export function emptyOrgPlacementDraft(): OrgPlacementDraft {
 }
 
 export function AgentOrgPlacementSection({
+  allowUnranked = true,
+  disabled = false,
+  selfPubkey = "",
   value,
   onChange,
 }: {
+  /**
+   * Offer "Unranked". True while creating (the agent has no placement yet);
+   * false while editing, where every placement the dialog can publish names
+   * a rank and clearing one is not an operation the relay has.
+   */
+  allowUnranked?: boolean;
+  disabled?: boolean;
+  /**
+   * The agent being placed, so it is never offered as its own manager. Empty
+   * while creating: the agent does not exist yet, so it cannot be a candidate.
+   */
+  selfPubkey?: string;
   value: OrgPlacementDraft;
   onChange: (next: OrgPlacementDraft) => void;
 }) {
@@ -43,8 +58,8 @@ export function AgentOrgPlacementSection({
   const rankValue = value.rank === "" ? null : value.rank;
   const managerTargetRank = rankValue ? escalationTarget(rankValue) : null;
   const managerCandidates = React.useMemo(
-    () => managerCandidatesFor(members, "", rankValue),
-    [members, rankValue],
+    () => managerCandidatesFor(members, selfPubkey, rankValue),
+    [members, selfPubkey, rankValue],
   );
 
   return (
@@ -57,6 +72,7 @@ export function AgentOrgPlacementSection({
           Org rank
         </label>
         <AgentDropdownSelect
+          disabled={disabled}
           id="agent-org-rank"
           onValueChange={(next) => {
             if (
@@ -71,7 +87,7 @@ export function AgentOrgPlacementSection({
             }
           }}
           options={[
-            { label: "Unranked", value: "" },
+            ...(allowUnranked ? [{ label: "Unranked", value: "" }] : []),
             ...ALL_ORG_RANKS.map((rank) => ({
               label: rankLabel(rank),
               value: rank,
@@ -100,6 +116,7 @@ export function AgentOrgPlacementSection({
                 ? "No chiefs of staff yet"
                 : "No team leads yet"
             }
+            disabled={disabled}
             id="agent-org-manager"
             onValueChange={(next) => {
               onChange({ ...value, manager: next });
