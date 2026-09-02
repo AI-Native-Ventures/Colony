@@ -7,6 +7,7 @@ import {
   parseRank,
   type AgentRank,
 } from "@/features/agents/employeeHeads";
+import { recordOrgPlacement } from "@/shared/api/orgPlacement";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -381,5 +382,13 @@ export async function publishManagedAgentRankHead(
     "Timed out while updating the agent's rank.",
     "Failed to update the agent's rank.",
   );
+  // The relay copy is authoritative for readers, but the device rebuilds the
+  // head from the local record. Without this write the next rebuild drops
+  // the placement and the roster falls back to team lead / unassigned.
+  await recordOrgPlacement({
+    pubkey: input.pubkey,
+    tier: input.tier,
+    manager: input.manager ?? null,
+  });
   return event.id;
 }
