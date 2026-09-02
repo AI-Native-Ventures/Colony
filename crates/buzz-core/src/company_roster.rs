@@ -809,6 +809,24 @@ fn community_discriminator(community_scope: &str) -> String {
 /// Length of the community discriminator inside a materialized ID.
 const COMMUNITY_DISCRIMINATOR_LEN: usize = 8;
 
+/// A short, stable discriminator for a relay URL.
+///
+/// Same construction and same eight-character budget as
+/// [`community_discriminator`], deliberately calling it rather than repeating
+/// the hashing, so an identifier keyed on a relay URL and one keyed on a
+/// community scope stay the same shape and stay inside the same 64-byte
+/// `d`-tag grammar.
+///
+/// Exposed because the desktop client names one built-in team per community
+/// from the relay URL it is connected to, and that id has to be derived the
+/// same way as every other per-community identifier rather than by a second,
+/// drifting copy of this code. Callers are expected to canonicalize the URL
+/// first: this hashes the bytes it is given, so two spellings of one relay
+/// would otherwise produce two discriminators.
+pub fn relay_discriminator(relay_url: &str) -> String {
+    community_discriminator(relay_url)
+}
+
 /// The relay's `d`-tag grammar caps a coordinate at 64 bytes and truncates
 /// past it. Anything longer stops being an identifier.
 pub const MAX_MATERIALIZED_ID_LEN: usize = 64;

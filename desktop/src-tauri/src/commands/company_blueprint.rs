@@ -162,7 +162,10 @@ pub async fn execute_company_blueprint(
 
         if needs(&journal, BlueprintCheckpoint::TeamsSeeded) {
             let teams = load_teams(&app_for_blocking)?;
-            let seeded_teams = seed_teams(&community_scope, &parsed, &teams, &now)
+            // The community the blueprint was approved on, so its teams are
+            // not planned against, listed on, or published to the others.
+            let approval_relay = crate::relay::relay_ws_url_with_override(&state);
+            let seeded_teams = seed_teams(&community_scope, &parsed, &teams, &approval_relay, &now)
                 .map_err(|error| error.to_string())?;
             if !seeded_teams.created_teams.is_empty() {
                 let mut next = teams;

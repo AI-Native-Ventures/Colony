@@ -35,6 +35,7 @@ mod tests {
             is_symlink: false,
             symlink_target: None,
             version: None,
+            relay_url: None,
             created_at: "2026-03-20T00:00:00Z".to_string(),
             updated_at: "2026-03-20T00:00:00Z".to_string(),
         }

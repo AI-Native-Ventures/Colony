@@ -70,7 +70,16 @@ pub fn creation_relay_pin(explicit: Option<&str>, workspace_relay: &str) -> Stri
         .unwrap_or_else(|| workspace_relay.to_string())
 }
 
-fn canonical(url: &str) -> String {
+/// The comparable form of a relay URL.
+///
+/// Every relay comparison in the app goes through this, so equivalent
+/// spellings of one relay (trailing slash, default port, host casing) never
+/// read as two different communities. An unparseable URL is returned verbatim
+/// rather than dropped, so a malformed pin still compares equal to itself.
+///
+/// `pub(crate)` so the team store can canonicalize a team's relay pin with
+/// the same rule the agent boundary already uses, rather than re-deriving it.
+pub(crate) fn canonical(url: &str) -> String {
     buzz_core_pkg::relay::normalize_relay_url(url).unwrap_or_else(|_| url.to_string())
 }
 

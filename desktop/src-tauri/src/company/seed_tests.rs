@@ -8,6 +8,10 @@ use super::*;
 
 const NOW: &str = "2026-08-01T09:00:00Z";
 const SCOPE: &str = "relay.example";
+/// The community a blueprint is approved on. Every team it seeds is pinned
+/// here, so the other communities this device joined neither list it nor plan
+/// against it.
+const SEED_RELAY: &str = "wss://relay.example";
 
 /// Built field by field, then converted through the checked conversion, which
 /// is the only way the machinery accepts one.
@@ -239,7 +243,7 @@ fn a_created_employee_pins_no_runtime_model_or_provider() {
 #[test]
 fn teams_are_created_with_their_members_and_lead() {
     let blueprint = blueprint();
-    let outcome = seed_teams(SCOPE, &blueprint, &[], NOW).expect("seed teams");
+    let outcome = seed_teams(SCOPE, &blueprint, &[], SEED_RELAY, NOW).expect("seed teams");
 
     assert_eq!(outcome.created_teams.len(), 1);
     let team = &outcome.created_teams[0];
@@ -286,8 +290,9 @@ fn a_team_staffed_by_a_declined_role_is_refused_not_trimmed() {
 #[test]
 fn an_existing_team_is_reused_rather_than_rebuilt() {
     let blueprint = blueprint();
-    let first = seed_teams(SCOPE, &blueprint, &[], NOW).expect("first");
-    let second = seed_teams(SCOPE, &blueprint, &first.created_teams, NOW).expect("second");
+    let first = seed_teams(SCOPE, &blueprint, &[], SEED_RELAY, NOW).expect("first");
+    let second =
+        seed_teams(SCOPE, &blueprint, &first.created_teams, SEED_RELAY, NOW).expect("second");
 
     assert!(second.created_teams.is_empty());
     assert_eq!(second.reused_team_ids.len(), 1);
@@ -336,5 +341,40 @@ fn the_chief_of_staff_is_never_minted_even_when_absent() {
             .reused_persona_ids
             .contains(&"builtin:fizz".to_string()),
         "it is still part of the company; the built-in seeding restores it"
+    );
+}
+
+/// One `teams.json` serves every community this device joined, so a team an
+/// approved blueprint creates has to name the community it was approved on.
+/// Unpinned, it would list, be planned against, and be published on all of
+/// them, staffed by personas that exist in only one.
+#[test]
+fn seeded_teams_are_pinned_to_the_approving_community() {
+    let blueprint = blueprint();
+
+    let outcome = seed_teams(SCOPE, &blueprint, &[], SEED_RELAY, NOW).expect("seed teams");
+
+    assert!(!outcome.created_teams.is_empty());
+    for team in &outcome.created_teams {
+        assert_eq!(
+            team.relay_url.as_deref(),
+            Some(SEED_RELAY),
+            "every seeded team names the community it was approved on"
+        );
+    }
+}
+
+/// The pin goes through the same canonicalizer every other relay comparison
+/// uses, so an equivalent spelling does not create a second community.
+#[test]
+fn seeded_team_pins_are_canonical() {
+    let blueprint = blueprint();
+
+    let outcome =
+        seed_teams(SCOPE, &blueprint, &[], "wss://Relay.Example/", NOW).expect("seed teams");
+
+    assert_eq!(
+        outcome.created_teams[0].relay_url.as_deref(),
+        Some(SEED_RELAY)
     );
 }

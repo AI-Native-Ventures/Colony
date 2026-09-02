@@ -388,6 +388,58 @@ fn team_record_deserializes_without_new_fields() {
     assert_eq!(record.version, None);
 }
 
+/// `relay_url` pins a team to one community. It landed after `teams.json`
+/// already existed on every install, so a record written before it must load
+/// as unpinned rather than failing the whole store.
+#[test]
+fn team_record_deserializes_without_relay_url() {
+    let record: super::TeamRecord = serde_json::from_str(
+        r#"{
+            "id": "team-1",
+            "name": "My Team",
+            "description": null,
+            "persona_ids": ["p1"],
+            "is_builtin": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }"#,
+    )
+    .expect("team record without relay_url should deserialize as unpinned");
+
+    assert_eq!(record.relay_url, None);
+}
+
+/// The pin is local-only bookkeeping, so an unpinned record must not start
+/// writing a `null` key into every stored team.
+#[test]
+fn team_record_serializes_relay_url_only_when_set() {
+    let mut record: super::TeamRecord = serde_json::from_str(
+        r#"{
+            "id": "team-1",
+            "name": "My Team",
+            "description": null,
+            "persona_ids": ["p1"],
+            "is_builtin": false,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }"#,
+    )
+    .expect("team record should deserialize");
+
+    let unpinned = serde_json::to_string(&record).expect("serialize unpinned");
+    assert!(
+        !unpinned.contains("relay_url"),
+        "an unpinned team must omit the key entirely: {unpinned}"
+    );
+
+    record.relay_url = Some("wss://a.example".to_string());
+    let pinned = serde_json::to_string(&record).expect("serialize pinned");
+    assert!(
+        pinned.contains(r#""relay_url":"wss://a.example""#),
+        "a pinned team must write the key: {pinned}"
+    );
+}
+
 /// A record whose in-memory key was blanked (because it lives in the
 /// keyring) must NOT serialize `private_key_nsec` into JSON.
 #[test]

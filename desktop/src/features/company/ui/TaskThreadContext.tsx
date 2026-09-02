@@ -12,6 +12,7 @@ import {
   deriveTaskExecutionState,
   splitDeliveryArtifacts,
 } from "@/features/company/taskThreadModel";
+import { teamDisplayName } from "@/features/company/teamDisplayName";
 import {
   canOpenTaskArtifact,
   openTaskArtifact,
@@ -98,9 +99,10 @@ export function TaskThreadContext({
     );
   }
 
-  const ownerLabel =
-    teamsQuery.data?.find((team) => team.id === task.owningTeamId)?.name ??
-    task.owningTeamId;
+  // A lookup miss is ordinary here: the teams list is scoped to the community
+  // being looked at, and the task carries whatever id the relay recorded when
+  // it was minted, which may predate this community's coordination record.
+  const ownerLabel = teamDisplayName(teamsQuery.data, task.owningTeamId);
   const qaLabel =
     personasQuery.data?.find((persona) => persona.id === task.qaPersonaId)
       ?.displayName ?? task.qaPersonaId;
@@ -110,8 +112,7 @@ export function TaskThreadContext({
   const reviewerLabel =
     reviewerTeamId === null
       ? null
-      : (teamsQuery.data?.find((team) => team.id === reviewerTeamId)?.name ??
-        reviewerTeamId);
+      : teamDisplayName(teamsQuery.data, reviewerTeamId);
   const workerLabel = run?.leaseHolderPubkey
     ? (profiles?.[run.leaseHolderPubkey]?.displayName ??
       truncatePubkey(run.leaseHolderPubkey))
