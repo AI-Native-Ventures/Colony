@@ -47,21 +47,83 @@ const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
 /// needs it.
 const COORDINATION_TEAM_SLUG: &str = "company-coordination";
 
-/// This device's own coordination team, seeded by [`ensure_default_coordination_team`]
-/// so implicit chat tasks have somewhere to land before any company blueprint
-/// is approved. Deliberately outside `BUILT_IN_TEAMS`: unlike Welcome, whether
-/// this one gets (re)seeded depends on whether some *other* team already
-/// satisfies the coordination contract, which the fixed reseed-by-id loop
-/// below can't express.
+/// The pre-migration coordination team id: one record for the whole device.
 ///
-/// `pub(crate)` so `event_sync.rs` can except this one id from the generic
-/// "built-ins are always available from code, so never publish them" skip —
-/// unlike every other built-in, the *relay* (not just other devices) must be
-/// able to resolve it: `company_broker::load_team_refs` validates a Task's
-/// `owningTeamId` against the owner's own published `KIND_TEAM` events, and
-/// this is the only team that can own chat work before a company blueprint
-/// seeds a real one.
+/// **Kept only for migration and for events already on the wire.** A device
+/// holds one `teams.json` but joins several communities, so a single record
+/// here listed members that live only in another community, and approving a
+/// blueprint on one community retired the team the others depended on. New
+/// coordination teams are named per community by
+/// [`coordination_team_id_for_relay`] instead.
+///
+/// This id keeps mattering for two reasons: a stored record still carrying it
+/// has to be split into per-community records on load, and `KIND_TEAM` events
+/// already published under it stay resolvable on each relay, so Tasks minted
+/// against it keep validating in `company_broker::load_team_refs`.
+///
+/// Deliberately outside `BUILT_IN_TEAMS`: unlike Welcome, whether a
+/// coordination team gets (re)seeded depends on whether some *other* team
+/// already satisfies the coordination contract for that community, which the
+/// fixed reseed-by-id loop below can't express.
 pub(crate) const DEFAULT_COORDINATION_TEAM_ID: &str = "builtin-team:company-coordination";
+
+/// Prefix every coordination team this client seeds for itself carries.
+const BUILT_IN_TEAM_PREFIX: &str = "builtin-team:";
+
+/// The id of the coordination team for the community reachable at `relay_url`.
+///
+/// Shape: `builtin-team:<8 hex>:company-coordination`, mirroring the
+/// blueprint shape `company-team:<8 hex>:<company>:company-coordination`. The
+/// URL is canonicalized first, so two spellings of one relay yield one id.
+///
+/// Both ends of the shape are load-bearing. The `builtin-team:` prefix keeps
+/// the record recognisable as this client's own seed rather than a
+/// blueprint's. The trailing slug is what `owning_team_for_chat` in buzz-sdk
+/// matches an id against to find the team that owns ambiguous chat work, so
+/// keeping it means that fallback needs no change. Eight hex characters keeps
+/// the whole coordinate inside the relay's 64-byte `d`-tag budget.
+// Exercised by tests here; the seeding, retirement, and publish paths that
+// call it in production land with the per-relay ensure/retire rewrite.
+#[allow(dead_code)]
+pub(crate) fn coordination_team_id_for_relay(relay_url: &str) -> String {
+    let discriminator = buzz_core_pkg::company_roster::relay_discriminator(
+        &crate::relay::agent_boundary::canonical(relay_url),
+    );
+    format!("{BUILT_IN_TEAM_PREFIX}{discriminator}:{COORDINATION_TEAM_SLUG}")
+}
+
+/// Whether `id` names a coordination team **this client seeds for itself**.
+///
+/// True for the legacy device-wide id and for every per-community id
+/// [`coordination_team_id_for_relay`] mints. False for a blueprint-seeded
+/// `company-team:...:company-coordination`: that one ends with the same slug
+/// but is user owned, not built in, and the whole point of retirement is that
+/// it can supersede one of ours.
+///
+/// This is the class test that replaces comparing against one literal id.
+pub(crate) fn is_coordination_team_id(id: &str) -> bool {
+    id == DEFAULT_COORDINATION_TEAM_ID
+        || (id.starts_with(BUILT_IN_TEAM_PREFIX) && id.ends_with(COORDINATION_TEAM_SLUG))
+}
+
+/// Whether `team` is in scope for the community reachable at `relay_url`.
+///
+/// An unpinned team belongs to every community, which is exactly how every
+/// team behaved before the pin existed. A pinned team belongs only to the
+/// relay it names, compared canonically so an equivalent spelling still
+/// matches.
+// Exercised by tests here; team listing, chat planning, and event sync start
+// filtering through it in the follow-up changes.
+#[allow(dead_code)]
+pub(crate) fn team_applies_to_relay(team: &TeamRecord, relay_url: &str) -> bool {
+    match team.relay_url.as_deref() {
+        None => true,
+        Some(pin) => {
+            crate::relay::agent_boundary::canonical(pin)
+                == crate::relay::agent_boundary::canonical(relay_url)
+        }
+    }
+}
 
 // Built-in teams that have been retired. A stored copy that still exactly
 // matches its seed is purged on load (the user never touched it); customized
@@ -90,6 +152,7 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
             is_symlink: false,
             symlink_target: None,
             version: None,
+            relay_url: None,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         })
@@ -97,12 +160,13 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
 }
 
 fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
-    if id == DEFAULT_COORDINATION_TEAM_ID {
-        // Owned and (re)seeded by `ensure_default_coordination_team`, not by
-        // the fixed `built_ins` list this function walks — exempt it from the
-        // generic "demote whatever isn't in `built_ins`" pass in
-        // `merge_teams_impl`, or it would lose `is_builtin` on the very next
-        // load.
+    if is_coordination_team_id(id) {
+        // Coordination teams are seeded per community, not by the fixed
+        // `built_ins` list this function walks, so exempt every one of them
+        // from the generic "demote whatever isn't in `built_ins`" pass in
+        // `merge_teams_impl`. Without this they would lose `is_builtin` on the
+        // very next load, which then flips sort order, deletion validation,
+        // and the event-sync publish rule.
         return Some(usize::MAX);
     }
     built_ins.iter().position(|team| team.id == id)
@@ -195,6 +259,7 @@ fn ensure_default_coordination_team(stored: &mut Vec<TeamRecord>, now: &str) -> 
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: now.to_string(),
         updated_at: now.to_string(),
     });

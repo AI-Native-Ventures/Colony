@@ -56,7 +56,7 @@ pub fn relay_api_base_url_with_override(state: &AppState) -> String {
 
 // ── Agent community boundary ────────────────────────────────────────────────
 
-mod agent_boundary;
+pub(crate) mod agent_boundary;
 pub use agent_boundary::{
     agent_belongs_to_workspace, creation_relay_pin, effective_agent_relay_url,
 };

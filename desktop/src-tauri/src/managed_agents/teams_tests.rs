@@ -4,10 +4,12 @@
 //! `#[path]`-included from there.
 
 use super::{
-    agents_referencing_personas, agents_referencing_team, ensure_default_coordination_team,
+    agents_referencing_personas, agents_referencing_team, built_in_team_order,
+    coordination_team_id_for_relay, ensure_default_coordination_team, is_coordination_team_id,
     load_teams_readonly, merge_teams, merge_teams_impl, other_teams_referencing_personas,
-    retire_default_coordination_team, sort_teams, team_references_persona, validate_team_deletion,
-    validate_team_membership, BuiltInTeam, DEFAULT_COORDINATION_TEAM_ID,
+    retire_default_coordination_team, sort_teams, team_applies_to_relay, team_references_persona,
+    validate_team_deletion, validate_team_membership, BuiltInTeam, BUILT_IN_TEAMS,
+    DEFAULT_COORDINATION_TEAM_ID,
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
@@ -24,6 +26,7 @@ fn team(id: &str, name: &str) -> TeamRecord {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "2026-03-20T00:00:00Z".to_string(),
         updated_at: "2026-03-20T00:00:00Z".to_string(),
     }
@@ -393,6 +396,7 @@ fn migration_pristine_fizz_is_purged() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "2026-01-01T00:00:00Z".to_string(),
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
@@ -419,6 +423,7 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "2026-01-01T00:00:00Z".to_string(),
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
@@ -798,4 +803,122 @@ fn merge_teams_retires_the_default_once_blueprint_seeding_lands() {
         1,
         "exactly one coordination team must remain"
     );
+}
+
+// ── per-relay coordination ids and the relay pin ────────────────────────
+
+/// Two relays that canonicalize to themselves, so the fixtures below assert
+/// about the id derivation rather than about URL normalization.
+const RELAY_A: &str = "wss://a.example";
+const RELAY_B: &str = "wss://b.example";
+
+/// The id is a coordinate on disk and (once published) in a `d` tag, so two
+/// spellings of the same relay must never mint two teams for one community.
+#[test]
+fn coordination_id_is_stable_for_equivalent_urls() {
+    assert_eq!(
+        coordination_team_id_for_relay("wss://x.example/"),
+        coordination_team_id_for_relay("wss://x.example")
+    );
+    assert_eq!(
+        coordination_team_id_for_relay("wss://X.Example"),
+        coordination_team_id_for_relay("wss://x.example")
+    );
+}
+
+#[test]
+fn coordination_id_differs_per_relay() {
+    assert_ne!(
+        coordination_team_id_for_relay(RELAY_A),
+        coordination_team_id_for_relay(RELAY_B)
+    );
+}
+
+/// Shape contract. The `builtin-team:` prefix keeps the record recognisable
+/// as this client's own seed; the trailing slug is what
+/// `owning_team_for_chat` in buzz-sdk matches on, and it must keep working
+/// unchanged. The middle stays eight hex characters so the whole coordinate
+/// stays inside the relay's 64-byte `d`-tag budget.
+#[test]
+fn coordination_id_ends_with_slug_and_starts_with_builtin_prefix() {
+    let id = coordination_team_id_for_relay(RELAY_A);
+
+    assert!(id.starts_with("builtin-team:"), "{id}");
+    assert!(id.ends_with("company-coordination"), "{id}");
+    assert_ne!(id, DEFAULT_COORDINATION_TEAM_ID);
+
+    let discriminator = id
+        .strip_prefix("builtin-team:")
+        .and_then(|rest| rest.strip_suffix(":company-coordination"))
+        .expect("id should be prefix, discriminator, then slug");
+    assert_eq!(discriminator.len(), 8, "{id}");
+    assert!(
+        discriminator
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f')),
+        "{id}"
+    );
+}
+
+/// The class test every reader now uses instead of comparing against one
+/// literal id. Blueprint-seeded teams end with the same slug but are user
+/// owned, so they must stay outside it.
+#[test]
+fn is_coordination_team_id_recognises_legacy_and_per_relay_but_not_blueprint() {
+    assert!(is_coordination_team_id(DEFAULT_COORDINATION_TEAM_ID));
+    assert!(is_coordination_team_id(&coordination_team_id_for_relay(
+        RELAY_A
+    )));
+    assert!(!is_coordination_team_id(
+        "company-team:abc123:horizon-labs:company-coordination"
+    ));
+    assert!(!is_coordination_team_id("builtin-team:welcome"));
+    assert!(!is_coordination_team_id("team-1"));
+}
+
+#[test]
+fn team_applies_to_relay_unpinned_matches_everything() {
+    let unpinned = team("team-1", "Any");
+
+    assert_eq!(unpinned.relay_url, None);
+    assert!(team_applies_to_relay(&unpinned, RELAY_A));
+    assert!(team_applies_to_relay(&unpinned, RELAY_B));
+}
+
+#[test]
+fn team_applies_to_relay_pinned_matches_only_canonical_equal() {
+    let mut pinned = team("team-1", "Pinned");
+    pinned.relay_url = Some(RELAY_A.to_string());
+
+    assert!(team_applies_to_relay(&pinned, RELAY_A));
+    assert!(
+        team_applies_to_relay(&pinned, "wss://a.example/"),
+        "an equivalent spelling of the pinned relay must still match"
+    );
+    assert!(!team_applies_to_relay(&pinned, RELAY_B));
+}
+
+/// Regression pin, widened: `built_in_team_order` used to exempt exactly one
+/// literal id. A per-relay coordination team is seeded the same way and is
+/// equally absent from `BUILT_IN_TEAMS`, so it must get the same exemption or
+/// `merge_teams_impl` strips `is_builtin` from it on the very next load.
+#[test]
+fn built_in_team_order_exempts_every_coordination_id() {
+    assert_eq!(
+        built_in_team_order(BUILT_IN_TEAMS, DEFAULT_COORDINATION_TEAM_ID),
+        Some(usize::MAX)
+    );
+    assert_eq!(
+        built_in_team_order(BUILT_IN_TEAMS, &coordination_team_id_for_relay(RELAY_A)),
+        Some(usize::MAX)
+    );
+    assert_eq!(
+        built_in_team_order(BUILT_IN_TEAMS, &coordination_team_id_for_relay(RELAY_B)),
+        Some(usize::MAX)
+    );
+    assert_eq!(
+        built_in_team_order(BUILT_IN_TEAMS, "builtin-team:welcome"),
+        Some(0)
+    );
+    assert_eq!(built_in_team_order(BUILT_IN_TEAMS, "team-1"), None);
 }

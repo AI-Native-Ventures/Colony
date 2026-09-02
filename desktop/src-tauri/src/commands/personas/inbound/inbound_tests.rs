@@ -410,6 +410,7 @@ fn local_team() -> TeamRecord {
         is_symlink: true,
         symlink_target: Some("/external".to_string()),
         version: Some("1.0".to_string()),
+        relay_url: None,
         created_at: "2025-01-01T00:00:00Z".to_string(),
         updated_at: "2025-01-01T00:00:00Z".to_string(),
     }

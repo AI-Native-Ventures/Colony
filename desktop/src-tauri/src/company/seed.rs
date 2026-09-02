@@ -201,6 +201,7 @@ pub fn seed_teams(
             is_symlink: false,
             symlink_target: None,
             version: None,
+            relay_url: None,
             created_at: now.to_string(),
             updated_at: now.to_string(),
         });

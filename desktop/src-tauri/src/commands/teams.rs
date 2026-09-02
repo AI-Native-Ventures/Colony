@@ -193,6 +193,7 @@ pub async fn create_team(input: CreateTeamRequest, app: AppHandle) -> Result<Tea
             is_symlink: false,
             symlink_target: None,
             version: None,
+            relay_url: None,
             created_at: now.clone(),
             updated_at: now,
         };

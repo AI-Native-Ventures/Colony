@@ -591,6 +591,7 @@ fn apply_inbound_team(
                 is_symlink: false,
                 symlink_target: None,
                 version: None,
+                relay_url: None,
                 created_at: now_iso(),
                 updated_at: now_iso(),
             });

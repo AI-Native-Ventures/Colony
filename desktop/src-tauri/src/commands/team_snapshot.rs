@@ -182,6 +182,7 @@ pub(crate) fn build_import_team(
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: now.to_string(),
         updated_at: now.to_string(),
     })
