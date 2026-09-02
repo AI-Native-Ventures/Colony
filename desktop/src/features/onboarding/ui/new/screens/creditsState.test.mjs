@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  checkoutNote,
   defaultPack,
   formatGrant,
   formatPrice,
@@ -88,4 +89,42 @@ test("credits_pack_price_is_selected_never_converted", () => {
   assert.equal(priceOf(STARTER, "ZAR"), 11_900);
   assert.equal(priceOf(STARTER, "USD"), 699);
   assert.notEqual(priceOf(STARTER, "ZAR"), priceOf(STARTER, "USD"));
+});
+
+test("credits_note_promises_a_website_refund_only_when_one_was_read", () => {
+  // The sentence was shown on every onboarding run, including the ones where
+  // the founder answered "no website" and nothing was ever read. Promising
+  // money back against a charge that never happened is a claim the screen
+  // cannot keep.
+  assert.equal(
+    checkoutNote("USD", "idle", false, false),
+    "",
+    "no website read, dollars: nothing to say",
+  );
+  assert.match(
+    checkoutNote("USD", "idle", false, true),
+    /reading your website comes off this first payment/,
+  );
+  assert.doesNotMatch(
+    checkoutNote("ZAR", "idle", false, false),
+    /website/,
+    "the rand explanation must not drag the website promise in with it",
+  );
+  assert.match(
+    checkoutNote("ZAR", "idle", false, true),
+    /reading your website comes off this first payment/,
+  );
+});
+
+test("credits_note_says_what_happened_before_it_says_anything_else", () => {
+  // A failed or unconfirmed checkout is the only thing worth reading at that
+  // moment, so it replaces the note rather than joining it.
+  assert.match(
+    checkoutNote("ZAR", "abandoned", false, true),
+    /^That payment was not completed\./,
+  );
+  assert.match(
+    checkoutNote("ZAR", "idle", true, true),
+    /^We could not reach Colony to confirm that payment\./,
+  );
 });

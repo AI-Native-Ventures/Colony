@@ -115,9 +115,23 @@ test("a non-technical user can get from the first screen to the end", async ({
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
 
-  await page
-    .getByRole("button", { name: "I will run my own agents for now" })
-    .click();
+  // One pack, not the seven-tile ladder. Someone who has not started yet
+  // cannot choose between seven amounts of a thing they have never spent.
+  await expect(page.getByTestId("onboarding-credits-pack")).toHaveCount(1);
+
+  // This walk answered "no website", so nothing was read and the screen must
+  // not offer money back against a reading that never happened.
+  await expect(page.getByText("reading your website")).toHaveCount(0);
+
+  // The Pay button fell below the fold at 1280x720 while the pack grid was
+  // there, and the canvas is fixed to the viewport and clips, so it could not
+  // be scrolled to: a dead end rather than a layout nit.
+  const pay = page.getByTestId("onboarding-credits-pay");
+  await expect(pay).toBeVisible();
+  const payBox = await pay.boundingBox();
+  expect((payBox?.y ?? 0) + (payBox?.height ?? 0)).toBeLessThanOrEqual(660);
+
+  await page.getByTestId("onboarding-credits-later").click();
 
   // The flow hands control back to the app: the canvas unmounts and the main
   // shell takes over. An invite screen must not appear in between, since

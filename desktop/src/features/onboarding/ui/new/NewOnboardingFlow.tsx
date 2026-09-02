@@ -242,6 +242,7 @@ export function NewOnboardingFlow({
 
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [scrapeFailed, setScrapeFailed] = useState(false);
+  const [websiteRead, setWebsiteRead] = useState(false);
   const [invites, setInvites] = useState<string[]>([]);
   const [isSendingInvites, setIsSendingInvites] = useState(false);
 
@@ -459,6 +460,12 @@ export function NewOnboardingFlow({
   const handleReadingDone = useCallback((result: ScrapeResult) => {
     if (result.ok) setDescriptionDraft(result.description);
     setScrapeFailed(!result.ok);
+    // Only a reading that came back with something costs anything to refund
+    // against, and the credits screen may only promise the refund when it
+    // did. A resume that lands straight on credits leaves this false, which
+    // is the safe direction: the screen says nothing rather than promising
+    // money back against a spend it cannot see.
+    setWebsiteRead(result.ok);
     setStep("description");
   }, []);
 
@@ -608,6 +615,7 @@ export function NewOnboardingFlow({
             track={canvasTrack}
             email={answers.account?.email ?? ""}
             pubkey={pubkey}
+            websiteRead={websiteRead}
             payments={effectiveServices.payments}
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}

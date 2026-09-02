@@ -84,9 +84,7 @@ test("public first run: fresh identity to Welcome through the canvas flow", asyn
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "I will run my own agents for now" })
-    .click();
+  await page.getByTestId("onboarding-credits-later").click();
 
   // The flow hands control to the app only once the workspace is open.
   await expect(page.locator(".onb-canvas")).toHaveCount(0, {
