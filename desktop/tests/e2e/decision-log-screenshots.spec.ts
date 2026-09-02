@@ -62,8 +62,9 @@ function decisionLog({
 }
 
 async function openLeadDecisionLog(page: Page) {
-  await page.goto("/#/agents?section=people");
+  await page.goto("/#/agents");
   const entry = page.getByTestId(`decision-log-entry-${LEAD_PUBKEY}`);
+  await entry.scrollIntoViewIfNeeded();
   await expect(entry).toBeVisible();
   await entry.click();
   const dialog = page.getByTestId("decision-log-dialog");

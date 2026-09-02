@@ -38,6 +38,22 @@ export function rankLabel(rank: AgentRank): string {
   return RANK_LABELS[rank];
 }
 
+const RANK_ORDER: Record<AgentRank, number> = {
+  worker: 0,
+  leader: 1,
+  executive: 2,
+};
+
+/**
+ * Whether moving from `current` to `next` is a promotion. It matters beyond
+ * the label: delegation grants are community-wide and resolve on rank alone,
+ * so a promotion to leader or above hands the agent every active grant at
+ * once. Every surface that changes a rank has to gate on this.
+ */
+export function isPromotion(current: AgentRank, next: AgentRank): boolean {
+  return RANK_ORDER[next] > RANK_ORDER[current];
+}
+
 export function parseRank(value: string | undefined): AgentRank | null {
   if (value === "worker" || value === "leader" || value === "executive") {
     return value;

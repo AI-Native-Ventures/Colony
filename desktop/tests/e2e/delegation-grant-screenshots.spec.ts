@@ -67,8 +67,9 @@ const SEEDED_GRANTS: RelayEvent[] = [
 ];
 
 async function openPeopleSection(page: import("@playwright/test").Page) {
-  await page.goto("/#/agents?section=people");
+  await page.goto("/#/agents");
   const section = page.getByTestId("people-roles-section");
+  await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
   return section;
 }

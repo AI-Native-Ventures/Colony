@@ -17,7 +17,6 @@ function targets(overrides = {}) {
     goDiscovery: target,
     goHome: target,
     goNewMessage: target,
-    goPeople: target,
     goProjects: target,
     goPulse: target,
     goSettings: target,
@@ -38,7 +37,6 @@ test("buildNavigationCommands includes enabled destinations", () => {
     [
       "open-home",
       "open-agents",
-      "open-people",
       "new-message",
       "browse-channels",
       "open-settings",

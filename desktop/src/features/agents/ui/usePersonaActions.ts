@@ -372,7 +372,7 @@ export function usePersonaActions() {
             // back that long and then reported a failure for something the
             // owner never asked for. It runs detached, and a failure leaves
             // the agent where it always used to land: Unranked, re-placeable
-            // from People and roles.
+            // from the org chart on the Agents page.
             if (!chosePlacement) {
               void place().catch(() => {});
             } else
@@ -381,7 +381,8 @@ export function usePersonaActions() {
               } catch (rankError) {
                 // Creation succeeded; the org placement the owner explicitly
                 // asked for is the part that failed. Name it so they know to
-                // retry from People and roles rather than re-creating.
+                // retry from the org chart on the Agents page rather than
+                // re-creating.
                 setPersonaErrorMessage(
                   rankError instanceof Error
                     ? `${created.agent.name} was created, but placing it in the org failed: ${rankError.message}`

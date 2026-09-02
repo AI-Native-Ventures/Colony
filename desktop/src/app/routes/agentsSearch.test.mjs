@@ -16,7 +16,6 @@ test("agents search keeps profile panel state", () => {
       profilePersona: "custom:reviewer",
       profileTab: "runtime",
       profileView: "diagnostics",
-      section: undefined,
     },
   );
 });
@@ -34,34 +33,21 @@ test("agents search drops empty profile values", () => {
       profilePersona: undefined,
       profileTab: undefined,
       profileView: undefined,
-      section: undefined,
     },
   );
 });
 
-test("agents search accepts the people section anchor", () => {
+test("agents search ignores the retired section param", () => {
   assert.deepEqual(validateAgentsSearch({ section: "people" }), {
     profile: undefined,
     profilePersona: undefined,
     profileTab: undefined,
     profileView: undefined,
-    section: "people",
-  });
-});
-
-test("agents search drops unknown sections", () => {
-  assert.deepEqual(validateAgentsSearch({ section: "teams" }), {
-    profile: undefined,
-    profilePersona: undefined,
-    profileTab: undefined,
-    profileView: undefined,
-    section: undefined,
   });
   assert.deepEqual(validateAgentsSearch({ section: 7 }), {
     profile: undefined,
     profilePersona: undefined,
     profileTab: undefined,
     profileView: undefined,
-    section: undefined,
   });
 });
