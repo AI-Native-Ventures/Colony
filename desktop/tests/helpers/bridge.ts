@@ -242,6 +242,24 @@ type MockBridgeOptions = {
    */
   companyWorkContext?: {
     initiativeId?: string;
+    /** Initiative heads beyond the one `initiativeId` names. */
+    initiatives?: Array<{
+      id: string;
+      title: string;
+      status?: string;
+      summary?: string;
+      costCentreId?: string;
+    }>;
+    /**
+     * Task heads seeded up front, so a per-initiative task count above the
+     * single Task the send flow mints can be proven.
+     */
+    tasks?: Array<{
+      id: string;
+      title: string;
+      initiativeId?: string | null;
+      status?: string;
+    }>;
     taskId: string;
     owningTeamId: string;
     qaPersonaId: string;
