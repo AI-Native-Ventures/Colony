@@ -138,16 +138,14 @@ export function createWorkContextResolver(
       );
     }
 
-    // A conflict names no head — the read still goes by coordinate. An
-    // applied receipt and a superseded claim both name an event id directly,
-    // and reading that exact event sidesteps whatever indexing the `#d` tag
-    // filter otherwise waits on.
+    // Only an applied receipt names a Task head, and reading that exact
+    // event sidesteps whatever indexing the `#d` tag filter otherwise waits
+    // on. A conflict names no event at all. A superseded claim names the
+    // company ACTION event that won the idempotency claim, signed by the
+    // owner under a different kind, so it is not a head id and reading it as
+    // one can only ever miss. Both go by coordinate instead.
     const headEventId =
-      outcome.status === "applied"
-        ? outcome.headEventId
-        : outcome.status === "superseded"
-          ? outcome.winnerEventId
-          : null;
+      outcome.status === "applied" ? outcome.headEventId : null;
     const task = await dependencies.loadTask(planned.taskId, headEventId);
     if (!task.ok) {
       throw new Error(
