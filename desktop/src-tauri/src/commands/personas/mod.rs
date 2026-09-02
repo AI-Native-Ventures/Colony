@@ -28,7 +28,7 @@ fn trim_optional(value: Option<String>) -> Option<String> {
 }
 
 mod pending;
-mod scope;
+pub(in crate::commands) mod scope;
 pub(in crate::commands) use pending::retain_persona_pending;
 pub(super) use pending::tombstone_persona_pending;
 mod create;

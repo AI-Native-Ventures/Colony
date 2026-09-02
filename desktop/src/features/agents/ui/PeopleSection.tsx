@@ -21,6 +21,7 @@ import {
   rankDelegationLabel,
 } from "@/features/agents/delegationAuthority";
 import { useCommunityOwnersQuery } from "@/features/agents/communityOwners";
+import { BackfillOrgPlacementButton } from "@/features/agents/ui/BackfillOrgPlacementButton";
 import {
   buildOrgTree,
   type OrgMember,
@@ -314,6 +315,14 @@ export function PeopleSection() {
                 No reporting line yet. Assign a manager from each agent's Edit
                 dialog to place them on the chart.
               </p>
+              <BackfillOrgPlacementButton
+                ownerPubkeys={ownersQuery.data ?? new Set<string>()}
+                unplaced={tree.unassigned.map((node) => ({
+                  pubkey: node.member.pubkey,
+                  name: node.member.name,
+                  rank: node.member.rank,
+                }))}
+              />
               <div className="mt-3 flex flex-col gap-2">
                 {tree.unassigned.map((node) => (
                   <OrgNodeCard

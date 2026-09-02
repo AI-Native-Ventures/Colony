@@ -81,6 +81,73 @@ pub fn plan_task_completion(
     })
 }
 
+/// The longest a task title may be, mirroring `MAX_NAME_LEN` in buzz-core:
+/// the relay validates the replacement and would refuse anything longer.
+const MAX_TITLE_LEN: usize = 200;
+
+fn clamp_title(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= MAX_TITLE_LEN {
+        return trimmed.to_owned();
+    }
+    trimmed.chars().take(MAX_TITLE_LEN).collect()
+}
+
+/// Rename a task to the name the agent gave its own work.
+///
+/// A chat-attributed Task is minted before the agent's turn starts, so its
+/// title is the raw message that created it. The agent cannot fix that
+/// itself: `KIND_COMPANY_ACTION` is owner-only, and an agent holds
+/// `MessagesWrite`. What it can write is a checkpoint summary, and this is
+/// how the owner's device turns that summary into the task's name.
+///
+/// Only the title moves. Status, assignees, and every chain field are carried
+/// through untouched, so a rename can never double as a transition.
+pub fn plan_task_rename(
+    task: &CompanyTask,
+    head_event_id: &str,
+    title: &str,
+    relay_pubkey: &str,
+) -> Result<CompanyAction, String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err("a task title cannot be blank".to_string());
+    }
+    let next_title = clamp_title(trimmed);
+    if next_title == task.title {
+        return Err("that is already the task's title".to_string());
+    }
+    // Only work that has actually started earns a name from the agent. A
+    // terminal task keeps the title it was completed under, so the record of
+    // what was asked does not change after the fact.
+    match task.status {
+        TaskStatus::Completed | TaskStatus::Cancelled => {
+            return Err("a finished task keeps the title it finished under".to_string());
+        }
+        _ => {}
+    }
+
+    let mut next = task.clone();
+    next.title = next_title.clone();
+    // Monotonic and derived from the head this is pinned to, not the clock,
+    // so a retry against the same head produces identical bytes.
+    next.updated_at = task.updated_at.saturating_add(1);
+
+    Ok(CompanyAction {
+        relay_pubkey: relay_pubkey.to_string(),
+        operation: CompanyActionOperation::Transition,
+        request_id: step_idempotency_key(&task.id, "agent-rename"),
+        idempotency_key: step_idempotency_key(
+            &task.id,
+            &format!("agent-rename:{head_event_id}:{next_title}"),
+        ),
+        target: coordinate(relay_pubkey, &task.id),
+        expected_head: Some(head_event_id.to_string()),
+        expected_references: Vec::new(),
+        payload: CompanyActionPayload::Task(next),
+    })
+}
+
 /// Park a task until `wake_at`.
 pub fn plan_task_snooze(
     task: &CompanyTask,
@@ -158,6 +225,68 @@ mod tests {
 
     const RELAY: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
     const HEAD: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn a_rename_moves_only_the_title() {
+        let original = task(TaskStatus::InProgress, DoerKind::Agent);
+        let action = plan_task_rename(
+            &original,
+            "aa11",
+            "Summarise recent OpenClaw releases",
+            RELAY,
+        )
+        .expect("rename planned");
+        let CompanyActionPayload::Task(next) = &action.payload else {
+            panic!("a rename must carry a task payload");
+        };
+        assert_eq!(next.title, "Summarise recent OpenClaw releases");
+        // Everything else is carried through, so a rename can never double as
+        // a transition.
+        assert_eq!(next.status, original.status);
+        assert_eq!(next.assignee_persona_ids, original.assignee_persona_ids);
+        assert_eq!(next.bounce_count, original.bounce_count);
+        assert_eq!(next.updated_at, original.updated_at + 1);
+    }
+
+    #[test]
+    fn a_blank_or_unchanged_title_is_refused() {
+        let original = task(TaskStatus::InProgress, DoerKind::Agent);
+        assert!(plan_task_rename(&original, "aa11", "   ", RELAY).is_err());
+        assert!(plan_task_rename(&original, "aa11", "Run outreach", RELAY).is_err());
+    }
+
+    #[test]
+    fn a_finished_task_keeps_the_title_it_finished_under() {
+        for status in [TaskStatus::Completed, TaskStatus::Cancelled] {
+            let original = task(status, DoerKind::Agent);
+            assert!(
+                plan_task_rename(&original, "aa11", "Something else", RELAY).is_err(),
+                "{status:?} must not be renameable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rename_is_idempotent_against_the_same_head_and_title() {
+        let original = task(TaskStatus::InProgress, DoerKind::Agent);
+        let first = plan_task_rename(&original, "aa11", "Check releases", RELAY).unwrap();
+        let second = plan_task_rename(&original, "aa11", "Check releases", RELAY).unwrap();
+        assert_eq!(first.idempotency_key, second.idempotency_key);
+        // A different head is a different attempt: the task moved underneath.
+        let other = plan_task_rename(&original, "bb22", "Check releases", RELAY).unwrap();
+        assert_ne!(first.idempotency_key, other.idempotency_key);
+    }
+
+    #[test]
+    fn an_overlong_title_is_clamped_rather_than_refused() {
+        let original = task(TaskStatus::InProgress, DoerKind::Agent);
+        let long = "x".repeat(400);
+        let action = plan_task_rename(&original, "aa11", &long, RELAY).expect("clamped");
+        let CompanyActionPayload::Task(next) = &action.payload else {
+            panic!("expected a task payload");
+        };
+        assert_eq!(next.title.chars().count(), 200);
+    }
 
     fn task(status: TaskStatus, doer_kind: DoerKind) -> CompanyTask {
         CompanyTask {

@@ -56,6 +56,7 @@ mod notifications;
 mod observer_archive;
 mod openrouter_connect;
 mod openrouter_quota;
+pub mod org_placement;
 mod os_idle;
 pub mod pairing;
 mod personas;
