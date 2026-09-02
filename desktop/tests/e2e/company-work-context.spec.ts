@@ -81,6 +81,30 @@ async function readCommands(page: import("@playwright/test").Page) {
   );
 }
 
+/** The arguments of the last `send_channel_message` the app invoked. */
+async function readLastSendArgs(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const payloads =
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_PAYLOADS__?: {
+            command: string;
+            payload: unknown;
+          }[];
+        }
+      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [];
+    for (let index = payloads.length - 1; index >= 0; index -= 1) {
+      if (payloads[index].command === "send_channel_message") {
+        return payloads[index].payload as {
+          mediaTags?: string[][] | null;
+          workTags?: string[][] | null;
+        };
+      }
+    }
+    return null;
+  });
+}
+
 async function mentionJasonAndSend(
   page: import("@playwright/test").Page,
   instruction: string,
@@ -150,6 +174,16 @@ test("an agent-directed message is charged to a Task the relay confirmed first",
   expect(reference("task")).toEqual([TASK_ID]);
   expect(reference("initiative")).toEqual([INITIATIVE_ID]);
   expect(reference("team")).toEqual([COORDINATION_TEAM]);
+
+  // The three references reach the native command on the work-context arg,
+  // never the imeta-only media one. They rode `mediaTags` for the life of the
+  // feature, where the native `imeta_tags` guard rejected the first of them
+  // and failed the send after the Task had already been created and paid for.
+  const sendArgs = await readLastSendArgs(page);
+  expect(sendArgs?.workTags).toEqual(
+    expect.arrayContaining([["task", TASK_ID]]),
+  );
+  expect(sendArgs?.mediaTags ?? []).toEqual([]);
 
   // Cost centre, client, purpose, and classification are properties of the
   // Task. A message that carried them would be a message that could lie.

@@ -39,6 +39,12 @@ export type SendChannelMessageInput = {
   /** `["client", marker]` tags, for idempotency markers. */
   clientTags?: string[][];
   linkPreviewTags?: string[][];
+  /**
+   * Work-context tags: `["task", id]`, `["team", id]`, `["initiative", id]`.
+   * Their own channel because they used to ride `mediaTags`, where the
+   * imeta-only guard rejected them and failed the send outright.
+   */
+  workTags?: string[][];
   sentFromThreadTag?: string[];
 };
 
@@ -54,6 +60,7 @@ export async function sendChannelMessage({
   blockReferenceTags,
   clientTags,
   linkPreviewTags,
+  workTags,
   sentFromThreadTag,
 }: SendChannelMessageInput): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
@@ -68,6 +75,7 @@ export async function sendChannelMessage({
       blockReferenceTags: blockReferenceTags ?? null,
       clientTags: clientTags ?? null,
       linkPreviewTags,
+      workTags: workTags ?? null,
       sentFromThreadTag: sentFromThreadTag ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,

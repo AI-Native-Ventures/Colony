@@ -763,6 +763,7 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
         &chat_root,
         "Prepare the interruption-safe investor update",
         None,
+        None,
         &fixture.relay,
         stamp + 1,
     )

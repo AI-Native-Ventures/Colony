@@ -61,6 +61,12 @@ export type EnsureChatTaskInput = {
   agentPubkey: string;
   title: string;
   clientOrganizationId: string | null;
+  /**
+   * Root event id of the thread this send replies in, `null` at channel root.
+   * The relay scopes its task-created notice into a thread only when the Task
+   * names one.
+   */
+  threadRoot: string | null;
   relayPubkey: string;
 };
 
@@ -74,6 +80,7 @@ export async function ensureChatTask(
     agentPubkey: input.agentPubkey,
     title: input.title,
     clientOrganizationId: input.clientOrganizationId,
+    threadRoot: input.threadRoot,
     relayPubkey: input.relayPubkey,
   });
 }

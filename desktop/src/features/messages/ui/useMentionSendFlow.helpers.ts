@@ -69,19 +69,44 @@ export function mergeOutgoingTagsWithReferenceMentions(
   ];
 }
 
+/**
+ * `threadRoot` is the root event id of the thread this send replies in, and
+ * `null` at channel root. It reaches the Task so the relay can scope its
+ * task-created notice into that thread; without it every notice landed at
+ * channel root, where it read as the work having been started somewhere the
+ * owner was not looking.
+ */
 export async function attachOutgoingWorkContext(
   channelId: string,
   content: string,
   agentPubkeys: readonly string[],
   mediaTags: string[][] | undefined,
   outgoingTags?: string[][],
+  threadRoot?: string | null,
 ) {
   return await attachWorkContext({
     channelId,
     content,
     agentPubkeys,
     outgoingTags: mergeOutgoingTags(mediaTags, outgoingTags ?? []) ?? [],
+    threadRoot: threadRoot ?? null,
   });
+}
+
+/**
+ * The thread a send belongs to, as the Task should name it.
+ *
+ * A reply deep in a thread names the thread's head, not its immediate parent,
+ * because the relay's row marker is `["e", root, "", "root"]`. When only a
+ * parent is known it is the head: a first reply's parent is the thread root.
+ */
+export function threadRootForWorkContext(
+  threadContext: {
+    parentEventId: string | null;
+    threadHeadId: string | null;
+  } | null,
+): string | null {
+  return threadContext?.threadHeadId ?? threadContext?.parentEventId ?? null;
 }
 
 export function buildTypedMentionRouting({
@@ -150,6 +175,34 @@ export function createFinishSendFailureHandler(
     restoreComposerAfterFailure();
     toast.error(getErrorMessage(error, "The message could not be sent."));
   };
+}
+
+/**
+ * Run `finishSend`, reporting anything it rejects with instead of swallowing
+ * it.
+ *
+ * Both of completeSend's outer catch sites used to restore the draft and say
+ * nothing, on the premise that a failure reaching them had already been
+ * toasted by the attach step. The premise is false: attach catches its own
+ * failure and `return`s, so the only errors that ever arrive here are
+ * `send()`'s. Every one of them was invisible. A message rejected by the
+ * native send command (for example a tag the event builder refuses) came back
+ * as a restored draft and nothing else, and the owner had no way to tell a
+ * failed send from one that had not been attempted.
+ *
+ * A caller that shows its own inline error for a failed send (the new-message
+ * screen does) will now show that error and this toast. Reporting twice is the
+ * lesser fault against reporting not at all.
+ */
+export async function runReportingFinishSendFailures(
+  finishSend: () => Promise<void>,
+  handleFinishSendFailure: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await finishSend();
+  } catch (error) {
+    handleFinishSendFailure(error);
+  }
 }
 
 /**

@@ -350,10 +350,17 @@ export function mergeOutgoingTags(
 /**
  * Inverse of `mergeOutgoingTags`: split a merged outgoing tag set back into
  * imeta media tags, NIP-30 `["emoji", ...]` tags, reference-only mention tags,
- * link-preview snapshot tags (`["link-preview", ...]`), and typed addressable
- * entity reference tags (Block, Cohort, ...), so the send path can route each
- * to its own validated Tauri arg. Any other prefix stays with `mediaTags`;
- * the imeta guard will reject it, which is the intended injection defense.
+ * link-preview snapshot tags (`["link-preview", ...]`), typed addressable
+ * entity reference tags (Block, Cohort, ...), and work-context tags
+ * (`["task", ...]`, `["team", ...]`, `["initiative", ...]`), so the send path
+ * can route each to its own validated Tauri arg. Any other prefix stays with
+ * `mediaTags`; the imeta guard will reject it, which is the intended injection
+ * defense.
+ *
+ * Work-context tags had no bucket until 2026-09-02 and so fell into that
+ * `else`. The imeta guard then rejected the whole send, which is why every
+ * agent mention whose text implied work created and paid for a Task on the
+ * relay and then never posted a message.
  */
 export function splitOutgoingTags(tags: string[][] | undefined): {
   mediaTags: string[][];
@@ -361,12 +368,14 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
   mentionTags: string[][];
   referenceTags: string[][];
   linkPreviewTags: string[][];
+  workTags: string[][];
 } {
   const mediaTags: string[][] = [];
   const emojiTags: string[][] = [];
   const mentionTags: string[][] = [];
   const referenceTags: string[][] = [];
   const linkPreviewTags: string[][] = [];
+  const workTags: string[][] = [];
   for (const tag of tags ?? []) {
     if (tag[0] === "emoji") {
       emojiTags.push(tag);
@@ -379,9 +388,37 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
       (tag[0] === "discovery" && tag.length >= 3)
     ) {
       referenceTags.push(tag);
+    } else if (isWorkContextTag(tag)) {
+      workTags.push(tag);
     } else {
       mediaTags.push(tag);
     }
   }
-  return { mediaTags, emojiTags, mentionTags, referenceTags, linkPreviewTags };
+  return {
+    mediaTags,
+    emojiTags,
+    mentionTags,
+    referenceTags,
+    linkPreviewTags,
+    workTags,
+  };
+}
+
+/** Tag names the work-context channel carries. Mirrors the Rust allowlist. */
+const WORK_CONTEXT_TAG_NAMES = new Set(["task", "team", "initiative"]);
+
+/**
+ * A work-context tag is routed by NAME alone.
+ *
+ * Routing on shape as well sent a malformed work tag, say `["task", ""]`, down
+ * the media bucket, where the imeta guard refused it with "media tags must use
+ * 'imeta' prefix". That names the wrong channel: nothing about the send was
+ * media, and the failure read as an attachment bug rather than a missing task
+ * id. Only the allowlisted three names come here, so this is not a hole for
+ * arbitrary tags; the Rust `work_context_tags` validator still enforces the
+ * `[name, value]` shape, a non-blank value, and its bound and charset, and now
+ * gets to say so in its own words.
+ */
+function isWorkContextTag(tag: string[]): boolean {
+  return WORK_CONTEXT_TAG_NAMES.has(tag[0]);
 }

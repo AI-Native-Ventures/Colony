@@ -129,6 +129,83 @@ fn emoji_tags(emoji_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Str
     Ok(())
 }
 
+/// Tag names the work-context channel carries. Mirrors `WORK_CONTEXT_TAG_NAMES`
+/// in `desktop/src/features/messages/lib/imetaMediaMarkdown.ts`.
+const WORK_CONTEXT_TAG_NAMES: &[&str] = &["task", "team", "initiative"];
+
+/// Longest work-context tag value the composer may sign. Matches the cap
+/// `valid_cohort_id` puts on a reference tag's id in `events/reference_tags.rs`.
+const MAX_WORK_CONTEXT_VALUE_LEN: usize = 128;
+
+/// Whether a work-context tag value is a well-formed id.
+///
+/// Mirrors `valid_cohort_id` in `events/reference_tags.rs`: bounded length and
+/// a closed charset, so no control character, newline or unbounded blob reaches
+/// a signed event through this channel. Every value this carries is a machine
+/// id (`chat:<uuid>`, `builtin-team:company-coordination`), never prose, so the
+/// lowercase-and-punctuation charset costs nothing legitimate.
+fn valid_work_context_value(value: &str) -> bool {
+    if value.is_empty() || value.len() > MAX_WORK_CONTEXT_VALUE_LEN {
+        return false;
+    }
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+}
+
+/// Validate and append work-context tags. Mirrors `imeta_tags` and
+/// `emoji_tags`: a closed allowlist, so this channel cannot smuggle a forged
+/// "h"/"e"/"p" tag any more than the other two can.
+///
+/// These tags carry the Task, Team and Initiative a message is attributed to.
+/// They arrived on the imeta-only media argument until 2026-09-02, where
+/// `imeta_tags` rejected the first one and the send failed before anything was
+/// signed. Every agent mention whose text implied work created and paid for a
+/// Task on the relay and then never posted a message.
+///
+/// Each tag is exactly `[name, value]` with a non-blank, bounded value. The
+/// composer routes a work tag here by name alone, so a malformed one arrives
+/// on this channel rather than being refused by the imeta guard under a
+/// message that names the wrong channel.
+fn work_context_tags(work_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for wt in work_tags {
+        let name = wt.first().map(String::as_str).unwrap_or_default();
+        if !WORK_CONTEXT_TAG_NAMES.contains(&name) {
+            return Err(format!(
+                "work tags must be one of {} (got {:?})",
+                WORK_CONTEXT_TAG_NAMES.join(", "),
+                wt.first()
+            ));
+        }
+        if wt.len() != 2 {
+            return Err(format!(
+                "work tag \"{name}\" must be [name, value] (got {} elements)",
+                wt.len()
+            ));
+        }
+        let value = wt[1].trim();
+        if value.is_empty() {
+            return Err(format!("work tag \"{name}\" must carry a value"));
+        }
+        if !valid_work_context_value(value) {
+            return Err(format!(
+                "work tag \"{name}\" value must be at most \
+                 {MAX_WORK_CONTEXT_VALUE_LEN} characters of lowercase ASCII, \
+                 digits, and \".\", \"_\", \":\" or \"-\""
+            ));
+        }
+        tags.push(tag(vec![name, value])?);
+    }
+    Ok(())
+}
+
 /// Validate a hex pubkey is exactly 64 hex characters.
 fn check_pubkey(pubkey: &str) -> Result<(), String> {
     if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -351,6 +428,7 @@ pub fn build_message_with_reference_tags(
         &crate::relay::relay_api_base_url(),
         &[],
         reference_tags,
+        &[],
     )
 }
 
@@ -370,6 +448,7 @@ pub fn build_message_with_reference_and_client_tags(
     relay_base: &str,
     client_tags: &[Vec<String>],
     reference_tags: &[Vec<String>],
+    work_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     build_message_with_client_and_reference_tags(
         channel_id,
@@ -384,6 +463,7 @@ pub fn build_message_with_reference_and_client_tags(
         relay_base,
         client_tags,
         reference_tags,
+        work_tags,
     )
 }
 
@@ -422,6 +502,7 @@ pub fn build_message_with_client_tags(
         relay_base,
         client_tags,
         &[],
+        &[],
     )
 }
 
@@ -439,6 +520,7 @@ fn build_message_with_client_and_reference_tags(
     relay_base: &str,
     client_tags: &[Vec<String>],
     reference_tags: &[Vec<String>],
+    work_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
@@ -453,6 +535,7 @@ fn build_message_with_client_and_reference_tags(
     append_sent_from_thread_tag(sent_from_thread_tag, &mut tags)?;
     append_client_tags(client_tags, &mut tags)?;
     append_block_reference_tags(reference_tags, &mut tags)?;
+    work_context_tags(work_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
 }
 

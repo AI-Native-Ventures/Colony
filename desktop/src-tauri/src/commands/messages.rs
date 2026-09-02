@@ -499,6 +499,7 @@ pub async fn send_channel_message(
     block_reference_tags: Option<Vec<Vec<String>>>,
     client_tags: Option<Vec<Vec<String>>>,
     link_preview_tags: Option<Vec<Vec<String>>>,
+    work_tags: Option<Vec<Vec<String>>>,
     sent_from_thread_tag: Option<Vec<String>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
@@ -514,6 +515,7 @@ pub async fn send_channel_message(
     let block_references = block_reference_tags.unwrap_or_default();
     let client_markers = client_tags.unwrap_or_default();
     let link_previews = link_preview_tags.unwrap_or_default();
+    let work = work_tags.unwrap_or_default();
     let relay_base = crate::relay::relay_api_base_url_with_override(&state);
     let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
     if sent_from_thread_tag.is_some() && kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE {
@@ -524,6 +526,9 @@ pub async fn send_channel_message(
     }
     if kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE && !client_markers.is_empty() {
         return Err("client marker tags are only supported on stream messages".into());
+    }
+    if kind_num != buzz_core_pkg::kind::KIND_STREAM_MESSAGE && !work.is_empty() {
+        return Err("work context tags are only supported on stream messages".into());
     }
 
     let mut resolved_root: Option<String> = None;
@@ -573,6 +578,7 @@ pub async fn send_channel_message(
                 &relay_base,
                 &client_markers,
                 &block_references,
+                &work,
             )?
         }
     };
