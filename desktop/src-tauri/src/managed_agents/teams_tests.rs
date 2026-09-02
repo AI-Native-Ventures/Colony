@@ -6,9 +6,10 @@
 //! sibling, `coordination_tests.rs`, which reuses the fixtures below.
 
 use super::{
-    agents_referencing_personas, agents_referencing_team, load_teams_readonly, merge_teams,
-    merge_teams_impl, other_teams_referencing_personas, sort_teams, team_references_persona,
-    validate_team_deletion, validate_team_membership, BuiltInTeam,
+    agents_referencing_personas, agents_referencing_team, load_teams_readonly,
+    merge_preserving_hidden_members, merge_teams, merge_teams_impl,
+    other_teams_referencing_personas, sort_teams, team_references_persona, validate_team_deletion,
+    validate_team_membership, BuiltInTeam,
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
@@ -519,4 +520,67 @@ fn load_teams_readonly_surfaces_read_error() {
         result.unwrap_err().contains("failed to read teams store"),
         "read error must be surfaced"
     );
+}
+
+// -- keeping members the editing community cannot see -------------------
+
+fn ids(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+/// The clobber this exists to stop. The dialog is populated from the
+/// workspace-scoped persona list, so an edit made on one community submits
+/// only that community's members; writing it back wholesale deleted the
+/// others from a store both communities share, with nothing in the dialog
+/// ever showing they were there.
+#[test]
+fn edit_on_one_community_keeps_members_scoped_to_another() {
+    let stored = ids(&["here:ann", "there:bo", "here:cass", "there:dee"]);
+    let hidden = ids(&["there:bo", "there:dee"]);
+
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann", "here:cass"]), &hidden);
+
+    assert_eq!(
+        merged,
+        ids(&["here:ann", "here:cass", "there:bo", "there:dee"]),
+        "hidden members are kept, appended in their stored order"
+    );
+}
+
+/// The submission stays authoritative for everything it could see, so
+/// removing a member still removes them.
+#[test]
+fn edit_can_still_remove_a_visible_member() {
+    let stored = ids(&["here:ann", "there:bo", "here:cass"]);
+    let hidden = ids(&["there:bo"]);
+
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann"]), &hidden);
+
+    assert_eq!(merged, ids(&["here:ann", "there:bo"]));
+    assert!(
+        !merged.contains(&"here:cass".to_string()),
+        "a member the editor could see and dropped must stay dropped"
+    );
+}
+
+/// A hidden member the submission names anyway is not duplicated.
+#[test]
+fn merge_does_not_duplicate_a_hidden_member_that_was_submitted() {
+    let stored = ids(&["here:ann", "there:bo"]);
+    let hidden = ids(&["there:bo"]);
+
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann", "there:bo"]), &hidden);
+
+    assert_eq!(merged, ids(&["here:ann", "there:bo"]));
+}
+
+/// A member whose definition exists nowhere is never hidden, so it stays
+/// removable. The card already warns about it and the dialog shows it.
+#[test]
+fn merge_does_not_resurrect_a_member_that_exists_nowhere() {
+    let stored = ids(&["here:ann", "ghost"]);
+
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann"]), &[]);
+
+    assert_eq!(merged, ids(&["here:ann"]));
 }

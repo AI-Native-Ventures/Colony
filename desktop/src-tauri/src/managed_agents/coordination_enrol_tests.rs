@@ -255,3 +255,28 @@ fn publish_rule_takes_a_blueprint_coordination_team_pinned_here() {
     assert!(team_publishes_to_relay(&real, RELAY_A));
     assert!(!team_publishes_to_relay(&real, RELAY_B));
 }
+
+/// A scope with no relay names no community, so nothing that names one may
+/// be published into it. The blank case is reachable: a `RetentionScope` can
+/// carry an empty relay before a workspace has resolved one, and the loose
+/// reading (treat blank as "matches anything") would push every community's
+/// teams onto whatever connection that scope ends up using, which is the
+/// device-wide leak this change retires. Unpinned teams still publish: they
+/// name no community either, and that is exactly how every team behaved
+/// before the pin existed.
+#[test]
+fn publish_rule_skips_everything_pinned_for_a_blank_relay() {
+    let ours = seeded_for(RELAY_A);
+    let blueprint = blueprint_team_pinned_to(RELAY_A);
+    let mut pinned_user_team = team("team-alpha", "Alpha");
+    pinned_user_team.relay_url = Some(RELAY_B.to_string());
+    let unpinned_user_team = team("team-beta", "Beta");
+
+    assert!(!team_publishes_to_relay(&ours, ""));
+    assert!(!team_publishes_to_relay(&blueprint, ""));
+    assert!(!team_publishes_to_relay(&pinned_user_team, ""));
+    assert!(
+        team_publishes_to_relay(&unpinned_user_team, ""),
+        "a team that names no community is not one this scope can leak"
+    );
+}

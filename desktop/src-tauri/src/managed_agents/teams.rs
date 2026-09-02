@@ -220,6 +220,40 @@ pub fn validate_team_membership(
     Ok(())
 }
 
+/// The membership to store after an edit, keeping members this community
+/// cannot see.
+///
+/// One `teams.json` serves every community this device joined, but the edit
+/// dialog is populated from the workspace-scoped persona list, so it submits
+/// only the members the community doing the editing can see. Writing that
+/// list back wholesale is a silent delete: editing a team's name on Colony
+/// stripped every member whose agents live only on Horizon, and nothing in
+/// the dialog ever showed they were there.
+///
+/// `submitted` is authoritative for everything visible, so a member the user
+/// actually removed stays removed. `hidden` is the stored members whose
+/// definitions exist but are scoped out of the editing community; they are
+/// appended in their stored order, after the submitted list, and only when
+/// the submission did not already name them.
+///
+/// A stored member whose definition exists NOWHERE is deliberately not
+/// hidden: it is a real gap the card already warns about, it is visible in
+/// the dialog, and it has to stay removable.
+pub(crate) fn merge_preserving_hidden_members(
+    stored: &[String],
+    submitted: Vec<String>,
+    hidden: &[String],
+) -> Vec<String> {
+    let mut merged = submitted;
+    for member in stored {
+        let is_hidden = hidden.iter().any(|id| id == member);
+        if is_hidden && !merged.contains(member) {
+            merged.push(member.clone());
+        }
+    }
+    merged
+}
+
 /// Whether a team depends on a persona as either a member or its lead.
 ///
 /// Checking both fields is intentionally defensive: valid new records always

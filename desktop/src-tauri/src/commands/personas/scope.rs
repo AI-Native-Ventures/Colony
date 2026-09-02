@@ -13,7 +13,10 @@
 //! it), and it hides the built-ins that ship with the app before they are
 //! first started, which is most of the first-run surface.
 
-use crate::{managed_agents::ManagedAgentRecord, relay::agent_belongs_to_workspace};
+use crate::{
+    managed_agents::ManagedAgentRecord,
+    relay::{agent_belongs_to_workspace, agent_boundary::canonical},
+};
 
 /// The only three things about an agent this rule needs.
 ///
@@ -86,17 +89,34 @@ pub(in crate::commands) fn definition_in_workspace(
 /// longer in your agents". They were not gone; they were scoped out by the
 /// rule above while the team itself was not.
 ///
-/// A team lists unless one of its members is a definition that exists but
-/// lives only in another community. Built-in teams always list. A member
-/// that exists nowhere is a real gap, so the team stays visible and the
-/// card's warning is for once telling the truth.
+/// Teams now carry a pin, and it is checked FIRST, ahead of the built-in
+/// exemption. A team named after another community is not this community's
+/// to show whatever else is true of it, and per-relay coordination teams are
+/// both built in and pinned: exempting built-ins before reading the pin would
+/// put every community's coordination team on every community's list, which
+/// is the device-wide record this change exists to retire wearing a different
+/// id.
+///
+/// An absent pin means unpinned, which belongs to every community, exactly as
+/// every team behaved before the pin existed.
+///
+/// After the pin, a team lists unless one of its members is a definition that
+/// exists but lives only in another community. Built-in teams always list. A
+/// member that exists nowhere is a real gap, so the team stays visible and
+/// the card's warning is for once telling the truth.
 pub(in crate::commands) fn team_in_workspace(
     member_ids: &[String],
     is_builtin: bool,
+    team_relay_pin: Option<&str>,
     definitions: &[(&str, bool)],
     agents: &[AgentRow<'_>],
     workspace_relay: &str,
 ) -> bool {
+    if let Some(pin) = team_relay_pin {
+        if canonical(pin) != canonical(workspace_relay) {
+            return false;
+        }
+    }
     if is_builtin {
         return true;
     }
@@ -194,6 +214,7 @@ mod tests {
         assert!(!team_in_workspace(
             &members(&["emelia", "jake"]),
             false,
+            None,
             &defs,
             &rows,
             HERE
@@ -212,6 +233,7 @@ mod tests {
         assert!(!team_in_workspace(
             &members(&["weaver", "jake"]),
             false,
+            None,
             &defs,
             &rows,
             HERE
@@ -225,6 +247,7 @@ mod tests {
         assert!(team_in_workspace(
             &members(&["weaver"]),
             false,
+            None,
             &defs,
             &rows,
             HERE
@@ -238,6 +261,7 @@ mod tests {
         assert!(team_in_workspace(
             &members(&["weaver", "gone"]),
             false,
+            None,
             &defs,
             &rows,
             HERE
@@ -251,19 +275,57 @@ mod tests {
         assert!(team_in_workspace(
             &members(&["draft"]),
             false,
+            None,
             &defs,
             &rows,
             HERE
         ));
     }
 
+    /// Built-in and unpinned: the Welcome team, which ships in code for every
+    /// community and names none of them.
     #[test]
-    fn a_builtin_team_always_lists() {
+    fn an_unpinned_builtin_team_always_lists() {
         let rows = vec![definition_row("jake"), agent("jake", ELSEWHERE)];
         let defs = [("jake", false)];
         assert!(team_in_workspace(
             &members(&["jake"]),
             true,
+            None,
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// The per-relay coordination team is built in AND pinned, so the pin has
+    /// to be read before the built-in exemption. Otherwise every community's
+    /// coordination team lists on every community, which is the device-wide
+    /// record this change retires, only now once per community.
+    #[test]
+    fn a_builtin_team_pinned_elsewhere_is_hidden() {
+        let rows = vec![definition_row("jake"), agent("jake", HERE)];
+        let defs = [("jake", false)];
+        assert!(!team_in_workspace(
+            &members(&["jake"]),
+            true,
+            Some(ELSEWHERE),
+            &defs,
+            &rows,
+            HERE
+        ));
+    }
+
+    /// The pin is compared canonically, so an equivalent spelling of this
+    /// community's relay still lists.
+    #[test]
+    fn a_team_pinned_here_lists_under_an_equivalent_spelling() {
+        let rows = vec![definition_row("jake"), agent("jake", HERE)];
+        let defs = [("jake", false)];
+        assert!(team_in_workspace(
+            &members(&["jake"]),
+            true,
+            Some(&format!("{HERE}/")),
             &defs,
             &rows,
             HERE

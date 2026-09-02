@@ -6,8 +6,9 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         delete_team_with_cascade, ensure_persona_ids_are_active, load_managed_agents,
-        load_personas, load_teams, save_teams, try_regenerate_nest, validate_team_membership,
-        CreateTeamRequest, TeamRecord, UpdateTeamRequest,
+        load_personas, load_teams, merge_preserving_hidden_members, save_teams,
+        try_regenerate_nest, validate_team_membership, CreateTeamRequest, TeamRecord,
+        UpdateTeamRequest,
     },
     util::now_iso,
 };
@@ -152,6 +153,7 @@ pub async fn list_teams(app: AppHandle) -> Result<Vec<TeamRecord>, String> {
             scope::team_in_workspace(
                 &team.persona_ids,
                 team.is_builtin,
+                team.relay_url.as_deref(),
                 &definitions,
                 &agents,
                 &workspace_relay,
@@ -234,12 +236,48 @@ pub async fn update_team(input: UpdateTeamRequest, app: AppHandle) -> Result<Tea
         let personas = load_personas(&app)?;
         ensure_persona_ids_are_active(&personas, &input.persona_ids)?;
 
+        // The dialog is populated from the workspace-scoped persona list, so
+        // the submission names only the members THIS community can see.
+        // Writing it back wholesale deletes the rest from a store every
+        // community shares: renaming a team on one community stripped every
+        // member whose agents live only on another, with nothing in the
+        // dialog ever showing they were there. Keep them.
+        let workspace_relay = crate::relay::relay_ws_url_with_override(&state);
+        let records = load_managed_agents(&app)?;
+        let agents: Vec<scope::AgentRow<'_>> = records.iter().map(scope::AgentRow::of).collect();
+        let hidden: Vec<String> = teams[team_index]
+            .persona_ids
+            .iter()
+            .filter(|member| {
+                // A member whose definition exists NOWHERE is not hidden. It
+                // is a real gap, the dialog shows it, and it has to stay
+                // removable.
+                personas
+                    .iter()
+                    .find(|persona| &persona.id == *member)
+                    .is_some_and(|persona| {
+                        !scope::definition_in_workspace(
+                            &persona.id,
+                            persona.is_builtin,
+                            &agents,
+                            &workspace_relay,
+                        )
+                    })
+            })
+            .cloned()
+            .collect();
+        let members = merge_preserving_hidden_members(
+            &teams[team_index].persona_ids,
+            input.persona_ids,
+            &hidden,
+        );
+
         let team = &mut teams[team_index];
 
         team.name = name;
         team.description = description;
         team.instructions = instructions;
-        team.persona_ids = input.persona_ids;
+        team.persona_ids = members;
         if let Some(lead_persona_id) = input.lead_persona_id {
             team.lead_persona_id = lead_persona_id;
         }
