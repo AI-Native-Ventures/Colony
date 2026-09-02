@@ -364,7 +364,7 @@ export function CreditsScreen({
               ? `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
               : "Pay"}
         </Button>
-        {track === "byo" && onSkip ? (
+        {onSkip ? (
           <button
             type="button"
             className="onb-quiet-action"

@@ -75,15 +75,19 @@ test("a non-technical user can get from the first screen to the end", async ({
   // Screen 4: the probe resolves on its own, no interaction.
   await expect(page.getByText("Building your workspace.")).toBeVisible();
 
-  // Screen 5: the default mock runtime catalog reports Oh My Pi ready with no
-  // login needed, so resolveTrack lands on the byo track: the brain picker
-  // appears here with Oh My Pi preselected, and credits later offers its skip
-  // button instead of a payment handoff. If someone changes that catalog so
-  // nothing is ready, the flow skips this screen altogether and credits loses
-  // its skip path, which breaks the rest of this walk.
+  // Screen 5: the brain picker opens on Colony Agent whatever the mock
+  // catalog reports ready, so the walk continues on the colony track. The
+  // skip path off the credits screen exists on every track, so this no
+  // longer depends on what the catalog says is installed.
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });
+  // Colony Agent is what the founder is defaulted into, not whichever tool
+  // detection happened to find first.
+  await expect(page.getByTestId("onboarding-brain-buzz-agent")).toHaveAttribute(
+    "data-selected",
+    "true",
+  );
   await page.getByRole("button", { name: "Continue" }).click();
 
   // Screen 6: business. Answering "no website" skips the paid reading step.
@@ -105,7 +109,7 @@ test("a non-technical user can get from the first screen to the end", async ({
     .fill("We service and repair cars for owners around Johannesburg.");
   await page.getByRole("button", { name: "Looks right" }).click();
 
-  // Screen 9: credits. The byo track offers the skip path, so no payment
+  // Screen 9: credits. Every track offers a way past it, so no payment
   // handoff is needed to finish.
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),

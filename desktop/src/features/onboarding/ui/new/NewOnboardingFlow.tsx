@@ -29,7 +29,11 @@ import {
   type OnboardingAnswers,
   type OnboardingStep,
 } from "../../flow/steps";
-import type { TrackResult } from "../../flow/track";
+import {
+  preselectedBrain,
+  trackForBrain,
+  type TrackResult,
+} from "../../flow/track";
 import { invitesEnabled } from "../../newOnboardingFlag";
 import { OnboardingCanvas } from "./OnboardingCanvas";
 import {
@@ -317,17 +321,20 @@ export function NewOnboardingFlow({
   };
 
   const handleProbeResolved = useCallback((result: TrackResult) => {
-    setTrackResult(result);
     // The brain screen always runs now. It used to be skipped whenever nothing
     // was installed, on the grounds that a list of one is not a choice — but
     // that was only true while the screen could do nothing except pick an
     // already-ready runtime. It installs and signs in now, so skipping it is
     // what would remove the choice.
     //
-    // Preselect by fixed catalog order rather than detection luck, falling back
-    // to the hosted agent, which is ready on every computer.
-    setSelectedBrain(result.installed[0] ?? COLONY_AGENT_RUNTIME_ID);
-    setAnswers((current) => ({ ...current, track: result.track }));
+    // Preselect the hosted agent, which is ready on every computer, rather
+    // than whatever detection happened to find first. The track follows the
+    // preselection for the same reason it follows an explicit pick.
+    const brain = preselectedBrain(result.brains, result.installed);
+    const track = trackForBrain(brain, result.installed);
+    setSelectedBrain(brain);
+    setTrackResult({ ...result, track });
+    setAnswers((current) => ({ ...current, track }));
     setStep("brain");
   }, []);
 
@@ -408,9 +415,16 @@ export function NewOnboardingFlow({
 
   const handleBrainContinue = () => {
     const chosen =
-      selectedBrain ?? trackResult?.installed[0] ?? COLONY_AGENT_RUNTIME_ID;
-    const updated: OnboardingAnswers = { ...answers, brain: chosen };
+      selectedBrain ??
+      (trackResult
+        ? preselectedBrain(trackResult.brains, trackResult.installed)
+        : COLONY_AGENT_RUNTIME_ID);
+    // The pick decides the track, not what probing found: someone who keeps
+    // the hosted agent is on the colony track even with a CLI signed in.
+    const track = trackForBrain(chosen, trackResult?.installed ?? []);
+    const updated: OnboardingAnswers = { ...answers, brain: chosen, track };
     setAnswers(updated);
+    setTrackResult((current) => (current ? { ...current, track } : current));
     // Write the choice into the agent config the workspace actually starts
     // agents from. Recording it in `answers` alone left founders who picked
     // Claude Code with defaults still set to another runtime and no model, and
@@ -551,8 +565,7 @@ export function NewOnboardingFlow({
             brains={trackResult.brains}
             selected={
               selectedBrain ??
-              trackResult.installed[0] ??
-              COLONY_AGENT_RUNTIME_ID
+              preselectedBrain(trackResult.brains, trackResult.installed)
             }
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
