@@ -213,7 +213,6 @@ pub fn run() {
     let builder = builder.plugin(ptt_shortcut::press_release_plugin());
 
     // A marker the release workflow greps for in the built binary.
-    //
     // 0.8.0 and 0.9.0 shipped with the updater compiled out: the build step
     // was missing BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT, so
     // build.rs never set this cfg. Every downstream signal still looked
