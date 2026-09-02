@@ -153,6 +153,34 @@ export function createFinishSendFailureHandler(
 }
 
 /**
+ * Run `finishSend`, reporting anything it rejects with instead of swallowing
+ * it.
+ *
+ * Both of completeSend's outer catch sites used to restore the draft and say
+ * nothing, on the premise that a failure reaching them had already been
+ * toasted by the attach step. The premise is false: attach catches its own
+ * failure and `return`s, so the only errors that ever arrive here are
+ * `send()`'s. Every one of them was invisible. A message rejected by the
+ * native send command (for example a tag the event builder refuses) came back
+ * as a restored draft and nothing else, and the owner had no way to tell a
+ * failed send from one that had not been attempted.
+ *
+ * A caller that shows its own inline error for a failed send (the new-message
+ * screen does) will now show that error and this toast. Reporting twice is the
+ * lesser fault against reporting not at all.
+ */
+export async function runReportingFinishSendFailures(
+  finishSend: () => Promise<void>,
+  handleFinishSendFailure: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await finishSend();
+  } catch (error) {
+    handleFinishSendFailure(error);
+  }
+}
+
+/**
  * Re-persist a draft that a completeSend attempt bailed out of (channel
  * changed mid-flight, upload canceled, work-context attach failed) so it is
  * not lost. Skips the write if whatever is currently stored under

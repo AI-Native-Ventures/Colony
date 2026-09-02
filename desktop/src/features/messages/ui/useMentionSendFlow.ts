@@ -46,6 +46,7 @@ import {
   mergeOutgoingTagsWithReferenceMentions,
   type PendingNonMemberMentionSend,
   persistCanceledDraftIfUnchanged,
+  runReportingFinishSendFailures,
   type SendMessageWithMentionFlowInput,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
@@ -538,9 +539,9 @@ export function useMentionSendFlow({
               ),
             ]),
           );
-          // Unlike send() below, this step has no surface of its own, so it
-          // toasts here rather than at the outer catch (avoids double-reporting
-          // a send() failure a caller like sendFirstMessage already shows).
+          // This step toasts here rather than at the outer catch so the
+          // attach failure's own message survives; the outer catch reports
+          // everything after it, which used to be reported nowhere at all.
           let finalOutgoingTags: string[][] | undefined;
           try {
             finalOutgoingTags = await attachOutgoingWorkContext(
@@ -587,13 +588,10 @@ export function useMentionSendFlow({
         if (preparedUpload) {
           uploadStarted = preparedUpload.start({
             onComplete: async (uploaded, signal) => {
-              try {
-                await finishSend(uploaded, signal);
-              } catch {
-                // Attach failure already toasted inside finishSend; anything
-                // else is send()'s to report, so just restore the draft.
-                restoreComposerAfterFailure();
-              }
+              await runReportingFinishSendFailures(
+                () => finishSend(uploaded, signal),
+                handleFinishSendFailure,
+              );
             },
             onError: (error) => {
               restoreComposerAfterFailure();
@@ -622,12 +620,10 @@ export function useMentionSendFlow({
         }
 
         if (!preparedUpload) {
-          try {
-            await finishSend([]);
-          } catch {
-            // Same split as above: attach toasted inside finishSend already.
-            restoreComposerAfterFailure();
-          }
+          await runReportingFinishSendFailures(
+            () => finishSend([]),
+            handleFinishSendFailure,
+          );
         }
       } finally {
         if (!uploadStarted) preparedUpload?.cancel();

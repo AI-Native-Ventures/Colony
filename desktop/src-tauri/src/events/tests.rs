@@ -278,3 +278,145 @@ fn edit_mentions_are_deduped_and_lowercased() {
     assert_eq!(p_tags[0], &vec!["p".to_string(), ALICE_HEX.to_string()]);
     assert_eq!(p_tags[1], &vec!["p".to_string(), BOB_HEX.to_string()]);
 }
+
+/// Work-context tags ride their own validated channel.
+///
+/// The composer attaches `["task", ...]` and `["team", ...]` to an
+/// agent-directed message whose text implies work. They used to arrive in the
+/// imeta-only media argument, where `imeta_tags` rejected the first one and
+/// the whole send failed before anything was signed. A Task was created and
+/// paid for on the relay and the message never posted.
+#[test]
+fn work_context_tags_ride_their_own_channel_not_the_imeta_one() {
+    let task = vec![
+        "task".to_owned(),
+        "chat:eecf0442-ac20-5939-a95a-0306f5441260".to_owned(),
+    ];
+    let team = vec![
+        "team".to_owned(),
+        "builtin-team:company-coordination".to_owned(),
+    ];
+    let work_tags = vec![task.clone(), team.clone()];
+
+    let event = build_message_with_reference_and_client_tags(
+        Uuid::new_v4(),
+        "@Christine - Graphic Designer okay?",
+        None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        "https://relay.example",
+        &[],
+        &[],
+        &work_tags,
+    )
+    .expect("work tags are accepted on their own channel")
+    .sign_with_keys(&Keys::generate())
+    .expect("signed");
+
+    for expected in [&task, &team] {
+        assert!(
+            event
+                .tags
+                .iter()
+                .any(|tag| tag.as_slice() == expected.as_slice()),
+            "the built event must carry {expected:?}"
+        );
+    }
+
+    // The media channel stays imeta-only: that guard is the injection defense,
+    // and moving work tags off it must not weaken it.
+    let error = build_message_with_reference_and_client_tags(
+        Uuid::new_v4(),
+        "@Christine - Graphic Designer okay?",
+        None,
+        &[],
+        &work_tags,
+        &[],
+        &[],
+        &[],
+        None,
+        "https://relay.example",
+        &[],
+        &[],
+        &[],
+    )
+    .expect_err("a work tag is still not an imeta tag");
+    assert!(
+        error.contains("imeta"),
+        "the rejection must name the imeta channel, got: {error}"
+    );
+}
+
+/// The work channel is an allowlist, not a hole for arbitrary tags.
+#[test]
+fn work_context_channel_rejects_anything_outside_its_allowlist() {
+    let cases: Vec<(Vec<Vec<String>>, &str)> = vec![
+        (
+            vec![vec!["h".to_owned(), Uuid::new_v4().to_string()]],
+            "a forged channel tag",
+        ),
+        (
+            vec![vec!["p".to_owned(), "a".repeat(64)]],
+            "a forged mention tag",
+        ),
+        (vec![vec!["task".to_owned()]], "a task tag with no value"),
+        (
+            vec![vec![
+                "team".to_owned(),
+                "builtin-team:x".to_owned(),
+                "extra".to_owned(),
+            ]],
+            "a team tag with a smuggled third element",
+        ),
+        (
+            vec![vec!["initiative".to_owned(), "   ".to_owned()]],
+            "an initiative tag with a blank value",
+        ),
+    ];
+
+    for (work_tags, description) in cases {
+        build_message_with_reference_and_client_tags(
+            Uuid::new_v4(),
+            "Readable fallback",
+            None,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            None,
+            "https://relay.example",
+            &[],
+            &[],
+            &work_tags,
+        )
+        .expect_err(description);
+    }
+
+    // And the three names it does accept are accepted.
+    let allowed = vec![
+        vec!["task".to_owned(), "chat:abc".to_owned()],
+        vec!["team".to_owned(), "builtin-team:abc".to_owned()],
+        vec!["initiative".to_owned(), "initiative:abc".to_owned()],
+    ];
+    build_message_with_reference_and_client_tags(
+        Uuid::new_v4(),
+        "Readable fallback",
+        None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        "https://relay.example",
+        &[],
+        &[],
+        &allowed,
+    )
+    .expect("task, team and initiative are the work channel");
+}

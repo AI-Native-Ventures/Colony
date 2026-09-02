@@ -4,14 +4,14 @@
  * a failed attachOutgoingWorkContext call in front of the user via
  * toast.error, instead of the message silently disappearing.
  *
- * In useMentionSendFlow.ts, finishSend catches only around the
- * attachOutgoingWorkContext call and calls this handler there; a failure
- * from send() itself (or anything after it) propagates to the two outer
- * catch sites, which restore the draft only and leave reporting to send()'s
- * own caller. That split exists because some callers (e.g. the new-DM
- * screen's sendFirstMessage) already show their own inline error for a
- * failed send before rethrowing, and toasting there too would report the
- * same failure twice.
+ * In useMentionSendFlow.ts, finishSend catches around the
+ * attachOutgoingWorkContext call and calls this handler there so the attach
+ * step's own message survives. A failure from send() itself (or anything
+ * after it) reaches the two outer catch sites, which since 2026-09-02 report
+ * through the same handler rather than restoring the draft in silence: see
+ * useMentionSendFlow.sendFailure.test.mjs. They swallowed every send()
+ * rejection before that, which is how a message the native command refused
+ * came back as a restored draft and nothing else.
  *
  * What is NOT tested here (and why): mounting useMentionSendFlow itself to
  * assert that toast.error and restoreComposerAfterFailure are called from

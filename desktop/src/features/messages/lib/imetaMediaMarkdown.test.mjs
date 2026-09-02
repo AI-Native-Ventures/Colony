@@ -668,13 +668,14 @@ const MENTION_REF = [
   "1111111111111111111111111111111111111111111111111111111111111111",
 ];
 
-test("splitOutgoingTags: undefined input yields five empty arrays", () => {
+test("splitOutgoingTags: undefined input yields six empty arrays", () => {
   assert.deepEqual(splitOutgoingTags(undefined), {
     mediaTags: [],
     emojiTags: [],
     mentionTags: [],
     referenceTags: [],
     linkPreviewTags: [],
+    workTags: [],
   });
 });
 
@@ -734,4 +735,43 @@ test("splitOutgoingTags is the inverse of mergeOutgoingTags", () => {
   assert.deepEqual(emojiTags, [EMOJI_A, EMOJI_B]);
   assert.deepEqual(mentionTags, []);
   assert.deepEqual(linkPreviewTags, []);
+});
+
+const WORK_TASK = ["task", "chat:eecf0442-ac20-5939-a95a-0306f5441260"];
+const WORK_TEAM = ["team", "builtin-team:company-coordination"];
+const WORK_INITIATIVE = ["initiative", "initiative:q3-launch"];
+
+test("splitOutgoingTags: work-context tags get their own bucket, never mediaTags", () => {
+  // Regression: these fell through the `else` into the imeta bucket, so the
+  // Rust `imeta_tags` guard rejected the whole send and every agent mention
+  // whose text implied work created a Task and then never posted a message.
+  const { mediaTags, workTags, emojiTags, mentionTags, linkPreviewTags } =
+    splitOutgoingTags([IMETA, WORK_TASK, WORK_TEAM, WORK_INITIATIVE]);
+  assert.deepEqual(mediaTags, [IMETA]);
+  assert.deepEqual(workTags, [WORK_TASK, WORK_TEAM, WORK_INITIATIVE]);
+  assert.deepEqual(emojiTags, []);
+  assert.deepEqual(mentionTags, []);
+  assert.deepEqual(linkPreviewTags, []);
+});
+
+test("splitOutgoingTags: work-only set leaves mediaTags empty", () => {
+  const { mediaTags, workTags } = splitOutgoingTags([WORK_TASK, WORK_TEAM]);
+  assert.deepEqual(mediaTags, []);
+  assert.deepEqual(workTags, [WORK_TASK, WORK_TEAM]);
+});
+
+test("splitOutgoingTags: malformed work tags stay with mediaTags (injection defense)", () => {
+  // Wrong arity or an empty value is not a work tag. It keeps falling to the
+  // imeta bucket so the Rust guard rejects it rather than the work channel
+  // becoming a hole for arbitrary tags.
+  const noValue = ["task"];
+  const extraElement = ["team", "builtin-team:x", "forged"];
+  const emptyValue = ["initiative", "   "];
+  const { mediaTags, workTags } = splitOutgoingTags([
+    noValue,
+    extraElement,
+    emptyValue,
+  ]);
+  assert.deepEqual(mediaTags, [noValue, extraElement, emptyValue]);
+  assert.deepEqual(workTags, []);
 });

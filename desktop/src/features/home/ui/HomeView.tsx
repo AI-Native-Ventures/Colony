@@ -834,6 +834,7 @@ export function HomeView({
                     mediaTags: imetaTags,
                     emojiTags,
                     mentionTags,
+                    workTags,
                   } = splitOutgoingTags(mediaTags);
                   const result = await sendChannelMessage({
                     channelId,
@@ -843,6 +844,7 @@ export function HomeView({
                     mentionPubkeys,
                     emojiTags,
                     mentionTags,
+                    workTags,
                   });
                   const authorPubkey = currentPubkey ?? itemToReply.item.pubkey;
                   const reply: InboxReply = {
@@ -868,7 +870,12 @@ export function HomeView({
                     id: result.eventId,
                     parentId: result.parentEventId,
                     rootId: result.rootEventId,
-                    tags: [...imetaTags, ...emojiTags, ...mentionTags],
+                    tags: [
+                      ...imetaTags,
+                      ...emojiTags,
+                      ...mentionTags,
+                      ...workTags,
+                    ],
                     timeLabel: formatTime(result.createdAt),
                   };
                   setLocalRepliesByItemId((current) => ({

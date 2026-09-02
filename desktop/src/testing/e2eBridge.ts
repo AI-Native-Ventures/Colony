@@ -10387,6 +10387,7 @@ async function handleSendChannelMessage(
     clientTags?: string[][] | null;
     linkPreviewTags?: string[][] | null;
     mentionTags?: string[][] | null;
+    workTags?: string[][] | null;
     sentFromThreadTag?: string[] | null;
   },
   config: E2eConfig | undefined,
@@ -10403,6 +10404,19 @@ async function handleSendChannelMessage(
   // event; mirror that here so attachment renderers (FileCard, images, video)
   // have the imeta tags they key on. `null`/empty → no extra tags.
   const mediaTags = args.mediaTags ?? [];
+  // The native command's `imeta_tags` guard accepts nothing but imeta on this
+  // arg, and it is the injection defense for the whole send. The mock did not
+  // mirror it until 2026-09-02, which is why company-work-context.spec.ts
+  // asserted a `task` tag on the sent event and passed for the life of the
+  // feature while every real send was rejected: the work tags fell into this
+  // bucket and the mock echoed them back instead of refusing them.
+  if (mediaTags.some((tag) => tag[0] !== "imeta")) {
+    throw new Error(
+      `media tags must use 'imeta' prefix (got ${JSON.stringify(
+        mediaTags.find((tag) => tag[0] !== "imeta")?.[0],
+      )})`,
+    );
+  }
   // NIP-30 custom-emoji tags ride their own validated arg server-side; the
   // relay echoes them back on the stored event too, so mirror that here so the
   // emoji renderer keeps resolving `:shortcode:` after the round-trip.
@@ -10428,6 +10442,20 @@ async function handleSendChannelMessage(
   // E2E recipient rendering exercises the same authored-snapshot path.
   const linkPreviewTags = args.linkPreviewTags ?? [];
   const mentionTags = args.mentionTags ?? [];
+  // Work-context tags (`task`, `team`, `initiative`) ride their own validated
+  // arg. Mirror the native allowlist so this channel cannot become a second
+  // hole for arbitrary tags in mock mode either.
+  const workTags = args.workTags ?? [];
+  if (
+    workTags.some(
+      (tag) =>
+        !["task", "team", "initiative"].includes(tag[0]) ||
+        tag.length !== 2 ||
+        tag[1].trim().length === 0,
+    )
+  ) {
+    throw new Error("work tags must be [task|team|initiative, value]");
+  }
   const sentFromThreadTag = args.sentFromThreadTag ?? null;
   if (linkPreviewTags.length > 0) {
     const suppression = linkPreviewTags.some(
@@ -10463,6 +10491,7 @@ async function handleSendChannelMessage(
     ...clientTags,
     ...linkPreviewTags,
     ...mentionTags,
+    ...workTags,
     ...(sentFromThreadTag ? [sentFromThreadTag] : []),
   ];
   const identity = getIdentity(config);
