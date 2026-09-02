@@ -478,10 +478,35 @@ export function filterActionCenterItems(
   );
 }
 
-export function countActionableItems(items: readonly ActionItem[]): number {
+/** Items still waiting on this person: the queue, not its history. */
+export function openActionItems(
+  items: readonly ActionItem[],
+): readonly ActionItem[] {
   return items.filter(
     (item) => item.state === "needs-action" || item.state === "failed",
-  ).length;
+  );
+}
+
+export function countActionableItems(items: readonly ActionItem[]): number {
+  return openActionItems(items).length;
+}
+
+/**
+ * The id of the thing an item was built from, when another Inbox surface could
+ * be counting that same thing: a Block carries its feed row's id, a reminder
+ * its relay event id. Null for asks, pings, and workflow approvals, which no
+ * other badge source names. Used by `inboxBadgeCount` to keep one waiting
+ * thing from reading as two.
+ */
+export function actionItemSourceId(item: ActionItem): string | null {
+  switch (item.source.kind) {
+    case "block":
+      return item.source.item.id;
+    case "reminder":
+      return item.source.reminder.eventId;
+    default:
+      return null;
+  }
 }
 
 export function sourceTimestamp(source: ActionSource): number {

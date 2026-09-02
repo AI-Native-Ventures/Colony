@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import { useAppShell } from "@/app/AppShellContext";
-import { FeatureGate } from "@/shared/features";
 
 import type { ActionItem } from "./contracts";
 import { useActionCenterItems } from "./useActionCenterItems";
@@ -32,7 +31,7 @@ const ActionCenterContext = React.createContext<ActionCenterDataSource | null>(
 
 /**
  * Mounts the single `useActionCenterItems` instance shared by the sidebar
- * badge and the Action Center route while `actionCenter` is enabled.
+ * badge and the Inbox's Actions pane.
  *
  * Without this, the badge (always mounted in the sidebar) and the route
  * (mounted only while the screen is open) each ran their own copy of every
@@ -44,7 +43,11 @@ const ActionCenterContext = React.createContext<ActionCenterDataSource | null>(
  * once here and having every consumer read from context instead removes
  * the second observer entirely.
  */
-function ActionCenterDataMount({ children }: { children: React.ReactNode }) {
+export function ActionCenterProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const { feedItemState } = useAppShell();
   const actionCenter = useActionCenterItems({
     localDoneIds: feedItemState.doneSet,
@@ -78,27 +81,7 @@ function ActionCenterDataMount({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * Wrap the part of the tree that contains both the sidebar and the routed
- * screens with this once (in `AppShell`). While the feature is disabled it
- * renders `children` unchanged — no hook mount, no queries — and consumers
- * fall back to `null`, which the route component uses as its signal to
- * mount a standalone (single) instance for direct-link access matching the
- * rest of the preview-feature routes (pulse, workflows, content).
- */
-export function ActionCenterProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <FeatureGate feature="actionCenter" fallback={children}>
-      <ActionCenterDataMount>{children}</ActionCenterDataMount>
-    </FeatureGate>
-  );
-}
-
-/** Null when `actionCenter` is disabled (the provider did not mount). */
+/** Null when no provider is mounted above the consumer. */
 export function useActionCenterContext(): ActionCenterDataSource | null {
   return React.useContext(ActionCenterContext);
 }

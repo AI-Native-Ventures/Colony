@@ -13,9 +13,19 @@ use std::path::Path;
 /// `sync_team_personas` wrote in [`crate::migration::run_boot_migrations`]
 /// (see its `# Ordering` guard). Event signing needs the resolved owner keys,
 /// so this runs after identity resolution, not in the boot migrations.
-pub fn run_event_sync(app: &tauri::AppHandle, owner_keys: &nostr::Keys, db_path: &Path) {
+///
+/// `relay_url` names the community `db_path`'s retention scope belongs to.
+/// The stores on disk are device-wide while retention is scoped per
+/// (relay, owner), so the team projection needs to know which community it is
+/// building - see [`migrate_teams_in_dir_at`].
+pub fn run_event_sync(
+    app: &tauri::AppHandle,
+    owner_keys: &nostr::Keys,
+    db_path: &Path,
+    relay_url: &str,
+) {
     migrate_personas_to_events(app, owner_keys, db_path);
-    migrate_teams_to_events(app, owner_keys, db_path);
+    migrate_teams_to_events(app, owner_keys, db_path, relay_url);
     crate::managed_agents::reconcile::reconcile_agents_to_events(app, owner_keys, db_path);
 }
 
@@ -29,10 +39,11 @@ pub fn spawn_event_sync(
     app: tauri::AppHandle,
     owner_keys: nostr::Keys,
     db_path: std::path::PathBuf,
+    relay_url: String,
 ) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = tauri::async_runtime::spawn_blocking(move || {
-            run_event_sync(&app, &owner_keys, &db_path);
+            run_event_sync(&app, &owner_keys, &db_path, &relay_url);
         })
         .await
         {
@@ -219,14 +230,22 @@ fn migrate_personas_in_dir_at(
 ///
 /// Must run after the persisted identity is resolved (it signs each event with
 /// the owner's keys).
-pub fn migrate_teams_to_events(app: &tauri::AppHandle, keys: &nostr::Keys, db_path: &Path) {
+///
+/// `relay_url` is the community whose retention scope `db_path` names; the
+/// projection is per community, not per device.
+pub fn migrate_teams_to_events(
+    app: &tauri::AppHandle,
+    keys: &nostr::Keys,
+    db_path: &Path,
+    relay_url: &str,
+) {
     use crate::managed_agents::managed_agents_base_dir;
 
     let Ok(base_dir) = managed_agents_base_dir(app) else {
         return;
     };
 
-    match migrate_teams_in_dir_at(&base_dir, keys, db_path) {
+    match migrate_teams_in_dir_at(&base_dir, keys, db_path, relay_url) {
         Ok(0) => {}
         Ok(migrated) => {
             eprintln!("buzz-desktop: team-event-migration: {migrated} teams migrated to retention");
@@ -243,21 +262,31 @@ pub fn migrate_teams_to_events(app: &tauri::AppHandle, keys: &nostr::Keys, db_pa
 /// per-coordinate content compare matches [`migrate_personas_in_dir`]: an
 /// unchanged team is skipped so a launch does not churn `pending_sync`.
 #[cfg(test)]
-fn migrate_teams_in_dir(base_dir: &Path, keys: &nostr::Keys) -> Result<u32, String> {
-    migrate_teams_in_dir_at(base_dir, keys, &base_dir.join("retention.db"))
+fn migrate_teams_in_dir(
+    base_dir: &Path,
+    keys: &nostr::Keys,
+    relay_url: &str,
+) -> Result<u32, String> {
+    migrate_teams_in_dir_at(base_dir, keys, &base_dir.join("retention.db"), relay_url)
 }
 
+/// Project `teams.json` into the `KIND_TEAM` events the community reachable
+/// at `relay_url` should hold.
+///
+/// One store, several communities: which of its records belong on this
+/// relay is [`team_publishes_to_relay`].
 fn migrate_teams_in_dir_at(
     base_dir: &Path,
     keys: &nostr::Keys,
     db_path: &Path,
+    relay_url: &str,
 ) -> Result<u32, String> {
     use crate::managed_agents::{
-        load_teams_readonly,
+        ensure_coordination_team_for_relay, load_teams_readonly,
         persona_events::monotonic_created_at,
         retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
         team_events::build_team_event,
-        DEFAULT_COORDINATION_TEAM_ID,
+        team_publishes_to_relay,
     };
     use buzz_core_pkg::kind::KIND_TEAM;
     use nostr::JsonUtil;
@@ -278,11 +307,19 @@ fn migrate_teams_in_dir_at(
     // in that community then failed with "missing reference in
     // task.owningTeamId".
     //
-    // `load_teams_readonly` merges the built-ins and guarantees a valid
-    // coordination team even from an absent file, and writes nothing. That
-    // makes this projection follow from code, which is where the team is
-    // actually defined, instead of from whatever the disk happened to hold.
-    let records = load_teams_readonly(&teams_path)?;
+    // `load_teams_readonly` merges the built-ins and writes nothing. It no
+    // longer synthesises a coordination team on its own: one store serves
+    // every community, so which community a coordination team belongs to is
+    // not knowable from the store alone. Ensuring THIS relay's team here, in
+    // memory, keeps the guarantee while making it per community.
+    //
+    // In memory deliberately, and not written back: `load_teams_readonly`
+    // never writes (see `load_teams_readonly_absent_file_performs_no_write`),
+    // and a boot reconcile is the wrong place to start authoring the store.
+    // The interactive paths that do own it (`company_team_refs`, the hire
+    // hook) persist the same record the next time the user acts.
+    let mut records = load_teams_readonly(&teams_path)?;
+    ensure_coordination_team_for_relay(&mut records, relay_url, &crate::util::now_iso());
 
     if records.is_empty() {
         return Ok(0);
@@ -294,16 +331,11 @@ fn migrate_teams_in_dir_at(
     let mut migrated = 0u32;
 
     for record in &records {
-        // Skip built-in teams — they're always available from code. Except
-        // the default coordination team: unlike every other built-in, the
-        // RELAY (not just other devices) must be able to resolve it —
-        // `company_broker::load_team_refs` validates a Task's
-        // `owningTeamId`/`assigneePersonaIds` against the owner's own
-        // published KIND_TEAM events, and this is the only team available to
-        // own chat work before a company blueprint seeds a real one. Skipping
-        // it here means `ensure_chat_task` can mint a Task the relay then
-        // rejects with "missing reference in task.owningTeamId".
-        if record.is_builtin && record.id != DEFAULT_COORDINATION_TEAM_ID {
+        // One store, several communities. `team_publishes_to_relay` holds the
+        // whole rule and its reasoning: user teams that apply here, plus this
+        // relay's own coordination team, which is the one built-in the RELAY
+        // itself has to resolve.
+        if !team_publishes_to_relay(record, relay_url) {
             continue;
         }
 

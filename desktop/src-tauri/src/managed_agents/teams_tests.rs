@@ -1,17 +1,19 @@
 //! Unit tests for `managed_agents/teams.rs`.
 //!
 //! Kept in a sibling file so `teams.rs` stays under the 1000-line gate;
-//! `#[path]`-included from there.
+//! `#[path]`-included from there. The coordination team (its per-community
+//! ids, the relay pin, seeding, retirement, and the legacy split) has its own
+//! sibling, `coordination_tests.rs`, which reuses the fixtures below.
 
 use super::{
-    agents_referencing_personas, agents_referencing_team, ensure_default_coordination_team,
-    load_teams_readonly, merge_teams, merge_teams_impl, other_teams_referencing_personas,
-    retire_default_coordination_team, sort_teams, team_references_persona, validate_team_deletion,
-    validate_team_membership, BuiltInTeam, DEFAULT_COORDINATION_TEAM_ID,
+    agents_referencing_personas, agents_referencing_team, load_teams_readonly,
+    merge_preserving_hidden_members, merge_teams, merge_teams_impl,
+    other_teams_referencing_personas, sort_teams, team_references_persona, validate_team_deletion,
+    validate_team_membership, BuiltInTeam,
 };
 use crate::managed_agents::{ManagedAgentRecord, TeamRecord, UpdateTeamRequest};
 
-fn team(id: &str, name: &str) -> TeamRecord {
+pub(crate) fn team(id: &str, name: &str) -> TeamRecord {
     TeamRecord {
         id: id.to_string(),
         name: name.to_string(),
@@ -24,6 +26,7 @@ fn team(id: &str, name: &str) -> TeamRecord {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "2026-03-20T00:00:00Z".to_string(),
         updated_at: "2026-03-20T00:00:00Z".to_string(),
     }
@@ -121,7 +124,7 @@ fn merge_teams_demotes_retired_built_ins() {
     let mut retired = team("builtin-team:legacy", "Legacy");
     retired.is_builtin = true;
 
-    let (records, changed) = merge_teams(vec![retired], "2026-05-07T00:00:00Z");
+    let (records, changed) = merge_teams(vec![retired], &[], "2026-05-07T00:00:00Z");
 
     assert!(changed);
     let demoted = records
@@ -236,7 +239,7 @@ fn persona_reference_check_includes_defensive_lead_only_records() {
 
 // ── agents_referencing_team ─────────────────────────────────────────────
 
-fn managed_agent(name: &str) -> ManagedAgentRecord {
+pub(crate) fn managed_agent(name: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
         manager: None,
@@ -393,11 +396,12 @@ fn migration_pristine_fizz_is_purged() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "2026-01-01T00:00:00Z".to_string(),
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
 
-    let (records, changed) = merge_teams(vec![pristine], "2026-07-01T00:00:00Z");
+    let (records, changed) = merge_teams(vec![pristine], &[], "2026-07-01T00:00:00Z");
 
     assert!(changed);
     assert!(!records.iter().any(|t| t.id == "builtin-team:fizz"));
@@ -419,11 +423,12 @@ fn migration_customized_fizz_is_demoted_to_user_team() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "2026-01-01T00:00:00Z".to_string(),
         updated_at: "2026-01-01T00:00:00Z".to_string(),
     };
 
-    let (records, changed) = merge_teams(vec![customized], "2026-07-01T00:00:00Z");
+    let (records, changed) = merge_teams(vec![customized], &[], "2026-07-01T00:00:00Z");
 
     assert!(changed);
     let demoted = records
@@ -442,7 +447,7 @@ fn migration_fizz_with_a_custom_lead_is_not_purged() {
     customized.lead_persona_id = Some("builtin:fizz".to_string());
     customized.is_builtin = true;
 
-    let (records, changed) = merge_teams(vec![customized], "2026-07-01T00:00:00Z");
+    let (records, changed) = merge_teams(vec![customized], &[], "2026-07-01T00:00:00Z");
 
     assert!(changed);
     let retained = records
@@ -454,45 +459,8 @@ fn migration_fizz_with_a_custom_lead_is_not_purged() {
 }
 
 #[test]
-fn welcome_team_is_seeded_and_idempotent() {
-    let (records, changed) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z");
-
-    assert!(changed);
-    // Welcome Team plus the default coordination team seeded by
-    // `ensure_default_coordination_team` — see the dedicated tests below.
-    assert_eq!(records.len(), 2);
-    let welcome = records
-        .iter()
-        .find(|team| team.id == "builtin-team:welcome")
-        .expect("welcome team should be seeded");
-    assert_eq!(welcome.id, "builtin-team:welcome");
-    assert_eq!(welcome.name, "Welcome Team");
-    assert_eq!(
-        welcome.description.as_deref(),
-        Some("A friendly starter trio ready to help you plan, create, and ship.")
-    );
-    assert_eq!(
-        welcome.persona_ids,
-        vec![
-            "builtin:fizz".to_string(),
-            "builtin:honey".to_string(),
-            "builtin:bumble".to_string(),
-        ]
-    );
-    assert!(welcome.is_builtin);
-
-    let expected = serde_json::to_value(&records).unwrap();
-    let (records_after_second_merge, changed) = merge_teams(records, "2026-07-02T00:00:00Z");
-    assert!(!changed);
-    assert_eq!(
-        serde_json::to_value(records_after_second_merge).unwrap(),
-        expected
-    );
-}
-
-#[test]
 fn welcome_team_seed_does_not_overwrite_customization() {
-    let (mut records, _) = merge_teams(Vec::new(), "2026-07-01T00:00:00Z");
+    let (mut records, _) = merge_teams(Vec::new(), &[], "2026-07-01T00:00:00Z");
     let welcome = records
         .iter_mut()
         .find(|team| team.id == "builtin-team:welcome")
@@ -501,7 +469,7 @@ fn welcome_team_seed_does_not_overwrite_customization() {
     welcome.description = Some("My customized starter team.".to_string());
     welcome.persona_ids = vec!["builtin:honey".to_string()];
 
-    let (records, changed) = merge_teams(records, "2026-07-02T00:00:00Z");
+    let (records, changed) = merge_teams(records, &[], "2026-07-02T00:00:00Z");
 
     assert!(!changed);
     let welcome = records
@@ -518,31 +486,6 @@ fn welcome_team_seed_does_not_overwrite_customization() {
 }
 
 // ── load_teams_readonly tests ──────────────────────────────────────────
-
-#[test]
-fn load_teams_readonly_absent_file_performs_no_write() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("teams.json");
-
-    // File does not exist.
-    assert!(!path.exists());
-
-    let records = load_teams_readonly(&path).unwrap();
-
-    // Returns the merged built-in list (Welcome Team plus the default
-    // coordination team) without persisting it.
-    assert_eq!(records.len(), 2);
-    assert!(records.iter().any(|team| team.id == "builtin-team:welcome"));
-    assert!(records
-        .iter()
-        .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID));
-
-    // The file must still NOT exist — no write-on-load side effect.
-    assert!(
-        !path.exists(),
-        "load_teams_readonly must not create the file"
-    );
-}
 
 #[test]
 fn load_teams_readonly_surfaces_parse_error() {
@@ -579,223 +522,65 @@ fn load_teams_readonly_surfaces_read_error() {
     );
 }
 
-// ── ensure_default_coordination_team ────────────────────────────────────
+// -- keeping members the editing community cannot see -------------------
 
+fn ids(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+/// The clobber this exists to stop. The dialog is populated from the
+/// workspace-scoped persona list, so an edit made on one community submits
+/// only that community's members; writing it back wholesale deleted the
+/// others from a store both communities share, with nothing in the dialog
+/// ever showing they were there.
 #[test]
-fn default_coordination_team_is_seeded_on_an_empty_store() {
-    let mut records = Vec::new();
+fn edit_on_one_community_keeps_members_scoped_to_another() {
+    let stored = ids(&["here:ann", "there:bo", "here:cass", "there:dee"]);
+    let hidden = ids(&["there:bo", "there:dee"]);
 
-    let changed = ensure_default_coordination_team(&mut records, "2026-08-01T00:00:00Z");
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann", "here:cass"]), &hidden);
 
-    assert!(changed);
-    let coordination = records
-        .iter()
-        .find(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
-        .expect("default coordination team should be seeded");
-    assert!(coordination.id.ends_with("company-coordination"));
     assert_eq!(
-        coordination.lead_persona_id.as_deref(),
-        Some("builtin:fizz")
-    );
-    assert!(coordination
-        .persona_ids
-        .iter()
-        .any(|persona| persona == "builtin:fizz"));
-    assert!(coordination.is_builtin);
-}
-
-#[test]
-fn default_coordination_team_is_not_duplicated_once_seeded() {
-    let mut records = Vec::new();
-    assert!(ensure_default_coordination_team(
-        &mut records,
-        "2026-08-01T00:00:00Z"
-    ));
-
-    let changed = ensure_default_coordination_team(&mut records, "2026-08-02T00:00:00Z");
-
-    assert!(!changed);
-    assert_eq!(
-        records
-            .iter()
-            .filter(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
-            .count(),
-        1
+        merged,
+        ids(&["here:ann", "here:cass", "there:bo", "there:dee"]),
+        "hidden members are kept, appended in their stored order"
     );
 }
 
+/// The submission stays authoritative for everything it could see, so
+/// removing a member still removes them.
 #[test]
-fn default_coordination_team_is_never_seeded_alongside_a_blueprint_seeded_one() {
-    // Simulates a company-team materialized from an approved blueprint
-    // (`company/seed.rs::seed_teams`, `materialized_team_id` in
-    // `buzz-core/src/company_roster.rs`) — same coordination suffix, an
-    // entirely different id namespace.
-    let mut records = vec![team(
-        "company-team:abc123:horizon-labs:company-coordination",
-        "Coordination",
-    )];
-    records[0].lead_persona_id = Some("company:abc123:horizon-labs:chief-of-staff".to_string());
-    records[0].persona_ids = vec!["company:abc123:horizon-labs:chief-of-staff".to_string()];
+fn edit_can_still_remove_a_visible_member() {
+    let stored = ids(&["here:ann", "there:bo", "here:cass"]);
+    let hidden = ids(&["there:bo"]);
 
-    let changed = ensure_default_coordination_team(&mut records, "2026-08-01T00:00:00Z");
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann"]), &hidden);
 
-    assert!(!changed, "a valid coordination team already exists");
+    assert_eq!(merged, ids(&["here:ann", "there:bo"]));
     assert!(
-        !records
-            .iter()
-            .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID),
-        "must never add a second coordination team"
+        !merged.contains(&"here:cass".to_string()),
+        "a member the editor could see and dropped must stay dropped"
     );
 }
 
+/// A hidden member the submission names anyway is not duplicated.
 #[test]
-fn default_coordination_team_does_not_fight_a_user_edit_that_invalidated_it() {
-    // The device already seeded the default once, and the owner has since
-    // cleared its lead (e.g. via `update_team`). Built-ins elsewhere in this
-    // file are never force-repaired once customized; this mirrors that.
-    let mut invalidated = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
-    invalidated.is_builtin = true;
-    invalidated.lead_persona_id = None;
-    let mut records = vec![invalidated];
+fn merge_does_not_duplicate_a_hidden_member_that_was_submitted() {
+    let stored = ids(&["here:ann", "there:bo"]);
+    let hidden = ids(&["there:bo"]);
 
-    let changed = ensure_default_coordination_team(&mut records, "2026-08-01T00:00:00Z");
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann", "there:bo"]), &hidden);
 
-    assert!(!changed);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].lead_persona_id, None);
+    assert_eq!(merged, ids(&["here:ann", "there:bo"]));
 }
 
+/// A member whose definition exists nowhere is never hidden, so it stays
+/// removable. The card already warns about it and the dialog shows it.
 #[test]
-fn default_coordination_team_survives_repeated_merges_without_losing_is_builtin() {
-    // Regression pin: `built_in_team_order` must exempt
-    // `DEFAULT_COORDINATION_TEAM_ID`, or the generic "demote whatever isn't
-    // in `built_ins`" pass in `merge_teams_impl` strips `is_builtin` from it
-    // on the very next load after it is seeded.
-    let (records, _) = merge_teams(Vec::new(), "2026-08-01T00:00:00Z");
-    let (records, changed) = merge_teams(records, "2026-08-02T00:00:00Z");
+fn merge_does_not_resurrect_a_member_that_exists_nowhere() {
+    let stored = ids(&["here:ann", "ghost"]);
 
-    assert!(
-        !changed,
-        "a stable store must not report a change on reload"
-    );
-    let coordination = records
-        .iter()
-        .find(|team| team.id == DEFAULT_COORDINATION_TEAM_ID)
-        .expect("default coordination team should persist");
-    assert!(
-        coordination.is_builtin,
-        "must stay builtin across reloads, like Welcome Team"
-    );
-}
+    let merged = merge_preserving_hidden_members(&stored, ids(&["here:ann"]), &[]);
 
-// ── retire_default_coordination_team ────────────────────────────────────
-
-fn blueprint_seeded_coordination_team() -> TeamRecord {
-    let mut real = team(
-        "company-team:abc123:horizon-labs:company-coordination",
-        "Coordination",
-    );
-    real.lead_persona_id = Some("company:abc123:horizon-labs:chief-of-staff".to_string());
-    real.persona_ids = vec!["company:abc123:horizon-labs:chief-of-staff".to_string()];
-    real
-}
-
-/// The bug this function exists to fix: the device seeded the default
-/// before ever approving a blueprint, then a blueprint was approved and
-/// seeded the real team. Both are now `is_valid_coordination_team`, but
-/// `sort_teams` always puts the `is_builtin` default ahead of the
-/// user-owned real one, so `owning_team_for_chat`'s fallback (`.find`, first
-/// match wins) would pick the default forever unless the default is
-/// retired.
-#[test]
-fn the_default_is_retired_once_a_blueprint_seeded_coordination_team_exists() {
-    let mut default = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
-    default.is_builtin = true;
-    default.lead_persona_id = Some("builtin:fizz".to_string());
-    default.persona_ids = vec!["builtin:fizz".to_string()];
-    let mut records = vec![default, blueprint_seeded_coordination_team()];
-
-    let changed = retire_default_coordination_team(&mut records);
-
-    assert!(changed);
-    assert_eq!(records.len(), 1);
-    assert_eq!(
-        records[0].id,
-        "company-team:abc123:horizon-labs:company-coordination"
-    );
-}
-
-/// Confirms the fix actually closes the shadowing path: after retirement,
-/// the sorted list `company_team_refs` reads from carries only the real
-/// team, so `owning_team_for_chat`'s fallback has nothing else to pick.
-#[test]
-fn after_retirement_sort_order_no_longer_favours_the_default() {
-    let mut default = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
-    default.is_builtin = true;
-    default.lead_persona_id = Some("builtin:fizz".to_string());
-    default.persona_ids = vec!["builtin:fizz".to_string()];
-    let mut records = vec![default, blueprint_seeded_coordination_team()];
-
-    retire_default_coordination_team(&mut records);
-    sort_teams(&mut records);
-
-    let first_coordination_match = records
-        .iter()
-        .find(|team| team.id.ends_with("company-coordination"))
-        .map(|team| team.id.as_str());
-    assert_eq!(
-        first_coordination_match,
-        records.first().map(|team| team.id.as_str()),
-        "the real team must be the only, and therefore first, coordination match"
-    );
-}
-
-/// Retirement must never fire when the default is the only valid
-/// coordination team, or ambiguous chat work loses its fallback entirely.
-#[test]
-fn retirement_does_not_fire_when_the_default_is_the_only_coordination_team() {
-    let mut default = team(DEFAULT_COORDINATION_TEAM_ID, "Company Coordination");
-    default.is_builtin = true;
-    default.lead_persona_id = Some("builtin:fizz".to_string());
-    default.persona_ids = vec!["builtin:fizz".to_string()];
-    let mut records = vec![default];
-
-    let changed = retire_default_coordination_team(&mut records);
-
-    assert!(!changed);
-    assert_eq!(records.len(), 1);
-}
-
-/// The end-to-end path: `merge_teams` (what `load_teams` actually calls)
-/// retires the default the moment a real coordination team appears in the
-/// store, without a caller having to know either function exists.
-#[test]
-fn merge_teams_retires_the_default_once_blueprint_seeding_lands() {
-    let (seeded, _) = merge_teams(Vec::new(), "2026-08-01T00:00:00Z");
-    assert!(
-        seeded
-            .iter()
-            .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID),
-        "the default should exist before any blueprint is approved"
-    );
-
-    let mut with_real_team = seeded;
-    with_real_team.push(blueprint_seeded_coordination_team());
-    let (merged, changed) = merge_teams(with_real_team, "2026-08-02T00:00:00Z");
-
-    assert!(changed);
-    assert!(
-        !merged
-            .iter()
-            .any(|team| team.id == DEFAULT_COORDINATION_TEAM_ID),
-        "the default must not survive alongside a real coordination team"
-    );
-    assert_eq!(
-        merged
-            .iter()
-            .filter(|team| team.id.ends_with("company-coordination"))
-            .count(),
-        1,
-        "exactly one coordination team must remain"
-    );
+    assert_eq!(merged, ids(&["here:ann"]));
 }

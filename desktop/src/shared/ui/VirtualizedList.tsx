@@ -94,6 +94,20 @@ export function VirtualizedList<T>({
     [resolvedScrollRef],
   );
 
+  // Re-render once the scroll element attaches (or is swapped for another).
+  // A caller that renders a different subtree while its list is empty gives
+  // the virtualizer a brand new scroll element the moment the first item
+  // arrives, and a ref assignment renders nothing on its own -- the
+  // virtualizer kept the measurement it took while the ref was still null,
+  // so total size grew to fit the rows while `getVirtualItems()` stayed
+  // empty and the list painted a correctly sized void. Tracking the element
+  // in state forces the one commit the virtualizer needs to re-observe it.
+  const [, setScrollElement] = React.useState<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    const element = resolvedScrollRef.current ?? null;
+    setScrollElement((previous) => (previous === element ? previous : element));
+  });
+
   // When a sticky header (or any caller content) sits above the rows in the
   // same scroll container, the row spacer no longer starts at scrollTop 0.
   // Feed that offset to the virtualizer as `scrollMargin` so the visible-range

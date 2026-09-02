@@ -825,6 +825,18 @@ pub struct TeamRecord {
     /// Version from the team's `plugin.json` manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The community this team belongs to, as a relay URL.
+    ///
+    /// Local-only bookkeeping: deliberately absent from `TeamEventContent`, so
+    /// it never reaches the wire. One `teams.json` is shared by every
+    /// community the user has joined, and a team that only makes sense on one
+    /// relay must not list members, own tasks, or be published anywhere else.
+    ///
+    /// `None` means unpinned: the record predates the pin, or it is a plain
+    /// user team that has no community of its own. Unpinned records behave
+    /// exactly as they did before the pin existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_url: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

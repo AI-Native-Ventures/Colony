@@ -2,7 +2,6 @@ export type CollapsibleSidebarGroup =
   | "starred"
   | "channels"
   | "forums"
-  | "directMessages"
-  | "work";
+  | "directMessages";
 
 export type CreateChannelKind = "stream" | "forum";

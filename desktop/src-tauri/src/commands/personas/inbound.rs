@@ -15,6 +15,8 @@ use crate::{
 };
 
 #[cfg(test)]
+mod inbound_team_tests;
+#[cfg(test)]
 mod inbound_tests;
 
 /// Apply an inbound kind:30175 persona event from the relay onto the local
@@ -173,7 +175,7 @@ fn reconcile_inbound_persona_event_blocking(
             let mut teams = load_teams(&app)?;
             let inbound = inbound_team
                 .ok_or_else(|| "inbound team content missing after parse".to_string())?;
-            apply_inbound_team(&mut teams, d_tag, inbound)?;
+            apply_inbound_team(&mut teams, d_tag, inbound, &arrival_relay_url)?;
             save_teams(&app, &teams)?;
         }
         KIND_MANAGED_AGENT => {
@@ -554,10 +556,27 @@ fn validate_inbound_team(
 /// idempotent — symmetric to the persona path, since a team (like a persona) is
 /// a secretless definition that another device may legitimately learn about
 /// from the relay.
+///
+/// A fresh insert is pinned to `arrival_relay_url`, the relay the event was
+/// actually received from. One `teams.json` serves every community this
+/// device joined, and the pin is the only thing that says which one an
+/// inbound record belongs to: unpinned, a team learned from one community
+/// would list, be planned against, and be republished on all of them. A
+/// patch leaves the pin alone, because the local record already knows where
+/// it lives and the wire never carries a pin (`TeamEventContent` omits it
+/// deliberately, being local to this install).
+///
+/// A coordination team keeps `is_builtin: true` on insert. These are the
+/// records the RELAY resolves `Task.owningTeamId` against, and built-in
+/// status is what makes them undeletable, sort first, and stay out of mention
+/// autocomplete. Inserting one as user-owned would let a second device's copy
+/// arrive as an ordinary deletable team and then sort behind the local one,
+/// which is exactly the shadowing `retire_per_relay_defaults` exists to stop.
 fn apply_inbound_team(
     teams: &mut Vec<TeamRecord>,
     d_tag: String,
     inbound: TeamEventContent,
+    arrival_relay_url: &str,
 ) -> Result<(), String> {
     match teams.iter_mut().find(|record| record.id == d_tag) {
         Some(local) => {
@@ -577,6 +596,7 @@ fn apply_inbound_team(
         }
         None => {
             let resolved = resolve_inbound_team(None, &inbound)?;
+            let is_coordination = crate::managed_agents::is_coordination_team_id(&d_tag);
             teams.push(TeamRecord {
                 id: d_tag,
                 name: inbound.name,
@@ -586,11 +606,12 @@ fn apply_inbound_team(
                 instructions: inbound.instructions.unwrap_or_default(),
                 persona_ids: resolved.persona_ids,
                 lead_persona_id: resolved.lead_persona_id,
-                is_builtin: false,
+                is_builtin: is_coordination,
                 source_dir: None,
                 is_symlink: false,
                 symlink_target: None,
                 version: None,
+                relay_url: Some(crate::relay::agent_boundary::canonical(arrival_relay_url)),
                 created_at: now_iso(),
                 updated_at: now_iso(),
             });

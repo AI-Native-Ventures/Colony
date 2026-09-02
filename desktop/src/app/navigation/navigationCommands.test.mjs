@@ -7,7 +7,6 @@ const target = () => undefined;
 
 function targets(overrides = {}) {
   return {
-    actionCenterEnabled: true,
     createAgent: target,
     createChannel: target,
     goActionCenter: target,
@@ -22,6 +21,7 @@ function targets(overrides = {}) {
     goSettings: target,
     goSpend: target,
     goWork: target,
+    goWorkInitiatives: target,
     goWorkflows: target,
     openBrowseChannels: target,
     projectsEnabled: true,
@@ -36,6 +36,7 @@ test("buildNavigationCommands includes enabled destinations", () => {
     buildNavigationCommands(targets()).map((command) => command.id),
     [
       "open-home",
+      "open-action-center",
       "open-agents",
       "new-message",
       "browse-channels",
@@ -44,10 +45,10 @@ test("buildNavigationCommands includes enabled destinations", () => {
       "create-agent",
       "open-blocks",
       "open-work",
+      "open-initiatives",
       "open-spend",
       "open-credits",
       "open-discovery",
-      "open-action-center",
       "open-pulse",
       "open-projects",
       "open-workflows",
@@ -58,17 +59,12 @@ test("buildNavigationCommands includes enabled destinations", () => {
 test("buildNavigationCommands omits disabled preview destinations", () => {
   const commands = buildNavigationCommands(
     targets({
-      actionCenterEnabled: false,
       pulseEnabled: false,
       projectsEnabled: false,
       workflowsEnabled: false,
     }),
   );
 
-  assert.equal(
-    commands.some((command) => command.id === "open-action-center"),
-    false,
-  );
   assert.equal(
     commands.some((command) => command.id === "open-pulse"),
     false,
@@ -83,6 +79,21 @@ test("buildNavigationCommands omits disabled preview destinations", () => {
   );
 });
 
+test("the Actions view of the inbox is always in the palette", () => {
+  const commands = buildNavigationCommands(
+    targets({
+      pulseEnabled: false,
+      projectsEnabled: false,
+      workflowsEnabled: false,
+    }),
+  );
+
+  assert.equal(
+    commands.some((command) => command.id === "open-action-center"),
+    true,
+  );
+});
+
 test("command callbacks delegate to their navigation targets", () => {
   const calls = [];
   const commands = buildNavigationCommands(
@@ -90,11 +101,18 @@ test("command callbacks delegate to their navigation targets", () => {
       goActionCenter: () => calls.push("action-center"),
       goCredits: () => calls.push("credits"),
       goSettings: () => calls.push("settings"),
+      goWorkInitiatives: () => calls.push("initiatives"),
     }),
   );
 
   commands.find((command) => command.id === "open-settings")?.onSelect();
   commands.find((command) => command.id === "open-action-center")?.onSelect();
   commands.find((command) => command.id === "open-credits")?.onSelect();
-  assert.deepEqual(calls, ["settings", "action-center", "credits"]);
+  commands.find((command) => command.id === "open-initiatives")?.onSelect();
+  assert.deepEqual(calls, [
+    "settings",
+    "action-center",
+    "credits",
+    "initiatives",
+  ]);
 });

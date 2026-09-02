@@ -449,7 +449,11 @@ export function useHomeFeedNotificationState(
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion invalidates getChannelReadAt
   return React.useMemo(() => {
-    const zero = { homeBadgeCount: 0, homeBadgeCountExcludingHighPriority: 0 };
+    const zero = {
+      homeBadgeCount: 0,
+      homeBadgeCountExcludingHighPriority: 0,
+      homeBadgeFeedIds: [] as string[],
+    };
     if (!settings.homeBadgeEnabled) {
       return zero;
     }
@@ -459,6 +463,10 @@ export function useHomeFeedNotificationState(
     }
 
     const seenFeedIdSet = new Set(seenFeedIds);
+    // The ids, not just the total. The sidebar badge folds these together with
+    // due reminders and open actions, and those sources overlap: without the
+    // ids it can only add three numbers and count one thing twice.
+    const homeBadgeFeedIds: string[] = [];
     let total = 0;
     let excludingHighPriority = 0;
     for (const item of currentFeedItems) {
@@ -481,6 +489,7 @@ export function useHomeFeedNotificationState(
         seenFeedIdSet,
       });
       if (!isUnread) continue;
+      homeBadgeFeedIds.push(item.id);
       total++;
       if (
         shouldCountTowardHomeBadgeSubtotal(
@@ -495,6 +504,7 @@ export function useHomeFeedNotificationState(
     return {
       homeBadgeCount: total,
       homeBadgeCountExcludingHighPriority: excludingHighPriority,
+      homeBadgeFeedIds,
     };
   }, [
     currentFeedItems,

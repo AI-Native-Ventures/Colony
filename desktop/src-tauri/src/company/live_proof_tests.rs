@@ -179,8 +179,14 @@ async fn the_app_creates_a_company_against_a_running_relay() {
         "the owner unchecked the CFO"
     );
 
-    let teams = super::seed::seed_teams(&scope, &blueprint, &[], "2026-08-01T09:00:00Z")
-        .expect("seed teams");
+    let teams = super::seed::seed_teams(
+        &scope,
+        &blueprint,
+        &[],
+        "wss://live.example",
+        "2026-08-01T09:00:00Z",
+    )
+    .expect("seed teams");
     assert_eq!(teams.created_teams.len(), 1);
     let team = &teams.created_teams[0];
     assert_eq!(team.persona_ids.len(), 2);

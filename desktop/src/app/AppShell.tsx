@@ -73,7 +73,7 @@ import {
   type SettingsSection,
   isSettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
-import { useDueReminderBadgeCount } from "@/features/reminders/hooks";
+import { useDueReminderEventIds } from "@/features/reminders/hooks";
 import { useAskNotifications } from "@/features/asks/useAskNotifications";
 import { useBudgetNotifications } from "@/features/ledger/useBudgetNotifications";
 import { useReminderNotifications } from "@/features/reminders/useReminderNotifications";
@@ -125,7 +125,6 @@ export function AppShell() {
     viewHuddleChannel,
   } = useHuddlePresentation();
   const hasCommunityRail = communitiesHook.communities.length > 1;
-  const actionCenterEnabled = useFeatureEnabled("actionCenter");
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
@@ -149,7 +148,6 @@ export function AppShell() {
   // spreads it rather than re-listing every `go*` target by hand.
   const nav = useAppNavigation();
   const {
-    goActionCenter,
     goAgents,
     goChannel,
     goContent,
@@ -159,7 +157,6 @@ export function AppShell() {
     goProjects,
     goPulse,
     goSettings,
-    goCredits,
     goSpend,
     goWork,
     goWorkflows,
@@ -434,7 +431,7 @@ export function AppShell() {
     markChannelRead,
     unreadThreadFeedItems,
   ]);
-  const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
+  const { homeBadgeCountExcludingHighPriority, homeBadgeFeedIds } =
     useHomeFeedNotificationState(
       homeFeedQuery.data,
       identityQuery.data?.pubkey,
@@ -454,7 +451,7 @@ export function AppShell() {
       channels,
       huddleBackingChannelIds,
     );
-  const dueReminderBadge = useDueReminderBadgeCount(
+  const dueReminderEventIds = useDueReminderEventIds(
     identityQuery.data?.pubkey,
     notificationSettings.settings.homeBadgeEnabled,
   );
@@ -662,7 +659,6 @@ export function AppShell() {
   // AppShell-local wrapper (a settings section, a dialog opener) are listed.
   const commandActions = useNavigationCommands({
     ...nav,
-    actionCenterEnabled,
     contentEnabled,
     createAgent: requestOpenCreateAgent,
     createChannel: handleOpenCreateChannel,
@@ -830,7 +826,8 @@ export function AppShell() {
                             currentPubkey={identityQuery.data?.pubkey}
                             errorMessage={channelsErrorMessage}
                             fallbackDisplayName={identityQuery.data?.displayName}
-                            homeBadgeCount={homeBadgeCount + dueReminderBadge}
+                            dueReminderEventIds={dueReminderEventIds}
+                            homeBadgeFeedIds={homeBadgeFeedIds}
                             addCommunityPrefill={addCommunityDialog.prefill}
                             isAddCommunityOpen={addCommunityDialog.open}
                             relayConnectionCard={relayConnectionCard}
@@ -878,7 +875,6 @@ export function AppShell() {
                                 });
                               await goChannel(directMessage.id);
                             }}
-                            onSelectActionCenter={() => void goActionCenter()}
                             onSelectAgents={() => void goAgents()}
                             onSelectDiscovery={() =>
                               void goDiscovery({ surface: "leads" })
@@ -893,7 +889,6 @@ export function AppShell() {
                             onSelectContent={() => void goContent()}
                             onSelectPulse={() => void goPulse()}
                             onSelectSettings={handleOpenSettings}
-                            onSelectCredits={() => void goCredits()}
                             onSelectSpend={() => void goSpend()}
                             onSelectWork={() => void goWork()}
                             onSelectWorkflows={() => void goWorkflows()}

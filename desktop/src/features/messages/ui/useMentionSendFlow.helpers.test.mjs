@@ -4,14 +4,14 @@
  * a failed attachOutgoingWorkContext call in front of the user via
  * toast.error, instead of the message silently disappearing.
  *
- * In useMentionSendFlow.ts, finishSend catches only around the
- * attachOutgoingWorkContext call and calls this handler there; a failure
- * from send() itself (or anything after it) propagates to the two outer
- * catch sites, which restore the draft only and leave reporting to send()'s
- * own caller. That split exists because some callers (e.g. the new-DM
- * screen's sendFirstMessage) already show their own inline error for a
- * failed send before rethrowing, and toasting there too would report the
- * same failure twice.
+ * In useMentionSendFlow.ts, finishSend catches around the
+ * attachOutgoingWorkContext call and calls this handler there so the attach
+ * step's own message survives. A failure from send() itself (or anything
+ * after it) reaches the two outer catch sites, which since 2026-09-02 report
+ * through the same handler rather than restoring the draft in silence: see
+ * useMentionSendFlow.sendFailure.test.mjs. They swallowed every send()
+ * rejection before that, which is how a message the native command refused
+ * came back as a restored draft and nothing else.
  *
  * What is NOT tested here (and why): mounting useMentionSendFlow itself to
  * assert that toast.error and restoreComposerAfterFailure are called from
@@ -25,8 +25,31 @@
  */
 
 import assert from "node:assert/strict";
-import test from "node:test";
-import { getErrorMessage } from "./useMentionSendFlow.helpers.ts";
+import test, { beforeEach, mock } from "node:test";
+
+/** Every message passed to `toast.error`, in order. */
+const toasts = [];
+
+mock.module("sonner", {
+  namedExports: {
+    toast: {
+      error: (message) => toasts.push(message),
+      success: () => {},
+    },
+  },
+});
+
+const {
+  createFinishSendFailureHandler,
+  getErrorMessage,
+  markSendFailureReported,
+  runReportingFinishSendFailures,
+  threadRootForWorkContext,
+} = await import("./useMentionSendFlow.helpers.ts");
+
+beforeEach(() => {
+  toasts.length = 0;
+});
 
 test("getErrorMessage_surfaces_the_thrown_work_context_message", () => {
   const error = new Error(
@@ -57,5 +80,75 @@ test("getErrorMessage_falls_back_for_an_error_with_an_empty_message", () => {
   assert.equal(
     getErrorMessage(new Error(""), "The message could not be sent."),
     "The message could not be sent.",
+  );
+});
+
+/**
+ * A failed send is reported once, whoever owns the surface it is reported on.
+ *
+ * The new-message screen's `onSend` sets an inline banner and rethrows, so the
+ * outer catch toasting the same string as well printed it twice: the smoke
+ * spec's strict locator for "Mock first DM send failed." resolved to two
+ * elements. A marked error restores the composer and leaves the reporting to
+ * that caller; every other send path keeps the toast, which is the whole
+ * point of the change that added it.
+ */
+test("a failed first DM restores the composer without a second report", async () => {
+  const restored = [];
+  await runReportingFinishSendFailures(
+    async () => {
+      throw markSendFailureReported(new Error("Mock first DM send failed."));
+    },
+    createFinishSendFailureHandler(() => restored.push("restored")),
+  );
+
+  assert.deepEqual(toasts, []);
+  assert.deepEqual(restored, ["restored"]);
+});
+
+test("a failed channel send is still toasted", async () => {
+  const restored = [];
+  await runReportingFinishSendFailures(
+    async () => {
+      throw new Error("Mock channel send failed.");
+    },
+    createFinishSendFailureHandler(() => restored.push("restored")),
+  );
+
+  assert.deepEqual(toasts, ["Mock channel send failed."]);
+  assert.deepEqual(restored, ["restored"]);
+});
+
+const THREAD_HEAD = "5910f909".padEnd(64, "a");
+const PARENT = "abcd1234".padEnd(64, "b");
+
+/**
+ * The Task names the thread's head, because the relay's row marker is
+ * ["e", root, "", "root"]. Naming the immediate parent instead would scope a
+ * deep reply's notice to a message in the middle of the thread rather than to
+ * the thread itself.
+ */
+test("the work context names the thread head, not the immediate parent", () => {
+  assert.equal(
+    threadRootForWorkContext({
+      parentEventId: PARENT,
+      threadHeadId: THREAD_HEAD,
+    }),
+    THREAD_HEAD,
+  );
+});
+
+test("a first reply falls back to its parent, which is the thread root", () => {
+  assert.equal(
+    threadRootForWorkContext({ parentEventId: PARENT, threadHeadId: null }),
+    PARENT,
+  );
+});
+
+test("a send at channel root names no thread", () => {
+  assert.equal(threadRootForWorkContext(null), null);
+  assert.equal(
+    threadRootForWorkContext({ parentEventId: null, threadHeadId: null }),
+    null,
   );
 });

@@ -247,7 +247,12 @@ fn write_base_teams(base_dir: &Path, records: &serde_json::Value) {
     .unwrap();
 }
 
-/// F8 for the team migration site — same supersede guarantee as personas.
+/// The community this reconcile is syncing. `teams.json` is device-wide while
+/// retention is scoped per (relay, owner), so the team projection is only
+/// answerable against one community.
+const SYNC_RELAY: &str = "wss://sync.example";
+
+/// F8 for the team migration site, same supersede guarantee as personas.
 #[test]
 fn migrate_teams_supersedes_future_dated_head() {
     use crate::managed_agents::retention::{
@@ -269,8 +274,12 @@ fn migrate_teams_supersedes_future_dated_head() {
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();
 
-    // Two: this team, plus the coordination team the store's merge guarantees.
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 2);
+    // Two: this team, plus the coordination team this reconcile ensures for
+    // the community it is syncing.
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        2
+    );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
     let head = get_retained_event(&conn, KIND_TEAM, &pubkey, "my-team")
@@ -291,7 +300,10 @@ fn migrate_teams_supersedes_future_dated_head() {
     edited.as_array_mut().unwrap()[0]["description"] = serde_json::json!("second");
     write_base_teams(base.path(), &edited);
 
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        1
+    );
 
     let row = get_retained_event(&conn, KIND_TEAM, &pubkey, "my-team")
         .unwrap()

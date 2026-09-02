@@ -61,6 +61,12 @@ export type EnsureChatTaskInput = {
   agentPubkey: string;
   title: string;
   clientOrganizationId: string | null;
+  /**
+   * Root event id of the thread this send replies in, `null` at channel root.
+   * The relay scopes its task-created notice into a thread only when the Task
+   * names one.
+   */
+  threadRoot: string | null;
   relayPubkey: string;
 };
 
@@ -74,6 +80,7 @@ export async function ensureChatTask(
     agentPubkey: input.agentPubkey,
     title: input.title,
     clientOrganizationId: input.clientOrganizationId,
+    threadRoot: input.threadRoot,
     relayPubkey: input.relayPubkey,
   });
 }
@@ -126,6 +133,61 @@ export async function createUserTask(
     costCentreId: input.costCentreId ?? null,
     initiativeHead: input.initiativeHead ?? null,
     assigneePersonaIds: input.assigneePersonaIds ?? [],
+    clientOrganizationId: input.clientOrganizationId ?? null,
+    relayPubkey: input.relayPubkey,
+  });
+}
+
+/** The Initiative a human created directly, e.g. from a "New initiative"
+ * affordance. */
+export type UserInitiativeResult = {
+  initiativeId: string;
+  /** The persona the initiative is accountable to. */
+  ownerPersonaId: string;
+  /** The signed Company Action that creates it. */
+  signedAction: string;
+};
+
+export type CreateInitiativeInput = {
+  /** The relay-signed company head, exactly as it was read. */
+  companyHead: string;
+  /**
+   * This client's stable identity for this create attempt. A retry (a lost
+   * receipt) reuses it and asks for the same initiative; two attempts sharing
+   * every other field, including title, still need distinct ids here to become
+   * two initiatives - mint a fresh one (e.g. `crypto.randomUUID()`) per
+   * "create" click, not per title.
+   */
+  requestId: string;
+  /** Channel the initiative was raised in. Required: the contract has no
+   * company-wide default for it. */
+  channelId: string;
+  title: string;
+  /** Free text. Absent and empty mean the same thing. */
+  summary?: string | null;
+  /** Defaults to the company's internal cost centre when omitted. */
+  costCentreId?: string | null;
+  clientOrganizationId?: string | null;
+  relayPubkey: string;
+};
+
+/**
+ * Create an initiative as `proposed`.
+ *
+ * Describing work is not starting it: the returned action creates a proposed
+ * initiative, and starting it is a separate owner decision through
+ * {@link advanceInitiative}.
+ */
+export async function createInitiative(
+  input: CreateInitiativeInput,
+): Promise<UserInitiativeResult> {
+  return await invokeTauri<UserInitiativeResult>("create_initiative", {
+    companyHead: input.companyHead,
+    requestId: input.requestId,
+    channelId: input.channelId,
+    title: input.title,
+    summary: input.summary ?? null,
+    costCentreId: input.costCentreId ?? null,
     clientOrganizationId: input.clientOrganizationId ?? null,
     relayPubkey: input.relayPubkey,
   });

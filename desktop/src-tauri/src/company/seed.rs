@@ -139,12 +139,21 @@ pub fn seed_personas(
 /// roster pass produced. A team may only contain roles the roster enabled;
 /// `validate_blueprint` already refused any that did not, and this refuses
 /// again rather than silently dropping a member.
+///
+/// Every team created here is pinned to `relay_url`, the community the
+/// blueprint was approved on. One `teams.json` serves every community this
+/// device joined, so an unpinned blueprint team would list, be planned
+/// against, and be published on all of them, staffed by personas that exist
+/// in only one. The pin is canonicalized, so an equivalent spelling of the
+/// relay still matches the community it names.
 pub fn seed_teams(
     community_scope: &str,
     blueprint: &ValidatedBlueprint,
     existing: &[TeamRecord],
+    relay_url: &str,
     now: &str,
 ) -> Result<SeedOutcome, TransactionError> {
+    let pin = crate::relay::agent_boundary::canonical(relay_url);
     let mut outcome = SeedOutcome::default();
     let enabled: Vec<BaselineRoleId> = blueprint
         .roster
@@ -201,6 +210,7 @@ pub fn seed_teams(
             is_symlink: false,
             symlink_target: None,
             version: None,
+            relay_url: Some(pin.clone()),
             created_at: now.to_string(),
             updated_at: now.to_string(),
         });

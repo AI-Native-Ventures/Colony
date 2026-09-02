@@ -43,6 +43,12 @@ export type WorkContextRequest = {
   /** The instruction being sent, used as the Task title. */
   title: string;
   clientOrganizationId?: string | null;
+  /**
+   * Root event id of the thread this send replies in, absent at channel root.
+   * Carried so the relay can scope its task-created notice into the thread
+   * that asked for the work instead of dropping it at channel root.
+   */
+  threadRoot?: string | null;
 };
 
 export type WorkContextDependencies = {
@@ -55,6 +61,7 @@ export type WorkContextDependencies = {
     agentPubkey: string;
     title: string;
     clientOrganizationId: string | null;
+    threadRoot: string | null;
     relayPubkey: string;
   }) => Promise<ChatTaskResult>;
   broker: Pick<CompanyActionBroker, "submit">;
@@ -114,6 +121,7 @@ export function createWorkContextResolver(
       agentPubkey: request.agentPubkey,
       title: request.title,
       clientOrganizationId: request.clientOrganizationId ?? null,
+      threadRoot: request.threadRoot ?? null,
       relayPubkey,
     });
 

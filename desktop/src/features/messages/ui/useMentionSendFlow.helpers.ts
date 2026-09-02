@@ -69,19 +69,44 @@ export function mergeOutgoingTagsWithReferenceMentions(
   ];
 }
 
+/**
+ * `threadRoot` is the root event id of the thread this send replies in, and
+ * `null` at channel root. It reaches the Task so the relay can scope its
+ * task-created notice into that thread; without it every notice landed at
+ * channel root, where it read as the work having been started somewhere the
+ * owner was not looking.
+ */
 export async function attachOutgoingWorkContext(
   channelId: string,
   content: string,
   agentPubkeys: readonly string[],
   mediaTags: string[][] | undefined,
   outgoingTags?: string[][],
+  threadRoot?: string | null,
 ) {
   return await attachWorkContext({
     channelId,
     content,
     agentPubkeys,
     outgoingTags: mergeOutgoingTags(mediaTags, outgoingTags ?? []) ?? [],
+    threadRoot: threadRoot ?? null,
   });
+}
+
+/**
+ * The thread a send belongs to, as the Task should name it.
+ *
+ * A reply deep in a thread names the thread's head, not its immediate parent,
+ * because the relay's row marker is `["e", root, "", "root"]`. When only a
+ * parent is known it is the head: a first reply's parent is the thread root.
+ */
+export function threadRootForWorkContext(
+  threadContext: {
+    parentEventId: string | null;
+    threadHeadId: string | null;
+  } | null,
+): string | null {
+  return threadContext?.threadHeadId ?? threadContext?.parentEventId ?? null;
 }
 
 export function buildTypedMentionRouting({
@@ -142,14 +167,79 @@ export function getErrorMessage(error: unknown, fallback: string) {
  * Takes `restoreComposerAfterFailure` as a parameter rather than closing
  * over it, so the handler can live here with the rest of this hook's
  * extracted logic instead of inline in the hook body.
+ *
+ * An error the caller has already put in front of the user (see
+ * `markSendFailureReported`) restores the composer without a toast, so the
+ * same sentence is not reported twice.
  */
 export function createFinishSendFailureHandler(
   restoreComposerAfterFailure: () => void,
 ) {
   return (error: unknown) => {
     restoreComposerAfterFailure();
+    if (wasSendFailureReported(error)) return;
     toast.error(getErrorMessage(error, "The message could not be sent."));
   };
+}
+
+/**
+ * Marker for a send failure the `onSend` caller has already shown the user on
+ * its own error surface.
+ *
+ * The new-message screen renders a failed first DM as an inline banner and
+ * rethrows, so once completeSend started reporting send() rejections the same
+ * sentence appeared twice, and the smoke spec's strict locator resolved to
+ * two elements. A symbol on the rejected error carries "this one is already
+ * reported" from the caller to the handler without threading a prop through
+ * MessageComposer for a case only that one screen has.
+ */
+const SEND_FAILURE_REPORTED = Symbol.for("buzz.sendFailureReported");
+
+/** Tag `error` as already reported, and return it so callers can `throw` it. */
+export function markSendFailureReported<T>(error: T): T {
+  if (error !== null && typeof error === "object") {
+    Object.defineProperty(error, SEND_FAILURE_REPORTED, {
+      configurable: true,
+      value: true,
+    });
+  }
+  return error;
+}
+
+export function wasSendFailureReported(error: unknown) {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    SEND_FAILURE_REPORTED in error
+  );
+}
+
+/**
+ * Run `finishSend`, reporting anything it rejects with instead of swallowing
+ * it.
+ *
+ * Both of completeSend's outer catch sites used to restore the draft and say
+ * nothing, on the premise that a failure reaching them had already been
+ * toasted by the attach step. The premise is false: attach catches its own
+ * failure and `return`s, so the only errors that ever arrive here are
+ * `send()`'s. Every one of them was invisible. A message rejected by the
+ * native send command (for example a tag the event builder refuses) came back
+ * as a restored draft and nothing else, and the owner had no way to tell a
+ * failed send from one that had not been attempted.
+ *
+ * A caller that shows its own inline error for a failed send (the new-message
+ * screen does) marks the error it rethrows, so each failure is reported
+ * exactly once: inline there, as a toast everywhere else.
+ */
+export async function runReportingFinishSendFailures(
+  finishSend: () => Promise<void>,
+  handleFinishSendFailure: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await finishSend();
+  } catch (error) {
+    handleFinishSendFailure(error);
+  }
 }
 
 /**

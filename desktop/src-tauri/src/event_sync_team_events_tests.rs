@@ -10,11 +10,45 @@ fn write_base_teams(base_dir: &Path, records: &serde_json::Value) {
     .unwrap();
 }
 
-/// The coordination team `load_teams_readonly`'s merge guarantees on every
-/// read, and which this migration must publish because the RELAY resolves
-/// `Task.owningTeamId` against it. Counted separately in every expectation
-/// below so a total never silently absorbs it.
-const MERGED_COORDINATION_TEAM: u32 = 1;
+/// The community every test below syncs, and a second one that must never
+/// receive its teams.
+///
+/// Retention is scoped per (relay, owner) while `teams.json` is device-wide,
+/// so "which teams does this reconcile publish" is only answerable against a
+/// community. Both spellings canonicalize to themselves, so the assertions
+/// are about the projection rather than about URL normalization.
+const SYNC_RELAY: &str = "wss://sync.example";
+const OTHER_RELAY: &str = "wss://other.example";
+
+/// The coordination team this reconcile guarantees for the community it is
+/// syncing, and which it must publish because the RELAY resolves
+/// `Task.owningTeamId` against it (`company_broker::load_team_refs`). Counted
+/// separately in every expectation below so a total never silently absorbs
+/// it.
+const ENSURED_COORDINATION_TEAM: u32 = 1;
+
+/// The id of the coordination team for `relay_url`, which is a per community
+/// coordinate now rather than one literal shared by every community.
+fn coordination_id(relay_url: &str) -> String {
+    crate::managed_agents::coordination_team_id_for_relay(relay_url)
+        .expect("a non-blank relay mints a coordination team id")
+}
+
+/// A stored coordination team for `relay_url`, exactly as
+/// `ensure_coordination_team_for_relay` writes it.
+fn stored_coordination_team(relay_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": coordination_id(relay_url),
+        "name": "Company Coordination",
+        "description": "Owns chat work with no more specific team, until a company blueprint is approved.",
+        "persona_ids": ["builtin:fizz"],
+        "lead_persona_id": "builtin:fizz",
+        "is_builtin": true,
+        "relay_url": relay_url,
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:00:00Z"
+    })
+}
 
 fn one_team() -> serde_json::Value {
     serde_json::json!([{
@@ -39,8 +73,8 @@ fn migrate_teams_writes_signed_retention_rows() {
     let pubkey = keys.public_key().to_hex();
 
     assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys).unwrap(),
-        1 + MERGED_COORDINATION_TEAM
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        1 + ENSURED_COORDINATION_TEAM
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -82,8 +116,8 @@ fn migrate_teams_skips_builtins() {
 
     // Only the coordination team, which is the one built-in the relay must see.
     assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys).unwrap(),
-        MERGED_COORDINATION_TEAM
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -97,46 +131,161 @@ fn migrate_teams_skips_builtins() {
     .is_none());
 }
 
-/// Reproduces the "conflict: missing reference in task.owningTeamId" bug: the
-/// default coordination team is `is_builtin: true` (so devices don't need to
-/// sync it from each other), but the RELAY still validates `Task.owningTeamId`
+/// Reproduces the "conflict: missing reference in task.owningTeamId" bug: a
+/// coordination team is `is_builtin: true` (so devices don't need to sync it
+/// from each other), but the RELAY still validates `Task.owningTeamId`
 /// against the owner's published `KIND_TEAM` events
 /// (`company_broker::load_team_refs`). If this team is skipped like every
 /// other built-in, `ensure_chat_task` can hand out a Task naming a team the
 /// relay has never heard of.
 #[test]
-fn migrate_teams_publishes_default_coordination_team_despite_builtin() {
+fn migrate_teams_publishes_the_relay_coordination_team_despite_builtin() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use crate::managed_agents::DEFAULT_COORDINATION_TEAM_ID;
     use buzz_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
     write_base_teams(
         base.path(),
-        &serde_json::json!([{
-            "id": DEFAULT_COORDINATION_TEAM_ID,
-            "name": "Company Coordination",
-            "description": "Owns chat work with no more specific team, until a company blueprint is approved.",
-            "persona_ids": ["builtin:fizz"],
-            "lead_persona_id": "builtin:fizz",
-            "is_builtin": true,
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z"
-        }]),
+        &serde_json::json!([stored_coordination_team(SYNC_RELAY)]),
     );
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();
 
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
+    );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
-    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, DEFAULT_COORDINATION_TEAM_ID)
+    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
         .unwrap()
         .unwrap();
     let event: nostr::Event = nostr::JsonUtil::from_json(&row.raw_event).unwrap();
     assert!(event.verify().is_ok());
     assert!(row.pending_sync);
     assert!(row.content.contains("builtin:fizz"));
+}
+
+/// One `teams.json` serves every community this device joined, so the store
+/// holds every community's coordination team at once. Publishing all of them
+/// into one scope is the device-wide leak this change retires: a community's
+/// relay would resolve, and offer work to, a team whose members live only
+/// somewhere else.
+#[test]
+fn migrate_teams_publishes_only_this_relays_coordination_team() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use buzz_core_pkg::kind::KIND_TEAM;
+
+    let base = tempfile::tempdir().unwrap();
+    write_base_teams(
+        base.path(),
+        &serde_json::json!([
+            stored_coordination_team(SYNC_RELAY),
+            stored_coordination_team(OTHER_RELAY),
+        ]),
+    );
+    let keys = nostr::Keys::generate();
+    let pubkey = keys.public_key().to_hex();
+
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
+    );
+
+    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
+    assert!(
+        get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
+            .unwrap()
+            .is_some(),
+        "this community's own coordination team must publish"
+    );
+    assert!(
+        get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(OTHER_RELAY))
+            .unwrap()
+            .is_none(),
+        "another community's coordination team must never reach this relay"
+    );
+}
+
+/// A community this device has joined but never authored a team for still
+/// gets one, minted for its own relay rather than borrowed from a sibling
+/// community. `load_teams_readonly` no longer synthesises a coordination team
+/// on its own, so this reconcile is what guarantees it per scope.
+#[test]
+fn migrate_teams_publishes_a_coordination_team_for_a_fresh_scope() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use buzz_core_pkg::kind::KIND_TEAM;
+
+    let base = tempfile::tempdir().unwrap();
+    write_base_teams(
+        base.path(),
+        &serde_json::json!([stored_coordination_team(OTHER_RELAY)]),
+    );
+    let keys = nostr::Keys::generate();
+    let pubkey = keys.public_key().to_hex();
+
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
+    );
+
+    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
+    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
+        .unwrap()
+        .expect("a scope with no team of its own must still get one for its own relay");
+    assert!(row.pending_sync);
+}
+
+/// A user team pinned to another community is not this community's to
+/// publish. Before the pin, one `teams.json` meant every relay received every
+/// team the device knew.
+#[test]
+fn migrate_teams_skips_user_teams_pinned_elsewhere() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use buzz_core_pkg::kind::KIND_TEAM;
+
+    let base = tempfile::tempdir().unwrap();
+    let mut elsewhere = one_team();
+    elsewhere.as_array_mut().unwrap()[0]["relay_url"] = serde_json::json!(OTHER_RELAY);
+    write_base_teams(base.path(), &elsewhere);
+    let keys = nostr::Keys::generate();
+
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
+    );
+
+    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
+    assert!(
+        get_retained_event(&conn, KIND_TEAM, &keys.public_key().to_hex(), "team-alpha")
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A team carrying no pin belongs to whoever is asking, exactly as every team
+/// did before the pin existed, so it still reaches every community. Only
+/// coordination teams are held to the stricter must-be-pinned rule.
+#[test]
+fn migrate_teams_publishes_unpinned_user_teams() {
+    use crate::managed_agents::retention::{get_retained_event, open_retention_db};
+    use buzz_core_pkg::kind::KIND_TEAM;
+
+    let base = tempfile::tempdir().unwrap();
+    write_base_teams(base.path(), &one_team());
+    let keys = nostr::Keys::generate();
+
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, OTHER_RELAY).unwrap(),
+        1 + ENSURED_COORDINATION_TEAM
+    );
+
+    let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
+    assert!(
+        get_retained_event(&conn, KIND_TEAM, &keys.public_key().to_hex(), "team-alpha")
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -146,12 +295,15 @@ fn migrate_teams_unchanged_second_run_is_noop() {
     let keys = nostr::Keys::generate();
 
     assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys).unwrap(),
-        1 + MERGED_COORDINATION_TEAM
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        1 + ENSURED_COORDINATION_TEAM
     );
     // Second run republishes nothing, coordination team included: the
     // per-coordinate content compare still holds once it is retained.
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 0);
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -165,8 +317,8 @@ fn migrate_teams_edited_team_re_retains_pending() {
     let pubkey = keys.public_key().to_hex();
 
     assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys).unwrap(),
-        1 + MERGED_COORDINATION_TEAM
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        1 + ENSURED_COORDINATION_TEAM
     );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
@@ -188,7 +340,10 @@ fn migrate_teams_edited_team_re_retains_pending() {
     edited.as_array_mut().unwrap()[0]["description"] = serde_json::json!("Renamed team");
     write_base_teams(base.path(), &edited);
 
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        1
+    );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
     let row = get_retained_event(&conn, KIND_TEAM, &pubkey, "team-alpha")
@@ -209,8 +364,8 @@ fn migrate_teams_no_file_still_publishes_the_coordination_team() {
     let base = tempfile::tempdir().unwrap();
     let keys = nostr::Keys::generate();
     assert_eq!(
-        migrate_teams_in_dir(base.path(), &keys).unwrap(),
-        MERGED_COORDINATION_TEAM
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
     );
 }
 
@@ -232,7 +387,6 @@ fn migrate_teams_no_file_still_publishes_the_coordination_team() {
 #[test]
 fn migrate_teams_publishes_coordination_team_when_the_store_lacks_it() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use crate::managed_agents::DEFAULT_COORDINATION_TEAM_ID;
     use buzz_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
@@ -253,10 +407,13 @@ fn migrate_teams_publishes_coordination_team_when_the_store_lacks_it() {
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();
 
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
+    );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
-    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, DEFAULT_COORDINATION_TEAM_ID)
+    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
         .unwrap()
         .expect("the coordination team must be published even when teams.json omits it");
     assert!(row.pending_sync);
@@ -271,7 +428,6 @@ fn migrate_teams_publishes_coordination_team_when_the_store_lacks_it() {
 #[test]
 fn migrate_teams_publishes_coordination_team_with_no_store_on_disk() {
     use crate::managed_agents::retention::{get_retained_event, open_retention_db};
-    use crate::managed_agents::DEFAULT_COORDINATION_TEAM_ID;
     use buzz_core_pkg::kind::KIND_TEAM;
 
     let base = tempfile::tempdir().unwrap();
@@ -279,10 +435,13 @@ fn migrate_teams_publishes_coordination_team_with_no_store_on_disk() {
     let keys = nostr::Keys::generate();
     let pubkey = keys.public_key().to_hex();
 
-    assert_eq!(migrate_teams_in_dir(base.path(), &keys).unwrap(), 1);
+    assert_eq!(
+        migrate_teams_in_dir(base.path(), &keys, SYNC_RELAY).unwrap(),
+        ENSURED_COORDINATION_TEAM
+    );
 
     let conn = open_retention_db(&base.path().join("retention.db")).unwrap();
-    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, DEFAULT_COORDINATION_TEAM_ID)
+    let row = get_retained_event(&conn, KIND_TEAM, &pubkey, &coordination_id(SYNC_RELAY))
         .unwrap()
         .expect("a device with no teams.json must still publish the coordination team");
     assert!(row.pending_sync);

@@ -115,6 +115,7 @@ fn team_export_round_trip_preserves_team_and_excludes_member_memory() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "now".to_string(),
         updated_at: "now".to_string(),
     };
@@ -180,6 +181,7 @@ fn team_export_with_instance_and_memory_level_uses_supplied_entries() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "now".to_string(),
         updated_at: "now".to_string(),
     };
@@ -705,6 +707,7 @@ fn full_rollback_at_teams_boundary_absent_agents_store() {
         is_symlink: false,
         symlink_target: None,
         version: None,
+        relay_url: None,
         created_at: "now".to_string(),
         updated_at: "now".to_string(),
     });

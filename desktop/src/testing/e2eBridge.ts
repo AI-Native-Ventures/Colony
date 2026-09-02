@@ -3340,10 +3340,44 @@ const mockChannels: MockChannel[] = [
   }),
 ];
 
+/** One extra initiative head a spec seeds. */
+export type MockInitiativeSeed = {
+  id: string;
+  title: string;
+  status?: string;
+  summary?: string;
+  costCentreId?: string;
+};
+
+/** One extra task head a spec seeds. */
+export type MockCompanyTaskSeed = {
+  id: string;
+  title: string;
+  initiativeId?: string | null;
+  status?: string;
+};
+
 /** The Colony company an E2E spec seeds for agent-directed sends. */
 export type CompanyWorkContextConfig = {
   /** Present when the seeded work belongs to an initiative. */
   initiativeId?: string;
+  /**
+   * Initiative heads beyond the one `initiativeId` names. The Initiatives tab
+   * lists every head this relay authored, so a spec proving that list needs
+   * more than the single one the send flow charges against.
+   */
+  initiatives?: MockInitiativeSeed[];
+  /**
+   * Task heads seeded up front. The broker only ever mints the one Task a
+   * send creates, so a per-initiative count above one has to be seeded.
+   */
+  tasks?: MockCompanyTaskSeed[];
+  /**
+   * Refuse the initiative read with a CLOSED, the way a relay refuses a
+   * filter it will not answer. The Initiatives tab is the only surface that
+   * asks for kind 30180 on its own, so this fails that pane and nothing else.
+   */
+  refuseInitiativeRead?: boolean;
   /** The Task the send flow will create and the message will reference. */
   taskId: string;
   owningTeamId: string;
@@ -3405,6 +3439,20 @@ const MOCK_RELAY_SELF_PUBKEY = getPublicKey(MOCK_RELAY_SECRET);
 const mockCompanyHeads: RelayEvent[] = [];
 const mockCompanyReceipts: RelayEvent[] = [];
 const mockCompanyActions: RelayEvent[] = [];
+/** Set from the seeded config, read by the REQ handler for kind 30180. */
+let mockRefuseInitiativeRead = false;
+/**
+ * What each `create_initiative` request token has already been answered with.
+ *
+ * `user_initiative_id` derives the identifier from the token, so replaying a
+ * token asks for the same initiative rather than starting a second one. This
+ * is that derivation, kept as a table because the mock has no hash to derive
+ * a UUID with.
+ */
+const mockUserInitiativeRequests = new Map<
+  string,
+  { initiativeId: string; idempotencyKey: string }
+>();
 
 let mockRelayMembers: RawRelayMember[] = [];
 
@@ -3479,32 +3527,48 @@ function mockCompanyRecord(config: CompanyWorkContextConfig) {
   };
 }
 
-function mockInitiativeRecord(config: CompanyWorkContextConfig) {
+function mockInitiativeRecord(
+  config: CompanyWorkContextConfig,
+  seed?: MockInitiativeSeed,
+) {
   return {
     schema: "colony.initiative/v1",
-    id: config.initiativeId as string,
-    title: "Launch outbound",
-    summary: "Open a first outbound channel.",
-    status: "active",
+    id: seed?.id ?? (config.initiativeId as string),
+    title: seed?.title ?? "Launch outbound",
+    summary: seed?.summary ?? "Open a first outbound channel.",
+    status: seed?.status ?? "active",
     ownerPersonaId: config.qaPersonaId,
-    costCentreId: config.costCentreId,
+    costCentreId: seed?.costCentreId ?? config.costCentreId,
     commercialPurpose: "sales",
     clientOrganizationId: null,
     expectedCostUsd: null,
     sourceChannelId: "welcome",
     sourceEventId: null,
+    // The relay writes these three on every head it has authored since the
+    // fields existed, and the desktop shape check matches on an exact field
+    // set. Omitting them here would have mock mode parse a head no live relay
+    // produces, so a break in the real shape would pass every e2e run.
+    templateId: null,
+    templateVersion: null,
+    cohortId: null,
     createdAt: 1_780_000_000,
     updatedAt: 1_780_000_000,
   };
 }
 
-function mockTaskRecord(config: CompanyWorkContextConfig, title: string) {
+function mockTaskRecord(
+  config: CompanyWorkContextConfig,
+  title: string,
+  seed?: MockCompanyTaskSeed,
+) {
   return {
     schema: "colony.task/v1",
-    id: config.taskId,
-    initiativeId: config.initiativeId ?? null,
+    id: seed?.id ?? config.taskId,
+    initiativeId: seed
+      ? (seed.initiativeId ?? null)
+      : (config.initiativeId ?? null),
     title,
-    status: "inProgress",
+    status: seed?.status ?? "inProgress",
     owningTeamId: config.owningTeamId,
     assigneePersonaIds: [],
     qaPersonaId: config.qaPersonaId,
@@ -3551,6 +3615,8 @@ function seedMockCompanyRecords(
   mockCompanyHeads.length = 0;
   mockCompanyReceipts.length = 0;
   mockCompanyActions.length = 0;
+  mockUserInitiativeRequests.clear();
+  mockRefuseInitiativeRead = config?.refuseInitiativeRead ?? false;
 
   if (config) {
     const company = mockCompanyRecord(config);
@@ -3563,6 +3629,25 @@ function seedMockCompanyRecords(
           ["cost-centre", initiative.costCentreId],
         ]),
       );
+    }
+    for (const seed of config.initiatives ?? []) {
+      const initiative = mockInitiativeRecord(config, seed);
+      mockCompanyHeads.push(
+        signAsMockRelay(30180, initiative, [
+          ["d", initiative.id],
+          ["cost-centre", initiative.costCentreId],
+        ]),
+      );
+    }
+    for (const seed of config.tasks ?? []) {
+      const task = mockTaskRecord(config, seed.title, seed);
+      const tags: string[][] = [
+        ["d", task.id],
+        ["team", task.owningTeamId],
+        ["cost-centre", task.costCentreId],
+      ];
+      if (task.initiativeId) tags.push(["initiative", task.initiativeId]);
+      mockCompanyHeads.push(signAsMockRelay(30181, task, tags));
     }
     return;
   }
@@ -3622,22 +3707,37 @@ function brokerMockCompanyAction(event: RelayEvent): boolean {
 
   let headEventId: string | null = null;
   if (outcome === "applied") {
-    const title =
-      (
-        JSON.parse(event.content || "{}") as {
-          payload?: { record?: { title?: string } };
-        }
-      )?.payload?.record?.title ?? "Chat work";
-    const task = mockTaskRecord(config, title);
-    const tags: string[][] = [
-      ["d", task.id],
-      ["team", task.owningTeamId],
-      ["cost-centre", task.costCentreId],
-    ];
-    if (task.initiativeId) tags.push(["initiative", task.initiativeId]);
-    const head = signAsMockRelay(30181, task, tags);
-    mockCompanyHeads.push(head);
-    headEventId = head.id;
+    const record = (
+      JSON.parse(event.content || "{}") as {
+        payload?: { record?: Record<string, unknown> };
+      }
+    )?.payload?.record;
+    // A Task create and an Initiative create arrive through the same
+    // envelope, and only the target says which kind the action writes.
+    // Answering both with a Task head left every created initiative
+    // unreadable, which the create flow reports as a create that did nothing.
+    if (target.startsWith("30180:")) {
+      const initiative = record ?? mockInitiativeRecord(config);
+      const head = signAsMockRelay(30180, initiative, [
+        ["d", String(initiative.id ?? "")],
+        ["cost-centre", String(initiative.costCentreId ?? config.costCentreId)],
+      ]);
+      mockCompanyHeads.push(head);
+      headEventId = head.id;
+    } else {
+      const title =
+        typeof record?.title === "string" ? record.title : "Chat work";
+      const task = mockTaskRecord(config, title);
+      const tags: string[][] = [
+        ["d", task.id],
+        ["team", task.owningTeamId],
+        ["cost-centre", task.costCentreId],
+      ];
+      if (task.initiativeId) tags.push(["initiative", task.initiativeId]);
+      const head = signAsMockRelay(30181, task, tags);
+      mockCompanyHeads.push(head);
+      headEventId = head.id;
+    }
   }
 
   mockCompanyReceipts.push(
@@ -10287,6 +10387,7 @@ async function handleSendChannelMessage(
     clientTags?: string[][] | null;
     linkPreviewTags?: string[][] | null;
     mentionTags?: string[][] | null;
+    workTags?: string[][] | null;
     sentFromThreadTag?: string[] | null;
   },
   config: E2eConfig | undefined,
@@ -10303,6 +10404,19 @@ async function handleSendChannelMessage(
   // event; mirror that here so attachment renderers (FileCard, images, video)
   // have the imeta tags they key on. `null`/empty → no extra tags.
   const mediaTags = args.mediaTags ?? [];
+  // The native command's `imeta_tags` guard accepts nothing but imeta on this
+  // arg, and it is the injection defense for the whole send. The mock did not
+  // mirror it until 2026-09-02, which is why company-work-context.spec.ts
+  // asserted a `task` tag on the sent event and passed for the life of the
+  // feature while every real send was rejected: the work tags fell into this
+  // bucket and the mock echoed them back instead of refusing them.
+  if (mediaTags.some((tag) => tag[0] !== "imeta")) {
+    throw new Error(
+      `media tags must use 'imeta' prefix (got ${JSON.stringify(
+        mediaTags.find((tag) => tag[0] !== "imeta")?.[0],
+      )})`,
+    );
+  }
   // NIP-30 custom-emoji tags ride their own validated arg server-side; the
   // relay echoes them back on the stored event too, so mirror that here so the
   // emoji renderer keeps resolving `:shortcode:` after the round-trip.
@@ -10328,6 +10442,20 @@ async function handleSendChannelMessage(
   // E2E recipient rendering exercises the same authored-snapshot path.
   const linkPreviewTags = args.linkPreviewTags ?? [];
   const mentionTags = args.mentionTags ?? [];
+  // Work-context tags (`task`, `team`, `initiative`) ride their own validated
+  // arg. Mirror the native allowlist so this channel cannot become a second
+  // hole for arbitrary tags in mock mode either.
+  const workTags = args.workTags ?? [];
+  if (
+    workTags.some(
+      (tag) =>
+        !["task", "team", "initiative"].includes(tag[0]) ||
+        tag.length !== 2 ||
+        tag[1].trim().length === 0,
+    )
+  ) {
+    throw new Error("work tags must be [task|team|initiative, value]");
+  }
   const sentFromThreadTag = args.sentFromThreadTag ?? null;
   if (linkPreviewTags.length > 0) {
     const suppression = linkPreviewTags.some(
@@ -10363,6 +10491,7 @@ async function handleSendChannelMessage(
     ...clientTags,
     ...linkPreviewTags,
     ...mentionTags,
+    ...workTags,
     ...(sentFromThreadTag ? [sentFromThreadTag] : []),
   ];
   const identity = getIdentity(config);
@@ -11022,6 +11151,21 @@ function sendToMockSocket(args: {
       filter.kinds?.length &&
       filter.kinds.every((kind) => COMPANY_RECORD_KINDS.includes(kind))
     ) {
+      // A history subscription rejects on CLOSED, which the company
+      // repository reports as `unavailable`, which the hook rethrows so React
+      // Query holds it as an error. That is the shape a real refusal takes.
+      if (
+        mockRefuseInitiativeRead &&
+        filter.kinds.length === 1 &&
+        filter.kinds[0] === 30180
+      ) {
+        sendWsText(socket.handler, [
+          "CLOSED",
+          subId,
+          "error: this relay will not answer initiative reads",
+        ]);
+        return;
+      }
       for (const event of filterMockCompanyEvents(filter)) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
       }
@@ -14464,6 +14608,78 @@ export function maybeInstallE2eTauriMocks() {
         return {
           taskId: config.taskId,
           owningTeamId: config.owningTeamId,
+          signedAction: JSON.stringify(action),
+        };
+      }
+      case "create_initiative": {
+        // Which persona answers for the initiative, what it is charged to,
+        // and that it starts proposed are decided in `user_initiative.rs` and
+        // proven there. What the desktop owns is publishing the action and
+        // reading the initiative back, so this returns the envelope that flow
+        // carries and nothing more.
+        const config = activeConfig?.mock?.companyWorkContext;
+        if (!config) {
+          throw new Error("no company is seeded for this initiative");
+        }
+        const request = payload as {
+          requestId?: string;
+          channelId?: string;
+          title?: string;
+          summary?: string | null;
+          costCentreId?: string | null;
+        };
+        const requestId = request.requestId ?? crypto.randomUUID();
+        let minted = mockUserInitiativeRequests.get(requestId);
+        if (!minted) {
+          minted = {
+            initiativeId: `user-initiative:${crypto.randomUUID()}`,
+            idempotencyKey: crypto.randomUUID(),
+          };
+          mockUserInitiativeRequests.set(requestId, minted);
+        }
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const record = {
+          schema: "colony.initiative/v1",
+          id: minted.initiativeId,
+          title: request.title ?? "",
+          summary: request.summary ?? null,
+          // Describing work is not starting it, so nothing here is past
+          // proposed.
+          status: "proposed",
+          ownerPersonaId: config.qaPersonaId,
+          costCentreId: request.costCentreId ?? config.costCentreId,
+          commercialPurpose: "administration",
+          clientOrganizationId: null,
+          expectedCostUsd: null,
+          sourceChannelId: request.channelId ?? "",
+          sourceEventId: null,
+          templateId: null,
+          templateVersion: null,
+          cohortId: null,
+          createdAt: nowSeconds,
+          updatedAt: nowSeconds,
+        };
+        const action = await signWithIdentity(
+          identity ?? DEFAULT_REAL_IDENTITY,
+          {
+            kind: 40013,
+            content: JSON.stringify({ payload: { record } }),
+            tags: [
+              ["p", MOCK_RELAY_SELF_PUBKEY],
+              ["a", `30180:${MOCK_RELAY_SELF_PUBKEY}:${minted.initiativeId}`],
+              [
+                "company-action",
+                "1",
+                "create",
+                requestId,
+                minted.idempotencyKey,
+              ],
+            ],
+          },
+        );
+        return {
+          initiativeId: minted.initiativeId,
+          ownerPersonaId: config.qaPersonaId,
           signedAction: JSON.stringify(action),
         };
       }

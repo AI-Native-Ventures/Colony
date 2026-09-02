@@ -88,7 +88,8 @@ type AppSidebarProps = {
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
-  homeBadgeCount: number;
+  dueReminderEventIds: readonly string[];
+  homeBadgeFeedIds: readonly string[];
   isAddCommunityOpen?: boolean;
   isLoading: boolean;
   isCreatingChannel: boolean;
@@ -135,13 +136,11 @@ type AppSidebarProps = {
   ) => void;
   onRemoveCommunity: (id: string) => Promise<LeaveCommunityResult | undefined>;
   onCreateAgent: () => void;
-  onSelectActionCenter: () => void;
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectProjects: () => void;
   onSelectContent: () => void;
   onSelectPulse: () => void;
-  onSelectCredits: () => void;
   onSelectSpend: () => void;
   onSelectWork: () => void;
   onSelectWorkflows: () => void;
@@ -182,7 +181,8 @@ export function AppSidebar({
   channels,
   currentPubkey,
   fallbackDisplayName,
-  homeBadgeCount,
+  dueReminderEventIds,
+  homeBadgeFeedIds,
   onBackgroundClick,
   isAddCommunityOpen,
   isLoading,
@@ -213,13 +213,11 @@ export function AppSidebar({
   onRemoveCommunity,
   onCreateAgent,
   commandActions,
-  onSelectActionCenter,
   onSelectAgents,
   onSelectDiscovery,
   onSelectProjects,
   onSelectContent,
   onSelectPulse,
-  onSelectCredits,
   onSelectSpend,
   onSelectWork,
   onSelectWorkflows,
@@ -291,7 +289,6 @@ export function AppSidebar({
     channels: false,
     forums: false,
     directMessages: false,
-    work: false,
   });
 
   const toggleCollapsedGroup = React.useCallback(
@@ -581,15 +578,14 @@ export function AppSidebar({
               data-testid="sidebar-scroll-content"
             >
               <AppSidebarPrimaryMenu
-                homeBadgeCount={homeBadgeCount}
-                onSelectActionCenter={onSelectActionCenter}
+                dueReminderEventIds={dueReminderEventIds}
+                homeBadgeFeedIds={homeBadgeFeedIds}
                 onSelectAgents={onSelectAgents}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}
                 onSelectContent={onSelectContent}
                 onSelectPulse={onSelectPulse}
-                onSelectCredits={onSelectCredits}
                 onSelectSpend={onSelectSpend}
                 onSelectWorkflows={onSelectWorkflows}
                 selectedView={selectedView}
@@ -603,9 +599,7 @@ export function AppSidebar({
                 <>
                   <WorkSidebarSection
                     isActive={selectedView === "work"}
-                    isCollapsed={collapsedGroups.work}
                     onSelect={onSelectWork}
-                    onToggleCollapsed={() => toggleCollapsedGroup("work")}
                   />
                   {starredChannels.length > 0 ? (
                     <ChannelGroupSection

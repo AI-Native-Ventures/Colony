@@ -668,13 +668,14 @@ const MENTION_REF = [
   "1111111111111111111111111111111111111111111111111111111111111111",
 ];
 
-test("splitOutgoingTags: undefined input yields five empty arrays", () => {
+test("splitOutgoingTags: undefined input yields six empty arrays", () => {
   assert.deepEqual(splitOutgoingTags(undefined), {
     mediaTags: [],
     emojiTags: [],
     mentionTags: [],
     referenceTags: [],
     linkPreviewTags: [],
+    workTags: [],
   });
 });
 
@@ -734,4 +735,61 @@ test("splitOutgoingTags is the inverse of mergeOutgoingTags", () => {
   assert.deepEqual(emojiTags, [EMOJI_A, EMOJI_B]);
   assert.deepEqual(mentionTags, []);
   assert.deepEqual(linkPreviewTags, []);
+});
+
+const WORK_TASK = ["task", "chat:eecf0442-ac20-5939-a95a-0306f5441260"];
+const WORK_TEAM = ["team", "builtin-team:company-coordination"];
+const WORK_INITIATIVE = ["initiative", "initiative:q3-launch"];
+
+test("splitOutgoingTags: work-context tags get their own bucket, never mediaTags", () => {
+  // Regression: these fell through the `else` into the imeta bucket, so the
+  // Rust `imeta_tags` guard rejected the whole send and every agent mention
+  // whose text implied work created a Task and then never posted a message.
+  const { mediaTags, workTags, emojiTags, mentionTags, linkPreviewTags } =
+    splitOutgoingTags([IMETA, WORK_TASK, WORK_TEAM, WORK_INITIATIVE]);
+  assert.deepEqual(mediaTags, [IMETA]);
+  assert.deepEqual(workTags, [WORK_TASK, WORK_TEAM, WORK_INITIATIVE]);
+  assert.deepEqual(emojiTags, []);
+  assert.deepEqual(mentionTags, []);
+  assert.deepEqual(linkPreviewTags, []);
+});
+
+test("splitOutgoingTags: work-only set leaves mediaTags empty", () => {
+  const { mediaTags, workTags } = splitOutgoingTags([WORK_TASK, WORK_TEAM]);
+  assert.deepEqual(mediaTags, []);
+  assert.deepEqual(workTags, [WORK_TASK, WORK_TEAM]);
+});
+
+test("splitOutgoingTags: a malformed work tag is still routed by its name", () => {
+  // Routing on shape as well sent these to the media bucket, where the Rust
+  // imeta guard refused the send with "media tags must use 'imeta' prefix".
+  // Nothing about the send was media, so the failure read as an attachment bug
+  // rather than a missing task id. The work validator refuses each of these on
+  // its own channel and says which work tag was wrong.
+  const noValue = ["task"];
+  const extraElement = ["team", "builtin-team:x", "forged"];
+  const emptyValue = ["initiative", "   "];
+  const { mediaTags, workTags } = splitOutgoingTags([
+    noValue,
+    extraElement,
+    emptyValue,
+  ]);
+  assert.deepEqual(mediaTags, []);
+  assert.deepEqual(workTags, [noValue, extraElement, emptyValue]);
+});
+
+test("splitOutgoingTags: only the three allowlisted names take the work channel", () => {
+  // The name allowlist is the injection defense now that shape no longer
+  // gates routing: a forged h/p/e tag must still fall to the media bucket,
+  // where the imeta guard refuses it.
+  const forgedChannel = ["h", "eecf0442-ac20-5939-a95a-0306f5441260"];
+  const forgedMention = ["p", "a".repeat(64)];
+  const forgedThread = ["e", "b".repeat(64), "", "root"];
+  const { mediaTags, workTags } = splitOutgoingTags([
+    forgedChannel,
+    forgedMention,
+    forgedThread,
+  ]);
+  assert.deepEqual(mediaTags, [forgedChannel, forgedMention, forgedThread]);
+  assert.deepEqual(workTags, []);
 });

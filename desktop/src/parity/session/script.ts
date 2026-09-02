@@ -1256,6 +1256,7 @@ export const SESSION_STEPS: SessionStep[] = [
       agentPubkey: ctx.identityPubkey,
       title: "parity oracle task",
       clientOrganizationId: null,
+      threadRoot: null,
       relayPubkey: BOGUS_PUBKEY,
     }),
   ),

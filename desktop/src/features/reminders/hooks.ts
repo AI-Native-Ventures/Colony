@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCommunities } from "@/features/communities/useCommunities";
@@ -8,7 +9,7 @@ import {
   fetchReminders,
   snoozeReminder,
 } from "@/features/reminders/lib/reminderService";
-import { countDue } from "@/features/reminders/lib/reminderFilters";
+import { countDue, isDue } from "@/features/reminders/lib/reminderFilters";
 import type {
   Reminder,
   ReminderTarget,
@@ -39,24 +40,35 @@ export function useRemindersQuery(pubkey: string | undefined) {
 }
 
 /**
- * The due-reminder contribution to the in-app Inbox nav badge. Reminders are a
- * separate stream from the feed badge machinery, so the count is summed in at
- * the AppShell wiring point rather than threaded through homeBadge.ts. Reads
- * the shared query above, so the useReminderNotifications poll's invalidate
- * keeps it live and countDue re-evaluates as reminders cross due. The caller
- * adds this raw (no isHomeActive suppression), mirroring the inbox filter
- * badge, which persists while the Inbox is open.
+ * The due-reminder contribution to the in-app Inbox nav badge, as relay event
+ * ids rather than a count. Reminders are a separate stream from the feed badge
+ * machinery, so they are folded in at the sidebar wiring point rather than
+ * threaded through homeBadge.ts. The ids are what makes that fold correct: a
+ * due reminder is also an open Action Center item, so a count could only be
+ * added and would show one reminder as two.
  *
- * `enabled` mirrors the homeBadgeEnabled contract: when the home badge toggle is
- * off, the feed contribution returns 0, so the reminder add must too — otherwise
- * a disabled badge would still show a reminder `(1)`.
+ * Reads the shared query above, so the useReminderNotifications poll's
+ * invalidate keeps it live and `isDue` re-evaluates as reminders cross due.
+ * The caller uses this raw (no isHomeActive suppression), mirroring the inbox
+ * filter badge, which persists while the Inbox is open.
+ *
+ * `enabled` mirrors the homeBadgeEnabled contract: when the home badge toggle
+ * is off, the feed contribution is empty, so the reminder contribution must be
+ * too, otherwise a disabled badge would still show a reminder `(1)`.
  */
-export function useDueReminderBadgeCount(
+export function useDueReminderEventIds(
   pubkey: string | undefined,
   enabled: boolean,
-): number {
+): string[] {
   const remindersQuery = useRemindersQuery(pubkey);
-  return enabled ? countDueReminders(remindersQuery.data ?? []) : 0;
+  const reminders = remindersQuery.data;
+  return React.useMemo(() => {
+    if (!enabled) return [];
+    const now = Math.floor(Date.now() / 1_000);
+    return (reminders ?? [])
+      .filter((reminder) => isDue(reminder, now))
+      .map((reminder) => reminder.eventId);
+  }, [enabled, reminders]);
 }
 
 /**
