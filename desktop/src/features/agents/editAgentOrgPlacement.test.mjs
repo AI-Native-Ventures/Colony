@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   orgPlacementChanged,
+  promotionGateDecision,
   seedOrgPlacement,
 } from "./editAgentOrgPlacement.ts";
 
@@ -94,4 +95,63 @@ test("changed_is_true_when_only_rank_differs", () => {
     ),
     true,
   );
+});
+
+function gate(overrides = {}) {
+  return promotionGateDecision({
+    seededRank: "worker",
+    draftRank: "leader",
+    grantCount: 2,
+    isGrantsLoading: false,
+    acknowledged: false,
+    ...overrides,
+  });
+}
+
+test("gate_blocks_an_unacknowledged_promotion_with_active_grants", () => {
+  assert.deepEqual(gate(), { confersGrants: true, blocked: true });
+});
+
+test("gate_releases_once_the_promotion_is_acknowledged", () => {
+  assert.deepEqual(gate({ acknowledged: true }), {
+    confersGrants: true,
+    blocked: false,
+  });
+});
+
+test("gate_warns_but_never_blocks_when_no_grants_are_active", () => {
+  assert.deepEqual(gate({ grantCount: 0 }), {
+    confersGrants: true,
+    blocked: false,
+  });
+});
+
+test("gate_does_not_block_while_grants_are_still_loading", () => {
+  // An unknown grant set would refuse a move the owner may be entitled to
+  // make, so the warning says it is checking rather than locking submit.
+  assert.deepEqual(gate({ isGrantsLoading: true }), {
+    confersGrants: true,
+    blocked: false,
+  });
+});
+
+test("gate_ignores_a_demotion", () => {
+  assert.deepEqual(gate({ seededRank: "executive", draftRank: "leader" }), {
+    confersGrants: false,
+    blocked: false,
+  });
+});
+
+test("gate_ignores_an_unchanged_rank", () => {
+  assert.deepEqual(gate({ seededRank: "leader", draftRank: "leader" }), {
+    confersGrants: false,
+    blocked: false,
+  });
+});
+
+test("gate_confers_grants_on_a_worker_to_executive_jump", () => {
+  assert.deepEqual(gate({ draftRank: "executive", acknowledged: true }), {
+    confersGrants: true,
+    blocked: false,
+  });
 });

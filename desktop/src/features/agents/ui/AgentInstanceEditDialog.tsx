@@ -614,6 +614,7 @@ export function AgentInstanceEditDialog({
       requiredEnvKeyMissing,
     }) &&
     providerValid &&
+    !orgPlacement.blocked &&
     !updateMutation.isPending &&
     !isAvatarUploadPending;
 
@@ -737,14 +738,13 @@ export function AgentInstanceEditDialog({
           autoRestartOnConfigChange,
         );
       }
-      // Rank and manager live on the relay, not on the record the update
-      // writes, so a moved placement is a second write. It throws on
-      // failure, which keeps the dialog open over a saved agent.
-      await orgPlacement.publish();
       showAgentProfileSyncWarning(result.agent.name, result.profileSyncError);
-      handleOpenChange(false);
       onUpdated?.(result.agent);
       offerStartAfterSave(result.agent, startMutation.mutate);
+      // Rank and manager live on the relay, so a moved placement is a second
+      // write. It runs last: a throw skips only the close, not the save above.
+      await orgPlacement.publish();
+      handleOpenChange(false);
     } catch {
       // React Query stores the error; keep dialog open and render it inline.
     }

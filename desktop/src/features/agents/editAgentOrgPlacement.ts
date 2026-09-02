@@ -1,4 +1,4 @@
-import type { AgentRank } from "@/features/agents/employeeHeads";
+import { isPromotion, type AgentRank } from "@/features/agents/employeeHeads";
 import type { OrgChartMember } from "@/features/agents/orgMembers";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -68,4 +68,43 @@ export function orgPlacementChanged(
   draft: OrgPlacementValues,
 ): boolean {
   return seeded.rank !== draft.rank || seeded.manager !== draft.manager;
+}
+
+/** What a draft placement owes the owner before it may be published. */
+export type PromotionGateDecision = {
+  /**
+   * True when the draft moves the agent up a rung, which hands it every
+   * active community grant at once.
+   */
+  confersGrants: boolean;
+  /** True while the owner still has to acknowledge what the move confers. */
+  blocked: boolean;
+};
+
+/**
+ * The same gate the org chart's role dialog applies: a promotion always
+ * explains itself, and it is refused until acknowledged only when grants
+ * actually exist. Grants still loading never blocks, because an unknown
+ * grant set would refuse a move the owner may be entitled to make; the
+ * warning says it is still checking instead.
+ */
+export function promotionGateDecision({
+  seededRank,
+  draftRank,
+  grantCount,
+  isGrantsLoading,
+  acknowledged,
+}: {
+  seededRank: AgentRank;
+  draftRank: AgentRank | "";
+  grantCount: number;
+  isGrantsLoading: boolean;
+  acknowledged: boolean;
+}): PromotionGateDecision {
+  const confersGrants = draftRank !== "" && isPromotion(seededRank, draftRank);
+  return {
+    confersGrants,
+    blocked:
+      confersGrants && !isGrantsLoading && grantCount > 0 && !acknowledged,
+  };
 }

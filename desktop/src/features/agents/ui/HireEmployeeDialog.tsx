@@ -26,8 +26,8 @@ import { AgentDropdownSelect } from "./agentConfigControls";
  *
  * The request (kind 9045) is owner-signed; the relay mints the keypair and
  * publishes the head asynchronously. Closing the dialog therefore does NOT
- * mean the agent exists yet -- a pending row on the People and Roles screen
- * says the workspace is minting an identity until the head lands.
+ * mean the agent exists yet -- a pending row on the org chart on the Agents
+ * page says the workspace is minting an identity until the head lands.
  */
 
 const ALL_RANKS: AgentRank[] = ["worker", "leader", "executive"];

@@ -7,8 +7,8 @@ import {
 } from "@/shared/constants/kinds";
 
 /**
- * Publishing the owner-signed operations behind the People and Roles
- * screen: hiring (kind 9045) and rank/manager changes for EXISTING
+ * Publishing the owner-signed operations behind the org chart on the
+ * Agents page: hiring (kind 9045) and rank/manager changes for EXISTING
  * employees (kind 9046). Both are validated by the relay at ingest; the
  * client builds the exact tag shapes `buzz-core/src/employee.rs` parses and
  * surfaces any relay rejection verbatim -- the relay's message names the

@@ -11035,7 +11035,13 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
-    if (filter.kinds?.includes(KIND_MANAGED_AGENT)) {
+    // Every kind, not any, for the reason the company branch above spells
+    // out: the persona-sync backfill asks for 30175/30176/30177/5 in one
+    // filter and must still reach the persona branch below.
+    if (
+      filter.kinds?.length &&
+      filter.kinds.every((kind) => kind === KIND_MANAGED_AGENT)
+    ) {
       for (const event of filterMockManagedAgentHeadEvents(filter)) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
       }
