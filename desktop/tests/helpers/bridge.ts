@@ -94,6 +94,20 @@ export type MockEmployeeHeadSeed = {
   manager?: string;
 };
 
+/**
+ * Owner-authored managed-agent heads (kind 30177) the mock relay serves: a
+ * personal agent's rank and reporting line live here, not in an employee row.
+ */
+export type MockManagedAgentHeadSeed = {
+  /** The agent pubkey; the head's `d` tag. */
+  pubkey: string;
+  name?: string;
+  /** `content.tier`; omitted seeds a head with no rank of its own. */
+  tier?: "worker" | "leader" | "executive";
+  /** The agent this one reports to (pubkey); omitted means no manager. */
+  manager?: string;
+};
+
 type MockHuddleSeed = {
   parentChannelId: string;
   ephemeralChannelId: string;
@@ -363,6 +377,8 @@ type MockBridgeOptions = {
   relayAgents?: MockRelayAgentSeed[];
   /** Employee heads (kind 30190) served by the mock relay: who is employed at what rank. */
   employeeHeads?: MockEmployeeHeadSeed[];
+  /** Owner-authored kind-30177 heads; the org chart's personal-agent source. */
+  managedAgentHeads?: MockManagedAgentHeadSeed[];
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];

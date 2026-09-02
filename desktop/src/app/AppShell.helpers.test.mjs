@@ -99,31 +99,13 @@ test("credits route derives the Credits sidebar selection", () => {
   });
 });
 
-test("people anchor derives a distinct People sidebar selection", () => {
-  assert.deepEqual(deriveShellRoute("/agents", { section: "people" }), {
-    selectedChannelId: null,
-    selectedView: "people",
-  });
+test("section params stay on the Agents selection", () => {
   assert.deepEqual(deriveShellRoute("/agents?section=people"), {
     selectedChannelId: null,
-    selectedView: "people",
-  });
-});
-
-test("unknown section values stay on the Agents selection", () => {
-  assert.deepEqual(deriveShellRoute("/agents", { section: "teams" }), {
-    selectedChannelId: null,
     selectedView: "agents",
   });
-  assert.deepEqual(deriveShellRoute("/agents", { section: 7 }), {
+  assert.deepEqual(deriveShellRoute("/agents?section=teams"), {
     selectedChannelId: null,
     selectedView: "agents",
-  });
-});
-
-test("the people section only applies on the agents route", () => {
-  assert.deepEqual(deriveShellRoute("/", { section: "people" }), {
-    selectedChannelId: null,
-    selectedView: "home",
   });
 });

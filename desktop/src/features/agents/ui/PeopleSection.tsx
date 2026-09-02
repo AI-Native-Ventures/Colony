@@ -51,7 +51,7 @@ import { Button } from "@/shared/ui/button";
 import { SectionHeader } from "@/shared/ui/PageHeader";
 
 /**
- * The People and Roles screen: the community's org chart of agents, an
+ * The org chart on the Agents page: the community's tree of agents, an
  * Unassigned tray for lines that do not resolve, hiring, and role editing.
  *
  * Humans are never drawn: the owner sits above the entire structure and can
@@ -169,7 +169,7 @@ export function PeopleSection() {
           </Button>
         }
         description="Who reports to whom, who is working, and what everyone may decide."
-        title="People and roles"
+        title="Org chart"
       />
 
       {error ? (

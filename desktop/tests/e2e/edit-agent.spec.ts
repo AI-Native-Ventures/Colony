@@ -1,6 +1,27 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import type { RelayEvent } from "../../src/shared/api/types";
+import { KIND_DELEGATION_GRANT } from "../../src/shared/constants/kinds";
+
+// Grant heads are trusted by authorship, and the mock relay's membership
+// snapshot names the default mock identity as the community's only owner.
+const OWNER_PUBKEY = "deadbeef".repeat(8);
+
+const ACTIVE_GRANT: RelayEvent = {
+  id: "mock-grant-copy-blog-titles".padEnd(64, "0"),
+  pubkey: OWNER_PUBKEY,
+  created_at: 1_800_000_000,
+  kind: KIND_DELEGATION_GRANT,
+  tags: [["d", "copy-blog-titles"]],
+  content: JSON.stringify({
+    category: "copy_change",
+    scope: "blog_post_titles",
+    active: true,
+    cap_nano_usd: 25_000_000_000,
+  }),
+  sig: "mocksig".repeat(20).slice(0, 128),
+};
 
 const BAKED_DEFAULTS = [
   { key: "BUZZ_AGENT_PROVIDER", value: "anthropic", masked: false },
@@ -404,6 +425,156 @@ test.describe("edit agent dialog", () => {
     // And it is the persona's record that's being edited.
     await expect(page.locator("#persona-display-name")).toHaveValue(
       "Edit E2E Persona",
+    );
+  });
+
+  test("shows org placement and publishes a rank change", async ({ page }) => {
+    await installMockBridge(page, {
+      // The org chart only trusts a kind-30177 head authored by a community
+      // owner. The mock relay's NIP-43 membership snapshot makes the default
+      // mock identity that owner, and the seeded head carries its pubkey.
+      managedAgents: [
+        {
+          pubkey: AGENT_PUBKEY,
+          name: AGENT_NAME,
+          status: "stopped",
+          channelNames: ["agents"],
+        },
+      ],
+      managedAgentHeads: [
+        { pubkey: AGENT_PUBKEY, name: AGENT_NAME, tier: "worker" },
+      ],
+    });
+
+    await openEditDialog(page);
+
+    // Seeded from the chart, not from the managed-agent record: the record
+    // carries no rank at all.
+    const rankSelect = page.getByTestId("agent-org-rank-select");
+    await expect(rankSelect).toBeVisible();
+    await expect(rankSelect).toHaveAttribute("data-value", "worker", {
+      timeout: 10_000,
+    });
+    await expect(
+      page.getByTestId("edit-agent-org-placement-pending"),
+    ).toHaveCount(0);
+
+    await rankSelect.click();
+    await page.getByTestId("agent-org-rank-select-option-leader").click();
+    await expect(rankSelect).toHaveAttribute("data-value", "leader");
+
+    // Worker to team lead is a promotion, so it must say what it confers --
+    // and with no grants active, say exactly that rather than blocking.
+    await expect(page.getByTestId("promotion-grant-warning")).toBeVisible();
+    await expect(page.getByTestId("promotion-no-grants")).toBeVisible();
+    await expect(page.getByTestId("edit-agent-dialog-submit")).toBeEnabled();
+
+    await page.getByTestId("edit-agent-dialog-submit").click();
+    await expect(page.getByTestId("edit-agent-dialog")).not.toBeVisible();
+
+    // The rank is a second write on the relay, so the proof is the published
+    // head, not anything the update mutation echoed back.
+    const published = await page.waitForFunction(
+      (pubkey) => {
+        type PublishedEvent = {
+          kind: number;
+          content: string;
+          tags: string[][];
+        };
+        const events =
+          (
+            window as unknown as {
+              __BUZZ_E2E_PUBLISHED_EVENTS__?: PublishedEvent[];
+            }
+          ).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
+        return (
+          events.find(
+            (event) =>
+              event.kind === 30177 &&
+              event.tags.some((tag) => tag[0] === "d" && tag[1] === pubkey),
+          ) ?? null
+        );
+      },
+      AGENT_PUBKEY,
+      { timeout: 10_000 },
+    );
+    const head = await published.jsonValue();
+    expect(JSON.parse(head.content).tier).toBe("leader");
+    // A team lead reports to a chief of staff, and none is seeded, so the
+    // head must carry no reporting line rather than an invented one.
+    expect(head.tags.some((tag) => tag[0] === "manager")).toBe(false);
+  });
+
+  test("blocks a promotion that confers grants until it is acknowledged", async ({
+    page,
+  }) => {
+    await installMockBridge(page, {
+      managedAgents: [
+        {
+          pubkey: AGENT_PUBKEY,
+          name: AGENT_NAME,
+          status: "stopped",
+          channelNames: ["agents"],
+        },
+      ],
+      managedAgentHeads: [
+        { pubkey: AGENT_PUBKEY, name: AGENT_NAME, tier: "worker" },
+      ],
+      delegationGrantEvents: [ACTIVE_GRANT],
+    });
+
+    await openEditDialog(page);
+
+    const rankSelect = page.getByTestId("agent-org-rank-select");
+    await expect(rankSelect).toHaveAttribute("data-value", "worker", {
+      timeout: 10_000,
+    });
+    const submit = page.getByTestId("edit-agent-dialog-submit");
+    await expect(submit).toBeEnabled();
+
+    await rankSelect.click();
+    await page.getByTestId("agent-org-rank-select-option-leader").click();
+
+    // Promoting hands over every active delegation at once, so the whole
+    // save is refused until the owner has seen which ones.
+    await expect(page.getByTestId("promotion-grant-warning")).toBeVisible();
+    await expect(
+      page.getByTestId("promotion-grant-copy-blog-titles"),
+    ).toBeVisible();
+    await expect(submit).toBeDisabled();
+
+    await page.getByTestId("promotion-acknowledge-checkbox").click();
+    await expect(submit).toBeEnabled();
+
+    await submit.click();
+    await expect(page.getByTestId("edit-agent-dialog")).not.toBeVisible();
+
+    const published = await page.waitForFunction(
+      (pubkey) => {
+        type PublishedEvent = {
+          kind: number;
+          content: string;
+          tags: string[][];
+        };
+        const events =
+          (
+            window as unknown as {
+              __BUZZ_E2E_PUBLISHED_EVENTS__?: PublishedEvent[];
+            }
+          ).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [];
+        return (
+          events.find(
+            (event) =>
+              event.kind === 30177 &&
+              event.tags.some((tag) => tag[0] === "d" && tag[1] === pubkey),
+          ) ?? null
+        );
+      },
+      AGENT_PUBKEY,
+      { timeout: 10_000 },
+    );
+    expect(JSON.parse((await published.jsonValue()).content).tier).toBe(
+      "leader",
     );
   });
 });

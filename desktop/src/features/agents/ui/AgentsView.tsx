@@ -39,100 +39,7 @@ import {
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { getInheritedAgentDefaults } from "./bakedEnvHelpers";
 
-/** Sections of this view addressable via `/agents?section=...`. */
-export type AgentsViewSection = "people";
-
-type AgentsViewProps = {
-  /** Anchor requested by the route; scrolls the section into view on arrival. */
-  focusSection?: AgentsViewSection;
-};
-
-const SECTION_ANCHOR_SELECTORS: Record<AgentsViewSection, string> = {
-  // PeopleSection owns this test id; the anchor only points at its root.
-  people: '[data-testid="people-roles-section"]',
-};
-
-const ANCHOR_TOP_PADDING_PX = 12;
-// Content above the anchor (agent grid, teams) resolves asynchronously after
-// mount, so the arrival target keeps moving for a while. The scroll position
-// is re-applied every frame until it holds steady...
-const ANCHOR_SETTLE_FRAMES = 10;
-// ...or until this budget expires.
-const ANCHOR_MAX_WAIT_MS = 3_000;
-
-/**
- * Land an anchored section in view when arriving via a deep link.
- *
- * Re-applies the scroll target each frame so late layout growth above the
- * section cannot leave it below the fold, stops once the target is stable,
- * and yields immediately to any user scroll input.
- */
-function useAnchoredSectionScroll(
-  containerRef: React.RefObject<HTMLDivElement | null>,
-  selector: string | null,
-) {
-  React.useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !selector) {
-      return;
-    }
-
-    let frame = 0;
-    let settledFrames = 0;
-    let lastTarget: number | null = null;
-    const startedAt = performance.now();
-
-    const cancel = () => {
-      cancelAnimationFrame(frame);
-      container.removeEventListener("wheel", cancel);
-      container.removeEventListener("touchstart", cancel);
-    };
-
-    const step = () => {
-      const anchor = container.querySelector(selector);
-      if (!(anchor instanceof HTMLElement)) {
-        frame = requestAnimationFrame(step);
-        return;
-      }
-
-      const rawTarget =
-        anchor.getBoundingClientRect().top -
-        container.getBoundingClientRect().top +
-        container.scrollTop -
-        ANCHOR_TOP_PADDING_PX;
-      const maxScroll = Math.max(
-        0,
-        container.scrollHeight - container.clientHeight,
-      );
-      const target = Math.max(0, Math.min(rawTarget, maxScroll));
-      container.scrollTop = target;
-
-      if (lastTarget !== null && Math.abs(target - lastTarget) < 1) {
-        settledFrames += 1;
-      } else {
-        settledFrames = 0;
-      }
-      lastTarget = target;
-
-      if (
-        settledFrames >= ANCHOR_SETTLE_FRAMES ||
-        performance.now() - startedAt > ANCHOR_MAX_WAIT_MS
-      ) {
-        cancel();
-        return;
-      }
-      frame = requestAnimationFrame(step);
-    };
-
-    container.addEventListener("wheel", cancel, { passive: true });
-    container.addEventListener("touchstart", cancel, { passive: true });
-    frame = requestAnimationFrame(step);
-
-    return cancel;
-  }, [containerRef, selector]);
-}
-
-export function AgentsView({ focusSection }: AgentsViewProps) {
+export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
   const { globalConfig } = useGlobalAgentConfig();
   const { data: bakedEnv } = useBakedBuildEnvQuery({ enabled: true });
@@ -144,18 +51,6 @@ export function AgentsView({ focusSection }: AgentsViewProps) {
   const fullAiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const compactActionsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
-  const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
-  const anchorSelector =
-    focusSection !== undefined ? SECTION_ANCHOR_SELECTORS[focusSection] : null;
-  useAnchoredSectionScroll(scrollContainerRef, anchorSelector);
-
-  // Leaving the anchored section (e.g. sidebar Agents click) returns to the
-  // top of the page instead of keeping the stale scroll position.
-  React.useEffect(() => {
-    if (anchorSelector) return;
-    scrollContainerRef.current?.scrollTo({ top: 0 });
-  }, [anchorSelector]);
-
   function openUnifiedCatalog() {
     personas.prepareCreate();
     personas.openCatalog();
@@ -234,10 +129,7 @@ export function AgentsView({ focusSection }: AgentsViewProps) {
 
   return (
     <>
-      <div
-        className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-7 sm:px-6 sm:py-8"
-        ref={scrollContainerRef}
-      >
+      <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-7 sm:px-6 sm:py-8">
         <div
           className="mx-auto w-full max-w-6xl space-y-8 [container-type:inline-size]"
           data-testid="agents-page-content"

@@ -57,6 +57,8 @@ import {
   KIND_EMPLOYEE,
   KIND_DELEGATION_GRANT,
   KIND_DECISION_LOG,
+  KIND_EMPLOYEE_UPDATE,
+  KIND_MANAGED_AGENT,
   KIND_MEMBER_ADDED_NOTIFICATION,
   KIND_MEMBER_REMOVED_NOTIFICATION,
   KIND_PERSONA,
@@ -148,6 +150,21 @@ type MockEmployeeHeadSeed = {
   name?: string;
   rank: "worker" | "leader" | "executive";
   /** The agent this employee reports to (pubkey); omitted means no manager. */
+  manager?: string;
+};
+
+/**
+ * An owner-authored managed-agent head (kind 30177). Personal agents carry
+ * their rank here rather than in an employee row, so the org chart can only
+ * place one whose head is signed by a community owner.
+ */
+type MockManagedAgentHeadSeed = {
+  /** The agent pubkey; the head's `d` tag. */
+  pubkey: string;
+  name?: string;
+  /** `content.tier`; omitted seeds a head with no rank of its own. */
+  tier?: "worker" | "leader" | "executive";
+  /** The agent this one reports to (pubkey); omitted means no manager. */
   manager?: string;
 };
 
@@ -383,6 +400,8 @@ type E2eConfig = {
     /** Employee heads (kind 30190) the mock relay serves: who is employed at
      *  what rank. Drives the rank badges and the ladder UI. */
     employeeHeads?: MockEmployeeHeadSeed[];
+    /** Owner-authored kind-30177 heads; the org chart's personal-agent source. */
+    managedAgentHeads?: MockManagedAgentHeadSeed[];
     /** Native-like huddle state seeded from authoritative role-bearing membership. */
     huddle?: MockHuddleSeed;
     agentListDelayMs?: number;
@@ -2537,6 +2556,51 @@ function resetMockEmployeeHeadEvents(config?: E2eConfig) {
 /** Serve employee heads for one REQ filter. */
 function filterMockEmployeeHeadEvents(filter: MockFilter): RelayEvent[] {
   return mockEmployeeHeadEvents.filter((event) => {
+    const authors = filter.authors?.map((author) => author.toLowerCase());
+    if (authors && !authors.includes(event.pubkey.toLowerCase())) {
+      return false;
+    }
+    const dValues = filter["#d"];
+    if (dValues) {
+      const carried = event.tags
+        .filter((tag) => tag[0] === "d")
+        .map((tag) => tag[1]?.toLowerCase());
+      if (!carried.some((value) => dValues.includes(value as string))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+const mockManagedAgentHeadEvents: RelayEvent[] = [];
+
+function resetMockManagedAgentHeadEvents(config?: E2eConfig) {
+  mockManagedAgentHeadEvents.length = 0;
+  for (const seed of config?.mock?.managedAgentHeads ?? []) {
+    // Authored by the mock identity, which `mock.relayMembers` reports as a
+    // community owner: a head signed by anyone else is invisible to the org
+    // chart, exactly as it is against a real relay.
+    const tags: string[][] = [["d", seed.pubkey.toLowerCase()]];
+    if (seed.manager !== undefined) {
+      tags.push(["manager", seed.manager.toLowerCase()]);
+    }
+    const content: Record<string, unknown> = { name: seed.name ?? "Agent" };
+    if (seed.tier !== undefined) content.tier = seed.tier;
+    mockManagedAgentHeadEvents.push(
+      createMockEvent(
+        KIND_MANAGED_AGENT,
+        JSON.stringify(content),
+        tags,
+        MOCK_IDENTITY_PUBKEY,
+      ),
+    );
+  }
+}
+
+/** Serve managed-agent heads (kind 30177) for one REQ filter. */
+function filterMockManagedAgentHeadEvents(filter: MockFilter): RelayEvent[] {
+  return mockManagedAgentHeadEvents.filter((event) => {
     const authors = filter.authors?.map((author) => author.toLowerCase());
     if (authors && !authors.includes(event.pubkey.toLowerCase())) {
       return false;
@@ -10971,6 +11035,19 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
+    // Every kind, not any, for the reason the company branch above spells
+    // out: the persona-sync backfill asks for 30175/30176/30177/5 in one
+    // filter and must still reach the persona branch below.
+    if (
+      filter.kinds?.length &&
+      filter.kinds.every((kind) => kind === KIND_MANAGED_AGENT)
+    ) {
+      for (const event of filterMockManagedAgentHeadEvents(filter)) {
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
     if (filter.kinds?.includes(KIND_DELEGATION_GRANT)) {
       for (const event of filterMockDelegationGrantEvents(filter)) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
@@ -11279,6 +11356,29 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (event.kind === KIND_MANAGED_AGENT) {
+      // A rank republish is NIP-33 latest-wins at (kind, author, d), and the
+      // client's own newest-first owner scan picks the winner, so the mock
+      // keeps every publish rather than replacing the seeded head.
+      mockManagedAgentHeadEvents.push({
+        ...event,
+        tags: event.tags.map((tag) => [...tag]),
+      });
+      window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
+      emitMockGlobalEvent(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
+    if (event.kind === KIND_EMPLOYEE_UPDATE) {
+      // Rank and manager changes for a hired employee. The relay rewrites the
+      // employee row from this; the mock only has to prove the write left the
+      // client, which is what the org-placement specs assert.
+      window.__BUZZ_E2E_PUBLISHED_EVENTS__?.push(event);
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     if (event.kind === KIND_DELEGATION_GRANT) {
       // NIP-33 heads are replaceable per (author, kind, d), but the relay
       // keeps every published head and its newest-first owner scan picks the
@@ -11485,6 +11585,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockDelegationGrantEvents(config);
   resetMockDecisionLogEvents(config);
   resetMockEmployeeHeadEvents(config);
+  resetMockManagedAgentHeadEvents(config);
   resetMockRelayAgents(config);
   resetMockManagedAgents(config);
   resetMockPersonas(config);
@@ -13453,6 +13554,11 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
+      case "record_org_placement":
+        // The desktop mirrors a published placement onto the local record so
+        // a later head rebuild does not drop it. Nothing in the mock rebuilds,
+        // so accepting the write is the whole contract.
+        return null;
       case "list_relay_members": {
         // Opt-in via mock.relayMembers: returning the member table makes the
         // viewer the community owner, which changes what owner-gated reads

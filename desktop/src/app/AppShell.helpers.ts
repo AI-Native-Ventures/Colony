@@ -8,7 +8,6 @@ export type AppView =
   | "channel"
   | "messages"
   | "agents"
-  | "people"
   | "discovery"
   | "workflows"
   | "pulse"
@@ -148,31 +147,12 @@ export function toSearchHit(
   };
 }
 
-/**
- * The Agents view hosts addressable sections (`?section=...`); only `people`
- * exists today. The validated search object wins when provided; raw-href
- * callers (tests, history helpers) keep the query in the pathname itself.
- */
-function isAgentsPeopleSection(
-  search: Record<string, unknown> | undefined,
-  query: string,
-): boolean {
-  if (search?.section !== undefined) {
-    return search.section === "people";
-  }
-  return new URLSearchParams(query).get("section") === "people";
-}
-
-export function deriveShellRoute(
-  pathname: string,
-  search?: Record<string, unknown>,
-): {
+export function deriveShellRoute(pathname: string): {
   selectedChannelId: string | null;
   selectedView: AppView;
 } {
   const queryIndex = pathname.indexOf("?");
   const path = queryIndex === -1 ? pathname : pathname.slice(0, queryIndex);
-  const query = queryIndex === -1 ? "" : pathname.slice(queryIndex + 1);
 
   if (path.startsWith("/channels/")) {
     const [, , rawChannelId] = path.split("/");
@@ -199,7 +179,7 @@ export function deriveShellRoute(
   if (path === "/agents") {
     return {
       selectedChannelId: null,
-      selectedView: isAgentsPeopleSection(search, query) ? "people" : "agents",
+      selectedView: "agents",
     };
   }
 

@@ -195,9 +195,13 @@ export function managerCandidatesFor(
 ): OrgMember[] {
   const target = selectedRank ? escalationTarget(selectedRank) : null;
   if (!target) return [];
+  // Normalized on both sides: callers hold pubkeys from several sources
+  // (a chart row, a managed-agent record, a `d` tag) and a case difference
+  // would offer the member itself as its own manager.
+  const self = normalizePubkey(memberPubkey);
   return members.filter(
     (candidate) =>
-      candidate.pubkey !== memberPubkey && candidate.rank === target,
+      normalizePubkey(candidate.pubkey) !== self && candidate.rank === target,
   );
 }
 

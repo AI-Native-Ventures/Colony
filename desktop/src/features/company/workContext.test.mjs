@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+} from "nostr-tools/pure";
+
+import {
+  createCompanyRepository,
+  resetCompanyRepositoryState,
+} from "./companyRepository.ts";
+import { canonicalCompanyJson } from "./contracts.ts";
+import {
   createWorkContextResolver,
   mergeWorkContextTags,
   workContextTags,
@@ -44,6 +55,30 @@ function task(overrides = {}) {
   };
 }
 
+const TASK_RELAY_SECRET = generateSecretKey();
+const TASK_RELAY_PUBKEY = getPublicKey(TASK_RELAY_SECRET);
+
+/** The exact head the relay's broker signs for an implicit chat task, so the
+ * read-back is exercised against the shape it actually meets. */
+function chatTaskHead() {
+  const record = task();
+  return finalizeEvent(
+    {
+      kind: 30181,
+      created_at: 1_780_000_100,
+      tags: [
+        ["d", record.id],
+        ["team", record.owningTeamId],
+        ["g", record.owningTeamId],
+        ["cost-centre", record.costCentreId],
+        ["w", record.status],
+      ],
+      content: canonicalCompanyJson(record),
+    },
+    TASK_RELAY_SECRET,
+  );
+}
+
 const REQUEST = {
   channelId: "engineering",
   sendId: "send-0001",
@@ -60,6 +95,7 @@ function resolver({
   },
   taskResult = { ok: true, value: task() },
   companyHead = COMPANY_HEAD,
+  readTask = null,
 } = {}) {
   const order = [];
   const loadTaskCalls = [];
@@ -85,7 +121,7 @@ function resolver({
     loadTask: async (taskId, headEventId) => {
       order.push("read-back");
       loadTaskCalls.push([taskId, headEventId]);
-      return taskResult;
+      return readTask ? await readTask(taskId, headEventId) : taskResult;
     },
   });
   return { resolve, order, loadTaskCalls };
@@ -209,9 +245,11 @@ test("a superseded submission means the send already succeeded, and proceeds", a
   assert.equal(context.taskId, TASK_ID);
 });
 
-// The relay's rejection names the exact event that won the claim, so the
-// read-back can go straight to it instead of waiting on the `#d` tag filter.
-test("a superseded claim's winning event id is handed to the read-back", async () => {
+// The relay's rejection names the company ACTION event that won the
+// idempotency claim, signed by the owner. That is not the task head, which
+// the relay signs itself under a different kind, so it must never be handed
+// to a read-back that looks up task heads by id.
+test("a superseded claim carries no head event id to the read-back", async () => {
   const { resolve, loadTaskCalls } = resolver({
     brokerOutcome: {
       status: "superseded",
@@ -221,7 +259,53 @@ test("a superseded claim's winning event id is handed to the read-back", async (
     },
   });
   await resolve(REQUEST);
-  assert.deepEqual(loadTaskCalls, [[TASK_ID, "w".repeat(64)]]);
+  assert.deepEqual(loadTaskCalls, [[TASK_ID, null]]);
+});
+
+// The whole path, against a relay that answers an `ids` lookup only for
+// events it actually holds under that id. Retrying a message with the same
+// text rebuilds the same task id and the same idempotency key under a new
+// event id, so the relay answers "superseded by original action <id>". Taking
+// that id as a task head id queried a filter nothing could satisfy, on all
+// eight attempts, and every retry of that text failed the same way forever.
+test("a superseded submission reads its task back by coordinate", async () => {
+  resetCompanyRepositoryState();
+  const head = chatTaskHead();
+  const winningActionEventId = "d".repeat(64);
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      if (filter.ids) return filter.ids.includes(head.id) ? [head] : [];
+      return filter["#d"]?.includes(TASK_ID) ? [head] : [];
+    },
+    relaySelf: async () => TASK_RELAY_PUBKEY,
+    delay: async () => {},
+    taskReadBackAttempts: 2,
+    taskReadBackIntervalMs: 1,
+  });
+
+  const { resolve } = resolver({
+    brokerOutcome: {
+      status: "superseded",
+      actionEventId: "a".repeat(64),
+      winnerEventId: winningActionEventId,
+      message: "This exact change was already applied by an earlier attempt.",
+    },
+    readTask: (taskId, headEventId) =>
+      repository.getTaskAfterAction(taskId, headEventId),
+  });
+
+  const context = await resolve(REQUEST);
+  assert.equal(context.taskId, TASK_ID);
+  assert.ok(
+    filters.some((filter) => filter["#d"]?.includes(TASK_ID)),
+    "the coordinate read must run",
+  );
+  assert.ok(
+    filters.every((filter) => !filter.ids?.includes(winningActionEventId)),
+    "the winning action event id must never be read as a task head",
+  );
 });
 
 // A superseded claim is only evidence that SOME attempt won it. If the Task

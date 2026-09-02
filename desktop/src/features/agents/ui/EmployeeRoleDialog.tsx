@@ -1,7 +1,11 @@
 import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { rankLabel, type AgentRank } from "@/features/agents/employeeHeads";
+import {
+  isPromotion,
+  rankLabel,
+  type AgentRank,
+} from "@/features/agents/employeeHeads";
 import {
   publishEmployeeRetirement,
   publishEmployeeUpdate,
@@ -11,7 +15,6 @@ import { recordRetiredEmployee } from "@/features/agents/retiredEmployees";
 import { managerCandidatesFor } from "@/features/agents/orgMembers";
 import { escalationTarget, type OrgMember } from "@/features/agents/orgTree";
 import type { DelegationGrant } from "@/features/agents/delegationGrants";
-import { formatNanousdAsUsd } from "@/shared/api/tauriProvisionedCredits";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
@@ -24,6 +27,7 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { AgentDropdownSelect } from "./agentConfigControls";
+import { PromotionGrantWarning } from "./PromotionGrantWarning";
 
 /**
  * Editing an agent's rank and reporting line -- and, for hired employees,
@@ -52,20 +56,7 @@ import { AgentDropdownSelect } from "./agentConfigControls";
  * under the verbatim message so the owner knows what to reassign first.
  */
 
-const RANK_ORDER: Record<AgentRank, number> = {
-  worker: 0,
-  leader: 1,
-  executive: 2,
-};
-
 const ALL_RANKS: AgentRank[] = ["worker", "leader", "executive"];
-
-/** Grants shown individually before the summary count takes over. */
-const MAX_LISTED_GRANTS = 4;
-
-export function isPromotion(current: AgentRank, next: AgentRank): boolean {
-  return RANK_ORDER[next] > RANK_ORDER[current];
-}
 
 /**
  * One editable member of the org. Employees always carry a rank; a personal
@@ -361,71 +352,15 @@ export function EmployeeRoleDialog({
           )}
 
           {confersGrants ? (
-            <div
-              className="space-y-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3"
-              data-testid="promotion-grant-warning"
-            >
-              <p className="text-sm font-medium text-foreground">
-                {member.rank === null ? "Assigning" : "Promoting"} {member.name}{" "}
-                to {selectedRank ? rankLabel(selectedRank) : ""} gives it every
-                active delegation in this community, immediately. Delegations
-                belong to the community, not to one agent: any leader or
-                executive may decide under them.
-              </p>
-              {isGrantsLoading ? (
-                <p className="text-xs text-muted-foreground">
-                  Checking active delegations...
-                </p>
-              ) : grants.length === 0 ? (
-                <p
-                  className="text-sm text-muted-foreground"
-                  data-testid="promotion-no-grants"
-                >
-                  No delegations are currently active, so this grants no
-                  autonomous spending authority.
-                </p>
-              ) : (
-                <div className="space-y-1.5">
-                  {grants.slice(0, MAX_LISTED_GRANTS).map((grant) => (
-                    <p
-                      className="text-xs text-foreground"
-                      data-testid={`promotion-grant-${grant.grantId}`}
-                      key={grant.grantId}
-                    >
-                      <span className="font-medium">{grant.category}</span>{" "}
-                      scope {grant.scope}
-                      {grant.capNanoUsd !== null
-                        ? `, capped at ${formatNanousdAsUsd(String(grant.capNanoUsd))}`
-                        : ", no spending cap"}
-                    </p>
-                  ))}
-                  {grants.length > MAX_LISTED_GRANTS ? (
-                    <p className="text-xs text-muted-foreground">
-                      ...and {grants.length - MAX_LISTED_GRANTS} more active{" "}
-                      {grants.length - MAX_LISTED_GRANTS === 1
-                        ? "delegation"
-                        : "delegations"}
-                      .
-                    </p>
-                  ) : null}
-                </div>
-              )}
-              {!isGrantsLoading ? (
-                <div className="flex items-start gap-2 text-sm text-foreground">
-                  <Checkbox
-                    checked={acknowledgedPromotion}
-                    data-testid="promotion-acknowledge-checkbox"
-                    id="promotion-acknowledge"
-                    onCheckedChange={(checked) => {
-                      setAcknowledgedPromotion(checked === true);
-                    }}
-                  />
-                  <label htmlFor="promotion-acknowledge">
-                    I understand what this promotion confers.
-                  </label>
-                </div>
-              ) : null}
-            </div>
+            <PromotionGrantWarning
+              acknowledged={acknowledgedPromotion}
+              grants={grants}
+              isGrantsLoading={isGrantsLoading}
+              name={member.name}
+              onAcknowledgedChange={setAcknowledgedPromotion}
+              rank={selectedRank}
+              verb={member.rank === null ? "Assigning" : "Promoting"}
+            />
           ) : null}
 
           {updateError ? (

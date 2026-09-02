@@ -1060,6 +1060,69 @@ test("a task read-back by head event id also retries past index lag", async () =
   assert.equal(calls, 2);
 });
 
+// The relay refuses a duplicate company action by naming the ACTION event
+// that won the idempotency claim, not the task head that action produced.
+// That id is signed by the owner and is not a kind 30181, so an `ids` read
+// for it can never match, on any attempt. Falling back to the coordinate
+// read is what the doc comment above already promised, and it is the only
+// thing that recovers a superseded send.
+test("a task read-back falls back to the coordinate read when the id read misses", async () => {
+  resetCompanyRepositoryState();
+  const head = taskHead();
+  const strangerEventId = "d".repeat(64);
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      // A real relay answers an `ids` lookup only for events it holds under
+      // those ids. The winning action event is not a task head.
+      if (filter.ids) return filter.ids.includes(head.id) ? [head] : [];
+      return [head];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+  });
+
+  const result = await repository.getTaskAfterAction(TASK.id, strangerEventId);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.id, TASK.id);
+  assert.equal(filters.length, 2);
+  assert.deepEqual(filters[0].ids, [strangerEventId]);
+  assert.equal(filters[1].ids, undefined);
+  assert.deepEqual(filters[1]["#d"], [TASK.id]);
+});
+
+// The fallback must not reopen the one door the retry loop deliberately
+// closes: a read cancelled by a community switch is not a miss, and a second
+// query in its place would fetch the old community's Task into the new one.
+test("a cancelled id read does not fall through to the coordinate read", async () => {
+  resetCompanyRepositoryState();
+  const filters = [];
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      await gate;
+      return [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    taskReadBackAttempts: 5,
+    taskReadBackIntervalMs: 10,
+  });
+
+  const pending = repository.getTaskAfterAction(TASK.id, "d".repeat(64));
+  resetCompanyRepositoryState();
+  release();
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "cancelled");
+  assert.equal(filters.length, 1);
+});
+
 // A read cancelled by a community switch is not indexing lag — retrying it
 // would only risk delivering the old community's Task into the new one.
 test("a task read-back does not retry past a community switch", async () => {
