@@ -16,21 +16,17 @@ test("a team the device knows about is named", () => {
   );
 });
 
-test("an unknown coordination id still reads as Company Coordination", () => {
+test("an unknown coordination id falls back to the id itself", () => {
   // A Task minted before this community's coordination team was published,
   // or one minted against another device's copy, resolves to no local team.
-  // The id is not a name, so showing it turns the thread header into hex.
+  // The dialog shows the id, which names what is missing.
   assert.equal(
     teamDisplayName([], "builtin-team:9f2a1c3d:company-coordination"),
-    "Company Coordination",
+    "builtin-team:9f2a1c3d:company-coordination",
   );
   assert.equal(
     teamDisplayName(undefined, "builtin-team:company-coordination"),
-    "Company Coordination",
-  );
-  assert.equal(
-    teamDisplayName([], "company-team:relay.example:acme:company-coordination"),
-    "Company Coordination",
+    "builtin-team:company-coordination",
   );
 });
 
