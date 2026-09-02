@@ -63,6 +63,11 @@ const INITIATIVE = {
   expectedCostUsd: null,
   sourceChannelId: "welcome",
   sourceEventId: null,
+  // Written on every head by every relay carrying the fan-out fields: the
+  // Rust struct defaults them but does not skip them when serialising.
+  templateId: null,
+  templateVersion: null,
+  cohortId: null,
   createdAt: 1_780_000_000,
   updatedAt: 1_780_000_000,
 };

@@ -25,7 +25,7 @@ const TASK_SCHEMA: &str = "colony.task/v1";
 const MAX_TITLE_LEN: usize = 200;
 /// The baseline team every company has, and the fallback when ownership of a
 /// piece of chat work is genuinely ambiguous.
-const COORDINATION_TEAM_SLUG: &str = "company-coordination";
+pub(crate) const COORDINATION_TEAM_SLUG: &str = "company-coordination";
 
 /// A Task Colony created from chat, and the action that creates it.
 #[derive(Debug, Clone, PartialEq)]
@@ -90,7 +90,7 @@ pub fn chat_task_id(channel_id: &str, send_id: &str) -> String {
     format!("chat:{derived}")
 }
 
-fn clamp_title(value: &str) -> String {
+pub(crate) fn clamp_title(value: &str) -> String {
     if value.len() <= MAX_TITLE_LEN {
         return value.to_owned();
     }

@@ -13,6 +13,7 @@ use buzz_sdk_pkg::{
     company_blueprint::sign_action,
     implicit_task::{plan_implicit_task, plan_user_task, UserTaskRequest},
     initiative_activation::{next_step, InitiativeIntent, InitiativeStep},
+    user_initiative::{plan_user_initiative, UserInitiativePlan, UserInitiativeRequest},
 };
 use nostr::JsonUtil;
 use serde::{Deserialize, Serialize};
@@ -530,13 +531,134 @@ pub async fn create_user_task(
     })
 }
 
+/// The Initiative a human created directly, e.g. from a "New initiative"
+/// affordance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInitiativeResult {
+    /// The stable Initiative identifier.
+    pub initiative_id: String,
+    /// The persona the initiative is accountable to.
+    pub owner_persona_id: String,
+    /// The signed Company Action that creates it.
+    pub signed_action: String,
+}
+
+/// What a caller typed into a "New initiative" form, before any of it has
+/// been checked against a company.
+#[derive(Debug, Clone, Copy)]
+struct InitiativeDraft<'a> {
+    request_id: &'a str,
+    channel_id: &'a str,
+    title: &'a str,
+    /// Absent and empty mean the same thing here: no summary was written.
+    summary: Option<&'a str>,
+    cost_centre_id: Option<&'a str>,
+    client_organization_id: Option<&'a str>,
+}
+
+/// The half of `create_initiative` that needs no running Tauri app: verify
+/// the head the caller read, then plan against it.
+///
+/// Split out so the two refusals that matter most - a head this community's
+/// relay did not write, and a draft the company contract rejects - are
+/// testable without an `AppHandle`, which no unit test can build.
+fn plan_initiative_from_head(
+    company_head: &str,
+    relay_pubkey: &str,
+    teams: &[buzz_core_pkg::company::CompanyTeamRef],
+    draft: InitiativeDraft<'_>,
+) -> Result<UserInitiativePlan, String> {
+    let company_event = relay_head(company_head, relay_pubkey, "company")?;
+    let company = parse_company_event(&company_event)
+        .map_err(|error| format!("the company head is unreadable: {error}"))?;
+
+    plan_user_initiative(
+        &company,
+        teams,
+        UserInitiativeRequest {
+            request_id: draft.request_id,
+            channel_id: draft.channel_id,
+            title: draft.title,
+            summary: draft.summary.unwrap_or_default(),
+            cost_centre_id: draft.cost_centre_id,
+            client_organization_id: draft.client_organization_id,
+            relay_pubkey,
+            // Derived from the request id rather than read from the clock, so
+            // a retry produces the same bytes and the relay recognises the
+            // replay.
+            now: buzz_core_pkg::company_roster::approval_timestamp(draft.request_id),
+        },
+    )
+}
+
+/// Build and sign the Initiative for one human-initiated "create an
+/// initiative" request.
+///
+/// `request_id` is the caller's stable identity for this create attempt, not
+/// for the initiative's content: retrying the same attempt (a lost receipt)
+/// asks for the same initiative, but two attempts sharing every visible
+/// field, including title, are still two bodies of work a human meant to
+/// create separately - see
+/// [`buzz_sdk_pkg::user_initiative::user_initiative_id`].
+///
+/// `cost_centre_id` defaults to the company's internal cost centre when
+/// omitted, so a human never has to resolve one before describing work. The
+/// result is `Proposed`: this describes an initiative, it does not start it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn create_initiative(
+    app: AppHandle,
+    company_head: String,
+    request_id: String,
+    channel_id: String,
+    title: String,
+    summary: Option<String>,
+    cost_centre_id: Option<String>,
+    client_organization_id: Option<String>,
+    relay_pubkey: String,
+    state: State<'_, AppState>,
+) -> Result<UserInitiativeResult, String> {
+    let keys = state
+        .signing_keys()
+        .map_err(|_| "creating an initiative requires the community owner".to_string())?;
+
+    if !is_event_id(&relay_pubkey) {
+        return Err("relay pubkey is not a valid public key".to_string());
+    }
+
+    let plan = plan_initiative_from_head(
+        &company_head,
+        &relay_pubkey,
+        &company_team_refs(&app)?,
+        InitiativeDraft {
+            request_id: &request_id,
+            channel_id: &channel_id,
+            title: &title,
+            summary: summary.as_deref(),
+            cost_centre_id: cost_centre_id.as_deref(),
+            client_organization_id: client_organization_id.as_deref(),
+        },
+    )?;
+
+    Ok(UserInitiativeResult {
+        initiative_id: plan.initiative_id,
+        owner_persona_id: plan.owner_persona_id,
+        signed_action: sign_action(&plan.action, &keys)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{resolve_chat_agent_persona, teams_to_company_refs};
+    use super::{
+        plan_initiative_from_head, resolve_chat_agent_persona, teams_to_company_refs,
+        InitiativeDraft,
+    };
     use crate::managed_agents::{
         AgentDefinition, BackendKind, ManagedAgentRecord, RespondTo, TeamRecord,
     };
     use buzz_sdk_pkg::implicit_task::owning_team_for_chat;
+    use nostr::JsonUtil;
 
     fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
         ManagedAgentRecord {
@@ -734,5 +856,129 @@ mod tests {
             "fallback team must be the coordination team, got {}",
             owner.id
         );
+    }
+
+    /// A relay-signed community profile head, exactly the shape
+    /// `parse_company_event` demands: kind, a `d` tag of `profile`, and
+    /// canonical JSON content.
+    fn company_head(keys: &nostr::Keys) -> String {
+        let profile = buzz_core_pkg::company::CompanyProfile {
+            schema: buzz_core_pkg::company::COMPANY_SCHEMA.to_string(),
+            trading_name: "Horizon Labs".to_string(),
+            legal_name: None,
+            website: None,
+            summary: "Software for South African businesses.".to_string(),
+            business_type: "agency".to_string(),
+            services: Vec::new(),
+            customer_segments: vec!["small business".to_string()],
+            cost_centres: vec![buzz_core_pkg::company::CostCentre {
+                id: "cc-coordination".to_string(),
+                name: "Company coordination".to_string(),
+                kind: buzz_core_pkg::company::CostCentreKind::Internal,
+                service_id: None,
+            }],
+            source_report_event_id: None,
+            created_at: 1_780_000_000,
+            updated_at: 1_780_000_000,
+        };
+        let value = serde_json::to_value(&profile).expect("the profile serialises");
+        let content = buzz_core_pkg::block::canonical_json(&value).expect("canonical content");
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(buzz_core_pkg::kind::KIND_COMPANY_PROFILE as u16),
+            content,
+        )
+        .tags(vec![
+            nostr::Tag::parse(["d", "profile"]).expect("the d tag parses")
+        ])
+        .sign_with_keys(keys)
+        .expect("the test head signs")
+        .as_json()
+    }
+
+    fn coordination_team_refs() -> Vec<buzz_core_pkg::company::CompanyTeamRef> {
+        vec![buzz_core_pkg::company::CompanyTeamRef {
+            id: "company-team:abc:horizonlabs:company-coordination".to_string(),
+            lead_persona_id: "company-role:abc:horizonlabs:coordinator".to_string(),
+            persona_ids: vec!["company-role:abc:horizonlabs:coordinator".to_string()],
+        }]
+    }
+
+    fn draft(title: &str) -> InitiativeDraft<'_> {
+        InitiativeDraft {
+            request_id: "4f1b0d1e-0e3a-4b5a-9a4b-2f7d8f1a6c22",
+            channel_id: "engineering",
+            title,
+            summary: None,
+            cost_centre_id: None,
+            client_organization_id: None,
+        }
+    }
+
+    #[test]
+    fn create_initiative_plans_a_proposed_initiative_from_a_relay_head() {
+        let keys = nostr::Keys::generate();
+        let relay_pubkey = keys.public_key().to_hex();
+        let plan = plan_initiative_from_head(
+            &company_head(&keys),
+            &relay_pubkey,
+            &coordination_team_refs(),
+            draft("Rebuild the marketing site"),
+        )
+        .expect("a titled draft on a relay-written head plans");
+        assert!(plan.initiative_id.starts_with("user-initiative:"));
+        assert_eq!(
+            plan.owner_persona_id,
+            "company-role:abc:horizonlabs:coordinator"
+        );
+    }
+
+    #[test]
+    fn create_initiative_refuses_a_blank_title() {
+        let keys = nostr::Keys::generate();
+        let relay_pubkey = keys.public_key().to_hex();
+        let error = plan_initiative_from_head(
+            &company_head(&keys),
+            &relay_pubkey,
+            &coordination_team_refs(),
+            draft("   "),
+        )
+        .expect_err("a blank title is not a body of work");
+        assert!(error.contains("title"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn create_initiative_refuses_a_head_this_relay_did_not_write() {
+        // Signed correctly, just not by this community's relay. Trusting it
+        // would let a caller hand the owner a company of their own invention
+        // and get the owner's signature on work costed against it.
+        let impostor = nostr::Keys::generate();
+        let relay_pubkey = nostr::Keys::generate().public_key().to_hex();
+        let error = plan_initiative_from_head(
+            &company_head(&impostor),
+            &relay_pubkey,
+            &coordination_team_refs(),
+            draft("Rebuild the marketing site"),
+        )
+        .expect_err("a head from another author is refused");
+        assert!(
+            error.contains("not authored by this community's relay"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn create_initiative_refuses_an_unknown_cost_centre() {
+        let keys = nostr::Keys::generate();
+        let relay_pubkey = keys.public_key().to_hex();
+        let mut input = draft("Rebuild the marketing site");
+        input.cost_centre_id = Some("cc-nowhere");
+        let error = plan_initiative_from_head(
+            &company_head(&keys),
+            &relay_pubkey,
+            &coordination_team_refs(),
+            input,
+        )
+        .expect_err("an unknown cost centre never reaches the relay");
+        assert!(error.contains("cost centre"), "unexpected error: {error}");
     }
 }
