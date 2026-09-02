@@ -32,6 +32,8 @@ export type InboundFrameCapabilities = {
     payload: unknown[],
     fallbackMessage: string,
   ): Promise<void>;
+  /** Close a subscription the CLOSED recovery path had to replace. */
+  closeSubscription?(subId: string): Promise<void>;
   setReconnectDelay(ms: number): void;
 };
 
@@ -102,6 +104,7 @@ export async function handleRelayWsMessage(
 
   if (type === "CLOSED" && typeof rest[0] === "string") {
     handleRelayClosed({
+      closeSubscription: caps.closeSubscription,
       subscriptions,
       subId: rest[0],
       message: typeof rest[1] === "string" ? rest[1] : "",

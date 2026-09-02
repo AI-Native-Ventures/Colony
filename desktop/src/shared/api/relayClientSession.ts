@@ -749,6 +749,7 @@ export class RelayClient {
         handleEose: (subId, gen) => this.handleEose(subId, gen),
         sendRawWithReconnectRetry: (payload, fallbackMessage) =>
           this.sendRawWithReconnectRetry(payload, fallbackMessage),
+        closeSubscription: (subId) => this.closeSubscription(subId),
         setReconnectDelay: (ms) => {
           this.reconnectDelayMs = ms;
         },
