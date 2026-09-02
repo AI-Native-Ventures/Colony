@@ -13,6 +13,7 @@ import type {
   ActionCenterStateFilter,
 } from "@/features/action-center/contracts";
 import type { HomeSurface } from "@/app/routes/homeSearch";
+import type { BillingTab } from "@/app/routes/spendSearch";
 import type {
   DiscoverySearch,
   DiscoverySurface,
@@ -146,26 +147,33 @@ export function useAppNavigation() {
     [goHome],
   );
 
-  const goSpend = React.useCallback(
-    (behavior?: NavigationBehavior) =>
+  /**
+   * Billing. `tab` picks the Spend ledger or the Credits top-up pane; both
+   * live on `/spend` so moving between them changes search state rather than
+   * unmounting one page and fetching another.
+   */
+  const goBilling = React.useCallback(
+    (tab: BillingTab, behavior?: NavigationBehavior) =>
       commitNavigation(
         {
           to: "/spend",
+          search: { tab },
         },
         behavior,
       ),
     [commitNavigation],
   );
 
+  /** Billing's Spend tab. Kept named for the sidebar and the palette. */
+  const goSpend = React.useCallback(
+    (behavior?: NavigationBehavior) => goBilling("spend", behavior),
+    [goBilling],
+  );
+
+  /** Billing's Credits tab. Kept named for the palette and the ledger link. */
   const goCredits = React.useCallback(
-    (behavior?: NavigationBehavior) =>
-      commitNavigation(
-        {
-          to: "/credits",
-        },
-        behavior,
-      ),
-    [commitNavigation],
+    (behavior?: NavigationBehavior) => goBilling("credits", behavior),
+    [goBilling],
   );
 
   const goDiscovery = React.useCallback(

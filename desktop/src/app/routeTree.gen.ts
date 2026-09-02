@@ -13,7 +13,6 @@ import { Route as remindersRouteImport } from "./routes/reminders";
 import { Route as pulseRouteImport } from "./routes/pulse";
 import { Route as projectsRouteImport } from "./routes/projects";
 import { Route as discoveryRouteImport } from "./routes/discovery";
-import { Route as creditsRouteImport } from "./routes/credits";
 import { Route as contentRouteImport } from "./routes/content";
 import { Route as agentsRouteImport } from "./routes/agents";
 import { Route as indexRouteImport } from "./routes/index";
@@ -63,11 +62,6 @@ const discoveryRoute = discoveryRouteImport.update({
   path: "/discovery",
   getParentRoute: () => rootRouteImport,
 } as any);
-const creditsRoute = creditsRouteImport.update({
-  id: "/credits",
-  path: "/credits",
-  getParentRoute: () => rootRouteImport,
-} as any);
 const contentRoute = contentRouteImport.update({
   id: "/content",
   path: "/content",
@@ -114,7 +108,6 @@ export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
   "/content": typeof contentRoute;
-  "/credits": typeof creditsRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -133,7 +126,6 @@ export interface FileRoutesByTo {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
   "/content": typeof contentRoute;
-  "/credits": typeof creditsRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -153,7 +145,6 @@ export interface FileRoutesById {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
   "/content": typeof contentRoute;
-  "/credits": typeof creditsRoute;
   "/discovery": typeof discoveryRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
@@ -174,7 +165,6 @@ export interface FileRouteTypes {
     | "/"
     | "/agents"
     | "/content"
-    | "/credits"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -193,7 +183,6 @@ export interface FileRouteTypes {
     | "/"
     | "/agents"
     | "/content"
-    | "/credits"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -212,7 +201,6 @@ export interface FileRouteTypes {
     | "/"
     | "/agents"
     | "/content"
-    | "/credits"
     | "/discovery"
     | "/projects"
     | "/pulse"
@@ -232,7 +220,6 @@ export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
   agentsRoute: typeof agentsRoute;
   contentRoute: typeof contentRoute;
-  creditsRoute: typeof creditsRoute;
   discoveryRoute: typeof discoveryRoute;
   projectsRoute: typeof projectsRoute;
   pulseRoute: typeof pulseRoute;
@@ -306,13 +293,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof discoveryRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/credits": {
-      id: "/credits";
-      path: "/credits";
-      fullPath: "/credits";
-      preLoaderRoute: typeof creditsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/content": {
       id: "/content";
       path: "/content";
@@ -376,7 +356,6 @@ const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
   agentsRoute: agentsRoute,
   contentRoute: contentRoute,
-  creditsRoute: creditsRoute,
   discoveryRoute: discoveryRoute,
   projectsRoute: projectsRoute,
   pulseRoute: pulseRoute,

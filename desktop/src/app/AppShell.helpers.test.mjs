@@ -92,8 +92,15 @@ test("agents route derives the Agents sidebar selection", () => {
   });
 });
 
-test("credits route derives the Credits sidebar selection", () => {
-  assert.deepEqual(deriveShellRoute("/credits"), {
+test("billing route derives the Billing sidebar selection", () => {
+  assert.deepEqual(deriveShellRoute("/spend"), {
+    selectedChannelId: null,
+    selectedView: "spend",
+  });
+});
+
+test("the retired credits route no longer has its own selection", () => {
+  assert.notDeepEqual(deriveShellRoute("/credits"), {
     selectedChannelId: null,
     selectedView: "credits",
   });

@@ -119,7 +119,7 @@ export function buildNavigationCommands(
       onSelect: () => {
         void targets.goSpend();
       },
-      title: "Open Spend",
+      title: "Open Billing",
     },
     {
       description: "Buy Colony Credits",
@@ -127,7 +127,7 @@ export function buildNavigationCommands(
       onSelect: () => {
         void targets.goCredits();
       },
-      title: "Open Credits",
+      title: "Open Billing credits",
     },
     {
       description: "Open Discovery",

@@ -12,7 +12,6 @@ export type AppView =
   | "pulse"
   | "projects"
   | "spend"
-  | "credits"
   | "content"
   | "work";
 
@@ -214,13 +213,6 @@ export function deriveShellRoute(pathname: string): {
   // Credits is where more comes from. Until this route existed the only way
   // to buy Credits was the first-run onboarding wizard, so anyone who
   // finished onboarding and ran out had no way to pay.
-  if (path === "/credits") {
-    return {
-      selectedChannelId: null,
-      selectedView: "credits",
-    };
-  }
-
   if (path === "/work") {
     return {
       selectedChannelId: null,

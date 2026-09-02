@@ -26,10 +26,10 @@ function readRememberedEmail(): string {
 }
 
 /**
- * Buying Credits from inside the app.
+ * Buying Credits from inside the app, as the Credits tab of Billing.
  *
- * Until this route existed, the purchase screen was mounted in exactly one
- * place — the first-run onboarding wizard — so anyone who finished onboarding
+ * Until this screen existed, the purchase surface was mounted in exactly one
+ * place, the first-run onboarding wizard, so anyone who finished onboarding
  * and later ran out of Credits had no way to pay.
  *
  * This owns fetching and checkout; `CreditsPage` owns presentation. The rules

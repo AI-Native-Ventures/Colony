@@ -5,7 +5,6 @@ import {
   Compass,
   FolderGit2,
   Inbox,
-  CreditCard,
   Receipt,
   Zap,
 } from "lucide-react";
@@ -50,7 +49,6 @@ type AppSidebarPrimaryMenuProps = {
   onSelectProjects: () => void;
   onSelectContent: () => void;
   onSelectPulse: () => void;
-  onSelectCredits: () => void;
   onSelectSpend: () => void;
   onSelectWorkflows: () => void;
   selectedView: SidebarSelectedView;
@@ -156,7 +154,6 @@ export function AppSidebarPrimaryMenu({
   onSelectProjects,
   onSelectContent,
   onSelectPulse,
-  onSelectCredits,
   onSelectSpend,
   onSelectWorkflows,
   selectedView,
@@ -224,26 +221,14 @@ export function AppSidebarPrimaryMenu({
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
-            data-testid="open-spend-view"
+            data-testid="open-billing-view"
             isActive={selectedView === "spend"}
             onClick={onSelectSpend}
-            tooltip="Spend"
+            tooltip="Billing"
             type="button"
           >
             <Receipt className="h-4 w-4" />
-            <SidebarMenuLabel>Spend</SidebarMenuLabel>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            data-testid="open-credits-view"
-            isActive={selectedView === "credits"}
-            onClick={onSelectCredits}
-            tooltip="Credits"
-            type="button"
-          >
-            <CreditCard className="h-4 w-4" />
-            <SidebarMenuLabel>Credits</SidebarMenuLabel>
+            <SidebarMenuLabel>Billing</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <FeatureGate feature="contentCalendar">
