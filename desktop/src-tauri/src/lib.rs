@@ -213,7 +213,6 @@ pub fn run() {
     let builder = builder.plugin(ptt_shortcut::press_release_plugin());
 
     // A marker the release workflow greps for in the built binary.
-    //
     // 0.8.0 and 0.9.0 shipped with the updater compiled out: the build step
     // was missing BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT, so
     // build.rs never set this cfg. Every downstream signal still looked
@@ -793,6 +792,7 @@ pub fn run() {
             commands::initiative::advance_initiative,
             commands::initiative::ensure_chat_task,
             commands::initiative::create_user_task,
+            commands::org_placement::record_org_placement,
             commands::task_transition::complete_queue_task,
             commands::task_transition::rename_task_from_agent,
             commands::task_transition::snooze_queue_task,
