@@ -17,6 +17,7 @@ import {
   Plus,
   Receipt,
   Settings,
+  Target,
   User,
   type LucideIcon,
   Zap,
@@ -43,6 +44,7 @@ export type SearchCommandId =
   | "open-content"
   | "open-discovery"
   | "open-home"
+  | "open-initiatives"
   | "open-projects"
   | "open-pulse"
   | "open-settings"
@@ -124,6 +126,8 @@ export function resultIcon(
         return Compass;
       case "open-home":
         return House;
+      case "open-initiatives":
+        return Target;
       case "open-projects":
         return FolderGit2;
       case "open-pulse":
