@@ -73,6 +73,10 @@ export function OnboardingCanvas({ step, track, children }: Props) {
           // blend into the canvas (the scroll fade) can reach the hue without
           // a second copy of the table in CSS.
           "--onb-base": theme.base,
+          // Derived per hue in canvasTheme.ts, not a fixed value: the flow's
+          // one lilac was muddy rose on amber and barely there on pink.
+          "--onb-disabled-bg": theme.disabledBg,
+          "--onb-disabled-ink": theme.disabledInk,
         } as CSSProperties
       }
     >

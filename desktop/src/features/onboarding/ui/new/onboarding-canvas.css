@@ -17,6 +17,13 @@
     --onb-shell-line: rgba(23, 23, 23, 0.14);
     --onb-rule: rgba(23, 23, 23, 0.28);
     --onb-accent: #171717;
+    /* Canvas tint and the disabled-action pair, as the violet screen wears
+       them. OnboardingCanvas overwrites all three per screen from
+       canvasTheme.ts; these defaults are what a canvas that sets none of them
+       falls back to, so a disabled button is never an untinted hole. */
+    --onb-base: #b394f9;
+    --onb-disabled-bg: #846fb5;
+    --onb-disabled-ink: #ffffff;
 
     position: fixed;
     inset: 0;

@@ -458,6 +458,20 @@
     background: #000000 !important;
   }
 
+  /* A primary action that cannot be pressed yet still has to be seen: it is
+     the thing the person is working toward. The shared Button's own disabled
+     state is `bg-primary` at half opacity, one fixed lilac for all five
+     canvases, which came out muddy rose on the amber screens and nearly
+     invisible on pink. These variables are the screen's own hue darkened
+     toward ink, derived in canvasTheme.ts and proved legible there, so the
+     opacity is turned back off: the colour carries the state now. */
+  :where(.onb-canvas) .onb-actions button[class*="inline-flex"]:disabled {
+    background: var(--onb-disabled-bg) !important;
+    color: var(--onb-disabled-ink) !important;
+    opacity: 1 !important;
+    box-shadow: none !important;
+  }
+
   :where(.onb-canvas) .onb-actions button[class*="inline-flex"] {
     height: auto !important;
     border-radius: 999px !important;
