@@ -1,12 +1,11 @@
 import * as React from "react";
 
+import type { CheckoutWatch } from "@/features/credits/useCheckoutWatch";
 import { CreditsPage } from "@/features/credits/ui/CreditsPage";
-import type { CheckoutState } from "@/features/credits/ui/CreditsPage";
 import type {
   ChargeCurrency,
   CreditPack,
 } from "@/features/onboarding/contracts";
-import { createWiredPaymentsService } from "@/features/onboarding/lib/wiredPaymentsService";
 import { defaultPack } from "@/features/onboarding/ui/new/screens/CreditsScreen";
 import { useIdentityQuery } from "@/shared/api/hooks";
 
@@ -32,26 +31,24 @@ function readRememberedEmail(): string {
  * place, the first-run onboarding wizard, so anyone who finished onboarding
  * and later ran out of Credits had no way to pay.
  *
- * This owns fetching and checkout; `CreditsPage` owns presentation. The rules
- * that matter are unchanged and still shared with onboarding: the client names
- * a pack and never a price, prices are read from the relay at runtime, the
- * default is pinned by id rather than position, and the charge currency's own
- * symbol is shown.
+ * This owns the pack list and the selection; `CreditsPage` owns presentation;
+ * an outstanding payment is watched by `useCheckoutWatch` on the route above,
+ * because this component unmounts on a tab switch and a payment in flight
+ * must not. The rules that matter are unchanged and still shared with
+ * onboarding: the client names a pack and never a price, prices are read from
+ * the relay at runtime, the default is pinned by id rather than position, and
+ * the charge currency's own symbol is shown.
  */
-export function CreditsRouteScreen() {
+export function CreditsRouteScreen({ checkout }: { checkout: CheckoutWatch }) {
   const identityQuery = useIdentityQuery();
   const pubkey = identityQuery.data?.pubkey ?? "";
-
-  // One instance for the life of the screen: rebuilding it per render would
-  // refetch the pack list on every state change.
-  const [payments] = React.useState(() => createWiredPaymentsService());
+  const { balanceUsdCents, payments, refreshBalance, setState, state } =
+    checkout;
 
   const [packs, setPacks] = React.useState<CreditPack[] | null>(null);
   const [currency, setCurrency] = React.useState<ChargeCurrency | null>(null);
   const [selected, setSelected] = React.useState<string | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
-  const [balance, setBalance] = React.useState<number | null>(null);
-  const [state, setState] = React.useState<CheckoutState>("idle");
 
   // Prices come from the relay so a change reaches users without a new build,
   // and so the client never holds a price it could send back.
@@ -73,14 +70,6 @@ export function CreditsRouteScreen() {
     };
   }, [payments]);
 
-  const refreshBalance = React.useCallback(() => {
-    if (!pubkey) return;
-    payments
-      .balance(pubkey)
-      .then((result) => setBalance(result.usdCents))
-      .catch(() => setBalance(null));
-  }, [payments, pubkey]);
-
   React.useEffect(refreshBalance, [refreshBalance]);
 
   const pay = React.useCallback(async () => {
@@ -97,20 +86,12 @@ export function CreditsRouteScreen() {
     } catch {
       setState("failed");
     }
-  }, [payments, pubkey, selected]);
-
-  // Settlement lands via the gateway's webhook, not this window, so the page
-  // polls while a payment is outstanding rather than trusting the redirect.
-  React.useEffect(() => {
-    if (state !== "returned") return;
-    const timer = window.setInterval(refreshBalance, 5_000);
-    return () => window.clearInterval(timer);
-  }, [refreshBalance, state]);
+  }, [payments, pubkey, selected, setState]);
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <CreditsPage
-        balanceUsdCents={balance}
+        balanceUsdCents={balanceUsdCents}
         currency={currency}
         loadFailed={loadFailed}
         onPay={pay}

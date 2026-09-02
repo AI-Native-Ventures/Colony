@@ -209,10 +209,6 @@ export function deriveShellRoute(pathname: string): {
     };
   }
 
-  // Credits sits beside Spend on purpose: Spend is where the money went,
-  // Credits is where more comes from. Until this route existed the only way
-  // to buy Credits was the first-run onboarding wizard, so anyone who
-  // finished onboarding and ran out had no way to pay.
   if (path === "/work") {
     return {
       selectedChannelId: null,

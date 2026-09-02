@@ -100,9 +100,9 @@ test("billing route derives the Billing sidebar selection", () => {
 });
 
 test("the retired credits route no longer has its own selection", () => {
-  assert.notDeepEqual(deriveShellRoute("/credits"), {
+  assert.deepEqual(deriveShellRoute("/credits"), {
     selectedChannelId: null,
-    selectedView: "credits",
+    selectedView: "home",
   });
 });
 

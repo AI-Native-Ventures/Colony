@@ -114,7 +114,7 @@ export function buildNavigationCommands(
       title: "Open Tasks",
     },
     {
-      description: "Open the Spend ledger",
+      description: "Open the Billing spend ledger",
       id: "open-spend",
       onSelect: () => {
         void targets.goSpend();
@@ -127,7 +127,7 @@ export function buildNavigationCommands(
       onSelect: () => {
         void targets.goCredits();
       },
-      title: "Open Billing credits",
+      title: "Add credits",
     },
     {
       description: "Open Discovery",
