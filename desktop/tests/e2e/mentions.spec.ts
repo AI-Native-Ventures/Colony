@@ -1217,6 +1217,14 @@ test("typing an unregistered @token before existing text is left alone", async (
   await expect(input).toHaveText("hello @zzq world");
 });
 
+// Upstream's #7242 case for this ("wrapped channel references keep the icon
+// on the first composer line") is not ported: it asserts on
+// `.inline-chip-icon-channel`, a decoration Colony does not render. Colony
+// decorates agent mentions only (mentionHighlightExtension emits
+// "mention-chip agent-mention-highlight"); the human and channel chip
+// decorations arrive with #5638.
+
+
 test("channel references keep caret movement through the channel name", async ({
   page,
 }) => {
@@ -1279,7 +1287,9 @@ test("selecting a managed agent mention inserts @Name into input", async ({
   });
   await expect(agentMentionChip).toBeVisible();
   await expect(agentMentionChip).toHaveText("alice");
-  await expect(agentMentionChip).toHaveCSS("display", "inline-flex");
+  // #7242 puts composer chips in the inline flow so wrapped fragments keep
+  // their icon on the first line; the agent chip joins that treatment.
+  await expect(agentMentionChip).toHaveCSS("display", "inline");
   await expect(agentMentionChip).toHaveCSS("border-top-width", "0px");
 });
 

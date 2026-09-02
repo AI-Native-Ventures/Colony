@@ -278,15 +278,16 @@
 
    Plain-text mention decorations stay inline because inline-flex pulls the
    caret into their decorated range and swallows the trailing space after an
-   @mention. Composer Buzz links are atom nodes, but their labels may still
-   fragment between characters; only the icon and leading label fragment stay
-   together. The line-height keeps each inline decoration box tall enough to
-   paint both block-padding edges without clipping.
+   @mention. Their generated icon participates in the first line's inline
+   flow: absolute positioning anchors it to the union of every wrapped line,
+   and icon-sized left padding is cloned onto every continuation fragment.
+   Composer Buzz links are atom nodes with their own leading-fragment wrapper.
 
-   Colony's agent decoration is excluded: it paints its bot glyph from an
-   absolutely positioned `::before`, which needs a containing block an inline
-   box does not give it, and the composer's hidden `@` prefix goes with it. */
-.rich-text-composer .tiptap .mention-chip:not(.agent-mention-highlight) {
+   This is what lets Colony's agent decoration join the inline treatment that
+   #6718 had to exclude it from: its bot glyph no longer needs a containing
+   block, because it flows inline here rather than being positioned against
+   one. */
+.rich-text-composer .tiptap .mention-chip {
   display: inline;
   min-height: 0;
   line-height: calc(
@@ -294,4 +295,24 @@
     var(--inline-chip-padding-block-start) +
     var(--inline-chip-padding-block-end)
   );
+}
+
+/* Colony's icon chip is `.agent-mention-highlight`, and its gap token is
+   `--agent-icon-gap`; upstream's `.inline-chip-with-icon` /
+   `--inline-chip-icon-gap` pair has no producer here. The human variant is
+   upstream-only too: Colony decorates agent mentions and nothing else. */
+.rich-text-composer
+  .tiptap
+  .mention-chip.agent-mention-highlight:not(.wrapping-inline-chip) {
+  padding-left: var(--inline-chip-padding-inline);
+}
+
+.rich-text-composer
+  .tiptap
+  .mention-chip.agent-mention-highlight:not(.wrapping-inline-chip)::before {
+  position: static;
+  display: inline-block;
+  margin-right: var(--agent-icon-gap);
+  transform: none;
+  vertical-align: -0.125em;
 }
