@@ -34,9 +34,12 @@ export function MachineCanvas({ step, showStep = true, children }: Props) {
     >
       <div className="onb-grain" />
       <AntScatter hue={theme.hue} />
+      {/* Both numbers are padded. The marker is a mono chapter mark, and
+          "01 / 2" reads as a typo beside the flow's own "01 / 10". */}
       {showStep ? (
         <p className="onb-step">
-          {String(index + 1).padStart(2, "0")} / {MACHINE_STEPS.length}
+          {String(index + 1).padStart(2, "0")} /{" "}
+          {String(MACHINE_STEPS.length).padStart(2, "0")}
         </p>
       ) : null}
       <div className="onb-stage">{children}</div>

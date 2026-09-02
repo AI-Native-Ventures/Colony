@@ -114,7 +114,11 @@ export function AccountSignInStep({
           Sign in with the email you used to set up Colony.
         </p>
       </div>
-      <div className="mx-auto mt-10 w-full max-w-[24rem]">
+      {/* `.onb-panel` is what makes a field a rule rather than a white box: the
+          canvas restyles the shared Input through it, exactly as the flow's own
+          account screen does. Without it this was the one screen in onboarding
+          still wearing boxed inputs. */}
+      <div className="onb-panel">
         <label className="onb-field" htmlFor="onb-signin-email">
           <span className="onb-label">Email</span>
           <Input
@@ -168,27 +172,61 @@ export function AccountSignInStep({
             created your account.
           </p>
         ) : null}
+        {failure !== null ? (
+          <p
+            aria-live="assertive"
+            className="onb-note onb-note-warn"
+            data-testid="signin-failure"
+            role="alert"
+          >
+            {failure.kind === "invalid-credentials"
+              ? mode === "recovery"
+                ? "That recovery code does not match that email. Check both and try again."
+                : "That email or password does not match an account. Check them and try again."
+              : failure.kind === "locked"
+                ? lockSeconds > 0
+                  ? `Too many attempts. Try again in ${clockFormat(lockSeconds)}.`
+                  : "You can try again now."
+                : failure.kind === "update-required"
+                  ? "This version of Colony is out of date. Update the app, then try again."
+                  : "We could not reach your workspace. Check your connection and try again."}
+          </p>
+        ) : null}
+        {/* The two doors out of this screen sit under the form they belong to,
+            on the same left edge as the fields. Centred and stacked they read
+            as a second, competing action group. */}
+        <div className="flex flex-col items-start gap-1">
+          {mode === "password" ? (
+            <button
+              className="onb-quiet-action"
+              data-testid="signin-use-recovery-code"
+              onClick={() => switchMode("recovery")}
+              type="button"
+            >
+              Forgot your password? Use your recovery code.
+            </button>
+          ) : (
+            <button
+              className="onb-quiet-action"
+              data-testid="signin-use-password"
+              onClick={() => switchMode("password")}
+              type="button"
+            >
+              Use your password instead.
+            </button>
+          )}
+          {onUsePrivateKey ? (
+            <button
+              className="onb-quiet-action"
+              data-testid="signin-use-private-key"
+              onClick={onUsePrivateKey}
+              type="button"
+            >
+              Use your private key instead.
+            </button>
+          ) : null}
+        </div>
       </div>
-      {failure !== null ? (
-        <p
-          aria-live="assertive"
-          className="onb-note onb-note-warn mx-auto max-w-[34rem] text-center"
-          data-testid="signin-failure"
-          role="alert"
-        >
-          {failure.kind === "invalid-credentials"
-            ? mode === "recovery"
-              ? "That recovery code does not match that email. Check both and try again."
-              : "That email or password does not match an account. Check them and try again."
-            : failure.kind === "locked"
-              ? lockSeconds > 0
-                ? `Too many attempts. Try again in ${clockFormat(lockSeconds)}.`
-                : "You can try again now."
-              : failure.kind === "update-required"
-                ? "This version of Colony is out of date. Update the app, then try again."
-                : "We could not reach your workspace. Check your connection and try again."}
-        </p>
-      ) : null}
       <div className="onb-actions">
         <Button
           disabled={!ready || pending}
@@ -198,37 +236,6 @@ export function AccountSignInStep({
         >
           {pending ? "Signing you in..." : "Sign in"}
         </Button>
-      </div>
-      <div className="mt-2 flex flex-col items-center gap-1">
-        {mode === "password" ? (
-          <button
-            className="onb-quiet-action"
-            data-testid="signin-use-recovery-code"
-            onClick={() => switchMode("recovery")}
-            type="button"
-          >
-            Forgot your password? Use your recovery code.
-          </button>
-        ) : (
-          <button
-            className="onb-quiet-action"
-            data-testid="signin-use-password"
-            onClick={() => switchMode("password")}
-            type="button"
-          >
-            Use your password instead.
-          </button>
-        )}
-        {onUsePrivateKey ? (
-          <button
-            className="onb-quiet-action"
-            data-testid="signin-use-private-key"
-            onClick={onUsePrivateKey}
-            type="button"
-          >
-            Use your private key instead.
-          </button>
-        ) : null}
       </div>
     </>
   );
