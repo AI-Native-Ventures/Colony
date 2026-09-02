@@ -115,9 +115,6 @@ pub(crate) fn is_coordination_team_id(id: &str) -> bool {
 /// team behaved before the pin existed. A pinned team belongs only to the
 /// relay it names, compared canonically so an equivalent spelling still
 /// matches.
-// Exercised by tests here; team listing, chat planning, and event sync start
-// filtering through it in the follow-up changes.
-#[allow(dead_code)]
 pub(crate) fn team_applies_to_relay(team: &TeamRecord, relay_url: &str) -> bool {
     match team.relay_url.as_deref() {
         None => true,

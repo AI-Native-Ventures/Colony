@@ -23,9 +23,10 @@ use crate::{
     app_state::AppState,
     company::transaction::is_event_id,
     managed_agents::{
-        enrol_persona_for_relay, load_personas, load_teams, save_personas, save_teams,
+        enrol_persona_for_relay, ensure_coordination_team_for_relay, is_coordination_team_id,
+        load_personas, load_teams, save_personas, save_teams,
         storage::{load_managed_agents, save_managed_agents},
-        AgentDefinition, ManagedAgentRecord, TeamRecord,
+        team_applies_to_relay, AgentDefinition, ManagedAgentRecord, TeamRecord,
     },
 };
 
@@ -72,15 +73,85 @@ fn teams_to_company_refs(
         .collect()
 }
 
-/// This device's teams, projected into what the company contract validates.
+/// Keep only the teams the community reachable at `relay_url` may plan work
+/// against.
+///
+/// One `teams.json` serves every community this device has joined, so the
+/// stored list is not a company: it is every company the device knows.
+/// Handing all of it to `plan_implicit_task` let a send in one community be
+/// charged to a team whose members live only in another.
+///
+/// Two rules, the second deliberately stricter. A team pinned to another
+/// relay is out, while an unpinned one stays, exactly as every team behaved
+/// before the pin existed. A coordination team this client seeds must
+/// additionally BE pinned here: `owning_team_for_chat` falls back to the
+/// first team whose id ends in the coordination slug, so an unpinned one
+/// would own ambiguous work for every community at once. That is the
+/// pre-migration device-wide record, which survives a `load_teams` whenever
+/// `split_legacy_coordination_team` found no relay pin to split it by.
+///
+/// A blueprint's own `company-team:...:company-coordination` is not one of
+/// ours, so [`is_coordination_team_id`] leaves it under the first rule alone:
+/// dropping an unpinned one would take away the real coordination team whose
+/// id this community's existing Tasks already name.
+///
+/// Pure, so the rule is provable without an `AppHandle`.
+fn teams_for_relay(teams: Vec<TeamRecord>, relay_url: &str) -> Vec<TeamRecord> {
+    teams
+        .into_iter()
+        .filter(|team| {
+            // `team_applies_to_relay` has already accepted an unpinned team,
+            // so `is_some` here is only the "and it names this relay" half.
+            team_applies_to_relay(team, relay_url)
+                && (!is_coordination_team_id(&team.id) || team.relay_url.is_some())
+        })
+        .collect()
+}
+
+/// One community's teams, projected into what the company contract validates.
 ///
 /// These are the same records published as the Team projection the relay
 /// checks against. If they have drifted, the relay refuses the Task and says
 /// so in its receipt rather than this process guessing.
+///
+/// Seeds this community's coordination team when it has none, and persists
+/// that. A device that hired agents through the ordinary UI but never
+/// approved a blueprint here has no team for it, and without one every
+/// ambiguous send fails with "this company has no coordination team to own
+/// ambiguous work". `resolve_chat_agent_persona` already seeds on the chat
+/// path, but `create_user_task` and `advance_initiative` never call it. The
+/// seed is idempotent, so the two are not competing writers.
+///
+/// A seeded record is appended rather than re-sorted into place. The only
+/// other team that could still end with the coordination slug here is an
+/// unpinned blueprint one, and letting that keep the fallback is right: it is
+/// a real approved coordination team, where ours only stands in for a
+/// community that has none.
+///
+/// Returns whether `teams` gained a record, so the caller knows to write the
+/// store back. Split from [`company_team_refs`] so the planner path itself,
+/// and not a hand-assembled imitation of it, is what the tests below run.
+fn plan_team_refs(
+    teams: &mut Vec<TeamRecord>,
+    relay_url: &str,
+    now: &str,
+) -> (bool, Vec<buzz_core_pkg::company::CompanyTeamRef>) {
+    let seeded = ensure_coordination_team_for_relay(teams, relay_url, now);
+    let refs = teams_to_company_refs(teams_for_relay(teams.clone(), relay_url));
+    (seeded, refs)
+}
+
+/// [`plan_team_refs`] against the stored team list, persisting a seed.
 fn company_team_refs(
     app: &AppHandle,
+    relay_url: &str,
 ) -> Result<Vec<buzz_core_pkg::company::CompanyTeamRef>, String> {
-    Ok(teams_to_company_refs(load_teams(app)?))
+    let mut teams = load_teams(app)?;
+    let (seeded, refs) = plan_team_refs(&mut teams, relay_url, &crate::util::now_iso());
+    if seeded {
+        save_teams(app, &teams)?;
+    }
+    Ok(refs)
 }
 
 /// Read a relay-signed head, refusing anything the tenant relay did not write.
@@ -149,7 +220,9 @@ pub async fn advance_initiative(
     let initiative = buzz_sdk_pkg::company::parse_initiative_event(&initiative_event)
         .map_err(|error| format!("the initiative head is unreadable: {error}"))?;
 
-    let teams = company_team_refs(&app)?;
+    // Scoped to the community this window is looking at, the same way
+    // `list_teams` scopes what the owner can see.
+    let teams = company_team_refs(&app, &crate::relay::relay_ws_url_with_override(&state))?;
 
     let status = serde_json::to_value(initiative.status)
         .ok()
@@ -434,7 +507,7 @@ pub async fn ensure_chat_task(
         outcome.persona_id
     };
 
-    let teams = company_team_refs(&app)?;
+    let teams = company_team_refs(&app, &relay_url)?;
 
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
@@ -526,7 +599,9 @@ pub async fn create_user_task(
         None => None,
     };
 
-    let teams = company_team_refs(&app)?;
+    // This command never goes through `resolve_chat_agent_persona`, so the
+    // active community is read here rather than inherited from a repair.
+    let teams = company_team_refs(&app, &crate::relay::relay_ws_url_with_override(&state))?;
 
     // Derived from the request id rather than read from the clock, so a
     // retry produces the same bytes and the relay recognises the replay.
@@ -655,7 +730,7 @@ pub async fn create_initiative(
     let plan = plan_initiative_from_head(
         &company_head,
         &relay_pubkey,
-        &company_team_refs(&app)?,
+        &company_team_refs(&app, &crate::relay::relay_ws_url_with_override(&state))?,
         InitiativeDraft {
             request_id: &request_id,
             channel_id: &channel_id,
