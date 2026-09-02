@@ -88,7 +88,8 @@ type AppSidebarProps = {
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
-  homeBadgeCount: number;
+  dueReminderEventIds: readonly string[];
+  homeBadgeFeedIds: readonly string[];
   isAddCommunityOpen?: boolean;
   isLoading: boolean;
   isCreatingChannel: boolean;
@@ -180,7 +181,8 @@ export function AppSidebar({
   channels,
   currentPubkey,
   fallbackDisplayName,
-  homeBadgeCount,
+  dueReminderEventIds,
+  homeBadgeFeedIds,
   onBackgroundClick,
   isAddCommunityOpen,
   isLoading,
@@ -577,7 +579,8 @@ export function AppSidebar({
               data-testid="sidebar-scroll-content"
             >
               <AppSidebarPrimaryMenu
-                homeBadgeCount={homeBadgeCount}
+                dueReminderEventIds={dueReminderEventIds}
+                homeBadgeFeedIds={homeBadgeFeedIds}
                 onSelectAgents={onSelectAgents}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}

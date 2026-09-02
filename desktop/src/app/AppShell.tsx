@@ -73,7 +73,7 @@ import {
   type SettingsSection,
   isSettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
-import { useDueReminderBadgeCount } from "@/features/reminders/hooks";
+import { useDueReminderEventIds } from "@/features/reminders/hooks";
 import { useAskNotifications } from "@/features/asks/useAskNotifications";
 import { useBudgetNotifications } from "@/features/ledger/useBudgetNotifications";
 import { useReminderNotifications } from "@/features/reminders/useReminderNotifications";
@@ -431,7 +431,7 @@ export function AppShell() {
     markChannelRead,
     unreadThreadFeedItems,
   ]);
-  const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
+  const { homeBadgeCountExcludingHighPriority, homeBadgeFeedIds } =
     useHomeFeedNotificationState(
       homeFeedQuery.data,
       identityQuery.data?.pubkey,
@@ -451,7 +451,7 @@ export function AppShell() {
       channels,
       huddleBackingChannelIds,
     );
-  const dueReminderBadge = useDueReminderBadgeCount(
+  const dueReminderEventIds = useDueReminderEventIds(
     identityQuery.data?.pubkey,
     notificationSettings.settings.homeBadgeEnabled,
   );
@@ -826,7 +826,8 @@ export function AppShell() {
                             currentPubkey={identityQuery.data?.pubkey}
                             errorMessage={channelsErrorMessage}
                             fallbackDisplayName={identityQuery.data?.displayName}
-                            homeBadgeCount={homeBadgeCount + dueReminderBadge}
+                            dueReminderEventIds={dueReminderEventIds}
+                            homeBadgeFeedIds={homeBadgeFeedIds}
                             addCommunityPrefill={addCommunityDialog.prefill}
                             isAddCommunityOpen={addCommunityDialog.open}
                             relayConnectionCard={relayConnectionCard}

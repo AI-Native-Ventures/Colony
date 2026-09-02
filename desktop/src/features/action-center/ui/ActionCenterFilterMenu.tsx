@@ -40,7 +40,7 @@ export function ActionCenterFilterMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          aria-label={`Filter Action Center: ${activeFilter}`}
+          aria-label={`Filter Actions: ${activeFilter}`}
           className={cn(TRIGGER_CLASS)}
           data-testid="action-center-filter-trigger"
           type="button"

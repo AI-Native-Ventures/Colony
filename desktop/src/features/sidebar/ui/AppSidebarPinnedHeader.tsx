@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   Activity,
   Bot,
@@ -10,6 +11,11 @@ import {
 } from "lucide-react";
 
 import { useActionCenterContext } from "@/features/action-center/ActionCenterContext";
+import {
+  actionItemSourceId,
+  openActionItems,
+} from "@/features/action-center/actionCenterModel";
+import { inboxBadgeCount } from "@/features/notifications/lib/inboxBadge";
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import type { SearchCommand } from "@/features/search/ui/SearchResultItem";
 import { FeatureGate } from "@/shared/features";
@@ -42,7 +48,8 @@ export type AppSidebarPinnedHeaderProps = {
 };
 
 type AppSidebarPrimaryMenuProps = {
-  homeBadgeCount: number;
+  dueReminderEventIds: readonly string[];
+  homeBadgeFeedIds: readonly string[];
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
@@ -106,16 +113,33 @@ export function AppSidebarPinnedHeader({
  * hook. See `ActionCenterContext.tsx`.
  */
 function InboxMenuItem({
-  homeBadgeCount,
+  dueReminderEventIds,
+  homeBadgeFeedIds,
   onSelectHome,
   selectedView,
 }: {
-  homeBadgeCount: number;
+  dueReminderEventIds: readonly string[];
+  homeBadgeFeedIds: readonly string[];
   onSelectHome: () => void;
   selectedView: SidebarSelectedView;
 }) {
   const actionCenter = useActionCenterContext();
-  const badgeCount = homeBadgeCount + (actionCenter?.openCount ?? 0);
+  const allItems = actionCenter?.allItems;
+  // Ids, not three counts. The feed rows, the due reminders, and the open
+  // actions name the same things from different angles, so they are folded
+  // into one set rather than added. See `inboxBadgeCount`.
+  const badgeCount = React.useMemo(
+    () =>
+      inboxBadgeCount({
+        actionItems: openActionItems(allItems ?? []).map((item) => ({
+          id: item.id,
+          sourceId: actionItemSourceId(item),
+        })),
+        dueReminderEventIds,
+        feedItemIds: homeBadgeFeedIds,
+      }),
+    [allItems, dueReminderEventIds, homeBadgeFeedIds],
+  );
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -147,7 +171,8 @@ function InboxMenuItem({
 }
 
 export function AppSidebarPrimaryMenu({
-  homeBadgeCount,
+  dueReminderEventIds,
+  homeBadgeFeedIds,
   onSelectAgents,
   onSelectDiscovery,
   onSelectHome,
@@ -166,7 +191,8 @@ export function AppSidebarPrimaryMenu({
     >
       <SidebarMenu className="pb-2">
         <InboxMenuItem
-          homeBadgeCount={homeBadgeCount}
+          dueReminderEventIds={dueReminderEventIds}
+          homeBadgeFeedIds={homeBadgeFeedIds}
           onSelectHome={onSelectHome}
           selectedView={selectedView}
         />

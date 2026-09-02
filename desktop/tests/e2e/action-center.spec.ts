@@ -226,15 +226,13 @@ test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
 
-test("opens the native Action Center with URL-backed filters and selection", async ({
+test("opens the native Actions pane with URL-backed filters and selection", async ({
   page,
 }) => {
   await page.goto("/#/?view=actions");
 
   await expect(page.getByTestId("action-center-screen")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Action Center" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Actions" })).toBeVisible();
   await expect(page.getByTestId("home-top-tab-actions")).toHaveAttribute(
     "data-state",
     "active",
