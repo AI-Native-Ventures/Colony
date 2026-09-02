@@ -408,16 +408,17 @@ export function splitOutgoingTags(tags: string[][] | undefined): {
 const WORK_CONTEXT_TAG_NAMES = new Set(["task", "team", "initiative"]);
 
 /**
- * A work-context tag is exactly `[name, value]` with a non-blank value. A
- * malformed one is deliberately NOT routed here: it keeps falling to
- * `mediaTags` so the imeta guard rejects it, rather than the work channel
- * becoming a second hole for arbitrary tags. The Rust side re-validates the
- * same shape, so this is a routing decision, not the only check.
+ * A work-context tag is routed by NAME alone.
+ *
+ * Routing on shape as well sent a malformed work tag, say `["task", ""]`, down
+ * the media bucket, where the imeta guard refused it with "media tags must use
+ * 'imeta' prefix". That names the wrong channel: nothing about the send was
+ * media, and the failure read as an attachment bug rather than a missing task
+ * id. Only the allowlisted three names come here, so this is not a hole for
+ * arbitrary tags; the Rust `work_context_tags` validator still enforces the
+ * `[name, value]` shape, a non-blank value, and its bound and charset, and now
+ * gets to say so in its own words.
  */
 function isWorkContextTag(tag: string[]): boolean {
-  return (
-    tag.length === 2 &&
-    WORK_CONTEXT_TAG_NAMES.has(tag[0]) &&
-    tag[1].trim().length > 0
-  );
+  return WORK_CONTEXT_TAG_NAMES.has(tag[0]);
 }

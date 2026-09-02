@@ -133,6 +133,33 @@ fn emoji_tags(emoji_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Str
 /// in `desktop/src/features/messages/lib/imetaMediaMarkdown.ts`.
 const WORK_CONTEXT_TAG_NAMES: &[&str] = &["task", "team", "initiative"];
 
+/// Longest work-context tag value the composer may sign. Matches the cap
+/// `valid_cohort_id` puts on a reference tag's id in `events/reference_tags.rs`.
+const MAX_WORK_CONTEXT_VALUE_LEN: usize = 128;
+
+/// Whether a work-context tag value is a well-formed id.
+///
+/// Mirrors `valid_cohort_id` in `events/reference_tags.rs`: bounded length and
+/// a closed charset, so no control character, newline or unbounded blob reaches
+/// a signed event through this channel. Every value this carries is a machine
+/// id (`chat:<uuid>`, `builtin-team:company-coordination`), never prose, so the
+/// lowercase-and-punctuation charset costs nothing legitimate.
+fn valid_work_context_value(value: &str) -> bool {
+    if value.is_empty() || value.len() > MAX_WORK_CONTEXT_VALUE_LEN {
+        return false;
+    }
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+}
+
 /// Validate and append work-context tags. Mirrors `imeta_tags` and
 /// `emoji_tags`: a closed allowlist, so this channel cannot smuggle a forged
 /// "h"/"e"/"p" tag any more than the other two can.
@@ -143,7 +170,10 @@ const WORK_CONTEXT_TAG_NAMES: &[&str] = &["task", "team", "initiative"];
 /// signed. Every agent mention whose text implied work created and paid for a
 /// Task on the relay and then never posted a message.
 ///
-/// Each tag is exactly `[name, value]` with a non-blank value.
+/// Each tag is exactly `[name, value]` with a non-blank, bounded value. The
+/// composer routes a work tag here by name alone, so a malformed one arrives
+/// on this channel rather than being refused by the imeta guard under a
+/// message that names the wrong channel.
 fn work_context_tags(work_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
     for wt in work_tags {
         let name = wt.first().map(String::as_str).unwrap_or_default();
@@ -163,6 +193,13 @@ fn work_context_tags(work_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(
         let value = wt[1].trim();
         if value.is_empty() {
             return Err(format!("work tag \"{name}\" must carry a value"));
+        }
+        if !valid_work_context_value(value) {
+            return Err(format!(
+                "work tag \"{name}\" value must be at most \
+                 {MAX_WORK_CONTEXT_VALUE_LEN} characters of lowercase ASCII, \
+                 digits, and \".\", \"_\", \":\" or \"-\""
+            ));
         }
         tags.push(tag(vec![name, value])?);
     }

@@ -99,11 +99,13 @@ function resolver({
 } = {}) {
   const order = [];
   const loadTaskCalls = [];
+  const ensureTaskCalls = [];
   const resolve = createWorkContextResolver({
     relaySelf: async () => RELAY,
     fetchCompanyHead: async () => companyHead,
     ensureTask: async (input) => {
       order.push("ensure");
+      ensureTaskCalls.push(input);
       assert.equal(input.sendId, "send-0001");
       assert.equal(input.relayPubkey, RELAY);
       return {
@@ -124,7 +126,7 @@ function resolver({
       return readTask ? await readTask(taskId, headEventId) : taskResult;
     },
   });
-  return { resolve, order, loadTaskCalls };
+  return { resolve, order, loadTaskCalls, ensureTaskCalls };
 }
 
 test("the task is created and confirmed before the message has any tags", async () => {
@@ -382,4 +384,28 @@ test("no profile and no relay identity both stop the send", async () => {
     loadTask: async () => ({ ok: true, value: task() }),
   });
   await assert.rejects(() => withoutRelay(REQUEST), /no stable identity/i);
+});
+
+const THREAD_ROOT = "5910f909".padEnd(64, "a");
+
+/**
+ * The Task a thread reply creates has to name the thread it came from.
+ *
+ * The relay scopes its task-created system row into a thread only when the
+ * Task carries a thread root, so without this the notice lands at channel
+ * root and reads as if the work had started outside the conversation that
+ * asked for it.
+ */
+test("a thread reply forwards its thread root to the task", async () => {
+  const { resolve, ensureTaskCalls } = resolver();
+  await resolve({ ...REQUEST, threadRoot: THREAD_ROOT });
+  assert.equal(ensureTaskCalls.length, 1);
+  assert.equal(ensureTaskCalls[0].threadRoot, THREAD_ROOT);
+});
+
+test("a send at channel root forwards no thread root", async () => {
+  const { resolve, ensureTaskCalls } = resolver();
+  await resolve(REQUEST);
+  assert.equal(ensureTaskCalls.length, 1);
+  assert.equal(ensureTaskCalls[0].threadRoot, null);
 });

@@ -760,10 +760,12 @@ test("splitOutgoingTags: work-only set leaves mediaTags empty", () => {
   assert.deepEqual(workTags, [WORK_TASK, WORK_TEAM]);
 });
 
-test("splitOutgoingTags: malformed work tags stay with mediaTags (injection defense)", () => {
-  // Wrong arity or an empty value is not a work tag. It keeps falling to the
-  // imeta bucket so the Rust guard rejects it rather than the work channel
-  // becoming a hole for arbitrary tags.
+test("splitOutgoingTags: a malformed work tag is still routed by its name", () => {
+  // Routing on shape as well sent these to the media bucket, where the Rust
+  // imeta guard refused the send with "media tags must use 'imeta' prefix".
+  // Nothing about the send was media, so the failure read as an attachment bug
+  // rather than a missing task id. The work validator refuses each of these on
+  // its own channel and says which work tag was wrong.
   const noValue = ["task"];
   const extraElement = ["team", "builtin-team:x", "forged"];
   const emptyValue = ["initiative", "   "];
@@ -772,6 +774,22 @@ test("splitOutgoingTags: malformed work tags stay with mediaTags (injection defe
     extraElement,
     emptyValue,
   ]);
-  assert.deepEqual(mediaTags, [noValue, extraElement, emptyValue]);
+  assert.deepEqual(mediaTags, []);
+  assert.deepEqual(workTags, [noValue, extraElement, emptyValue]);
+});
+
+test("splitOutgoingTags: only the three allowlisted names take the work channel", () => {
+  // The name allowlist is the injection defense now that shape no longer
+  // gates routing: a forged h/p/e tag must still fall to the media bucket,
+  // where the imeta guard refuses it.
+  const forgedChannel = ["h", "eecf0442-ac20-5939-a95a-0306f5441260"];
+  const forgedMention = ["p", "a".repeat(64)];
+  const forgedThread = ["e", "b".repeat(64), "", "root"];
+  const { mediaTags, workTags } = splitOutgoingTags([
+    forgedChannel,
+    forgedMention,
+    forgedThread,
+  ]);
+  assert.deepEqual(mediaTags, [forgedChannel, forgedMention, forgedThread]);
   assert.deepEqual(workTags, []);
 });

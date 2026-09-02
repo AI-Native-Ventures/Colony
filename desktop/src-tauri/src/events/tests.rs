@@ -420,3 +420,70 @@ fn work_context_channel_rejects_anything_outside_its_allowlist() {
     )
     .expect("task, team and initiative are the work channel");
 }
+
+/// A work tag's value is bounded and charset-restricted, not just non-blank.
+///
+/// The name allowlist stops a forged `h`/`p` tag, but the value was free-form
+/// until 2026-09-02: a newline, a control character or an unbounded blob would
+/// have been signed into the event as long as it trimmed to something. Every
+/// value this channel legitimately carries is a machine id, so it is held to
+/// the same bound `valid_cohort_id` puts on a reference tag's id.
+#[test]
+fn work_context_channel_rejects_an_oversized_or_control_character_value() {
+    let cases: Vec<(String, &str)> = vec![
+        ("chat:".to_owned() + &"a".repeat(124), "129 characters"),
+        ("chat:a\nb".to_owned(), "an embedded newline"),
+        ("chat:a\tb".to_owned(), "an embedded tab"),
+        ("chat:a\u{0}b".to_owned(), "an embedded NUL"),
+        ("chat:ABC".to_owned(), "uppercase hex"),
+        ("chat:a b".to_owned(), "an interior space"),
+        (":chat".to_owned(), "a leading separator"),
+    ];
+
+    for (value, description) in cases {
+        let work_tags = vec![vec!["task".to_owned(), value]];
+        let error = build_message_with_reference_and_client_tags(
+            Uuid::new_v4(),
+            "Readable fallback",
+            None,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            None,
+            "https://relay.example",
+            &[],
+            &[],
+            &work_tags,
+        )
+        .expect_err(description);
+        assert!(
+            error.contains("task"),
+            "the rejection of {description} must name the tag, got: {error}"
+        );
+    }
+
+    // The longest legitimate id is still accepted, so the cap bounds the value
+    // rather than capping it below what the composer actually sends.
+    let longest = vec![vec![
+        "task".to_owned(),
+        "chat:".to_owned() + &"a".repeat(123),
+    ]];
+    build_message_with_reference_and_client_tags(
+        Uuid::new_v4(),
+        "Readable fallback",
+        None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        None,
+        "https://relay.example",
+        &[],
+        &[],
+        &longest,
+    )
+    .expect("128 characters is inside the cap");
+}

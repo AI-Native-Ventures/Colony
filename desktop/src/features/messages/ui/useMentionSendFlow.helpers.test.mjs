@@ -26,7 +26,10 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getErrorMessage } from "./useMentionSendFlow.helpers.ts";
+import {
+  getErrorMessage,
+  threadRootForWorkContext,
+} from "./useMentionSendFlow.helpers.ts";
 
 test("getErrorMessage_surfaces_the_thrown_work_context_message", () => {
   const error = new Error(
@@ -57,5 +60,39 @@ test("getErrorMessage_falls_back_for_an_error_with_an_empty_message", () => {
   assert.equal(
     getErrorMessage(new Error(""), "The message could not be sent."),
     "The message could not be sent.",
+  );
+});
+
+const THREAD_HEAD = "5910f909".padEnd(64, "a");
+const PARENT = "abcd1234".padEnd(64, "b");
+
+/**
+ * The Task names the thread's head, because the relay's row marker is
+ * ["e", root, "", "root"]. Naming the immediate parent instead would scope a
+ * deep reply's notice to a message in the middle of the thread rather than to
+ * the thread itself.
+ */
+test("the work context names the thread head, not the immediate parent", () => {
+  assert.equal(
+    threadRootForWorkContext({
+      parentEventId: PARENT,
+      threadHeadId: THREAD_HEAD,
+    }),
+    THREAD_HEAD,
+  );
+});
+
+test("a first reply falls back to its parent, which is the thread root", () => {
+  assert.equal(
+    threadRootForWorkContext({ parentEventId: PARENT, threadHeadId: null }),
+    PARENT,
+  );
+});
+
+test("a send at channel root names no thread", () => {
+  assert.equal(threadRootForWorkContext(null), null);
+  assert.equal(
+    threadRootForWorkContext({ parentEventId: null, threadHeadId: null }),
+    null,
   );
 });

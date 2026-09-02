@@ -47,6 +47,7 @@ import {
   type PendingNonMemberMentionSend,
   persistCanceledDraftIfUnchanged,
   runReportingFinishSendFailures,
+  threadRootForWorkContext,
   type SendMessageWithMentionFlowInput,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
@@ -550,6 +551,7 @@ export function useMentionSendFlow({
               agentMentionPubkeys,
               mediaTags,
               outgoingTags,
+              threadRootForWorkContext(draft.capturedThreadContext),
             );
           } catch (error) {
             handleFinishSendFailure(error);

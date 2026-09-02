@@ -107,6 +107,13 @@ pub(crate) fn clamp_title(value: &str) -> String {
 /// carries explicit client-delivery context when the composer had any; without
 /// it the work is administration, because claiming a client's delivery cost for
 /// work nobody tied to a client would misstate the company's margin.
+///
+/// `thread_root` is the root event id of the thread the send is a reply in,
+/// and `None` for a send at channel root. The relay scopes its task-created
+/// system row into a thread only when the Task names one, so a `None` here
+/// puts the notice at channel root. It was hard-coded `None` until
+/// 2026-09-02, which is why no implicit chat task's notice had ever appeared
+/// inside the thread that asked for the work.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_implicit_task(
     company: &CompanyProfile,
@@ -116,6 +123,7 @@ pub fn plan_implicit_task(
     send_id: &str,
     title: &str,
     client_organization_id: Option<&str>,
+    thread_root: Option<&str>,
     relay_pubkey: &str,
     now: i64,
 ) -> Result<ImplicitTaskPlan, String> {
@@ -155,13 +163,20 @@ pub fn plan_implicit_task(
             .filter(|id| !id.trim().is_empty())
             .map(str::to_owned),
         source_channel_id: channel_id.to_owned(),
+        // The Task is created before the message is published, so at this
+        // moment there is no message event id to name. Filling it needs the
+        // Task created after the send, or a follow-up action carrying the
+        // event id; until then "from this message" links to nothing.
         source_event_id: None,
         // Colony created this, the owner did not ask for it by name.
         implicit: true,
         depends_on: Vec::new(),
         subject: None,
         stage: None,
-        thread_root: None,
+        thread_root: thread_root
+            .map(str::trim)
+            .filter(|root| !root.is_empty())
+            .map(str::to_owned),
         doer_kind: DoerKind::Agent,
         wake_at: None,
         outcome_reason: None,
@@ -433,6 +448,14 @@ mod tests {
     }
 
     fn plan(teams: &[CompanyTeamRef], client: Option<&str>) -> ImplicitTaskPlan {
+        plan_in_thread(teams, client, None)
+    }
+
+    fn plan_in_thread(
+        teams: &[CompanyTeamRef],
+        client: Option<&str>,
+        thread_root: Option<&str>,
+    ) -> ImplicitTaskPlan {
         plan_implicit_task(
             &company(),
             teams,
@@ -441,6 +464,7 @@ mod tests {
             "send-0001",
             "Take a look at the failing deploy and tell me what broke",
             client,
+            thread_root,
             RELAY,
             1_780_000_500,
         )
@@ -556,6 +580,7 @@ mod tests {
             "send-0001",
             &long,
             None,
+            None,
             RELAY,
             1_780_000_500,
         )
@@ -580,6 +605,7 @@ mod tests {
             "send-0001",
             "Do the thing",
             None,
+            None,
             RELAY,
             1_780_000_500,
         )
@@ -600,6 +626,7 @@ mod tests {
                 channel,
                 send,
                 "Do the thing",
+                None,
                 None,
                 RELAY,
                 1_780_000_500,
@@ -796,5 +823,36 @@ mod tests {
         let task = user_task_of(&plan);
         assert_eq!(task.commercial_purpose, CommercialPurpose::ClientDelivery);
         assert_eq!(task.client_organization_id.as_deref(), Some("acme"));
+    }
+
+    const THREAD_ROOT: &str = "5910f909aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22";
+
+    /// A thread reply's Task names the thread it belongs to.
+    ///
+    /// `thread_root` was hard-coded `None` here until 2026-09-02, so the
+    /// relay's task-created system row could never carry the
+    /// `["e", root, "", "root"]` marker that puts a row inside a thread.
+    /// Every notice for a thread reply landed at channel root instead,
+    /// reading as if the work had started somewhere the owner was not
+    /// looking.
+    #[test]
+    fn a_thread_reply_task_carries_its_thread_root() {
+        let plan = plan_in_thread(&[engineering()], None, Some(THREAD_ROOT));
+        assert_eq!(task_of(&plan).thread_root.as_deref(), Some(THREAD_ROOT));
+    }
+
+    #[test]
+    fn a_root_message_task_has_no_thread_root() {
+        let plan = plan_in_thread(&[engineering()], None, None);
+        assert_eq!(task_of(&plan).thread_root, None);
+    }
+
+    /// The Task is created before the message is published, so at planning
+    /// time there is no message event id to point at. Asserted so the null is
+    /// a recorded decision rather than an oversight rediscovered later.
+    #[test]
+    fn the_task_cannot_name_a_message_that_has_not_been_sent_yet() {
+        let plan = plan_in_thread(&[engineering()], None, Some(THREAD_ROOT));
+        assert_eq!(task_of(&plan).source_event_id, None);
     }
 }

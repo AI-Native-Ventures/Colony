@@ -69,19 +69,44 @@ export function mergeOutgoingTagsWithReferenceMentions(
   ];
 }
 
+/**
+ * `threadRoot` is the root event id of the thread this send replies in, and
+ * `null` at channel root. It reaches the Task so the relay can scope its
+ * task-created notice into that thread; without it every notice landed at
+ * channel root, where it read as the work having been started somewhere the
+ * owner was not looking.
+ */
 export async function attachOutgoingWorkContext(
   channelId: string,
   content: string,
   agentPubkeys: readonly string[],
   mediaTags: string[][] | undefined,
   outgoingTags?: string[][],
+  threadRoot?: string | null,
 ) {
   return await attachWorkContext({
     channelId,
     content,
     agentPubkeys,
     outgoingTags: mergeOutgoingTags(mediaTags, outgoingTags ?? []) ?? [],
+    threadRoot: threadRoot ?? null,
   });
+}
+
+/**
+ * The thread a send belongs to, as the Task should name it.
+ *
+ * A reply deep in a thread names the thread's head, not its immediate parent,
+ * because the relay's row marker is `["e", root, "", "root"]`. When only a
+ * parent is known it is the head: a first reply's parent is the thread root.
+ */
+export function threadRootForWorkContext(
+  threadContext: {
+    parentEventId: string | null;
+    threadHeadId: string | null;
+  } | null,
+): string | null {
+  return threadContext?.threadHeadId ?? threadContext?.parentEventId ?? null;
 }
 
 export function buildTypedMentionRouting({
