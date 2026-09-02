@@ -792,6 +792,7 @@ pub fn run() {
             commands::initiative::advance_initiative,
             commands::initiative::ensure_chat_task,
             commands::initiative::create_user_task,
+            commands::initiative::create_initiative,
             commands::org_placement::record_org_placement,
             commands::task_transition::complete_queue_task,
             commands::task_transition::rename_task_from_agent,
@@ -939,7 +940,6 @@ pub fn run() {
         .expect("error while building tauri application");
 
     let shutdown_done = Arc::new(AtomicBool::new(false));
-
     #[cfg(unix)]
     shutdown::install_signal_handler(app.handle().clone(), Arc::clone(&shutdown_done));
 

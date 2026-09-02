@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 440,
-    "rust_lines": 170380,
+    "rust_lines": 170626,
     "tauri_coupled": 176,
     "portable": 264,
     "portable_lines": 96622,
@@ -454,10 +454,10 @@
     ]
   },
   "commands": {
-    "registered": 352,
-    "defined": 352,
+    "registered": 353,
+    "defined": 353,
     "by_reach": {
-      "frontend": 346,
+      "frontend": 347,
       "NO CALLER FOUND": 4,
       "frontend-plugin-prefixed": 2
     },
@@ -469,16 +469,16 @@
     ]
   },
   "params": {
-    "AppHandle": 361,
-    "State": 264,
+    "AppHandle": 362,
+    "State": 265,
     "Window": 7,
     "ipc::Request": 1,
     "ipc::Channel": 4
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 358,
-      "State": 264,
+      "AppHandle": 359,
+      "State": 265,
       "Window": 7,
       "ipc::Request": 1,
       "ipc::Channel": 4
@@ -578,6 +578,7 @@
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/commands/agent_config.rs": 5,
     "src-tauri/src/commands/terminal.rs": 5,
+    "src-tauri/src/commands/initiative.rs": 4,
     "src-tauri/src/commands/workspace.rs": 4,
     "src-tauri/src/commands/task_transition.rs": 4,
     "src-tauri/src/commands/media_raw.rs": 4,
@@ -588,7 +589,6 @@
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
-    "src-tauri/src/commands/initiative.rs": 3,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
@@ -1099,6 +1099,15 @@
       "example_sites": [
         "src/parity/session/script.ts:965",
         "src/shared/api/tauriChannelTemplates.ts:74"
+      ]
+    },
+    "create_initiative": {
+      "defining_file": "src-tauri/src/commands/initiative.rs",
+      "module": "initiative",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/initiative.ts:177"
       ]
     },
     "create_managed_agent": {

@@ -193,6 +193,7 @@ export default defineConfig({
         "**/ask-resolution-screenshots.spec.ts",
         "**/action-center-v2-screenshots.spec.ts",
         "**/delegation-grant-screenshots.spec.ts",
+        "**/work-tabs.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

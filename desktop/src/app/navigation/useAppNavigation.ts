@@ -267,11 +267,20 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  // `initiativeId` scopes the board and nothing else, but every tab carries
+  // it: a switch to Tasks and back would otherwise land on an unscoped board,
+  // silently discarding the initiative someone had chosen.
   const goWork = React.useCallback(
-    (behavior?: NavigationBehavior) =>
+    (initiativeId?: string, behavior?: NavigationBehavior) =>
       commitNavigation(
         {
           to: "/work",
+          // Named rather than left absent: the Tasks page's tab bar reads
+          // this param, and a link that omits it lands on the same pane
+          // without saying which one it meant.
+          search: initiativeId
+            ? { initiativeId, view: "list" }
+            : { view: "list" },
         },
         behavior,
       ),
@@ -293,11 +302,27 @@ export function useAppNavigation() {
   );
 
   const goWorkQueue = React.useCallback(
-    (behavior?: NavigationBehavior) =>
+    (initiativeId?: string, behavior?: NavigationBehavior) =>
       commitNavigation(
         {
           to: "/work",
-          search: { view: "queue" },
+          search: initiativeId
+            ? { initiativeId, view: "queue" }
+            : { view: "queue" },
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
+  const goWorkInitiatives = React.useCallback(
+    (initiativeId?: string, behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/work",
+          search: initiativeId
+            ? { initiativeId, view: "initiatives" }
+            : { view: "initiatives" },
         },
         behavior,
       ),
@@ -510,6 +535,7 @@ export function useAppNavigation() {
     goWorkflow,
     goWork,
     goWorkBoard,
+    goWorkInitiatives,
     goWorkQueue,
     goWorkflows,
     openSearchHit,

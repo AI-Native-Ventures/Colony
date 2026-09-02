@@ -133,6 +133,15 @@ export type Initiative = {
   expectedCostUsd: number | null;
   sourceChannelId: string;
   sourceEventId: string | null;
+  /** Template this run was fanned out from, pinned at creation. Null for an
+   * initiative that was not fanned out from a template. */
+  templateId: string | null;
+  /** The template's version at the moment this run started, pinned so a later
+   * edit to the template cannot mutate work already in flight. Null iff
+   * `templateId` is null. */
+  templateVersion: number | null;
+  /** Cohort this run was fanned out over, pinned at creation. */
+  cohortId: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -397,8 +406,26 @@ const INITIATIVE_FIELDS: Record<string, FieldKind> = {
   expectedCostUsd: { type: "optionalNumber" },
   sourceChannelId: { type: "string" },
   sourceEventId: { type: "optionalString" },
+  templateId: { type: "optionalString" },
+  templateVersion: { type: "optionalInteger" },
+  cohortId: { type: "optionalString" },
   createdAt: { type: "integer" },
   updatedAt: { type: "integer" },
+};
+
+/**
+ * What serde fills in when an initiative head's content lacks the fan-out
+ * fields. The Rust struct carries `#[serde(default)]` on all three and no
+ * `skip_serializing_if`, so every relay writing that struct writes them, as
+ * null for an initiative that is not a fan-out run. Heads written before the
+ * fields existed lack the keys entirely and are still served verbatim, so
+ * desktop injects these before the exact-shape check rather than refusing
+ * them. Same pattern, and same reason, as `TASK_FIELD_DEFAULTS` below.
+ */
+const INITIATIVE_FIELD_DEFAULTS: Record<string, unknown> = {
+  templateId: null,
+  templateVersion: null,
+  cohortId: null,
 };
 
 const SUBJECT_REF_FIELDS: Record<string, FieldKind> = {
@@ -558,7 +585,10 @@ export function parseInitiativeHead(
 ): CompanyParseResult<Initiative> {
   const head = readHead(event, relaySelfPubkey, KIND_INITIATIVE);
   if (!head.ok) return head;
-  const record = head.value;
+  // Injected on a copy so the signed content itself is never rewritten. A key
+  // that IS present always wins over its default, so a malformed explicit
+  // value still fails the shape check exactly as Rust would.
+  const record = { ...INITIATIVE_FIELD_DEFAULTS, ...head.value };
   if (!matchesShape(record, INITIATIVE_FIELDS)) {
     return companyFailure(
       "invalid-record",

@@ -1,26 +1,14 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
+import { validateWorkSearch } from "./workSearch";
+
 const WorkRouteScreen = React.lazy(async () => {
   const module = await import("./WorkRouteScreen");
   return { default: module.WorkRouteScreen };
 });
 
-export type WorkRouteSearch = {
-  view?: "list" | "board" | "queue";
-  initiativeId?: string;
-};
-
-function validateWorkSearch(search: Record<string, unknown>): WorkRouteSearch {
-  return {
-    initiativeId:
-      typeof search.initiativeId === "string" ? search.initiativeId : undefined,
-    view:
-      search.view === "board" || search.view === "queue"
-        ? search.view
-        : undefined,
-  };
-}
+export type { WorkRouteSearch, WorkView } from "./workSearch";
 
 export const Route = createFileRoute("/work")({
   validateSearch: validateWorkSearch,

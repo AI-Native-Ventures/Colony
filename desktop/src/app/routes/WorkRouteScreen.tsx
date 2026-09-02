@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
+  initiativesQueryKey,
   tasksQueryKey,
   useCompanyTasks,
   useInitiatives,
@@ -11,7 +12,10 @@ import { queueActioner } from "@/features/company/queueActions";
 import { selectTaskRuns } from "@/features/company/taskRuns";
 import type { CompanyTask } from "@/features/company/contracts";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { initiativeRows } from "@/features/company/initiativesModel";
+import { InitiativesScreen } from "@/features/company/ui/InitiativesScreen";
 import { NewTaskDialog } from "@/features/company/ui/NewTaskDialog";
+import { WorkTopTabs } from "@/features/company/ui/WorkTopTabs";
 import { TaskListScreen } from "@/features/company/ui/TaskListScreen";
 import { TaskBoardScreen } from "@/features/company/ui/TaskBoardScreen";
 import { TaskQueueScreen } from "@/features/company/ui/TaskQueueScreen";
@@ -32,11 +36,29 @@ import type { RelayEvent } from "@/shared/api/types";
 import { relayClient } from "@/shared/api/relayClient";
 import { KIND_JOB_HEAD } from "@/shared/constants/kinds";
 import { Route as WorkRoute } from "./work";
+import { workView } from "./workSearch";
 
 const NO_EVENTS: RelayEvent[] = [];
 
+/**
+ * The one Error a company query can be in, from either of the two places it
+ * can fail: a thrown transport failure React Query holds, or a refusal the
+ * repository returns as data.
+ */
+function companyQueryError(query: {
+  error: unknown;
+  data?: { ok: boolean; message?: string } | undefined;
+}): Error | null {
+  if (query.error instanceof Error) return query.error;
+  if (query.data && !query.data.ok) {
+    return new Error(query.data.message ?? "This read could not be completed.");
+  }
+  return null;
+}
+
 export function WorkRouteScreen() {
   const search = WorkRoute.useSearch();
+  const view = workView(search);
   const { activeCommunity } = useCommunities();
   const communityId = activeCommunity?.id ?? "";
 
@@ -75,17 +97,19 @@ export function WorkRouteScreen() {
     [tasks, runEvents],
   );
 
-  const error =
-    tasksQuery.error instanceof Error
-      ? tasksQuery.error
-      : tasksQuery.data && !tasksQuery.data.ok
-        ? new Error(tasksQuery.data.message)
-        : null;
+  const error = companyQueryError(tasksQuery);
 
   const initiatives = initiativesQuery.data?.ok
     ? initiativesQuery.data.value
     : [];
   const isLoading = communityId !== "" && tasksQuery.isLoading;
+  // The Initiatives tab reads a different query from the other three panes,
+  // and it fails on its own terms: a relay that answers tasks can still
+  // refuse the initiative read or hand back a head this build cannot parse.
+  // Handing it the tasks query's state rendered every one of those as "No
+  // initiatives yet".
+  const initiativesError = companyQueryError(initiativesQuery);
+  const initiativesLoading = communityId !== "" && initiativesQuery.isLoading;
 
   // Dependencies can reach across initiatives, so the blocked-by count
   // resolves against every fetched task, not just the board's narrowed
@@ -123,7 +147,7 @@ export function WorkRouteScreen() {
   );
   const [isNewTaskOpen, setIsNewTaskOpen] = React.useState(false);
   const handleOpenNewTask = React.useCallback(() => setIsNewTaskOpen(true), []);
-  const { goChannel } = useAppNavigation();
+  const { goChannel, goWorkBoard } = useAppNavigation();
   // Open where the work is actually happening. A chat-attributed task carries
   // the send it came from, so the row lands on that message; a task created by
   // hand has only its channel, and lands there.
@@ -200,9 +224,31 @@ export function WorkRouteScreen() {
     [runQueueAction, tasks],
   );
 
-  if (search.view === "queue") {
-    return (
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+  const initiativeListRows = React.useMemo(
+    () => initiativeRows(initiatives, tasks),
+    [initiatives, tasks],
+  );
+  const handleOpenInitiative = React.useCallback(
+    (initiativeId: string) => {
+      void goWorkBoard(initiativeId);
+    },
+    [goWorkBoard],
+  );
+  const handleInitiativeCreated = React.useCallback(() => {
+    void queryClient.invalidateQueries({
+      queryKey: initiativesQueryKey(communityId),
+    });
+  }, [queryClient, communityId]);
+
+  const boardInitiative =
+    search.initiativeId !== undefined
+      ? (initiatives.find((entry) => entry.id === search.initiativeId) ?? null)
+      : null;
+
+  return (
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <WorkTopTabs initiativeId={search.initiativeId} view={view} />
+      {view === "queue" ? (
         <TaskQueueScreen
           error={error}
           initiativeTitleById={initiativeTitleById}
@@ -213,54 +259,51 @@ export function WorkRouteScreen() {
           pendingTaskId={pendingTaskId}
           queue={queue}
         />
-      </div>
-    );
-  }
+      ) : null}
 
-  if (search.view === "board") {
-    const initiative =
-      search.initiativeId !== undefined
-        ? (initiatives.find((entry) => entry.id === search.initiativeId) ??
-          null)
-        : null;
+      {view === "initiatives" ? (
+        <InitiativesScreen
+          channels={memberChannels}
+          communityId={communityId}
+          error={initiativesError}
+          isLoading={initiativesLoading}
+          onCreated={handleInitiativeCreated}
+          onOpenInitiative={handleOpenInitiative}
+          rows={initiativeListRows}
+        />
+      ) : null}
 
-    return (
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {view === "board" ? (
         <TaskBoardScreen
           error={error}
-          initiative={initiative}
+          initiative={boardInitiative}
           initiatives={initiatives}
           isLoading={isLoading}
           onNewTask={handleOpenNewTask}
           rows={boardRows}
           tasksById={tasksById}
         />
+      ) : null}
+
+      {view === "list" ? (
+        <TaskListScreen
+          error={error}
+          initiatives={initiatives}
+          isLoading={isLoading}
+          onNewTask={handleOpenNewTask}
+          onOpenTask={handleOpenTask}
+          rows={rows}
+        />
+      ) : null}
+
+      {view === "board" || view === "list" ? (
         <NewTaskDialog
           channels={memberChannels}
           onCreated={handleTaskCreated}
           onOpenChange={setIsNewTaskOpen}
           open={isNewTaskOpen}
         />
-      </div>
-    );
-  }
-
-  return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <TaskListScreen
-        error={error}
-        initiatives={initiatives}
-        isLoading={isLoading}
-        onNewTask={handleOpenNewTask}
-        onOpenTask={handleOpenTask}
-        rows={rows}
-      />
-      <NewTaskDialog
-        channels={memberChannels}
-        onCreated={handleTaskCreated}
-        onOpenChange={setIsNewTaskOpen}
-        open={isNewTaskOpen}
-      />
+      ) : null}
     </div>
   );
 }
