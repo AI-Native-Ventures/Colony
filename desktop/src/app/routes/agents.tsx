@@ -15,10 +15,9 @@ export const Route = createFileRoute("/agents")({
 });
 
 function AgentsRouteComponent() {
-  const search = Route.useSearch();
   return (
     <React.Suspense fallback={<ViewLoadingFallback kind="agents" />}>
-      <AgentsScreen focusSection={search.section} />
+      <AgentsScreen />
     </React.Suspense>
   );
 }

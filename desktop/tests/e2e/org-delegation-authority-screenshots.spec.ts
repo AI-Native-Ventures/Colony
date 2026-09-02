@@ -75,8 +75,9 @@ function grantHead({
 }
 
 async function openPeopleSection(page: Page) {
-  await page.goto("/#/agents?section=people");
+  await page.goto("/#/agents");
   const section = page.getByTestId("people-roles-section");
+  await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
   await expect(page.getByTestId(`org-node-${WORKER_PUBKEY}`)).toBeVisible();
   return section;

@@ -169,7 +169,7 @@ export function PeopleSection() {
           </Button>
         }
         description="Who reports to whom, who is working, and what everyone may decide."
-        title="People and roles"
+        title="Org chart"
       />
 
       {error ? (

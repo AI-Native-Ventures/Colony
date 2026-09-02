@@ -49,7 +49,7 @@ export function TaskAssigneeFields({
         data-testid="new-task-no-assignees"
       >
         Nobody on a team yet, so there is nobody to give this to. Add an agent
-        to a team under People and roles first.
+        to a team from the org chart on the Agents page first.
       </p>
     );
   }

@@ -39,9 +39,10 @@ const ORG = [
 
 test("the org chart draws a populated two-level tree", async ({ page }) => {
   await installMockBridge(page, { employeeHeads: [...ORG] });
-  await page.goto("/#/agents?section=people");
+  await page.goto("/#/agents");
 
   const section = page.getByTestId("people-roles-section");
+  await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
 
   const tree = page.getByTestId("org-tree");
@@ -68,9 +69,10 @@ test("an unranked agent is an action, not an empty page", async ({ page }) => {
   // No employee heads at all: the section must still explain itself rather
   // than claiming nobody is employed while agents are listed above it.
   await installMockBridge(page, {});
-  await page.goto("/#/agents?section=people");
+  await page.goto("/#/agents");
 
   const section = page.getByTestId("people-roles-section");
+  await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
 
   await waitForAnimations(page);

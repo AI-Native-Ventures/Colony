@@ -99,7 +99,7 @@ export function AgentOrgPlacementSection({
         />
         <p className="text-xs text-muted-foreground">
           Where this agent sits in the community org. You can change it later
-          under People and roles.
+          from the org chart on the Agents page.
         </p>
       </div>
       {managerTargetRank ? (

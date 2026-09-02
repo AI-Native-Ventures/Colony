@@ -455,50 +455,39 @@ test("message deep links survive reload", async ({ page }) => {
   );
 });
 
-test("the agents route renders the People and Roles section via deep link", async ({
-  page,
-}) => {
-  await page.goto("/#/agents?section=people");
-
-  const section = page.getByTestId("people-roles-section");
-  await expect(section).toBeVisible();
-  await expect(
-    section.getByRole("heading", { name: "People and roles" }),
-  ).toBeVisible();
-  await expect(section.getByTestId("hire-employee-button")).toBeVisible();
-});
-
-test("the sidebar People entry navigates to the anchored section", async ({
+test("the Agents page hosts the org chart with no People nav entry", async ({
   page,
 }) => {
   await page.goto("/");
 
-  await page.getByTestId("open-people-view").click();
+  // The People and roles destination is gone: the org chart lives on Agents.
+  await expect(page.getByTestId("open-people-view")).toHaveCount(0);
 
-  await expect(page).toHaveURL(/#\/agents\?section=people$/);
-  await expect(page.getByTestId("people-roles-section")).toBeVisible();
-  await expect(page.getByTestId("open-people-view")).toHaveAttribute(
-    "data-active",
-    "true",
-  );
-  await expect(page.getByTestId("open-agents-view")).not.toHaveAttribute(
-    "data-active",
-    "true",
-  );
-});
-
-test("arriving by deep link puts People and Roles in view", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto("/#/agents?section=people");
+  await page.getByTestId("open-agents-view").click();
+  await expect(page).toHaveURL(/#\/agents$/);
 
   const section = page.getByTestId("people-roles-section");
+  await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
-  await expect(section).toBeInViewport({ ratio: 0.5 });
+  await expect(
+    section.getByRole("heading", { name: "Org chart" }),
+  ).toBeVisible();
+  await expect(section.getByTestId("hire-employee-button")).toBeVisible();
+});
 
-  // Bookmarkable: a reload lands in the same place.
-  await page.reload();
+test("the retired section param still lands on the Agents page", async ({
+  page,
+}) => {
+  // Old bookmarks keep working: the unknown param is ignored, not an error.
+  await page.goto("/#/agents?section=people");
+
+  await expect(page.getByTestId("agents-page-content")).toBeVisible();
+  await expect(page.getByTestId("open-agents-view")).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+
+  const section = page.getByTestId("people-roles-section");
+  await section.scrollIntoViewIfNeeded();
   await expect(section).toBeVisible();
-  await expect(section).toBeInViewport({ ratio: 0.5 });
 });
