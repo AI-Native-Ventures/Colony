@@ -24,6 +24,15 @@
     max-width: 92rem;
     margin: 0 auto;
     text-align: left;
+    /* Content-sized, then centred by the stage: never stretched to fill the
+       stage row. A stretched screen has free space inside it, and measured in
+       Chrome that space goes into the screen's own auto rows rather than being
+       centred away, which walks the action row down to the bottom edge of the
+       window. Sized to its content the screen has no free space to give away,
+       and the stage splits the slack above and below it instead.
+       `safe` matters: a screen taller than the window would otherwise centre
+       to a top that cannot be scrolled back to, losing the headline. */
+    align-self: safe center;
   }
 
   :where(.onb-canvas) .onb-screen[data-wide="true"] {
@@ -37,9 +46,21 @@
 
   /* Column placement. The headline column spans both rows on the left;
      controls and their action row stack in the right column. */
+  /* Three content-sized slots, not three `auto` ones, and that is most of the
+     reason the account screen fits a 720-tall window.
+
+     Every row here already sizes to its item: the panel carries its own
+     max-height and scrolls inside it, and the action row is one button. What
+     `auto` added on top was slack. Only credits fills row 1, so on every other
+     screen an `auto` chooser row still took a share of the headline column's
+     contribution, which spans all three rows: 118px of nothing above the
+     panel. Measured in Chrome, `auto` rows also absorb whatever space is left
+     over rather than leaving it to `align-content: center` to place. Between
+     them those two put the account screen's Continue button at y 698, on the
+     bottom edge of the window, whatever the panel's height was. */
   :where(.onb-canvas)
     .onb-screen:not([data-wide="true"]):not([data-solo="true"]) {
-    grid-template-rows: auto auto auto;
+    grid-template-rows: repeat(3, min-content);
   }
 
   :where(.onb-canvas)
@@ -1162,6 +1183,33 @@
     .onb-canvas .onb-screen.onb-machine-screen .onb-sub {
       margin-top: 0.75rem;
       font-size: 1rem;
+    }
+  }
+
+  /* Short windows. Placed last on purpose: these are the same properties the
+     rules above set, at the same specificity, so source order is what makes
+     them win.
+
+     The window minimum is 800x500 (src-tauri/tauri.conf.json) and a 1280x720
+     laptop is the ordinary case, so the flow's resting rhythm has to be the
+     one for a tall window rather than the only one. At 720 the account
+     screen's Continue button ran to y 718 and touched the bottom edge. The
+     spacing tightens here instead; the stage scrolls behind this for windows
+     shorter still, but a screen a person can read without scrolling is worth
+     half a centimetre of air. */
+  @media (max-height: 840px) {
+    :where(.onb-canvas) .onb-screen {
+      row-gap: 1.25rem;
+    }
+
+    :where(.onb-canvas) .onb-panel,
+    :where(.onb-canvas) .onb-fieldset,
+    :where(.onb-canvas) .onb-stack {
+      gap: 1.375rem;
+    }
+
+    :where(.onb-canvas) .onb-actions {
+      margin-top: 1.5rem;
     }
   }
 

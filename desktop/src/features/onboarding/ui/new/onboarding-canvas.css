@@ -94,15 +94,39 @@
   }
 
   /* The stage hosts screen content above the mesh layers. Without it the
-     positioned mesh, streak and grain would paint over static children. */
+     positioned mesh, streak and grain would paint over static children.
+
+     It is also the flow's scroll container. The canvas itself must stay
+     `overflow: hidden`, because the grain, the scatter field, the step marker
+     and the scroll fade are all absolutely positioned against it and would
+     scroll away with the content if it scrolled. Scrolling the stage instead
+     keeps that chrome pinned to the window while a screen taller than the
+     window becomes reachable rather than clipped. */
   .onb-stage {
     position: relative;
     z-index: 2;
     height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     display: grid;
     grid-template-rows: 1fr auto;
     padding: clamp(2rem, 5vh, 4rem) clamp(2rem, 7vw, 8rem)
       clamp(1.5rem, 4vh, 2.5rem);
+  }
+
+  /* Scroll cue. A clipped screen and a screen that simply ends look identical,
+     and the thing below the fold is the primary action, so "there is more" has
+     to be said rather than left to be discovered. Rendered only while there is
+     something below: a fade sitting over the end of the content would be a
+     standing lie about the rest of the flow. */
+  .onb-fade {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 3;
+    height: 4rem;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--onb-base));
   }
 
   /* Step marker. Mono, letterspaced, high on the page: the only numeric thing
@@ -217,17 +241,22 @@
     }
   }
 
-  /* Narrow windows: the step marker overlapped content when absolutely
-     positioned, so it becomes a normal line above the stage. */
+  /* Narrow windows: the step marker moves in tight against the corner so it
+     stops crowding a headline that now runs the full width.
+
+     It stays absolutely positioned. Laying it out in the canvas's flow instead
+     pushed the stage, which is `height: 100%`, past the bottom of a canvas that
+     clips: the marker's own height was silently cut off the end of every screen
+     at this width. The stage keeps clear of it with padding instead. */
   @media (max-width: 900px) {
     .onb-step {
-      position: static;
-      padding: 1.25rem 1.5rem 0;
+      top: 1.25rem;
+      left: 1.5rem;
     }
 
     .onb-stage {
       grid-template-rows: 1fr auto;
-      padding-top: 0.5rem;
+      padding-top: 3rem;
     }
   }
 }
