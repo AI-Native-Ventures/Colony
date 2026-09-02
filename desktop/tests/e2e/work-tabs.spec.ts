@@ -382,3 +382,31 @@ test("an initiative read the relay refuses is shown as an error, not as an empty
   // is still reachable when the list itself could not be read.
   await expect(page.getByTestId("initiatives-new")).toBeVisible();
 });
+
+test("the sidebar has a single Tasks row that opens the list view", async ({
+  page,
+}) => {
+  await installMockBridge(page, { companyWorkContext: COMPANY_WORK_CONTEXT });
+  await page.goto("/#/");
+
+  const tasksRow = page.getByTestId("open-work-view");
+  await expect(tasksRow).toHaveCount(1);
+  await expect(tasksRow).toHaveText("Tasks");
+
+  // The three rows and the per-initiative list the section used to carry are
+  // tabs on the page now. Asserting they are gone is what stops the sidebar
+  // quietly regrowing a second route into the same page.
+  await expect(page.getByTestId("open-work-board")).toHaveCount(0);
+  await expect(page.getByTestId("open-work-queue")).toHaveCount(0);
+  await expect(page.getByTestId("open-work-board-initiative")).toHaveCount(0);
+  await expect(page.getByTestId("queue-sidebar-count")).toHaveCount(0);
+
+  await tasksRow.click();
+
+  await expect(page.getByTestId("task-list-page")).toBeVisible();
+  await expect(page.getByTestId("work-top-tab-list")).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(tasksRow).toHaveAttribute("data-active", "true");
+});

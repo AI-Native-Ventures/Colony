@@ -289,7 +289,6 @@ export function AppSidebar({
     channels: false,
     forums: false,
     directMessages: false,
-    work: false,
   });
 
   const toggleCollapsedGroup = React.useCallback(
@@ -600,9 +599,7 @@ export function AppSidebar({
                 <>
                   <WorkSidebarSection
                     isActive={selectedView === "work"}
-                    isCollapsed={collapsedGroups.work}
                     onSelect={onSelectWork}
-                    onToggleCollapsed={() => toggleCollapsedGroup("work")}
                   />
                   {starredChannels.length > 0 ? (
                     <ChannelGroupSection

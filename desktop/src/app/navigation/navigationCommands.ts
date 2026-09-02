@@ -20,6 +20,7 @@ export type NavigationCommandTargets = {
   goCredits: NavigationCommandTarget;
   goSpend: NavigationCommandTarget;
   goWork: NavigationCommandTarget;
+  goWorkInitiatives: NavigationCommandTarget;
   goWorkflows: NavigationCommandTarget;
   openBrowseChannels: NavigationCommandTarget;
   projectsEnabled: boolean;
@@ -114,6 +115,14 @@ export function buildNavigationCommands(
       title: "Open Tasks",
     },
     {
+      description: "See and create initiatives",
+      id: "open-initiatives",
+      onSelect: () => {
+        void targets.goWorkInitiatives();
+      },
+      title: "Open Initiatives",
+    },
+    {
       description: "Open the Billing spend ledger",
       id: "open-spend",
       onSelect: () => {
@@ -204,6 +213,7 @@ export function useNavigationCommands(
     goCredits,
     goSpend,
     goWork,
+    goWorkInitiatives,
     goWorkflows,
     openBrowseChannels,
     projectsEnabled,
@@ -230,6 +240,7 @@ export function useNavigationCommands(
         goCredits,
         goSpend,
         goWork,
+        goWorkInitiatives,
         goWorkflows,
         openBrowseChannels,
         projectsEnabled,
@@ -253,6 +264,7 @@ export function useNavigationCommands(
       goSettings,
       goSpend,
       goWork,
+      goWorkInitiatives,
       goWorkflows,
       openBrowseChannels,
       projectsEnabled,
