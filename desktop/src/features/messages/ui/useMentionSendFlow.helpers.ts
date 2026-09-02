@@ -167,14 +167,51 @@ export function getErrorMessage(error: unknown, fallback: string) {
  * Takes `restoreComposerAfterFailure` as a parameter rather than closing
  * over it, so the handler can live here with the rest of this hook's
  * extracted logic instead of inline in the hook body.
+ *
+ * An error the caller has already put in front of the user (see
+ * `markSendFailureReported`) restores the composer without a toast, so the
+ * same sentence is not reported twice.
  */
 export function createFinishSendFailureHandler(
   restoreComposerAfterFailure: () => void,
 ) {
   return (error: unknown) => {
     restoreComposerAfterFailure();
+    if (wasSendFailureReported(error)) return;
     toast.error(getErrorMessage(error, "The message could not be sent."));
   };
+}
+
+/**
+ * Marker for a send failure the `onSend` caller has already shown the user on
+ * its own error surface.
+ *
+ * The new-message screen renders a failed first DM as an inline banner and
+ * rethrows, so once completeSend started reporting send() rejections the same
+ * sentence appeared twice, and the smoke spec's strict locator resolved to
+ * two elements. A symbol on the rejected error carries "this one is already
+ * reported" from the caller to the handler without threading a prop through
+ * MessageComposer for a case only that one screen has.
+ */
+const SEND_FAILURE_REPORTED = Symbol.for("buzz.sendFailureReported");
+
+/** Tag `error` as already reported, and return it so callers can `throw` it. */
+export function markSendFailureReported<T>(error: T): T {
+  if (error !== null && typeof error === "object") {
+    Object.defineProperty(error, SEND_FAILURE_REPORTED, {
+      configurable: true,
+      value: true,
+    });
+  }
+  return error;
+}
+
+export function wasSendFailureReported(error: unknown) {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    SEND_FAILURE_REPORTED in error
+  );
 }
 
 /**
@@ -191,8 +228,8 @@ export function createFinishSendFailureHandler(
  * failed send from one that had not been attempted.
  *
  * A caller that shows its own inline error for a failed send (the new-message
- * screen does) will now show that error and this toast. Reporting twice is the
- * lesser fault against reporting not at all.
+ * screen does) marks the error it rethrows, so each failure is reported
+ * exactly once: inline there, as a toast everywhere else.
  */
 export async function runReportingFinishSendFailures(
   finishSend: () => Promise<void>,

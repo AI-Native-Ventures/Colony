@@ -15,6 +15,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 import { MessageComposer } from "./MessageComposer";
+import { markSendFailureReported } from "./useMentionSendFlow.helpers";
 import { NewMessageResultRow } from "./NewMessageResultRow";
 import {
   formatRecipientName,
@@ -281,7 +282,8 @@ export function NewMessageScreen({
         const message =
           error instanceof Error ? error.message : "Failed to send message.";
         if (isMountedRef.current) setSubmitErrorMessage(message);
-        throw error;
+        // Reported inline above; the mark keeps completeSend from toasting it.
+        throw markSendFailureReported(error);
       }
 
       if (!isMountedRef.current) {
