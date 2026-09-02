@@ -550,3 +550,47 @@ fn team_refs_create_the_coordination_team_for_a_fresh_community() {
         .expect("ambiguous work must have somewhere to land");
     assert_eq!(owner.id, chat_team_id());
 }
+
+/// `owning_team_for_chat` takes the FIRST team whose id ends in the
+/// coordination slug, so the order this list comes back in decides which team
+/// owns ambiguous work.
+///
+/// The seed appends, while every other route to a team list arrives through
+/// `load_teams`, which returns `sort_teams` order. Without a sort the call
+/// that seeds answers a send with one team and the very next call, reading
+/// the same store back, answers it with another. Built-ins sort first, so
+/// this community's own pinned default wins, ahead of an unpinned blueprint
+/// coordination team that belongs to no community in particular.
+#[test]
+fn team_refs_are_sorted_after_seeding() {
+    let unpinned_blueprint = user_team("company-team:abc123:acme:company-coordination", None);
+    let mut teams = vec![unpinned_blueprint.clone()];
+
+    let (seeded, refs) = plan_team_refs(&mut teams, CHAT_RELAY, "2026-08-30T00:00:00Z");
+
+    assert!(seeded, "this community had no coordination team of its own");
+    assert_eq!(
+        teams.iter().map(|team| team.id.clone()).collect::<Vec<_>>(),
+        vec![chat_team_id(), unpinned_blueprint.id.clone()],
+        "the seeded built-in must be sorted into place, not left appended"
+    );
+
+    let owner = owning_team_for_chat(&refs, "some-hired-agent-persona")
+        .expect("ambiguous work must have somewhere to land");
+    assert_eq!(
+        owner.id,
+        chat_team_id(),
+        "this community's own team owns the work, not an unpinned blueprint one"
+    );
+
+    // The call that seeds and the call that reads the store back must agree.
+    let (seeded_again, refs_again) = plan_team_refs(&mut teams, CHAT_RELAY, "2026-08-31T00:00:00Z");
+    assert!(!seeded_again);
+    assert_eq!(
+        refs.iter().map(|team| team.id.clone()).collect::<Vec<_>>(),
+        refs_again
+            .iter()
+            .map(|team| team.id.clone())
+            .collect::<Vec<_>>(),
+    );
+}

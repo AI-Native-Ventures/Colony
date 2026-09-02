@@ -13,7 +13,7 @@ pub(crate) fn teams_store_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(managed_agents_base_dir(app)?.join("teams.json"))
 }
 
-pub(super) fn sort_teams(records: &mut [TeamRecord]) {
+pub(crate) fn sort_teams(records: &mut [TeamRecord]) {
     records.sort_by(|left, right| {
         let left_builtin = if left.is_builtin { 0 } else { 1 };
         let right_builtin = if right.is_builtin { 0 } else { 1 };
