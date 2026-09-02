@@ -250,10 +250,15 @@ pub async fn apply_workspace(
             // stranded tombstones and archive requests publish on this boot
             // instead of being abandoned by the storage cutover.
             migrate_legacy_retention_into(&restore_app, &scope);
+            // The scope's own relay, not `relay_ws_url_with_override`: the
+            // team projection has to name the community this retention
+            // database belongs to, and these are the same value here only
+            // because the scope was resolved a few lines ago.
             crate::event_sync::spawn_event_sync(
                 restore_app.clone(),
                 scope.owner_keys,
                 scope.db_path,
+                scope.relay_url,
             )
         }
         Err(error) => {

@@ -139,6 +139,43 @@ fn team_pinned_to_relay(team: &TeamRecord, canonical_relay: &str) -> bool {
         .is_some_and(|pin| crate::relay::agent_boundary::canonical(pin) == canonical_relay)
 }
 
+/// Whether `team` belongs in the `KIND_TEAM` projection this device publishes
+/// into the community reachable at `relay_url`.
+///
+/// Retention is scoped per (relay, owner), but one `teams.json` serves every
+/// community this device has joined, so the store is not a projection of one
+/// company: it is every company the device knows. Publishing all of it puts
+/// one community's teams on another community's relay.
+///
+/// Two rules, and the second is the stricter one.
+///
+/// A user-owned team publishes wherever it applies: to its own community when
+/// pinned, and to every community when it carries no pin, which is exactly
+/// how every team behaved before the pin existed.
+///
+/// A built-in publishes only when it is a coordination team pinned to THIS
+/// relay. Every other built-in ships in code, so devices carry it already and
+/// no relay ever has to resolve it. The coordination team is the exception
+/// the relay itself depends on: `company_broker::load_team_refs` validates a
+/// Task's `owningTeamId` against the owner's published `KIND_TEAM` events, so
+/// leaving it unpublished lets `ensure_chat_task` mint a Task the relay then
+/// refuses with "missing reference in task.owningTeamId".
+///
+/// That exception demands a real pin rather than mere compatibility. An
+/// unpinned coordination team is the pre-migration device-wide record, which
+/// survives a load whenever [`split_legacy_coordination_team`] found no relay
+/// pin to split it by. Publishing it here would put one record on every
+/// community's relay again, which is the shape this change exists to retire.
+/// Events already published under its id stay on each relay regardless, so
+/// Tasks minted against it keep resolving.
+pub(crate) fn team_publishes_to_relay(team: &TeamRecord, relay_url: &str) -> bool {
+    if !team.is_builtin {
+        return team_applies_to_relay(team, relay_url);
+    }
+    is_coordination_team_id(&team.id)
+        && team_pinned_to_relay(team, &crate::relay::agent_boundary::canonical(relay_url))
+}
+
 /// Whether `team` satisfies what `owning_team_for_chat`'s fallback and
 /// `company_team_refs`'s filter both require of a coordination team: an id
 /// ending in the coordination slug, with a lead who is also a member.
