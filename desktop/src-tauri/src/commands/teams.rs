@@ -1,12 +1,13 @@
 use tauri::AppHandle;
 use uuid::Uuid;
 
+use super::personas::scope;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        delete_team_with_cascade, ensure_persona_ids_are_active, load_personas, load_teams,
-        save_teams, try_regenerate_nest, validate_team_membership, CreateTeamRequest, TeamRecord,
-        UpdateTeamRequest,
+        delete_team_with_cascade, ensure_persona_ids_are_active, load_managed_agents,
+        load_personas, load_teams, save_teams, try_regenerate_nest, validate_team_membership,
+        CreateTeamRequest, TeamRecord, UpdateTeamRequest,
     },
     util::now_iso,
 };
@@ -135,7 +136,28 @@ pub async fn list_teams(app: AppHandle) -> Result<Vec<TeamRecord>, String> {
             .managed_agents_store_lock
             .lock()
             .map_err(|error| error.to_string())?;
-        load_teams(&app)
+        let mut teams = load_teams(&app)?;
+        // Teams carry no relay pin, so without this a team assembled on one
+        // community lists on every other with its members flagged missing.
+        // Same rule as definitions; see `personas::scope`.
+        let personas = load_personas(&app)?;
+        let definitions: Vec<(&str, bool)> = personas
+            .iter()
+            .map(|persona| (persona.id.as_str(), persona.is_builtin))
+            .collect();
+        let records = load_managed_agents(&app)?;
+        let agents: Vec<scope::AgentRow<'_>> = records.iter().map(scope::AgentRow::of).collect();
+        let workspace_relay = crate::relay::relay_ws_url_with_override(&state);
+        teams.retain(|team| {
+            scope::team_in_workspace(
+                &team.persona_ids,
+                team.is_builtin,
+                &definitions,
+                &agents,
+                &workspace_relay,
+            )
+        });
+        Ok(teams)
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
