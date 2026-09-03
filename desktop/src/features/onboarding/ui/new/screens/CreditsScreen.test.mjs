@@ -117,3 +117,69 @@ test("a known account email is used without asking again", async (t) => {
 
   result.unmount();
 });
+test("every pack the relay sells is offered, cheapest first, defaulting to growth", async (t) => {
+  const { result } = await mountCredits(t, { email: "founder@example.com" });
+
+  const tiles = result
+    .getAllByRole("button")
+    .filter((node) => node.dataset.testid?.startsWith("credits-pack-"));
+  assert.deepEqual(
+    tiles.map((tile) => tile.dataset.testid),
+    [
+      "credits-pack-starter",
+      "credits-pack-growth",
+      "credits-pack-scale",
+      "credits-pack-pro",
+    ],
+    "the relay's order is the price order, and it is the one shown",
+  );
+  assert.deepEqual(
+    tiles.map((tile) => tile.getAttribute("aria-pressed")),
+    ["false", "true", "false", "false"],
+  );
+  assert.match(
+    result.getByTestId("credits-pack-scale").textContent,
+    /\$44 of credits/,
+  );
+  assert.match(
+    result.getByTestId("credits-pack-scale").textContent,
+    /R899 once off/,
+  );
+  assert.equal(
+    result.getByTestId("onboarding-credits-pay").textContent,
+    "Pay R299",
+  );
+
+  result.unmount();
+});
+
+test("picking a bigger pack is what gets charged", async (t) => {
+  const { act, created, result } = await mountCredits(t, {
+    email: "founder@example.com",
+  });
+
+  await act(async () => {
+    result.getByTestId("credits-pack-pro").click();
+  });
+
+  assert.equal(
+    result.getByTestId("credits-pack-pro").getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    result.getByTestId("credits-pack-growth").getAttribute("aria-pressed"),
+    "false",
+  );
+  assert.equal(
+    result.getByTestId("onboarding-credits-pay").textContent,
+    "Pay R2449",
+    "the button must name the price of the pack that is selected",
+  );
+
+  await act(async () => {
+    result.getByTestId("onboarding-credits-pay").click();
+  });
+  assert.deepEqual(created, [{ email: "founder@example.com", packId: "pro" }]);
+
+  result.unmount();
+});
