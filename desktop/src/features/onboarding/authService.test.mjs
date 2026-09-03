@@ -84,6 +84,21 @@ test("a taken address maps to email-taken", async () => {
   );
 });
 
+test("a taken identity maps to identity-taken, not unreachable", async () => {
+  // The relay answers 409 pubkey_taken when this computer's key already has an
+  // account under another email. Nothing about the connection is wrong, and
+  // retrying can never succeed, so this must not land on unreachable.
+  const auth = createAuthService(
+    deps({
+      post: async () => ({ status: 409, body: { error: "pubkey_taken" } }),
+    }),
+  );
+  await assert.rejects(
+    () => auth.signUp("second@example.com", "correct horse battery"),
+    (error) => error.kind === "identity-taken",
+  );
+});
+
 test("a lockout carries its retry delay", async () => {
   const auth = createAuthService(
     deps({

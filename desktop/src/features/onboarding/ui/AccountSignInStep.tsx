@@ -189,7 +189,13 @@ export function AccountSignInStep({
                   : "You can try again now."
                 : failure.kind === "update-required"
                   ? "This version of Colony is out of date. Update the app, then try again."
-                  : "We could not reach your workspace. Check your connection and try again."}
+                  : // Signing in cannot produce identity-taken, but it is a
+                    // member of the union, so it gets its own copy rather than
+                    // falling through to a connection message that would be
+                    // wrong on the one screen that already is the answer.
+                    failure.kind === "identity-taken"
+                    ? "This computer already has a Colony account under another email. Sign in with that email instead."
+                    : "We could not reach your workspace. Check your connection and try again."}
           </p>
         ) : null}
         {/* The two doors out of this screen sit under the form they belong to,
