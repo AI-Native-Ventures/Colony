@@ -7,7 +7,6 @@ const valid = {
   name: "Aisha Bello",
   email: "aisha@rosebankauto.co.za",
   password: "colonyprototype",
-  city: "Johannesburg",
 };
 
 test("account_gate_requires_a_real_email", () => {
@@ -19,7 +18,14 @@ test("account_gate_requires_a_long_enough_password", () => {
   assert.equal(accountReady({ ...valid, password: "short" }), false);
 });
 
-test("account_gate_does_not_require_a_city", () => {
-  // City is prefilled from IP and is optional. Nothing blocks on it.
-  assert.equal(accountReady({ ...valid, city: "" }), true);
+test("account_gate_requires_a_name", () => {
+  assert.equal(accountReady({ ...valid, name: "   " }), false);
+});
+
+test("account_gate_asks_for_nothing_beyond_the_three_fields", () => {
+  // The screen collects a name, an email and a password. City, country and
+  // the photo left it: they are profile details, and the gate never depended
+  // on them even when the screen still asked.
+  assert.equal(accountReady({ ...valid, city: "", country: "" }), true);
+  assert.equal(accountReady({ ...valid, avatarUrl: "" }), true);
 });
