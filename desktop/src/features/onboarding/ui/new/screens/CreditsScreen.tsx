@@ -135,15 +135,16 @@ type Props = {
 };
 
 /**
- * One pack, one price, and a way past it.
+ * The credit ladder, one price preselected, and a way past it.
  *
- * The screen used to show the whole catalogue: seven tiles in a ragged grid,
- * three paragraphs of copy, and a Pay button that fell below the fold at
- * 1280x720. A founder who has not started yet cannot choose between seven
- * amounts of a thing they have never spent, so the choice was work without a
- * decision in it. One pack at the smallest sensible price is the ask; the
- * rest of the ladder lives in Billing, where someone who has spent credits
- * can see what they use and buy accordingly.
+ * The screen briefly sold a single pack, on the reasoning that a founder who
+ * has not started cannot choose between amounts of a thing they have never
+ * spent. In practice it read as the only price Colony has: someone who
+ * already knew they wanted more than R299 of credits had to pay the smallest
+ * amount first and go find Billing. So the whole catalogue is offered again,
+ * cheapest first and in the relay's own order, with "growth" preselected by
+ * id so the default answer is still one click away and adding tiers never
+ * moves it.
  *
  * "Later" is a real button on every track, the same size as Pay. It used to
  * be the smallest text on the screen and only on the own-tool track, which
@@ -167,6 +168,7 @@ export function CreditsScreen({
   const [state, setState] = useState<CheckoutState>("idle");
   const [packs, setPacks] = useState<CreditPack[] | null>(null);
   const [currency, setCurrency] = useState<ChargeCurrency | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   // Set when a started checkout could not be confirmed. Unlike `abandoned`,
   // nothing here knows the payment failed, so the wording never claims a
@@ -177,7 +179,13 @@ export function CreditsScreen({
   const [receiptEmail, setReceiptEmail] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
 
-  const effectiveEmail = (email ?? receiptEmail).trim();
+  // Normalised once, because the two readers disagreed otherwise. Onboarding
+  // hands over `answers.account?.email ?? ""`, and "" is not nullish: the
+  // field rendered (it tests `!email`) while `email ?? receiptEmail` kept the
+  // empty string, so a valid typed address was thrown away and Pay could
+  // never enable. One value now decides both.
+  const knownEmail = email?.trim() || undefined;
+  const effectiveEmail = knownEmail ?? receiptEmail.trim();
   const emailReady = effectiveEmail.length > 0 && isEmail(effectiveEmail);
 
   // Prices come from the relay so a change reaches users without a new
@@ -190,6 +198,7 @@ export function CreditsScreen({
         if (!live) return;
         setPacks(list.packs);
         setCurrency(list.currency);
+        setSelected(defaultPack(list.packs)?.id ?? null);
       })
       .catch(() => {
         if (live) setLoadFailed(true);
@@ -199,9 +208,13 @@ export function CreditsScreen({
     };
   }, [payments]);
 
-  // The one pack this screen sells, named rather than positional: adding
-  // tiers to the catalogue must not move what a new buyer is asked for.
-  const chosen = packs ? defaultPack(packs) : null;
+  // What Pay will charge for. The selection is seeded by id rather than
+  // position, so adding tiers to the catalogue never moves what a new buyer
+  // is defaulted into; the fallback covers the render between the packs
+  // arriving and a selection existing.
+  const chosen = packs
+    ? (packs.find((pack) => pack.id === selected) ?? defaultPack(packs))
+    : null;
 
   const pay = async () => {
     if (!chosen || !emailReady || state === "leaving") return;
@@ -272,30 +285,38 @@ export function CreditsScreen({
         <p className="onb-sub">{sub}</p>
       </div>
       <div className="onb-packs">
-        {chosen === null ? (
+        {packs === null || packs.length === 0 ? (
           <p className="onb-note">
             {loadFailed
               ? "Could not load prices. Check your connection and try again."
               : "Loading prices…"}
           </p>
         ) : (
-          <div
-            className="onb-pack onb-pack-solo"
-            data-testid="onboarding-credits-pack"
-          >
-            <span className="onb-pack-grant">
-              {formatGrant(chosen.grantNanousd)} of credits
-            </span>
-            {currency ? (
-              <span className="onb-pack-price">
-                {formatPrice(priceOf(chosen, currency), currency)} once off
+          packs.map((pack) => (
+            <button
+              type="button"
+              key={pack.id}
+              className="onb-pack"
+              data-testid={`credits-pack-${pack.id}`}
+              aria-pressed={pack.id === chosen?.id}
+              data-selected={pack.id === chosen?.id ? "true" : undefined}
+              disabled={state === "leaving"}
+              onClick={() => setSelected(pack.id)}
+            >
+              <span className="onb-pack-grant">
+                {formatGrant(pack.grantNanousd)} of credits
               </span>
-            ) : null}
-          </div>
+              {currency ? (
+                <span className="onb-pack-price">
+                  {formatPrice(priceOf(pack, currency), currency)} once off
+                </span>
+              ) : null}
+            </button>
+          ))
         )}
       </div>
       <div className="onb-panel">
-        {!email ? (
+        {!knownEmail ? (
           <label className="onb-field" htmlFor="credits-receipt-email">
             <span className="onb-label">Receipt email</span>
             <input

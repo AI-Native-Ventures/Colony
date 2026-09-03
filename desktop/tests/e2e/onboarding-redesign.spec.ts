@@ -169,17 +169,40 @@ test("a non-technical user can get from the first screen to the end", async ({
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
 
-  // One pack, not the seven-tile ladder. Someone who has not started yet
-  // cannot choose between seven amounts of a thing they have never spent.
-  await expect(page.getByTestId("onboarding-credits-pack")).toHaveCount(1);
+  // The whole ladder is on offer, with "growth" preselected: a founder who
+  // already knows they want more than the smallest pack must not have to buy
+  // the smallest one first and then go looking for Billing.
+  await expect(page.locator(".onb-pack")).toHaveCount(7);
+  await expect(page.getByTestId("credits-pack-growth")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("onboarding-credits-pay")).toHaveText(
+    "Pay R299",
+  );
+
+  // Picking a tier is what gets charged, and the button says so.
+  await page.getByTestId("credits-pack-scale").click();
+  await expect(page.getByTestId("credits-pack-scale")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("credits-pack-growth")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.getByTestId("onboarding-credits-pay")).toHaveText(
+    "Pay R899",
+  );
 
   // This walk answered "no website", so nothing was read and the screen must
   // not offer money back against a reading that never happened.
   await expect(page.getByText("reading your website")).toHaveCount(0);
 
-  // The Pay button fell below the fold at 1280x720 while the pack grid was
-  // there, and the canvas is fixed to the viewport and clips, so it could not
-  // be scrolled to: a dead end rather than a layout nit.
+  // The Pay button fell below the fold at 1280x720 the first time the pack
+  // ladder was on this screen, and the canvas is fixed to the viewport and
+  // clips, so it could not be scrolled to: a dead end rather than a layout
+  // nit. The ladder is back, so this is the assertion that keeps it honest.
   const pay = page.getByTestId("onboarding-credits-pay");
   await expect(pay).toBeVisible();
   const payBox = await pay.boundingBox();

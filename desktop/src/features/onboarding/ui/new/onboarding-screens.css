@@ -1047,10 +1047,15 @@
     color: var(--muted-foreground);
   }
 
+  /* The whole ladder wraps here, and the canvas is fixed to the viewport and
+     clips: anything this row grows by comes straight off the Pay button's
+     headroom at 1280x720, which is how Pay ended up below the fold with
+     nothing to scroll the first time seven tiles were on screen. So the
+     spacing is tight enough for the tiers to wrap into two rows. */
   :where(.onb-canvas) .onb-packs {
     display: flex;
-    gap: 0.625rem;
-    margin-top: 2rem;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
     flex-wrap: wrap;
     justify-content: center;
   }
@@ -1059,9 +1064,9 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.25rem;
-    min-width: 8.5rem;
-    padding: 0.9rem 1.1rem;
+    gap: 0.125rem;
+    min-width: 7.25rem;
+    padding: 0.7rem 0.9rem;
     border-radius: 0.875rem;
     border: 1px solid var(--onb-shell-line);
     background: var(--onb-shell);
@@ -1079,20 +1084,22 @@
     transform: translate3d(0, -2px, 0);
   }
 
+  /* Selected is filled, the rest stay outlined: with six tiers on screen a
+     border colour alone is not the difference between "this is what you are
+     paying" and "this is one of the options". The fill is mixed from
+     currentColor so it lands the same way on the light canvases and the dark
+     one, where ink flips. */
   :where(.onb-canvas) .onb-pack[data-selected="true"] {
     border-color: currentColor;
+    background: color-mix(in srgb, currentColor 16%, transparent);
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
   }
 
-  /* Onboarding sells one pack, so its card is a statement rather than a
-     control: no pointer, no lift on hover, nothing that invites a click that
-     does nothing. The rest of the ladder is in Billing. */
-  :where(.onb-canvas) .onb-pack-solo {
+  :where(.onb-canvas) .onb-pack:disabled {
     cursor: default;
-    min-width: 11rem;
   }
 
-  :where(.onb-canvas) .onb-pack-solo:hover {
+  :where(.onb-canvas) .onb-pack:disabled:hover {
     transform: none;
   }
 
@@ -1140,7 +1147,7 @@
      is the same purchase whichever currency the gateway bills. */
   :where(.onb-canvas) .onb-pack-grant {
     font-weight: 600;
-    font-size: 1.0625rem;
+    font-size: 1rem;
   }
 
   :where(.onb-canvas) .onb-pack-price {
