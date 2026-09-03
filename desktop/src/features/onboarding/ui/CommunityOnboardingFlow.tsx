@@ -533,11 +533,11 @@ export function CommunityOnboardingFlow({
           <>
             <div className="onb-col-head">
               <h1 className="onb-headline">
-                Meet your <em>starter team</em>.
+                Meet your <em>Chief of Staff</em>.
               </h1>
               <p className="onb-sub">
-                Colony lets you bring several agents into one workspace. This
-                team is what gets you started.
+                Colony runs on agents you hire as the work needs them. This is
+                the one who gets you started.
               </p>
             </div>
             <div className="onb-panel">
