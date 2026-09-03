@@ -10,7 +10,7 @@ import type {
   TimelineReaction,
 } from "@/features/messages/types";
 import {
-  getThreadReference,
+  getEventThreadReference,
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
 import {
@@ -115,7 +115,7 @@ export function countTopLevelTimelineRows(events: RelayEvent[]): number {
     if (!isTimelineContentEvent(event) || deletedEventIds.has(event.id)) {
       continue;
     }
-    const { parentId } = getThreadReference(event.tags);
+    const { parentId } = getEventThreadReference(event);
     if (parentId == null || isBroadcastReply(event.tags)) {
       count += 1;
     }
@@ -526,7 +526,7 @@ export function formatTimelineMessages(
       return 0;
     }
 
-    const thread = getThreadReference(event.tags);
+    const thread = getEventThreadReference(event);
     if (!thread.parentId) {
       depthByEventId.set(event.id, 0);
       return 0;
@@ -557,7 +557,7 @@ export function formatTimelineMessages(
         relaySelfPubkey,
         requireChannelTagForPTags: true,
       });
-    const thread = getThreadReference(event.tags);
+    const thread = getEventThreadReference(event);
     const edit = editsByTargetId.get(event.id);
     const role = roleByPubkey.get(authorPubkey.toLowerCase());
     const authorProfile = profiles?.[authorPubkey.toLowerCase()];

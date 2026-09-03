@@ -1,3 +1,4 @@
+import { isTaskTransitionRow } from "@/features/messages/lib/channelTimelineRows";
 import type { RelayEvent } from "@/shared/api/types";
 
 export type ThreadReference = {
@@ -49,6 +50,35 @@ export function getThreadReference(tags: string[][]): ThreadReference {
     parentId,
     rootId: rootTag?.[1] ?? parentId,
   };
+}
+
+/**
+ * The thread an event replies into, resolved from the whole event rather than
+ * its tags alone.
+ *
+ * Identical to {@link getThreadReference} for everything a person writes: this
+ * client marks a direct reply to a thread root with a lone `reply` marker
+ * (see `buildReplyTags`), so a lone `root` marker means "not a reply" and must
+ * keep meaning that for ordinary messages.
+ *
+ * Relay-authored task transition rows (kind 40099) are the one exception. The
+ * relay anchored them with a lone `root` marker, which resolved to no parent
+ * at all, which is why they rendered at channel level instead of inside the
+ * thread they belong to. Those rows are direct replies to the root, so resolve
+ * them that way. Rows emitted by newer relays carry a `reply` marker and never
+ * reach the fallback.
+ */
+export function getEventThreadReference(event: RelayEvent): ThreadReference {
+  const reference = getThreadReference(event.tags);
+  if (reference.parentId !== null) return reference;
+  if (!isTaskTransitionRow(event)) return reference;
+
+  const rootId = event.tags.find(
+    (tag) => tag[0] === "e" && typeof tag[1] === "string" && tag[3] === "root",
+  )?.[1];
+  if (!rootId) return reference;
+
+  return { parentId: rootId, rootId };
 }
 
 /**

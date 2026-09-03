@@ -15,7 +15,7 @@ import {
 } from "@/features/messages/lib/messageQueryKeys";
 import {
   buildReplyTags,
-  getThreadReference,
+  getEventThreadReference,
   isBroadcastReply,
   normalizeMentionPubkeys,
   resolveReplyRootId,
@@ -67,7 +67,10 @@ import {
   parseChannelWindowResponse,
   parseLiveThreadSummary,
 } from "@/features/messages/lib/channelWindowResponse";
-import { isChannelTimelineRow } from "@/features/messages/lib/channelTimelineRows";
+import {
+  isChannelTimelineRow,
+  isTaskTransitionRow,
+} from "@/features/messages/lib/channelTimelineRows";
 import {
   CHANNEL_AUX_EVENT_KINDS,
   KIND_CHANNEL_THREAD_SUMMARY,
@@ -310,9 +313,12 @@ export function useChannelSubscription(channel: Channel | null) {
       return;
     }
     const isTimelineRow = isChannelTimelineRow(event);
-    const threadReference = isTimelineRow
-      ? getThreadReference(event.tags)
-      : null;
+    // A task transition row is never a channel timeline row, but it is still a
+    // reply into its thread and the thread panel has to receive it live.
+    const threadReference =
+      isTimelineRow || isTaskTransitionRow(event)
+        ? getEventThreadReference(event)
+        : null;
     if (threadReference?.parentId != null) {
       const rootId = threadReference?.rootId;
       if (rootId) {

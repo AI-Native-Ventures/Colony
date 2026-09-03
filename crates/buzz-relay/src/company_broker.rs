@@ -1242,12 +1242,32 @@ fn task_transition_thread_anchor(task: &CompanyTask) -> Option<&str> {
         .or(task.source_event_id.as_deref())
 }
 
+/// NIP-10 `e` tags anchoring a transition row as a direct reply to `anchor`.
+///
+/// Both markers name the same event, which is what makes the row a *reply*
+/// rather than a bare thread annotation. A lone `root` marker is not enough:
+/// the desktop resolves a parent from the `reply` marker (its own reply
+/// builder marks a direct reply to a root that way), so a root-only row
+/// resolved to no parent at all and rendered at channel level, between the
+/// owner's real messages, as a relay-signed caption they cannot delete.
+///
+/// Emitting `root` as well keeps every existing reader that scopes a thread
+/// by its root marker working unchanged.
+fn task_transition_anchor_tags(anchor: &str) -> Result<[Tag; 2], String> {
+    let root = Tag::parse(["e", anchor, "", "root"])
+        .map_err(|error| format!("invalid `e` root tag: {error}"))?;
+    let reply = Tag::parse(["e", anchor, "", "reply"])
+        .map_err(|error| format!("invalid `e` reply tag: {error}"))?;
+    Ok([root, reply])
+}
+
 /// Emit one kind 40099 system row for a committed task transition.
 ///
-/// Scoped to where the work happens: the task's source channel, tagged into
-/// its own thread with an `e` root marker when it has one — the same shape
-/// ask receipts use — so a row never lands in a channel the task does not
-/// belong to. The thread it picks is `task_transition_thread_anchor`.
+/// Scoped to where the work happens: the task's source channel, tagged as a
+/// reply into its own thread when it has one (see
+/// `task_transition_anchor_tags`), so a row never lands in a channel the task
+/// does not belong to, nor at the top level of one. The thread it picks is
+/// `task_transition_thread_anchor`.
 ///
 /// Best-effort exactly like every other post-commit side effect: the owner's
 /// action is already durable when this runs, so any failure here is logged
@@ -1278,7 +1298,7 @@ pub(crate) async fn emit_task_transition(
         return;
     };
 
-    let mut tags = Vec::with_capacity(2);
+    let mut tags = Vec::with_capacity(3);
     match Tag::parse(["h", channel_id.to_string().as_str()]) {
         Ok(tag) => tags.push(tag),
         Err(error) => {
@@ -1287,11 +1307,12 @@ pub(crate) async fn emit_task_transition(
         }
     }
     if let Some(thread_root) = task_transition_thread_anchor(task) {
-        match Tag::parse(["e", thread_root, "", "root"]) {
-            Ok(tag) => tags.push(tag),
+        match task_transition_anchor_tags(thread_root) {
+            Ok(anchor_tags) => tags.extend(anchor_tags),
             Err(error) => {
                 // The row still lands in the right channel; only the thread
-                // scoping is lost, which the channel timeline renders anyway.
+                // scoping is lost, and an unanchored row is exactly what the
+                // desktop already drops from the channel timeline.
                 tracing::warn!(
                     task_id = %task.id,
                     thread_root,
@@ -2364,5 +2385,37 @@ mod tests {
         task.thread_root = None;
         task.source_event_id = None;
         assert_eq!(task_transition_thread_anchor(&task), None);
+    }
+
+    /// The anchor must make the row a *reply*, not just a thread annotation.
+    ///
+    /// Desktop 0.16.5 shipped with a root-only anchor and the row still
+    /// rendered at channel level: the client resolves a parent from the
+    /// `reply` marker, so root-only meant "no parent" and the row was placed
+    /// beside the owner's own messages instead of inside the thread.
+    #[test]
+    fn transition_anchor_carries_both_nip10_markers() {
+        let anchor = "c".repeat(64);
+        let tags = task_transition_anchor_tags(&anchor).expect("anchor tags");
+        let shapes: Vec<(String, String, String)> = tags
+            .iter()
+            .map(|tag| {
+                let parts = tag.as_slice();
+                (
+                    parts.first().cloned().unwrap_or_default(),
+                    parts.get(1).cloned().unwrap_or_default(),
+                    parts.last().cloned().unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            shapes,
+            vec![
+                ("e".to_string(), anchor.clone(), "root".to_string()),
+                ("e".to_string(), anchor.clone(), "reply".to_string()),
+            ],
+            "both markers name the same event, so the row is a direct reply to it"
+        );
     }
 }
