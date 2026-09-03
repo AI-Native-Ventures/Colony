@@ -1,5 +1,5 @@
 import type { RelayEvent } from "@/shared/api/types";
-import { CHANNEL_TIMELINE_CONTENT_KINDS } from "@/shared/constants/kinds";
+import { isChannelTimelineRow } from "./channelTimelineRows";
 import {
   compareRelayOrder,
   flattenChannelWindowEvents,
@@ -8,11 +8,9 @@ import {
 import { reconcileIncomingMessage } from "./messageMerge";
 import { getThreadReference, isBroadcastReply } from "./threading";
 
-const CHANNEL_TIMELINE_KINDS = new Set<number>(CHANNEL_TIMELINE_CONTENT_KINDS);
-
 function retainRefetchReconciliationEvents(events: RelayEvent[]) {
   return events.filter((event) => {
-    if (!CHANNEL_TIMELINE_KINDS.has(event.kind)) return false;
+    if (!isChannelTimelineRow(event)) return false;
     if (event.pending) return true;
     const thread = getThreadReference(event.tags);
     return thread.parentId !== null && !isBroadcastReply(event.tags);
