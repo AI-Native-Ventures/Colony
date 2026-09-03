@@ -214,3 +214,10 @@ test("track_follows_the_brain_choice_not_the_detection", () => {
   assert.equal(trackForBrain(null, ["pi"]), "colony");
   assert.equal(trackForBrain("codex", ["pi"]), "colony");
 });
+
+test("openrouter_is_bring_your_own_however_little_is_installed", () => {
+  // The key is theirs and OpenRouter bills them directly, so credits have
+  // nothing to pay for and the credits screen has no reason to appear.
+  assert.equal(trackForBrain("openrouter", []), "byo");
+  assert.equal(trackForBrain("openrouter", ["claude"]), "byo");
+});

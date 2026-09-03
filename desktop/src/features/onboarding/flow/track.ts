@@ -38,6 +38,15 @@ const COLONY_AGENT_RUNTIME_ID = "buzz-agent";
 const COLONY_AGENT_LABEL = "Colony Agent";
 
 /**
+ * The brain answer for "my own OpenRouter key".
+ *
+ * Not a runtime id: the lane runs the hosted agent against the founder's own
+ * OpenRouter account, so nothing in the catalog carries this name. Spelled out
+ * here rather than imported from the screen so the flow does not depend on it.
+ */
+const OPENROUTER_BRAIN_ID = "openrouter";
+
+/**
  * The brain the screen opens on: Colony Agent whenever it is listed.
  *
  * It used to be `installed[0]`, so a founder with Oh My Pi on their computer
@@ -78,6 +87,9 @@ export function trackForBrain(
   if (!chosen || chosen === COLONY_AGENT_RUNTIME_ID || chosen === "colony") {
     return "colony";
   }
+  // OpenRouter is bring-your-own by definition: the key is theirs and
+  // OpenRouter bills them directly, so credits have nothing to pay for.
+  if (chosen === OPENROUTER_BRAIN_ID) return "byo";
   return installed.includes(chosen) ? "byo" : "colony";
 }
 
