@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import {
-  parseEmojiAvatarDataUrl,
-  ProfileAvatarEditor,
-} from "@/features/profile/ui/ProfileAvatarEditor";
 import { Button } from "@/shared/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Progress } from "@/shared/ui/progress";
 import type { AuthFailure } from "../../../authService";
@@ -20,17 +14,25 @@ export type AccountValues = {
   name: string;
   email: string;
   password: string;
+  /**
+   * No longer asked for here, and always empty for a fresh signup.
+   *
+   * The screen used to end on two bare underlines labelled City and Country,
+   * with no placeholder and no stated reason, and a photo circle with no
+   * affordance. Signing up needs a name, an email and a password; where
+   * someone lives and what they look like are profile details, and profile
+   * details belong in Profile settings, after the account exists.
+   *
+   * The three fields stay declared because the flow that owns this screen
+   * carries them into `OnboardingAnswers.founder`, and every reader downstream
+   * already treats them as optional: the founder brief omits the location line
+   * when it is blank, and the kind:0 write omits an empty avatar rather than
+   * publishing one.
+   */
   city: string;
-  /** Carried over from the previous first-run flow: Scout's brief uses it. */
   country: string;
   gender: FounderGender | null;
   selfDescribedGender: string;
-  /**
-   * Profile picture, empty when skipped. Collected here rather than on a
-   * screen of its own: this is where the founder says who they are, and the
-   * previous flow's dedicated avatar step is one of the screens the redesign
-   * folded away.
-   */
   avatarUrl: string;
 };
 
@@ -109,6 +111,12 @@ export function AccountScreen({
   const lockSeconds = useSecondsRemaining(
     failure?.kind === "locked" ? failure.retryAfterSecs : null,
   );
+  // Both failures mean an account already exists, one under this address and
+  // one under this computer's identity. Each states that next to the field it
+  // concerns and offers the sign-in door, so neither takes the generic banner
+  // that tells the user to check a connection that is working.
+  const alreadyHasAccount =
+    failure?.kind === "email-taken" || failure?.kind === "identity-taken";
 
   return (
     <div className="onb-screen">
@@ -122,26 +130,18 @@ export function AccountScreen({
         </p>
       </div>
       <div className="onb-panel">
-        <div className="onb-identity-row">
-          <AvatarPicker
-            avatarUrl={values.avatarUrl}
-            disabled={isSubmitting}
-            name={values.name}
-            onChange={(avatarUrl) => onChange({ avatarUrl })}
+        <label className="onb-field" htmlFor="onb-account-name">
+          <span className="onb-label">Your name</span>
+          <Input
+            id="onb-account-name"
+            value={values.name}
+            placeholder="Aisha Bello"
+            onChange={(e) => onChange({ name: e.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
+            }}
           />
-          <label className="onb-field" htmlFor="onb-account-name">
-            <span className="onb-label">Your name</span>
-            <Input
-              id="onb-account-name"
-              value={values.name}
-              placeholder="Aisha Bello"
-              onChange={(e) => onChange({ name: e.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
-              }}
-            />
-          </label>
-        </div>
+        </label>
         <label className="onb-field" htmlFor="onb-account-email">
           <span className="onb-label">Email</span>
           <Input
@@ -158,6 +158,15 @@ export function AccountScreen({
           {failure?.kind === "email-taken" ? (
             <p className="onb-note onb-note-warn">
               That email already has an account.
+            </p>
+          ) : null}
+          {failure?.kind === "identity-taken" ? (
+            <p
+              className="onb-note onb-note-warn"
+              data-testid="onboarding-account-identity-taken"
+            >
+              This computer already has a Colony account under another email.
+              Sign in with that email instead.
             </p>
           ) : null}
           {emailTouched && values.email && !isEmail(values.email) ? (
@@ -187,31 +196,6 @@ export function AccountScreen({
               : `${shortfall} more characters`}
           </p>
         </label>
-        <div className="onb-row">
-          <label className="onb-field" htmlFor="onb-account-city">
-            <span className="onb-label">City</span>
-            <Input
-              id="onb-account-city"
-              value={values.city}
-              onChange={(e) => onChange({ city: e.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
-              }}
-            />
-          </label>
-          <label className="onb-field" htmlFor="onb-account-country">
-            <span className="onb-label">Country</span>
-            <Input
-              id="onb-account-country"
-              value={values.country}
-              onChange={(e) => onChange({ country: e.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && ready && !isSubmitting) onSubmit();
-              }}
-            />
-          </label>
-        </div>
-        <p className="onb-note">Change these if we got them wrong.</p>
         <fieldset className="onb-field">
           <legend className="onb-label">Gender (optional)</legend>
           <div className="onb-chips">
@@ -248,7 +232,7 @@ export function AccountScreen({
           ) : null}
         </fieldset>
       </div>
-      {failure !== null && failure.kind !== "email-taken" ? (
+      {failure !== null && !alreadyHasAccount ? (
         <p className="onb-note onb-note-warn" role="alert">
           {failure.kind === "invalid-credentials"
             ? "That information does not match an account. Check it and try again."
@@ -262,7 +246,7 @@ export function AccountScreen({
         </p>
       ) : null}
       <div className="onb-actions">
-        {failure?.kind === "email-taken" && onSignInRequest ? (
+        {alreadyHasAccount && onSignInRequest ? (
           <button
             className="onb-quiet-action"
             data-testid="onb-account-taken-sign-in"
@@ -277,97 +261,5 @@ export function AccountScreen({
         </Button>
       </div>
     </div>
-  );
-}
-
-/** Emoji-picker colours, mapped onto the onboarding canvas's own variables so
- *  the editor does not arrive wearing the app's chat theme. */
-const ONBOARDING_EMOJI_PICKER_THEME_VARS = {
-  "--buzz-emoji-picker-rgb-background":
-    "var(--buzz-onboarding-emoji-picker-background)",
-  "--buzz-emoji-picker-rgb-color": "var(--buzz-onboarding-emoji-picker-color)",
-  "--buzz-emoji-picker-rgb-input": "var(--buzz-onboarding-emoji-picker-input)",
-} as React.CSSProperties;
-
-/**
- * The profile picture, as a circle that opens the shared avatar editor.
- *
- * The same `ProfileAvatarEditor` the previous flow's avatar step and the
- * community profile stage both used, so uploads, emoji avatars and animated
- * previews behave identically wherever someone sets a picture. Skipping is
- * silent and costs nothing: the circle just stays empty, and the profile is
- * written without an avatar.
- */
-function AvatarPicker({
-  avatarUrl,
-  disabled,
-  name,
-  onChange,
-}: {
-  avatarUrl: string;
-  disabled: boolean;
-  name: string;
-  onChange: (avatarUrl: string) => void;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const emojiAvatar = parseEmojiAvatarDataUrl(avatarUrl);
-  const hasAvatar = avatarUrl.trim().length > 0;
-  const previewName = name.trim() || "Your profile";
-
-  return (
-    <>
-      <button
-        aria-label={hasAvatar ? "Change your photo" : "Add your photo"}
-        className="onb-avatar-button"
-        data-has-avatar={hasAvatar}
-        data-testid="onboarding-account-avatar"
-        disabled={disabled}
-        onClick={() => setIsOpen(true)}
-        type="button"
-      >
-        {emojiAvatar ? (
-          <span
-            aria-hidden="true"
-            className="onb-avatar-emoji"
-            style={{ backgroundColor: emojiAvatar.color }}
-          >
-            {emojiAvatar.emoji}
-          </span>
-        ) : hasAvatar ? (
-          <ProfileAvatar
-            avatarUrl={avatarUrl}
-            className="h-full w-full"
-            label={previewName}
-          />
-        ) : (
-          <span className="onb-avatar-empty">Photo</span>
-        )}
-      </button>
-      <Dialog onOpenChange={setIsOpen} open={isOpen}>
-        <DialogContent
-          className="buzz-onboarding-neutral-theme max-w-[34rem]"
-          data-testid="onboarding-account-avatar-editor"
-          surface="textured"
-        >
-          <DialogTitle className="px-2 pt-2 text-2xl font-normal">
-            Add your photo
-          </DialogTitle>
-          <ProfileAvatarEditor
-            avatarUrl={avatarUrl}
-            disabled={disabled}
-            donePending={isUploading}
-            emojiPickerTheme="auto"
-            emojiPickerThemeVars={ONBOARDING_EMOJI_PICKER_THEME_VARS}
-            onDone={() => setIsOpen(false)}
-            onUploadingChange={setIsUploading}
-            onUrlChange={onChange}
-            presentation="onboarding-modal"
-            previewName={previewName}
-            showInlineUploadPreview
-          />
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }

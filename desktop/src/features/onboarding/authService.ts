@@ -24,6 +24,15 @@ import type { OnboardingServices } from "./contracts";
  */
 export type AuthFailure =
   | { kind: "email-taken" }
+  /**
+   * This computer's identity is already bound to an account under a different
+   * email. Signup escrows the local pubkey, so a machine that already has an
+   * account cannot create a second one under a new address: the answer is to
+   * sign in with the email that identity belongs to, never to retry. Common on
+   * Canary, which inherits the production identity from the legacy keychain
+   * service on every reset.
+   */
+  | { kind: "identity-taken" }
   | { kind: "invalid-credentials" }
   | { kind: "locked"; retryAfterSecs: number }
   | { kind: "unreachable" }
@@ -76,6 +85,11 @@ function failureFromResponse(body: unknown): AuthFailure {
   switch (readString(body, "error")) {
     case "email_taken":
       return { kind: "email-taken" };
+    // The address is free but this computer's key is not. Falling through to
+    // `unreachable` told the user to check a connection that was never the
+    // problem, and no amount of retrying can change the answer.
+    case "pubkey_taken":
+      return { kind: "identity-taken" };
     case "invalid_credentials":
     case "invalid_recovery_code":
       return { kind: "invalid-credentials" };

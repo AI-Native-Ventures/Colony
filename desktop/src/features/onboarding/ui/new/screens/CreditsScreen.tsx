@@ -57,17 +57,24 @@ export function defaultPack(packs: CreditPack[]): CreditPack | null {
 }
 
 /**
- * The note under the packs, which depends on where the buyer came from.
+ * The note beside the pack, which says only what is true of this purchase.
  *
- * The website-reading sentence only makes sense on a first purchase during
- * onboarding: that is the one payment the scrape spend can come off. A
- * returning buyer topping up has no website in the story.
+ * It used to promise that "anything we spent reading your website comes off
+ * this first payment" on every onboarding run, including the runs where the
+ * founder said they had no website and nothing was ever read. A refund
+ * against a charge that never happened is not reassurance, it is a claim the
+ * screen cannot keep, so the sentence is now gated on a reading having
+ * actually returned something.
+ *
+ * The rand sentence is here because the pack's price and the credits it
+ * grants are denominated differently, which is otherwise a surprise on the
+ * bank statement.
  */
 export function checkoutNote(
   currency: ChargeCurrency | null,
   state: CheckoutState,
   unconfirmed: boolean,
-  isFirstPurchase: boolean,
+  websiteRead: boolean,
 ): string {
   if (unconfirmed) {
     return "We could not reach Colony to confirm that payment. If you paid, your credits land automatically.";
@@ -75,14 +82,18 @@ export function checkoutNote(
   if (state === "abandoned") {
     return "That payment was not completed. Nothing has been charged.";
   }
-  if (currency !== "ZAR") {
-    return isFirstPurchase
-      ? "Anything we spent reading your website comes off this first payment."
-      : "This checkout bills in dollars, the same currency your credits are denominated in.";
+  const lines: string[] = [];
+  if (currency === "ZAR") {
+    lines.push(
+      "You pay in rands. Credits are counted in dollars, because that is what the thinking costs.",
+    );
   }
-  return isFirstPurchase
-    ? "Credits are priced in dollars because that is what the thinking costs. You pay in rands, and your bank handles the rest. Anything we spent reading your website comes off this first payment."
-    : "Credits are priced in dollars because that is what the thinking costs. You pay in rands, and your bank handles the rest.";
+  if (websiteRead) {
+    lines.push(
+      "Anything we spent reading your website comes off this first payment.",
+    );
+  }
+  return lines.join(" ");
 }
 
 type Props = {
@@ -99,12 +110,19 @@ type Props = {
    * an existing user has no stored account email to reuse.
    */
   email?: string;
-  /** Viewer pubkey, when known: enables the current-balance line. */
+  /** Viewer pubkey, when known: lets a missing webhook be caught by a
+   * balance read rather than stranding a buyer who has already paid. */
   pubkey?: string;
+  /**
+   * Whether a website was actually read for this founder. Gates the one
+   * sentence that promises money back against the reading spend, which must
+   * never appear for someone who never gave a website.
+   */
+  websiteRead?: boolean;
   /** Single-column layout for hosts narrower than onboarding's canvas. */
   wide?: boolean;
   /** Advances the onboarding flow. Outside onboarding there is no next
-   * step: the screen stays put and refreshes the balance instead. */
+   * step: the screen stays put. */
   onPaid?: () => void;
   onSkip?: () => void;
   onBack?: () => void;
@@ -116,11 +134,29 @@ type Props = {
   onRetryFinish?: () => void;
 };
 
+/**
+ * The credit ladder, one price preselected, and a way past it.
+ *
+ * The screen briefly sold a single pack, on the reasoning that a founder who
+ * has not started cannot choose between amounts of a thing they have never
+ * spent. In practice it read as the only price Colony has: someone who
+ * already knew they wanted more than R299 of credits had to pay the smallest
+ * amount first and go find Billing. So the whole catalogue is offered again,
+ * cheapest first and in the relay's own order, with "growth" preselected by
+ * id so the default answer is still one click away and adding tiers never
+ * moves it.
+ *
+ * "Later" is a real button on every track, the same size as Pay. It used to
+ * be the smallest text on the screen and only on the own-tool track, which
+ * left every other founder facing a payment wall on their way into a product
+ * they have not seen work yet.
+ */
 export function CreditsScreen({
   track,
   email,
   pubkey,
   payments,
+  websiteRead = false,
   wide,
   onPaid,
   onSkip,
@@ -142,9 +178,14 @@ export function CreditsScreen({
   // what is typed here could reach the relay.
   const [receiptEmail, setReceiptEmail] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
-  const [balanceCents, setBalanceCents] = useState<number | null>(null);
 
-  const effectiveEmail = (email ?? receiptEmail).trim();
+  // Normalised once, because the two readers disagreed otherwise. Onboarding
+  // hands over `answers.account?.email ?? ""`, and "" is not nullish: the
+  // field rendered (it tests `!email`) while `email ?? receiptEmail` kept the
+  // empty string, so a valid typed address was thrown away and Pay could
+  // never enable. One value now decides both.
+  const knownEmail = email?.trim() || undefined;
+  const effectiveEmail = knownEmail ?? receiptEmail.trim();
   const emailReady = effectiveEmail.length > 0 && isEmail(effectiveEmail);
 
   // Prices come from the relay so a change reaches users without a new
@@ -157,8 +198,6 @@ export function CreditsScreen({
         if (!live) return;
         setPacks(list.packs);
         setCurrency(list.currency);
-        // The default is a named pack, not a position: adding tiers to the
-        // catalogue must not move what a new buyer is defaulted into.
         setSelected(defaultPack(list.packs)?.id ?? null);
       })
       .catch(() => {
@@ -169,41 +208,13 @@ export function CreditsScreen({
     };
   }, [payments]);
 
-  // What the workspace already holds. Someone choosing between packs needs
-  // to know what they have; a failed read hides the line rather than
-  // inventing a zero.
-  useEffect(() => {
-    if (!pubkey) return undefined;
-    let live = true;
-    payments
-      .balance(pubkey)
-      .then((current) => {
-        if (live) setBalanceCents(current.usdCents);
-      })
-      .catch(() => {
-        if (live) setBalanceCents(null);
-      });
-    return () => {
-      live = false;
-    };
-  }, [payments, pubkey]);
-
-  const chosen = packs?.find((pack) => pack.id === selected) ?? null;
-
-  const refreshBalance = () => {
-    if (!pubkey) return;
-    payments
-      .balance(pubkey)
-      .then((current) => setBalanceCents(current.usdCents))
-      .catch(() => setBalanceCents(null));
-  };
-
-  /** Payment confirmed somewhere in the pipeline: land well either way. */
-  const finishPaid = () => {
-    onPaid?.();
-    refreshBalance();
-    setState("idle");
-  };
+  // What Pay will charge for. The selection is seeded by id rather than
+  // position, so adding tiers to the catalogue never moves what a new buyer
+  // is defaulted into; the fallback covers the render between the packs
+  // arriving and a selection existing.
+  const chosen = packs
+    ? (packs.find((pack) => pack.id === selected) ?? defaultPack(packs))
+    : null;
 
   const pay = async () => {
     if (!chosen || !emailReady || state === "leaving") return;
@@ -236,13 +247,15 @@ export function CreditsScreen({
       // screen because a callback went missing.
       const verified = await payments.verify(reference);
       if (verified.paid) {
-        finishPaid();
+        onPaid?.();
+        setState("idle");
         return;
       }
       if (pubkey) {
         const balance = await payments.balance(pubkey);
         if (balance.usdCents > 0) {
-          finishPaid();
+          onPaid?.();
+          setState("idle");
           return;
         }
       }
@@ -253,12 +266,15 @@ export function CreditsScreen({
     }
   };
 
+  // One sentence. The screen's job is to make a small ask legible, and the
+  // three paragraphs it used to carry made it read like a plan the founder
+  // had to understand before they could pay.
   const sub =
-    track === "colony"
-      ? "Finding customers, reaching out, research: work that carries on while you sleep. Your agents run on Colony, and credits are what they run on."
-      : track === "byo"
-        ? "You picked a tool you already pay for, so it covers your agents' thinking. Credits are for the work Colony runs itself, carrying on while you sleep."
-        : "Your agents run on Colony, and Colony runs on credits: model calls, searches, sends. Top up whenever the tin runs low.";
+    track === "byo"
+      ? "Your own tool does the thinking. Credits pay for the work Colony runs for you."
+      : "Credits pay for the thinking your agents do. Start small; top up in Billing any time.";
+
+  const note = checkoutNote(currency, state, unconfirmed, websiteRead);
 
   return (
     <div className="onb-screen" data-wide={wide ? "true" : undefined}>
@@ -269,13 +285,7 @@ export function CreditsScreen({
         <p className="onb-sub">{sub}</p>
       </div>
       <div className="onb-packs">
-        {balanceCents !== null ? (
-          <p className="onb-balance">
-            Current balance:{" "}
-            <strong>{formatPrice(balanceCents, "USD")} of credits</strong>
-          </p>
-        ) : null}
-        {packs === null ? (
+        {packs === null || packs.length === 0 ? (
           <p className="onb-note">
             {loadFailed
               ? "Could not load prices. Check your connection and try again."
@@ -287,7 +297,10 @@ export function CreditsScreen({
               type="button"
               key={pack.id}
               className="onb-pack"
-              data-selected={selected === pack.id}
+              data-testid={`credits-pack-${pack.id}`}
+              aria-pressed={pack.id === chosen?.id}
+              data-selected={pack.id === chosen?.id ? "true" : undefined}
+              disabled={state === "leaving"}
               onClick={() => setSelected(pack.id)}
             >
               <span className="onb-pack-grant">
@@ -295,7 +308,7 @@ export function CreditsScreen({
               </span>
               {currency ? (
                 <span className="onb-pack-price">
-                  {formatPrice(priceOf(pack, currency), currency)}
+                  {formatPrice(priceOf(pack, currency), currency)} once off
                 </span>
               ) : null}
             </button>
@@ -303,7 +316,7 @@ export function CreditsScreen({
         )}
       </div>
       <div className="onb-panel">
-        {!email ? (
+        {!knownEmail ? (
           <label className="onb-field" htmlFor="credits-receipt-email">
             <span className="onb-label">Receipt email</span>
             <input
@@ -332,13 +345,15 @@ export function CreditsScreen({
             Colony never sees your card details.
           </p>
         </div>
-        <p
-          className={`onb-note${
-            state === "abandoned" || unconfirmed ? " onb-note-warn" : ""
-          }`}
-        >
-          {checkoutNote(currency, state, unconfirmed, track !== undefined)}
-        </p>
+        {note ? (
+          <p
+            className={`onb-note${
+              state === "abandoned" || unconfirmed ? " onb-note-warn" : ""
+            }`}
+          >
+            {note}
+          </p>
+        ) : null}
       </div>
       {finishError && onRetryFinish ? (
         <p className="onb-note onb-note-warn">
@@ -355,6 +370,7 @@ export function CreditsScreen({
       <div className="onb-actions">
         <Button
           size="lg"
+          data-testid="onboarding-credits-pay"
           disabled={!chosen || !emailReady || state === "leaving" || finishing}
           onClick={() => void pay()}
         >
@@ -364,16 +380,18 @@ export function CreditsScreen({
               ? `Pay ${formatPrice(priceOf(chosen, currency), currency)}`
               : "Pay"}
         </Button>
-        {track === "byo" && onSkip ? (
+        {onSkip ? (
+          // A plain button rather than the shared one: the canvas paints
+          // every `Button` in this row as the solid ink pill, and two of
+          // those side by side would offer no primary.
           <button
             type="button"
-            className="onb-quiet-action"
+            className="onb-later"
+            data-testid="onboarding-credits-later"
             disabled={finishing}
             onClick={onSkip}
           >
-            {finishing
-              ? "Opening your workspace"
-              : "I will run my own agents for now"}
+            {finishing ? "Opening your workspace" : "Later"}
           </button>
         ) : null}
         {onBack ? (

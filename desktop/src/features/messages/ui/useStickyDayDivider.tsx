@@ -6,6 +6,7 @@ import type { VirtualizedTimelineItem } from "@/features/messages/lib/virtualize
 import { cn } from "@/shared/lib/cn";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { DayDivider } from "./DayDivider";
+import { activeDayDividerIndex } from "./stickyDayDivider";
 
 type StickyDayDividerArgs = {
   items: VirtualizedTimelineItem[];
@@ -72,21 +73,29 @@ export function useStickyDayDivider({
       ];
       for (const pill of sourcePills) pill.style.removeProperty("visibility");
 
-      let activeDividerIndex = -1;
+      let candidateIndex = -1;
       for (const [index, divider] of dayDividerItems.entries()) {
         if (list.getItemOffset(divider.index) > offset + pinnedTop) break;
-        activeDividerIndex = index;
+        candidateIndex = index;
       }
-      const candidateDivider = dayDividerItems[activeDividerIndex];
-      if (
-        activeDividerIndex > 0 &&
-        candidateDivider &&
-        (renderedDividerPillTop(candidateDivider) ?? -Infinity) > pinnedTop
-      ) {
-        activeDividerIndex -= 1;
-      }
+      const candidateDivider = dayDividerItems[candidateIndex];
+      const activeDividerIndex = activeDayDividerIndex({
+        scrollOffset: offset,
+        candidateIndex,
+        candidatePillTop: candidateDivider
+          ? renderedDividerPillTop(candidateDivider)
+          : null,
+        pinnedTop,
+      });
       const activeDivider = dayDividerItems[activeDividerIndex];
-      const nextDivider = dayDividerItems[activeDividerIndex + 1];
+      // Nothing pinned means nothing in transit either. Without this guard the
+      // divider that is merely NEXT would still be pulled into the incoming
+      // slot at the top of the timeline, hiding the real one and drawing its
+      // own copy over the first message: the same overlap by another route.
+      const nextDivider =
+        activeDividerIndex < 0
+          ? undefined
+          : dayDividerItems[activeDividerIndex + 1];
       const nextDividerTop = nextDivider
         ? (renderedDividerPillTop(nextDivider) ??
           list.getItemOffset(nextDivider.index) - offset)

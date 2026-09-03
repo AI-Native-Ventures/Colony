@@ -24,6 +24,15 @@
     max-width: 92rem;
     margin: 0 auto;
     text-align: left;
+    /* Content-sized, then centred by the stage: never stretched to fill the
+       stage row. A stretched screen has free space inside it, and measured in
+       Chrome that space goes into the screen's own auto rows rather than being
+       centred away, which walks the action row down to the bottom edge of the
+       window. Sized to its content the screen has no free space to give away,
+       and the stage splits the slack above and below it instead.
+       `safe` matters: a screen taller than the window would otherwise centre
+       to a top that cannot be scrolled back to, losing the headline. */
+    align-self: safe center;
   }
 
   :where(.onb-canvas) .onb-screen[data-wide="true"] {
@@ -37,9 +46,21 @@
 
   /* Column placement. The headline column spans both rows on the left;
      controls and their action row stack in the right column. */
+  /* Three content-sized slots, not three `auto` ones, and that is most of the
+     reason the account screen fits a 720-tall window.
+
+     Every row here already sizes to its item: the panel carries its own
+     max-height and scrolls inside it, and the action row is one button. What
+     `auto` added on top was slack. Only credits fills row 1, so on every other
+     screen an `auto` chooser row still took a share of the headline column's
+     contribution, which spans all three rows: 118px of nothing above the
+     panel. Measured in Chrome, `auto` rows also absorb whatever space is left
+     over rather than leaving it to `align-content: center` to place. Between
+     them those two put the account screen's Continue button at y 698, on the
+     bottom edge of the window, whatever the panel's height was. */
   :where(.onb-canvas)
     .onb-screen:not([data-wide="true"]):not([data-solo="true"]) {
-    grid-template-rows: auto auto auto;
+    grid-template-rows: repeat(3, min-content);
   }
 
   :where(.onb-canvas)
@@ -114,7 +135,7 @@
     margin-top: 0 !important;
   }
 
-  /* BusinessScreen groups its questions in fieldsets, which arrive with a
+  /* CompanyScreen groups its questions in fieldsets, which arrive with a
      browser border, padding and margin. */
   :where(.onb-canvas) fieldset.onb-options {
     border: 0;
@@ -231,7 +252,11 @@
   }
 
   /* Photo beside the name it illustrates, rather than on a screen of its own.
-     The field takes the remaining width so the row still reads as one input. */
+     The field takes the remaining width so the row still reads as one input.
+
+     These rules came back with the profile screen the legacy flow's avatar
+     step folded into: founder signup no longer sets a picture, but an
+     existing identity writing its first profile still does, on this circle. */
   :where(.onb-canvas) .onb-identity-row {
     display: flex;
     align-items: flex-end;
@@ -437,6 +462,20 @@
     background: #000000 !important;
   }
 
+  /* A primary action that cannot be pressed yet still has to be seen: it is
+     the thing the person is working toward. The shared Button's own disabled
+     state is `bg-primary` at half opacity, one fixed lilac for all five
+     canvases, which came out muddy rose on the amber screens and nearly
+     invisible on pink. These variables are the screen's own hue darkened
+     toward ink, derived in canvasTheme.ts and proved legible there, so the
+     opacity is turned back off: the colour carries the state now. */
+  :where(.onb-canvas) .onb-actions button[class*="inline-flex"]:disabled {
+    background: var(--onb-disabled-bg) !important;
+    color: var(--onb-disabled-ink) !important;
+    opacity: 1 !important;
+    box-shadow: none !important;
+  }
+
   :where(.onb-canvas) .onb-actions button[class*="inline-flex"] {
     height: auto !important;
     border-radius: 999px !important;
@@ -468,17 +507,6 @@
     align-items: center;
     width: 100%;
     text-align: center;
-  }
-
-  /* The key-import card centres itself against the viewport, which predates
-     this canvas: it was positioned independently of a small heading and a
-     bottom-docked action bar. Against a full-height redesign screen that
-     absolute placement lands the card underneath the headline. Inside the
-     canvas it returns to flow, and the screen's own grid spaces it. */
-  :where(.onb-canvas) .buzz-onboarding-key-import-position {
-    position: static;
-    transform: none;
-    margin-top: 2.5rem;
   }
 
   /* Back is a quiet control on the canvas, not a grey chip from the old
@@ -524,6 +552,12 @@
     background: transparent !important;
     box-shadow: none !important;
     padding: 0 !important;
+    /* The 224px floor exists so the nine-slice's opposing edge bands cannot
+       meet on a semi-transparent seam. With the texture off there is no seam
+       to protect, and the floor is pure dead space: on a 500px-tall window it
+       is what pushed the field down under the docked action. */
+    min-width: 0 !important;
+    min-height: 0 !important;
   }
 
   /* A solo screen is a hero: everything centres on the axis, and the sub
@@ -661,6 +695,85 @@
     min-height: 1.5rem;
     font-size: 0.9375rem;
     color: var(--onb-ink-soft);
+  }
+
+  /* The building screen's live list. One line per job, each ticking as it
+     finishes, so the wait shows what it produced rather than a spinner. */
+  :where(.onb-canvas) .onb-worklist {
+    display: grid;
+    gap: 0.75rem;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  :where(.onb-canvas) .onb-work {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 1rem;
+    line-height: 1.4;
+    color: var(--onb-ink-soft);
+    transition: color 320ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="done"],
+  :where(.onb-canvas) .onb-work[data-status="failed"] {
+    color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-work__label {
+    min-width: 0;
+  }
+
+  /* The mark carries the state on its own, so the line does not have to say
+     "done" in words as well as in colour. */
+  :where(.onb-canvas) .onb-work__mark {
+    position: relative;
+    flex: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 999px;
+    border: 2px solid var(--onb-rule);
+    transition:
+      background 320ms var(--onb-ease),
+      border-color 320ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="doing"] .onb-work__mark::after {
+    content: "";
+    position: absolute;
+    inset: -0.25rem;
+    border-radius: 999px;
+    border: 2px solid var(--onb-ink);
+    opacity: 0.35;
+    animation: onb-pulse 1.9s var(--onb-ease) infinite;
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="done"] .onb-work__mark {
+    background: var(--onb-ink);
+    border-color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="failed"] .onb-work__mark {
+    background: transparent;
+    border-color: var(--onb-ink);
+    border-style: dashed;
+  }
+
+  /* The draft the list ends on, and the openers that stand in for it when
+     there was no website to read. */
+  :where(.onb-canvas) .onb-draft {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+  }
+
+  :where(.onb-canvas) .onb-openers {
+    display: grid;
+    gap: 0.5rem;
   }
 
   /* Screen 5: found brains. */
@@ -808,9 +921,122 @@
     box-shadow: 0 0 0 3px rgba(23, 23, 23, 0.14);
   }
 
+  /* Screen 5a: three named ways of paying for the thinking, stacked. The
+     headings are what make them read as alternatives to one another rather
+     than as one long list of tools, which is the whole reason a founder
+     already paying for Claude was being steered toward a second bill. */
+  :where(.onb-canvas) .onb-lanes {
+    display: flex;
+    flex-direction: column;
+    gap: 1.125rem;
+    width: 100%;
+  }
+
+  :where(.onb-canvas) .onb-lane {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* The key sits in the strip under the grid, so it takes the width the
+     sign-in action would have taken beside it. */
+  :where(.onb-canvas) .onb-field--key {
+    width: 100%;
+  }
+
+  /* Screen 5a: the brains, as a two-column grid of compact tiles. Six
+     full-width rows carrying a dot, a name and a sentence each ran the whole
+     right column and made a list of six read as a list of twenty. The tile is
+     one line: mark, name, state. */
+  :where(.onb-canvas) .onb-options--tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  :where(.onb-canvas) .onb-option--tile {
+    gap: 0.625rem;
+    min-height: 3.25rem;
+    padding: 0.625rem 0.75rem;
+    border-radius: 0.875rem;
+  }
+
+  /* Fixed box: the marks arrive as square bitmaps, wide inline SVGs and a
+     lucide glyph, and only a fixed box lands all three on one baseline. */
+  :where(.onb-canvas) .onb-option__logo {
+    width: 1.5rem;
+    height: 1.5rem;
+    flex: none;
+    object-fit: contain;
+  }
+
+  /* A name that does not fit is clipped rather than allowed to wrap: a
+     wrapped tile is a taller tile, and the row of them stops being a row. */
+  :where(.onb-canvas) .onb-option--tile .onb-option__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :where(.onb-canvas) .onb-option__pill {
+    flex: none;
+    padding: 0.0625rem 0.4375rem;
+    border-radius: 999px;
+    border: 1px solid var(--onb-shell-line);
+    font-size: 0.6875rem;
+    color: var(--onb-ink-soft);
+    white-space: nowrap;
+  }
+
+  :where(.onb-canvas) .onb-option[data-status="ready"] .onb-option__pill {
+    border-color: hsl(160 60% 45% / 0.5);
+    color: hsl(160 60% 32%);
+  }
+
+  :where(.onb-canvas) .onb-option[data-status="needs-login"] .onb-option__pill {
+    border-color: hsl(38 92% 50% / 0.6);
+  }
+
+  /* A tile that cannot think yet is dimmed, not disabled: picking it is how
+     the install or the sign-in under the grid is asked for. */
+  :where(.onb-canvas) .onb-option--tile[data-status="not-installed"],
+  :where(.onb-canvas) .onb-option--tile[data-status="needs-login"] {
+    opacity: 0.7;
+  }
+
+  :where(.onb-canvas) .onb-option--tile[data-selected="true"] {
+    opacity: 1;
+    border-color: currentColor;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+
+  /* The one thing to do next, under the grid and belonging to the pick. */
+  :where(.onb-canvas) .onb-option-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    margin-top: 0.75rem;
+  }
+
+  :where(.onb-canvas) .onb-option-strip .onb-option__meta {
+    margin-top: 0;
+  }
+
+  @media (max-width: 900px) {
+    :where(.onb-canvas) .onb-options--tiles {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
   /* Title and status were both inline in one span and ran together as
      "Oh My PiReady". They stack now. */
-  :where(.onb-canvas) .onb-option > span:last-child {
+  /* Not on a tile: there the last span is the state pill, and stacking it
+     turns a pill into a block. */
+  :where(.onb-canvas) .onb-option:not(.onb-option--tile) > span:last-child {
     display: grid;
     gap: 0.15rem;
   }
@@ -934,10 +1160,15 @@
     color: var(--muted-foreground);
   }
 
+  /* The whole ladder wraps here, and the canvas is fixed to the viewport and
+     clips: anything this row grows by comes straight off the Pay button's
+     headroom at 1280x720, which is how Pay ended up below the fold with
+     nothing to scroll the first time seven tiles were on screen. So the
+     spacing is tight enough for the tiers to wrap into two rows. */
   :where(.onb-canvas) .onb-packs {
     display: flex;
-    gap: 0.625rem;
-    margin-top: 2rem;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
     flex-wrap: wrap;
     justify-content: center;
   }
@@ -946,9 +1177,9 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.25rem;
-    min-width: 8.5rem;
-    padding: 0.9rem 1.1rem;
+    gap: 0.125rem;
+    min-width: 7.25rem;
+    padding: 0.7rem 0.9rem;
     border-radius: 0.875rem;
     border: 1px solid var(--onb-shell-line);
     background: var(--onb-shell);
@@ -966,16 +1197,70 @@
     transform: translate3d(0, -2px, 0);
   }
 
+  /* Selected is filled, the rest stay outlined: with six tiers on screen a
+     border colour alone is not the difference between "this is what you are
+     paying" and "this is one of the options". The fill is mixed from
+     currentColor so it lands the same way on the light canvases and the dark
+     one, where ink flips. */
   :where(.onb-canvas) .onb-pack[data-selected="true"] {
     border-color: currentColor;
+    background: color-mix(in srgb, currentColor 16%, transparent);
     box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
+  }
+
+  :where(.onb-canvas) .onb-pack:disabled {
+    cursor: default;
+  }
+
+  :where(.onb-canvas) .onb-pack:disabled:hover {
+    transform: none;
+  }
+
+  /* "Later" is a real choice, so it is a real button the same size as Pay.
+     It cannot be the shared Button: the rule above paints every one of those
+     in this row as the solid ink pill, and two solid pills side by side
+     offer no primary. Outline against ink is the same control at a lower
+     volume. */
+  :where(.onb-canvas) .onb-later {
+    height: auto;
+    border-radius: 999px;
+    border: 1px solid var(--onb-ink);
+    background: transparent;
+    color: var(--onb-ink);
+    padding: 1.05rem 2.4rem;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    transition:
+      transform 280ms var(--onb-ease),
+      opacity 280ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-later:not(:disabled):hover {
+    transform: translate3d(0, -2px, 0);
+  }
+
+  :where(.onb-canvas) .onb-later:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :where(.onb-canvas) .onb-later {
+      transition: none;
+    }
+
+    :where(.onb-canvas) .onb-later:not(:disabled):hover {
+      transform: none;
+    }
   }
 
   /* The grant leads: it is the product. The price is secondary, because it
      is the same purchase whichever currency the gateway bills. */
   :where(.onb-canvas) .onb-pack-grant {
     font-weight: 600;
-    font-size: 1.0625rem;
+    font-size: 1rem;
   }
 
   :where(.onb-canvas) .onb-pack-price {
@@ -1125,6 +1410,76 @@
   :where(.onb-canvas) .onb-install-ant {
     width: 84px;
     margin: 0 auto 1.5rem;
+  }
+
+  /* Machine pages: "Enter your private key", "Unlock your account" and
+     "Welcome back". These three are the sign-in side of onboarding rather than
+     steps of the first-run flow, and they share a shape the main flow's
+     screens do not: one headline, one control group, and a primary action that
+     is docked at the foot of the window instead of sitting in an action row.
+     Everything below is scoped to `.onb-machine-screen` so none of it reaches
+     the flow's own screens.
+
+     The specificity here is deliberate: the right-column placement rules above
+     are four classes deep (a class plus two `:not()` attribute tests plus the
+     target), so a `:where()`-scoped rule would lose to them. */
+
+  /* Key import has nothing above its panel and nothing below it, so the
+     three-row right column would leave an empty row and a 2.5rem gap on each
+     side of the form. It takes the whole column and centres against the
+     headline instead. Sign-in keeps the standard rows: it does have an action
+     row, and a panel spanning every row would sit underneath it. */
+  .onb-canvas .onb-screen.onb-machine-screen[data-machine-page="key-import"]
+    .onb-panel {
+    grid-row: 1 / -1;
+    align-self: center;
+  }
+
+  /* Short windows. The headline is sized for a hero on a full-height screen;
+     at 720px and below it is the reason the form lands under the docked
+     action, and on the passphrase stage it pushed the heading clean off the
+     top of the window. These are the sign-in screens, so the form is the
+     subject and the type steps back to make room for it. */
+  @media (max-height: 46rem) {
+    .onb-canvas .onb-screen.onb-machine-screen {
+      row-gap: 1.25rem;
+    }
+
+    .onb-canvas .onb-screen.onb-machine-screen .onb-headline {
+      font-size: clamp(2rem, 4.6vw, 3.25rem);
+    }
+
+    .onb-canvas .onb-screen.onb-machine-screen .onb-sub {
+      margin-top: 0.75rem;
+      font-size: 1rem;
+    }
+  }
+
+  /* Short windows. Placed last on purpose: these are the same properties the
+     rules above set, at the same specificity, so source order is what makes
+     them win.
+
+     The window minimum is 800x500 (src-tauri/tauri.conf.json) and a 1280x720
+     laptop is the ordinary case, so the flow's resting rhythm has to be the
+     one for a tall window rather than the only one. At 720 the account
+     screen's Continue button ran to y 718 and touched the bottom edge. The
+     spacing tightens here instead; the stage scrolls behind this for windows
+     shorter still, but a screen a person can read without scrolling is worth
+     half a centimetre of air. */
+  @media (max-height: 840px) {
+    :where(.onb-canvas) .onb-screen {
+      row-gap: 1.25rem;
+    }
+
+    :where(.onb-canvas) .onb-panel,
+    :where(.onb-canvas) .onb-fieldset,
+    :where(.onb-canvas) .onb-stack {
+      gap: 1.375rem;
+    }
+
+    :where(.onb-canvas) .onb-actions {
+      margin-top: 1.5rem;
+    }
   }
 
   /* Reduced motion: one gate per mechanism. CSS-driven animation is switched

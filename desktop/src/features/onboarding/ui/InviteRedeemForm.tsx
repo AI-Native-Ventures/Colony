@@ -57,7 +57,13 @@ type InviteRedeemFormProps = {
   onConnect?: (relayWsUrl: string) => void;
   onRedeem: (relayWsUrl: string, code: string, policyReceipt?: string) => void;
   placeholder?: string;
-  variant?: "add-community" | "default" | "onboarding-spotlight";
+  /**
+   * "canvas" is the onboarding canvas treatment: an underline field and the
+   * canvas action row, matching the machine screens. It is the same form
+   * logic as every other variant, so invite parsing, bare codes and join
+   * policies behave identically wherever someone pastes a link.
+   */
+  variant?: "add-community" | "canvas" | "default" | "onboarding-spotlight";
 };
 
 export function InviteRedeemForm({
@@ -144,6 +150,7 @@ export function InviteRedeemForm({
     normalizedRelayUrl !== null;
   const isOnboardingSpotlight = variant === "onboarding-spotlight";
   const isAddCommunity = variant === "add-community";
+  const isCanvas = variant === "canvas";
   const showInvalidInviteTip =
     isOnboardingSpotlight && inviteInput.trim().length > 0 && !canSubmit;
 
@@ -287,11 +294,14 @@ export function InviteRedeemForm({
       className={
         isOnboardingSpotlight
           ? ONBOARDING_PRIMARY_CTA_CLASS
-          : isAddCommunity
-            ? "h-10"
-            : "h-10 w-full"
+          : isCanvas
+            ? undefined
+            : isAddCommunity
+              ? "h-10"
+              : "h-10 w-full"
       }
       data-testid="invite-redeem-submit"
+      size={isCanvas ? "lg" : undefined}
       disabled={
         !canSubmit ||
         isRedeeming ||
@@ -313,6 +323,12 @@ export function InviteRedeemForm({
         />
       ) : isOnboardingSpotlight ? (
         "Next"
+      ) : isCanvas ? (
+        joinPolicy ? (
+          "Accept and join"
+        ) : (
+          "Continue"
+        )
       ) : isAddCommunity ? (
         joinPolicy ? (
           "Accept and join"
@@ -327,7 +343,16 @@ export function InviteRedeemForm({
     </Button>
   );
 
-  const cancelButton = (
+  const cancelButton = isCanvas ? (
+    <button
+      className="onb-quiet-action"
+      disabled={isRedeeming}
+      onClick={onCancel}
+      type="button"
+    >
+      Back
+    </button>
+  ) : (
     <Button
       className={
         isOnboardingSpotlight
@@ -349,9 +374,11 @@ export function InviteRedeemForm({
         "flex w-full flex-col",
         isOnboardingSpotlight
           ? "relative items-center"
-          : isAddCommunity
-            ? "gap-4"
-            : "gap-3",
+          : isCanvas
+            ? "gap-6"
+            : isAddCommunity
+              ? "gap-4"
+              : "gap-3",
       )}
       id={formId}
       onSubmit={handleSubmit}
@@ -392,6 +419,23 @@ export function InviteRedeemForm({
             </label>
           </div>
         </Card>
+      ) : isCanvas ? (
+        <label className="onb-field" htmlFor="invite-input">
+          <span className="onb-label">Invite link or community URL</span>
+          <Input
+            autoComplete="off"
+            autoCorrect="off"
+            autoFocus
+            data-testid="invite-redeem-input"
+            disabled={isRedeeming}
+            id="invite-input"
+            onChange={handleInviteInputChange}
+            placeholder={placeholder ?? "Paste the link you were sent"}
+            spellCheck={false}
+            type="text"
+            value={inviteInput}
+          />
+        </label>
       ) : (
         <div className="space-y-1.5 text-left">
           <label
@@ -441,7 +485,21 @@ export function InviteRedeemForm({
         </p>
       ) : null}
 
-      {needsRelayField ? (
+      {needsRelayField && isCanvas ? (
+        <label className="onb-field" htmlFor="invite-relay-url">
+          <span className="onb-label">Relay URL</span>
+          <Input
+            disabled={isRedeeming}
+            id="invite-relay-url"
+            onChange={handleRelayInputChange}
+            placeholder="wss://relay.example.com"
+            type="text"
+            value={bareCodeRelayUrl}
+          />
+        </label>
+      ) : null}
+
+      {needsRelayField && !isCanvas ? (
         <div
           className={cn(
             "space-y-1.5 text-left",
@@ -467,11 +525,27 @@ export function InviteRedeemForm({
       ) : null}
 
       {policyError ? (
-        <p className="text-center text-sm text-destructive">{policyError}</p>
+        <p
+          className={
+            isCanvas
+              ? "onb-note onb-note-warn"
+              : "text-center text-sm text-destructive"
+          }
+        >
+          {policyError}
+        </p>
       ) : null}
 
       {error ? (
-        <p className="text-center text-sm text-destructive">{error}</p>
+        <p
+          className={
+            isCanvas
+              ? "onb-note onb-note-warn"
+              : "text-center text-sm text-destructive"
+          }
+        >
+          {error}
+        </p>
       ) : null}
 
       <AnimatePresence initial={false}>
@@ -534,6 +608,11 @@ export function InviteRedeemForm({
           {submitButton}
           {cancelButton}
         </OnboardingFooter>
+      ) : isCanvas ? (
+        <div className="onb-actions">
+          {submitButton}
+          {cancelButton}
+        </div>
       ) : isAddCommunity ? (
         <div className="flex justify-end pt-1">{submitButton}</div>
       ) : (

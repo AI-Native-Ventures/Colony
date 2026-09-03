@@ -22,6 +22,7 @@ import {
   welcomeTeammateHasExpectedAccess,
 } from "@/features/onboarding/welcomeGuide";
 import { isWelcomeChannel } from "@/features/onboarding/welcome";
+import { postZeroCreditsNoticeIfNeeded } from "@/features/onboarding/welcomeCreditsNotice";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { useThreadReplies } from "@/features/messages/useThreadReplies";
 import {
@@ -701,7 +702,16 @@ export function useWelcomeKickoff(
         await queryClient.invalidateQueries({
           queryKey: managedAgentsQueryKey,
         });
-        if (openerAlreadySent) return;
+        if (openerAlreadySent) {
+          // A resumed session: the opener is already in the channel, so the
+          // notice is the only thing still owed.
+          await postZeroCreditsNoticeIfNeeded({
+            agentPubkey: resolvedAgentSet.lead.pubkey,
+            channelId,
+            credentialMode: globalConfig.credential_mode,
+          });
+          return;
+        }
 
         const leadStartIndex = agentsToStart.findIndex(
           (agent) => agent.pubkey === resolvedAgentSet.lead.pubkey,
@@ -751,6 +761,13 @@ export function useWelcomeKickoff(
           ),
         );
         clearFounderBrief();
+        // After the opener, so the channel reads as a greeting followed by
+        // the one thing standing between the founder and an answer.
+        await postZeroCreditsNoticeIfNeeded({
+          agentPubkey: resolvedAgentSet.lead.pubkey,
+          channelId,
+          credentialMode: globalConfig.credential_mode,
+        });
         if (!isCancelled()) onKickoffOpenerPosted?.(openerResult.eventId);
       } catch (error) {
         console.warn("Failed to start the Welcome team kickoff.", error);
@@ -763,6 +780,7 @@ export function useWelcomeKickoff(
     agentAccessOwnerOnly,
     channelId,
     configLoading,
+    globalConfig.credential_mode,
     isActiveWelcome,
     onKickoffOpenerPosted,
     queryClient,

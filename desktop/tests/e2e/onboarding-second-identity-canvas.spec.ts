@@ -49,9 +49,22 @@ async function walkCanvasFlow(
   await expect(
     page.getByRole("heading", { name: "Now, your company." }),
   ).toBeVisible();
-  await shot("company");
   await page.getByLabel("Company name").fill(companyName);
+  await page
+    .getByRole("button", { name: "Not yet, we are still building" })
+    .click();
+  await page.getByRole("button", { name: "No", exact: true }).click();
+  await shot("company");
   await page.getByRole("button", { name: "Create workspace" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Tell us what you do." }),
+  ).toBeVisible({ timeout: 20_000 });
+  await shot("summary");
+  await page
+    .getByPlaceholder("We repair and service cars in Johannesburg.")
+    .fill("We service and repair cars for owners around Johannesburg.");
+  await page.getByRole("button", { name: "Looks right" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
@@ -60,31 +73,10 @@ async function walkCanvasFlow(
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
-  ).toBeVisible();
-  await shot("work-context");
-  await page
-    .getByRole("button", { name: "Not yet, we are still building" })
-    .click();
-  await page.getByRole("button", { name: "No", exact: true }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible();
-  await shot("summary");
-  await page
-    .getByPlaceholder("We repair and service cars in Johannesburg.")
-    .fill("We service and repair cars for owners around Johannesburg.");
-  await page.getByRole("button", { name: "Looks right" }).click();
-
-  await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
   await shot("tin");
-  await page
-    .getByRole("button", { name: "I will run my own agents for now" })
-    .click();
+  await page.getByTestId("onboarding-credits-later").click();
 
   await expect(page.locator(".onb-canvas")).toHaveCount(0, {
     timeout: 30_000,
@@ -100,9 +92,7 @@ test("scenario A: genuinely fresh machine, fresh identity", async ({
   page,
 }) => {
   const identity = { ...TEST_IDENTITIES.tyler, username: "" };
-  await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+  await page.addInitScript(() => {});
   await seedActiveIdentity(page, identity);
   await installMockBridge(page, undefined, {
     skipOnboardingSeed: true,
@@ -144,9 +134,7 @@ test("scenario B: a second fresh identity on a machine that already has a commun
 }) => {
   const newIdentity = { ...TEST_IDENTITIES.alice, username: "" };
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+  await page.addInitScript(() => {});
   // installMockBridge's default (no skipCommunitySeed) seeds a community
   // stamped with tyler's pubkey -- simulating a machine that already has a
   // workspace from a first account. Then override the active identity to a

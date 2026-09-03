@@ -25,11 +25,19 @@ export const STARTER_PERSONA_NAMES: Record<StarterPersonaId, string> = {
   [STARTER_PERSONA_IDS.honey]: "Forager",
 };
 
-/** Kickoff display order: lead first, then teammates. */
+/**
+ * The starting lineup a new company opens with, in display order.
+ *
+ * Scout alone. Forager and Tender still exist as built-in definitions, and an
+ * install that already has them keeps them, but they are no longer seeded
+ * active for a fresh company. Mirrors `default_active` in
+ * desktop/src-tauri/src/managed_agents/personas.rs, which is authoritative.
+ *
+ * This is the lineup, not the catalog: iterate it to render what a new company
+ * starts with, never to enumerate every built-in persona.
+ */
 export const STARTER_PERSONA_ORDER: readonly StarterPersonaId[] = [
   STARTER_PERSONA_IDS.fizz,
-  STARTER_PERSONA_IDS.honey,
-  STARTER_PERSONA_IDS.bumble,
 ];
 
 export function starterPersonaName(id: StarterPersonaId): string {

@@ -1,5 +1,10 @@
 // desktop/src/features/onboarding/ui/new/machineCanvas.ts
-import { HUE_CANVAS, type CanvasTheme, type HueName } from "./canvasTheme";
+import {
+  disabledActionColours,
+  HUE_CANVAS,
+  type CanvasTheme,
+  type HueName,
+} from "./canvasTheme";
 
 /**
  * The machine-setup screens, in the order someone walks them.
@@ -31,5 +36,6 @@ const MACHINE_HUE: Record<MachineStep, HueName> = {
 
 export function machineCanvasFor(step: MachineStep): CanvasTheme {
   const hue = MACHINE_HUE[step];
-  return { base: HUE_CANVAS[hue], ink: "dark", hue };
+  const base = HUE_CANVAS[hue];
+  return { base, ink: "dark", hue, ...disabledActionColours(base) };
 }

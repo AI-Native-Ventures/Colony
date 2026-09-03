@@ -1,10 +1,10 @@
 {
   "files": {
     "rust_total": 445,
-    "rust_lines": 173425,
+    "rust_lines": 173437,
     "tauri_coupled": 177,
     "portable": 268,
-    "portable_lines": 98977,
+    "portable_lines": 98972,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -750,7 +750,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:274",
+        "src/features/communities/useCommunityInit.ts:276",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -2307,7 +2307,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/onboarding/flow/completeFirstRunIo.ts:26",
+        "src/features/onboarding/flow/completeFirstRunIo.ts:27",
         "src/parity/session/script.ts:1415",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
@@ -2329,7 +2329,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:260",
+        "src/features/communities/useCommunityInit.ts:262",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:37"
       ]
@@ -3273,7 +3273,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/onboarding/ui/ProviderLaneChoice.tsx:212",
-        "src/shared/api/tauriSubscriptions.ts:68"
+        "src/features/onboarding/ui/new/screens/BrainScreen.tsx:31",
+        "src/features/onboarding/ui/new/screens/brainLanes.ts:81"
       ]
     },
     "scan_onboarding_company_website": {

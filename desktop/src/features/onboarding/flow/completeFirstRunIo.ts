@@ -8,6 +8,7 @@ import { updateProfile } from "@/shared/api/tauriProfiles";
 import { markCommunityOnboardingComplete } from "../communityOnboarding";
 import { initializeStarterChannels } from "../hooks";
 import { takePendingWelcomeChannelForDirectEntry } from "../welcome";
+import { welcomeKickoffContextClientTag } from "../welcomeKickoffContext";
 import type { CompleteFirstRunIo } from "./completeFirstRun";
 
 /**
@@ -25,12 +26,16 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
   // The marker travels as a client tag, not a Block reference: `welcomeKickoff`
   // and `has_managed_agent_channel_message_marker` both look for
   // `["client", marker]`, and `clientTags` is the validated channel for it.
+  //
+  // The second tag says what this message *is* rather than which send it was:
+  // the founder's own signup context, which the timeline renders as one quiet
+  // line so Scout's reply is the first full message they read.
   sendFirstTask: async (channelId, content, marker) => {
     const sent = await sendChannelMessage({
       channelId,
       content,
       parentEventId: null,
-      clientTags: [["client", marker]],
+      clientTags: [["client", marker], welcomeKickoffContextClientTag()],
     });
     return { eventId: sent.eventId };
   },

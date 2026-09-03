@@ -23,9 +23,14 @@ import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkey
 import { huddleWindowChannelId } from "@/features/huddle/lib/huddleWindow";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
-import { isFreshFounder } from "@/features/onboarding/freshFounder";
-import { isNewOnboardingEnabled } from "@/features/onboarding/newOnboardingFlag";
+import {
+  clearFounderRunRequested,
+  isFounderRunRequested,
+  markFounderRunRequested,
+  shouldRunCanvasFirstRun,
+} from "@/features/onboarding/freshFounder";
 import { CanvasFirstRunHost } from "@/features/onboarding/ui/new/CanvasFirstRunHost";
+import { ExistingIdentityProfileFlow } from "@/features/onboarding/ui/new/ExistingIdentityProfileFlow";
 import {
   type FirstCommunityPage,
   useCommunityOnboarding,
@@ -39,7 +44,6 @@ import {
   MachineOnboardingFlow,
   type MachineOnboardingPage,
 } from "@/features/onboarding/ui/MachineOnboardingFlow";
-import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
@@ -57,7 +61,7 @@ import {
   onAddCommunityPrefillAvailable,
   requestAddCommunityPrefill,
 } from "@/features/communities/addCommunityPrefill";
-import { WelcomeSetup } from "@/features/communities/ui/WelcomeSetup";
+import { WorkspaceSetupFlow } from "@/features/onboarding/ui/new/WorkspaceSetupFlow";
 import { CommunityApplyErrorScreen } from "@/features/communities/ui/CommunityApplyErrorScreen";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
 import { setAvatarProfileSyncQueryClient } from "@/features/profile/avatarProfileSync";
@@ -262,35 +266,23 @@ function AppReady({
   }
 
   if (onboarding.stage === "onboarding") {
-    // The redesigned flow owns every "Start with Colony" fresh-identity
-    // signup (CanvasFirstRunHost in CommunityApp, gated by isFreshFounder,
-    // which claims the workspace as one of its own steps) -- including a
-    // second identity signing up on a machine that already has a different
-    // identity's community (isFreshFounder scopes its community check to the
-    // signing-up pubkey; see freshFounder.ts).
+    // Everything that reaches this gate is an identity that already exists
+    // on this machine and has no relay profile yet: "bring your own key", a
+    // reinstall, a second machine, or the dev-only forced-fresh replay
+    // (VITE_BUZZ_FORCE_FRESH_ONBOARDING). A brand-new founder never arrives
+    // here -- CanvasFirstRunHost in CommunityApp owns that walk, gated by
+    // isFreshFounder, because claiming the workspace is one of its steps.
     //
-    // What legitimately still reaches this legacy flow, none of which is an
-    // ordinary signup:
-    //   - identity-lost recovery (onboarding.identityLost): the keyring was
-    //     cleared after a migration, and OnboardingFlow's key-import page has
-    //     no canvas equivalent to re-enter an existing nsec.
-    //   - dev-only forced-fresh replay (VITE_BUZZ_FORCE_FRESH_ONBOARDING),
-    //     which reruns onboarding against an EXISTING identity and never
-    //     ships to production.
-    //   - an imported identity (never marked fresh -- see freshFounder.ts)
-    //     that has no relay profile yet after creating or joining a
-    //     community through WelcomeSetup/CommunityOnboardingFlow. This is
-    //     "bring your own key", not "sign up", and predates the canvas
-    //     project; it is not covered by CanvasFirstRunHost.
-    //   - VITE_NEW_ONBOARDING=0 (the redesign's kill switch): when the
-    //     canvas flow is disabled entirely, this IS the onboarding path, by
-    //     design, for every signup.
+    // Identity-lost recovery does not arrive here either: a lost keyring
+    // pins machine onboarding to its own stage, so the canvas key-import
+    // screen answers it before CommunityApp is ever mounted.
+    //
+    // The only open question left, then, is what to call them.
     return (
-      <OnboardingFlow
-        actions={onboarding.flow.actions}
-        identityLost={onboarding.identityLost}
-        initialProfile={onboarding.flow.initialProfile}
+      <ExistingIdentityProfileFlow
+        initialProfile={onboarding.flow.initialProfile.profile}
         key={onboarding.currentPubkey ?? "anonymous"}
+        onComplete={onboarding.flow.actions.complete}
       />
     );
   }
@@ -545,7 +537,7 @@ function CommunityApp({
   // The flow must keep ONE stable position in the element tree across every
   // stage. Rendering it from a different slot when the stage flips to
   // "entering" would remount it — React state resets and the "Meet your
-  // starter team" screen visibly restarts mid-handoff.
+  // Chief of Staff" screen visibly restarts mid-handoff.
   const isEnteringCurtain = transaction?.stage === "entering";
 
   // The app mounts (and starts loading data) beneath the splash overlay; the
@@ -573,22 +565,24 @@ function CommunityApp({
   const [canvasRunState, setCanvasRunState] = useState<
     "unstarted" | "active" | "finished"
   >("unstarted");
+  // Scoped to this identity: a community stamped with a DIFFERENT pubkey (an
+  // earlier account on this machine) must not disqualify a genuinely new
+  // signup from the canvas flow. `community.pubkey` is display-only, but it
+  // is the only local signal of "which identity already has a workspace
+  // here": see Community.pubkey's doc.
+  const hasOwnCommunity = communities.some(
+    (community) => community.pubkey === currentPubkey,
+  );
+  // An existing identity that asked to create a community walks the same
+  // canvas run, minus the two screens that make an account.
+  const [isRequestedFounderRun, setIsRequestedFounderRun] = useState(() =>
+    isFounderRunRequested(currentPubkey),
+  );
   const canvasEligible =
-    isNewOnboardingEnabled(import.meta.env) &&
     !transaction &&
     canvasRunState !== "finished" &&
     (canvasRunState === "active" ||
-      isFreshFounder({
-        pubkey: currentPubkey,
-        // Scoped to this identity: a community stamped with a DIFFERENT
-        // pubkey (an earlier account on this machine) must not disqualify a
-        // genuinely new signup from the canvas flow. `community.pubkey` is
-        // display-only, but it is the only local signal of "which identity
-        // already has a workspace here" — see Community.pubkey's doc.
-        hasOwnCommunity: communities.some(
-          (community) => community.pubkey === currentPubkey,
-        ),
-      }));
+      shouldRunCanvasFirstRun({ pubkey: currentPubkey, hasOwnCommunity }));
   useEffect(() => {
     if (canvasEligible && canvasRunState === "unstarted") {
       setCanvasRunState("active");
@@ -602,18 +596,41 @@ function CommunityApp({
         activeRelayUrl={activeCommunity?.relayUrl ?? null}
         communityApplied={communityApplied}
         currentPubkey={currentPubkey}
-        onFinished={() => setCanvasRunState("finished")}
+        existingIdentity={isRequestedFounderRun}
+        onFinished={() => {
+          clearFounderRunRequested(currentPubkey);
+          setIsRequestedFounderRun(false);
+          setCanvasRunState("finished");
+        }}
+        onLeaveRun={() => {
+          clearFounderRunRequested(currentPubkey);
+          setIsRequestedFounderRun(false);
+          setCanvasRunState("unstarted");
+        }}
         onRequestSignIn={onRequestSignIn}
       />
     );
   } else if (!transaction) {
     if (community.needsSetup) {
-      // Show welcome setup for first-run users with no communities
+      // No community on this machine yet: join one, create one, or reconnect
+      // one this identity already owns.
       appContent = (
-        <WelcomeSetup
+        <WorkspaceSetupFlow
           initialPage={resumeFirstCommunityPage ?? undefined}
           onBack={
             isFindingCommunityAfterLeave ? undefined : onBackToMachineConfig
+          }
+          // Creating a community is the founder walk, so it runs the canvas
+          // one rather than a form of its own. The marker is what survives a
+          // relaunch halfway through it.
+          onCreateCommunity={
+            currentPubkey
+              ? () => {
+                  markFounderRunRequested(currentPubkey);
+                  setIsRequestedFounderRun(true);
+                  setCanvasRunState("active");
+                }
+              : undefined
           }
         />
       );

@@ -1,5 +1,5 @@
 // desktop/src/features/onboarding/ui/new/MachineCanvas.tsx
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { AntScatter } from "./AntScatter";
 import {
@@ -18,25 +18,46 @@ type Props = {
    * a chore before the product has said what it is.
    */
   showStep?: boolean;
+  /**
+   * Which gate this is, for the specs that wait on one. Defaults to machine
+   * onboarding because that is what wore the canvas first; screens that are
+   * not machine setup name themselves, so a spec asserting the machine flow
+   * has gone does not match a later screen wearing the same canvas.
+   */
+  testId?: string;
+  /** For a canvas that covers another one, which needs to stack above it. */
+  className?: string;
+  /** Merged over the hue, for a canvas that fades itself out. */
+  style?: CSSProperties;
   children: ReactNode;
 };
 
-export function MachineCanvas({ step, showStep = true, children }: Props) {
+export function MachineCanvas({
+  step,
+  showStep = true,
+  testId = "machine-onboarding-gate",
+  className,
+  style,
+  children,
+}: Props) {
   const theme = machineCanvasFor(step);
   const index = MACHINE_STEPS.indexOf(step);
 
   return (
     <div
-      className="onb-canvas"
+      className={className ? `onb-canvas ${className}` : "onb-canvas"}
       data-ink={theme.ink}
-      data-testid="machine-onboarding-gate"
-      style={{ background: theme.base }}
+      data-testid={testId}
+      style={{ background: theme.base, ...style }}
     >
       <div className="onb-grain" />
       <AntScatter hue={theme.hue} />
+      {/* Both numbers are padded. The marker is a mono chapter mark, and
+          "01 / 2" reads as a typo beside the flow's own "01 / 10". */}
       {showStep ? (
         <p className="onb-step">
-          {String(index + 1).padStart(2, "0")} / {MACHINE_STEPS.length}
+          {String(index + 1).padStart(2, "0")} /{" "}
+          {String(MACHINE_STEPS.length).padStart(2, "0")}
         </p>
       ) : null}
       <div className="onb-stage">{children}</div>

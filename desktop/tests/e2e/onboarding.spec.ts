@@ -7,7 +7,6 @@ import { GUIDE_NAME, STARTER_PERSONA_IDS } from "../helpers/starterTeam";
 import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
-  passThroughBackupStep,
   seedActiveIdentity,
 } from "../helpers/onboarding";
 
@@ -257,13 +256,13 @@ async function seedCommunityProfileStage(page: Page, id: string) {
 }
 
 async function uploadCommunityAvatar(page: Page, filename: string) {
-  await page.getByTestId("community-avatar-open").click();
-  await page.getByTestId("community-avatar-input").setInputFiles({
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await page.getByTestId("onboarding-avatar-input").setInputFiles({
     buffer: Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"),
     mimeType: "image/png",
     name: filename,
   });
-  await page.getByTestId("community-avatar-done").click();
+  await page.getByTestId("onboarding-avatar-done").click();
 }
 
 async function readHomeSeenStorageKeys(page: Page) {
@@ -659,18 +658,21 @@ async function expectWelcomeGuideIntro(
 async function expectIncompleteOnboarding(page: Page) {
   await expect(page.getByTestId("onboarding-gate")).toBeVisible();
   await expectShellHidden(page);
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect(page.getByTestId("onboarding-display-name")).toHaveValue("");
 }
 
 async function completeProfileOnboarding(page: Page) {
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
   await page
     .getByTestId("onboarding-avatar-url")
     .fill("https://example.com/onboarding-avatar.png");
+  await page.getByTestId("onboarding-avatar-done").click();
+  // One screen, one action: an identity that already exists has nothing left
+  // to answer once the name is in, and the key it holds was backed up (or
+  // deliberately not) when the machine flow created it.
   await page.getByTestId("onboarding-next").click();
-  await passThroughBackupStep(page);
 }
 
 test("completed users skip the loading gate while profile is still settling", async ({
@@ -727,9 +729,7 @@ test("non-local runtime override keeps community selection without release flag"
   });
   await page.goto("/");
 
-  await expect(
-    page.getByRole("button", { name: /Join a community/ }),
-  ).toBeVisible();
+  await expect(page.getByTestId("community-choice-join")).toBeVisible();
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
   await expect(page.getByTestId("membership-denied")).toHaveCount(0);
   await expect(page.getByTestId("restore-previous-community")).toHaveCount(0);
@@ -802,12 +802,8 @@ test("recovers legacy auto-connected default community after membership denial",
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await page.getByTestId("onboarding-next").click();
 
-  await expect(
-    page.getByRole("button", { name: /Create a community/ }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: /Join a community/ }),
-  ).toBeVisible();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+  await expect(page.getByTestId("community-choice-join")).toBeVisible();
   await expect(page.getByTestId("membership-denied")).toHaveCount(0);
   await expect
     .poll(async () =>
@@ -940,9 +936,7 @@ test("non-local default auto-connects when the release flag is enabled", async (
       pubkey: BLANK_TYLER_IDENTITY.pubkey,
       hasNsec: false,
     });
-  await expect(
-    page.getByRole("button", { name: /Join a community/ }),
-  ).toHaveCount(0);
+  await expect(page.getByTestId("community-choice-join")).toHaveCount(0);
   await expect(page.getByTestId("community-choice-create")).toHaveCount(0);
   await expect
     .poll(
@@ -962,6 +956,20 @@ test("non-local default auto-connects when the release flag is enabled", async (
   ).toEqual([]);
 });
 
+/**
+ * Open the owned-communities screen: the one that lists the communities this
+ * key already owns.
+ *
+ * "Create a community" on the choice screen runs the canvas founder walk now,
+ * so the door to this screen is the reconnect route: someone who owns one
+ * already and wants it back, and creating is the one thing this screen no
+ * longer does itself.
+ */
+async function openOwnedCommunitySetup(page: Page) {
+  await page.getByTestId("community-choice-existing").click();
+  await page.getByTestId("existing-choice-owner").click();
+}
+
 test("first-community choices route join, create, owner, and member intents", async ({
   page,
 }) => {
@@ -979,47 +987,31 @@ test("first-community choices route join, create, owner, and member intents", as
   });
   await page.goto("/");
 
-  await expect(
-    page.getByRole("button", { name: /Join a community/ }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: /Create a community/ }),
-  ).toBeVisible();
-  const existing = page.getByRole("button", {
-    name: /I already have a community/,
-  });
+  await expect(page.getByTestId("community-choice-join")).toBeVisible();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+  const existing = page.getByTestId("community-choice-existing");
   await expect(existing).toBeVisible();
   await existing.click();
   // Owner/member split lives on its own page, mirroring the hub layout.
   await expect(
     page.getByRole("heading", { name: "Reconnect to your community" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "I own the community" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "I’m a member or admin" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("existing-choice-owner")).toBeVisible();
+  await expect(page.getByTestId("existing-choice-member")).toBeVisible();
 
-  await page.getByRole("button", { name: "I’m a member or admin" }).click();
+  await page.getByTestId("existing-choice-member").click();
   await expect(
     page.getByRole("heading", { name: "Reconnect to your community" }),
   ).toBeVisible();
   const accessInput = page.getByTestId("invite-redeem-input");
-  await expect(accessInput).toHaveAttribute(
-    "placeholder",
-    "Invite link or community URL",
-  );
   await accessInput.fill("https://default.example.com");
   await expect(page.getByTestId("invite-redeem-submit")).toBeEnabled();
   // Back from the member form returns to the role choice, then to the hub.
   await page.getByRole("button", { name: "Back" }).click();
-  await expect(
-    page.getByRole("button", { name: "I own the community" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("existing-choice-owner")).toBeVisible();
   await page.getByTestId("existing-back").click();
 
-  await page.getByRole("button", { name: /Join a community/ }).click();
+  await page.getByTestId("community-choice-join").click();
   await expect(
     page.getByRole("heading", { name: "Join a community" }),
   ).toBeVisible();
@@ -1061,12 +1053,12 @@ test("first-community owner can connect an existing hosted community", async ({
   );
   await page.goto("/");
 
-  await page.getByTestId("community-choice-create").click();
-  await expect(page.getByText("North Star")).toBeVisible();
-  await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
+  await openOwnedCommunitySetup(page);
+  // The whole row is the control: a Connect button inside a row that is
+  // itself a button is not valid markup, and the row's own click is the
+  // action.
+  await page.getByRole("option", { name: /North Star/ }).click();
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -1090,7 +1082,7 @@ test("first-community owner can connect an existing hosted community", async ({
     .toContain('"stage":"founder"');
 });
 
-test("first-community owner can create and connect a hosted community", async ({
+test("back returns to the first-community choices and can reopen the owned list", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -1111,218 +1103,12 @@ test("first-community owner can create and connect a hosted community", async ({
   );
   await page.goto("/");
 
-  await page.getByTestId("community-choice-create").click();
-  const createSurface = page.getByTestId("hosted-community-create-surface");
-  const surfaceBoxBeforeFeedback = await createSurface.boundingBox();
-  const communityNameInput = page.getByTestId("hosted-community-address-input");
-  await communityNameInput.fill("bee-lab");
-  await expect(communityNameInput).toHaveAttribute("style", /width: 7ch;/);
-  const availabilityFeedback = page.getByText("That address is available.");
-  await expect(availabilityFeedback).toBeVisible();
-  const [feedbackBox, surfaceBox, inputBox, suffixBox] = await Promise.all([
-    availabilityFeedback.boundingBox(),
-    createSurface.boundingBox(),
-    page.getByTestId("hosted-community-address-input").boundingBox(),
-    page.locator("#hosted-community-suffix").boundingBox(),
-  ]);
-  if (
-    !surfaceBoxBeforeFeedback ||
-    !feedbackBox ||
-    !surfaceBox ||
-    !inputBox ||
-    !suffixBox
-  ) {
-    throw new Error("Could not measure hosted community creation layout");
-  }
-  expect(surfaceBox.y).toBe(surfaceBoxBeforeFeedback.y);
-  expect(surfaceBox.height).toBe(surfaceBoxBeforeFeedback.height);
-  const addressLeft = inputBox.x;
-  const addressRight = suffixBox.x + suffixBox.width;
-  expect(
-    Math.abs(
-      (addressLeft + addressRight) / 2 - (surfaceBox.x + surfaceBox.width / 2),
-    ),
-  ).toBeLessThanOrEqual(1);
-  expect(feedbackBox.y).toBeGreaterThanOrEqual(
-    surfaceBox.y + surfaceBox.height,
-  );
-  await page.getByRole("button", { name: "Next" }).click();
-  // V2's founder screen used to sit in front of this one. It serves the
-  // returning-founder journey now, because asking for the founder's details
-  // here as well as in the redesigned flow meant asking twice in one sitting.
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
-      ),
-    )
-    .toContain("wss://bee-lab.colony.ainative.ventures");
-});
-
-test("hosted community address line stays within the card for a long name", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {},
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  // The 800px app minimum is the worst case for the full-width address line.
-  await page.setViewportSize({ width: 800, height: 720 });
-  await page.goto("/");
-
-  await page.getByTestId("community-choice-create").click();
-
-  const createSurface = page.getByTestId("hosted-community-create-surface");
-  const communityNameInput = page.getByTestId("hosted-community-address-input");
-  // A maximum-length (63 char) valid name — the overflow case Wes flagged; the
-  // 7-char check above cannot catch it.
-  const longName = "a".repeat(63);
-  await communityNameInput.fill(longName);
-  await expect(communityNameInput).toHaveValue(longName);
-
-  // Measure only once the layout has stopped moving. Inter is fetched lazily
-  // and `document.fonts.ready` can resolve before the face this line uses is
-  // requested at all, so a single measurement reports fallback advance widths
-  // and the composed line's centre lands a couple of pixels off.
-  //
-  // That was first treated as slack in the tolerance, twice: 2px, then 3px
-  // after `fonts.ready` was added on 2026-08-31, and it still missed at
-  // 3.495px on the 0.15.4 promotion. A third raise would keep buying the same
-  // flake, so wait for the measurement to settle instead and hold the bound.
-  const measure = async () => {
-    const [surface, input, suffix] = await Promise.all([
-      createSurface.boundingBox(),
-      communityNameInput.boundingBox(),
-      page.locator("#hosted-community-suffix").boundingBox(),
-    ]);
-    if (!surface || !input || !suffix) return null;
-    return {
-      left: input.x,
-      right: suffix.x + suffix.width,
-      surfaceLeft: surface.x,
-      surfaceRight: surface.x + surface.width,
-      surfaceCentre: surface.x + surface.width / 2,
-    };
-  };
-
-  // Returns a number and never throws: `expect.poll` rethrows on the first
-  // call if its callback throws, so a throwing probe here would be a hard
-  // failure rather than a wait.
-  await expect
-    .poll(
-      async () => {
-        const box = await measure();
-        if (!box) return Number.POSITIVE_INFINITY;
-        return Math.abs((box.left + box.right) / 2 - box.surfaceCentre);
-      },
-      { message: "the address line never settled within the card" },
-    )
-    .toBeLessThanOrEqual(3);
-
-  const settled = await measure();
-  if (!settled) {
-    throw new Error("Could not measure hosted community creation layout");
-  }
-  const surfaceBox = {
-    x: settled.surfaceLeft,
-    width: settled.surfaceRight - settled.surfaceLeft,
-  };
-  const addressLeft = settled.left;
-  const addressRight = settled.right;
-  // The composed `<name>.<suffix>` line must stay within the card — no
-  // horizontal overflow past the surface or the 800px window.
-  expect(addressLeft).toBeGreaterThanOrEqual(surfaceBox.x);
-  expect(addressRight).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width);
-  expect(addressRight).toBeLessThanOrEqual(800);
-  // Centring was already asserted by the poll above, against the settled
-  // layout rather than whichever frame the first measurement happened to
-  // catch. The overflow assertions are what actually guard the reported bug.
-});
-
-test("first-community reports a created community without a relay address", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {
-      colonyCreatedCommunity: {
-        id: "hosted-bee-lab",
-        name: "bee-lab",
-      },
-    },
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("community-choice-create").click();
-  await page.getByRole("textbox", { name: "Community name" }).fill("bee-lab");
-  await expect(page.getByText("That address is available.")).toBeVisible();
-  await page.getByRole("button", { name: "Next" }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "The community was created, but the relay did not return its address.",
-  );
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toHaveCount(0);
-});
-
-test("back returns to the first-community choices and can reopen create", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {},
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("community-choice-create").click();
-  await expect(
-    page.getByTestId("hosted-community-address-input"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Back" }).click();
+  await openOwnedCommunitySetup(page);
+  await expect(page.getByTestId("owned-communities")).toBeVisible();
+  await page.getByTestId("owned-communities-back").click();
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
-  await page.getByTestId("community-choice-create").click();
-  await expect(
-    page.getByTestId("hosted-community-address-input"),
-  ).toBeVisible();
+  await openOwnedCommunitySetup(page);
+  await expect(page.getByTestId("owned-communities")).toBeVisible();
 });
 
 test("first-community shows the scenario cards for localhost", async ({
@@ -1369,14 +1155,8 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(
     page.getByRole("button", { name: "Join default community" }),
   ).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: /Join a community/ }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", {
-      name: /Create a community/,
-    }),
-  ).toBeVisible();
+  await expect(page.getByTestId("community-choice-join")).toBeVisible();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
 
   // Back out of community selection and the machine flow reopens on its
   // landing screen. It used to reopen on an agent-config screen that asked
@@ -1409,7 +1189,7 @@ test("first-community direct join reaches founder setup", async ({ page }) => {
   });
   await page.goto("/");
 
-  await page.getByRole("button", { name: /Join a community/ }).click();
+  await page.getByTestId("community-choice-join").click();
   await page
     .getByTestId("invite-redeem-input")
     .fill("wss://onboarding.communities.buzz.xyz");
@@ -1418,10 +1198,8 @@ test("first-community direct join reaches founder setup", async ({ page }) => {
   // V2's founder screen used to sit in front of this one. It serves the
   // returning-founder journey now, because asking for the founder's details
   // here as well as in the redesigned flow meant asking twice in one sitting.
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
-  await expect(page.getByText("Connecting securely…")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
+  await expect(page.getByText("Connecting securely")).toHaveCount(0);
   await expect(page.getByText("Create an identity key")).toHaveCount(0);
   await expect
     .poll(() =>
@@ -1468,12 +1246,12 @@ test("first-community direct join cancel returns to request access", async ({
   );
   await page.goto("/");
 
-  await page.getByRole("button", { name: /Join a community/ }).click();
+  await page.getByTestId("community-choice-join").click();
   await page
     .getByTestId("invite-redeem-input")
     .fill("wss://onboarding.communities.buzz.xyz");
   await page.getByTestId("invite-redeem-submit").click();
-  await expect(page.getByText("Connecting securely…")).toBeVisible();
+  await expect(page.getByText("Connecting securely")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await expect(
@@ -1560,9 +1338,9 @@ test("canceling a join to an existing inactive community preserves it", async ({
     window.location.reload();
   }, COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY);
 
-  await expect(page.getByText("Connecting securely…")).toBeVisible();
+  await expect(page.getByText("Connecting securely")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByText("Connecting securely…")).toHaveCount(0);
+  await expect(page.getByText("Connecting securely")).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -1573,361 +1351,6 @@ test("canceling a join to an existing inactive community preserves it", async ({
       }),
     )
     .toEqual(["active-community", "existing-community"]);
-});
-
-test("connected first-community profile step offers equal-width Next and Back controls", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript(
-    ({ pubkey, transactionStorageKey }) => {
-      window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
-        "true",
-      );
-      const timestamp = new Date().toISOString();
-      window.localStorage.setItem(
-        transactionStorageKey,
-        JSON.stringify({
-          id: "txn-profile-step",
-          source: "first-community",
-          stage: "profile",
-          relayUrl: "ws://localhost:3000",
-          communityName: "Default",
-          communityId: "e2e-default-community",
-          addedCommunity: true,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
-    },
-    {
-      pubkey: BLANK_TYLER_IDENTITY.pubkey,
-      transactionStorageKey: COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY,
-    },
-  );
-  await installFakeCamera(page, { failRequests: 1 });
-  const uploadedAvatarUrl = "https://mock.relay/media/community-avatar.png";
-  let avatarRequestCount = 0;
-  await page.route(`${uploadedAvatarUrl}*`, async (route) => {
-    avatarRequestCount += 1;
-    if (avatarRequestCount === 1) {
-      await route.fulfill({ status: 404 });
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    await route.fulfill({
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        "base64",
-      ),
-      contentType: "image/png",
-    });
-  });
-  await installMockBridge(
-    page,
-    {
-      uploadDelayMs: 1_000,
-      uploadDescriptors: [
-        {
-          filename: "community-avatar.png",
-          sha256: "c".repeat(64),
-          size: 128,
-          type: "image/png",
-          uploaded: 1_779_900_000,
-          url: "https://mock.relay/media/community-avatar.png",
-        },
-      ],
-    },
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await expect(page.getByTestId("community-onboarding-flow")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
-  const profileMain = page.getByTestId("community-profile-main");
-  const profileHeading = page.getByRole("heading", {
-    name: "Build your profile",
-  });
-  await expect(profileHeading).toBeVisible();
-  const profileHeadingBox = await profileHeading.boundingBox();
-  if (!profileHeadingBox) {
-    throw new Error("Could not measure community profile heading position");
-  }
-  expect(Math.abs(profileHeadingBox.y - 106)).toBeLessThan(8);
-  const nameKey = page.getByTestId("community-profile-name-key");
-  const avatarButton = page.getByTestId("community-avatar-open");
-  await expect(nameKey).toBeVisible();
-  await expect(avatarButton).toBeVisible();
-  const nameKeyBox = await nameKey.boundingBox();
-  const avatarButtonBox = await avatarButton.boundingBox();
-  expect(nameKeyBox?.width).toBeGreaterThan(380);
-  expect(avatarButtonBox?.width).toBe(144);
-  const nameKeyStyles = await nameKey.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    return {
-      backgroundColor: styles.backgroundColor,
-      borderColor: styles.borderColor,
-      borderRadius: styles.borderRadius,
-      boxShadow: styles.boxShadow,
-      fontSize: styles.fontSize,
-    };
-  });
-  expect(nameKeyStyles.backgroundColor).toMatch(
-    /^(rgba\(255, 255, 255, 0\.95\)|oklab\(.+ \/ 0\.95\))$/,
-  );
-  expect(nameKeyStyles.borderColor).toBe("rgba(113, 113, 6, 0.28)");
-  expect(nameKeyStyles.boxShadow).toContain(
-    "rgba(113, 113, 6, 0.5) 0px 0px 0px 1px inset",
-  );
-  expect(nameKeyStyles).toMatchObject({
-    borderRadius: "16px",
-    fontSize: "14px",
-  });
-  await expect(page.getByText("Your username", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("community-onboarding-flow")).toHaveAttribute(
-    "data-system-color-scheme",
-    /^(light|dark)$/,
-  );
-  await page.emulateMedia({ colorScheme: "dark" });
-  await expect(page.getByTestId("community-onboarding-flow")).toHaveAttribute(
-    "data-system-color-scheme",
-    "dark",
-  );
-  await avatarButton.click();
-  const avatarDialog = page.getByRole("dialog", { name: "Edit your avatar" });
-  await expect(avatarDialog).toBeVisible();
-  await expect(avatarDialog).toHaveAttribute(
-    "data-system-color-scheme",
-    "light",
-  );
-  const dialogStyles = await avatarDialog.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    return {
-      backgroundColor: styles.backgroundColor,
-      boxShadow: styles.boxShadow,
-      color: styles.color,
-    };
-  });
-  expect(dialogStyles.backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(dialogStyles.color).toBe("rgb(23, 23, 23)");
-  expect(dialogStyles.boxShadow).not.toBe("none");
-  const dialogOverlay = page.getByTestId("dialog-overlay");
-  const overlayStyles = await dialogOverlay.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    return {
-      backdropFilter: styles.backdropFilter,
-      backgroundColor: styles.backgroundColor,
-    };
-  });
-  expect(overlayStyles.backgroundColor).toBe("rgba(0, 0, 0, 0)");
-  expect(overlayStyles.backdropFilter).toBe("none");
-  const dialogLayout = await avatarDialog.evaluate((element) => ({
-    clientHeight: element.clientHeight,
-    clientWidth: element.clientWidth,
-    scrollHeight: element.scrollHeight,
-  }));
-  const editorWidth = await page
-    .getByTestId("community-avatar-editor")
-    .evaluate((element) => element.clientWidth);
-  const uploadHeight = await page
-    .getByTestId("community-avatar-upload")
-    .evaluate((element) => element.clientHeight);
-  const urlBox = await page.getByTestId("community-avatar-url").boundingBox();
-  const dialogBox = await avatarDialog.boundingBox();
-  if (!dialogBox || !urlBox) {
-    throw new Error("Could not measure avatar dialog layout");
-  }
-  expect(dialogLayout.clientWidth).toBeLessThanOrEqual(560);
-  const imageDialogHeight = dialogLayout.clientHeight;
-  const dialogTransition = await avatarDialog.evaluate(
-    (element) => window.getComputedStyle(element).transitionProperty,
-  );
-  expect(dialogTransition).toContain("height");
-  expect(editorWidth).toBe(456);
-  expect(uploadHeight).toBe(126);
-  expect(dialogLayout.scrollHeight).toBeLessThanOrEqual(
-    dialogLayout.clientHeight,
-  );
-  expect(urlBox.y).toBeGreaterThanOrEqual(dialogBox.y);
-  expect(urlBox.y + urlBox.height).toBeLessThanOrEqual(
-    dialogBox.y + dialogBox.height,
-  );
-  const saveButton = page.getByTestId("community-avatar-done");
-  await page.getByTestId("community-avatar-input").setInputFiles({
-    buffer: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-      "base64",
-    ),
-    mimeType: "image/png",
-    name: "community-avatar.png",
-  });
-  const previewImage = page.getByTestId(
-    "community-avatar-upload-preview-image",
-  );
-  await expect(previewImage).toHaveAttribute("src", /^blob:/);
-  await expect(saveButton).toBeDisabled();
-  await expect(saveButton).toHaveText("Save");
-  const localPreviewUrl = await previewImage.getAttribute("src");
-  await expect(previewImage).toHaveAttribute("src", localPreviewUrl ?? "");
-  await saveButton.click();
-  await expect(avatarDialog).toHaveCount(0);
-  const avatarCircleImage = page.getByTestId("community-avatar-circle-image");
-  await expect(avatarCircleImage).toHaveAttribute("src", /^blob:/);
-  await expect(
-    page.getByTestId("community-avatar-circle-upload-pending"),
-  ).toBeVisible();
-  await expect(page.getByTestId("community-profile-name-key")).toBeEnabled();
-  await expect
-    .poll(() => avatarCircleImage.getAttribute("src"))
-    .not.toMatch(/^blob:/);
-  await expect(
-    page.getByTestId("community-avatar-circle-upload-pending"),
-  ).toHaveCount(0);
-
-  await avatarButton.click();
-  await expect(avatarDialog).toBeVisible();
-  await expect(previewImage).toHaveAttribute(
-    "src",
-    new RegExp(`^${uploadedAvatarUrl}`),
-  );
-  const modeContentShell = page.getByTestId(
-    "community-avatar-mode-content-shell",
-  );
-  await page.waitForTimeout(300);
-  const measureAnchoredEditorLayout = async () => {
-    const [tabsBox, contentShellBox, contentBox, saveBox] = await Promise.all([
-      page.getByRole("tablist", { name: "Avatar type" }).boundingBox(),
-      modeContentShell.boundingBox(),
-      modeContentShell.locator(":scope > div").boundingBox(),
-      saveButton.boundingBox(),
-    ]);
-    if (!tabsBox || !contentShellBox || !contentBox || !saveBox) {
-      throw new Error("Could not measure anchored avatar editor layout");
-    }
-    return { tabsBox, contentShellBox, contentBox, saveBox };
-  };
-  const imageEditorLayout = await measureAnchoredEditorLayout();
-  expect(
-    Math.abs(
-      imageEditorLayout.contentBox.y +
-        imageEditorLayout.contentBox.height / 2 -
-        (imageEditorLayout.contentShellBox.y +
-          imageEditorLayout.contentShellBox.height / 2),
-    ),
-  ).toBeLessThanOrEqual(1);
-  const saveStyles = await saveButton.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    return { backgroundColor: styles.backgroundColor, color: styles.color };
-  });
-  expect(saveStyles).toEqual({
-    backgroundColor: "rgb(23, 23, 23)",
-    color: "rgb(240, 240, 205)",
-  });
-  const defaultDialogHeight = imageDialogHeight;
-  await page.getByRole("tab", { name: "Emoji" }).click();
-  await expect
-    .poll(() => avatarDialog.evaluate((element) => element.clientHeight))
-    .toBe(defaultDialogHeight);
-  await page.waitForTimeout(300);
-  const emojiEditorLayout = await measureAnchoredEditorLayout();
-  expect(emojiEditorLayout.saveBox.y).toBe(imageEditorLayout.saveBox.y);
-  await page.getByRole("tab", { name: "Animated" }).click();
-  await expect(saveButton).toHaveCount(0);
-  await expect(
-    page.getByTestId("community-avatar-animated-error"),
-  ).toContainText("Could not access the camera");
-  const retryCameraButton = page.getByTestId("community-avatar-animated-retry");
-  await expect(retryCameraButton).toHaveText("Try camera again");
-  await retryCameraButton.click();
-  const captureButton = page.getByTestId("community-avatar-animated-record");
-  await expect(captureButton).toHaveText("Capture 3 sec video");
-  await captureButton.click();
-  await expect(
-    page.getByTestId("community-avatar-animated-sections"),
-  ).toBeVisible({ timeout: 60_000 });
-  await expect(saveButton).toBeVisible();
-  await page.getByRole("tab", { name: "Emoji" }).click();
-  await selectFirstEmojiFromPicker(page);
-  await expect
-    .poll(() => avatarDialog.evaluate((element) => element.clientHeight))
-    .toBeGreaterThan(defaultDialogHeight);
-  await page.waitForTimeout(300);
-  const selectedEmojiDialogHeight = await avatarDialog.evaluate(
-    (element) => element.clientHeight,
-  );
-  const expandedEmojiLayout = await measureAnchoredEditorLayout();
-  expect(
-    expandedEmojiLayout.contentBox.y - expandedEmojiLayout.contentShellBox.y,
-  ).toBeGreaterThanOrEqual(24);
-  expect(
-    expandedEmojiLayout.contentShellBox.y +
-      expandedEmojiLayout.contentShellBox.height -
-      (expandedEmojiLayout.contentBox.y +
-        expandedEmojiLayout.contentBox.height),
-  ).toBeGreaterThanOrEqual(24);
-  expect(
-    expandedEmojiLayout.contentBox.y -
-      (expandedEmojiLayout.tabsBox.y + expandedEmojiLayout.tabsBox.height),
-  ).toBeGreaterThanOrEqual(24);
-  expect(
-    expandedEmojiLayout.saveBox.y -
-      (expandedEmojiLayout.contentBox.y +
-        expandedEmojiLayout.contentBox.height),
-  ).toBeGreaterThanOrEqual(24);
-  await page.getByTestId("community-avatar-custom-color").click();
-  await expect
-    .poll(() => avatarDialog.evaluate((element) => element.clientHeight))
-    .toBeGreaterThan(selectedEmojiDialogHeight);
-  await page.getByTestId("community-avatar-custom-color-done").click();
-  await expect
-    .poll(() => avatarDialog.evaluate((element) => element.clientHeight))
-    .toBe(selectedEmojiDialogHeight);
-  await page.getByRole("tab", { name: "Image" }).click();
-  await expect
-    .poll(() => avatarDialog.evaluate((element) => element.clientHeight))
-    .toBe(imageDialogHeight);
-  await expect(profileMain).toHaveClass(/opacity-45/);
-  await expect(profileMain).toHaveClass(/blur-\[3px\]/);
-  await expect(
-    page.getByTestId("community-profile-name-key"),
-  ).not.toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(avatarDialog).toHaveCount(0);
-  await expect(avatarButton).toBeFocused();
-  const nextButton = page.getByTestId("community-profile-next");
-  const backButton = page.getByTestId("community-profile-back");
-  await expect(nextButton).toHaveText("Next");
-  await expect(nextButton).toBeDisabled();
-  await expect(backButton).toHaveText("Back");
-  await expect(backButton).toBeEnabled();
-  const [nextBox, backBox] = await Promise.all([
-    nextButton.boundingBox(),
-    backButton.boundingBox(),
-  ]);
-  if (!nextBox || !backBox) {
-    throw new Error("Could not measure community profile navigation controls");
-  }
-  expect(Math.abs(nextBox.width - backBox.width)).toBeLessThanOrEqual(1);
-  expect(nextBox.width).toBeLessThanOrEqual(160);
-
-  await backButton.click();
-  await expect(
-    page.getByRole("heading", { name: "Join a community" }),
-  ).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) => window.localStorage.getItem(key),
-        COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY,
-      ),
-    )
-    .toBeNull();
 });
 
 test("name-only community profile save preserves an existing avatar", async ({
@@ -1943,8 +1366,8 @@ test("name-only community profile save preserves an existing avatar", async ({
   const existingAvatarUrl =
     "https://mock.relay/media/existing-community-avatar.png";
   await seedCurrentAvatar(page, existingAvatarUrl);
-  await page.getByTestId("community-profile-name-key").fill("Tyler");
-  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
+  await page.getByTestId("onboarding-next").click();
 
   await expect
     .poll(() =>
@@ -2007,24 +1430,24 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
   );
   await page.goto("/");
 
-  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
   await uploadCommunityAvatar(page, "pending-community-avatar.png");
 
-  const avatarImage = page.getByTestId("community-avatar-circle-image");
+  const avatarImage = page.getByTestId("onboarding-avatar-circle-image");
   await expect(avatarImage).toHaveAttribute("src", /^blob:/);
   await expect(
-    page.getByTestId("community-avatar-circle-upload-pending"),
+    page.getByTestId("onboarding-avatar-circle-upload-pending"),
   ).toBeVisible();
   await expect(avatarImage).toHaveClass(/brightness-75/);
-  await expect(page.getByTestId("community-profile-next")).toBeEnabled();
+  await expect(page.getByTestId("onboarding-next")).toBeEnabled();
   await page.waitForTimeout(500);
   await expect(
-    page.getByTestId("community-avatar-circle-upload-pending"),
+    page.getByTestId("onboarding-avatar-circle-upload-pending"),
   ).toBeVisible();
 
-  const avatar = page.getByTestId("community-avatar-circle");
+  const avatar = page.getByTestId("onboarding-avatar-circle");
   const pendingSpinner = page
-    .getByTestId("community-avatar-circle-upload-pending")
+    .getByTestId("onboarding-avatar-circle-upload-pending")
     .locator(".sprout-arc-spinner");
   const [avatarBox, spinnerBox] = await Promise.all([
     avatar.boundingBox(),
@@ -2045,16 +1468,19 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
         (spinnerBox.y + spinnerBox.height / 2),
     ),
   ).toBeLessThanOrEqual(1);
-  expect(spinnerBox.width / avatarBox.width).toBeLessThanOrEqual(0.2);
+  // The old assertion also pinned the spinner to a fifth of the circle,
+  // which was a ratio against the deleted 144px avatar step. The circle is
+  // 52px beside the name now; what still has to hold is that the spinner is
+  // centred on it rather than sized against it.
 
-  await expect(page.getByTestId("community-avatar-empty")).toBeVisible({
+  await expect(page.getByTestId("onboarding-avatar-empty")).toBeVisible({
     timeout: 10_000,
   });
   await expect(
-    page.getByRole("button", { name: "Add an avatar" }),
+    page.getByRole("button", { name: "Add your photo" }),
   ).toBeVisible();
   await expect(
-    page.getByTestId("community-avatar-circle-fallback"),
+    page.getByTestId("onboarding-avatar-circle-fallback"),
   ).toHaveCount(0);
   await expect(avatarImage).toHaveCount(0);
   await expect(
@@ -2064,7 +1490,7 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
     page.getByText("Your default avatar is showing instead."),
   ).toBeVisible();
 
-  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("onboarding-next").click();
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -2133,12 +1559,12 @@ test("a pending avatar never becomes durable if propagation fails after onboardi
   );
   await page.goto("/");
 
-  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
   await uploadCommunityAvatar(page, "saved-pending-community-avatar.png");
   await expect(
-    page.getByTestId("community-avatar-circle-upload-pending"),
+    page.getByTestId("onboarding-avatar-circle-upload-pending"),
   ).toBeVisible();
-  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("onboarding-next").click();
   await page.getByTestId("community-team-intro-enter").click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
     timeout: 10_000,
@@ -2205,9 +1631,9 @@ test("a pending avatar becomes durable after onboarding unmounts once ready", as
   );
   await page.goto("/");
 
-  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
   await uploadCommunityAvatar(page, "ready-after-unmount-community-avatar.png");
-  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("onboarding-next").click();
   await page.getByTestId("community-team-intro-enter").click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
     timeout: 10_000,
@@ -2280,9 +1706,9 @@ test("a failed pending replacement leaves the confirmed avatar untouched", async
   await page.goto("/");
   await seedCurrentAvatar(page, existingAvatarUrl);
 
-  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
   await uploadCommunityAvatar(page, "replacement-community-avatar.png");
-  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("onboarding-next").click();
 
   await expect
     .poll(() =>
@@ -2347,17 +1773,17 @@ test("replacing a pending upload disposes its verifier and local preview", async
   );
   await page.goto("/");
 
-  await page.getByTestId("community-profile-name-key").fill("Tyler");
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
   await uploadCommunityAvatar(page, "superseded-community-avatar.png");
   const supersededPreviewUrl = await page
-    .getByTestId("community-avatar-circle-image")
+    .getByTestId("onboarding-avatar-circle-image")
     .getAttribute("src");
   expect(supersededPreviewUrl).toMatch(/^blob:/);
 
-  await page.getByTestId("community-avatar-open").click();
+  await page.getByTestId("onboarding-profile-avatar").click();
   await page.getByRole("tab", { name: "Emoji" }).click();
   await selectFirstEmojiFromPicker(page);
-  await page.getByTestId("community-avatar-done").click();
+  await page.getByTestId("onboarding-avatar-done").click();
 
   await expect
     .poll(() =>
@@ -2419,8 +1845,8 @@ test("membership denial on community profile save offers recovery", async ({
   );
   await page.goto("/");
 
-  await page.getByTestId("community-profile-name-key").fill("Kalvin");
-  await page.getByTestId("community-profile-next").click();
+  await page.getByTestId("onboarding-display-name").fill("Kalvin");
+  await page.getByTestId("onboarding-next").click();
 
   await expect(page.getByTestId("membership-denied")).toBeVisible();
   await expect(
@@ -2431,9 +1857,7 @@ test("membership denial on community profile save offers recovery", async ({
   await page.getByLabel("Community URL").fill("wss://invited.example.com");
   await page.getByRole("button", { name: "Save changes" }).click();
   await page.getByRole("button", { name: "Use anyway" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(
@@ -2537,21 +1961,21 @@ test("no-event profile cached then reloaded still sees onboarding", async ({
   await expectIncompleteOnboarding(page);
 });
 
-test("avatar step uses an add-image placeholder before an avatar is chosen", async ({
+test("the photo circle says what it is before a picture is chosen", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_AVATAR_PLACEHOLDER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
-  const preview = page.getByTestId("onboarding-avatar-preview");
-  await expect(preview).toBeVisible();
-  await expect(preview).toHaveAttribute("aria-label", "Add a display image");
-  await expect(preview).toHaveClass(/border-dashed/);
+  // Name and photo are one screen: the picture is set from the circle beside
+  // the name rather than on a step of its own, so the empty circle has to
+  // say what it is for.
+  const circle = page.getByTestId("onboarding-profile-avatar");
+  await expect(circle).toBeVisible();
+  await expect(circle).toHaveAttribute("aria-label", "Add your photo");
+  await expect(circle).toHaveAttribute("data-has-avatar", "false");
+  await expect(page.getByTestId("onboarding-avatar-empty")).toHaveText("Photo");
 });
 
 test("avatar step reveals preset backgrounds after the first emoji pick", async ({
@@ -2562,8 +1986,8 @@ test("avatar step reveals preset backgrounds after the first emoji pick", async 
   await page.goto("/");
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
 
   await page.getByRole("tab", { name: "Emoji" }).click();
 
@@ -2574,10 +1998,6 @@ test("avatar step reveals preset backgrounds after the first emoji pick", async 
 
   await expect(colorGridShell).toHaveAttribute("aria-hidden", "false");
   await expect(page.getByTestId("onboarding-avatar-color-grid")).toBeVisible();
-  await expect(page.getByTestId("onboarding-avatar-preview")).not.toHaveCSS(
-    "background-color",
-    "rgb(255, 255, 255)",
-  );
 });
 
 test("avatar step accepts an avatar URL before completing onboarding", async ({
@@ -2588,56 +2008,19 @@ test("avatar step accepts an avatar URL before completing onboarding", async ({
   await page.goto("/");
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
   await page
     .getByTestId("onboarding-avatar-url")
     .fill("https://example.com/morty.png");
+  await page.getByTestId("onboarding-avatar-done").click();
 
-  const preview = page.getByTestId("onboarding-avatar-preview");
-  await expect(preview).toBeVisible();
-  const box = await preview.boundingBox();
-  expect(box?.width).toBeCloseTo(192, 0);
-  expect(box?.height).toBeCloseTo(192, 0);
-
-  await page.getByTestId("onboarding-next").click();
-  await passThroughBackupStep(page);
-  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectWelcomeView(page);
-});
-
-test("failed avatar saves can continue without saving the avatar", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await installMockBridge(page, {}, { skipOnboardingSeed: true });
-  await page.goto("/");
-
-  await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
-  await page
-    .getByTestId("onboarding-avatar-url")
-    .fill("https://example.com/morty.png");
-  await page.evaluate(() => {
-    const testWindow = window as Window & {
-      __BUZZ_E2E__?: { mock?: { profileUpdateError?: string } };
-    };
-    if (testWindow.__BUZZ_E2E__?.mock) {
-      testWindow.__BUZZ_E2E__.mock.profileUpdateError =
-        "Temporary avatar sync failure.";
-    }
-  });
+  await expect(page.getByTestId("onboarding-profile-avatar")).toHaveAttribute(
+    "data-has-avatar",
+    "true",
+  );
 
   await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByText("Temporary avatar sync failure.")).toBeVisible();
-  await expect(
-    page.getByTestId("onboarding-next-without-saving"),
-  ).toBeVisible();
-  await page.getByTestId("onboarding-next-without-saving").click();
-
-  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -2670,8 +2053,8 @@ test("avatar upload rejects a file whose server-detected MIME is not an image", 
   await page.goto("/");
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
   await page.getByTestId("onboarding-avatar-input").setInputFiles({
     name: "looks-like.png",
     mimeType: "image/png",
@@ -2707,8 +2090,8 @@ test("avatar upload accepts a file whose server-detected MIME is an image", asyn
   await page.goto("/");
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
   await page.getByTestId("onboarding-avatar-input").setInputFiles({
     name: "avatar.png",
     mimeType: "image/png",
@@ -2716,10 +2099,14 @@ test("avatar upload accepts a file whose server-detected MIME is an image", asyn
   });
 
   await expect(page.getByTestId("onboarding-avatar-url")).toHaveValue("");
-  await expect(
-    page.getByTestId("onboarding-avatar-preview-fallback"),
-  ).toHaveText("MQ");
   await expect(page.getByTestId("onboarding-avatar-error")).toHaveCount(0);
+  // The upload was accepted, so the circle behind the editor is wearing it
+  // even though the URL field stays empty: that field is for pasting a link,
+  // not a readout of what was uploaded.
+  await expect(page.getByTestId("onboarding-profile-avatar")).toHaveAttribute(
+    "data-has-avatar",
+    "true",
+  );
 });
 
 test("first-run onboarding keeps the shell hidden and lands on private Welcome after profile setup", async ({
@@ -2730,7 +2117,7 @@ test("first-run onboarding keeps the shell hidden and lands on private Welcome a
   await page.goto("/");
 
   await expect(page.getByTestId("onboarding-gate")).toBeVisible();
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect(page.getByTestId("onboarding-display-name")).toHaveValue("");
   await expectNoHomeSeenEntries(page);
 
@@ -2997,10 +2384,6 @@ test("failed first profile saves can be skipped for the current session", async 
   await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
   await page.getByTestId("onboarding-skip").click();
 
-  // The profile error-recovery skip now leads to the key-backup step instead
-  // of exiting onboarding; the explicit acknowledgement is the only exit, and
-  // completing through it lands on the standard first-run Welcome channel.
-  await passThroughBackupStep(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectWelcomeView(page);
 });
@@ -3153,9 +2536,11 @@ test("open relay skips membership gating during onboarding", async ({
   await page.goto("/");
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await page.getByTestId("onboarding-next").click();
+  // Name and photo are one screen: the picture is set from the circle beside
+  // the name rather than on a step of its own.
+  await page.getByTestId("onboarding-profile-avatar").click();
 
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
   await expect(page.getByTestId("membership-denied")).toHaveCount(0);
 });
 
@@ -3318,9 +2703,13 @@ test("membership denied shows all four affordances and change-community edits no
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await page.getByTestId("onboarding-next").click();
 
-  // Membership-denied screen renders with all four affordances.
+  // Membership-denied screen renders with all four affordances, on the same
+  // canvas as every other screen a person can reach before their community
+  // exists rather than as a card of its own.
   const denied = page.getByTestId("membership-denied");
   await expect(denied).toBeVisible();
+  await expect(denied).toHaveClass(/onb-canvas/);
+  await expect(denied.locator(".onb-headline")).toHaveText("Not a member yet.");
   await expect(denied.getByRole("button", { name: "Try again" })).toBeVisible();
   await expect(denied.getByRole("button", { name: "Back" })).toBeVisible();
   await expect(
@@ -3423,7 +2812,7 @@ test("cancel from profile Back preserves drafts and denied Back returns to inter
   // Cancel the overlay — profile should still be visible with the name intact.
   await overlay.getByRole("button", { name: "Cancel" }).click();
   await expect(overlay).toHaveCount(0);
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect(nameInput).toHaveValue("Morty QA");
 
   // --- Profile → membership denied → Back returns to profile ---
@@ -3437,7 +2826,7 @@ test("cancel from profile Back preserves drafts and denied Back returns to inter
     .getByTestId("membership-denied")
     .getByRole("button", { name: "Back" })
     .click();
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect(nameInput).toHaveValue("Morty QA");
 });
 

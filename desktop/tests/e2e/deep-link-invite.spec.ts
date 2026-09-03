@@ -60,7 +60,7 @@ test("join deep link is acknowledged without claiming before setup", async ({
   const gate = page.getByTestId("pending-invite-gate");
   await expect(gate).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Opening community link" }),
+    page.getByRole("heading", { name: "Opening a community link" }),
   ).toBeVisible();
   await page.getByTestId("pending-invite-continue").click();
   await expect(gate).toHaveCount(0);
@@ -91,7 +91,7 @@ test("connect deep link shows a static acknowledgment during setup", async ({
   const gate = page.getByTestId("pending-invite-gate");
   await expect(gate).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Opening community link" }),
+    page.getByRole("heading", { name: "Opening a community link" }),
   ).toBeVisible();
   await expect(gate).toContainText("hive");
 
@@ -127,9 +127,9 @@ test("add-community deep link starts onboarding when no community is configured"
   await page.goto("/");
 
   await expect(page.getByTestId("community-onboarding-flow")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
+  // The profile stage is the canvas profile screen now: same question, one
+  // screen, shared with every other path that asks it.
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(

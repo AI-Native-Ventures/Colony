@@ -17,6 +17,13 @@
     --onb-shell-line: rgba(23, 23, 23, 0.14);
     --onb-rule: rgba(23, 23, 23, 0.28);
     --onb-accent: #171717;
+    /* Canvas tint and the disabled-action pair, as the violet screen wears
+       them. OnboardingCanvas overwrites all three per screen from
+       canvasTheme.ts; these defaults are what a canvas that sets none of them
+       falls back to, so a disabled button is never an untinted hole. */
+    --onb-base: #b394f9;
+    --onb-disabled-bg: #846fb5;
+    --onb-disabled-ink: #ffffff;
 
     position: fixed;
     inset: 0;
@@ -94,15 +101,39 @@
   }
 
   /* The stage hosts screen content above the mesh layers. Without it the
-     positioned mesh, streak and grain would paint over static children. */
+     positioned mesh, streak and grain would paint over static children.
+
+     It is also the flow's scroll container. The canvas itself must stay
+     `overflow: hidden`, because the grain, the scatter field, the step marker
+     and the scroll fade are all absolutely positioned against it and would
+     scroll away with the content if it scrolled. Scrolling the stage instead
+     keeps that chrome pinned to the window while a screen taller than the
+     window becomes reachable rather than clipped. */
   .onb-stage {
     position: relative;
     z-index: 2;
     height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     display: grid;
     grid-template-rows: 1fr auto;
     padding: clamp(2rem, 5vh, 4rem) clamp(2rem, 7vw, 8rem)
       clamp(1.5rem, 4vh, 2.5rem);
+  }
+
+  /* Scroll cue. A clipped screen and a screen that simply ends look identical,
+     and the thing below the fold is the primary action, so "there is more" has
+     to be said rather than left to be discovered. Rendered only while there is
+     something below: a fade sitting over the end of the content would be a
+     standing lie about the rest of the flow. */
+  .onb-fade {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 3;
+    height: 4rem;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--onb-base));
   }
 
   /* Step marker. Mono, letterspaced, high on the page: the only numeric thing
@@ -117,6 +148,78 @@
     letter-spacing: 0.28em;
     color: var(--onb-ink);
     opacity: 0.45;
+  }
+
+  /* Way out. Mirrors the step marker across the canvas: a walk that a founder
+     did not have to start needs somewhere to stop from every screen, and a
+     control that lives on the canvas rather than on a screen cannot be
+     forgotten by the next screen added to the flow. */
+  .onb-exit {
+    position: absolute;
+    top: clamp(1.5rem, 4vh, 3rem);
+    right: clamp(2rem, 7vw, 8rem);
+    z-index: 3;
+  }
+
+  /* A key beside the control that copies it. The membership-recovery screen
+     shows the founder's npub for an admin to invite, and the import form
+     echoes back the identity a pasted nsec resolves to.
+
+     These live in this file rather than beside the other screen classes only
+     to keep this change clear of a file another change is editing; they are
+     screen styles and belong with them. */
+  :where(.onb-canvas) .onb-key-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid var(--onb-shell-line);
+    border-radius: 1.125rem;
+    background: var(--onb-shell);
+    color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-key {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-key-copy {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid var(--onb-shell-line);
+    border-radius: 0.75rem;
+    background: none;
+    color: var(--onb-ink-soft);
+    cursor: pointer;
+  }
+
+  :where(.onb-canvas) .onb-key-copy:hover {
+    color: var(--onb-ink);
+  }
+
+  /* Join-policy consent, on the canvas. The block keeps its own layout for
+     the dialog surfaces that also render it; only the card treatment and the
+     ink are rewritten here, where the background is a hue rather than a
+     theme surface. */
+  :where(.onb-canvas) .onb-policy {
+    border-color: var(--onb-shell-line);
+    background: var(--onb-shell);
+    color: var(--onb-ink-soft);
+  }
+
+  :where(.onb-canvas) .onb-policy label {
+    color: var(--onb-ink-soft);
   }
 
   /* Foot: trail + mark. Provisioned here so screens can drop an ant trail in
@@ -217,17 +320,27 @@
     }
   }
 
-  /* Narrow windows: the step marker overlapped content when absolutely
-     positioned, so it becomes a normal line above the stage. */
+  /* Narrow windows: the step marker moves in tight against the corner so it
+     stops crowding a headline that now runs the full width.
+
+     It stays absolutely positioned. Laying it out in the canvas's flow instead
+     pushed the stage, which is `height: 100%`, past the bottom of a canvas that
+     clips: the marker's own height was silently cut off the end of every screen
+     at this width. The stage keeps clear of it with padding instead. */
   @media (max-width: 900px) {
     .onb-step {
-      position: static;
-      padding: 1.25rem 1.5rem 0;
+      top: 1.25rem;
+      left: 1.5rem;
+    }
+
+    .onb-exit {
+      top: 1.25rem;
+      right: 1.5rem;
     }
 
     .onb-stage {
       grid-template-rows: 1fr auto;
-      padding-top: 0.5rem;
+      padding-top: 3rem;
     }
   }
 }

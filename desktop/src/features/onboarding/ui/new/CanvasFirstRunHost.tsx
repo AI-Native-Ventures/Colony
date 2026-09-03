@@ -40,6 +40,13 @@ type Props = {
    * machine flow's account-signin page. The canvas run is left unstarted.
    */
   onRequestSignIn?: () => void;
+  /**
+   * This run was asked for by an identity that already exists (the "Create a
+   * community" door), rather than started by a brand-new signup.
+   */
+  existingIdentity?: boolean;
+  /** Leaves such a run from its first screen, back to the choice screen. */
+  onLeaveRun?: () => void;
 };
 
 /**
@@ -56,6 +63,8 @@ export function CanvasFirstRunHost({
   activeRelayUrl,
   onFinished,
   onRequestSignIn,
+  existingIdentity = false,
+  onLeaveRun,
 }: Props) {
   const queryClient = useQueryClient();
   const { addCommunity } = useCommunities();
@@ -147,6 +156,8 @@ export function CanvasFirstRunHost({
       provisioning={provisioning}
       onComplete={onComplete}
       onRequestSignIn={onRequestSignIn}
+      existingIdentity={existingIdentity}
+      onLeaveRun={onLeaveRun}
     />
   );
 }

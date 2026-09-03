@@ -38,6 +38,62 @@ const COLONY_AGENT_RUNTIME_ID = "buzz-agent";
 const COLONY_AGENT_LABEL = "Colony Agent";
 
 /**
+ * The brain answer for "my own OpenRouter key".
+ *
+ * Not a runtime id: the lane runs the hosted agent against the founder's own
+ * OpenRouter account, so nothing in the catalog carries this name. Spelled out
+ * here rather than imported from the screen so the flow does not depend on it.
+ */
+const OPENROUTER_BRAIN_ID = "openrouter";
+
+/**
+ * The brain the screen opens on: Colony Agent whenever it is listed.
+ *
+ * It used to be `installed[0]`, so a founder with Oh My Pi on their computer
+ * opened on a row named "Oh My Pi" while the copy beside it said Colony runs
+ * a brain for them. Detection order is not a recommendation, and the tool
+ * names in that list mean nothing to the person this flow is written for.
+ * Colony Agent is hosted, so it is ready on every computer and is the only
+ * option that can be preselected without also being a guess. The other rows
+ * stay selectable: this changes what is already chosen, not what is offered.
+ */
+export function preselectedBrain(
+  brains: readonly BrainCandidate[],
+  installed: readonly string[] = [],
+): string {
+  if (brains.some((brain) => brain.id === COLONY_AGENT_RUNTIME_ID)) {
+    return COLONY_AGENT_RUNTIME_ID;
+  }
+  return installed[0] ?? COLONY_AGENT_RUNTIME_ID;
+}
+
+/**
+ * The track a brain choice implies, which is not always the track probing
+ * resolved.
+ *
+ * `resolveTrack` answers "what could this computer do" from detection alone,
+ * and it runs before the founder has said anything. Once they pick, the pick
+ * is the answer: choosing the hosted agent means Colony does the thinking and
+ * credits pay for it, however many CLIs are installed beside it. Without this
+ * a founder who kept the Colony Agent default on a machine with Claude Code
+ * signed in reached a credits screen telling them their own tool covers the
+ * thinking, which is the opposite of what they chose.
+ */
+export function trackForBrain(
+  brain: string | null,
+  installed: readonly string[] = [],
+): OnboardingTrack {
+  const chosen = brain?.trim();
+  if (!chosen || chosen === COLONY_AGENT_RUNTIME_ID || chosen === "colony") {
+    return "colony";
+  }
+  // OpenRouter is bring-your-own by definition: the key is theirs and
+  // OpenRouter bills them directly, so credits have nothing to pay for.
+  if (chosen === OPENROUTER_BRAIN_ID) return "byo";
+  return installed.includes(chosen) ? "byo" : "colony";
+}
+
+/**
  * Ready first, then what needs signing in, then what is not here at all.
  *
  * The catalog's own order is alphabetical-ish and mixes the three together,
