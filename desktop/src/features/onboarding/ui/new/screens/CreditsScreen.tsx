@@ -177,7 +177,13 @@ export function CreditsScreen({
   const [receiptEmail, setReceiptEmail] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
 
-  const effectiveEmail = (email ?? receiptEmail).trim();
+  // Normalised once, because the two readers disagreed otherwise. Onboarding
+  // hands over `answers.account?.email ?? ""`, and "" is not nullish: the
+  // field rendered (it tests `!email`) while `email ?? receiptEmail` kept the
+  // empty string, so a valid typed address was thrown away and Pay could
+  // never enable. One value now decides both.
+  const knownEmail = email?.trim() || undefined;
+  const effectiveEmail = knownEmail ?? receiptEmail.trim();
   const emailReady = effectiveEmail.length > 0 && isEmail(effectiveEmail);
 
   // Prices come from the relay so a change reaches users without a new
@@ -295,7 +301,7 @@ export function CreditsScreen({
         )}
       </div>
       <div className="onb-panel">
-        {!email ? (
+        {!knownEmail ? (
           <label className="onb-field" htmlFor="credits-receipt-email">
             <span className="onb-label">Receipt email</span>
             <input
