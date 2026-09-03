@@ -35,7 +35,7 @@ import {
   trackForBrain,
   type TrackResult,
 } from "../../flow/track";
-import { invitesEnabled } from "../../newOnboardingFlag";
+import { invitesEnabled } from "../../invitesFlag";
 import { OnboardingCanvas } from "./OnboardingCanvas";
 import {
   AccountScreen,
@@ -73,8 +73,7 @@ const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
 /**
  * E2E only: one spec pins an auth failure so the account screen's failure
  * states stay testable without pointing the flow at a live server. The mode
- * check keeps this unreachable outside the e2e build, exactly like the flag's
- * own localStorage override in newOnboardingFlag.ts.
+ * check is what keeps this unreachable outside the e2e build.
  */
 function readE2eAuthFailure(
   env: Record<string, string | undefined>,
@@ -99,10 +98,8 @@ function readE2eAuthFailure(
 }
 
 /**
- * Which auth service the flow runs on. The boundary newOnboardingFlag draws
- * for the redesigned flow itself decides this too: the build-time switch
- * turns the real service on, and the e2e build mode keeps fakes so existing
- * specs stay hermetic.
+ * Which auth service the flow runs on: the real one everywhere except the
+ * e2e build, which keeps fakes so its specs stay hermetic.
  */
 export function resolveAuthServices(
   env: Record<string, string | undefined>,
@@ -116,8 +113,8 @@ export function resolveAuthServices(
   // back to `contracts.fake.ts`: an account that was never created, and a
   // hand-written paragraph about a Johannesburg workshop presented as what
   // Colony found on the user's own website. Nothing failed, which is what made
-  // it dangerous. The e2e mode is the only build that keeps fakes, so its
-  // specs stay hermetic.
+  // it dangerous. That flag is gone entirely now, and the e2e mode is the only
+  // build that keeps fakes.
   const useReal = env.MODE !== "e2e";
   const base = useReal
     ? {

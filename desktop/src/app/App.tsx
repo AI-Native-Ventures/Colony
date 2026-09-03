@@ -29,7 +29,6 @@ import {
   markFounderRunRequested,
   shouldRunCanvasFirstRun,
 } from "@/features/onboarding/freshFounder";
-import { isNewOnboardingEnabled } from "@/features/onboarding/newOnboardingFlag";
 import { CanvasFirstRunHost } from "@/features/onboarding/ui/new/CanvasFirstRunHost";
 import { ExistingIdentityProfileFlow } from "@/features/onboarding/ui/new/ExistingIdentityProfileFlow";
 import {
@@ -581,7 +580,6 @@ function CommunityApp({
     isFounderRunRequested(currentPubkey),
   );
   const canvasEligible =
-    isNewOnboardingEnabled(import.meta.env) &&
     !transaction &&
     canvasRunState !== "finished" &&
     (canvasRunState === "active" ||

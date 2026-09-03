@@ -49,7 +49,6 @@ test("a taken email points at the sign-in door", async ({ page }, testInfo) => {
   // mount and the bridge triggers it. The override keeps the canvas flow on
   // in this build, the same way the first-run spec does.
   await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
     window.localStorage.setItem(
       "colony.e2e.authFailure",
       JSON.stringify({ kind: "email-taken" }),

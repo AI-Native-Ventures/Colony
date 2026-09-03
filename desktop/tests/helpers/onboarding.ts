@@ -18,15 +18,14 @@ export async function seedActiveIdentity(
 
 /**
  * Seed the state a brand-new founder reaches the canvas first run with: the
- * fresh-identity marker machine onboarding writes, plus the redesign flag the
- * e2e build honours. Must run before installMockBridge, since React reads
- * both on mount and the bridge triggers that mount.
+ * fresh-identity marker machine onboarding writes. Must run before
+ * installMockBridge, since React reads it on mount and the bridge triggers
+ * that mount.
  */
 export async function seedFreshFounder(page: Page, pubkey: string) {
   await page.addInitScript(
     ({ key }) => {
       window.localStorage.setItem(key, "true");
-      window.localStorage.setItem("colony.e2e.newOnboarding", "1");
     },
     { key: `colony.identity.fresh:${pubkey}` },
   );

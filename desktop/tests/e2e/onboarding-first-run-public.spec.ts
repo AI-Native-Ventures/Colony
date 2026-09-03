@@ -23,9 +23,7 @@ test("public first run: fresh identity to Welcome through the canvas flow", asyn
   // Nothing about the founder is seeded: "Start with Colony" is what writes
   // the fresh-identity marker, so this walk proves the real chain rather than
   // a fixture standing in for it.
-  await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+  await page.addInitScript(() => {});
   await seedActiveIdentity(page, FIRST_RUN_IDENTITY);
   await installMockBridge(page, undefined, {
     skipOnboardingSeed: true,
