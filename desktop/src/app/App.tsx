@@ -26,6 +26,7 @@ import { useMachineOnboardingState } from "@/features/onboarding/machineOnboardi
 import { isFreshFounder } from "@/features/onboarding/freshFounder";
 import { isNewOnboardingEnabled } from "@/features/onboarding/newOnboardingFlag";
 import { CanvasFirstRunHost } from "@/features/onboarding/ui/new/CanvasFirstRunHost";
+import { ExistingIdentityProfileFlow } from "@/features/onboarding/ui/new/ExistingIdentityProfileFlow";
 import {
   type FirstCommunityPage,
   useCommunityOnboarding,
@@ -259,6 +260,20 @@ function AppReady({
 
   if (onboarding.stage === "relaunch-required") {
     return <RelaunchRequiredScreen />;
+  }
+
+  if (onboarding.stage === "onboarding" && !onboarding.identityLost) {
+    // A key that exists but has no relay profile: "bring your own key", a
+    // reinstall, or a second machine. The only thing left to ask is what to
+    // call them, so that is the whole screen.
+    return (
+      <ExistingIdentityProfileFlow
+        initialProfile={onboarding.flow.initialProfile.profile}
+        key={onboarding.currentPubkey ?? "anonymous"}
+        onComplete={onboarding.flow.actions.complete}
+        onSkip={onboarding.flow.actions.skipForNow}
+      />
+    );
   }
 
   if (onboarding.stage === "onboarding") {

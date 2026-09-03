@@ -18,10 +18,22 @@ type Props = {
    * a chore before the product has said what it is.
    */
   showStep?: boolean;
+  /**
+   * Which gate this is, for the specs that wait on one. Defaults to machine
+   * onboarding because that is what wore the canvas first; screens that are
+   * not machine setup name themselves, so a spec asserting the machine flow
+   * has gone does not match a later screen wearing the same canvas.
+   */
+  testId?: string;
   children: ReactNode;
 };
 
-export function MachineCanvas({ step, showStep = true, children }: Props) {
+export function MachineCanvas({
+  step,
+  showStep = true,
+  testId = "machine-onboarding-gate",
+  children,
+}: Props) {
   const theme = machineCanvasFor(step);
   const index = MACHINE_STEPS.indexOf(step);
 
@@ -29,7 +41,7 @@ export function MachineCanvas({ step, showStep = true, children }: Props) {
     <div
       className="onb-canvas"
       data-ink={theme.ink}
-      data-testid="machine-onboarding-gate"
+      data-testid={testId}
       style={{ background: theme.base }}
     >
       <div className="onb-grain" />

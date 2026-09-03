@@ -166,6 +166,7 @@ export default defineConfig({
         "**/provisioned-credits-recovery.spec.ts",
         "**/doctor-states.spec.ts",
         "**/onboarding-avatar-skip.spec.ts",
+        "**/onboarding-existing-identity.spec.ts",
         "**/onboarding-backup.spec.ts",
         "**/onboarding-agent-defaults.spec.ts",
         "**/onboarding-redesign.spec.ts",

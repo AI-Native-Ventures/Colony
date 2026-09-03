@@ -103,7 +103,11 @@ export function WorkspaceSetupFlow({ initialPage, onBack }: Props) {
   }
 
   return (
-    <MachineCanvas showStep={false} step="identity">
+    <MachineCanvas
+      showStep={false}
+      step="identity"
+      testId="workspace-setup-gate"
+    >
       <StartupWindowDragRegion />
       {page === "welcome" ? (
         <WorkspaceChoiceScreen
