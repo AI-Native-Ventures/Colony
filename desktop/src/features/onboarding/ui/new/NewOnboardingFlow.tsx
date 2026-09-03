@@ -26,6 +26,7 @@ import {
   backStep,
   nextStep,
   resumeStep,
+  stepPosition,
   type OnboardingAnswers,
   type OnboardingStep,
 } from "../../flow/steps";
@@ -651,8 +652,20 @@ export function NewOnboardingFlow({
     }
   })();
 
+  // Counted from the recorded answer rather than the live business-screen
+  // state, so the total does not twitch while someone is still choosing.
+  const position = stepPosition(step, {
+    hasWebsite: answers.hasWebsite,
+    invitesEnabled: canInvite,
+  });
+
   return (
-    <OnboardingCanvas step={step} track={canvasTrack}>
+    <OnboardingCanvas
+      step={step}
+      track={canvasTrack}
+      index={position.index}
+      total={position.total}
+    >
       {body}
     </OnboardingCanvas>
   );

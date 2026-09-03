@@ -83,6 +83,55 @@ export function nextStep(
 }
 
 /**
+ * What decides whether a screen is on this founder's path.
+ *
+ * `hasWebsite` is the answer as recorded, so `null` (not asked yet) still
+ * counts the reading screen in: it is coming unless someone says otherwise.
+ * `invitesEnabled` is the build flag, read once per run.
+ */
+export type StepVisibility = {
+  hasWebsite: boolean | null;
+  invitesEnabled: boolean;
+};
+
+/**
+ * The screens this founder will actually see, in order.
+ *
+ * The counter used to render `index + 1 / ONBOARDING_STEPS.length`, which said
+ * "/ 10" on a run that could never reach ten: invites ship dark, so the tenth
+ * screen does not exist, and answering "no website" skips the reading screen,
+ * which made the counter jump 06 to 08 with nothing in between. A count of
+ * screens nobody will see is not a position, it is a guess.
+ *
+ * The brain screen is always here. It used to be skipped when nothing was
+ * installed, on the grounds that a list of one is not a choice; it installs and
+ * signs in now, so skipping it is what would remove the choice (see the note in
+ * NewOnboardingFlow's probe handler).
+ */
+export function visibleSteps(state: StepVisibility): OnboardingStep[] {
+  return ONBOARDING_STEPS.filter((step) => {
+    if (step === "reading") return state.hasWebsite !== false;
+    if (step === "invite") return state.invitesEnabled;
+    return true;
+  });
+}
+
+/**
+ * Where a screen sits on that path, as the counter renders it.
+ *
+ * A step that is not on the path (a resume that lands mid-change) reports
+ * position 0 rather than a negative one, so the marker degrades to the first
+ * screen instead of rendering "00".
+ */
+export function stepPosition(
+  step: OnboardingStep,
+  state: StepVisibility,
+): { index: number; total: number } {
+  const steps = visibleSteps(state);
+  return { index: Math.max(0, steps.indexOf(step)), total: steps.length };
+}
+
+/**
  * Null means the screen shows no back control at all. Account and recovery
  * have nothing to go back to once the account exists, and the working steps
  * above must not be re-entered.
