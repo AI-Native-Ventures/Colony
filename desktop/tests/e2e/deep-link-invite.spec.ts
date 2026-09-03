@@ -127,9 +127,9 @@ test("add-community deep link starts onboarding when no community is configured"
   await page.goto("/");
 
   await expect(page.getByTestId("community-onboarding-flow")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
+  // The profile stage is the canvas profile screen now: same question, one
+  // screen, shared with every other path that asks it.
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(

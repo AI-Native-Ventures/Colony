@@ -1,5 +1,5 @@
 // desktop/src/features/onboarding/ui/new/MachineCanvas.tsx
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { AntScatter } from "./AntScatter";
 import {
@@ -27,6 +27,8 @@ type Props = {
   testId?: string;
   /** For a canvas that covers another one, which needs to stack above it. */
   className?: string;
+  /** Merged over the hue, for a canvas that fades itself out. */
+  style?: CSSProperties;
   children: ReactNode;
 };
 
@@ -35,6 +37,7 @@ export function MachineCanvas({
   showStep = true,
   testId = "machine-onboarding-gate",
   className,
+  style,
   children,
 }: Props) {
   const theme = machineCanvasFor(step);
@@ -45,7 +48,7 @@ export function MachineCanvas({
       className={className ? `onb-canvas ${className}` : "onb-canvas"}
       data-ink={theme.ink}
       data-testid={testId}
-      style={{ background: theme.base }}
+      style={{ background: theme.base, ...style }}
     >
       <div className="onb-grain" />
       <AntScatter hue={theme.hue} />
