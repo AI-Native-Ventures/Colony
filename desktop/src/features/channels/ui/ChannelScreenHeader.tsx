@@ -28,6 +28,7 @@ import {
 } from "@/features/profile/ui/ProfileAvatarWithStatus";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
+import { UserNameIndicators } from "@/features/user-status/ui/UserNameIndicators";
 import { Button } from "@/shared/ui/button";
 import type { Channel, PresenceStatus } from "@/shared/api/types";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -291,6 +292,15 @@ export function ChannelScreenHeader({
         </>
       }
       title={activeChannelTitle}
+      titleAdornment={
+        activeChannel?.channelType === "dm" && !isGroupDm ? (
+          <UserNameIndicators
+            className="ml-1"
+            pubkey={activeDmParticipant?.pubkey}
+            size="dm"
+          />
+        ) : null
+      }
       transparentChrome={transparentChrome}
       visibility={activeChannel?.visibility}
     />

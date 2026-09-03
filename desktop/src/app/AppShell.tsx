@@ -63,6 +63,7 @@ import {
 import {
   useSetUserStatusMutation,
   useUserStatusQuery,
+  visibleUserStatus,
   useUserStatusSubscription,
 } from "@/features/user-status/hooks";
 import { useCommunityEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
@@ -901,9 +902,11 @@ export function AppShell() {
                             profile={profileQuery.data}
                             selfUserStatus={
                               deferredPubkey
-                                ? (selfStatusQuery.data?.[
+                                ? (visibleUserStatus(
+                                  selfStatusQuery.data?.[
                                     deferredPubkey.toLowerCase()
-                                  ] ?? undefined)
+                                  ],
+                                ) ?? undefined)
                                 : undefined
                             }
                             selectedChannelId={selectedChannelId}

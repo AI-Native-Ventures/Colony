@@ -166,7 +166,9 @@ export function SidebarProfileCard({
             onSetUserStatus={onSetUserStatus}
             triggerContainerRef={profileCardRef}
             userStatusEmoji={selfUserStatus?.emoji}
+            userStatusExpiresAt={selfUserStatus?.expiresAt}
             userStatusText={selfUserStatus?.text}
+            userStatusUpdatedAt={selfUserStatus?.updatedAt}
             communitySwitcherSlot={
               <CommunitySwitcher
                 activeCommunity={activeCommunity}

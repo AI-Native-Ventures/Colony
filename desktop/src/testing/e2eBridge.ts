@@ -1220,7 +1220,7 @@ type WsHandler = (message: unknown) => void;
 const GLOBAL_MOCK_SUBSCRIPTION = "*";
 
 type MockSubscription = {
-  channelId: string;
+  channelIds: string[];
   kinds: number[] | null;
   /** `#p` values from the REQ filters, if any — lets specs assert an
    *  owner-scoped live subscription (e.g. the observer-archive `24200`
@@ -1364,6 +1364,18 @@ declare global {
       url: string,
     ) => { observed: boolean; held: boolean } | null;
     __BUZZ_E2E_RELEASE_BLOCK_DATA__?: (url: string) => void;
+    __BUZZ_E2E_HAS_MOCK_GLOBAL_KIND_SUBSCRIPTION__?: (kind: number) => boolean;
+    __BUZZ_E2E_SET_MOCK_USER_STATUS__?: (input: {
+      text: string;
+      emoji?: string;
+      expiresAt?: number;
+      createdAt?: number;
+    }) => RelayEvent;
+    /** Explicit presence evidence; independent of managed-agent runtime state. */
+    __BUZZ_E2E_EMIT_MOCK_PRESENCE__?: (input: {
+      pubkey: string;
+      status: PresenceStatus;
+    }) => void;
     __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -5432,14 +5444,15 @@ function prependMockHistory(input: {
 function emitMockHistory(
   socket: MockSocket,
   subId: string,
-  channelId: string,
+  channelIds: string[],
   filter: MockFilter,
 ) {
+  // #7112 subscribes across several channels at once, so the history page is
+  // selected over the union of their stores through Colony's own selector.
   const events = selectMockChannelHistory(
-    getMockMessageStore(channelId),
+    channelIds.flatMap((channelId) => getMockMessageStore(channelId)),
     filter,
   );
-
   const emit = () => {
     for (const event of events) {
       sendWsText(socket.handler, ["EVENT", subId, event]);
@@ -5454,8 +5467,8 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
   for (const socket of mockSockets.values()) {
     for (const [subId, subscription] of socket.subscriptions) {
       if (
-        (subscription.channelId === channelId ||
-          subscription.channelId === GLOBAL_MOCK_SUBSCRIPTION) &&
+        (subscription.channelIds.includes(channelId) ||
+          subscription.channelIds.includes(GLOBAL_MOCK_SUBSCRIPTION)) &&
         (!subscription.kinds || subscription.kinds.includes(event.kind))
       ) {
         sendWsText(socket.handler, ["EVENT", subId, event]);
@@ -5486,8 +5499,8 @@ function hasMockLiveSubscription(channelId: string, kind?: number) {
   for (const socket of mockSockets.values()) {
     for (const subscription of socket.subscriptions.values()) {
       if (
-        (subscription.channelId === channelId ||
-          subscription.channelId === GLOBAL_MOCK_SUBSCRIPTION) &&
+        (subscription.channelIds.includes(channelId) ||
+          subscription.channelIds.includes(GLOBAL_MOCK_SUBSCRIPTION)) &&
         (kind === undefined ||
           !subscription.kinds ||
           subscription.kinds.includes(kind))
@@ -11093,8 +11106,7 @@ function sendToMockSocket(args: {
       const kinds = new Set<number>();
       const ownerPubkeys = new Set<string>();
       for (const f of filters) {
-        const cid = f["#h"]?.[0];
-        if (cid) channelIds.add(cid);
+        for (const channelId of f["#h"] ?? []) channelIds.add(channelId);
         for (const kind of f.kinds ?? []) {
           kinds.add(kind);
         }
@@ -11117,7 +11129,8 @@ function sendToMockSocket(args: {
         return;
       }
       socket.subscriptions.set(subId, {
-        channelId: onlyChannelId ?? GLOBAL_MOCK_SUBSCRIPTION,
+        channelIds:
+          channelIds.size > 0 ? [...channelIds] : [GLOBAL_MOCK_SUBSCRIPTION],
         kinds: kinds.size > 0 ? [...kinds] : null,
         ownerPubkeys: [...ownerPubkeys],
       });
@@ -11326,6 +11339,13 @@ function sendToMockSocket(args: {
     }
 
     const channelIds = filter["#h"] ?? [];
+    if (channelIds.length > 0 && subId.startsWith("history-")) {
+      const closeReason = mockChannelHistoryCloses.shift();
+      if (closeReason) {
+        sendWsText(socket.handler, ["CLOSED", subId, closeReason]);
+        return;
+      }
+    }
     if (channelIds.length !== 1) {
       const matchingEvents = [...mockMessages.values()]
         .flat()
@@ -11367,14 +11387,7 @@ function sendToMockSocket(args: {
       return;
     }
 
-    if (subId.startsWith("history-")) {
-      const closeReason = mockChannelHistoryCloses.shift();
-      if (closeReason) {
-        sendWsText(socket.handler, ["CLOSED", subId, closeReason]);
-        return;
-      }
-    }
-    emitMockHistory(socket, subId, channelIds[0], filter);
+    emitMockHistory(socket, subId, channelIds, filter);
     return;
   }
 
@@ -11906,6 +11919,26 @@ export function maybeInstallE2eTauriMocks() {
     emitMockLiveEvent(channel.id, stored);
     return stored;
   };
+  window.__BUZZ_E2E_SET_MOCK_USER_STATUS__ = ({
+    text,
+    emoji,
+    expiresAt,
+    createdAt,
+  }) => {
+    const tags = [["d", "general"]];
+    if (emoji) tags.push(["emoji", emoji]);
+    if (expiresAt) tags.push(["expiration", String(expiresAt)]);
+    const event = createMockEvent(
+      KIND_USER_STATUS,
+      text,
+      tags,
+      DEFAULT_MOCK_IDENTITY.pubkey,
+      createdAt,
+    );
+    recordMockUserStatus(event);
+    emitMockGlobalEvent(event);
+    return event;
+  };
   window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ = prependMockHistory;
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({
     channelName,
@@ -11943,6 +11976,13 @@ export function maybeInstallE2eTauriMocks() {
   }) => hasMockOwnerKindSubscription(ownerPubkey, kind);
   window.__BUZZ_E2E_RELEASE_OBSERVER_ARCHIVE_POLICY__ = () => {
     releaseObserverArchivePolicy();
+  };
+  window.__BUZZ_E2E_HAS_MOCK_GLOBAL_KIND_SUBSCRIPTION__ = (kind) =>
+    hasMockLiveSubscription(GLOBAL_MOCK_SUBSCRIPTION, kind);
+  window.__BUZZ_E2E_EMIT_MOCK_PRESENCE__ = ({ pubkey, status }) => {
+    const author = pubkey.toLowerCase();
+    setMockPresenceStatus(author, status);
+    emitMockGlobalEvent(createMockEvent(20001, status, [], author));
   };
   window.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
     const category = item.category === "mention" ? "mentions" : item.category;
