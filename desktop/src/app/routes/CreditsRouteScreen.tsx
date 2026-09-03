@@ -8,6 +8,7 @@ import type {
 } from "@/features/onboarding/contracts";
 import { defaultPack } from "@/features/onboarding/ui/new/screens/CreditsScreen";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { openUrl } from "@/shared/api/nativeBridge";
 
 /** Where the buyer's email is remembered between top-ups.
  *
@@ -81,7 +82,10 @@ export function CreditsRouteScreen({ checkout }: { checkout: CheckoutWatch }) {
         selected,
         readRememberedEmail() || `${pubkey}@colony.local`,
       );
-      window.open(started.authorizationUrl, "_blank", "noopener,noreferrer");
+      // `window.open` is a no-op inside the app's webview: the transaction was
+      // created, the screen said "waiting for your bank", and no browser ever
+      // opened. The shell has to be asked to open it.
+      await openUrl(started.authorizationUrl);
       setState("returned");
     } catch {
       setState("failed");
