@@ -104,6 +104,15 @@ export function nextStep(
  */
 export type StepVisibility = {
   invitesEnabled: boolean;
+  /**
+   * Whether the probe found a tool the founder already pays for.
+   *
+   * True until the probe answers, for the same reason the website answer used
+   * to count the reading screen in while it was null: the screen is coming
+   * unless something says otherwise. The count may then only shrink, once,
+   * while the building screen is still ticking.
+   */
+  brainDetected: boolean;
 };
 
 /**
@@ -114,14 +123,17 @@ export type StepVisibility = {
  * screen does not exist. A count of screens nobody will see is not a position,
  * it is a guess.
  *
- * The brain screen is always here. It used to be skipped when nothing was
- * installed, on the grounds that a list of one is not a choice; it installs and
- * signs in now, so skipping it is what would remove the choice (see the note in
- * NewOnboardingFlow's probe handler).
+ * The brain screen is here only when the probe found a tool the founder
+ * already subscribes to. Colony Agent is the default now, so on a computer
+ * with nothing installed the screen offers one row, already selected, that
+ * the founder has no way to evaluate: a question with one answer is a screen,
+ * not a choice. It is applied silently instead (see NewOnboardingFlow's
+ * building handler).
  */
 export function visibleSteps(state: StepVisibility): OnboardingStep[] {
   return ONBOARDING_STEPS.filter((step) => {
     if (step === "invite") return state.invitesEnabled;
+    if (step === "brain") return state.brainDetected;
     return true;
   });
 }
@@ -152,8 +164,21 @@ const BACK_TARGETS: Partial<Record<OnboardingStep, OnboardingStep>> = {
   invite: "credits",
 };
 
-export function backStep(current: OnboardingStep): OnboardingStep | null {
-  return BACK_TARGETS[current] ?? null;
+/**
+ * Back never lands on a screen this founder was not shown.
+ *
+ * Credits sits behind the brain screen, which is skipped whenever nothing was
+ * detected. Going back to it there would hand someone a choice the flow had
+ * just decided they did not have, so credits simply has no back control on
+ * that path.
+ */
+export function backStep(
+  current: OnboardingStep,
+  state: StepVisibility,
+): OnboardingStep | null {
+  const target = BACK_TARGETS[current] ?? null;
+  if (target === null) return null;
+  return visibleSteps(state).includes(target) ? target : null;
 }
 
 export function resumeStep(answers: OnboardingAnswers): OnboardingStep {

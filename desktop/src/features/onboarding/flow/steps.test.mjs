@@ -60,19 +60,33 @@ test("the_website_answer_no_longer_moves_anyone_between_screens", () => {
   }
 });
 
+const SHOWN = { invitesEnabled: true, brainDetected: true };
+const NO_BRAIN = { invitesEnabled: true, brainDetected: false };
+
 test("back_never_lands_on_a_step_that_does_work_on_entry", () => {
   // Landing back on building would re-read the user's computer and spend
   // money on a second scrape.
   for (const step of ONBOARDING_STEPS) {
-    assert.notEqual(backStep(step), "building", `${step} goes back to work`);
+    assert.notEqual(
+      backStep(step, SHOWN),
+      "building",
+      `${step} goes back to work`,
+    );
   }
-  assert.equal(backStep("company"), "account");
+  assert.equal(backStep("company", SHOWN), "account");
 });
 
 test("back_is_absent_where_it_has_no_meaning", () => {
-  assert.equal(backStep("account"), null);
-  assert.equal(backStep("recovery"), null);
-  assert.equal(backStep("building"), null);
+  assert.equal(backStep("account", SHOWN), null);
+  assert.equal(backStep("recovery", SHOWN), null);
+  assert.equal(backStep("building", SHOWN), null);
+});
+
+test("back_never_lands_on_a_screen_this_founder_was_not_shown", () => {
+  // Credits sits behind the brain screen. Skipping it must not leave a Back
+  // control that hands someone the choice the flow just made for them.
+  assert.equal(backStep("credits", SHOWN), "brain");
+  assert.equal(backStep("credits", NO_BRAIN), null);
 });
 
 test("resume_lands_on_the_first_unanswered_step", () => {
@@ -122,23 +136,39 @@ test("resume_returns_to_company_while_any_of_its_three_answers_is_missing", () =
 });
 
 test("invites_shipping_dark_leave_the_six_screens_a_founder_sees", () => {
-  const steps = visibleSteps({ invitesEnabled: false });
+  const steps = visibleSteps({ invitesEnabled: false, brainDetected: true });
   assert.ok(!steps.includes("invite"));
   assert.equal(steps.length, 6);
   assert.equal(steps.at(-1), "credits");
 });
 
-test("the_brain_screen_is_always_counted", () => {
+test("the_brain_screen_is_counted_only_when_something_was_detected", () => {
+  // A picker holding one already-selected row is a screen, not a choice.
   for (const invitesEnabled of [true, false]) {
     assert.ok(
-      visibleSteps({ invitesEnabled }).includes("brain"),
+      visibleSteps({ invitesEnabled, brainDetected: true }).includes("brain"),
       `brain missing for invites=${invitesEnabled}`,
+    );
+    assert.ok(
+      !visibleSteps({ invitesEnabled, brainDetected: false }).includes("brain"),
+      `brain counted with nothing detected, invites=${invitesEnabled}`,
     );
   }
 });
 
+test("a_founder_with_nothing_installed_sees_five_screens", () => {
+  const steps = visibleSteps({ invitesEnabled: false, brainDetected: false });
+  assert.deepEqual(steps, [
+    "account",
+    "recovery",
+    "company",
+    "building",
+    "credits",
+  ]);
+});
+
 test("visible_steps_keep_the_spec_order_and_are_the_whole_list_when_nothing_is_dropped", () => {
-  const steps = visibleSteps({ invitesEnabled: true });
+  const steps = visibleSteps({ invitesEnabled: true, brainDetected: true });
   assert.deepEqual(steps, [...ONBOARDING_STEPS]);
 });
 
@@ -147,7 +177,7 @@ test("the_counter_never_jumps_by_more_than_one", () => {
   // skipped, because it numbered screens the founder would never see.
   for (const hasWebsite of [true, false]) {
     for (const invitesEnabled of [true, false]) {
-      const state = { invitesEnabled };
+      const state = { invitesEnabled, brainDetected: true };
       const answers = { ...base, hasWebsite };
       let current = "account";
       let previous = stepPosition(current, state);
@@ -178,8 +208,11 @@ test("the_counter_never_jumps_by_more_than_one", () => {
 
 test("a_step_that_is_not_on_the_path_reports_the_first_position", () => {
   // Never renders "00": a resume mid-change degrades to screen one.
-  assert.deepEqual(stepPosition("invite", { invitesEnabled: false }), {
-    index: 0,
-    total: 6,
-  });
+  assert.deepEqual(
+    stepPosition("invite", { invitesEnabled: false, brainDetected: true }),
+    {
+      index: 0,
+      total: 6,
+    },
+  );
 });

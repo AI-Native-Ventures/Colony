@@ -231,6 +231,26 @@ export function NewOnboardingFlow({
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
 
+  /**
+   * Whether the brain screen is a question worth asking this founder.
+   *
+   * It used to run for everyone. That was right while the screen could do
+   * nothing but pick an already-ready runtime and Colony had no agent of its
+   * own; now Colony Agent is the default and it is hosted, so a founder with
+   * nothing installed reaches a picker holding one row that is already
+   * selected. Nothing on that screen is theirs to decide, and the tool names
+   * on it mean nothing to the person this flow is written for. So it is shown
+   * only when detection found something they already pay for, and otherwise
+   * the same choice is applied for them, through the same call the screen
+   * makes.
+   *
+   * Unknown counts as detected: the probe has not answered yet, and the screen
+   * is coming unless something says otherwise.
+   */
+  const brainDetected =
+    trackResult === null || trackResult.installed.length > 0;
+  const visibility = { invitesEnabled: canInvite, brainDetected };
+
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [websiteRead, setWebsiteRead] = useState(false);
   const [invites, setInvites] = useState<string[]>([]);
@@ -307,9 +327,16 @@ export function NewOnboardingFlow({
   }, []);
 
   const goBack = () => {
-    const target = backStep(step);
+    const target = backStep(step, visibility);
     if (target) goTo(target);
   };
+
+  /**
+   * The screen's back control, or nothing when the screen behind it was never
+   * shown. A control that does nothing when pressed is worse than no control.
+   */
+  const backHandler = (from: OnboardingStep) =>
+    backStep(from, visibility) ? goBack : undefined;
 
   /**
    * What the probe found, recorded without moving anywhere.
@@ -450,13 +477,33 @@ export function NewOnboardingFlow({
     setWebsiteRead(result.ok);
   }, []);
 
+  const applyColonyAgentSilently = (): Pick<
+    OnboardingAnswers,
+    "brain" | "track"
+  > => {
+    const track = trackForBrain(COLONY_AGENT_RUNTIME_ID, []);
+    // Best effort, exactly as on the screen: a failed config write must not
+    // trap anyone, and Agent defaults can fix it afterwards.
+    void applyBrainChoice(COLONY_AGENT_RUNTIME_ID).catch((error: unknown) => {
+      console.warn(
+        "Could not apply the default brain to agent defaults.",
+        error,
+      );
+    });
+    setSelectedBrain(COLONY_AGENT_RUNTIME_ID);
+    setTrackResult((current) => (current ? { ...current, track } : current));
+    return { brain: COLONY_AGENT_RUNTIME_ID, track };
+  };
+
   const handleBuildingContinue = () => {
+    const applied = brainDetected ? null : applyColonyAgentSilently();
     const updated: OnboardingAnswers = {
       ...answers,
       description: descriptionDraft.trim(),
+      ...applied,
     };
     setAnswers(updated);
-    goTo(nextStep("building", updated));
+    goTo(applied ? "credits" : nextStep("building", updated));
   };
 
   const handlePaid = () => {
@@ -587,7 +634,7 @@ export function NewOnboardingFlow({
             payments={effectiveServices.payments}
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}
-            onBack={goBack}
+            onBack={backHandler("credits")}
             finishing={finishState.status === "running"}
             finishError={
               finishState.status === "error"
@@ -619,7 +666,7 @@ export function NewOnboardingFlow({
     }
   })();
 
-  const position = stepPosition(step, { invitesEnabled: canInvite });
+  const position = stepPosition(step, visibility);
 
   return (
     <OnboardingCanvas
