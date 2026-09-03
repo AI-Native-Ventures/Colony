@@ -67,9 +67,9 @@ import {
   parseChannelWindowResponse,
   parseLiveThreadSummary,
 } from "@/features/messages/lib/channelWindowResponse";
+import { isChannelTimelineRow } from "@/features/messages/lib/channelTimelineRows";
 import {
   CHANNEL_AUX_EVENT_KINDS,
-  CHANNEL_TIMELINE_CONTENT_KINDS,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_STREAM_MESSAGE,
   KIND_SYSTEM_MESSAGE,
@@ -83,7 +83,6 @@ type MessageQueryContext = {
   queryKey: ReturnType<typeof channelMessagesKey>;
 };
 
-const CHANNEL_TIMELINE_KINDS = new Set<number>(CHANNEL_TIMELINE_CONTENT_KINDS);
 const CHANNEL_AUX_KINDS = new Set<number>(CHANNEL_AUX_EVENT_KINDS);
 
 export function createOptimisticMessage(
@@ -310,7 +309,7 @@ export function useChannelSubscription(channel: Channel | null) {
       if (next !== current) queryClient.setQueryData(windowKey, next);
       return;
     }
-    const isTimelineRow = CHANNEL_TIMELINE_KINDS.has(event.kind);
+    const isTimelineRow = isChannelTimelineRow(event);
     const threadReference = isTimelineRow
       ? getThreadReference(event.tags)
       : null;

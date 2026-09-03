@@ -1,10 +1,10 @@
 import type { RelayEvent } from "@/shared/api/types";
 import {
   CHANNEL_AUX_EVENT_KINDS,
-  CHANNEL_TIMELINE_CONTENT_KINDS,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_CHANNEL_WINDOW_BOUNDS,
 } from "@/shared/constants/kinds";
+import { isChannelTimelineRow } from "./channelTimelineRows";
 import type {
   ChannelWindowCursor,
   ChannelWindowPage,
@@ -12,7 +12,6 @@ import type {
   LiveThreadSummary,
 } from "./channelWindowStore";
 
-const CONTENT_KINDS = new Set<number>(CHANNEL_TIMELINE_CONTENT_KINDS);
 const AUX_KINDS = new Set<number>(CHANNEL_AUX_EVENT_KINDS);
 
 type WireCursor = { created_at: number; id: string };
@@ -88,7 +87,7 @@ export function parseChannelWindowResponse(
   startCursor: ChannelWindowCursor | null,
 ): ChannelWindowPage {
   const rows = events
-    .filter((event) => CONTENT_KINDS.has(event.kind))
+    .filter((event) => isChannelTimelineRow(event))
     .map((event) => ({
       event,
       thread: null as ChannelWindowThreadSummary | null,
