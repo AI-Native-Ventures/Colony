@@ -2904,9 +2904,13 @@ test("membership denied shows all four affordances and change-community edits no
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await page.getByTestId("onboarding-next").click();
 
-  // Membership-denied screen renders with all four affordances.
+  // Membership-denied screen renders with all four affordances, on the same
+  // canvas as every other screen a person can reach before their community
+  // exists rather than as a card of its own.
   const denied = page.getByTestId("membership-denied");
   await expect(denied).toBeVisible();
+  await expect(denied).toHaveClass(/onb-canvas/);
+  await expect(denied.locator(".onb-headline")).toHaveText("Not a member yet.");
   await expect(denied.getByRole("button", { name: "Try again" })).toBeVisible();
   await expect(denied.getByRole("button", { name: "Back" })).toBeVisible();
   await expect(
