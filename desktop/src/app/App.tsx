@@ -57,7 +57,7 @@ import {
   onAddCommunityPrefillAvailable,
   requestAddCommunityPrefill,
 } from "@/features/communities/addCommunityPrefill";
-import { WelcomeSetup } from "@/features/communities/ui/WelcomeSetup";
+import { WorkspaceSetupFlow } from "@/features/onboarding/ui/new/WorkspaceSetupFlow";
 import { CommunityApplyErrorScreen } from "@/features/communities/ui/CommunityApplyErrorScreen";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
 import { setAvatarProfileSyncQueryClient } from "@/features/profile/avatarProfileSync";
@@ -608,9 +608,10 @@ function CommunityApp({
     );
   } else if (!transaction) {
     if (community.needsSetup) {
-      // Show welcome setup for first-run users with no communities
+      // No community on this machine yet: join one, create one, or reconnect
+      // one this identity already owns.
       appContent = (
-        <WelcomeSetup
+        <WorkspaceSetupFlow
           initialPage={resumeFirstCommunityPage ?? undefined}
           onBack={
             isFindingCommunityAfterLeave ? undefined : onBackToMachineConfig
