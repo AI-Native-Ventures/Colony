@@ -26,12 +26,13 @@ import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { MembershipDenied } from "./MembershipDenied";
+import { AdditionalCommunityRun } from "./new/AdditionalCommunityRun";
 import { MachineCanvas } from "./new/MachineCanvas";
 import { ProfileScreen } from "./new/screens/ProfileScreen";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
-import { OnboardingV2Flow } from "./OnboardingV2Flow";
 import { completeFirstRun } from "../flow/completeFirstRun";
 import { DEFAULT_COMPLETE_FIRST_RUN_IO } from "../flow/completeFirstRunIo";
+import type { OnboardingV2Draft } from "../onboardingV2";
 
 function isRelayMembershipDeniedError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -195,89 +196,113 @@ export function CommunityOnboardingFlow({
     markCommunityOnboardingComplete(identity.pubkey, relayUrl);
     clear();
   }, [clear, relayUrl]);
-  const finalize = React.useCallback(async () => {
-    if (isPending || !relayUrl) return;
-    setIsPending(true);
-    update({ stage: "finalizing", error: undefined });
-    // The handoff talks to a possibly brand-new relay. Without a deadline a
-    // relay that never answers leaves the user on "Bringing Scout online…"
-    // forever with no error and no way forward — the exact trap this guard
-    // exists for. On timeout the catch below surfaces Retry / Skip for now.
-    const deadline = new Promise<never>((_, reject) => {
-      window.setTimeout(
-        () =>
-          reject(
-            new Error("Scout setup timed out. Try again or skip for now."),
-          ),
-        FINALIZE_TIMEOUT_MS,
-      );
-    });
-    try {
-      const work = (async () => {
-        // Before the channels exist, so it is settled before the kickoff runs.
-        if (isOwnerLed) await startAgentSetup();
-        const identity = await getIdentity();
-        // A resumed transaction whose brief already went out keeps its
-        // recorded id and must not re-check the marker; passing draft: null
-        // preserves that exactly.
-        const draft = transaction?.onboardingV2 ?? null;
-        const alreadyDelivered = Boolean(draft?.firstTask.deliveredEventId);
-        const completion = await completeFirstRun(
-          {
-            queryClient,
-            relayUrl,
-            pubkey: identity.pubkey,
-            draft: alreadyDelivered ? null : draft,
-            // The legacy profile stage already published kind:0.
-            profileDisplayName: null,
-            // This path already wrote the profile, avatar included, on its own
-            // profile stage; completion must not publish a second kind:0.
-            profileAvatarUrl: null,
-          },
-          DEFAULT_COMPLETE_FIRST_RUN_IO,
+  /**
+   * The one handoff: Scout's brief delivered, the workspace opened, the gate
+   * key written. `draft` is what the brief is built from, passed in rather
+   * than read off the transaction so a walk that has only just produced it
+   * does not have to wait for a state round trip first.
+   *
+   * Throws on failure as well as recording the error, because the canvas walk
+   * shows its own retry from the rejected promise.
+   */
+  const finalizeWith = React.useCallback(
+    async (draft: OnboardingV2Draft | null) => {
+      if (isPending || !relayUrl) return;
+      setIsPending(true);
+      update({ stage: "finalizing", error: undefined });
+      // The handoff talks to a possibly brand-new relay. Without a deadline a
+      // relay that never answers leaves the user on "Bringing Scout online…"
+      // forever with no error and no way forward: the exact trap this guard
+      // exists for. On timeout the catch below surfaces Retry / Skip for now.
+      const deadline = new Promise<never>((_, reject) => {
+        window.setTimeout(
+          () =>
+            reject(
+              new Error("Scout setup timed out. Try again or skip for now."),
+            ),
+          FINALIZE_TIMEOUT_MS,
         );
-        if (completion.focusChannelId) {
-          let onboardingV2 = transaction?.onboardingV2;
-          if (onboardingV2 && completion.firstTaskEventId) {
-            onboardingV2 = {
-              ...onboardingV2,
-              firstTask: {
-                ...onboardingV2.firstTask,
-                deliveredEventId: completion.firstTaskEventId,
-              },
-            };
-          }
-          // Keep this screen mounted as a curtain over the loading app; the
-          // "entering" stage fades it out once Welcome reports ready.
-          update({
-            stage: "entering",
-            error: undefined,
-            onboardingV2: onboardingV2
-              ? { ...onboardingV2, stage: "entering" }
-              : undefined,
-          });
-          return;
-        }
-        await finish();
-      })();
-      await Promise.race([work, deadline]);
-    } catch (error) {
-      setStarterChannelFailureCount((count) => count + 1);
-      update({
-        error: error instanceof Error ? error.message : String(error),
       });
-      setIsPending(false);
-    }
-  }, [
-    finish,
-    isOwnerLed,
-    isPending,
-    queryClient,
-    relayUrl,
-    startAgentSetup,
-    transaction?.onboardingV2,
-    update,
-  ]);
+      try {
+        const work = (async () => {
+          // Before the channels exist, so it is settled before the kickoff
+          // runs.
+          if (isOwnerLed) await startAgentSetup();
+          const identity = await getIdentity();
+          // A resumed transaction whose brief already went out keeps its
+          // recorded id and must not re-check the marker; passing draft: null
+          // preserves that exactly.
+          const alreadyDelivered = Boolean(draft?.firstTask.deliveredEventId);
+          const completion = await completeFirstRun(
+            {
+              queryClient,
+              relayUrl,
+              pubkey: identity.pubkey,
+              draft: alreadyDelivered ? null : draft,
+              // The profile is not this handoff's to write: the join walk
+              // published kind:0 on its own profile screen, and the
+              // second-community walk never asks for a name it already knows.
+              profileDisplayName: null,
+              profileAvatarUrl: null,
+            },
+            DEFAULT_COMPLETE_FIRST_RUN_IO,
+          );
+          if (completion.focusChannelId) {
+            let onboardingV2 = draft ?? undefined;
+            if (onboardingV2 && completion.firstTaskEventId) {
+              onboardingV2 = {
+                ...onboardingV2,
+                firstTask: {
+                  ...onboardingV2.firstTask,
+                  deliveredEventId: completion.firstTaskEventId,
+                },
+              };
+            }
+            // Keep this screen mounted as a curtain over the loading app; the
+            // "entering" stage fades it out once Welcome reports ready.
+            update({
+              stage: "entering",
+              error: undefined,
+              onboardingV2: onboardingV2
+                ? { ...onboardingV2, stage: "entering" }
+                : undefined,
+            });
+            return;
+          }
+          await finish();
+        })();
+        await Promise.race([work, deadline]);
+      } catch (error) {
+        setStarterChannelFailureCount((count) => count + 1);
+        update({
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setIsPending(false);
+        throw error;
+      }
+    },
+    [
+      finish,
+      isOwnerLed,
+      isPending,
+      queryClient,
+      relayUrl,
+      startAgentSetup,
+      update,
+    ],
+  );
+
+  /**
+   * The team screen's own finish: it has no retry of its own beyond the button
+   * it already renders, so a failure is recorded and swallowed here.
+   */
+  const finalize = React.useCallback(
+    () =>
+      finalizeWith(transaction?.onboardingV2 ?? null).catch(() => {
+        // Already recorded on the transaction by finalizeWith.
+      }),
+    [finalizeWith, transaction?.onboardingV2],
+  );
 
   const backToProfile = React.useCallback(() => {
     if (isPending) return;
@@ -409,29 +434,33 @@ export function CommunityOnboardingFlow({
     }
   };
 
-  // The duplication was only ever in first run: the redesigned flow asks for
-  // the founder's name, country, city and gender there, so showing V2 as well
-  // meant answering the same questions twice in one sitting. A returning
-  // founder creating a second community never sees the redesigned flow at
-  // all, and that journey is V2's alone, so it still renders here. The draft
-  // is the brief's payload on this path; the canvas first run builds its own
-  // from the flow answers and delivers it through the same shared module.
+  // A founder who already has an account and asks for a second community
+  // walks the same canvas as first run, minus the two screens that make an
+  // account. This used to be a flow of its own, which is how the one journey
+  // that only reaches experienced founders ended up being the only one still
+  // wearing the previous design.
+  //
+  // "entering" is deliberately not here: the walk is over by then, and what
+  // the stage needs is the curtain below rather than the last screen of a
+  // finished flow.
   const isReturningFounderJourney = transaction.source === "create-community";
   if (
-    transaction.onboardingV2 &&
     isReturningFounderJourney &&
     transaction.stage !== "claiming" &&
-    transaction.stage !== "connecting"
+    transaction.stage !== "connecting" &&
+    transaction.stage !== "entering"
   ) {
     return (
-      <OnboardingV2Flow
-        draft={transaction.onboardingV2}
-        externalError={transaction.error}
-        isFinalizing={isPending}
-        journey="additional-community"
-        onChange={(onboardingV2) => update({ onboardingV2, error: undefined })}
-        onReadyToFinalize={finalize}
-        onSkip={() => void finish()}
+      <AdditionalCommunityRun
+        initialDraft={transaction.onboardingV2 ?? null}
+        onComplete={async (draft) => {
+          // Recorded before the handoff so a relaunch mid-handoff resumes with
+          // the answers this walk produced rather than an empty draft.
+          update({ onboardingV2: draft, error: undefined });
+          await finalizeWith(draft);
+        }}
+        onExit={() => void finish()}
+        transactionId={transaction.id}
       />
     );
   }

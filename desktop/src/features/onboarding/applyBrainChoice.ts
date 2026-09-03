@@ -8,9 +8,10 @@
  * "Oh My Pi" with no model selected, and their Chief of Staff never answered.
  * Nothing errored: the config the agent starts from was simply never written.
  *
- * The older `OnboardingV2Flow` does write it (`configForAutomaticCli` on the
- * runtime it auto-selected). This is the same write, driven by an explicit
- * human choice instead of detection order.
+ * `ensureAutomaticAgentConfig` does the same write for a founder who was
+ * never asked (`configForAutomaticCli` on the runtime detection picked). This
+ * is that write, driven by an explicit human choice instead of detection
+ * order.
  *
  * `resolveTrack` hands the screen runtime *labels*, not ids, so the label is
  * matched back to a catalog entry here. An unmatched label writes nothing

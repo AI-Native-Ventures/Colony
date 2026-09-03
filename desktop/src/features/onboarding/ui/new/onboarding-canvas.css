@@ -150,6 +150,17 @@
     opacity: 0.45;
   }
 
+  /* Way out. Mirrors the step marker across the canvas: a walk that a founder
+     did not have to start needs somewhere to stop from every screen, and a
+     control that lives on the canvas rather than on a screen cannot be
+     forgotten by the next screen added to the flow. */
+  .onb-exit {
+    position: absolute;
+    top: clamp(1.5rem, 4vh, 3rem);
+    right: clamp(2rem, 7vw, 8rem);
+    z-index: 3;
+  }
+
   /* Foot: trail + mark. Provisioned here so screens can drop an ant trail in
      without new chrome CSS. */
   .onb-foot {
@@ -259,6 +270,11 @@
     .onb-step {
       top: 1.25rem;
       left: 1.5rem;
+    }
+
+    .onb-exit {
+      top: 1.25rem;
+      right: 1.5rem;
     }
 
     .onb-stage {

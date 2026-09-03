@@ -1,14 +1,14 @@
 /**
  * The one place onboarding decides how a new owner's agents are powered.
  *
- * Every journey that ends with someone landing in their own Welcome channel
- * runs this: the first-run flow (through `CommunityOnboardingFlow.finalize`)
- * and a returning founder creating another company (through
- * `OnboardingV2Flow`'s Install button). It used to live only on the second of
- * those, so a brand-new owner reached Welcome with `credential_mode: "byok"`
- * and no provider, `resolveAgentReadiness` answered `{ready: false}`, and the
- * first thing Colony said to them was `WELCOME_KICKOFF_PROVIDER_MESSAGE`: a
- * Settings errand instead of their team.
+ * Every owner-led journey that ends with someone landing in their own Welcome
+ * channel runs this, through `CommunityOnboardingFlow.finalize`: a first
+ * community, and a returning founder creating another one. It used to run
+ * only on the second of those, from a screen of its own, so a brand-new owner
+ * reached Welcome with `credential_mode: "byok"` and no provider,
+ * `resolveAgentReadiness` answered `{ready: false}`, and the first thing
+ * Colony said to them was `WELCOME_KICKOFF_PROVIDER_MESSAGE`: a Settings
+ * errand instead of their team.
  */
 
 import { isColonyCreditsEligible } from "@/features/agents/ui/colonyCreditsEligibility";
@@ -50,10 +50,8 @@ export type AutomaticAgentPlan =
 
 /**
  * Everything this module touches outside itself. Callers override a member
- * when they need their own wiring (the Install button hands in its mutation so
- * the button keeps its pending state and the catalog is refetched), and tests
- * hand in the whole set so the decision runs under plain node with no Tauri
- * host and no live relay.
+ * when they need their own wiring, and tests hand in the whole set so the
+ * decision runs under plain node with no Tauri host and no live relay.
  */
 export type AutomaticAgentSetupIo = {
   listRuntimes: () => Promise<AcpRuntimeCatalogEntry[]>;
@@ -187,32 +185,4 @@ export async function ensureAutomaticAgentConfig(
       ? planAutomaticAgentConfig(runtimes, current, await relayHostsAgents(io))
       : offline;
   return applyPlan(plan, io);
-}
-
-/**
- * The hosted route on its own, for the Install button that asks for it by
- * name. Same gate as the automatic path: the button cannot talk this machine
- * into a config the relay behind it cannot serve.
- */
-export async function installAndConfigureColonyAgent(
-  overrides: Partial<AutomaticAgentSetupIo> = {},
-): Promise<AutomaticAgentPlan> {
-  const io = { ...WIRED_IO, ...overrides };
-  const current = await io.loadConfig();
-  const config = defaultColonyAgentConfig(current);
-  if (!(await relayHostsAgents(io))) {
-    return { action: "skip", reason: "relay-has-no-hosted-agent" };
-  }
-  if (!isColonyCreditsEligible(COLONY_AGENT_RUNTIME_ID, config.provider)) {
-    return { action: "skip", reason: "provider-not-eligible" };
-  }
-  return applyPlan(
-    {
-      action: "configure",
-      route: "colony-agent",
-      runtimeId: COLONY_AGENT_RUNTIME_ID,
-      config,
-    },
-    io,
-  );
 }
