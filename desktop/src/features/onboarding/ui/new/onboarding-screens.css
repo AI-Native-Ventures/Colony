@@ -921,6 +921,29 @@
     box-shadow: 0 0 0 3px rgba(23, 23, 23, 0.14);
   }
 
+  /* Screen 5a: three named ways of paying for the thinking, stacked. The
+     headings are what make them read as alternatives to one another rather
+     than as one long list of tools, which is the whole reason a founder
+     already paying for Claude was being steered toward a second bill. */
+  :where(.onb-canvas) .onb-lanes {
+    display: flex;
+    flex-direction: column;
+    gap: 1.125rem;
+    width: 100%;
+  }
+
+  :where(.onb-canvas) .onb-lane {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* The key sits in the strip under the grid, so it takes the width the
+     sign-in action would have taken beside it. */
+  :where(.onb-canvas) .onb-field--key {
+    width: 100%;
+  }
+
   /* Screen 5a: the brains, as a two-column grid of compact tiles. Six
      full-width rows carrying a dot, a name and a sentence each ran the whole
      right column and made a list of six read as a list of twenty. The tile is
