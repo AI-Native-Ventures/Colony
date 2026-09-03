@@ -153,15 +153,15 @@ fn merge_personas_adds_missing_built_ins() {
         .map(|record| record.display_name.as_str())
         .collect();
     assert_eq!(display_names, vec!["Scout", "Forager", "Tender"]);
+    // The catalog still ships all three definitions, but a fresh company's
+    // starting lineup is Scout alone: Forager and Tender are offered, not
+    // activated.
     let active_ids: Vec<&str> = records
         .iter()
         .filter(|record| record.is_active)
         .map(|record| record.id.as_str())
         .collect();
-    assert_eq!(
-        active_ids,
-        vec!["builtin:fizz", "builtin:honey", "builtin:bumble"]
-    );
+    assert_eq!(active_ids, vec!["builtin:fizz"]);
 }
 
 #[test]

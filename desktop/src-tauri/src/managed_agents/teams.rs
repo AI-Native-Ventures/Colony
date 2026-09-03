@@ -32,11 +32,23 @@ pub(super) struct BuiltInTeam {
     lead_persona_id: Option<&'static str>,
 }
 
+// The Welcome Team is kept as a one-member team rather than dropped. Its id is
+// the anchor the onboarding provisioning path pins the starter instance to
+// (`agent.team_id == "builtin-team:welcome"`), and every lookup that finds the
+// Chief of Staff for a relay filters on it. Removing it from BUILT_IN_TEAMS
+// would demote the stored copy on every existing install to a user-owned team,
+// which changes deletion validation and the event-sync publish rule for a
+// record those installs are still using.
+//
+// Forager and Tender are deliberately absent: a new company starts with Scout
+// alone. Their persona definitions are untouched, and an install that already
+// stored the three-member team keeps it, because merge_teams only seeds a
+// built-in team that is missing and never rewrites one that is already there.
 pub(super) const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     id: "builtin-team:welcome",
     name: "Welcome Team",
-    description: Some("A friendly starter trio ready to help you plan, create, and ship."),
-    persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
+    description: Some("Your Chief of Staff, ready to help you plan, create, and ship."),
+    persona_ids: &["builtin:fizz"],
     lead_persona_id: None,
 }];
 

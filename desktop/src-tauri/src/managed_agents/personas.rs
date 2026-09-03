@@ -74,7 +74,11 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         name_pool: &["Forager"],
         model: None,
         runtime: None,
-        default_active: true,
+        // Not part of the starting lineup. A new company opens with Scout
+        // alone; Forager stays in the built-in catalog so it can be selected
+        // into My Agents later, and an install that already activated it keeps
+        // it (merge_personas never rewrites a stored `is_active`).
+        default_active: false,
     },
     BuiltInPersona {
         id: "builtin:bumble",
@@ -86,7 +90,8 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         name_pool: &["Tender"],
         model: None,
         runtime: None,
-        default_active: true,
+        // Not part of the starting lineup, for the same reason as Forager.
+        default_active: false,
     },
 ];
 
