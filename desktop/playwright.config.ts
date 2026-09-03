@@ -56,6 +56,7 @@ export default defineConfig({
         "**/account-signin.spec.ts",
         "**/navigation.spec.ts",
         "**/navigation-command-palette.spec.ts",
+        "**/kickoff-context-row.spec.ts",
         "**/action-center.spec.ts",
         "**/channels.spec.ts",
         "**/channel-shared-header-backdrop.spec.ts",

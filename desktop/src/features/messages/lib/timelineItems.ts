@@ -17,6 +17,7 @@ import {
   isWithinGroupingWindow,
   startsNewMessageGroup,
 } from "@/features/messages/lib/messageGrouping";
+import { isWelcomeKickoffContextMessage } from "@/features/onboarding/welcomeKickoffContext";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 
 /**
@@ -34,6 +35,11 @@ export type TimelineItem =
       key: string;
       entries: MainTimelineEntry[];
     }
+  // The founder's own signup context, posted by first run and marked at send.
+  // A full message row here means the first thing a new founder reads in their
+  // workspace is a wall of labels they typed two screens ago, with Scout's
+  // reply below it. One quiet expandable line instead.
+  | { kind: "kickoff-context"; key: string; entry: MainTimelineEntry }
   | {
       kind: "message";
       key: string;
@@ -57,6 +63,22 @@ export type TimelineDayGroup = {
 /** Stable per-item key, unique across the flattened stream. */
 export function getTimelineItemKey(item: TimelineItem): string {
   return item.key;
+}
+
+/**
+ * The message ids a row is responsible for: what read tracking and retention
+ * ask about. Dividers carry none; a membership summary carries every event it
+ * folded together.
+ */
+export function timelineItemMessageIds(item: TimelineNonDayItem): string[] {
+  if (item.kind === "system-group") {
+    return item.entries.map((entry) => entry.message.id);
+  }
+  return item.kind === "message" ||
+    item.kind === "system" ||
+    item.kind === "kickoff-context"
+    ? [item.entry.message.id]
+    : [];
 }
 
 function entryRenderKey(entry: MainTimelineEntry): string {
@@ -223,6 +245,16 @@ export function buildTimelineItems(
       previousGroupEntry = null;
       previousMessageItemIndex = null;
       items.push({ kind: "unread-divider", key: `unread-${renderKey}` });
+    }
+
+    // Checked before the system/message split and before grouping: this row
+    // is neither a system event nor part of anyone's message group, and it
+    // must never become the anchor a following message continues from.
+    if (isWelcomeKickoffContextMessage(message.tags)) {
+      previousGroupEntry = null;
+      previousMessageItemIndex = null;
+      items.push({ kind: "kickoff-context", key: renderKey, entry });
+      continue;
     }
 
     const kind = message.kind === KIND_SYSTEM_MESSAGE ? "system" : "message";

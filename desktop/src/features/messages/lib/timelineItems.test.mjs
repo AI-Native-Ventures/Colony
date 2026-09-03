@@ -474,3 +474,86 @@ test("buildTimelineDayGroups: preserves leading rows without a day divider", () 
     },
   ]);
 });
+
+test("the founder's signup context gets its own quiet row", () => {
+  // First run posts the founder's context, then Scout replies to it. The
+  // context must not render as a full message row, or the first thing a new
+  // founder reads is a wall of labels they typed two screens earlier.
+  const { items } = buildTimelineItems(
+    [
+      entry({
+        id: "context",
+        createdAt: dayAt(2026, 6, 14, 9, 0),
+        tags: [
+          ["client", "colony-onboarding-v2:first-task:abc"],
+          ["client", "colony-kickoff:context"],
+        ],
+      }),
+      entry({
+        id: "scout",
+        createdAt: dayAt(2026, 6, 14, 9, 1),
+        pubkey: "scout",
+      }),
+    ],
+    null,
+  );
+
+  assert.deepEqual(kinds(items), ["day-divider", "kickoff-context", "message"]);
+  assert.equal(getTimelineItemKey(items[1]), "context");
+});
+
+test("an untagged message from the same author still renders as a message", () => {
+  // Only the marker changes anything. Everything sent before it existed, and
+  // everything sent after it by anyone else, renders exactly as it did.
+  const { items } = buildTimelineItems(
+    [
+      entry({ id: "a", createdAt: dayAt(2026, 6, 14, 9, 0) }),
+      entry({
+        id: "b",
+        createdAt: dayAt(2026, 6, 14, 9, 1),
+        tags: [["client", "colony-onboarding-v2:first-task:abc"]],
+      }),
+    ],
+    null,
+  );
+
+  assert.deepEqual(kinds(items), ["day-divider", "message", "message"]);
+});
+
+test("the context row breaks the group it sits inside", () => {
+  // The context row is not an author's message, so a message on the far side
+  // of it must render with its own header rather than continuing across it.
+  // All three are the same author within the grouping window, so without the
+  // break the third row would group onto the first.
+  const author = "author-a";
+  const { items } = buildTimelineItems(
+    [
+      entry({ id: "before", pubkey: author, createdAt: dayAt(2026, 6, 14, 9) }),
+      entry({
+        id: "context",
+        pubkey: author,
+        createdAt: dayAt(2026, 6, 14, 9, 1),
+        tags: [["client", "colony-kickoff:context"]],
+      }),
+      entry({
+        id: "after",
+        pubkey: author,
+        createdAt: dayAt(2026, 6, 14, 9, 2),
+      }),
+    ],
+    null,
+  );
+
+  assert.deepEqual(kinds(items), [
+    "day-divider",
+    "message",
+    "kickoff-context",
+    "message",
+  ]);
+  assert.deepEqual(
+    items
+      .filter((item) => item.kind === "message")
+      .map((item) => item.isContinuation),
+    [false, false],
+  );
+});
