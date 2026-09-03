@@ -1,11 +1,14 @@
 // desktop/src/features/onboarding/ui/new/screens/ProfileScreen.tsx
 import { useState } from "react";
 
+import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
   parseEmojiAvatarDataUrl,
   ProfileAvatarEditor,
 } from "@/features/profile/ui/ProfileAvatarEditor";
+import { OnboardingRelayConnectionErrorCard } from "@/features/onboarding/ui/OnboardingRelayConnectionErrorCard";
+import { isRelayUnreachableError } from "@/shared/lib/relayError";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
@@ -31,6 +34,14 @@ type Props = {
   onSkip?: () => void;
   /** Offered when the save failed but a saved name already exists. */
   onContinueWithoutSaving?: () => void;
+  /**
+   * Leaves this screen entirely. The app gate has nowhere to go back to, so
+   * it passes nothing; a community transaction passes its cancel, which is
+   * how someone abandons a join they have started.
+   */
+  onBack?: () => void;
+  /** What that exit is called, when "Back" is not what it does. */
+  backLabel?: string;
 };
 
 /**
@@ -50,6 +61,8 @@ export function ProfileScreen({
   error = null,
   onSkip,
   onContinueWithoutSaving,
+  onBack,
+  backLabel = "Back",
 }: Props) {
   const ready = profileReady(values);
 
@@ -91,7 +104,16 @@ export function ProfileScreen({
         </div>
         <p className="onb-note">A picture is optional.</p>
       </div>
-      {error ? (
+      {error && isRelayUnreachableError(error) ? (
+        // A relay that cannot be reached is a connection to fix rather than a
+        // sentence to read, so this one failure gets a control instead of a
+        // line of text.
+        <OnboardingRelayConnectionErrorCard
+          isSaving={isSaving}
+          key={error}
+          message={error}
+        />
+      ) : error ? (
         <p className="onb-note onb-note-warn" role="alert">
           {error}
         </p>
@@ -123,6 +145,17 @@ export function ProfileScreen({
             type="button"
           >
             Skip for now
+          </button>
+        ) : null}
+        {onBack ? (
+          <button
+            className="onb-quiet-action"
+            data-testid="onboarding-back"
+            disabled={isSaving}
+            onClick={onBack}
+            type="button"
+          >
+            {backLabel}
           </button>
         ) : null}
       </div>
@@ -158,7 +191,13 @@ function AvatarPicker({
   const [isOpen, setIsOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const emojiAvatar = parseEmojiAvatarDataUrl(avatarUrl);
-  const hasAvatar = avatarUrl.trim().length > 0;
+  const presentation = useAvatarPresentation(avatarUrl);
+  // A picture whose upload never propagated is not a picture: the circle goes
+  // back to empty so it can be replaced, and the profile is written without
+  // it. Dropping this check left a failed upload showing initials as though
+  // it had worked.
+  const hasAvatar =
+    avatarUrl.trim().length > 0 && presentation?.state !== "failed";
   const previewName = name.trim() || "Your profile";
 
   return (
@@ -185,9 +224,18 @@ function AvatarPicker({
             avatarUrl={avatarUrl}
             className="h-full w-full"
             label={previewName}
+            // Named so the pending-upload and failed-image states stay
+            // assertable: an avatar that is still propagating is the whole
+            // point of the deferred registration around this screen.
+            testId="onboarding-avatar-circle"
           />
         ) : (
-          <span className="onb-avatar-empty">Photo</span>
+          <span
+            className="onb-avatar-empty"
+            data-testid="onboarding-avatar-empty"
+          >
+            Photo
+          </span>
         )}
       </button>
       <Dialog onOpenChange={setIsOpen} open={isOpen}>
@@ -211,6 +259,10 @@ function AvatarPicker({
             presentation="onboarding-modal"
             previewName={previewName}
             showInlineUploadPreview
+            // Keeps the editor's controls named as they were on the avatar
+            // step this screen replaces, so what the specs drive is the
+            // control rather than the screen that happened to host it.
+            testIdPrefix="onboarding-avatar"
           />
         </DialogContent>
       </Dialog>

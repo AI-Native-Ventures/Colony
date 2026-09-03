@@ -283,7 +283,6 @@ function AppReady({
         initialProfile={onboarding.flow.initialProfile.profile}
         key={onboarding.currentPubkey ?? "anonymous"}
         onComplete={onboarding.flow.actions.complete}
-        onSkip={onboarding.flow.actions.skipForNow}
       />
     );
   }

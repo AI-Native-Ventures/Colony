@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import { expectEmojiMartStylesInstalled } from "../helpers/css";
 import { seedActiveIdentity } from "../helpers/onboarding";
 
 /**
@@ -86,4 +87,67 @@ test("leaving the founder walk returns to the community choice", async ({
   await page.getByRole("button", { name: "Back" }).click();
   await expect(page.getByTestId("workspace-setup-gate")).toBeVisible();
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
+});
+
+test("the photo control shares the profile emoji picker", async ({ page }) => {
+  // Ported from the avatar step this screen replaced: the editor is shared
+  // with Profile settings, so its controls have to keep their sizes wherever
+  // it is opened from.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await expect(page.getByTestId("onboarding-avatar-editor")).toBeVisible();
+  await page.getByRole("tab", { name: "Emoji" }).click();
+
+  const picker = page.locator("em-emoji-picker");
+  await expect(picker.locator("input[type='search']")).toBeVisible();
+  await expectEmojiMartStylesInstalled(picker);
+  // The old spec pinned the picker box to 384px, which was the deleted avatar
+  // step's dialog height rather than anything about the control. What is
+  // shared, and what actually broke when the stylesheet failed to load, is
+  // the size of the controls inside it.
+  await expect(
+    page.getByTestId("onboarding-avatar-emoji-picker"),
+  ).toBeVisible();
+
+  const controlHeights = await picker.evaluate((element) => {
+    const input = element.shadowRoot?.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    );
+    const toneControl =
+      element.shadowRoot?.querySelector<HTMLElement>(".search + .flex");
+    if (!input || !toneControl) {
+      throw new Error("Onboarding emoji picker controls did not render.");
+    }
+    return {
+      input: input.getBoundingClientRect().height,
+      tone: toneControl.getBoundingClientRect().height,
+    };
+  });
+  expect(controlHeights).toEqual({ input: 48, tone: 48 });
+});
+
+test("a chosen picture is kept on the same screen as the name", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-profile-avatar").click();
+  await page
+    .getByTestId("onboarding-avatar-url")
+    .fill("https://example.com/onboarding-avatar.png");
+  await page.getByTestId("onboarding-avatar-done").click();
+
+  // No second screen to advance to: the photo is set and the name is still
+  // the only thing the action waits on.
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
+  await expect(page.getByTestId("onboarding-profile-avatar")).toHaveAttribute(
+    "data-has-avatar",
+    "true",
+  );
+  await expect(page.getByTestId("onboarding-next")).toBeDisabled();
 });

@@ -496,6 +496,7 @@ export function CommunityOnboardingFlow({
                 setDisplayName(patch.displayName);
               if (patch.avatarUrl !== undefined) setAvatarUrl(patch.avatarUrl);
             }}
+            onBack={onCancel}
             onSubmit={() => void saveProfile()}
             values={{ avatarUrl, displayName }}
           />

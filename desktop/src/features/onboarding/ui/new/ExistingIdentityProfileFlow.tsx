@@ -35,8 +35,6 @@ type Props = {
   initialProfile: Profile | null | undefined;
   /** Onboarding is finished: set up starter channels and enter the app. */
   onComplete: () => void;
-  /** Leave onboarding without a saved profile, after a failed save. */
-  onSkip: () => void;
 };
 
 /**
@@ -50,7 +48,6 @@ type Props = {
 export function ExistingIdentityProfileFlow({
   initialProfile,
   onComplete,
-  onSkip,
 }: Props) {
   const { activeCommunity } = useCommunities();
   const queryClient = useQueryClient();
@@ -130,9 +127,9 @@ export function ExistingIdentityProfileFlow({
         return;
       }
       if (membershipStatus === "unreachable") {
-        setSaveError(
-          "Can't reach this relay. Check your connection, or change your community.",
-        );
+        // Phrased so the screen recognises it as the connectivity failure it
+        // is and offers the reconnect card rather than a line of prose.
+        setSaveError("relay unreachable: could not reach this community");
         return;
       }
       if (membershipStatus === "error") {
@@ -213,6 +210,11 @@ export function ExistingIdentityProfileFlow({
     <MachineCanvas showStep={false} step="identity" testId="onboarding-gate">
       <StartupWindowDragRegion />
       <ProfileScreen
+        // The relay this profile is being written to can be the wrong one:
+        // a gated relay refuses the write, and changing community is the way
+        // out. The previous flow put this behind its Back control; it says
+        // what it does now.
+        backLabel="Change community"
         error={saveError}
         isSaving={isSaving}
         onChange={updateDraft}
@@ -224,14 +226,24 @@ export function ExistingIdentityProfileFlow({
             ? onComplete
             : undefined
         }
+        // Both exits enter the app, exactly as they did before: the previous
+        // flow's "Skip for now" walked on to the key-backup step and finished
+        // from there. What differs is only which one is offered, and that
+        // still turns on whether the relay already knows a name for them.
         onSkip={
           saveError && savedProfile.displayName.length === 0
-            ? onSkip
+            ? onComplete
             : undefined
         }
+        onBack={() => setIsCommunityChangeOpen(true)}
         onSubmit={() => void save()}
         values={draft}
       />
+      {isCommunityChangeOpen ? (
+        <CommunityChangeOverlay
+          onClose={() => setIsCommunityChangeOpen(false)}
+        />
+      ) : null}
     </MachineCanvas>
   );
 }
