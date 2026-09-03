@@ -380,7 +380,7 @@ test("a blank box is never the whole offer when there is no website", async ({
   await expect(page.getByRole("button", { name: "Looks right" })).toBeEnabled();
 });
 
-test("nothing detected means no brain screen and no dead Back behind it", async ({
+test("nothing detected still asks who pays, with Colony picked", async ({
   page,
 }) => {
   await seedFreshFirstRun(page, {}, { acpRuntimesCatalog: NOTHING_INSTALLED });
@@ -392,23 +392,27 @@ test("nothing detected means no brain screen and no dead Back behind it", async 
   await expect(
     page.getByRole("heading", { name: "Tell us what you do." }),
   ).toBeVisible({ timeout: 20_000 });
-  // Five screens, not six: the picker is not counted when it will not run.
+  // Six screens: the brain choice is asked on every first run now, and the
+  // credits screen follows because Colony is the default when nothing is found.
   await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
-    "04 / 05",
+    "04 / 06",
   );
   await page
     .getByPlaceholder("We repair and service cars in Johannesburg.")
     .fill("We service and repair cars for owners around Johannesburg.");
   await page.getByRole("button", { name: "Looks right" }).click();
 
-  // Straight to credits: a picker with one already-selected row is a screen,
-  // not a choice, so the same choice is applied without asking.
+  // The brain screen shows with an empty subscription lane and Colony chosen.
+  await expect(
+    page.getByRole("heading", { name: "Pick who does the thinking." }),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByTestId("onboarding-brain-lane-subscription"),
+  ).toContainText("No subscription tools found on this computer.");
+  await expect(page.getByTestId("onboarding-brain-lane-colony")).toBeVisible();
+  await page.getByRole("button", { name: "Continue" }).click();
+
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible({ timeout: 15_000 });
-  await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toHaveCount(0);
-  // And no Back control offering the screen the flow just decided against.
-  await expect(page.getByRole("button", { name: "Back" })).toHaveCount(0);
 });
