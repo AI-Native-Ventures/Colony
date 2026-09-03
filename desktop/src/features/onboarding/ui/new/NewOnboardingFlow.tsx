@@ -1,5 +1,11 @@
 // desktop/src/features/onboarding/ui/new/NewOnboardingFlow.tsx
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import {
@@ -180,6 +186,17 @@ type Props = {
    * offered it. Only meaningful alongside `existingIdentity`.
    */
   onLeaveRun?: () => void;
+  /**
+   * Where this run's answers are stored. First run owns the default key; a
+   * run for a second community passes one of its own so the two cannot resume
+   * onto each other's answers.
+   */
+  answersKey?: string;
+  /**
+   * Chrome pinned to the canvas for every screen of this run (the
+   * second-community walk's way out).
+   */
+  canvasOverlay?: ReactNode;
 };
 
 export function NewOnboardingFlow({
@@ -189,6 +206,8 @@ export function NewOnboardingFlow({
   onRequestSignIn,
   existingIdentity = false,
   onLeaveRun,
+  answersKey,
+  canvasOverlay,
 }: Props) {
   // Build-time flags never change mid-session, so both are read once.
   const canInvite = invitesEnabled(import.meta.env);
@@ -201,7 +220,7 @@ export function NewOnboardingFlow({
   const [reducedMotion] = useState(readReducedMotion);
 
   const [boot] = useState(() => {
-    const loaded = loadAnswers(answerStorage);
+    const loaded = loadAnswers(answerStorage, answersKey);
     if (!existingIdentity) {
       return { answers: loaded, step: resumeStep(loaded) };
     }
@@ -299,7 +318,7 @@ export function NewOnboardingFlow({
       .current(answersRef.current)
       .then(() => {
         // Cleared only on success: a failed handoff must stay resumable.
-        clearAnswers(answerStorage);
+        clearAnswers(answerStorage, answersKey);
       })
       .catch((error: unknown) => {
         finishedRef.current = false;
@@ -311,7 +330,7 @@ export function NewOnboardingFlow({
               : "Something went wrong opening your workspace. Try again.",
         });
       });
-  }, []);
+  }, [answersKey]);
 
   const goTo = useCallback(
     (target: OnboardingStep | "done") => {
@@ -333,8 +352,8 @@ export function NewOnboardingFlow({
   }, [canInvite, step, finish]);
 
   useEffect(() => {
-    saveAnswers(answerStorage, answers);
-  }, [answers]);
+    saveAnswers(answerStorage, answers, answersKey);
+  }, [answers, answersKey]);
 
   // The machine flow's config screen used to seed a brand-new account's agent
   // defaults when it mounted. That screen asked the brain question a second
@@ -709,6 +728,7 @@ export function NewOnboardingFlow({
       track={canvasTrack}
       index={Math.max(0, position.index - skippedSteps)}
       total={position.total - skippedSteps}
+      overlay={canvasOverlay}
     >
       {body}
     </OnboardingCanvas>

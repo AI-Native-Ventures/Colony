@@ -23,6 +23,12 @@ type Props = {
    */
   index: number;
   total: number;
+  /**
+   * Chrome pinned to the canvas rather than to one screen, beside the step
+   * marker. The second-community walk puts its way out here so that every
+   * screen carries it without each screen having to.
+   */
+  overlay?: ReactNode;
   children: ReactNode;
 };
 
@@ -68,6 +74,7 @@ export function OnboardingCanvas({
   track,
   index,
   total,
+  overlay,
   children,
 }: Props) {
   const theme = canvasFor(step, track);
@@ -97,6 +104,7 @@ export function OnboardingCanvas({
       <p className="onb-step" data-testid="onboarding-step-counter">
         {String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}
       </p>
+      {overlay}
       <div className="onb-stage" ref={stageRef}>
         {children}
       </div>

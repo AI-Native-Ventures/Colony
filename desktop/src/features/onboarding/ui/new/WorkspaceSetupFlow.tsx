@@ -5,19 +5,20 @@ import {
   hasLegacyAutoConnectRecovery,
   restoreLegacyAutoConnectedCommunity,
 } from "@/features/communities/communityStorage";
-import { HostedCommunityOnboarding } from "@/features/communities/ui/HostedCommunityOnboarding";
 import {
   type FirstCommunityPage,
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
-import { OnboardingFooterProvider } from "@/features/onboarding/ui/OnboardingFooter";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
-import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
 import { MachineCanvas } from "./MachineCanvas";
 import { JoinWorkspaceScreen } from "./screens/JoinWorkspaceScreen";
+import {
+  OwnedCommunitiesScreen,
+  type OwnedCommunityRow,
+} from "./screens/OwnedCommunitiesScreen";
 import { WorkspaceChoiceScreen } from "./screens/WorkspaceChoiceScreen";
 
 type WorkspaceSetupPage = "welcome" | "existing" | "join" | "member" | "owned";
@@ -51,7 +52,6 @@ export function WorkspaceSetupFlow({
   );
   const communityOnboarding = useCommunityOnboarding();
   const identityQuery = useIdentityQuery();
-  const systemColorScheme = useSystemColorScheme();
   const activePubkey = identityQuery.data?.pubkey;
   const npub = activePubkey ? pubkeyToNpub(activePubkey) : "";
   const npubError = identityQuery.error
@@ -78,6 +78,32 @@ export function WorkspaceSetupFlow({
     [communityOnboarding, firstCommunityPage],
   );
 
+  /**
+   * Reconnect a community this key owns.
+   *
+   * `owned` is the page's own source of truth about the owner: a transaction
+   * started from here is owner-led, which is what decides whether this device
+   * writes its agent defaults during the walk.
+   */
+  const [ownedError, setOwnedError] = React.useState<string | null>(null);
+  const connectOwnedCommunity = React.useCallback(
+    (row: OwnedCommunityRow) => {
+      setOwnedError(null);
+      const started = communityOnboarding.start({
+        source: "first-community",
+        firstCommunityPage: "owned",
+        relayUrl: row.relayUrl,
+        communityName: row.name,
+      });
+      if (!started) {
+        setOwnedError(
+          "Onboarding is already in progress for another community. Finish or cancel that one, then connect this community.",
+        );
+      }
+    },
+    [communityOnboarding],
+  );
+
   const redeemInvite = React.useCallback(
     (relayUrl: string, code: string, policyReceipt?: string) => {
       communityOnboarding.start({
@@ -90,26 +116,6 @@ export function WorkspaceSetupFlow({
     },
     [communityOnboarding, firstCommunityPage],
   );
-
-  if (page === "owned") {
-    // Creating or reclaiming a hosted community still runs the previous
-    // screen, in the shell it was drawn for. The canvas first run replaces
-    // it in its own commit; dropping it onto the canvas in the meantime
-    // would leave a pastel card floating on a coloured field.
-    return (
-      <div
-        className="buzz-onboarding-neutral-theme buzz-startup-shell flex h-dvh items-start justify-center overflow-y-auto bg-background px-4 pb-36 pt-[106px] text-foreground"
-        data-system-color-scheme={systemColorScheme}
-      >
-        <StartupWindowDragRegion />
-        <OnboardingFooterProvider>
-          <div className="relative flex min-h-0 w-full max-w-[920px] flex-1 flex-col items-center text-center">
-            <HostedCommunityOnboarding onBack={() => setPage("welcome")} />
-          </div>
-        </OnboardingFooterProvider>
-      </div>
-    );
-  }
 
   return (
     <MachineCanvas
@@ -152,6 +158,13 @@ export function WorkspaceSetupFlow({
           onChoose={(choice) =>
             setPage(choice === "owner" ? "owned" : "member")
           }
+        />
+      ) : page === "owned" ? (
+        <OwnedCommunitiesScreen
+          error={ownedError}
+          onBack={() => setPage("welcome")}
+          onConnect={connectOwnedCommunity}
+          onCreate={onCreateCommunity}
         />
       ) : (
         <JoinWorkspaceScreen

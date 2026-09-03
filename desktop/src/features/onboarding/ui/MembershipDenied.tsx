@@ -1,18 +1,18 @@
 import * as React from "react";
-import { Check, Copy, KeyRound, ShieldX, Ticket } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import { nsecToNpub, pubkeyToNpub } from "@/shared/lib/nostrUtils";
-import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Spinner } from "@/shared/ui/spinner";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { InviteRedeemForm } from "./InviteRedeemForm";
+import { MachineCanvas } from "./new/MachineCanvas";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 
 type MembershipDeniedProps = {
-  /** The relay that denied membership — used as the target for bare-code invites. */
+  /** The relay that denied membership, and the target for bare-code invites. */
   activeRelayUrl: string;
   onBack: () => void;
   onChangeCommunity: () => void;
@@ -97,62 +97,20 @@ export function MembershipDenied({
   );
 
   return (
-    <div
-      className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_48%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] px-4 py-8"
-      data-testid="membership-denied"
-    >
+    <MachineCanvas showStep={false} step="identity" testId="membership-denied">
       <StartupWindowDragRegion />
-      <div className="w-full max-w-md rounded-[28px] border border-border/70 bg-background/92 p-8 shadow-2xl backdrop-blur-sm">
-        <div className="space-y-3">
-          <Badge variant="warning">Membership required</Badge>
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
-              <ShieldX className="h-4 w-4 text-destructive" />
-            </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              Not a member yet
-            </h1>
-          </div>
-          <p className="text-sm leading-6 text-muted-foreground">
-            This relay requires an invitation. Ask a relay admin to add you as a
-            member, then come back and try again.
+      <div className="onb-screen">
+        <div className="onb-col-head">
+          <h1 className="onb-headline">
+            Not a <em>member</em> yet.
+          </h1>
+          <p className="onb-sub">
+            This community is invitation only. Ask an admin to add you, then
+            come back and try again.
           </p>
         </div>
 
-        <div className="mt-6 space-y-3">
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">
-              Your public key (npub)
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 truncate rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 font-mono text-xs text-foreground">
-                {npub}
-              </code>
-              <Button
-                className="shrink-0"
-                onClick={() => {
-                  void handleCopy();
-                }}
-                size="icon"
-                title="Copy npub"
-                type="button"
-                variant="outline"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-emerald-500" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-          </div>
-          <p className="text-xs leading-5 text-muted-foreground">
-            This is your public identity — it&apos;s safe to share. Send it to
-            the relay admin so they can invite you.
-          </p>
-        </div>
-
-        <div className="mt-6 flex flex-col gap-2">
+        <div className="onb-panel">
           {isInviteFormOpen ? (
             <InviteRedeemForm
               defaultRelayUrl={activeRelayUrl}
@@ -160,22 +118,19 @@ export function MembershipDenied({
               isRedeeming={false}
               onCancel={() => setIsInviteFormOpen(false)}
               onRedeem={handleInviteRedeem}
+              variant="canvas"
             />
           ) : isImportFormOpen ? (
             <form
-              className="flex flex-col gap-3"
+              className="onb-stack"
+              id="membership-denied-import"
               onSubmit={(event) => {
                 event.preventDefault();
                 void handleImportKey();
               }}
             >
-              <div className="space-y-1.5 text-left">
-                <label
-                  className="text-sm font-medium text-foreground"
-                  htmlFor="membership-denied-nsec"
-                >
-                  Private key
-                </label>
+              <label className="onb-field" htmlFor="membership-denied-nsec">
+                <span className="onb-label">Private key</span>
                 <Input
                   autoComplete="off"
                   autoCorrect="off"
@@ -191,108 +146,125 @@ export function MembershipDenied({
                   type="password"
                   value={nsecInput}
                 />
-              </div>
+              </label>
 
               {previewNpub ? (
                 <div
-                  className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+                  className="onb-key-row"
                   data-testid="membership-denied-npub-preview"
                 >
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                  <div className="min-w-0 space-y-0.5">
-                    <p className="font-medium text-foreground">
+                  <Check aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="onb-label">
                       This will use this Nostr identity:
                     </p>
-                    <p className="break-all font-mono text-2xs text-muted-foreground">
-                      {previewNpub}
-                    </p>
+                    <p className="onb-key">{previewNpub}</p>
                   </div>
                 </div>
               ) : null}
 
               {importError ? (
-                <p className="text-center text-sm text-destructive">
-                  {importError}
-                </p>
+                <p className="onb-note onb-note-warn">{importError}</p>
               ) : null}
-
-              <Button
-                className="w-full"
-                data-testid="membership-denied-import-key"
-                disabled={!isValidNsec || isImportingKey}
-                type="submit"
-              >
-                {isImportingKey ? (
-                  <Spinner
-                    aria-label="Importing key"
-                    className="h-4 w-4 border-2"
-                  />
-                ) : (
-                  "Import key"
-                )}
-              </Button>
-              <Button
-                className="w-full text-muted-foreground hover:text-accent-foreground"
-                disabled={isImportingKey}
-                onClick={() => {
-                  setImportError(null);
-                  setIsImportFormOpen(false);
-                  setNsecInput("");
-                }}
-                type="button"
-                variant="ghost"
-              >
-                Back
-              </Button>
             </form>
           ) : (
-            <>
-              <Button className="w-full" onClick={onRetry} type="button">
-                Try again
-              </Button>
-              <div className="flex gap-2">
-                <Button
-                  className="flex-1 text-muted-foreground hover:text-accent-foreground"
-                  onClick={onBack}
-                  type="button"
-                  variant="ghost"
-                >
-                  Back
-                </Button>
-                <Button
-                  className="flex-1 text-muted-foreground hover:text-accent-foreground"
-                  onClick={onChangeCommunity}
-                  type="button"
-                  variant="ghost"
-                >
-                  Change community
-                </Button>
+            <div className="onb-stack">
+              <div className="onb-field">
+                <span className="onb-label">Your public key (npub)</span>
+                <div className="onb-key-row">
+                  <code className="onb-key">{npub}</code>
+                  <button
+                    className="onb-key-copy"
+                    onClick={() => {
+                      void handleCopy();
+                    }}
+                    title="Copy npub"
+                    type="button"
+                  >
+                    {copied ? (
+                      <Check aria-hidden="true" className="h-4 w-4" />
+                    ) : (
+                      <Copy aria-hidden="true" className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
               </div>
-              <button
-                className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                data-testid="membership-denied-redeem-invite"
-                onClick={() => setIsInviteFormOpen(true)}
-                type="button"
-              >
-                <Ticket className="h-4 w-4" />
-                Have an invite?
-              </button>
-              <button
-                className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                data-testid="membership-denied-change-key"
-                onClick={() => {
-                  setImportError(null);
-                  setIsImportFormOpen(true);
-                }}
-                type="button"
-              >
-                <KeyRound className="h-4 w-4" />
-                Use a different key
-              </button>
-            </>
+              <p className="onb-note">
+                This is your public identity, so it is safe to share. Send it to
+                an admin so they can invite you.
+              </p>
+            </div>
           )}
         </div>
+
+        {isInviteFormOpen ? null : isImportFormOpen ? (
+          <div className="onb-actions">
+            <Button
+              data-testid="membership-denied-import-key"
+              disabled={!isValidNsec || isImportingKey}
+              form="membership-denied-import"
+              size="lg"
+              type="submit"
+            >
+              {isImportingKey ? (
+                <Spinner
+                  aria-label="Importing key"
+                  className="h-4 w-4 border-2"
+                />
+              ) : (
+                "Import key"
+              )}
+            </Button>
+            <button
+              className="onb-quiet-action"
+              disabled={isImportingKey}
+              onClick={() => {
+                setImportError(null);
+                setIsImportFormOpen(false);
+                setNsecInput("");
+              }}
+              type="button"
+            >
+              Back
+            </button>
+          </div>
+        ) : (
+          <div className="onb-actions">
+            <Button onClick={onRetry} size="lg" type="button">
+              Try again
+            </Button>
+            <button className="onb-quiet-action" onClick={onBack} type="button">
+              Back
+            </button>
+            <button
+              className="onb-quiet-action"
+              onClick={onChangeCommunity}
+              type="button"
+            >
+              Change community
+            </button>
+            <button
+              className="onb-quiet-action"
+              data-testid="membership-denied-redeem-invite"
+              onClick={() => setIsInviteFormOpen(true)}
+              type="button"
+            >
+              Have an invite?
+            </button>
+            <button
+              className="onb-quiet-action"
+              data-testid="membership-denied-change-key"
+              onClick={() => {
+                setImportError(null);
+                setIsImportFormOpen(true);
+              }}
+              type="button"
+            >
+              Use a different key
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </MachineCanvas>
   );
 }

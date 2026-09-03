@@ -22,8 +22,13 @@ type JoinPolicyNoticeProps = {
  * (`/api/join-policy/terms|privacy`) in the system browser via the OS
  * opener. They must NOT navigate or render in-app: these surfaces exist
  * before onboarding completes, where the router (required by the message
- * Markdown component) is not mounted — an in-app render tears down the
+ * Markdown component) is not mounted, and an in-app render tears down the
  * whole React tree.
+ *
+ * The `onb-policy` class is what lets the canvas surfaces restyle the block
+ * as one of their own panels (see onboarding-canvas.css). The Tailwind
+ * classes beside it are what the dialog surfaces still wear, so the block
+ * reads correctly on both without a variant prop.
  */
 export function JoinPolicyNotice({
   ageConfirmed,
@@ -37,7 +42,7 @@ export function JoinPolicyNotice({
   const agreementConfirmationId = React.useId();
 
   return (
-    <div className="space-y-3 rounded-xl border border-border/70 bg-muted/30 p-4 text-left">
+    <div className="onb-policy space-y-3 rounded-xl border border-border/70 bg-muted/30 p-4 text-left">
       {policy.ageAttestationRequired ? (
         <div className="flex items-start gap-3">
           <Checkbox

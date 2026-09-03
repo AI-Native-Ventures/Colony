@@ -150,6 +150,78 @@
     opacity: 0.45;
   }
 
+  /* Way out. Mirrors the step marker across the canvas: a walk that a founder
+     did not have to start needs somewhere to stop from every screen, and a
+     control that lives on the canvas rather than on a screen cannot be
+     forgotten by the next screen added to the flow. */
+  .onb-exit {
+    position: absolute;
+    top: clamp(1.5rem, 4vh, 3rem);
+    right: clamp(2rem, 7vw, 8rem);
+    z-index: 3;
+  }
+
+  /* A key beside the control that copies it. The membership-recovery screen
+     shows the founder's npub for an admin to invite, and the import form
+     echoes back the identity a pasted nsec resolves to.
+
+     These live in this file rather than beside the other screen classes only
+     to keep this change clear of a file another change is editing; they are
+     screen styles and belong with them. */
+  :where(.onb-canvas) .onb-key-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid var(--onb-shell-line);
+    border-radius: 1.125rem;
+    background: var(--onb-shell);
+    color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-key {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-key-copy {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid var(--onb-shell-line);
+    border-radius: 0.75rem;
+    background: none;
+    color: var(--onb-ink-soft);
+    cursor: pointer;
+  }
+
+  :where(.onb-canvas) .onb-key-copy:hover {
+    color: var(--onb-ink);
+  }
+
+  /* Join-policy consent, on the canvas. The block keeps its own layout for
+     the dialog surfaces that also render it; only the card treatment and the
+     ink are rewritten here, where the background is a hue rather than a
+     theme surface. */
+  :where(.onb-canvas) .onb-policy {
+    border-color: var(--onb-shell-line);
+    background: var(--onb-shell);
+    color: var(--onb-ink-soft);
+  }
+
+  :where(.onb-canvas) .onb-policy label {
+    color: var(--onb-ink-soft);
+  }
+
   /* Foot: trail + mark. Provisioned here so screens can drop an ant trail in
      without new chrome CSS. */
   .onb-foot {
@@ -259,6 +331,11 @@
     .onb-step {
       top: 1.25rem;
       left: 1.5rem;
+    }
+
+    .onb-exit {
+      top: 1.25rem;
+      right: 1.5rem;
     }
 
     .onb-stage {

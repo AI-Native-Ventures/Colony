@@ -61,8 +61,19 @@ function coerce(raw: unknown): OnboardingAnswers {
   };
 }
 
-export function loadAnswers(storage: AnswerStorage): OnboardingAnswers {
-  const stored = storage.get(ONBOARDING_ANSWERS_KEY);
+/**
+ * Which run these answers belong to.
+ *
+ * First run owns {@link ONBOARDING_ANSWERS_KEY} and is the only caller that
+ * leaves this alone. A founder creating a second community walks the same
+ * screens, so its answers need a key of their own: sharing one would resume
+ * the second walk onto the first company's answers, or wipe them.
+ */
+export function loadAnswers(
+  storage: AnswerStorage,
+  key: string = ONBOARDING_ANSWERS_KEY,
+): OnboardingAnswers {
+  const stored = storage.get(key);
   if (!stored) return { ...EMPTY_ANSWERS };
   try {
     return coerce(JSON.parse(stored));
@@ -74,10 +85,14 @@ export function loadAnswers(storage: AnswerStorage): OnboardingAnswers {
 export function saveAnswers(
   storage: AnswerStorage,
   answers: OnboardingAnswers,
+  key: string = ONBOARDING_ANSWERS_KEY,
 ): void {
-  storage.set(ONBOARDING_ANSWERS_KEY, JSON.stringify(answers));
+  storage.set(key, JSON.stringify(answers));
 }
 
-export function clearAnswers(storage: AnswerStorage): void {
-  storage.remove(ONBOARDING_ANSWERS_KEY);
+export function clearAnswers(
+  storage: AnswerStorage,
+  key: string = ONBOARDING_ANSWERS_KEY,
+): void {
+  storage.remove(key);
 }
