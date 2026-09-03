@@ -25,6 +25,8 @@ type Props = {
    * has gone does not match a later screen wearing the same canvas.
    */
   testId?: string;
+  /** For a canvas that covers another one, which needs to stack above it. */
+  className?: string;
   children: ReactNode;
 };
 
@@ -32,6 +34,7 @@ export function MachineCanvas({
   step,
   showStep = true,
   testId = "machine-onboarding-gate",
+  className,
   children,
 }: Props) {
   const theme = machineCanvasFor(step);
@@ -39,7 +42,7 @@ export function MachineCanvas({
 
   return (
     <div
-      className="onb-canvas"
+      className={className ? `onb-canvas ${className}` : "onb-canvas"}
       data-ink={theme.ink}
       data-testid={testId}
       style={{ background: theme.base }}
