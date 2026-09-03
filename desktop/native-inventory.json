@@ -750,7 +750,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:274",
+        "src/features/communities/useCommunityInit.ts:276",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -2307,7 +2307,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/onboarding/flow/completeFirstRunIo.ts:26",
+        "src/features/onboarding/flow/completeFirstRunIo.ts:27",
         "src/parity/session/script.ts:1415",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
@@ -2329,7 +2329,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:260",
+        "src/features/communities/useCommunityInit.ts:262",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:37"
       ]
