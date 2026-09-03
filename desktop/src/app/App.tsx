@@ -40,7 +40,6 @@ import {
   MachineOnboardingFlow,
   type MachineOnboardingPage,
 } from "@/features/onboarding/ui/MachineOnboardingFlow";
-import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
@@ -262,50 +261,25 @@ function AppReady({
     return <RelaunchRequiredScreen />;
   }
 
-  if (onboarding.stage === "onboarding" && !onboarding.identityLost) {
-    // A key that exists but has no relay profile: "bring your own key", a
-    // reinstall, or a second machine. The only thing left to ask is what to
-    // call them, so that is the whole screen.
+  if (onboarding.stage === "onboarding") {
+    // Everything that reaches this gate is an identity that already exists
+    // on this machine and has no relay profile yet: "bring your own key", a
+    // reinstall, a second machine, or the dev-only forced-fresh replay
+    // (VITE_BUZZ_FORCE_FRESH_ONBOARDING). A brand-new founder never arrives
+    // here -- CanvasFirstRunHost in CommunityApp owns that walk, gated by
+    // isFreshFounder, because claiming the workspace is one of its steps.
+    //
+    // Identity-lost recovery does not arrive here either: a lost keyring
+    // pins machine onboarding to its own stage, so the canvas key-import
+    // screen answers it before CommunityApp is ever mounted.
+    //
+    // The only open question left, then, is what to call them.
     return (
       <ExistingIdentityProfileFlow
         initialProfile={onboarding.flow.initialProfile.profile}
         key={onboarding.currentPubkey ?? "anonymous"}
         onComplete={onboarding.flow.actions.complete}
         onSkip={onboarding.flow.actions.skipForNow}
-      />
-    );
-  }
-
-  if (onboarding.stage === "onboarding") {
-    // The redesigned flow owns every "Start with Colony" fresh-identity
-    // signup (CanvasFirstRunHost in CommunityApp, gated by isFreshFounder,
-    // which claims the workspace as one of its own steps) -- including a
-    // second identity signing up on a machine that already has a different
-    // identity's community (isFreshFounder scopes its community check to the
-    // signing-up pubkey; see freshFounder.ts).
-    //
-    // What legitimately still reaches this legacy flow, none of which is an
-    // ordinary signup:
-    //   - identity-lost recovery (onboarding.identityLost): the keyring was
-    //     cleared after a migration, and OnboardingFlow's key-import page has
-    //     no canvas equivalent to re-enter an existing nsec.
-    //   - dev-only forced-fresh replay (VITE_BUZZ_FORCE_FRESH_ONBOARDING),
-    //     which reruns onboarding against an EXISTING identity and never
-    //     ships to production.
-    //   - an imported identity (never marked fresh -- see freshFounder.ts)
-    //     that has no relay profile yet after creating or joining a
-    //     community through WelcomeSetup/CommunityOnboardingFlow. This is
-    //     "bring your own key", not "sign up", and predates the canvas
-    //     project; it is not covered by CanvasFirstRunHost.
-    //   - VITE_NEW_ONBOARDING=0 (the redesign's kill switch): when the
-    //     canvas flow is disabled entirely, this IS the onboarding path, by
-    //     design, for every signup.
-    return (
-      <OnboardingFlow
-        actions={onboarding.flow.actions}
-        identityLost={onboarding.identityLost}
-        initialProfile={onboarding.flow.initialProfile}
-        key={onboarding.currentPubkey ?? "anonymous"}
       />
     );
   }
