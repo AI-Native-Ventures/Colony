@@ -6,11 +6,11 @@ import { JSDOM } from "jsdom";
 /**
  * Renders the brain picker the way onboarding mounts it.
  *
- * What is pinned here is the compact grid the screen became: every brain
- * carries its own mark rather than an anonymous status dot, a brain that is
- * not ready yet is still pickable (picking it is how its install or sign-in
- * is asked for), and the action for that pick appears once, under the grid,
- * instead of once per row.
+ * What is pinned here is the three-lane choice the screen became: the
+ * subscriptions found on this computer with what is left on each, Colony's own
+ * agent paid for with credits, and OpenRouter paid for with the founder's own
+ * key. All three are always on screen, the screen opens on the subscription
+ * with the most left, and each lane's own condition gates Continue.
  */
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
@@ -33,6 +33,29 @@ const BRAINS = [
   { id: "opencode", label: "OpenCode", status: "needs-login" },
   { id: "codex", label: "Codex", status: "not-installed" },
 ];
+
+const signedIn = (id, tier, planLabel, short, long) => ({
+  id,
+  state: {
+    state: "signed_in",
+    tier,
+    plan_label: planLabel,
+    short_window:
+      short === null ? null : { remaining_percent: short, resets_at: null },
+    long_window:
+      long === null ? null : { remaining_percent: long, resets_at: null },
+    usage_captured_at: null,
+  },
+});
+
+const SCAN = {
+  harnesses: [
+    signedIn("claude", "Max", "Max 20x", 88, 72),
+    { id: "opencode", state: { state: "installed_not_signed_in" } },
+    { id: "codex", state: { state: "not_installed" } },
+  ],
+  recommended_id: "claude",
+};
 
 /**
  * Mocks the runtime catalog hooks once per test and hands back a mount.
@@ -76,7 +99,8 @@ async function brainHarness(t) {
           brains: BRAINS,
           onContinue() {},
           onSelect: (id) => picked.push(id),
-          selected: "buzz-agent",
+          scan: SCAN,
+          selected: null,
           ...props,
         }),
       );
@@ -86,76 +110,118 @@ async function brainHarness(t) {
   };
 }
 
-test("every brain is shown with its own mark, not a bare status dot", async (t) => {
-  // The owner's note on canary was that the harnesses were unrecognisable:
-  // six identical rows, each a green dot and a name. A mark per brain is the
-  // fix, and it has to survive the runtimes query not having answered yet:
-  // the first frame is painted from probing's snapshot, where the catalog
-  // entry the icon normally keys off does not exist.
+test("all three lanes are named, whatever the computer holds", async (t) => {
   const mount = await brainHarness(t);
   const { result } = await mount();
 
-  for (const brain of BRAINS) {
-    const tile = result.getByTestId(`onboarding-brain-${brain.id}`);
-    const mark = tile.querySelector(
-      "img.onb-option__logo, svg.onb-option__logo",
+  for (const lane of ["subscription", "colony", "openrouter"]) {
+    assert.ok(
+      result.getByTestId(`onboarding-brain-lane-${lane}`),
+      `${lane} lane missing`,
     );
-    assert.ok(mark, `${brain.id} rendered no mark`);
   }
-
-  // The two brains with a bundled bitmap logo render it as an <img> with a
-  // real source, rather than falling through to the terminal glyph.
-  for (const id of ["claude", "opencode"]) {
-    const image = result
-      .getByTestId(`onboarding-brain-${id}`)
-      .querySelector("img");
-    assert.ok(image, `${id} rendered no <img>`);
-    assert.ok(image.getAttribute("src"), `${id} rendered an empty <img>`);
-  }
+  // A subscription that is not installed is not something they pay for.
+  assert.equal(result.queryByTestId("onboarding-brain-codex"), null);
 });
 
-test("a brain that cannot think yet is still pickable", async (t) => {
-  // The row used to be disabled, with its own install button beside it. The
-  // tile is the pick and the strip under the grid is the work, so the tile
-  // has to accept the click that puts the strip on screen.
+test("a subscription tile carries what is left on it", async (t) => {
+  const mount = await brainHarness(t);
+  const { result } = await mount();
+
+  const tile = result.getByTestId("onboarding-brain-claude");
+  // 72 is the weekly window: whichever runs out first is what stops them.
+  assert.match(tile.textContent, /72% left/);
+  assert.ok(
+    tile.querySelector("img.onb-option__logo, svg.onb-option__logo"),
+    "the subscription rendered no mark",
+  );
+  assert.match(
+    result.getByTestId("onboarding-brain-opencode").textContent,
+    /Sign in/,
+  );
+});
+
+test("the screen opens on the subscription with the most left", async (t) => {
+  const mount = await brainHarness(t);
+  const { result } = await mount();
+
+  assert.equal(
+    result.getByTestId("onboarding-brain-claude").dataset.selected,
+    "true",
+  );
+  assert.equal(
+    result.getByTestId("onboarding-brain-buzz-agent").dataset.selected,
+    "false",
+  );
+  // The default says why, rather than the app deciding silently.
+  assert.ok(result.getByText("Claude Max 20x has 72% left, so we picked it."));
+});
+
+test("nothing usable falls back to Colony, never to OpenRouter", async (t) => {
+  const mount = await brainHarness(t);
+  const { result } = await mount({
+    brains: [BRAINS[0]],
+    scan: { harnesses: [], recommended_id: null },
+  });
+
+  assert.equal(
+    result.getByTestId("onboarding-brain-buzz-agent").dataset.selected,
+    "true",
+  );
+  assert.equal(
+    result.getByTestId("onboarding-brain-openrouter").dataset.selected,
+    "false",
+  );
+  assert.ok(result.getByText("No subscription tools found on this computer."));
+  assert.equal(
+    result.getByTestId("onboarding-brain-continue").disabled,
+    false,
+    "the hosted agent is ready on every computer",
+  );
+});
+
+test("the OpenRouter lane gates Continue on a key that looks like one", async (t) => {
+  const mount = await brainHarness(t);
+  const { fireEvent, result } = await mount({ selected: "openrouter" });
+
+  const field = result.getByTestId("onboarding-openrouter-key");
+  assert.equal(field.type, "password", "the key is masked");
+  assert.equal(result.getByTestId("onboarding-brain-continue").disabled, true);
+
+  fireEvent.change(field, { target: { value: "sk-ant-not-openrouter" } });
+  assert.equal(
+    result.getByTestId("onboarding-brain-continue").disabled,
+    true,
+    "another vendor's key opened the gate",
+  );
+
+  fireEvent.change(field, { target: { value: "sk-or-v1-abcdef" } });
+  assert.equal(result.getByTestId("onboarding-brain-continue").disabled, false);
+  assert.ok(
+    result.getByText("Billed by OpenRouter. Colony never sees your card."),
+  );
+});
+
+test("a subscription that is not signed in yet asks for the sign-in, not for money", async (t) => {
+  const mount = await brainHarness(t);
+  const { result } = await mount({ selected: "opencode" });
+
+  assert.equal(result.getByTestId("onboarding-brain-continue").disabled, true);
+  assert.ok(result.getByTestId("onboarding-brain-action-opencode"));
+  assert.equal(
+    result.queryByTestId("onboarding-brain-action-claude"),
+    null,
+    "an unpicked subscription still carried its own action",
+  );
+});
+
+test("every tile is an option and picking one reports its id", async (t) => {
   const mount = await brainHarness(t);
   const { fireEvent, picked, result } = await mount();
 
-  fireEvent.click(result.getByTestId("onboarding-brain-codex"));
+  // Two subscriptions plus Colony plus OpenRouter.
+  assert.equal(result.queryAllByRole("option").length, 4);
 
-  assert.deepEqual(picked, ["codex"]);
-});
-
-test("the action belongs to the pick, not to every row", async (t) => {
-  const mount = await brainHarness(t);
-  const ready = await mount();
-  // Every brain is an option, and nothing is asked of the founder while the
-  // pick is ready: Continue is the only button on the screen.
-  assert.equal(ready.result.queryAllByRole("option").length, BRAINS.length);
-  assert.equal(ready.result.queryAllByRole("button").length, 1);
-
-  const { result } = await mount({ selected: "codex" });
-
-  assert.ok(result.getByTestId("onboarding-brain-action-codex"));
-  assert.equal(
-    result.queryByTestId("onboarding-brain-action-opencode"),
-    null,
-    "an unpicked brain still carried its own action",
-  );
-  assert.ok(result.getByText("Not on this computer yet"));
-});
-
-test("continue stays shut until the pick is ready", async (t) => {
-  const mount = await brainHarness(t);
-  const notReady = await mount({ selected: "opencode" });
-  assert.equal(
-    notReady.result.getByTestId("onboarding-brain-continue").disabled,
-    true,
-  );
-
-  const ready = await mount({ selected: "claude" });
-  assert.equal(
-    ready.result.getByTestId("onboarding-brain-continue").disabled,
-    false,
-  );
+  fireEvent.click(result.getByTestId("onboarding-brain-openrouter"));
+  assert.deepEqual(picked, ["openrouter"]);
 });

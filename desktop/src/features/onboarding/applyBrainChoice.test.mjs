@@ -101,3 +101,19 @@ test("the hosted agent resolves without the catalog naming it", () => {
   assert.equal(planned.preferred_runtime, "buzz-agent");
   assert.deepEqual(planned, planBrainConfig([], BYOK, "colony"));
 });
+
+test("the OpenRouter lane writes the founder's own key, never a credits lease", () => {
+  const planned = planBrainConfig([], BYOK, "openrouter", "sk-or-v1-abcdef");
+  assert.ok(planned);
+  assert.equal(planned.credential_mode, "byok");
+  assert.equal(planned.preferred_runtime, "buzz-agent");
+  assert.equal(planned.provider, "openrouter");
+  assert.equal(planned.env_vars.OPENROUTER_API_KEY, "sk-or-v1-abcdef");
+});
+
+test("the OpenRouter lane writes nothing without a key", () => {
+  // Provider without credential is a config whose agents cannot start, which
+  // reads as a team that never speaks rather than as a missing key.
+  assert.equal(planBrainConfig([], BYOK, "openrouter"), null);
+  assert.equal(planBrainConfig([], BYOK, "openrouter", "   "), null);
+});

@@ -44,6 +44,39 @@ const WIRED_IO = {
 /** The sentinel the flow records when Colony does the thinking. */
 export const COLONY_BRAIN_ANSWER = "colony";
 
+/** The sentinel the flow records when the founder brings an OpenRouter key. */
+export const OPENROUTER_BRAIN_ANSWER = "openrouter";
+
+/**
+ * The env var the agent spawn path reads the OpenRouter key from.
+ *
+ * Same name `OpenRouterConnectField` writes through `set_global_agent_config`;
+ * spelled out here rather than imported so this module stays free of React and
+ * can run under plain node.
+ */
+const OPENROUTER_API_KEY = "OPENROUTER_API_KEY";
+
+/**
+ * The hosted agent pointed at the founder's own OpenRouter account.
+ *
+ * Same runtime and model as the fresh-signup seed (`freshSignupDefaults`), so
+ * the only thing this lane changes is who is billed: `byok` with their key,
+ * never a Colony credits lease.
+ */
+export function openRouterBrainConfig(
+  current: GlobalAgentConfig,
+  key: string,
+): GlobalAgentConfig {
+  return {
+    ...current,
+    credential_mode: "byok",
+    preferred_runtime: COLONY_AGENT_RUNTIME_ID,
+    provider: "openrouter",
+    model: "deepseek/deepseek-v4-flash",
+    env_vars: { ...current.env_vars, [OPENROUTER_API_KEY]: key.trim() },
+  };
+}
+
 /**
  * The config a brain choice implies, or null when nothing should be written.
  *
@@ -54,9 +87,19 @@ export function planBrainConfig(
   runtimes: readonly AcpRuntimeCatalogEntry[],
   current: GlobalAgentConfig,
   brain: string | null,
+  openRouterKey?: string,
 ): GlobalAgentConfig | null {
   const chosen = brain?.trim();
   if (!chosen) return null;
+
+  // The OpenRouter lane is a key, not a runtime: without one there is nothing
+  // to write, and writing the provider alone would leave a config whose agents
+  // cannot start.
+  if (chosen === OPENROUTER_BRAIN_ANSWER) {
+    return openRouterKey?.trim()
+      ? openRouterBrainConfig(current, openRouterKey)
+      : null;
+  }
 
   // Both spellings of "Colony does the thinking" resolve without consulting
   // the catalog. `COLONY_BRAIN_ANSWER` is what the flow recorded while the
@@ -95,13 +138,14 @@ export type ApplyBrainChoiceIo = {
 export async function applyBrainChoice(
   brain: string | null,
   io: ApplyBrainChoiceIo = WIRED_IO,
+  openRouterKey?: string,
 ): Promise<GlobalAgentConfig | null> {
   if (!brain?.trim()) return null;
   const [runtimes, current] = await Promise.all([
     io.listRuntimes(),
     io.loadConfig(),
   ]);
-  const next = planBrainConfig(runtimes, current, brain);
+  const next = planBrainConfig(runtimes, current, brain, openRouterKey);
   if (!next) return null;
   await io.saveConfig(next);
   return next;

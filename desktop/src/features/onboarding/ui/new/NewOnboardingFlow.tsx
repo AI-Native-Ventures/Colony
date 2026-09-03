@@ -15,7 +15,6 @@ import {
 } from "@/shared/lib/safeStorage";
 import type { AuthFailure } from "../../authService";
 import { applyBrainChoice } from "../../applyBrainChoice";
-import { COLONY_AGENT_RUNTIME_ID } from "../../automaticRuntime";
 import { applyFreshSignupDefaults } from "../../freshSignupDefaults";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
 import { createWiredScrapeService } from "../../lib/wiredScrapeService";
@@ -30,17 +29,19 @@ import {
 } from "../../flow/persistence";
 import {
   backStep,
+  creditsNeeded,
   nextStep,
   resumeStep,
   stepPosition,
   type OnboardingAnswers,
   type OnboardingStep,
 } from "../../flow/steps";
+import { trackForBrain, type TrackResult } from "../../flow/track";
 import {
-  preselectedBrain,
-  trackForBrain,
-  type TrackResult,
-} from "../../flow/track";
+  scanAgentSubscriptions,
+  type SubscriptionScan,
+} from "@/shared/api/tauriSubscriptions";
+import { defaultBrainId } from "./screens/brainLanes";
 import { invitesEnabled } from "../../invitesFlag";
 import { OnboardingCanvas } from "./OnboardingCanvas";
 import {
@@ -271,26 +272,55 @@ export function NewOnboardingFlow({
 
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
+  const [subscriptionScan, setSubscriptionScan] =
+    useState<SubscriptionScan | null>(null);
+  const [openRouterKey, setOpenRouterKey] = useState("");
+  // A pick of their own is never overwritten by a scan that lands after it.
+  const brainPickedByFounder = useRef(false);
 
   /**
-   * Whether the brain screen is a question worth asking this founder.
+   * What the founder already pays for, read from disk once per run.
    *
-   * It used to run for everyone. That was right while the screen could do
-   * nothing but pick an already-ready runtime and Colony had no agent of its
-   * own; now Colony Agent is the default and it is hosted, so a founder with
-   * nothing installed reaches a picker holding one row that is already
-   * selected. Nothing on that screen is theirs to decide, and the tool names
-   * on it mean nothing to the person this flow is written for. So it is shown
-   * only when detection found something they already pay for, and otherwise
-   * the same choice is applied for them, through the same call the screen
-   * makes.
-   *
-   * Unknown counts as detected: the probe has not answered yet, and the screen
-   * is coming unless something says otherwise.
+   * Filesystem only: a PATH probe per harness plus one config read, so it is
+   * safe this early, before anyone has agreed to anything. A failed scan is
+   * not an error state: the brain screen falls back to the runtime catalog
+   * and still offers all three lanes.
    */
-  const brainDetected =
-    trackResult === null || trackResult.installed.length > 0;
-  const visibility = { invitesEnabled: canInvite, brainDetected };
+  useEffect(() => {
+    let cancelled = false;
+    void scanAgentSubscriptions()
+      .then((scan) => {
+        // A host that does not know the command may resolve with nothing
+        // rather than rejecting, and a scan without harnesses is not a scan.
+        if (cancelled || !Array.isArray(scan?.harnesses)) return;
+        setSubscriptionScan(scan);
+        if (!brainPickedByFounder.current) {
+          setSelectedBrain(defaultBrainId(scan));
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("Could not scan for agent subscriptions.", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleBrainSelect = useCallback((id: string) => {
+    brainPickedByFounder.current = true;
+    setSelectedBrain(id);
+  }, []);
+
+  /**
+   * The brain screen is on every path now: it offers three ways of paying for
+   * the thinking, so it is a real choice even on a computer with nothing
+   * installed. What moves instead is the credits screen, which only the
+   * founder who chose Colony's own agent has anything to buy on.
+   */
+  const visibility = {
+    invitesEnabled: canInvite,
+    creditsNeeded: creditsNeeded(answers),
+  };
 
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [websiteRead, setWebsiteRead] = useState(false);
@@ -401,11 +431,11 @@ export function NewOnboardingFlow({
    * preselection for the same reason it follows an explicit pick.
    */
   const handleProbeResolved = useCallback((result: TrackResult) => {
-    const brain = preselectedBrain(result.brains, result.installed);
-    const track = trackForBrain(brain, result.installed);
-    setSelectedBrain(brain);
-    setTrackResult({ ...result, track });
-    setAnswers((current) => ({ ...current, track }));
+    setTrackResult(result);
+    // Recorded as colony until the founder says otherwise: it is what keeps a
+    // resume from re-running the building screen, and credits stay counted in
+    // until a choice takes them out. Detection is not a choice.
+    setAnswers((current) => ({ ...current, track: current.track ?? "colony" }));
   }, []);
 
   const handleAccountSubmit = async () => {
@@ -492,11 +522,7 @@ export function NewOnboardingFlow({
   };
 
   const handleBrainContinue = () => {
-    const chosen =
-      selectedBrain ??
-      (trackResult
-        ? preselectedBrain(trackResult.brains, trackResult.installed)
-        : COLONY_AGENT_RUNTIME_ID);
+    const chosen = selectedBrain ?? defaultBrainId(subscriptionScan);
     // The pick decides the track, not what probing found: someone who keeps
     // the hosted agent is on the colony track even with a CLI signed in.
     const track = trackForBrain(chosen, trackResult?.installed ?? []);
@@ -508,12 +534,14 @@ export function NewOnboardingFlow({
     // Claude Code with defaults still set to another runtime and no model, and
     // a Chief of Staff that never answered. Best effort: a failed config write
     // must not trap someone on this screen, and Agent defaults can fix it.
-    void applyBrainChoice(chosen).catch((error: unknown) => {
-      console.warn(
-        "Could not apply the selected brain to agent defaults.",
-        error,
-      );
-    });
+    void applyBrainChoice(chosen, undefined, openRouterKey).catch(
+      (error: unknown) => {
+        console.warn(
+          "Could not apply the selected brain to agent defaults.",
+          error,
+        );
+      },
+    );
     goTo(nextStep("brain", updated));
   };
 
@@ -527,33 +555,13 @@ export function NewOnboardingFlow({
     setWebsiteRead(result.ok);
   }, []);
 
-  const applyColonyAgentSilently = (): Pick<
-    OnboardingAnswers,
-    "brain" | "track"
-  > => {
-    const track = trackForBrain(COLONY_AGENT_RUNTIME_ID, []);
-    // Best effort, exactly as on the screen: a failed config write must not
-    // trap anyone, and Agent defaults can fix it afterwards.
-    void applyBrainChoice(COLONY_AGENT_RUNTIME_ID).catch((error: unknown) => {
-      console.warn(
-        "Could not apply the default brain to agent defaults.",
-        error,
-      );
-    });
-    setSelectedBrain(COLONY_AGENT_RUNTIME_ID);
-    setTrackResult((current) => (current ? { ...current, track } : current));
-    return { brain: COLONY_AGENT_RUNTIME_ID, track };
-  };
-
   const handleBuildingContinue = () => {
-    const applied = brainDetected ? null : applyColonyAgentSilently();
     const updated: OnboardingAnswers = {
       ...answers,
       description: descriptionDraft.trim(),
-      ...applied,
     };
     setAnswers(updated);
-    goTo(applied ? "credits" : nextStep("building", updated));
+    goTo(nextStep("building", updated));
   };
 
   const handlePaid = () => {
@@ -666,12 +674,12 @@ export function NewOnboardingFlow({
         return (
           <BrainScreen
             brains={trackResult.brains}
-            selected={
-              selectedBrain ??
-              preselectedBrain(trackResult.brains, trackResult.installed)
-            }
-            onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
+            onOpenRouterKeyChange={setOpenRouterKey}
+            onSelect={handleBrainSelect}
+            openRouterKey={openRouterKey}
+            scan={subscriptionScan}
+            selected={selectedBrain ?? defaultBrainId(subscriptionScan)}
           />
         );
       case "credits":
