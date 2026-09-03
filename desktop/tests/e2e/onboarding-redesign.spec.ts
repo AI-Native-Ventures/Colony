@@ -16,6 +16,7 @@ const FIRST_RUN_IDENTITY = { ...TEST_IDENTITIES.tyler, username: "" };
 async function seedFreshFirstRun(
   page: Page,
   extraStorage: Record<string, string> = {},
+  mock?: Parameters<typeof installMockBridge>[1],
 ) {
   await page.addInitScript((extra) => {
     for (const [key, value] of Object.entries(extra)) {
@@ -26,10 +27,68 @@ async function seedFreshFirstRun(
   // and an empty community list are what open it, not the app-level gate.
   await seedFreshFounder(page, FIRST_RUN_IDENTITY.pubkey);
   await seedActiveIdentity(page, FIRST_RUN_IDENTITY);
-  await installMockBridge(page, undefined, {
+  await installMockBridge(page, mock, {
     skipOnboardingSeed: true,
     skipCommunitySeed: true,
   });
+}
+
+/**
+ * A computer with no tool the founder already pays for.
+ *
+ * The default mock catalog reports Oh My Pi and Claude Code ready, which is
+ * the detected case. This is the other one: only the hosted agent, which is
+ * on every computer and is never something detection found.
+ */
+function runtime(
+  id: string,
+  label: string,
+  availability: string,
+  authStatus: Record<string, unknown>,
+) {
+  return {
+    id,
+    label,
+    avatar_url: "",
+    availability,
+    command: null,
+    binary_path: null,
+    default_args: [],
+    mcp_command: null,
+    install_hint: `Install ${label}`,
+    install_instructions_url: "https://example.com",
+    can_auto_install: false,
+    underlying_cli_path: null,
+    node_required: false,
+    auth_status: authStatus,
+    login_hint: `Sign in to ${label}`,
+  };
+}
+
+const NOTHING_INSTALLED = [
+  runtime("buzz-agent", "Colony Agent", "available", {
+    status: "not_applicable",
+  }),
+  runtime("claude", "Claude Code", "not_installed", { status: "unknown" }),
+  runtime("codex", "Codex", "available", { status: "logged_out" }),
+];
+
+/** Everything before the building screen, answered the same way every time. */
+async function walkToCompany(page: Page) {
+  await passMachineLanding(page);
+  await page.getByLabel("Your name").fill("Aisha Bello");
+  await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
+  await page.getByLabel("Password").fill("colonyprototype");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByLabel("I have saved my code").click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Now, your company." }),
+  ).toBeVisible();
+  await page.getByLabel("Company name").fill("Rosebank Auto Care");
+  await page
+    .getByRole("button", { name: "Not yet, we are still building" })
+    .click();
 }
 
 /**
@@ -65,15 +124,31 @@ test("a non-technical user can get from the first screen to the end", async ({
   await page.getByLabel("I have saved my code").click();
   await page.getByRole("button", { name: "Continue" }).click();
 
-  // Screen 3: company.
+  // Screen 3: company. Name, stage and the website question are one screen:
+  // answering "no website" here is what skips the paid reading step later.
   await expect(
     page.getByRole("heading", { name: "Now, your company." }),
   ).toBeVisible();
   await page.getByLabel("Company name").fill("Rosebank Auto Care");
+  await page
+    .getByRole("button", { name: "Not yet, we are still building" })
+    .click();
+  await page.getByRole("button", { name: "No", exact: true }).click();
   await page.getByRole("button", { name: "Create workspace" }).click();
 
-  // Screen 4: the probe resolves on its own, no interaction.
-  await expect(page.getByText("Building your workspace.")).toBeVisible();
+  // Screen 4: building. It shows its work as a live list and ends on the
+  // draft, with no interaction until it settles. No website means the flow
+  // must not claim a finding.
+  await expect(page.getByTestId("onboarding-building-list")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Tell us what you do." }),
+  ).toBeVisible({ timeout: 15_000 });
+  // The list is still there beside the draft: what was done stays on screen.
+  await expect(page.getByTestId("onboarding-building-list")).toBeVisible();
+  await page
+    .getByPlaceholder("We repair and service cars in Johannesburg.")
+    .fill("We service and repair cars for owners around Johannesburg.");
+  await page.getByRole("button", { name: "Looks right" }).click();
 
   // Screen 5: the brain picker opens on Colony Agent whatever the mock
   // catalog reports ready, so the walk continues on the colony track. The
@@ -90,26 +165,7 @@ test("a non-technical user can get from the first screen to the end", async ({
   );
   await page.getByRole("button", { name: "Continue" }).click();
 
-  // Screen 6: business. Answering "no website" skips the paid reading step.
-  await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Not yet, we are still building" })
-    .click();
-  await page.getByRole("button", { name: "No", exact: true }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  // Screen 8: description. No website means the flow must not claim a finding.
-  await expect(
-    page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible();
-  await page
-    .getByPlaceholder("We repair and service cars in Johannesburg.")
-    .fill("We service and repair cars for owners around Johannesburg.");
-  await page.getByRole("button", { name: "Looks right" }).click();
-
-  // Screen 9: credits. Every track offers a way past it, so no payment
+  // Screen 6: credits. Every track offers a way past it, so no payment
   // handoff is needed to finish.
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),
@@ -197,24 +253,133 @@ test("a disabled primary action always says what is missing", async ({
   await expect(page.getByText("7 more characters")).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
 
-  // The same rule on the business screen: unanswered questions are named.
+  // The same rule on the company screen: unanswered questions are named,
+  // and the name on its own is not enough to claim a workspace.
   await page.getByLabel("Your name").fill("Aisha Bello");
   await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
   await page.getByLabel("Password").fill("colonyprototype");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByLabel("I have saved my code").click();
   await page.getByRole("button", { name: "Continue" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Now, your company." }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Enter your company name to continue."),
+  ).toBeVisible();
   await page.getByLabel("Company name").fill("Rosebank Auto Care");
+  await expect(
+    page.getByText("Answer both questions to continue."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create workspace" }),
+  ).toBeDisabled();
+});
+
+test("a founder with a website is shown what was read and can change it", async ({
+  page,
+}) => {
+  // The other walk that matters. Every other spec here answers "no website",
+  // so the reading line, the finding copy and the credits refund line were
+  // never walked end to end by anything.
+  await seedFreshFirstRun(page);
+  await page.goto("/");
+  await walkToCompany(page);
+  await page.getByRole("button", { name: "Yes", exact: true }).click();
+  await page
+    .getByPlaceholder("rosebankautocare.co.za")
+    .fill("rosebankautocare.co.za");
   await page.getByRole("button", { name: "Create workspace" }).click();
+
+  // Building: the list runs, the site is read, and the screen ends on the
+  // draft it produced rather than on a blank box.
+  await expect(page.getByTestId("onboarding-building-list")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Here is what we found." }),
+  ).toBeVisible({ timeout: 20_000 });
+  const draft = page.getByPlaceholder(
+    "We repair and service cars in Johannesburg.",
+  );
+  await expect(draft).toHaveValue(/independent vehicle workshop/);
+
+  // A read that came back leaves nothing to offer as an opener.
+  await expect(page.getByText("Tap one and change it")).toHaveCount(0);
+
+  await draft.fill("We service and repair cars for owners around Rosebank.");
+  await page.getByRole("button", { name: "Looks right" }).click();
+
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Continue" }).click();
+
+  // Something was read, so the refund against it may be promised. The
+  // no-website walk above asserts the opposite.
   await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
+    page.getByRole("heading", { name: "Put something in the tin." }),
   ).toBeVisible();
+  await expect(page.getByText("reading your website")).toBeVisible();
+});
+
+test("a blank box is never the whole offer when there is no website", async ({
+  page,
+}) => {
+  await seedFreshFirstRun(page);
+  await page.goto("/");
+  await walkToCompany(page);
+  await page.getByRole("button", { name: "No", exact: true }).click();
+  await page.getByRole("button", { name: "Create workspace" }).click();
+
   await expect(
-    page.getByText("Answer both questions to continue."),
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
+    page.getByRole("heading", { name: "Tell us what you do." }),
+  ).toBeVisible({ timeout: 20_000 });
+
+  // Nothing was read, so there is nothing to show. Three openers stand in
+  // for the blank box and "20 more characters", and tapping one fills it.
+  const opener = page.getByRole("button", { name: /^We .+ for .+\.$/ });
+  await expect(opener).toHaveCount(3);
+  const first = opener.first();
+  const text = (await first.textContent())?.trim() ?? "";
+  await first.click();
+  const draft = page.getByPlaceholder(
+    "We repair and service cars in Johannesburg.",
+  );
+  await expect(draft).toHaveValue(text);
+
+  // Filled, so the openers give way to the count and the action is live.
+  await expect(opener).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Looks right" })).toBeEnabled();
+});
+
+test("nothing detected means no brain screen and no dead Back behind it", async ({
+  page,
+}) => {
+  await seedFreshFirstRun(page, {}, { acpRuntimesCatalog: NOTHING_INSTALLED });
+  await page.goto("/");
+  await walkToCompany(page);
+  await page.getByRole("button", { name: "No", exact: true }).click();
+  await page.getByRole("button", { name: "Create workspace" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Tell us what you do." }),
+  ).toBeVisible({ timeout: 20_000 });
+  // Five screens, not six: the picker is not counted when it will not run.
+  await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
+    "04 / 05",
+  );
+  await page
+    .getByPlaceholder("We repair and service cars in Johannesburg.")
+    .fill("We service and repair cars for owners around Johannesburg.");
+  await page.getByRole("button", { name: "Looks right" }).click();
+
+  // Straight to credits: a picker with one already-selected row is a screen,
+  // not a choice, so the same choice is applied without asking.
+  await expect(
+    page.getByRole("heading", { name: "Put something in the tin." }),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByRole("heading", { name: "Pick who does the thinking." }),
+  ).toHaveCount(0);
+  // And no Back control offering the screen the flow just decided against.
+  await expect(page.getByRole("button", { name: "Back" })).toHaveCount(0);
 });

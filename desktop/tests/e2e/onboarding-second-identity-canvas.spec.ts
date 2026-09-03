@@ -49,34 +49,28 @@ async function walkCanvasFlow(
   await expect(
     page.getByRole("heading", { name: "Now, your company." }),
   ).toBeVisible();
-  await shot("company");
   await page.getByLabel("Company name").fill(companyName);
+  await page
+    .getByRole("button", { name: "Not yet, we are still building" })
+    .click();
+  await page.getByRole("button", { name: "No", exact: true }).click();
+  await shot("company");
   await page.getByRole("button", { name: "Create workspace" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Tell us what you do." }),
+  ).toBeVisible({ timeout: 20_000 });
+  await shot("summary");
+  await page
+    .getByPlaceholder("We repair and service cars in Johannesburg.")
+    .fill("We service and repair cars for owners around Johannesburg.");
+  await page.getByRole("button", { name: "Looks right" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 20_000 });
   await shot("assistant");
   await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
-  ).toBeVisible();
-  await shot("work-context");
-  await page
-    .getByRole("button", { name: "Not yet, we are still building" })
-    .click();
-  await page.getByRole("button", { name: "No", exact: true }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible();
-  await shot("summary");
-  await page
-    .getByPlaceholder("We repair and service cars in Johannesburg.")
-    .fill("We service and repair cars for owners around Johannesburg.");
-  await page.getByRole("button", { name: "Looks right" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),

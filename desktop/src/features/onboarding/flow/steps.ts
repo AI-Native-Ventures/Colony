@@ -1,16 +1,25 @@
 // desktop/src/features/onboarding/flow/steps.ts
 import type { FounderGender } from "../onboardingV2";
 
-/** The ten screens, in the order the spec defines them. */
+/**
+ * The screens, in the order the spec defines them.
+ *
+ * This was ten. Three of them asked about the same company (`company`,
+ * `business`) and three showed one stretch of work split across screens
+ * (`probing`, `reading`, `description`), which is how a founder ended up
+ * describing their business twice and watching two progress screens that
+ * never showed what came of them.
+ *
+ * `business` folded into `company`; `probing`, `reading` and `description`
+ * folded into `building`, which does both jobs and ends on the draft they
+ * produced. `invite` still ships dark, so six is what anyone sees.
+ */
 export const ONBOARDING_STEPS = [
   "account",
   "recovery",
   "company",
-  "probing",
+  "building",
   "brain",
-  "business",
-  "reading",
-  "description",
   "credits",
   "invite",
 ] as const;
@@ -60,23 +69,26 @@ export type OnboardingAnswers = {
 };
 
 /**
- * Steps that do work the moment they are entered: probing reads the user's
- * computer, and reading spends Colony's own money on a scrape. Back must never
- * land on one of these, and resume must re-run them rather than restore a
+ * Steps that do work the moment they are entered: building reads the user's
+ * computer and spends Colony's own money on a scrape. Back must never land on
+ * one of these, and resume must re-run them rather than restore a
  * half-finished result.
  */
-const WORKING_STEPS: ReadonlySet<OnboardingStep> = new Set([
-  "probing",
-  "reading",
-]);
+const WORKING_STEPS: ReadonlySet<OnboardingStep> = new Set(["building"]);
 
+/**
+ * The next screen, in order.
+ *
+ * `answers` used to decide this: the business screen jumped past reading when
+ * there was no website. Reading lives inside `building` now, which asks the
+ * question of itself, so the order is the order. The parameter stays because
+ * the flow reads it at every call site and the next branch to appear here
+ * will need it.
+ */
 export function nextStep(
   current: OnboardingStep,
-  answers: OnboardingAnswers,
+  _answers: OnboardingAnswers,
 ): OnboardingStep | "done" {
-  if (current === "business" && answers.hasWebsite === false) {
-    return "description";
-  }
   const index = ONBOARDING_STEPS.indexOf(current);
   const next = ONBOARDING_STEPS[index + 1];
   return next ?? "done";
@@ -85,13 +97,22 @@ export function nextStep(
 /**
  * What decides whether a screen is on this founder's path.
  *
- * `hasWebsite` is the answer as recorded, so `null` (not asked yet) still
- * counts the reading screen in: it is coming unless someone says otherwise.
- * `invitesEnabled` is the build flag, read once per run.
+ * `invitesEnabled` is the build flag, read once per run. `hasWebsite` used to
+ * be here too, to drop the reading screen from the count when there was no
+ * website; reading is a line inside `building` now, so the count no longer
+ * moves with the answer.
  */
 export type StepVisibility = {
-  hasWebsite: boolean | null;
   invitesEnabled: boolean;
+  /**
+   * Whether the probe found a tool the founder already pays for.
+   *
+   * True until the probe answers, for the same reason the website answer used
+   * to count the reading screen in while it was null: the screen is coming
+   * unless something says otherwise. The count may then only shrink, once,
+   * while the building screen is still ticking.
+   */
+  brainDetected: boolean;
 };
 
 /**
@@ -99,19 +120,20 @@ export type StepVisibility = {
  *
  * The counter used to render `index + 1 / ONBOARDING_STEPS.length`, which said
  * "/ 10" on a run that could never reach ten: invites ship dark, so the tenth
- * screen does not exist, and answering "no website" skips the reading screen,
- * which made the counter jump 06 to 08 with nothing in between. A count of
- * screens nobody will see is not a position, it is a guess.
+ * screen does not exist. A count of screens nobody will see is not a position,
+ * it is a guess.
  *
- * The brain screen is always here. It used to be skipped when nothing was
- * installed, on the grounds that a list of one is not a choice; it installs and
- * signs in now, so skipping it is what would remove the choice (see the note in
- * NewOnboardingFlow's probe handler).
+ * The brain screen is here only when the probe found a tool the founder
+ * already subscribes to. Colony Agent is the default now, so on a computer
+ * with nothing installed the screen offers one row, already selected, that
+ * the founder has no way to evaluate: a question with one answer is a screen,
+ * not a choice. It is applied silently instead (see NewOnboardingFlow's
+ * building handler).
  */
 export function visibleSteps(state: StepVisibility): OnboardingStep[] {
   return ONBOARDING_STEPS.filter((step) => {
-    if (step === "reading") return state.hasWebsite !== false;
     if (step === "invite") return state.invitesEnabled;
+    if (step === "brain") return state.brainDetected;
     return true;
   });
 }
@@ -138,25 +160,37 @@ export function stepPosition(
  */
 const BACK_TARGETS: Partial<Record<OnboardingStep, OnboardingStep>> = {
   company: "account",
-  business: "company",
-  description: "business",
-  credits: "description",
+  credits: "brain",
   invite: "credits",
 };
 
-export function backStep(current: OnboardingStep): OnboardingStep | null {
-  return BACK_TARGETS[current] ?? null;
+/**
+ * Back never lands on a screen this founder was not shown.
+ *
+ * Credits sits behind the brain screen, which is skipped whenever nothing was
+ * detected. Going back to it there would hand someone a choice the flow had
+ * just decided they did not have, so credits simply has no back control on
+ * that path.
+ */
+export function backStep(
+  current: OnboardingStep,
+  state: StepVisibility,
+): OnboardingStep | null {
+  const target = BACK_TARGETS[current] ?? null;
+  if (target === null) return null;
+  return visibleSteps(state).includes(target) ? target : null;
 }
 
 export function resumeStep(answers: OnboardingAnswers): OnboardingStep {
   if (!answers.account) return "account";
   if (!answers.recoveryAcknowledged) return "recovery";
-  if (!answers.company) return "company";
-  if (!answers.track) return "probing";
+  // Company, stage and website are one screen, so any of the three unanswered
+  // resumes onto it.
+  if (!answers.company || answers.stage === null || answers.hasWebsite === null)
+    return "company";
+  // Building produces both, and re-runs rather than restoring half of one.
+  if (!answers.track || !answers.description) return "building";
   if (!answers.brain) return "brain";
-  if (answers.stage === null || answers.hasWebsite === null) return "business";
-  if (answers.hasWebsite && !answers.description) return "reading";
-  if (!answers.description) return "description";
   if (!answers.paid) return "credits";
   return "invite";
 }

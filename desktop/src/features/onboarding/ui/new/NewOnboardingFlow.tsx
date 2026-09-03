@@ -43,17 +43,10 @@ import {
   type AccountValues,
 } from "./screens/AccountScreen";
 import { BrainScreen } from "./screens/BrainScreen";
-import {
-  BusinessScreen,
-  type BusinessPatch,
-  type BusinessStage,
-} from "./screens/BusinessScreen";
+import { BuildingScreen } from "./screens/BuildingScreen";
 import { CompanyScreen, type CompanyValues } from "./screens/CompanyScreen";
 import { CreditsScreen } from "./screens/CreditsScreen";
-import { DescriptionScreen } from "./screens/DescriptionScreen";
 import { InviteScreen } from "./screens/InviteScreen";
-import { ProbingScreen } from "./screens/ProbingScreen";
-import { ReadingScreen } from "./screens/ReadingScreen";
 import { RecoveryScreen } from "./screens/RecoveryScreen";
 
 /**
@@ -222,6 +215,9 @@ export function NewOnboardingFlow({
   const [pubkey, setPubkey] = useState("");
   const [companyValues, setCompanyValues] = useState<CompanyValues>({
     company: "",
+    stage: null,
+    hasWebsite: null,
+    website: "",
   });
   const [companyState, setCompanyState] = useState<{
     status: "idle" | "provisioning" | "error";
@@ -235,14 +231,27 @@ export function NewOnboardingFlow({
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
 
-  const [businessStage, setBusinessStage] = useState<BusinessStage | null>(
-    null,
-  );
-  const [hasWebsite, setHasWebsite] = useState<boolean | null>(null);
-  const [website, setWebsite] = useState("");
+  /**
+   * Whether the brain screen is a question worth asking this founder.
+   *
+   * It used to run for everyone. That was right while the screen could do
+   * nothing but pick an already-ready runtime and Colony had no agent of its
+   * own; now Colony Agent is the default and it is hosted, so a founder with
+   * nothing installed reaches a picker holding one row that is already
+   * selected. Nothing on that screen is theirs to decide, and the tool names
+   * on it mean nothing to the person this flow is written for. So it is shown
+   * only when detection found something they already pay for, and otherwise
+   * the same choice is applied for them, through the same call the screen
+   * makes.
+   *
+   * Unknown counts as detected: the probe has not answered yet, and the screen
+   * is coming unless something says otherwise.
+   */
+  const brainDetected =
+    trackResult === null || trackResult.installed.length > 0;
+  const visibility = { invitesEnabled: canInvite, brainDetected };
 
   const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [scrapeFailed, setScrapeFailed] = useState(false);
   const [websiteRead, setWebsiteRead] = useState(false);
   const [invites, setInvites] = useState<string[]>([]);
   const [isSendingInvites, setIsSendingInvites] = useState(false);
@@ -318,26 +327,35 @@ export function NewOnboardingFlow({
   }, []);
 
   const goBack = () => {
-    const target = backStep(step);
+    const target = backStep(step, visibility);
     if (target) goTo(target);
   };
 
+  /**
+   * The screen's back control, or nothing when the screen behind it was never
+   * shown. A control that does nothing when pressed is worse than no control.
+   */
+  const backHandler = (from: OnboardingStep) =>
+    backStep(from, visibility) ? goBack : undefined;
+
+  /**
+   * What the probe found, recorded without moving anywhere.
+   *
+   * The probe used to own a screen of its own and end it, so resolving and
+   * navigating were the same act. It is one line of the building screen now,
+   * which keeps running afterwards: the read may still be in flight and the
+   * draft is still to be edited.
+   *
+   * Preselect the hosted agent, which is ready on every computer, rather than
+   * whatever detection happened to find first. The track follows the
+   * preselection for the same reason it follows an explicit pick.
+   */
   const handleProbeResolved = useCallback((result: TrackResult) => {
-    // The brain screen always runs now. It used to be skipped whenever nothing
-    // was installed, on the grounds that a list of one is not a choice — but
-    // that was only true while the screen could do nothing except pick an
-    // already-ready runtime. It installs and signs in now, so skipping it is
-    // what would remove the choice.
-    //
-    // Preselect the hosted agent, which is ready on every computer, rather
-    // than whatever detection happened to find first. The track follows the
-    // preselection for the same reason it follows an explicit pick.
     const brain = preselectedBrain(result.brains, result.installed);
     const track = trackForBrain(brain, result.installed);
     setSelectedBrain(brain);
     setTrackResult({ ...result, track });
     setAnswers((current) => ({ ...current, track }));
-    setStep("brain");
   }, []);
 
   const handleAccountSubmit = async () => {
@@ -386,12 +404,19 @@ export function NewOnboardingFlow({
     goTo(nextStep("recovery", updated));
   };
 
-  const handleCompanySubmit = async () => {
+  const handleCompanySubmit = async (normalisedWebsite: string | null) => {
     const name = companyValues.company.trim();
     if (!name || companyState.status === "provisioning") return;
+    // Stage and the website answer are recorded alongside the name: they are
+    // three questions on one screen, so they land together or not at all.
+    const said = {
+      stage: companyValues.stage,
+      hasWebsite: companyValues.hasWebsite,
+      website: normalisedWebsite,
+    };
     if (!provisioning) {
       // A community is already applied: nothing to claim, just record it.
-      const updated: OnboardingAnswers = { ...answers, company: name };
+      const updated: OnboardingAnswers = { ...answers, company: name, ...said };
       setAnswers(updated);
       goTo(nextStep("company", updated));
       return;
@@ -407,6 +432,7 @@ export function NewOnboardingFlow({
     const updated: OnboardingAnswers = {
       ...answers,
       company: name,
+      ...said,
       // Recorded so a reload resumes onto the address already claimed
       // instead of claiming a second one.
       communitySlug: outcome.slug,
@@ -441,42 +467,43 @@ export function NewOnboardingFlow({
     goTo(nextStep("brain", updated));
   };
 
-  const handleBusinessChange = (patch: BusinessPatch) => {
-    if (patch.stage !== undefined) setBusinessStage(patch.stage);
-    if (patch.hasWebsite !== undefined) setHasWebsite(patch.hasWebsite);
-    if (patch.website !== undefined) setWebsite(patch.website);
-  };
-
-  const handleBusinessContinue = (normalisedWebsite: string | null) => {
-    const updated: OnboardingAnswers = {
-      ...answers,
-      stage: businessStage,
-      hasWebsite,
-      website: normalisedWebsite,
-    };
-    setAnswers(updated);
-    goTo(nextStep("business", updated));
-  };
-
   const handleReadingDone = useCallback((result: ScrapeResult) => {
     if (result.ok) setDescriptionDraft(result.description);
-    setScrapeFailed(!result.ok);
     // Only a reading that came back with something costs anything to refund
     // against, and the credits screen may only promise the refund when it
     // did. A resume that lands straight on credits leaves this false, which
     // is the safe direction: the screen says nothing rather than promising
     // money back against a spend it cannot see.
     setWebsiteRead(result.ok);
-    setStep("description");
   }, []);
 
-  const handleDescriptionContinue = () => {
+  const applyColonyAgentSilently = (): Pick<
+    OnboardingAnswers,
+    "brain" | "track"
+  > => {
+    const track = trackForBrain(COLONY_AGENT_RUNTIME_ID, []);
+    // Best effort, exactly as on the screen: a failed config write must not
+    // trap anyone, and Agent defaults can fix it afterwards.
+    void applyBrainChoice(COLONY_AGENT_RUNTIME_ID).catch((error: unknown) => {
+      console.warn(
+        "Could not apply the default brain to agent defaults.",
+        error,
+      );
+    });
+    setSelectedBrain(COLONY_AGENT_RUNTIME_ID);
+    setTrackResult((current) => (current ? { ...current, track } : current));
+    return { brain: COLONY_AGENT_RUNTIME_ID, track };
+  };
+
+  const handleBuildingContinue = () => {
+    const applied = brainDetected ? null : applyColonyAgentSilently();
     const updated: OnboardingAnswers = {
       ...answers,
       description: descriptionDraft.trim(),
+      ...applied,
     };
     setAnswers(updated);
-    goTo(nextStep("description", updated));
+    goTo(applied ? "credits" : nextStep("building", updated));
   };
 
   const handlePaid = () => {
@@ -535,10 +562,12 @@ export function NewOnboardingFlow({
             values={companyValues}
             onChange={(patch) => {
               setCompanyValues((current) => ({ ...current, ...patch }));
-              // Editing the name is a fresh attempt; drop the stale answer.
+              // Editing an answer is a fresh attempt; drop the stale one.
               setCompanyState({ status: "idle" });
             }}
-            onSubmit={() => void handleCompanySubmit()}
+            onSubmit={(normalisedWebsite) =>
+              void handleCompanySubmit(normalisedWebsite)
+            }
             onBack={goBack}
             isSubmitting={companyState.status === "provisioning"}
             error={
@@ -548,23 +577,39 @@ export function NewOnboardingFlow({
             }
           />
         );
-      case "probing":
+      case "building":
         return (
-          <ProbingScreen
+          <BuildingScreen
+            hasWebsite={answers.hasWebsite === true}
+            website={answers.website ?? ""}
             globalConfig={globalConfig}
+            services={effectiveServices}
             reducedMotion={reducedMotion}
-            onResolved={handleProbeResolved}
+            value={descriptionDraft}
+            onChange={setDescriptionDraft}
+            onProbeResolved={handleProbeResolved}
+            onReadDone={handleReadingDone}
+            onContinue={handleBuildingContinue}
           />
         );
       case "brain":
         if (trackResult === null) {
-          // A resumed session has no probe result yet: probe again rather
-          // than guess what was installed.
+          // A resumed session has no probe result yet: run the building screen
+          // again rather than guess what was installed. It re-probes, and
+          // `resumeStep` sends a resume here in the first place only once the
+          // draft exists, so nothing it produced is thrown away.
           return (
-            <ProbingScreen
+            <BuildingScreen
+              hasWebsite={answers.hasWebsite === true}
+              website={answers.website ?? ""}
               globalConfig={globalConfig}
+              services={effectiveServices}
               reducedMotion={reducedMotion}
-              onResolved={handleProbeResolved}
+              value={descriptionDraft}
+              onChange={setDescriptionDraft}
+              onProbeResolved={handleProbeResolved}
+              onReadDone={handleReadingDone}
+              onContinue={handleBuildingContinue}
             />
           );
         }
@@ -579,37 +624,6 @@ export function NewOnboardingFlow({
             onContinue={handleBrainContinue}
           />
         );
-      case "business":
-        return (
-          <BusinessScreen
-            stage={businessStage}
-            hasWebsite={hasWebsite}
-            website={website}
-            onChange={handleBusinessChange}
-            onContinue={handleBusinessContinue}
-            onBack={goBack}
-          />
-        );
-      case "reading":
-        return (
-          <ReadingScreen
-            url={answers.website ?? ""}
-            services={effectiveServices}
-            reducedMotion={reducedMotion}
-            onDone={handleReadingDone}
-          />
-        );
-      case "description":
-        return (
-          <DescriptionScreen
-            hasWebsite={answers.hasWebsite === true}
-            scrapeFailed={scrapeFailed}
-            value={descriptionDraft}
-            onChange={setDescriptionDraft}
-            onContinue={handleDescriptionContinue}
-            onBack={goBack}
-          />
-        );
       case "credits":
         return (
           <CreditsScreen
@@ -620,7 +634,7 @@ export function NewOnboardingFlow({
             payments={effectiveServices.payments}
             onPaid={handlePaid}
             onSkip={handleCreditsSkip}
-            onBack={goBack}
+            onBack={backHandler("credits")}
             finishing={finishState.status === "running"}
             finishError={
               finishState.status === "error"
@@ -652,12 +666,7 @@ export function NewOnboardingFlow({
     }
   })();
 
-  // Counted from the recorded answer rather than the live business-screen
-  // state, so the total does not twitch while someone is still choosing.
-  const position = stepPosition(step, {
-    hasWebsite: answers.hasWebsite,
-    invitesEnabled: canInvite,
-  });
+  const position = stepPosition(step, visibility);
 
   return (
     <OnboardingCanvas
