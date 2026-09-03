@@ -74,31 +74,17 @@ const OUTER_SPACES = /^[ \u00A0]+|[ \u00A0]+$/g;
  * space: when Chromium rewrites the whitespace run around the caret it
  * anchors the replacement at either edge, and both mean the same boundary.
  */
-/**
- * The caret position just past a mention's trailing space, or `pos` when the
- * caret is not sitting on one. Ported with #6531, which is the first commit
- * here to need it; upstream keeps the same helper lower in its file.
- */
-export function selectionAfterMentionTrailingSpace(
-  doc: ProseMirrorNode,
-  pos: number,
-): number {
-  if (pos < 0 || pos >= doc.content.size) return pos;
-  const nextChar = doc.textBetween(pos, pos + 1, "\n", "\0");
-  if (nextChar !== " ") return pos;
-  const lookbehind = Math.min(pos, 80);
-  const before = doc.textBetween(pos - lookbehind, pos, "\n", "\0");
-  if (!/(?:^|[\s(])[@#][^\s]+$/.test(before)) return pos;
-  return pos + 1;
-}
-
 function mentionTrailingSpaceBoundary(
   doc: ProseMirrorNode,
   pos: number,
+  names: readonly string[] = [],
 ): number | null {
-  const afterSpace = selectionAfterMentionTrailingSpace(doc, pos);
+  const afterSpace = selectionAfterMentionTrailingSpace(doc, pos, names);
   if (afterSpace !== pos) return afterSpace;
-  if (pos > 0 && selectionAfterMentionTrailingSpace(doc, pos - 1) === pos) {
+  if (
+    pos > 0 &&
+    selectionAfterMentionTrailingSpace(doc, pos - 1, names) === pos
+  ) {
     return pos;
   }
   return null;
@@ -132,12 +118,13 @@ export function insertionForMentionTextInput(
   from: number,
   to: number,
   text: string,
+  names: readonly string[] = [],
 ): MentionTextInsertion | null {
   if (from === to) {
-    const next = selectionAfterMentionTrailingSpace(doc, from);
+    const next = selectionAfterMentionTrailingSpace(doc, from, names);
     return next === from ? null : { insertAt: next, text };
   }
-  const boundary = mentionTrailingSpaceBoundary(doc, from);
+  const boundary = mentionTrailingSpaceBoundary(doc, from, names);
   if (boundary === null) return null;
   if (!SPACE_RUN.test(doc.textBetween(from, to, "\n", "\0"))) return null;
   return { insertAt: boundary, text: text.replace(OUTER_SPACES, "") };
@@ -154,19 +141,21 @@ export function mentionTextInputInsertion(
   to: number,
   text: string,
   settling: boolean,
+  names: readonly string[] = [],
 ): MentionTextInsertion | null {
   if (!settling) return null;
-  return insertionForMentionTextInput(doc, from, to, text);
+  return insertionForMentionTextInput(doc, from, to, text, names);
 }
 
 /** Caret just after a mention trailing space: ArrowLeft lands on the token end. */
 export function positionAfterArrowLeftThroughMentionSpace(
   doc: ProseMirrorNode,
   from: number,
+  names: readonly string[] = [],
 ): number | null {
   if (from <= 0) return null;
   const chipEnd = from - 1;
-  if (selectionAfterMentionTrailingSpace(doc, chipEnd) === from) {
+  if (selectionAfterMentionTrailingSpace(doc, chipEnd, names) === from) {
     return chipEnd;
   }
   return null;
@@ -269,7 +258,8 @@ export function settleAutocompleteMentionInsert(
   text: string,
 ): void {
   const storage = mentionHighlightStorage(editor);
-  const mentionInsert = /(?:^|[\s(])([@#])([^\s]+) $/.exec(text);
+  // Autocomplete provides a literal label, including spaces and disambiguators.
+  const mentionInsert = /(?:^|[\s(])([@#])([^@#\r\n]+) $/.exec(text);
   if (!mentionInsert) return;
   const prefix = mentionInsert[1];
   const label = mentionInsert[2];
@@ -338,6 +328,11 @@ export const MentionHighlightExtension = Extension.create({
     // Per-editor caret settlement: autocomplete arms it, ArrowLeft and click
     // cancel it, so only a deliberate insert moves the caret (#6531).
     const settlement = createMentionCaretSettlement();
+    const knownNames = () => [
+      ...extension.storage.names,
+      ...extension.storage.agentNames,
+      ...extension.storage.channelNames,
+    ];
 
     return [
       new Plugin({
@@ -362,7 +357,11 @@ export const MentionHighlightExtension = Extension.create({
               (tr.docChanged || settlement.peek() !== null)
             ) {
               settlement.arm(
-                selectionAfterMentionTrailingSpace(tr.doc, tr.selection.from),
+                selectionAfterMentionTrailingSpace(
+                  tr.doc,
+                  tr.selection.from,
+                  knownNames(),
+                ),
               );
             }
 
@@ -414,7 +413,11 @@ export const MentionHighlightExtension = Extension.create({
             return null;
           }
           const from = newState.selection.from;
-          const next = selectionAfterMentionTrailingSpace(newState.doc, from);
+          const next = selectionAfterMentionTrailingSpace(
+            newState.doc,
+            from,
+            knownNames(),
+          );
           if (
             !shouldAdvanceMentionCaret({
               from,
@@ -441,6 +444,7 @@ export const MentionHighlightExtension = Extension.create({
               const next = selectionAfterMentionTrailingSpace(
                 view.state.doc,
                 from,
+                knownNames(),
               );
               if (next !== from) {
                 applying = true;
@@ -477,6 +481,7 @@ export const MentionHighlightExtension = Extension.create({
               to,
               text,
               settlement.peek() !== null,
+              knownNames(),
             );
             if (insertion == null) {
               settlement.cancel();
@@ -511,6 +516,7 @@ export const MentionHighlightExtension = Extension.create({
             const chipEnd = positionAfterArrowLeftThroughMentionSpace(
               view.state.doc,
               view.state.selection.from,
+              knownNames(),
             );
             if (chipEnd == null) return false;
             view.dispatch(
@@ -531,6 +537,7 @@ export const MentionHighlightExtension = Extension.create({
             const chipEnd = positionAfterArrowLeftThroughMentionSpace(
               view.state.doc,
               pos,
+              knownNames(),
             );
             if (chipEnd == null) return false;
             view.dispatch(
@@ -586,6 +593,73 @@ export function buildHighlightPatterns(
   }
 
   return patterns;
+}
+
+/**
+ * If `pos` sits at the end of an `@name` / `#channel` token and the next
+ * character is a space, return the position after that space.
+ *
+ * Autocomplete inserts `@Name ` then chip decorations wrap the token. The
+ * browser can map the caret back to the chip edge, so the next keystroke
+ * lands before the space (`@quinnhello`). Callers use this to keep typing
+ * after the token.
+ */
+export function selectionAfterMentionTrailingSpace(
+  doc: ProseMirrorNode,
+  pos: number,
+  names: readonly string[] = [],
+): number {
+  if (pos < 0 || pos >= doc.content.size) return pos;
+  const nextChar = doc.textBetween(pos, pos + 1, "\n", "\0");
+  if (nextChar !== " ") return pos;
+  // Use registered full labels as well as the legacy single-token fallback.
+  // A multi-word name's internal spaces are not trailing separators.
+  const lookbehind = Math.min(
+    pos,
+    names.reduce((max, name) => Math.max(max, name.length + 2), 80),
+  );
+  const before = doc.textBetween(pos - lookbehind, pos, "\n", "\0");
+  const lower = before.toLowerCase();
+  // Don't treat the space inside a registered multi-word label as the end of
+  // a single-word token, even when the browser maps the caret there.
+  const internalSpace = names.some((name) => {
+    const token = name.toLowerCase();
+    for (
+      let space = token.indexOf(" ");
+      space >= 0;
+      space = token.indexOf(" ", space + 1)
+    ) {
+      const start = before.length - space - 1;
+      if (start < 0 || (start > 0 && !/[\s(]/.test(before[start - 1])))
+        continue;
+      if (before[start] !== "@" && before[start] !== "#") continue;
+      if (lower.slice(start + 1) !== token.slice(0, space)) continue;
+      if (
+        doc
+          .textBetween(
+            pos,
+            Math.min(doc.content.size, pos + name.length - space),
+            "\n",
+            "\0",
+          )
+          .toLowerCase() === token.slice(space)
+      )
+        return true;
+    }
+    return false;
+  });
+  if (internalSpace) return pos;
+  const knownBoundary = names.some((name) => {
+    const start = before.length - name.length - 1;
+    return (
+      start >= 0 &&
+      (start === 0 || /[\s(]/.test(before[start - 1])) &&
+      (before[start] === "@" || before[start] === "#") &&
+      lower.slice(start + 1) === name.toLowerCase()
+    );
+  });
+  if (!knownBoundary && !/(?:^|[\s(])[@#][^\s]+$/.test(before)) return pos;
+  return pos + 1;
 }
 
 /**
