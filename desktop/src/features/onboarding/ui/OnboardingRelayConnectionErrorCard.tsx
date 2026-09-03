@@ -100,7 +100,7 @@ export function OnboardingRelayConnectionErrorCard({
         .then(runAction)
         .then((didReconnect) => {
           if (didReconnect !== false) {
-            // Synchronous success (phase 1) — clear the ref and mark success
+            // Synchronous success (phase 1): clear the ref and mark success
             // immediately. The connection-state effect won't fire because the
             // ref was just cleared.
             hadActiveReconnectRef.current = false;

@@ -569,7 +569,7 @@ function CommunityApp({
   // earlier account on this machine) must not disqualify a genuinely new
   // signup from the canvas flow. `community.pubkey` is display-only, but it
   // is the only local signal of "which identity already has a workspace
-  // here" — see Community.pubkey's doc.
+  // here": see Community.pubkey's doc.
   const hasOwnCommunity = communities.some(
     (community) => community.pubkey === currentPubkey,
   );
