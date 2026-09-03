@@ -3273,7 +3273,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/features/onboarding/ui/ProviderLaneChoice.tsx:212",
-        "src/shared/api/tauriSubscriptions.ts:68"
+        "src/features/onboarding/ui/new/screens/BrainScreen.tsx:31",
+        "src/features/onboarding/ui/new/screens/brainLanes.ts:81"
       ]
     },
     "scan_onboarding_company_website": {
