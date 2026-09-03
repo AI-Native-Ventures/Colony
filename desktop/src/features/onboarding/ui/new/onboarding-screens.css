@@ -251,6 +251,73 @@
     gap: 0.25rem;
   }
 
+  /* Photo beside the name it illustrates, rather than on a screen of its own.
+     The field takes the remaining width so the row still reads as one input.
+
+     These rules came back with the profile screen the legacy flow's avatar
+     step folded into: founder signup no longer sets a picture, but an
+     existing identity writing its first profile still does, on this circle. */
+  :where(.onb-canvas) .onb-identity-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.875rem;
+    width: 100%;
+  }
+
+  :where(.onb-canvas) .onb-identity-row .onb-field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  :where(.onb-canvas) .onb-avatar-button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 3.25rem;
+    height: 3.25rem;
+    overflow: hidden;
+    border-radius: 999px;
+    border: 1px dashed var(--onb-shell-line);
+    background: var(--onb-shell);
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition:
+      border-color 200ms var(--onb-ease),
+      transform 200ms var(--onb-ease);
+  }
+
+  /* A chosen photo is content, not a placeholder, so the dashed "add me"
+     border becomes solid once there is something in the circle. */
+  :where(.onb-canvas) .onb-avatar-button[data-has-avatar="true"] {
+    border-style: solid;
+  }
+
+  :where(.onb-canvas) .onb-avatar-button:hover:not(:disabled) {
+    transform: translate3d(0, -1px, 0);
+  }
+
+  :where(.onb-canvas) .onb-avatar-button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  :where(.onb-canvas) .onb-avatar-emoji {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    font-size: 1.5rem;
+  }
+
+  :where(.onb-canvas) .onb-avatar-empty {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.5rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.65;
+  }
+
   :where(.onb-canvas) .onb-label {
     font-family: "JetBrains Mono", monospace;
     font-size: 0.6875rem;

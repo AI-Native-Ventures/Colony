@@ -59,8 +59,12 @@ test("creating a community starts the founder walk at the company screen", async
   await page.getByTestId("community-choice-create").click();
 
   await expect(page.getByText("Now, your company.")).toBeVisible();
+  // The company screen is this run's first screen, and the total counts only
+  // what is coming: the account and recovery screens are behind them, invites
+  // ship dark, and the brain screen appears only if the probe finds a tool
+  // they already pay for. So the position is pinned and the total is not.
   await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
-    "01 / 07",
+    /^01 \/ 0[1-9]$/,
   );
   // The request is recorded, so a relaunch halfway through the walk resumes
   // it instead of dropping the person back on the choice screen.
