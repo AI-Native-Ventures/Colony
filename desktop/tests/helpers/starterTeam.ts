@@ -17,7 +17,20 @@ export const GUIDE_NAME = starterPersonaName(STARTER_PERSONA_IDS.fizz);
 export const SECOND_NAME = starterPersonaName(STARTER_PERSONA_IDS.honey);
 export const THIRD_NAME = starterPersonaName(STARTER_PERSONA_IDS.bumble);
 
-export const STARTER_NAMES: readonly string[] =
+/**
+ * Every built-in persona name, for specs that seed all three and assert on the
+ * catalog. This is the catalog, NOT the starting lineup: a new company is
+ * seeded with `STARTER_LINEUP_NAMES` only, and a spec that wants all three has
+ * to activate them itself through `activePersonaIds`.
+ */
+export const STARTER_NAMES: readonly string[] = [
+  GUIDE_NAME,
+  SECOND_NAME,
+  THIRD_NAME,
+];
+
+/** What a fresh company actually starts with. */
+export const STARTER_LINEUP_NAMES: readonly string[] =
   STARTER_PERSONA_ORDER.map(starterPersonaName);
 
 /** `@fizz`-style mention token for a display name. */
