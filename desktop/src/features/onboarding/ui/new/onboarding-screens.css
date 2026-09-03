@@ -921,9 +921,99 @@
     box-shadow: 0 0 0 3px rgba(23, 23, 23, 0.14);
   }
 
+  /* Screen 5a: the brains, as a two-column grid of compact tiles. Six
+     full-width rows carrying a dot, a name and a sentence each ran the whole
+     right column and made a list of six read as a list of twenty. The tile is
+     one line: mark, name, state. */
+  :where(.onb-canvas) .onb-options--tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  :where(.onb-canvas) .onb-option--tile {
+    gap: 0.625rem;
+    min-height: 3.25rem;
+    padding: 0.625rem 0.75rem;
+    border-radius: 0.875rem;
+  }
+
+  /* Fixed box: the marks arrive as square bitmaps, wide inline SVGs and a
+     lucide glyph, and only a fixed box lands all three on one baseline. */
+  :where(.onb-canvas) .onb-option__logo {
+    width: 1.5rem;
+    height: 1.5rem;
+    flex: none;
+    object-fit: contain;
+  }
+
+  /* A name that does not fit is clipped rather than allowed to wrap: a
+     wrapped tile is a taller tile, and the row of them stops being a row. */
+  :where(.onb-canvas) .onb-option--tile .onb-option__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :where(.onb-canvas) .onb-option__pill {
+    flex: none;
+    padding: 0.0625rem 0.4375rem;
+    border-radius: 999px;
+    border: 1px solid var(--onb-shell-line);
+    font-size: 0.6875rem;
+    color: var(--onb-ink-soft);
+    white-space: nowrap;
+  }
+
+  :where(.onb-canvas) .onb-option[data-status="ready"] .onb-option__pill {
+    border-color: hsl(160 60% 45% / 0.5);
+    color: hsl(160 60% 32%);
+  }
+
+  :where(.onb-canvas) .onb-option[data-status="needs-login"] .onb-option__pill {
+    border-color: hsl(38 92% 50% / 0.6);
+  }
+
+  /* A tile that cannot think yet is dimmed, not disabled: picking it is how
+     the install or the sign-in under the grid is asked for. */
+  :where(.onb-canvas) .onb-option--tile[data-status="not-installed"],
+  :where(.onb-canvas) .onb-option--tile[data-status="needs-login"] {
+    opacity: 0.7;
+  }
+
+  :where(.onb-canvas) .onb-option--tile[data-selected="true"] {
+    opacity: 1;
+    border-color: currentColor;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+
+  /* The one thing to do next, under the grid and belonging to the pick. */
+  :where(.onb-canvas) .onb-option-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    margin-top: 0.75rem;
+  }
+
+  :where(.onb-canvas) .onb-option-strip .onb-option__meta {
+    margin-top: 0;
+  }
+
+  @media (max-width: 900px) {
+    :where(.onb-canvas) .onb-options--tiles {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
   /* Title and status were both inline in one span and ran together as
      "Oh My PiReady". They stack now. */
-  :where(.onb-canvas) .onb-option > span:last-child {
+  /* Not on a tile: there the last span is the state pill, and stacking it
+     turns a pill into a block. */
+  :where(.onb-canvas) .onb-option:not(.onb-option--tile) > span:last-child {
     display: grid;
     gap: 0.15rem;
   }
