@@ -29,6 +29,7 @@ import {
 } from "@/shared/ui/sidebar";
 import { SidebarMenuLabel } from "@/shared/ui/sidebar-menu-label";
 import type { SidebarSelectedView } from "../types";
+import { SidebarMoreNavGroup } from "./SidebarMoreNavGroup";
 
 export type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
@@ -50,6 +51,12 @@ export type AppSidebarPinnedHeaderProps = {
 type AppSidebarPrimaryMenuProps = {
   dueReminderEventIds: readonly string[];
   homeBadgeFeedIds: readonly string[];
+  /**
+   * When set, Pulse, Projects, Content, Workflows and Discovery move under a
+   * "More" group instead of standing in the open list. Null is today's
+   * sidebar, which is what everyone but a fresh founder gets.
+   */
+  moreNav: { isOpen: boolean; onToggle: () => void } | null;
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
@@ -173,6 +180,7 @@ function InboxMenuItem({
 export function AppSidebarPrimaryMenu({
   dueReminderEventIds,
   homeBadgeFeedIds,
+  moreNav,
   onSelectAgents,
   onSelectDiscovery,
   onSelectHome,
@@ -183,47 +191,100 @@ export function AppSidebarPrimaryMenu({
   onSelectWorkflows,
   selectedView,
 }: AppSidebarPrimaryMenuProps) {
+  const pulseItem = (
+    <FeatureGate feature="pulse" key="pulse">
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          data-testid="open-pulse-view"
+          isActive={selectedView === "pulse"}
+          onClick={onSelectPulse}
+          tooltip="Pulse"
+          type="button"
+        >
+          <Activity className="h-4 w-4" />
+          <SidebarMenuLabel>Pulse</SidebarMenuLabel>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </FeatureGate>
+  );
+  const projectsItem = (
+    <FeatureGate feature="projects" key="projects">
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          data-testid="open-projects-view"
+          isActive={selectedView === "projects"}
+          onClick={onSelectProjects}
+          tooltip="Projects"
+          type="button"
+        >
+          <FolderGit2 className="h-4 w-4" />
+          <SidebarMenuLabel>Projects</SidebarMenuLabel>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </FeatureGate>
+  );
+  const contentItem = (
+    <FeatureGate feature="contentCalendar" key="content">
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          data-testid="open-content-view"
+          isActive={selectedView === "content"}
+          onClick={onSelectContent}
+          tooltip="Content"
+          type="button"
+        >
+          <CalendarRange className="h-4 w-4" />
+          <SidebarMenuLabel>Content</SidebarMenuLabel>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </FeatureGate>
+  );
+  const workflowsItem = (
+    <FeatureGate feature="workflows" key="workflows">
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          data-testid="open-workflows-view"
+          isActive={selectedView === "workflows"}
+          onClick={onSelectWorkflows}
+          tooltip="Workflows"
+          type="button"
+        >
+          <Zap className="h-4 w-4" />
+          <SidebarMenuLabel>Workflows</SidebarMenuLabel>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </FeatureGate>
+  );
+  const discoveryItem = (
+    <SidebarMenuItem key="discovery">
+      <SidebarMenuButton
+        data-testid="open-discovery-view"
+        isActive={selectedView === "discovery"}
+        onClick={onSelectDiscovery}
+        tooltip="Discovery"
+        type="button"
+      >
+        <Compass className="h-4 w-4" />
+        <SidebarMenuLabel>Discovery</SidebarMenuLabel>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+
   return (
     <SidebarHeader
       className="relative z-40 cursor-default select-none px-2 pb-0 pt-0"
       data-tauri-drag-region
       data-testid="sidebar-primary-menu"
     >
-      <SidebarMenu className="pb-2">
+      <SidebarMenu className={moreNav ? "pb-0" : "pb-2"}>
         <InboxMenuItem
           dueReminderEventIds={dueReminderEventIds}
           homeBadgeFeedIds={homeBadgeFeedIds}
           onSelectHome={onSelectHome}
           selectedView={selectedView}
         />
-        <FeatureGate feature="pulse">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-pulse-view"
-              isActive={selectedView === "pulse"}
-              onClick={onSelectPulse}
-              tooltip="Pulse"
-              type="button"
-            >
-              <Activity className="h-4 w-4" />
-              <SidebarMenuLabel>Pulse</SidebarMenuLabel>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </FeatureGate>
-        <FeatureGate feature="projects">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-projects-view"
-              isActive={selectedView === "projects"}
-              onClick={onSelectProjects}
-              tooltip="Projects"
-              type="button"
-            >
-              <FolderGit2 className="h-4 w-4" />
-              <SidebarMenuLabel>Projects</SidebarMenuLabel>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </FeatureGate>
+        {moreNav ? null : pulseItem}
+        {moreNav ? null : projectsItem}
         <SidebarMenuItem>
           <SidebarMenuButton
             className="data-[active=true]:font-normal"
@@ -257,47 +318,22 @@ export function AppSidebarPrimaryMenu({
             <SidebarMenuLabel>Billing</SidebarMenuLabel>
           </SidebarMenuButton>
         </SidebarMenuItem>
-        <FeatureGate feature="contentCalendar">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-content-view"
-              isActive={selectedView === "content"}
-              onClick={onSelectContent}
-              tooltip="Content"
-              type="button"
-            >
-              <CalendarRange className="h-4 w-4" />
-              <SidebarMenuLabel>Content</SidebarMenuLabel>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </FeatureGate>
-        <FeatureGate feature="workflows">
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-workflows-view"
-              isActive={selectedView === "workflows"}
-              onClick={onSelectWorkflows}
-              tooltip="Workflows"
-              type="button"
-            >
-              <Zap className="h-4 w-4" />
-              <SidebarMenuLabel>Workflows</SidebarMenuLabel>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </FeatureGate>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            data-testid="open-discovery-view"
-            isActive={selectedView === "discovery"}
-            onClick={onSelectDiscovery}
-            tooltip="Discovery"
-            type="button"
-          >
-            <Compass className="h-4 w-4" />
-            <SidebarMenuLabel>Discovery</SidebarMenuLabel>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        {moreNav ? null : contentItem}
+        {moreNav ? null : workflowsItem}
+        {moreNav ? null : discoveryItem}
       </SidebarMenu>
+      {moreNav ? (
+        <SidebarMoreNavGroup
+          isOpen={moreNav.isOpen}
+          onToggle={moreNav.onToggle}
+        >
+          {pulseItem}
+          {projectsItem}
+          {contentItem}
+          {workflowsItem}
+          {discoveryItem}
+        </SidebarMoreNavGroup>
+      ) : null}
     </SidebarHeader>
   );
 }

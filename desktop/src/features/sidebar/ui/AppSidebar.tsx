@@ -54,6 +54,7 @@ import type {
 } from "@/features/sidebar/ui/AppSidebar.types";
 import { SidebarRelayConnectionCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
 import { WorkSidebarSection } from "@/features/sidebar/ui/WorkSidebarSection";
+import { useSidebarMoreNav } from "@/features/sidebar/useSidebarMoreNav";
 import type { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import {
   SidebarLoadingContent,
@@ -323,6 +324,7 @@ export function AppSidebar({
     assignChannel,
     unassignChannel,
   } = useChannelSections(currentPubkey, activeCommunity?.relayUrl);
+  const moreNav = useSidebarMoreNav(currentPubkey);
 
   const sectionIds = React.useMemo(
     () => channelSections.map((s) => s.id),
@@ -580,6 +582,7 @@ export function AppSidebar({
               <AppSidebarPrimaryMenu
                 dueReminderEventIds={dueReminderEventIds}
                 homeBadgeFeedIds={homeBadgeFeedIds}
+                moreNav={moreNav}
                 onSelectAgents={onSelectAgents}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}

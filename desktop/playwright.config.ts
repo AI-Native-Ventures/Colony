@@ -57,6 +57,7 @@ export default defineConfig({
         "**/navigation.spec.ts",
         "**/navigation-command-palette.spec.ts",
         "**/kickoff-context-row.spec.ts",
+        "**/sidebar-more-nav.spec.ts",
         "**/action-center.spec.ts",
         "**/channels.spec.ts",
         "**/channel-shared-header-backdrop.spec.ts",
