@@ -1226,12 +1226,28 @@ fn task_transition_payload(event_type: &str, task: &CompanyTask) -> serde_json::
     payload
 }
 
+/// Which event a task transition row threads under.
+///
+/// A task opened inside a thread carries that thread's root and belongs
+/// there. A task created straight from a channel message has no
+/// `thread_root`, but it does have the message it was created from: that
+/// message is the thread the transition belongs under, and using it keeps
+/// the row out of the channel's main timeline, where it is a wall of
+/// undeletable relay-signed captions between real messages.
+///
+/// Only a task with neither anchor stays unthreaded.
+fn task_transition_thread_anchor(task: &CompanyTask) -> Option<&str> {
+    task.thread_root
+        .as_deref()
+        .or(task.source_event_id.as_deref())
+}
+
 /// Emit one kind 40099 system row for a committed task transition.
 ///
 /// Scoped to where the work happens: the task's source channel, tagged into
 /// its own thread with an `e` root marker when it has one — the same shape
 /// ask receipts use — so a row never lands in a channel the task does not
-/// belong to.
+/// belong to. The thread it picks is `task_transition_thread_anchor`.
 ///
 /// Best-effort exactly like every other post-commit side effect: the owner's
 /// action is already durable when this runs, so any failure here is logged
@@ -1270,7 +1286,7 @@ pub(crate) async fn emit_task_transition(
             return;
         }
     }
-    if let Some(thread_root) = task.thread_root.as_deref() {
+    if let Some(thread_root) = task_transition_thread_anchor(task) {
         match Tag::parse(["e", thread_root, "", "root"]) {
             Ok(tag) => tags.push(tag),
             Err(error) => {
@@ -2316,5 +2332,37 @@ mod tests {
         let round: serde_json::Value =
             serde_json::from_str(&content).expect("canonical content is JSON");
         assert_eq!(round["type"], "task_created");
+    }
+
+    /// A transition row must thread under something whenever the task names
+    /// anything to thread under. Before this, a task created from a plain
+    /// channel message (no `thread_root`) emitted an `h`-only row, which the
+    /// channel timeline renders as a top-level, relay-signed, undeletable
+    /// caption beside the owner's own messages.
+    #[test]
+    fn transition_threads_under_the_source_message_without_a_thread_root() {
+        let source_event = "a".repeat(64);
+        let thread_root = "b".repeat(64);
+        let mut task = sample_task();
+        task.thread_root = None;
+        task.source_event_id = Some(source_event.clone());
+        assert_eq!(
+            task_transition_thread_anchor(&task),
+            Some(source_event.as_str()),
+            "the message the task was created from is its thread"
+        );
+
+        // An explicit thread root still wins: the task was opened inside that
+        // thread, and the source event is only the fallback anchor.
+        task.thread_root = Some(thread_root.clone());
+        assert_eq!(
+            task_transition_thread_anchor(&task),
+            Some(thread_root.as_str())
+        );
+
+        // Neither anchor is the only case that stays unthreaded.
+        task.thread_root = None;
+        task.source_event_id = None;
+        assert_eq!(task_transition_thread_anchor(&task), None);
     }
 }
