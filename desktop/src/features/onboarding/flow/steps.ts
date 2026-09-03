@@ -77,21 +77,39 @@ export type OnboardingAnswers = {
 const WORKING_STEPS: ReadonlySet<OnboardingStep> = new Set(["building"]);
 
 /**
- * The next screen, in order.
+ * Whether this founder's brain choice is paid for with Colony credits.
  *
- * `answers` used to decide this: the business screen jumped past reading when
- * there was no website. Reading lives inside `building` now, which asks the
- * question of itself, so the order is the order. The parameter stays because
- * the flow reads it at every call site and the next branch to appear here
- * will need it.
+ * The brain screen offers three ways of paying and only one of them is
+ * Colony's: a founder on their own Claude subscription or their own OpenRouter
+ * key has nothing to buy, and asking them for money for thinking they already
+ * pay for is how a first run loses someone who had already chosen.
+ *
+ * Unknown counts as needed: the track is null until the brain screen is
+ * answered, and the screen is coming unless something says otherwise. The
+ * count may then only shrink, once.
+ */
+export function creditsNeeded(answers: OnboardingAnswers): boolean {
+  return (answers.track ?? "colony") === "colony";
+}
+
+/**
+ * The next screen, in order, skipping the ones this founder will not see.
+ *
+ * Credits is the only conditional one: the brain screen decides whether there
+ * is anything to buy, and it decides it one screen earlier than the counter
+ * does, so both read the same answer rather than each deciding for themselves.
  */
 export function nextStep(
   current: OnboardingStep,
-  _answers: OnboardingAnswers,
+  answers: OnboardingAnswers,
 ): OnboardingStep | "done" {
-  const index = ONBOARDING_STEPS.indexOf(current);
-  const next = ONBOARDING_STEPS[index + 1];
-  return next ?? "done";
+  let index = ONBOARDING_STEPS.indexOf(current) + 1;
+  while (index < ONBOARDING_STEPS.length) {
+    const next = ONBOARDING_STEPS[index];
+    if (next !== "credits" || creditsNeeded(answers)) return next;
+    index += 1;
+  }
+  return "done";
 }
 
 /**
@@ -105,14 +123,15 @@ export function nextStep(
 export type StepVisibility = {
   invitesEnabled: boolean;
   /**
-   * Whether the probe found a tool the founder already pays for.
+   * Whether this founder's brain choice is paid for with Colony credits, as
+   * `creditsNeeded` reads it off the answers.
    *
-   * True until the probe answers, for the same reason the website answer used
-   * to count the reading screen in while it was null: the screen is coming
-   * unless something says otherwise. The count may then only shrink, once,
-   * while the building screen is still ticking.
+   * True until the brain screen is answered, for the same reason the website
+   * answer used to count the reading screen in while it was null: the screen
+   * is coming unless something says otherwise. The count may then only shrink,
+   * once.
    */
-  brainDetected: boolean;
+  creditsNeeded: boolean;
 };
 
 /**
@@ -123,17 +142,16 @@ export type StepVisibility = {
  * screen does not exist. A count of screens nobody will see is not a position,
  * it is a guess.
  *
- * The brain screen is here only when the probe found a tool the founder
- * already subscribes to. Colony Agent is the default now, so on a computer
- * with nothing installed the screen offers one row, already selected, that
- * the founder has no way to evaluate: a question with one answer is a screen,
- * not a choice. It is applied silently instead (see NewOnboardingFlow's
- * building handler).
+ * The brain screen is on every path now. It used to be dropped when nothing
+ * was detected, because it could then only offer one already-selected row; it
+ * offers three ways of paying for the thinking, so there is a real choice on
+ * it even on a computer with nothing installed. Credits is what moves instead:
+ * only the founder who chose Colony's own agent has anything to buy.
  */
 export function visibleSteps(state: StepVisibility): OnboardingStep[] {
   return ONBOARDING_STEPS.filter((step) => {
     if (step === "invite") return state.invitesEnabled;
-    if (step === "brain") return state.brainDetected;
+    if (step === "credits") return state.creditsNeeded;
     return true;
   });
 }
@@ -167,10 +185,9 @@ const BACK_TARGETS: Partial<Record<OnboardingStep, OnboardingStep>> = {
 /**
  * Back never lands on a screen this founder was not shown.
  *
- * Credits sits behind the brain screen, which is skipped whenever nothing was
- * detected. Going back to it there would hand someone a choice the flow had
- * just decided they did not have, so credits simply has no back control on
- * that path.
+ * Invite sits behind credits, which a founder paying for their own thinking
+ * never sees. Going back to it there would offer them the purchase their
+ * choice had just made unnecessary, so it has no back control on that path.
  */
 export function backStep(
   current: OnboardingStep,
@@ -191,7 +208,9 @@ export function resumeStep(answers: OnboardingAnswers): OnboardingStep {
   // Building produces both, and re-runs rather than restoring half of one.
   if (!answers.track || !answers.description) return "building";
   if (!answers.brain) return "brain";
-  if (!answers.paid) return "credits";
+  // A founder on their own subscription or their own key has nothing to buy,
+  // so an unpaid run of theirs is finished rather than parked on credits.
+  if (!answers.paid && creditsNeeded(answers)) return "credits";
   return "invite";
 }
 

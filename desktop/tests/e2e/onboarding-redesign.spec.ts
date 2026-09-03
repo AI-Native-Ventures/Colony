@@ -155,8 +155,16 @@ test("a non-technical user can get from the first screen to the end", async ({
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });
-  // Colony Agent is what the founder is defaulted into, not whichever tool
-  // detection happened to find first.
+  // All three ways of paying for the thinking are named on the screen, so a
+  // founder who has never heard of OpenRouter can still see they are
+  // alternatives to one another.
+  for (const lane of ["subscription", "colony", "openrouter"]) {
+    await expect(
+      page.getByTestId(`onboarding-brain-lane-${lane}`),
+    ).toBeVisible();
+  }
+  // With no subscription scan behind the mock host, Colony Agent is what the
+  // founder is defaulted into, not whichever tool detection found first.
   await expect(page.getByTestId("onboarding-brain-buzz-agent")).toHaveAttribute(
     "data-selected",
     "true",
