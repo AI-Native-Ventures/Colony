@@ -5,6 +5,10 @@ import test from "node:test";
 import { draftFromAnswers, firstTaskFor } from "./founderBrief.ts";
 import { EMPTY_ANSWERS } from "./persistence.ts";
 import { buildOnboardingFirstTaskMessage } from "../onboardingV2FirstTask.ts";
+import {
+  founderBriefOpening,
+  founderBriefSummaryFrom,
+} from "../founderBriefSummary.ts";
 
 function answers(overrides = {}) {
   return {
@@ -84,6 +88,34 @@ test("the draft always carries a first task, or delivery is skipped", () => {
     assert.ok(draft.firstTask.content.trim().length > 0, String(company));
   }
   assert.match(firstTaskFor(answers()), /Rosebank Auto Care/);
+});
+
+test("a signup that never asked where they live says nothing about location", () => {
+  // The account screen stopped asking for city and country, so every fresh
+  // signup arrives with both blank. Neither the brief nor Scout's opener may
+  // narrate the gap: no "Location:" line, and nothing "based in undefined".
+  const draft = draftFromAnswers(
+    answers({
+      founder: {
+        fullName: "Aisha Bello",
+        city: "",
+        country: "",
+        gender: "woman",
+        selfDescribedGender: "",
+      },
+    }),
+  );
+  const message = buildOnboardingFirstTaskMessage(draft);
+  assert.match(message, /Founder: Aisha Bello/);
+  assert.doesNotMatch(message, /Location:/);
+  assert.doesNotMatch(message, /undefined/);
+
+  const summary = founderBriefSummaryFrom(draft);
+  assert.equal(summary.location, "");
+  const opening = founderBriefOpening(summary);
+  assert.doesNotMatch(opening, /based in/);
+  assert.doesNotMatch(opening, /undefined/);
+  assert.match(opening, /Independent workshop servicing German cars\./);
 });
 
 test("an unanswered flow still produces a sendable draft", () => {

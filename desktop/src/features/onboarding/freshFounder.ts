@@ -35,6 +35,26 @@ export function clearFreshIdentity(
 }
 
 /**
+ * Did this identity sign up on this machine?
+ *
+ * The marker alone, without the "and has not finished onboarding yet" clause
+ * {@link isFreshFounder} adds. Surfaces that greet a founder *after* first run
+ * need this one: by the time they reach their workspace the completion key is
+ * written, so `isFreshFounder` is already false and would treat a founder five
+ * seconds past signup exactly like a five-year veteran.
+ *
+ * Nothing clears the marker, which is the point: it records how this identity
+ * arrived, and that does not change later.
+ */
+export function isFreshFounderIdentity(
+  pubkey: string | null | undefined,
+  storage: StorageLike | null = ambientStorage(),
+): boolean {
+  if (!pubkey || !storage) return false;
+  return storage.getItem(freshIdentityKey(pubkey)) === "true";
+}
+
+/**
  * Should this boot run the canvas first run instead of WelcomeSetup?
  *
  * `hasOwnCommunity` must be scoped to the pubkey signing up, not to the

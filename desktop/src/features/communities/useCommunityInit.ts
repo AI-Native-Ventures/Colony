@@ -47,6 +47,7 @@ import { resetPartyRepositoryState } from "@/features/parties/partyRepository";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
+import { resetSidebarMoreNav } from "@/features/sidebar/sidebarMoreNav";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
 
@@ -98,6 +99,7 @@ function resetCommunityState({
     resetAvatarPresentations();
   }
   resetSidebarRelayConnectionCardState();
+  resetSidebarMoreNav();
   resetMediaCaches();
   resetLeadUpdateListeners();
   resetVideoPlayerState();

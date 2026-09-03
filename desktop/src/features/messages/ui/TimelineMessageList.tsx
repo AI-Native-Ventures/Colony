@@ -10,6 +10,7 @@ import {
   getTimelineItemKey,
   type TimelineDayGroup,
   type TimelineNonDayItem,
+  timelineItemMessageIds,
 } from "@/features/messages/lib/timelineItems";
 import {
   buildVirtualizedItems,
@@ -39,6 +40,7 @@ import {
   useStickyDayDivider,
 } from "./useStickyDayDivider";
 import { DayDivider } from "./DayDivider";
+import { KickoffContextRow } from "./KickoffContextRow";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
@@ -266,6 +268,13 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               ownerProfiles={ownerProfiles}
             />
           );
+        case "kickoff-context":
+          return (
+            <KickoffContextRow
+              footer={messageFooters?.[item.entry.message.id] ?? null}
+              message={item.entry.message}
+            />
+          );
         case "system-group":
           return (
             <SystemRow
@@ -403,15 +412,6 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     </div>
   );
 });
-
-function timelineItemMessageIds(item: TimelineNonDayItem): string[] {
-  if (item.kind === "system-group") {
-    return item.entries.map((entry) => entry.message.id);
-  }
-  return item.kind === "message" || item.kind === "system"
-    ? [item.entry.message.id]
-    : [];
-}
 
 type VirtualizedTimelineRowsProps = {
   dayGroups: TimelineDayGroup[];

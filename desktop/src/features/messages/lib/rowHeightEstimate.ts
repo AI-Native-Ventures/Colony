@@ -158,6 +158,8 @@ export function estimateRowHeight(
 // estimate honest without a content scan.
 const DIVIDER_HEIGHT = 56;
 const SYSTEM_GROUP_HEIGHT = 80;
+/** One collapsed line plus its row padding. Expanding remeasures. */
+const KICKOFF_CONTEXT_HEIGHT = 40;
 
 /**
  * `contain-intrinsic-size` for a `timeline-row-cv` wrapper. A credible per-row
@@ -174,7 +176,9 @@ export function estimateTimelineItemHeight(item: TimelineItem): number {
       ? estimateRowHeight(item.entry.message)
       : item.kind === "system-group"
         ? SYSTEM_GROUP_HEIGHT
-        : DIVIDER_HEIGHT;
+        : item.kind === "kickoff-context"
+          ? KICKOFF_CONTEXT_HEIGHT
+          : DIVIDER_HEIGHT;
 }
 
 export function timelineRowReserveStyle(

@@ -16,7 +16,17 @@ const source = readFileSync(
 );
 
 test("first task marker travels on the client tag channel", () => {
-  assert.match(source, /clientTags: \[\["client", marker\]\]/);
+  assert.match(source, /clientTags: \[\["client", marker\],/);
+});
+
+test("the kickoff context marker travels on that same channel", () => {
+  // `append_client_tags` rejects any tag whose first element is not "client",
+  // so the "this is the founder's signup context" marker has to ride here too
+  // rather than getting a tag name of its own.
+  assert.match(
+    source,
+    /clientTags: \[[\s\S]*?welcomeKickoffContextClientTag\(\)/,
+  );
 });
 
 test("first task marker never travels on the block reference channel", () => {
