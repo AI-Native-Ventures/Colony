@@ -111,6 +111,12 @@ export function AccountScreen({
   const lockSeconds = useSecondsRemaining(
     failure?.kind === "locked" ? failure.retryAfterSecs : null,
   );
+  // Both failures mean an account already exists, one under this address and
+  // one under this computer's identity. Each states that next to the field it
+  // concerns and offers the sign-in door, so neither takes the generic banner
+  // that tells the user to check a connection that is working.
+  const alreadyHasAccount =
+    failure?.kind === "email-taken" || failure?.kind === "identity-taken";
 
   return (
     <div className="onb-screen">
@@ -152,6 +158,15 @@ export function AccountScreen({
           {failure?.kind === "email-taken" ? (
             <p className="onb-note onb-note-warn">
               That email already has an account.
+            </p>
+          ) : null}
+          {failure?.kind === "identity-taken" ? (
+            <p
+              className="onb-note onb-note-warn"
+              data-testid="onboarding-account-identity-taken"
+            >
+              This computer already has a Colony account under another email.
+              Sign in with that email instead.
             </p>
           ) : null}
           {emailTouched && values.email && !isEmail(values.email) ? (
@@ -217,7 +232,7 @@ export function AccountScreen({
           ) : null}
         </fieldset>
       </div>
-      {failure !== null && failure.kind !== "email-taken" ? (
+      {failure !== null && !alreadyHasAccount ? (
         <p className="onb-note onb-note-warn" role="alert">
           {failure.kind === "invalid-credentials"
             ? "That information does not match an account. Check it and try again."
@@ -231,7 +246,7 @@ export function AccountScreen({
         </p>
       ) : null}
       <div className="onb-actions">
-        {failure?.kind === "email-taken" && onSignInRequest ? (
+        {alreadyHasAccount && onSignInRequest ? (
           <button
             className="onb-quiet-action"
             data-testid="onb-account-taken-sign-in"
