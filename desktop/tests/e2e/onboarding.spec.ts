@@ -957,12 +957,13 @@ test("non-local default auto-connects when the release flag is enabled", async (
 });
 
 /**
- * Open the hosted-community screen: the one that lists the communities this
- * key already owns and can create another.
+ * Open the owned-communities screen: the one that lists the communities this
+ * key already owns.
  *
  * "Create a community" on the choice screen runs the canvas founder walk now,
  * so the door to this screen is the reconnect route: someone who owns one
- * already and wants it back.
+ * already and wants it back, and creating is the one thing this screen no
+ * longer does itself.
  */
 async function openOwnedCommunitySetup(page: Page) {
   await page.getByTestId("community-choice-existing").click();
@@ -1053,8 +1054,10 @@ test("first-community owner can connect an existing hosted community", async ({
   await page.goto("/");
 
   await openOwnedCommunitySetup(page);
-  await expect(page.getByText("North Star")).toBeVisible();
-  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  // The whole row is the control: a Connect button inside a row that is
+  // itself a button is not valid markup, and the row's own click is the
+  // action.
+  await page.getByRole("option", { name: /North Star/ }).click();
   await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await expect
     .poll(() =>
@@ -1079,7 +1082,7 @@ test("first-community owner can connect an existing hosted community", async ({
     .toContain('"stage":"founder"');
 });
 
-test("first-community owner can create and connect a hosted community", async ({
+test("back returns to the first-community choices and can reopen the owned list", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -1101,215 +1104,11 @@ test("first-community owner can create and connect a hosted community", async ({
   await page.goto("/");
 
   await openOwnedCommunitySetup(page);
-  const createSurface = page.getByTestId("hosted-community-create-surface");
-  const surfaceBoxBeforeFeedback = await createSurface.boundingBox();
-  const communityNameInput = page.getByTestId("hosted-community-address-input");
-  await communityNameInput.fill("bee-lab");
-  await expect(communityNameInput).toHaveAttribute("style", /width: 7ch;/);
-  const availabilityFeedback = page.getByText("That address is available.");
-  await expect(availabilityFeedback).toBeVisible();
-  const [feedbackBox, surfaceBox, inputBox, suffixBox] = await Promise.all([
-    availabilityFeedback.boundingBox(),
-    createSurface.boundingBox(),
-    page.getByTestId("hosted-community-address-input").boundingBox(),
-    page.locator("#hosted-community-suffix").boundingBox(),
-  ]);
-  if (
-    !surfaceBoxBeforeFeedback ||
-    !feedbackBox ||
-    !surfaceBox ||
-    !inputBox ||
-    !suffixBox
-  ) {
-    throw new Error("Could not measure hosted community creation layout");
-  }
-  expect(surfaceBox.y).toBe(surfaceBoxBeforeFeedback.y);
-  expect(surfaceBox.height).toBe(surfaceBoxBeforeFeedback.height);
-  const addressLeft = inputBox.x;
-  const addressRight = suffixBox.x + suffixBox.width;
-  expect(
-    Math.abs(
-      (addressLeft + addressRight) / 2 - (surfaceBox.x + surfaceBox.width / 2),
-    ),
-  ).toBeLessThanOrEqual(1);
-  expect(feedbackBox.y).toBeGreaterThanOrEqual(
-    surfaceBox.y + surfaceBox.height,
-  );
-  await page.getByRole("button", { name: "Next" }).click();
-  // V2's founder screen used to sit in front of this one. It serves the
-  // returning-founder journey now, because asking for the founder's details
-  // here as well as in the redesigned flow meant asking twice in one sitting.
-  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
-      ),
-    )
-    .toContain("wss://bee-lab.colony.ainative.ventures");
-});
-
-test("hosted community address line stays within the card for a long name", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {},
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  // The 800px app minimum is the worst case for the full-width address line.
-  await page.setViewportSize({ width: 800, height: 720 });
-  await page.goto("/");
-
-  await openOwnedCommunitySetup(page);
-
-  const createSurface = page.getByTestId("hosted-community-create-surface");
-  const communityNameInput = page.getByTestId("hosted-community-address-input");
-  // A maximum-length (63 char) valid name — the overflow case Wes flagged; the
-  // 7-char check above cannot catch it.
-  const longName = "a".repeat(63);
-  await communityNameInput.fill(longName);
-  await expect(communityNameInput).toHaveValue(longName);
-
-  // Measure only once the layout has stopped moving. Inter is fetched lazily
-  // and `document.fonts.ready` can resolve before the face this line uses is
-  // requested at all, so a single measurement reports fallback advance widths
-  // and the composed line's centre lands a couple of pixels off.
-  //
-  // That was first treated as slack in the tolerance, twice: 2px, then 3px
-  // after `fonts.ready` was added on 2026-08-31, and it still missed at
-  // 3.495px on the 0.15.4 promotion. A third raise would keep buying the same
-  // flake, so wait for the measurement to settle instead and hold the bound.
-  const measure = async () => {
-    const [surface, input, suffix] = await Promise.all([
-      createSurface.boundingBox(),
-      communityNameInput.boundingBox(),
-      page.locator("#hosted-community-suffix").boundingBox(),
-    ]);
-    if (!surface || !input || !suffix) return null;
-    return {
-      left: input.x,
-      right: suffix.x + suffix.width,
-      surfaceLeft: surface.x,
-      surfaceRight: surface.x + surface.width,
-      surfaceCentre: surface.x + surface.width / 2,
-    };
-  };
-
-  // Returns a number and never throws: `expect.poll` rethrows on the first
-  // call if its callback throws, so a throwing probe here would be a hard
-  // failure rather than a wait.
-  await expect
-    .poll(
-      async () => {
-        const box = await measure();
-        if (!box) return Number.POSITIVE_INFINITY;
-        return Math.abs((box.left + box.right) / 2 - box.surfaceCentre);
-      },
-      { message: "the address line never settled within the card" },
-    )
-    .toBeLessThanOrEqual(3);
-
-  const settled = await measure();
-  if (!settled) {
-    throw new Error("Could not measure hosted community creation layout");
-  }
-  const surfaceBox = {
-    x: settled.surfaceLeft,
-    width: settled.surfaceRight - settled.surfaceLeft,
-  };
-  const addressLeft = settled.left;
-  const addressRight = settled.right;
-  // The composed `<name>.<suffix>` line must stay within the card — no
-  // horizontal overflow past the surface or the 800px window.
-  expect(addressLeft).toBeGreaterThanOrEqual(surfaceBox.x);
-  expect(addressRight).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width);
-  expect(addressRight).toBeLessThanOrEqual(800);
-  // Centring was already asserted by the poll above, against the settled
-  // layout rather than whichever frame the first measurement happened to
-  // catch. The overflow assertions are what actually guard the reported bug.
-});
-
-test("first-community reports a created community without a relay address", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {
-      colonyCreatedCommunity: {
-        id: "hosted-bee-lab",
-        name: "bee-lab",
-      },
-    },
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await openOwnedCommunitySetup(page);
-  await page.getByRole("textbox", { name: "Community name" }).fill("bee-lab");
-  await expect(page.getByText("That address is available.")).toBeVisible();
-  await page.getByRole("button", { name: "Next" }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "The community was created, but the relay did not return its address.",
-  );
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toHaveCount(0);
-});
-
-test("back returns to the first-community choices and can reopen create", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await page.addInitScript((pubkey) => {
-    window.localStorage.setItem(
-      `buzz-machine-onboarding-complete.v2:${pubkey}`,
-      "true",
-    );
-  }, BLANK_TYLER_IDENTITY.pubkey);
-  await installMockBridge(
-    page,
-    {},
-    {
-      relayWsUrl: "ws://localhost:3000",
-      skipOnboardingSeed: true,
-      skipCommunitySeed: true,
-    },
-  );
-  await page.goto("/");
-
-  await openOwnedCommunitySetup(page);
-  await expect(
-    page.getByTestId("hosted-community-address-input"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("owned-communities")).toBeVisible();
+  await page.getByTestId("owned-communities-back").click();
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
   await openOwnedCommunitySetup(page);
-  await expect(
-    page.getByTestId("hosted-community-address-input"),
-  ).toBeVisible();
+  await expect(page.getByTestId("owned-communities")).toBeVisible();
 });
 
 test("first-community shows the scenario cards for localhost", async ({
