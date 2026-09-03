@@ -537,7 +537,7 @@ function CommunityApp({
   // The flow must keep ONE stable position in the element tree across every
   // stage. Rendering it from a different slot when the stage flips to
   // "entering" would remount it — React state resets and the "Meet your
-  // starter team" screen visibly restarts mid-handoff.
+  // Chief of Staff" screen visibly restarts mid-handoff.
   const isEnteringCurtain = transaction?.stage === "entering";
 
   // The app mounts (and starts loading data) beneath the splash overlay; the
