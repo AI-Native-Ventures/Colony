@@ -24,27 +24,38 @@ const base = {
   paid: false,
 };
 
-test("steps_are_ten_in_spec_order", () => {
-  assert.equal(ONBOARDING_STEPS.length, 10);
+test("steps_are_nine_in_spec_order", () => {
+  assert.equal(ONBOARDING_STEPS.length, 9);
   assert.equal(ONBOARDING_STEPS[0], "account");
-  assert.equal(ONBOARDING_STEPS[8], "credits");
+  assert.equal(ONBOARDING_STEPS[7], "credits");
 });
 
-test("business_with_no_website_skips_the_reading_step", () => {
+test("the_business_screen_no_longer_exists", () => {
+  // Its two questions live on the company screen: one company, asked once.
+  assert.ok(!ONBOARDING_STEPS.includes("business"));
+});
+
+test("company_leads_into_the_probe", () => {
   const answers = { ...base, hasWebsite: false };
-  assert.equal(nextStep("business", answers), "description");
+  assert.equal(nextStep("company", answers), "probing");
 });
 
-test("business_with_a_website_goes_to_reading", () => {
+test("no_website_skips_the_reading_step_after_the_brain_screen", () => {
+  const answers = { ...base, hasWebsite: false };
+  assert.equal(nextStep("brain", answers), "description");
+});
+
+test("a_website_goes_to_reading_after_the_brain_screen", () => {
   const answers = { ...base, hasWebsite: true, website: "example.com" };
-  assert.equal(nextStep("business", answers), "reading");
+  assert.equal(nextStep("brain", answers), "reading");
 });
 
 test("back_skips_steps_that_do_work_on_entry", () => {
-  // Landing back on reading would re-run the scrape and spend money again.
-  assert.equal(backStep("description"), "business");
-  // Landing back on the probe would re-read the user's computer.
-  assert.equal(backStep("business"), "company");
+  // Landing back on reading would re-run the scrape and spend money again,
+  // and landing back on the probe would re-read the user's computer. The
+  // company screen is the nearest screen before both that only asks.
+  assert.equal(backStep("description"), "company");
+  assert.equal(backStep("company"), "account");
 });
 
 test("back_is_absent_where_it_has_no_meaning", () => {
@@ -68,8 +79,24 @@ test("resume_reruns_probing_rather_than_restoring_a_partial_result", () => {
     account: { email: "a@b.com" },
     recoveryAcknowledged: true,
     company: "Rosebank Auto Care",
+    stage: "building",
+    hasWebsite: false,
   };
   assert.equal(resumeStep(answers), "probing");
+});
+
+test("resume_returns_to_company_while_any_of_its_three_answers_is_missing", () => {
+  const answered = {
+    ...base,
+    account: { email: "a@b.com" },
+    recoveryAcknowledged: true,
+    company: "Rosebank Auto Care",
+    stage: "building",
+    hasWebsite: false,
+  };
+  assert.equal(resumeStep({ ...answered, company: null }), "company");
+  assert.equal(resumeStep({ ...answered, stage: null }), "company");
+  assert.equal(resumeStep({ ...answered, hasWebsite: null }), "company");
 });
 
 test("no_website_drops_the_reading_screen_from_the_count", () => {
@@ -144,6 +171,6 @@ test("a_step_that_is_not_on_the_path_reports_the_first_position", () => {
   // Never renders "00": a resume mid-change degrades to screen one.
   assert.deepEqual(
     stepPosition("reading", { hasWebsite: false, invitesEnabled: false }),
-    { index: 0, total: 8 },
+    { index: 0, total: 7 },
   );
 });

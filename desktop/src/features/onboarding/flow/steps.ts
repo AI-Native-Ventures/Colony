@@ -1,14 +1,21 @@
 // desktop/src/features/onboarding/flow/steps.ts
 import type { FounderGender } from "../onboardingV2";
 
-/** The ten screens, in the order the spec defines them. */
+/**
+ * The screens, in the order the spec defines them.
+ *
+ * `business` used to sit between the brain picker and the reading screen and
+ * asked about the same company the company screen had already named, with an
+ * unrelated question in between. Its two questions moved onto the company
+ * screen, which is where a founder expects to be asked about their company
+ * once.
+ */
 export const ONBOARDING_STEPS = [
   "account",
   "recovery",
   "company",
   "probing",
   "brain",
-  "business",
   "reading",
   "description",
   "credits",
@@ -74,7 +81,10 @@ export function nextStep(
   current: OnboardingStep,
   answers: OnboardingAnswers,
 ): OnboardingStep | "done" {
-  if (current === "business" && answers.hasWebsite === false) {
+  // The website question is answered on the company screen now, three screens
+  // before the reading screen it decides. The skip therefore happens at the
+  // brain screen, which is the last one before reading.
+  if (current === "brain" && answers.hasWebsite === false) {
     return "description";
   }
   const index = ONBOARDING_STEPS.indexOf(current);
@@ -138,8 +148,7 @@ export function stepPosition(
  */
 const BACK_TARGETS: Partial<Record<OnboardingStep, OnboardingStep>> = {
   company: "account",
-  business: "company",
-  description: "business",
+  description: "company",
   credits: "description",
   invite: "credits",
 };
@@ -151,10 +160,12 @@ export function backStep(current: OnboardingStep): OnboardingStep | null {
 export function resumeStep(answers: OnboardingAnswers): OnboardingStep {
   if (!answers.account) return "account";
   if (!answers.recoveryAcknowledged) return "recovery";
-  if (!answers.company) return "company";
+  // Company, stage and website are one screen, so any of the three unanswered
+  // resumes onto it.
+  if (!answers.company || answers.stage === null || answers.hasWebsite === null)
+    return "company";
   if (!answers.track) return "probing";
   if (!answers.brain) return "brain";
-  if (answers.stage === null || answers.hasWebsite === null) return "business";
   if (answers.hasWebsite && !answers.description) return "reading";
   if (!answers.description) return "description";
   if (!answers.paid) return "credits";

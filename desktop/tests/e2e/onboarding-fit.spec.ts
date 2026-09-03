@@ -13,7 +13,7 @@ import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
  * clipped instead of scrolling, so at 800x500 the button was simply gone with
  * nothing on screen saying so.
  *
- * Three things are asserted, on the account and business screens:
+ * Three things are asserted, on the account and company screens:
  *
  * 1. at 1280x720 the primary button's bottom clears the viewport bottom by at
  *    least 24px, and nothing needs scrolling;
@@ -31,14 +31,18 @@ const FIRST_RUN_IDENTITY = { ...TEST_IDENTITIES.tyler, username: "" };
 const BOTTOM_CLEARANCE_PX = 24;
 
 /**
- * Answers that resume the flow straight onto the business screen.
+ * Answers that resume the flow straight onto the company screen.
  *
- * `resumeStep` reads these: an account, an acknowledged recovery code, a
- * company, a track and a brain are answered, and the business questions are
- * not. Walking the six screens by hand would measure the same layout while
- * spending a minute per viewport on screens this spec does not assert.
+ * `resumeStep` reads these: an account and an acknowledged recovery code are
+ * answered, and none of the company screen's three questions are. Walking the
+ * screens before it by hand would measure the same layout while spending a
+ * minute per viewport on screens this spec does not assert.
+ *
+ * The company screen is the tallest of the flow now that it carries a name
+ * field and two question groups, which is what makes it the one worth
+ * measuring beside the account screen.
  */
-const RESUMED_ONTO_BUSINESS = JSON.stringify({
+const RESUMED_ONTO_COMPANY = JSON.stringify({
   account: { email: "aisha@rosebankauto.co.za" },
   founder: {
     fullName: "Aisha Bello",
@@ -49,15 +53,15 @@ const RESUMED_ONTO_BUSINESS = JSON.stringify({
     avatarUrl: "",
   },
   recoveryAcknowledged: true,
-  company: "Rosebank Auto Care",
-  track: "byo",
-  brain: "colony-agent",
+  company: null,
+  track: null,
+  brain: null,
   stage: null,
   hasWebsite: null,
   website: null,
   description: null,
   paid: false,
-  communitySlug: "rosebank-auto-care",
+  communitySlug: null,
 });
 
 async function seedFreshFirstRun(
@@ -125,12 +129,14 @@ async function scrollStageToBottom(page: Page) {
 }
 
 /** Point 1: the whole screen fits a 1280x720 window with room under the action. */
-async function assertFitsLaptopWindow(page: Page, screenName: string) {
+async function assertFitsLaptopWindow(
+  page: Page,
+  screenName: string,
+  action: string,
+) {
   await page.setViewportSize({ width: 1280, height: 720 });
   const layout = await readLayout(page);
-  const button = await page
-    .getByRole("button", { name: "Continue" })
-    .boundingBox();
+  const button = await page.getByRole("button", { name: action }).boundingBox();
   if (!button) throw new Error(`no primary button on the ${screenName} screen`);
   const clearance = layout.viewport.height - (button.y + button.height);
   expect(
@@ -149,6 +155,7 @@ async function assertFitsLaptopWindow(page: Page, screenName: string) {
 async function assertStacksAndScrollsAtMinimumWindow(
   page: Page,
   screenName: string,
+  action: string,
 ) {
   await page.setViewportSize({ width: 800, height: 500 });
   const layout = await readLayout(page);
@@ -174,9 +181,7 @@ async function assertStacksAndScrollsAtMinimumWindow(
   ).toBeVisible();
 
   await scrollStageToBottom(page);
-  const button = await page
-    .getByRole("button", { name: "Continue" })
-    .boundingBox();
+  const button = await page.getByRole("button", { name: action }).boundingBox();
   if (!button) throw new Error(`no primary button on the ${screenName} screen`);
   expect(
     button.y,
@@ -197,21 +202,25 @@ test("the account screen fits the window it is given", async ({ page }) => {
     page.getByRole("heading", { name: "Let's get your colony started." }),
   ).toBeVisible();
 
-  await assertFitsLaptopWindow(page, "account");
-  await assertStacksAndScrollsAtMinimumWindow(page, "account");
+  await assertFitsLaptopWindow(page, "account", "Continue");
+  await assertStacksAndScrollsAtMinimumWindow(page, "account", "Continue");
 });
 
-test("the business screen fits the window it is given", async ({ page }) => {
+test("the company screen fits the window it is given", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await seedFreshFirstRun(page, {
-    "colony.onboarding.answers": RESUMED_ONTO_BUSINESS,
+    "colony.onboarding.answers": RESUMED_ONTO_COMPANY,
   });
   await page.goto("/");
   await passMachineLanding(page);
   await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
+    page.getByRole("heading", { name: "Now, your company." }),
   ).toBeVisible();
 
-  await assertFitsLaptopWindow(page, "business");
-  await assertStacksAndScrollsAtMinimumWindow(page, "business");
+  await assertFitsLaptopWindow(page, "company", "Create workspace");
+  await assertStacksAndScrollsAtMinimumWindow(
+    page,
+    "company",
+    "Create workspace",
+  );
 });

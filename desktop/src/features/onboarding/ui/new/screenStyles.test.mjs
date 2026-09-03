@@ -52,7 +52,7 @@ test("screen_styles_are_layered", () => {
 });
 
 test("fieldset_defaults_are_reset", () => {
-  // BusinessScreen groups its questions in fieldsets, which arrive with a
+  // CompanyScreen groups its questions in fieldsets, which arrive with a
   // browser border, padding and margin.
   assert.match(css, /fieldset[^{]*\{[^}]*border:\s*0/);
 });

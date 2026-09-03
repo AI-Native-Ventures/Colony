@@ -65,11 +65,16 @@ test("a non-technical user can get from the first screen to the end", async ({
   await page.getByLabel("I have saved my code").click();
   await page.getByRole("button", { name: "Continue" }).click();
 
-  // Screen 3: company.
+  // Screen 3: company. Name, stage and the website question are one screen:
+  // answering "no website" here is what skips the paid reading step later.
   await expect(
     page.getByRole("heading", { name: "Now, your company." }),
   ).toBeVisible();
   await page.getByLabel("Company name").fill("Rosebank Auto Care");
+  await page
+    .getByRole("button", { name: "Not yet, we are still building" })
+    .click();
+  await page.getByRole("button", { name: "No", exact: true }).click();
   await page.getByRole("button", { name: "Create workspace" }).click();
 
   // Screen 4: the probe resolves on its own, no interaction.
@@ -90,17 +95,7 @@ test("a non-technical user can get from the first screen to the end", async ({
   );
   await page.getByRole("button", { name: "Continue" }).click();
 
-  // Screen 6: business. Answering "no website" skips the paid reading step.
-  await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Not yet, we are still building" })
-    .click();
-  await page.getByRole("button", { name: "No", exact: true }).click();
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  // Screen 8: description. No website means the flow must not claim a finding.
+  // Screen 6: description. No website means the flow must not claim a finding.
   await expect(
     page.getByRole("heading", { name: "Tell us what you do." }),
   ).toBeVisible();
@@ -109,7 +104,7 @@ test("a non-technical user can get from the first screen to the end", async ({
     .fill("We service and repair cars for owners around Johannesburg.");
   await page.getByRole("button", { name: "Looks right" }).click();
 
-  // Screen 9: credits. Every track offers a way past it, so no payment
+  // Screen 7: credits. Every track offers a way past it, so no payment
   // handoff is needed to finish.
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),
@@ -197,24 +192,25 @@ test("a disabled primary action always says what is missing", async ({
   await expect(page.getByText("7 more characters")).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
 
-  // The same rule on the business screen: unanswered questions are named.
+  // The same rule on the company screen: unanswered questions are named,
+  // and the name on its own is not enough to claim a workspace.
   await page.getByLabel("Your name").fill("Aisha Bello");
   await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
   await page.getByLabel("Password").fill("colonyprototype");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByLabel("I have saved my code").click();
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByLabel("Company name").fill("Rosebank Auto Care");
-  await page.getByRole("button", { name: "Create workspace" }).click();
   await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Continue" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Tell us about the work." }),
+    page.getByRole("heading", { name: "Now, your company." }),
   ).toBeVisible();
+  await expect(
+    page.getByText("Enter your company name to continue."),
+  ).toBeVisible();
+  await page.getByLabel("Company name").fill("Rosebank Auto Care");
   await expect(
     page.getByText("Answer both questions to continue."),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Create workspace" }),
+  ).toBeDisabled();
 });

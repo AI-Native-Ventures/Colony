@@ -135,7 +135,7 @@
     margin-top: 0 !important;
   }
 
-  /* BusinessScreen groups its questions in fieldsets, which arrive with a
+  /* CompanyScreen groups its questions in fieldsets, which arrive with a
      browser border, padding and margin. */
   :where(.onb-canvas) fieldset.onb-options {
     border: 0;

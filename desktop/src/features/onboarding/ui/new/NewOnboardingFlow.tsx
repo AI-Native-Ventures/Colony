@@ -43,11 +43,6 @@ import {
   type AccountValues,
 } from "./screens/AccountScreen";
 import { BrainScreen } from "./screens/BrainScreen";
-import {
-  BusinessScreen,
-  type BusinessPatch,
-  type BusinessStage,
-} from "./screens/BusinessScreen";
 import { CompanyScreen, type CompanyValues } from "./screens/CompanyScreen";
 import { CreditsScreen } from "./screens/CreditsScreen";
 import { DescriptionScreen } from "./screens/DescriptionScreen";
@@ -222,6 +217,9 @@ export function NewOnboardingFlow({
   const [pubkey, setPubkey] = useState("");
   const [companyValues, setCompanyValues] = useState<CompanyValues>({
     company: "",
+    stage: null,
+    hasWebsite: null,
+    website: "",
   });
   const [companyState, setCompanyState] = useState<{
     status: "idle" | "provisioning" | "error";
@@ -234,12 +232,6 @@ export function NewOnboardingFlow({
 
   const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
-
-  const [businessStage, setBusinessStage] = useState<BusinessStage | null>(
-    null,
-  );
-  const [hasWebsite, setHasWebsite] = useState<boolean | null>(null);
-  const [website, setWebsite] = useState("");
 
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [scrapeFailed, setScrapeFailed] = useState(false);
@@ -386,12 +378,19 @@ export function NewOnboardingFlow({
     goTo(nextStep("recovery", updated));
   };
 
-  const handleCompanySubmit = async () => {
+  const handleCompanySubmit = async (normalisedWebsite: string | null) => {
     const name = companyValues.company.trim();
     if (!name || companyState.status === "provisioning") return;
+    // Stage and the website answer are recorded alongside the name: they are
+    // three questions on one screen, so they land together or not at all.
+    const said = {
+      stage: companyValues.stage,
+      hasWebsite: companyValues.hasWebsite,
+      website: normalisedWebsite,
+    };
     if (!provisioning) {
       // A community is already applied: nothing to claim, just record it.
-      const updated: OnboardingAnswers = { ...answers, company: name };
+      const updated: OnboardingAnswers = { ...answers, company: name, ...said };
       setAnswers(updated);
       goTo(nextStep("company", updated));
       return;
@@ -407,6 +406,7 @@ export function NewOnboardingFlow({
     const updated: OnboardingAnswers = {
       ...answers,
       company: name,
+      ...said,
       // Recorded so a reload resumes onto the address already claimed
       // instead of claiming a second one.
       communitySlug: outcome.slug,
@@ -439,23 +439,6 @@ export function NewOnboardingFlow({
       );
     });
     goTo(nextStep("brain", updated));
-  };
-
-  const handleBusinessChange = (patch: BusinessPatch) => {
-    if (patch.stage !== undefined) setBusinessStage(patch.stage);
-    if (patch.hasWebsite !== undefined) setHasWebsite(patch.hasWebsite);
-    if (patch.website !== undefined) setWebsite(patch.website);
-  };
-
-  const handleBusinessContinue = (normalisedWebsite: string | null) => {
-    const updated: OnboardingAnswers = {
-      ...answers,
-      stage: businessStage,
-      hasWebsite,
-      website: normalisedWebsite,
-    };
-    setAnswers(updated);
-    goTo(nextStep("business", updated));
   };
 
   const handleReadingDone = useCallback((result: ScrapeResult) => {
@@ -535,10 +518,12 @@ export function NewOnboardingFlow({
             values={companyValues}
             onChange={(patch) => {
               setCompanyValues((current) => ({ ...current, ...patch }));
-              // Editing the name is a fresh attempt; drop the stale answer.
+              // Editing an answer is a fresh attempt; drop the stale one.
               setCompanyState({ status: "idle" });
             }}
-            onSubmit={() => void handleCompanySubmit()}
+            onSubmit={(normalisedWebsite) =>
+              void handleCompanySubmit(normalisedWebsite)
+            }
             onBack={goBack}
             isSubmitting={companyState.status === "provisioning"}
             error={
@@ -577,17 +562,6 @@ export function NewOnboardingFlow({
             }
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
-          />
-        );
-      case "business":
-        return (
-          <BusinessScreen
-            stage={businessStage}
-            hasWebsite={hasWebsite}
-            website={website}
-            onChange={handleBusinessChange}
-            onContinue={handleBusinessContinue}
-            onBack={goBack}
           />
         );
       case "reading":
@@ -652,7 +626,7 @@ export function NewOnboardingFlow({
     }
   })();
 
-  // Counted from the recorded answer rather than the live business-screen
+  // Counted from the recorded answer rather than the live company-screen
   // state, so the total does not twitch while someone is still choosing.
   const position = stepPosition(step, {
     hasWebsite: answers.hasWebsite,

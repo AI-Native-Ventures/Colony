@@ -176,7 +176,6 @@ const SCREEN_HUE: Record<string, HueName> = {
   probing: "green",
   "brain:byo": "pink",
   "brain:colony": "violet",
-  business: "amber",
   reading: "green",
   description: "pink",
   credits: "violet",

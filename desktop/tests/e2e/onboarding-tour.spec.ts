@@ -40,20 +40,18 @@ test("tour", async ({ page }) => {
 
   await shot(page, "04-company");
   await page.getByLabel("Company name").fill("Rosebank Auto Care");
-  await page.getByRole("button", { name: "Create workspace" }).click();
-
-  await shot(page, "05-probing");
-  await page
-    .getByRole("heading", { name: "Pick who does the thinking." })
-    .waitFor({ timeout: 15_000 });
-  await shot(page, "06-brain");
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await shot(page, "07-business");
   await page
     .getByRole("button", { name: "Not yet, we are still building" })
     .click();
   await page.getByRole("button", { name: "No", exact: true }).click();
+  await shot(page, "05-company-filled");
+  await page.getByRole("button", { name: "Create workspace" }).click();
+
+  await shot(page, "06-probing");
+  await page
+    .getByRole("heading", { name: "Pick who does the thinking." })
+    .waitFor({ timeout: 15_000 });
+  await shot(page, "07-brain");
   await page.getByRole("button", { name: "Continue" }).click();
 
   await shot(page, "08-description");
