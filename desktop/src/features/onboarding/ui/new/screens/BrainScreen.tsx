@@ -8,6 +8,7 @@ import {
   useInstallAcpRuntimeMutation,
 } from "@/features/agents/hooks";
 import { getOnboardingAuthMethods } from "@/features/onboarding/ui/onboardingRuntimeSelection";
+import { RuntimeIcon } from "@/features/onboarding/ui/RuntimeIcon";
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { getInstallErrorMessage } from "@/shared/lib/installError";
 import { Button } from "@/shared/ui/button";
@@ -31,6 +32,36 @@ const STATUS_COPY: Record<BrainCandidate["status"], string> = {
   "needs-login": "Found, sign in with your subscription",
   "not-installed": "Not on this computer yet",
 };
+
+/**
+ * The same three states at tile width.
+ *
+ * Six full-width rows carrying the sentences above filled the whole column and
+ * still said one thing each. The tile keeps the state legible at a glance and
+ * leaves the sentence to the strip under the grid, where it belongs to the
+ * option someone actually picked.
+ */
+const STATUS_PILL: Record<BrainCandidate["status"], string> = {
+  ready: "Ready",
+  "needs-login": "Sign in",
+  "not-installed": "Not installed",
+};
+
+/**
+ * A catalog entry for a brain the runtimes query has not handed back yet.
+ *
+ * `RuntimeIcon` keys its logo off the id alone, so the snapshot probing
+ * handed down is enough to paint the first frame with the right mark rather
+ * than a placeholder that swaps a moment later.
+ */
+function iconRuntime(
+  brain: BrainCandidate,
+  runtime: AcpRuntimeCatalogEntry | undefined,
+): AcpRuntimeCatalogEntry {
+  return (
+    runtime ?? ({ id: brain.id, label: brain.label } as AcpRuntimeCatalogEntry)
+  );
+}
 
 /** How long to keep polling the catalog after a sign-in is handed to a browser. */
 const SIGN_IN_POLL_MS = 2_000;
@@ -64,9 +95,8 @@ export function BrainScreen({ brains, selected, onSelect, onContinue }: Props) {
     [runtimesQuery.data],
   );
 
-  const selectedIsReady = live.some(
-    (brain) => brain.id === selected && brain.status === "ready",
-  );
+  const selectedBrain = live.find((brain) => brain.id === selected) ?? null;
+  const selectedIsReady = selectedBrain?.status === "ready";
   const anyReady = live.some((brain) => brain.status === "ready");
 
   // A row someone just made ready is the row they were reaching for. Selecting
@@ -93,18 +123,37 @@ export function BrainScreen({ brains, selected, onSelect, onContinue }: Props) {
             : "Your agents need a brain to think with. Colony can set one up for you."}
         </p>
       </div>
-      <div className="onb-options" role="listbox" aria-label="Your agents">
+      <div
+        aria-label="Your agents"
+        className="onb-options onb-options--tiles"
+        role="listbox"
+      >
         {live.map((brain) => (
-          <BrainRow
+          <BrainTile
             brain={brain}
             key={brain.id}
-            onClaim={setClaimed}
             onSelect={onSelect}
             runtime={byId.get(brain.id)}
             selected={selected === brain.id}
           />
         ))}
       </div>
+      {selectedBrain && selectedBrain.status !== "ready" ? (
+        // One strip under the grid rather than an action inside every tile:
+        // six install buttons on screen at once is a wall of work, and only
+        // the one belonging to the pick is ever the next thing to do.
+        <div className="onb-option-strip" data-status={selectedBrain.status}>
+          <p className="onb-option__meta">
+            {STATUS_COPY[selectedBrain.status]}
+          </p>
+          <BrainRowAction
+            brain={selectedBrain}
+            key={selectedBrain.id}
+            onClaim={setClaimed}
+            runtime={byId.get(selectedBrain.id)}
+          />
+        </div>
+      ) : null}
       <div className="onb-actions">
         <Button
           data-testid="onboarding-brain-continue"
@@ -119,52 +168,43 @@ export function BrainScreen({ brains, selected, onSelect, onContinue }: Props) {
   );
 }
 
-function BrainRow({
+function BrainTile({
   brain,
-  onClaim,
   onSelect,
   runtime,
   selected,
 }: {
   brain: BrainCandidate;
-  onClaim: (id: string) => void;
   onSelect: (id: string) => void;
   runtime: AcpRuntimeCatalogEntry | undefined;
   selected: boolean;
 }) {
-  const ready = brain.status === "ready";
-
   return (
-    <div className="onb-option-row" data-status={brain.status}>
-      <button
-        aria-selected={selected}
-        className="onb-option"
-        data-selected={selected}
-        data-status={brain.status}
-        data-testid={`onboarding-brain-${brain.id}`}
-        // Everything is listed so the set reads as a choice, but only a brain
-        // that can actually think is selectable. The action beside an
-        // unselectable row is what turns it into one.
-        disabled={!ready}
-        onClick={() => onSelect(brain.id)}
-        role="option"
-        type="button"
-      >
-        <span className="onb-pulse" />
-        <span>
-          <span className="onb-option__title">{brain.label}</span>
-          <span className="onb-option__meta">{STATUS_COPY[brain.status]}</span>
-        </span>
-      </button>
-      {ready ? null : (
-        <BrainRowAction brain={brain} onClaim={onClaim} runtime={runtime} />
-      )}
-    </div>
+    <button
+      aria-selected={selected}
+      className="onb-option onb-option--tile"
+      data-selected={selected}
+      data-status={brain.status}
+      data-testid={`onboarding-brain-${brain.id}`}
+      // Every tile picks, including one that cannot think yet: picking it is
+      // how someone asks for the install or the sign-in that makes it usable,
+      // and Continue stays shut until the pick is actually ready.
+      onClick={() => onSelect(brain.id)}
+      role="option"
+      type="button"
+    >
+      <RuntimeIcon
+        className="onb-option__logo"
+        runtime={iconRuntime(brain, runtime)}
+      />
+      <span className="onb-option__title">{brain.label}</span>
+      <span className="onb-option__pill">{STATUS_PILL[brain.status]}</span>
+    </button>
   );
 }
 
 /**
- * The install or sign-in beside a row that cannot think yet.
+ * The install or sign-in under a grid whose pick cannot think yet.
  *
  * Each row owns its own mutation instance: react-query v5 fires per-mutate
  * callbacks only for the latest `mutate()` on a shared instance, so two
