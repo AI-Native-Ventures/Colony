@@ -23,7 +23,12 @@ import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkey
 import { huddleWindowChannelId } from "@/features/huddle/lib/huddleWindow";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
-import { isFreshFounder } from "@/features/onboarding/freshFounder";
+import {
+  clearFounderRunRequested,
+  isFounderRunRequested,
+  markFounderRunRequested,
+  shouldRunCanvasFirstRun,
+} from "@/features/onboarding/freshFounder";
 import { isNewOnboardingEnabled } from "@/features/onboarding/newOnboardingFlag";
 import { CanvasFirstRunHost } from "@/features/onboarding/ui/new/CanvasFirstRunHost";
 import { ExistingIdentityProfileFlow } from "@/features/onboarding/ui/new/ExistingIdentityProfileFlow";
@@ -562,22 +567,25 @@ function CommunityApp({
   const [canvasRunState, setCanvasRunState] = useState<
     "unstarted" | "active" | "finished"
   >("unstarted");
+  // Scoped to this identity: a community stamped with a DIFFERENT pubkey (an
+  // earlier account on this machine) must not disqualify a genuinely new
+  // signup from the canvas flow. `community.pubkey` is display-only, but it
+  // is the only local signal of "which identity already has a workspace
+  // here" — see Community.pubkey's doc.
+  const hasOwnCommunity = communities.some(
+    (community) => community.pubkey === currentPubkey,
+  );
+  // An existing identity that asked to create a community walks the same
+  // canvas run, minus the two screens that make an account.
+  const [isRequestedFounderRun, setIsRequestedFounderRun] = useState(() =>
+    isFounderRunRequested(currentPubkey),
+  );
   const canvasEligible =
     isNewOnboardingEnabled(import.meta.env) &&
     !transaction &&
     canvasRunState !== "finished" &&
     (canvasRunState === "active" ||
-      isFreshFounder({
-        pubkey: currentPubkey,
-        // Scoped to this identity: a community stamped with a DIFFERENT
-        // pubkey (an earlier account on this machine) must not disqualify a
-        // genuinely new signup from the canvas flow. `community.pubkey` is
-        // display-only, but it is the only local signal of "which identity
-        // already has a workspace here" — see Community.pubkey's doc.
-        hasOwnCommunity: communities.some(
-          (community) => community.pubkey === currentPubkey,
-        ),
-      }));
+      shouldRunCanvasFirstRun({ pubkey: currentPubkey, hasOwnCommunity }));
   useEffect(() => {
     if (canvasEligible && canvasRunState === "unstarted") {
       setCanvasRunState("active");
@@ -591,7 +599,17 @@ function CommunityApp({
         activeRelayUrl={activeCommunity?.relayUrl ?? null}
         communityApplied={communityApplied}
         currentPubkey={currentPubkey}
-        onFinished={() => setCanvasRunState("finished")}
+        existingIdentity={isRequestedFounderRun}
+        onFinished={() => {
+          clearFounderRunRequested(currentPubkey);
+          setIsRequestedFounderRun(false);
+          setCanvasRunState("finished");
+        }}
+        onLeaveRun={() => {
+          clearFounderRunRequested(currentPubkey);
+          setIsRequestedFounderRun(false);
+          setCanvasRunState("unstarted");
+        }}
         onRequestSignIn={onRequestSignIn}
       />
     );
@@ -604,6 +622,18 @@ function CommunityApp({
           initialPage={resumeFirstCommunityPage ?? undefined}
           onBack={
             isFindingCommunityAfterLeave ? undefined : onBackToMachineConfig
+          }
+          // Creating a community is the founder walk, so it runs the canvas
+          // one rather than a form of its own. The marker is what survives a
+          // relaunch halfway through it.
+          onCreateCommunity={
+            currentPubkey
+              ? () => {
+                  markFounderRunRequested(currentPubkey);
+                  setIsRequestedFounderRun(true);
+                  setCanvasRunState("active");
+                }
+              : undefined
           }
         />
       );

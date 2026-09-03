@@ -4,9 +4,67 @@ import { onboardingCompletionStorageKey } from "./completionKey";
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 const FRESH_IDENTITY_KEY_PREFIX = "colony.identity.fresh";
+const FOUNDER_RUN_KEY_PREFIX = "colony.founder.run";
 
 function freshIdentityKey(pubkey: string): string {
   return `${FRESH_IDENTITY_KEY_PREFIX}:${pubkey}`;
+}
+
+function founderRunKey(pubkey: string): string {
+  return `${FOUNDER_RUN_KEY_PREFIX}:${pubkey}`;
+}
+
+/**
+ * Written when someone who already has an identity asks to create a
+ * community ("Create a community" on the workspace choice screen).
+ *
+ * The fresh-identity marker cannot answer this: that one means "this key was
+ * made moments ago", and the person here has had theirs for months, possibly
+ * with a finished onboarding behind them. What they are asking for is the
+ * founder walk, minus the two screens that make an account, so the request is
+ * recorded as itself. It survives a relaunch mid-run, and the run clears it.
+ */
+export function markFounderRunRequested(
+  pubkey: string,
+  storage: StorageLike | null = ambientStorage(),
+): void {
+  storage?.setItem(founderRunKey(pubkey), "true");
+}
+
+export function clearFounderRunRequested(
+  pubkey: string,
+  storage: StorageLike | null = ambientStorage(),
+): void {
+  storage?.removeItem(founderRunKey(pubkey));
+}
+
+export function isFounderRunRequested(
+  pubkey: string | null,
+  storage: StorageLike | null = ambientStorage(),
+): boolean {
+  if (!pubkey || !storage) return false;
+  return storage.getItem(founderRunKey(pubkey)) === "true";
+}
+
+/**
+ * Should this boot run the canvas founder walk?
+ *
+ * Two ways in: a brand-new identity that has just signed up, and an existing
+ * identity that asked to create a community. Both claim a workspace, which is
+ * a step of the walk itself, so both belong to the same flow; they differ
+ * only in whether the account and recovery screens are on the path.
+ */
+export function shouldRunCanvasFirstRun(args: {
+  pubkey: string | null;
+  hasOwnCommunity: boolean;
+  storage?: StorageLike | null;
+}): boolean {
+  const storage = args.storage ?? ambientStorage();
+  if (!args.pubkey || args.hasOwnCommunity || !storage) return false;
+  return (
+    isFounderRunRequested(args.pubkey, storage) ||
+    isFreshFounder({ ...args, storage })
+  );
 }
 
 function ambientStorage(): StorageLike | null {

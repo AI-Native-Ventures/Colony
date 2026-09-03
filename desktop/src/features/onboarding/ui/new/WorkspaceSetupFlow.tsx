@@ -27,6 +27,11 @@ type Props = {
   initialPage?: FirstCommunityPage;
   /** Absent when there is nowhere behind this screen to go back to. */
   onBack?: () => void;
+  /**
+   * Starts the canvas founder walk for this identity. Absent only before the
+   * identity resolves, which is also when nothing here can be clicked yet.
+   */
+  onCreateCommunity?: () => void;
 };
 
 /**
@@ -36,7 +41,11 @@ type Props = {
  * machine sequence, so they keep the landing hue and show no step marker:
  * a count here would promise a walk that does not exist.
  */
-export function WorkspaceSetupFlow({ initialPage, onBack }: Props) {
+export function WorkspaceSetupFlow({
+  initialPage,
+  onBack,
+  onCreateCommunity,
+}: Props) {
   const [page, setPage] = React.useState<WorkspaceSetupPage>(
     initialPage ?? "welcome",
   );
@@ -114,13 +123,14 @@ export function WorkspaceSetupFlow({ initialPage, onBack }: Props) {
           mode="welcome"
           onBack={onBack}
           onChoose={(choice) => {
-            setPage(
-              choice === "create"
-                ? "owned"
-                : choice === "existing"
-                  ? "existing"
-                  : "join",
-            );
+            if (choice === "create") {
+              // Creating is the founder walk, not a form: it names the
+              // company, claims the address and sets the agents up.
+              if (onCreateCommunity) onCreateCommunity();
+              else setPage("owned");
+              return;
+            }
+            setPage(choice === "existing" ? "existing" : "join");
           }}
           onRestorePrevious={
             canRestorePreviousCommunity

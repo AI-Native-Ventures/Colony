@@ -44,3 +44,46 @@ test("saving a name finishes onboarding and enters the app", async ({
 
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
 });
+
+test("creating a community starts the founder walk at the company screen", async ({
+  page,
+}) => {
+  // An identity that already exists and has no community: the account and
+  // recovery screens are behind them, so the walk opens on the company
+  // question and the counter counts only the screens they will see.
+  await installMockBridge(page, undefined, { skipCommunitySeed: true });
+  await page.goto("/");
+
+  await expect(page.getByTestId("workspace-setup-gate")).toBeVisible();
+  await page.getByTestId("community-choice-create").click();
+
+  await expect(page.getByText("Now, your company.")).toBeVisible();
+  await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
+    "01 / 07",
+  );
+  // The request is recorded, so a relaunch halfway through the walk resumes
+  // it instead of dropping the person back on the choice screen.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Object.keys(window.localStorage).some((key) =>
+          key.startsWith("colony.founder.run:"),
+        ),
+      ),
+    )
+    .toBe(true);
+});
+
+test("leaving the founder walk returns to the community choice", async ({
+  page,
+}) => {
+  await installMockBridge(page, undefined, { skipCommunitySeed: true });
+  await page.goto("/");
+
+  await page.getByTestId("community-choice-create").click();
+  await expect(page.getByText("Now, your company.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("workspace-setup-gate")).toBeVisible();
+  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+});
