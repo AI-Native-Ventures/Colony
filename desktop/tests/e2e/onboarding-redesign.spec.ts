@@ -8,11 +8,9 @@ import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
 // the active identity, which is what keeps the app-level onboarding gate open.
 const FIRST_RUN_IDENTITY = { ...TEST_IDENTITIES.tyler, username: "" };
 
-// The redesigned flow ships dark. The override key is only honoured in the
-// e2e build mode (see newOnboardingFlag.ts), so this opts just these tests
-// in while every other first-run spec keeps the old flow. The script must be
-// registered before installMockBridge: React reads the flag on mount and the
-// bridge triggers that mount.
+// The canvas flow is the only flow, so nothing here opts into it. Storage
+// seeding still has to be registered before installMockBridge: React reads it
+// on mount and the bridge triggers that mount.
 async function seedFreshFirstRun(
   page: Page,
   extraStorage: Record<string, string> = {},

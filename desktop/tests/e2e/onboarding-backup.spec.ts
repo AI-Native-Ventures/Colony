@@ -38,7 +38,11 @@ test("fresh account entry defers backup and reaches community onboarding", async
 
   await page.getByRole("button", { name: "Start with Colony" }).click();
 
-  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+  // A brand-new identity lands in the canvas first run, which claims the
+  // workspace as one of its own steps.
+  await expect(
+    page.getByRole("heading", { name: "Let's get your colony started." }),
+  ).toBeVisible();
   await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   const reminderEntries = await page.evaluate(() =>
     Object.entries(window.localStorage).filter(([key]) =>

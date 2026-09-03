@@ -14,7 +14,11 @@ test("normal first launch uses the persisted identity through simple entry", asy
   await page.goto("/");
 
   await page.getByRole("button", { name: "Start with Colony" }).click();
-  await expect(page.getByTestId("community-choice-create")).toBeVisible();
+  // A brand-new identity walks the canvas first run, which claims its
+  // workspace itself rather than asking which community to join.
+  await expect(
+    page.getByRole("heading", { name: "Let's get your colony started." }),
+  ).toBeVisible();
   await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Create a new identity key" }),

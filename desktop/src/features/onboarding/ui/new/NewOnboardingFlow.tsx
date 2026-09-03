@@ -35,7 +35,7 @@ import {
   trackForBrain,
   type TrackResult,
 } from "../../flow/track";
-import { invitesEnabled } from "../../newOnboardingFlag";
+import { invitesEnabled } from "../../invitesFlag";
 import { OnboardingCanvas } from "./OnboardingCanvas";
 import {
   AccountScreen,
@@ -73,8 +73,7 @@ const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
 /**
  * E2E only: one spec pins an auth failure so the account screen's failure
  * states stay testable without pointing the flow at a live server. The mode
- * check keeps this unreachable outside the e2e build, exactly like the flag's
- * own localStorage override in newOnboardingFlag.ts.
+ * check is what keeps this unreachable outside the e2e build.
  */
 function readE2eAuthFailure(
   env: Record<string, string | undefined>,
@@ -99,10 +98,8 @@ function readE2eAuthFailure(
 }
 
 /**
- * Which auth service the flow runs on. The boundary newOnboardingFlag draws
- * for the redesigned flow itself decides this too: the build-time switch
- * turns the real service on, and the e2e build mode keeps fakes so existing
- * specs stay hermetic.
+ * Which auth service the flow runs on: the real one everywhere except the
+ * e2e build, which keeps fakes so its specs stay hermetic.
  */
 export function resolveAuthServices(
   env: Record<string, string | undefined>,
@@ -116,8 +113,8 @@ export function resolveAuthServices(
   // back to `contracts.fake.ts`: an account that was never created, and a
   // hand-written paragraph about a Johannesburg workshop presented as what
   // Colony found on the user's own website. Nothing failed, which is what made
-  // it dangerous. The e2e mode is the only build that keeps fakes, so its
-  // specs stay hermetic.
+  // it dangerous. That flag is gone entirely now, and the e2e mode is the only
+  // build that keeps fakes.
   const useReal = env.MODE !== "e2e";
   const base = useReal
     ? {
@@ -171,6 +168,18 @@ type Props = {
    * host is left unfinished because onboarding simply did not happen here.
    */
   onRequestSignIn?: () => void;
+  /**
+   * The person walking this already has an identity on this machine: they
+   * signed in, or imported a key, and then asked to create a community. The
+   * account and recovery screens are behind them, so the walk starts on the
+   * company screen and never offers those two as somewhere to go back to.
+   */
+  existingIdentity?: boolean;
+  /**
+   * Leaves an existing-identity run from its first screen, back to whatever
+   * offered it. Only meaningful alongside `existingIdentity`.
+   */
+  onLeaveRun?: () => void;
 };
 
 export function NewOnboardingFlow({
@@ -178,6 +187,8 @@ export function NewOnboardingFlow({
   provisioning,
   onComplete,
   onRequestSignIn,
+  existingIdentity = false,
+  onLeaveRun,
 }: Props) {
   // Build-time flags never change mid-session, so both are read once.
   const canInvite = invitesEnabled(import.meta.env);
@@ -191,7 +202,18 @@ export function NewOnboardingFlow({
 
   const [boot] = useState(() => {
     const loaded = loadAnswers(answerStorage);
-    return { answers: loaded, step: resumeStep(loaded) };
+    if (!existingIdentity) {
+      return { answers: loaded, step: resumeStep(loaded) };
+    }
+    // The two account screens are already answered by the fact that this
+    // identity exists. Recording that, rather than special-casing the
+    // resume, keeps one definition of "where does this run pick up".
+    const seeded: OnboardingAnswers = {
+      ...loaded,
+      account: loaded.account ?? { email: "" },
+      recoveryAcknowledged: true,
+    };
+    return { answers: seeded, step: resumeStep(seeded) };
   });
   const [answers, setAnswers] = useState<OnboardingAnswers>(boot.answers);
   const [step, setStep] = useState<OnboardingStep>(boot.step);
@@ -328,7 +350,16 @@ export function NewOnboardingFlow({
 
   const goBack = () => {
     const target = backStep(step, visibility);
-    if (target) goTo(target);
+    if (!target) return;
+    // Back off the company screen leads to the account screen, which does not
+    // exist on this path: the identity was made before the run started. What
+    // is behind the run instead is the choice that started it, so back leaves
+    // the walk rather than dead-ending on a button that does nothing.
+    if (existingIdentity && (target === "account" || target === "recovery")) {
+      onLeaveRun?.();
+      return;
+    }
+    goTo(target);
   };
 
   /**
@@ -667,13 +698,17 @@ export function NewOnboardingFlow({
   })();
 
   const position = stepPosition(step, visibility);
+  // An existing-identity run never shows the account or recovery screens, and
+  // a counter that includes them would open on "03 / 06" and promise two
+  // screens that are not coming.
+  const skippedSteps = existingIdentity ? 2 : 0;
 
   return (
     <OnboardingCanvas
       step={step}
       track={canvasTrack}
-      index={position.index}
-      total={position.total}
+      index={Math.max(0, position.index - skippedSteps)}
+      total={position.total - skippedSteps}
     >
       {body}
     </OnboardingCanvas>

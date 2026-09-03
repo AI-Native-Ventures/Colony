@@ -92,9 +92,7 @@ test("scenario A: genuinely fresh machine, fresh identity", async ({
   page,
 }) => {
   const identity = { ...TEST_IDENTITIES.tyler, username: "" };
-  await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+  await page.addInitScript(() => {});
   await seedActiveIdentity(page, identity);
   await installMockBridge(page, undefined, {
     skipOnboardingSeed: true,
@@ -136,9 +134,7 @@ test("scenario B: a second fresh identity on a machine that already has a commun
 }) => {
   const newIdentity = { ...TEST_IDENTITIES.alice, username: "" };
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("colony.e2e.newOnboarding", "1");
-  });
+  await page.addInitScript(() => {});
   // installMockBridge's default (no skipCommunitySeed) seeds a community
   // stamped with tyler's pubkey -- simulating a machine that already has a
   // workspace from a first account. Then override the active identity to a

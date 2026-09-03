@@ -82,13 +82,15 @@ test("machine onboarding: simple entry and account recovery", async ({
     page.getByRole("button", { name: "Start with Colony" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Start with Colony" }).click();
+  // A brand-new identity walks the canvas first run, which claims the
+  // workspace itself; it never passes through a community choice.
   await expect(
-    page.getByRole("heading", { name: "Join or create a community" }),
+    page.getByRole("heading", { name: "Let's get your colony started." }),
   ).toBeVisible();
   await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-page-backup")).toHaveCount(0);
   await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02-community-choice.png` });
+  await page.screenshot({ path: `${SHOT_DIR}/02-first-run-account.png` });
 });
 
 /**
@@ -284,21 +286,18 @@ test("simple account entry keeps one-column geometry on narrow windows", async (
   expect(geometry.scrollWidth).toBe(geometry.clientWidth);
 });
 
-test("relay onboarding: profile and avatar docked CTAs", async ({ page }) => {
+test("relay onboarding: the profile screen and its action", async ({
+  page,
+}) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+  // Name and photo are one screen now, so there is one shot where there were
+  // two, and the action sits on the canvas rather than in a docked footer.
+  await expect(page.getByTestId("onboarding-page-profile")).toBeVisible();
   await page.getByTestId("onboarding-display-name").fill("Ada Lovelace");
+  await expect(page.getByTestId("onboarding-next")).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/04-profile.png` });
-
-  await page.getByTestId("onboarding-next").click();
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
-  await page
-    .getByTestId("onboarding-avatar-url")
-    .fill("https://example.com/onboarding-avatar.png");
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/05-avatar.png` });
 });
