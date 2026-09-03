@@ -402,13 +402,15 @@ test("nothing detected still asks who pays, with Colony picked", async ({
     .fill("We service and repair cars for owners around Johannesburg.");
   await page.getByRole("button", { name: "Looks right" }).click();
 
-  // The brain screen shows with an empty subscription lane and Colony chosen.
+  // The brain screen shows: Codex is installed but logged out, so it is
+  // offered with a Sign in pill, and Colony is the default because nothing
+  // usable was found.
   await expect(
     page.getByRole("heading", { name: "Pick who does the thinking." }),
   ).toBeVisible({ timeout: 15_000 });
-  await expect(
-    page.getByTestId("onboarding-brain-lane-subscription"),
-  ).toContainText("No subscription tools found on this computer.");
+  const subscriptions = page.getByTestId("onboarding-brain-lane-subscription");
+  await expect(subscriptions).toContainText("Codex");
+  await expect(subscriptions).toContainText("Sign in");
   await expect(page.getByTestId("onboarding-brain-lane-colony")).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
 
