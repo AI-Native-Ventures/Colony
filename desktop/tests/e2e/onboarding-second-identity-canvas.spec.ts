@@ -58,19 +58,19 @@ async function walkCanvasFlow(
   await page.getByRole("button", { name: "Create workspace" }).click();
 
   await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toBeVisible({ timeout: 20_000 });
-  await shot("assistant");
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
     page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 20_000 });
   await shot("summary");
   await page
     .getByPlaceholder("We repair and service cars in Johannesburg.")
     .fill("We service and repair cars for owners around Johannesburg.");
   await page.getByRole("button", { name: "Looks right" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Pick who does the thinking." }),
+  ).toBeVisible({ timeout: 20_000 });
+  await shot("assistant");
+  await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),

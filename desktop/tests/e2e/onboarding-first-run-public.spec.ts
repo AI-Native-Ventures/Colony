@@ -64,17 +64,17 @@ test("public first run: fresh identity to Welcome through the canvas flow", asyn
   await expect(page.getByText("colony.ainative.ventures")).toHaveCount(0);
 
   await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
     page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 20_000 });
   await page
     .getByPlaceholder("We repair and service cars in Johannesburg.")
     .fill("We service and repair cars for owners around Johannesburg.");
   await page.getByRole("button", { name: "Looks right" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Pick who does the thinking." }),
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),

@@ -693,6 +693,85 @@
     color: var(--onb-ink-soft);
   }
 
+  /* The building screen's live list. One line per job, each ticking as it
+     finishes, so the wait shows what it produced rather than a spinner. */
+  :where(.onb-canvas) .onb-worklist {
+    display: grid;
+    gap: 0.75rem;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  :where(.onb-canvas) .onb-work {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 1rem;
+    line-height: 1.4;
+    color: var(--onb-ink-soft);
+    transition: color 320ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="done"],
+  :where(.onb-canvas) .onb-work[data-status="failed"] {
+    color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-work__label {
+    min-width: 0;
+  }
+
+  /* The mark carries the state on its own, so the line does not have to say
+     "done" in words as well as in colour. */
+  :where(.onb-canvas) .onb-work__mark {
+    position: relative;
+    flex: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 999px;
+    border: 2px solid var(--onb-rule);
+    transition:
+      background 320ms var(--onb-ease),
+      border-color 320ms var(--onb-ease);
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="doing"] .onb-work__mark::after {
+    content: "";
+    position: absolute;
+    inset: -0.25rem;
+    border-radius: 999px;
+    border: 2px solid var(--onb-ink);
+    opacity: 0.35;
+    animation: onb-pulse 1.9s var(--onb-ease) infinite;
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="done"] .onb-work__mark {
+    background: var(--onb-ink);
+    border-color: var(--onb-ink);
+  }
+
+  :where(.onb-canvas) .onb-work[data-status="failed"] .onb-work__mark {
+    background: transparent;
+    border-color: var(--onb-ink);
+    border-style: dashed;
+  }
+
+  /* The draft the list ends on, and the openers that stand in for it when
+     there was no website to read. */
+  :where(.onb-canvas) .onb-draft {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+  }
+
+  :where(.onb-canvas) .onb-openers {
+    display: grid;
+    gap: 0.5rem;
+  }
+
   /* Screen 5: found brains. */
   :where(.onb-canvas) .onb-options {
     display: grid;

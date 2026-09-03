@@ -77,8 +77,19 @@ test("a non-technical user can get from the first screen to the end", async ({
   await page.getByRole("button", { name: "No", exact: true }).click();
   await page.getByRole("button", { name: "Create workspace" }).click();
 
-  // Screen 4: the probe resolves on its own, no interaction.
-  await expect(page.getByText("Building your workspace.")).toBeVisible();
+  // Screen 4: building. It shows its work as a live list and ends on the
+  // draft, with no interaction until it settles. No website means the flow
+  // must not claim a finding.
+  await expect(page.getByTestId("onboarding-building-list")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Tell us what you do." }),
+  ).toBeVisible({ timeout: 15_000 });
+  // The list is still there beside the draft: what was done stays on screen.
+  await expect(page.getByTestId("onboarding-building-list")).toBeVisible();
+  await page
+    .getByPlaceholder("We repair and service cars in Johannesburg.")
+    .fill("We service and repair cars for owners around Johannesburg.");
+  await page.getByRole("button", { name: "Looks right" }).click();
 
   // Screen 5: the brain picker opens on Colony Agent whatever the mock
   // catalog reports ready, so the walk continues on the colony track. The
@@ -95,16 +106,7 @@ test("a non-technical user can get from the first screen to the end", async ({
   );
   await page.getByRole("button", { name: "Continue" }).click();
 
-  // Screen 6: description. No website means the flow must not claim a finding.
-  await expect(
-    page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible();
-  await page
-    .getByPlaceholder("We repair and service cars in Johannesburg.")
-    .fill("We service and repair cars for owners around Johannesburg.");
-  await page.getByRole("button", { name: "Looks right" }).click();
-
-  // Screen 7: credits. Every track offers a way past it, so no payment
+  // Screen 6: credits. Every track offers a way past it, so no payment
   // handoff is needed to finish.
   await expect(
     page.getByRole("heading", { name: "Put something in the tin." }),

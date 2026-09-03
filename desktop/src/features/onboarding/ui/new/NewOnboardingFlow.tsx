@@ -43,12 +43,10 @@ import {
   type AccountValues,
 } from "./screens/AccountScreen";
 import { BrainScreen } from "./screens/BrainScreen";
+import { BuildingScreen } from "./screens/BuildingScreen";
 import { CompanyScreen, type CompanyValues } from "./screens/CompanyScreen";
 import { CreditsScreen } from "./screens/CreditsScreen";
-import { DescriptionScreen } from "./screens/DescriptionScreen";
 import { InviteScreen } from "./screens/InviteScreen";
-import { ProbingScreen } from "./screens/ProbingScreen";
-import { ReadingScreen } from "./screens/ReadingScreen";
 import { RecoveryScreen } from "./screens/RecoveryScreen";
 
 /**
@@ -234,7 +232,6 @@ export function NewOnboardingFlow({
   const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
 
   const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [scrapeFailed, setScrapeFailed] = useState(false);
   const [websiteRead, setWebsiteRead] = useState(false);
   const [invites, setInvites] = useState<string[]>([]);
   const [isSendingInvites, setIsSendingInvites] = useState(false);
@@ -314,22 +311,24 @@ export function NewOnboardingFlow({
     if (target) goTo(target);
   };
 
+  /**
+   * What the probe found, recorded without moving anywhere.
+   *
+   * The probe used to own a screen of its own and end it, so resolving and
+   * navigating were the same act. It is one line of the building screen now,
+   * which keeps running afterwards: the read may still be in flight and the
+   * draft is still to be edited.
+   *
+   * Preselect the hosted agent, which is ready on every computer, rather than
+   * whatever detection happened to find first. The track follows the
+   * preselection for the same reason it follows an explicit pick.
+   */
   const handleProbeResolved = useCallback((result: TrackResult) => {
-    // The brain screen always runs now. It used to be skipped whenever nothing
-    // was installed, on the grounds that a list of one is not a choice — but
-    // that was only true while the screen could do nothing except pick an
-    // already-ready runtime. It installs and signs in now, so skipping it is
-    // what would remove the choice.
-    //
-    // Preselect the hosted agent, which is ready on every computer, rather
-    // than whatever detection happened to find first. The track follows the
-    // preselection for the same reason it follows an explicit pick.
     const brain = preselectedBrain(result.brains, result.installed);
     const track = trackForBrain(brain, result.installed);
     setSelectedBrain(brain);
     setTrackResult({ ...result, track });
     setAnswers((current) => ({ ...current, track }));
-    setStep("brain");
   }, []);
 
   const handleAccountSubmit = async () => {
@@ -443,23 +442,21 @@ export function NewOnboardingFlow({
 
   const handleReadingDone = useCallback((result: ScrapeResult) => {
     if (result.ok) setDescriptionDraft(result.description);
-    setScrapeFailed(!result.ok);
     // Only a reading that came back with something costs anything to refund
     // against, and the credits screen may only promise the refund when it
     // did. A resume that lands straight on credits leaves this false, which
     // is the safe direction: the screen says nothing rather than promising
     // money back against a spend it cannot see.
     setWebsiteRead(result.ok);
-    setStep("description");
   }, []);
 
-  const handleDescriptionContinue = () => {
+  const handleBuildingContinue = () => {
     const updated: OnboardingAnswers = {
       ...answers,
       description: descriptionDraft.trim(),
     };
     setAnswers(updated);
-    goTo(nextStep("description", updated));
+    goTo(nextStep("building", updated));
   };
 
   const handlePaid = () => {
@@ -533,23 +530,39 @@ export function NewOnboardingFlow({
             }
           />
         );
-      case "probing":
+      case "building":
         return (
-          <ProbingScreen
+          <BuildingScreen
+            hasWebsite={answers.hasWebsite === true}
+            website={answers.website ?? ""}
             globalConfig={globalConfig}
+            services={effectiveServices}
             reducedMotion={reducedMotion}
-            onResolved={handleProbeResolved}
+            value={descriptionDraft}
+            onChange={setDescriptionDraft}
+            onProbeResolved={handleProbeResolved}
+            onReadDone={handleReadingDone}
+            onContinue={handleBuildingContinue}
           />
         );
       case "brain":
         if (trackResult === null) {
-          // A resumed session has no probe result yet: probe again rather
-          // than guess what was installed.
+          // A resumed session has no probe result yet: run the building screen
+          // again rather than guess what was installed. It re-probes, and
+          // `resumeStep` sends a resume here in the first place only once the
+          // draft exists, so nothing it produced is thrown away.
           return (
-            <ProbingScreen
+            <BuildingScreen
+              hasWebsite={answers.hasWebsite === true}
+              website={answers.website ?? ""}
               globalConfig={globalConfig}
+              services={effectiveServices}
               reducedMotion={reducedMotion}
-              onResolved={handleProbeResolved}
+              value={descriptionDraft}
+              onChange={setDescriptionDraft}
+              onProbeResolved={handleProbeResolved}
+              onReadDone={handleReadingDone}
+              onContinue={handleBuildingContinue}
             />
           );
         }
@@ -562,26 +575,6 @@ export function NewOnboardingFlow({
             }
             onSelect={setSelectedBrain}
             onContinue={handleBrainContinue}
-          />
-        );
-      case "reading":
-        return (
-          <ReadingScreen
-            url={answers.website ?? ""}
-            services={effectiveServices}
-            reducedMotion={reducedMotion}
-            onDone={handleReadingDone}
-          />
-        );
-      case "description":
-        return (
-          <DescriptionScreen
-            hasWebsite={answers.hasWebsite === true}
-            scrapeFailed={scrapeFailed}
-            value={descriptionDraft}
-            onChange={setDescriptionDraft}
-            onContinue={handleDescriptionContinue}
-            onBack={goBack}
           />
         );
       case "credits":
@@ -626,12 +619,7 @@ export function NewOnboardingFlow({
     }
   })();
 
-  // Counted from the recorded answer rather than the live company-screen
-  // state, so the total does not twitch while someone is still choosing.
-  const position = stepPosition(step, {
-    hasWebsite: answers.hasWebsite,
-    invitesEnabled: canInvite,
-  });
+  const position = stepPosition(step, { invitesEnabled: canInvite });
 
   return (
     <OnboardingCanvas
