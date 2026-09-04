@@ -649,16 +649,69 @@ pub(crate) async fn rebind_pending_thread_claim(
     }) else {
         return Ok(());
     };
+    let root_hex = event.id.to_hex();
     state
         .db
-        .rebind_thread_task(
-            tenant.community(),
-            &task_id,
-            &format!("root:{}", event.id.to_hex()),
-        )
+        .rebind_thread_task(tenant.community(), &task_id, &format!("root:{root_hex}"))
         .await
         .map_err(|error| format!("database error rebinding this thread's claim: {error}"))?;
+
+    // The claim row is not the only thing that was keyed on a thread root that
+    // did not exist yet: the task head itself was written with `threadRoot`
+    // null, because the message it belongs to had not been published when the
+    // task was opened. A reader asking "which task belongs to this thread"
+    // filters on that field, so a task opened by a thread's FIRST message was
+    // invisible to the thread header, Mark done, and the new-task switch,
+    // while a task opened from a reply was not. Now that the root exists, the
+    // head learns it. The hidden chat task takes the same path: its own
+    // message names it, so it is rebound by this same call.
+    record_thread_root(tenant, state, &task_id, &root_hex).await
+}
+
+/// Give a task the thread root it could not have been created with.
+///
+/// Deliberately not a transition: nothing about the work changed, so a
+/// coordination row announcing it would be noise in the very thread it is
+/// describing.
+async fn record_thread_root(
+    tenant: &TenantContext,
+    state: &Arc<AppState>,
+    task_id: &str,
+    root_hex: &str,
+) -> Result<(), String> {
+    let Some(previous_event) = load_head(tenant, state, KIND_TASK, task_id).await? else {
+        return Ok(());
+    };
+    let previous = buzz_sdk::company::parse_task_event(&previous_event)
+        .map_err(|error| format!("that task is unreadable: {error}"))?;
+    let Some(replacement) = thread_root_backfill(&previous, root_hex) else {
+        return Ok(());
+    };
+    write_task_head(tenant, state, &previous_event, &replacement).await?;
     Ok(())
+}
+
+/// The replacement head a thread root backfill needs, or `None` when the task
+/// needs no rewrite.
+///
+/// A task that already names a thread root keeps it: the root it was opened
+/// against is the truth, and a later message in the same thread must not be
+/// able to move a task to a different conversation. A closed task is left
+/// alone for the same reason, plus a simpler one: rewriting a finished record
+/// to improve a filter is not worth touching the record at all.
+fn thread_root_backfill(previous: &CompanyTask, root_hex: &str) -> Option<CompanyTask> {
+    if previous.thread_root.is_some()
+        || matches!(
+            previous.status,
+            TaskStatus::Completed | TaskStatus::Cancelled
+        )
+    {
+        return None;
+    }
+    let mut replacement = previous.clone();
+    replacement.thread_root = Some(root_hex.to_owned());
+    replacement.updated_at = previous.updated_at + 1;
+    Some(replacement)
 }
 
 /// Whether this event is one assignee reporting its part of a task done.
@@ -805,6 +858,37 @@ mod tests {
             created_at: 1_767_225_600,
             updated_at: 1_767_225_600,
         }
+    }
+
+    #[test]
+    fn a_task_opened_by_a_threads_first_message_learns_its_root() {
+        let mut task = sample_task();
+        task.thread_root = None;
+        let root = "b".repeat(64);
+        let replacement = thread_root_backfill(&task, &root).expect("the head is rewritten");
+        assert_eq!(replacement.thread_root.as_deref(), Some(root.as_str()));
+        assert_eq!(replacement.updated_at, task.updated_at + 1);
+        assert_eq!(
+            replacement.id, task.id,
+            "it is the same task, told where it lives"
+        );
+    }
+
+    #[test]
+    fn a_task_that_already_names_a_thread_is_never_moved_to_another_one() {
+        let task = sample_task();
+        assert_eq!(task.thread_root.as_deref(), Some("abc"));
+        assert!(thread_root_backfill(&task, &"b".repeat(64)).is_none());
+    }
+
+    #[test]
+    fn a_closed_task_is_not_rewritten_to_improve_a_filter() {
+        let mut task = sample_task();
+        task.thread_root = None;
+        task.status = TaskStatus::Completed;
+        assert!(thread_root_backfill(&task, &"b".repeat(64)).is_none());
+        task.status = TaskStatus::Cancelled;
+        assert!(thread_root_backfill(&task, &"b".repeat(64)).is_none());
     }
 
     #[test]

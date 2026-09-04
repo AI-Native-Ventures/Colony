@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use buzz_core::company::{CompanyTask, CompanyTeamRef, TaskStatus, ThreadAttachMode};
 use buzz_core::kind::{
-    KIND_COMPANY_ACTION, KIND_COMPANY_RECEIPT, KIND_MANAGED_AGENT, KIND_TASK, KIND_TASK_REPORT,
-    KIND_TEAM,
+    KIND_COMPANY_ACTION, KIND_COMPANY_RECEIPT, KIND_MANAGED_AGENT, KIND_STREAM_MESSAGE_V2,
+    KIND_TASK, KIND_TASK_REPORT, KIND_TEAM,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_receipt, parse_task_event, CompanyAction,
@@ -345,6 +345,95 @@ fn attach<'a>(
         now: now(),
     })
     .expect("attach plans")
+}
+
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres"]
+async fn a_task_opened_by_a_threads_first_message_learns_its_root() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut client, &owner, &[]).await;
+    let signer = owner.public_key().to_hex();
+
+    // A send that STARTS a thread has no root to name: the event it will
+    // become does not exist until it is published. The task is opened first,
+    // because the turn must not run unattributed, so it is written with no
+    // thread root at all.
+    let opened = attached_task(
+        &mut client,
+        &owner,
+        &fixture.relay,
+        &attach(
+            &fixture,
+            &signer,
+            None,
+            "send-1",
+            ThreadAttachMode::Open,
+            "Cut the release video",
+            Some(&fixture.team.lead_persona_id),
+        ),
+    )
+    .await;
+    assert!(
+        opened.thread_root.is_none(),
+        "the root this task belongs to does not exist yet"
+    );
+
+    // Now publish the message that task was opened for, carrying the task the
+    // relay handed back.
+    let message = EventBuilder::new(
+        Kind::Custom(KIND_STREAM_MESSAGE_V2 as u16),
+        "Cut the release video",
+    )
+    .tags(vec![
+        Tag::parse(["h", fixture.channel.as_str()]).expect("h tag"),
+        Tag::parse(["task", opened.id.as_str()]).expect("task tag"),
+    ])
+    .sign_with_keys(&owner)
+    .expect("message signs");
+    let root = message.id.to_hex();
+    assert!(
+        client
+            .send_event(message)
+            .await
+            .expect("relay answers the message")
+            .accepted,
+        "the thread root message is stored"
+    );
+
+    // The head learns the root the moment it exists. Without this, a reader
+    // asking "which task belongs to this thread" finds nothing, so the thread
+    // header, Mark done and the new-task switch appear only for tasks opened
+    // from a reply.
+    let with_root = await_thread_root(&mut client, &fixture.relay, &opened.id, &root).await;
+    assert_eq!(with_root.thread_root.as_deref(), Some(root.as_str()));
+    assert_eq!(
+        with_root.id, opened.id,
+        "it is the same task, not a second one"
+    );
+
+    // And a reply inside that thread joins it rather than opening a second.
+    let reply = attached_task(
+        &mut client,
+        &owner,
+        &fixture.relay,
+        &attach(
+            &fixture,
+            &signer,
+            Some(&root),
+            "send-2",
+            ThreadAttachMode::Open,
+            "Add captions too",
+            Some(&fixture.team.lead_persona_id),
+        ),
+    )
+    .await;
+    assert_eq!(
+        reply.id, opened.id,
+        "the rebound claim is what makes the first reply join the thread's task"
+    );
 }
 
 #[tokio::test]
@@ -878,6 +967,25 @@ async fn head_of(client: &mut BuzzTestClient, relay: &str, task_id: &str) -> Opt
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     None
+}
+
+/// Poll one task head until it names the thread root the caller expects.
+async fn await_thread_root(
+    client: &mut BuzzTestClient,
+    relay: &str,
+    task_id: &str,
+    root: &str,
+) -> CompanyTask {
+    for _ in 0..20 {
+        if let Some(event) = head_of(client, relay, task_id).await {
+            let task = parse_task_event(&event).expect("task head parses");
+            if task.thread_root.as_deref() == Some(root) {
+                return task;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("task {task_id} never learned thread root {root}");
 }
 
 /// Poll one task head until it reaches the status the caller expects.
