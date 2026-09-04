@@ -15,8 +15,12 @@
 //!   requester's own key; the requester must already be a relay member of
 //!   the tenant community the request arrives on, and becomes the owner of
 //!   the created community.
-//! - `GET /api/communities/mine` — NIP-98; lists communities the requester
-//!   owns on this deployment.
+//! - `GET /api/communities/mine[?scope=owner|member]`: NIP-98; lists
+//!   communities the requester owns on this deployment. `scope=member`
+//!   (the default is `owner`) widens the list to every non-archived
+//!   community the requester holds any `relay_members` row in, adding a
+//!   `role` field to each entry. The signed NIP-98 `u` tag always names
+//!   the bare `/api/communities/mine` path, never the query string.
 //!
 //! Scope is deliberately narrower than the operator surface:
 //!
@@ -87,6 +91,33 @@ const RESERVED_SLUGS: &[&str] = &[
 #[derive(Debug, Deserialize)]
 pub struct AvailabilityQuery {
     name: String,
+}
+
+/// Query parameters for `GET /api/communities/mine`.
+#[derive(Debug, Deserialize)]
+pub struct MineQuery {
+    /// `owner` (default) or `member`. Unknown values are rejected with 400.
+    scope: Option<String>,
+}
+
+/// Which memberships `GET /api/communities/mine` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MineScope {
+    /// Only communities the requester owns. The historical behaviour.
+    Owner,
+    /// Every non-archived community the requester belongs to, at any role.
+    Member,
+}
+
+/// Parse the `scope` query parameter, defaulting to [`MineScope::Owner`].
+fn parse_mine_scope(raw: Option<&str>) -> Result<MineScope, String> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("owner") => Ok(MineScope::Owner),
+        Some("member") => Ok(MineScope::Member),
+        Some(other) => Err(format!(
+            "unknown scope {other:?}: expected \"owner\" or \"member\""
+        )),
+    }
 }
 
 /// JSON body for `POST /api/communities`.
@@ -390,51 +421,129 @@ pub async fn create_community(
     }
 }
 
-/// `GET /api/communities/mine` — communities the signer owns here.
+/// Strip the provisioning-domain suffix from a host to recover its slug,
+/// leaving hosts outside the provisioning domain untouched.
+fn slug_from_host(host: &str, suffix: &str) -> String {
+    host.strip_suffix(suffix).unwrap_or(host).to_string()
+}
+
+/// `GET /api/communities/mine[?scope=owner|member]`: communities the signer
+/// owns here, or (with `scope=member`) every community the signer belongs to.
+///
+/// The default response is byte-identical to the owner-only listing this
+/// route has always returned, so existing clients need no change. The signed
+/// NIP-98 `u` tag names the bare path, so adding the query parameter does not
+/// invalidate a signature a client already knows how to produce.
 pub async fn list_my_communities(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<MineQuery>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let domain = provisioning_domain(&state)?.to_string();
+    let scope = parse_mine_scope(query.scope.as_deref())
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, &message))?;
 
     let (_tenant, pubkey) =
         authenticate(&state, &headers, "GET", "/api/communities/mine", None).await?;
     let pubkey_hex = pubkey.to_hex();
 
-    let rows = state
-        .db
-        .list_communities_owned_by(&pubkey_hex)
-        .await
-        .map_err(|e| internal_error(&format!("self-provision list: {e}")))?;
-
     let suffix = format!(".{domain}");
+    let communities = match scope {
+        MineScope::Owner => {
+            let rows = state
+                .db
+                .list_communities_owned_by(&pubkey_hex)
+                .await
+                .map_err(|e| internal_error(&format!("self-provision list: {e}")))?;
+            rows.into_iter()
+                .map(|row| {
+                    let slug = slug_from_host(&row.host, &suffix);
+                    serde_json::json!({
+                        "id": row.id.to_string(),
+                        "name": slug,
+                        "slug": slug,
+                        "normalized_host": row.host,
+                        "owner_pubkey": pubkey_hex,
+                        "created_at": row.created_at,
+                        "archived_at": row.archived_at,
+                    })
+                })
+                .collect::<Vec<_>>()
+        }
+        MineScope::Member => {
+            let rows = state
+                .db
+                .list_communities_for_member(&pubkey_hex)
+                .await
+                .map_err(|e| internal_error(&format!("self-provision member list: {e}")))?;
+            rows.into_iter()
+                .map(|row| {
+                    let slug = slug_from_host(&row.host, &suffix);
+                    serde_json::json!({
+                        "id": row.id.to_string(),
+                        "name": slug,
+                        "slug": slug,
+                        "normalized_host": row.host,
+                        "owner_pubkey": row.owner_pubkey,
+                        "role": row.role,
+                        "created_at": row.created_at,
+                        // Member scope lists only active communities, so this
+                        // is always null; it is carried so both scopes return
+                        // the same entry shape.
+                        "archived_at": Value::Null,
+                    })
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+
     Ok(Json(serde_json::json!({
         "owner_pubkey": pubkey_hex,
-        "communities": rows
-            .into_iter()
-            .map(|row| {
-                let slug = row
-                    .host
-                    .strip_suffix(&suffix)
-                    .unwrap_or(&row.host)
-                    .to_string();
-                serde_json::json!({
-                    "id": row.id.to_string(),
-                    "name": slug,
-                    "slug": slug,
-                    "normalized_host": row.host,
-                    "owner_pubkey": pubkey_hex,
-                    "created_at": row.created_at,
-                    "archived_at": row.archived_at,
-                })
-            })
-            .collect::<Vec<_>>(),
+        "communities": communities,
     })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mine_scope_defaults_to_owner() {
+        assert_eq!(parse_mine_scope(None).unwrap(), MineScope::Owner);
+        assert_eq!(parse_mine_scope(Some("")).unwrap(), MineScope::Owner);
+        assert_eq!(parse_mine_scope(Some("owner")).unwrap(), MineScope::Owner);
+    }
+
+    #[test]
+    fn mine_scope_accepts_member() {
+        assert_eq!(parse_mine_scope(Some("member")).unwrap(), MineScope::Member);
+        assert_eq!(
+            parse_mine_scope(Some(" member ")).unwrap(),
+            MineScope::Member
+        );
+    }
+
+    #[test]
+    fn mine_scope_rejects_unknown_values() {
+        let message = parse_mine_scope(Some("bogus")).unwrap_err();
+        assert!(message.contains("bogus"), "message names the bad value");
+        assert!(message.contains("member"), "message names the valid values");
+        // Case is not normalized: only the two documented spellings pass.
+        assert!(parse_mine_scope(Some("Owner")).is_err());
+    }
+
+    #[test]
+    fn slug_is_the_host_without_the_provisioning_suffix() {
+        assert_eq!(
+            slug_from_host("acme.colony.ainative.ventures", ".colony.ainative.ventures"),
+            "acme"
+        );
+        // A host outside the provisioning domain keeps its full name.
+        assert_eq!(
+            slug_from_host("relay.example.test", ".colony.ainative.ventures"),
+            "relay.example.test"
+        );
+    }
 
     #[test]
     fn config_names_the_domain_when_provisioning_is_enabled() {

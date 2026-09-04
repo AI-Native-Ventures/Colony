@@ -911,6 +911,25 @@ pub struct OwnedCommunityRecord {
     pub archived_at: Option<DateTime<Utc>>,
 }
 
+/// Community row returned by member-scoped community discovery.
+///
+/// Unlike [`OwnedCommunityRecord`] this covers every community the requester
+/// holds any `relay_members` row in, so the requester's own role is carried
+/// alongside the community's owner rather than being implied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberCommunityRecord {
+    /// Stable server-resolved community id.
+    pub id: CommunityId,
+    /// Normalized host that maps to this community.
+    pub host: String,
+    /// When the community row was created.
+    pub created_at: DateTime<Utc>,
+    /// The requester's role in this community (`owner`, `admin`, `member`).
+    pub role: String,
+    /// The community's owner, if one is recorded.
+    pub owner_pubkey: Option<String>,
+}
+
 /// Community row returned by an owner-authorized archive operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchivedCommunityRecord {
@@ -1641,6 +1660,62 @@ impl Db {
                     host,
                     created_at,
                     archived_at,
+                })
+            })
+            .collect()
+    }
+
+    /// Lists every non-archived community where `member_pubkey` holds any
+    /// `relay_members` row, with that member's role and the community owner.
+    ///
+    /// The member-scoped counterpart of [`list_communities_owned_by`]: it is
+    /// keyed only on the requester's own pubkey, so it is safe to expose to
+    /// that requester, but it still crosses community boundaries and must
+    /// never be called on behalf of a different key.
+    pub async fn list_communities_for_member(
+        &self,
+        member_pubkey: &str,
+    ) -> Result<Vec<MemberCommunityRecord>> {
+        let member_pubkey = member_pubkey.to_ascii_lowercase();
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                c.id,
+                c.host,
+                c.created_at,
+                rm.role,
+                (
+                    SELECT owner.pubkey
+                    FROM relay_members owner
+                    WHERE owner.community_id = c.id
+                      AND owner.role = 'owner'
+                    ORDER BY owner.created_at ASC, owner.pubkey ASC
+                    LIMIT 1
+                ) AS owner_pubkey
+            FROM communities c
+            JOIN relay_members rm ON rm.community_id = c.id
+            WHERE rm.pubkey = $1
+              AND c.archived_at IS NULL
+            ORDER BY c.created_at ASC, c.host ASC
+            "#,
+        )
+        .bind(member_pubkey)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let id: Uuid = row.try_get("id")?;
+                let host: String = row.try_get("host")?;
+                let created_at: DateTime<Utc> = row.try_get("created_at")?;
+                let role: String = row.try_get("role")?;
+                let owner_pubkey: Option<String> = row.try_get("owner_pubkey")?;
+                Ok(MemberCommunityRecord {
+                    id: CommunityId::from_uuid(id),
+                    host,
+                    created_at,
+                    role,
+                    owner_pubkey,
                 })
             })
             .collect()
@@ -8895,6 +8970,72 @@ mod tests {
             .await
             .expect("list owned communities");
 
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].id, community_a);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn list_communities_for_member_returns_every_role_and_skips_archived() {
+        let db = setup_db().await;
+        let community_a = CommunityId::from_uuid(make_community(&db.pool).await);
+        let community_b = CommunityId::from_uuid(make_community(&db.pool).await);
+        let community_c = CommunityId::from_uuid(make_community(&db.pool).await);
+        let community_d = CommunityId::from_uuid(make_community(&db.pool).await);
+        // Unique per run for the same reason the owner-scoped test above is:
+        // this query is keyed only by pubkey, so a shared fixed pubkey picks
+        // up communities leaked by sibling ignored tests.
+        let member = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let member = member.as_str();
+        let other = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let other = other.as_str();
+
+        db.bootstrap_owner(community_a, member)
+            .await
+            .expect("owner A");
+        db.bootstrap_owner(community_b, other)
+            .await
+            .expect("other owner B");
+        db.add_relay_member(community_b, member, "member", None)
+            .await
+            .expect("member B");
+        db.bootstrap_owner(community_c, other)
+            .await
+            .expect("other owner C");
+        db.add_relay_member(community_c, member, "admin", None)
+            .await
+            .expect("admin C");
+        db.bootstrap_owner(community_d, other)
+            .await
+            .expect("other owner D");
+        db.add_relay_member(community_d, member, "member", None)
+            .await
+            .expect("member D");
+        sqlx::query("UPDATE communities SET archived_at = now() WHERE id = $1")
+            .bind(community_d.as_uuid())
+            .execute(&db.pool)
+            .await
+            .expect("archive D");
+
+        let rows = db
+            .list_communities_for_member(member)
+            .await
+            .expect("list member communities");
+
+        let by_id: std::collections::HashMap<_, _> = rows
+            .iter()
+            .map(|row| (row.id, (row.role.as_str(), row.owner_pubkey.as_deref())))
+            .collect();
+        assert_eq!(rows.len(), 3, "archived community D must be excluded");
+        assert_eq!(by_id.get(&community_a), Some(&("owner", Some(member))));
+        assert_eq!(by_id.get(&community_b), Some(&("member", Some(other))));
+        assert_eq!(by_id.get(&community_c), Some(&("admin", Some(other))));
+
+        // The owner-scoped query keeps its narrower answer.
+        let owned = db
+            .list_communities_owned_by(member)
+            .await
+            .expect("list owned communities");
         assert_eq!(owned.len(), 1);
         assert_eq!(owned[0].id, community_a);
     }
