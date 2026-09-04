@@ -59,7 +59,7 @@ jobs:
   build-macos-arm64:
     name: Build and publish macOS (Apple Silicon)
     if: github.repository == 'AI-Native-Ventures/Colony'
-    runs-on: [self-hosted, macOS, colony-builder]
+    runs-on: macos-latest
     timeout-minutes: 120
     env:
       TARGET: aarch64-apple-darwin
