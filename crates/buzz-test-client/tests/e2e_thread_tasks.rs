@@ -73,25 +73,49 @@ async fn relay_self() -> String {
         .to_string()
 }
 
-async fn e2e_db_pool() -> sqlx::Pool<sqlx::Postgres> {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
-    sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&database_url)
+/// One pool for the whole suite.
+///
+/// Built once on purpose. Every fixture helper used to open its own pool and
+/// never close it, so a run leaked a Postgres connection per seeded member and
+/// per community lookup. Postgres has a connection ceiling, and once a run got
+/// close enough to it the RELAY could no longer acquire one: its next query
+/// waited on the pool's own 30 second acquire timeout, which is exactly the
+/// timeout the client saw, at whichever event happened to be next. That is why
+/// a case late in the file failed at a different point each round while the
+/// same code passed earlier in the same run.
+static E2E_POOL: tokio::sync::OnceCell<sqlx::Pool<sqlx::Postgres>> =
+    tokio::sync::OnceCell::const_new();
+
+async fn e2e_db_pool() -> &'static sqlx::Pool<sqlx::Postgres> {
+    E2E_POOL
+        .get_or_init(|| async {
+            let database_url = std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(2)
+                .connect(&database_url)
+                .await
+                .expect("connect to e2e Postgres")
+        })
         .await
-        .expect("connect to e2e Postgres")
 }
 
+/// The deployment community, looked up once.
+static E2E_COMMUNITY: tokio::sync::OnceCell<Uuid> = tokio::sync::OnceCell::const_new();
+
 async fn community_id() -> Uuid {
-    let pool = e2e_db_pool().await;
-    let host = relay_url().replace("wss://", "").replace("ws://", "");
-    sqlx::query_scalar("SELECT id FROM communities WHERE lower(host) = lower($1)")
-        .bind(&host)
-        .fetch_optional(&pool)
+    *E2E_COMMUNITY
+        .get_or_init(|| async {
+            let pool = e2e_db_pool().await;
+            let host = relay_url().replace("wss://", "").replace("ws://", "");
+            sqlx::query_scalar("SELECT id FROM communities WHERE lower(host) = lower($1)")
+                .bind(&host)
+                .fetch_optional(pool)
+                .await
+                .expect("query the deployment community")
+                .unwrap_or_else(|| panic!("community for host {host} must exist"))
+        })
         .await
-        .expect("query the deployment community")
-        .unwrap_or_else(|| panic!("community for host {host} must exist"))
 }
 
 /// Seed one member. `agent_owner` marks the key as an agent, which is what
@@ -106,7 +130,7 @@ async fn seed_member(keys: &Keys, role: &str, agent_owner: Option<&Keys>) {
     .bind(community)
     .bind(keys.public_key().to_bytes())
     .bind(agent_owner.map(|owner| owner.public_key().to_bytes().to_vec()))
-    .execute(&pool)
+    .execute(pool)
     .await
     .expect("seed the member as a user");
     sqlx::query(
@@ -117,7 +141,7 @@ async fn seed_member(keys: &Keys, role: &str, agent_owner: Option<&Keys>) {
     .bind(community)
     .bind(keys.public_key().to_hex())
     .bind(role)
-    .execute(&pool)
+    .execute(pool)
     .await
     .expect("seed the member role");
 }
