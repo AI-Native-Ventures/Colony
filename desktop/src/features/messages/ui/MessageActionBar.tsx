@@ -25,7 +25,10 @@ import {
 import { getTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
+import { buildMentionClipboardHtml } from "@/features/messages/lib/mentionClipboard";
 import { getThreadReference } from "@/features/messages/lib/threading";
+import { useMessageMentionIdentities } from "@/features/messages/lib/useMessageMentionIdentities";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { ReportMessageDialog } from "@/features/moderation/ui/ReportMessageDialog";
 import { MessageModerationMenuItems } from "@/features/moderation/ui/MessageModerationMenuItems";
 import type {
@@ -101,11 +104,14 @@ function MoreActionsMenu({
   open,
   isFollowingThread,
   isUnread,
+  profiles,
 }: {
   /** Channel UUID for the "Copy link" action. When null/undefined, the
    *  Copy link entry is hidden (e.g. inbox preview rows that don't have it). */
   channelId?: string | null;
   message: TimelineMessage;
+  /** Resolves the mention identities carried by "Copy message". */
+  profiles?: UserProfileLookup;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onFollowThread?: (message: TimelineMessage) => void;
@@ -134,6 +140,10 @@ function MoreActionsMenu({
 
   const hasCopyActions =
     !message.pending && message.kind !== KIND_HUDDLE_STARTED;
+  // "Copy message" copies the Markdown body verbatim, so its plain flavor is
+  // already readable anywhere. The HTML sidecar adds only identity, letting a
+  // paste back into Buzz re-light each chip with the pubkey the author tagged.
+  const mentionIdentities = useMessageMentionIdentities(message.tags, profiles);
 
   // A report needs a real, delivered event to target and a known author to
   // name in the NIP-56 `p` tag. Pending sends and system huddle rows have
@@ -232,6 +242,10 @@ function MoreActionsMenu({
                 copyTextToClipboard(
                   message.body,
                   "Message copied to clipboard",
+                  buildMentionClipboardHtml({
+                    identities: mentionIdentities,
+                    text: message.body,
+                  }) ?? undefined,
                 );
               }}
             >
@@ -418,6 +432,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   reactions,
   isFollowingThread,
   isUnread,
+  profiles,
 }: {
   /** Channel UUID — required for the "Copy link" action; when omitted the
    *  action is hidden (callers like the home inbox that lack the context). */
@@ -443,6 +458,8 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   /** Current read state of the clicked message, from the same predicate the
    *  unread badge uses. Drives the single mark-read/unread toggle label. */
   isUnread?: boolean;
+  /** Resolves the mention identities carried by "Copy message". */
+  profiles?: UserProfileLookup;
 }) {
   const [isReactionPickerOpen, setIsReactionPickerOpen] = React.useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = React.useState(false);
@@ -671,6 +688,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
               open={isDropdownOpen}
               isFollowingThread={isFollowingThread}
               isUnread={isUnread}
+              profiles={profiles}
             />
           ) : null}
         </div>

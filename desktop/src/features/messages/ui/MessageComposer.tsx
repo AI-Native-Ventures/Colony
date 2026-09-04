@@ -25,10 +25,7 @@ import { isMentionCodeContext } from "@/features/messages/lib/mentionCodeContext
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { getPersistentAgentAudienceScope } from "@/features/messages/lib/persistentAgentAudience";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import {
-  hasMentionClipboardHtml,
-  normalizeMentionClipboardHtml,
-} from "@/features/messages/lib/normalizeMentionClipboard";
+import { handleMentionClipboardPaste } from "@/features/messages/lib/mentionClipboardPaste";
 import {
   type AutocompleteEdit,
   type LinkSelectionInfo,
@@ -267,6 +264,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     channelNames: channelLinks.knownChannelNames,
     messageLinkChannels: channelLinks.channels,
     customEmoji,
+    getMentionIdentities: mentions.getMentionIdentities,
     onSubmit: () => submitMessageRef.current(),
     onEditLastOwnMessage: () => {
       // An existing edit target prevents re-entering edit, even for empty text.
@@ -514,6 +512,9 @@ function MessageComposerImpl(props: MessageComposerProps) {
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
       if (isEditSubmissionLocked) return;
+      // An edit extracts from the same mention map a pasted identity binds
+      // into, so wait on any check still deciding. Bounded internally.
+      await mentions.settlePendingMentionBindings();
       // Empty edits delete the message through handleEditSave.
       await submitMessageEdit({
         content: trimmed,
@@ -641,6 +642,7 @@ function MessageComposerImpl(props: MessageComposerProps) {
     mentions.getDraftMentionRefs,
     mentions.restoreDraftMentionRefs,
     mentions.revalidateMentionPubkeys,
+    mentions.settlePendingMentionBindings,
   ]);
   submitMessageRef.current = submitMessage;
   useComposerAutoSubmit(
@@ -719,6 +721,10 @@ function MessageComposerImpl(props: MessageComposerProps) {
     ],
   );
   // ── Media paste + ⌘K link shortcut via Tiptap editorProps ──────────
+  const bindPastedMentionIdentitiesRef = React.useRef(
+    mentions.bindPastedMentionIdentities,
+  );
+  bindPastedMentionIdentitiesRef.current = mentions.bindPastedMentionIdentities;
   const uploadFileRef = React.useRef(media.uploadFile);
   uploadFileRef.current = media.uploadFile;
   React.useEffect(() => {
@@ -770,12 +776,19 @@ function MessageComposerImpl(props: MessageComposerProps) {
           if (handleAgentSnapshotPaste(event, media.setPendingImeta))
             return true;
           // Strip mention/channel wrappers that Tiptap would misread as bold.
-          const html = event.clipboardData?.getData("text/html");
-          if (html && hasMentionClipboardHtml(html)) {
-            const cleanHtml = normalizeMentionClipboardHtml(html);
-            event.preventDefault();
-            _view.pasteHTML(cleanHtml);
-            return true;
+          // Colony keeps its own paste handler rather than upstream's
+          // `useComposerPasteHandler` (that hook is #6714's), so #7228's
+          // identity binding is wired here: the chips the paste carried are
+          // verified against trusted state and re-bound to their pubkeys,
+          // which is what makes a pasted mention send as a mention.
+          if (event.clipboardData) {
+            const bound = handleMentionClipboardPaste({
+              bindMentionIdentities: bindPastedMentionIdentitiesRef.current,
+              clipboardData: event.clipboardData,
+              preventDefault: () => event.preventDefault(),
+              view: _view,
+            });
+            if (bound) return true;
           }
           const plainText = event.clipboardData?.getData("text/plain") ?? "";
           if (plainText.includes("\n")) {

@@ -673,6 +673,12 @@ export function useMentionSendFlow({
       isMentionSendPendingRef.current = true;
       setIsMentionSendPending(true);
       try {
+        // Every extraction below reads the mention map, and a pasted identity
+        // can still be verifying — the relay round trip for a non-member is
+        // exactly the case this feature exists for. Sending first would
+        // publish a readable `@Label` with no `p` tag. Bounded inside, so a
+        // lookup that never answers delays the send rather than blocking it.
+        await mentions.settlePendingMentionBindings();
         const dmThreadAgentMentionError = getDmThreadAgentMentionError(
           trimmed,
           capturedThreadContext,
@@ -815,6 +821,7 @@ export function useMentionSendFlow({
       mentions.isManagedAgentPubkey,
       mentions.getDraftMentionRefs,
       mentions.routeTypedMentionReferences,
+      mentions.settlePendingMentionBindings,
       onPrepareSendChannel,
     ],
   );
