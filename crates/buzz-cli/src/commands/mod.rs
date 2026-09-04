@@ -6,6 +6,7 @@ pub mod channels;
 pub mod communities;
 pub mod company;
 pub mod content;
+pub mod credits;
 pub mod decisions;
 pub mod discovery;
 pub mod dms;
