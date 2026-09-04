@@ -7,6 +7,8 @@ import {
   filterWorkRows,
   formatTaskAge,
   groupWorkRows,
+  nestSubTasks,
+  reportedCompleteSummary,
   shortIdLabel,
   sortWorkRows,
 } from "./workListModel.ts";
@@ -36,6 +38,9 @@ function task(overrides = {}) {
     threadRoot: null,
     doerKind: "agent",
     wakeAt: null,
+    reportedCompleteBy: [],
+    hidden: false,
+    parentTaskId: null,
     createdAt: NOW - 4_000,
     updatedAt: NOW - 600,
     ...overrides,
@@ -236,4 +241,85 @@ test("live counts exclude completed and cancelled tasks", () => {
     task({ id: "t:3", status: "cancelled" }),
   ]);
   assert.equal(countLiveTasks(rows), 1);
+});
+
+// A hidden task only carries the cost of turns that were not work. Showing
+// one would put "are you there?" in Work at InProgress beside real
+// instructions, which is what made the task list read as a transcript.
+test("hidden chat tasks never reach the list", () => {
+  const rows = rowsOf([
+    task({ id: "t:work" }),
+    task({ id: "t:chat", title: "Thread chat", hidden: true, implicit: true }),
+  ]);
+  const visible = filterWorkRows(rows, {
+    showImplicit: true,
+    initiativeId: null,
+  });
+  assert.deepEqual(
+    visible.map((row) => row.task.id),
+    ["t:work"],
+  );
+});
+
+// A sub-task read anywhere but beside its parent loses the only thing that
+// explains it.
+test("sub-tasks are ordered directly under their parent", () => {
+  const rows = rowsOf([
+    task({ id: "t:parent" }),
+    task({ id: "t:other" }),
+    task({ id: "t:child", parentTaskId: "t:parent" }),
+  ]);
+  assert.deepEqual(
+    nestSubTasks(rows).map((row) => row.task.id),
+    ["t:parent", "t:child", "t:other"],
+  );
+});
+
+// Filtered out, or fallen off the read ceiling: either way the sub-task is
+// still work, so it keeps its own place rather than disappearing.
+test("a sub-task whose parent is absent keeps its own place", () => {
+  const rows = rowsOf([task({ id: "t:child", parentTaskId: "t:gone" })]);
+  assert.deepEqual(
+    nestSubTasks(rows).map((row) => row.task.id),
+    ["t:child"],
+  );
+});
+
+test("partial completion is the only state worth a line", () => {
+  const assignees = ["persona:a", "persona:b", "persona:c"];
+  assert.equal(
+    reportedCompleteSummary(
+      task({
+        assigneePersonaIds: assignees,
+        reportedCompleteBy: ["persona:a", "persona:b"],
+      }),
+    ),
+    "2 of 3 agents reported done",
+  );
+  assert.equal(
+    reportedCompleteSummary(
+      task({ assigneePersonaIds: assignees, reportedCompleteBy: [] }),
+    ),
+    null,
+  );
+  assert.equal(
+    reportedCompleteSummary(
+      task({ assigneePersonaIds: assignees, reportedCompleteBy: assignees }),
+    ),
+    null,
+  );
+});
+
+// A report from somebody the task is not assigned to is not one of its
+// shares, so it cannot move the count.
+test("only assignees count towards the reported total", () => {
+  assert.equal(
+    reportedCompleteSummary(
+      task({
+        assigneePersonaIds: ["persona:a", "persona:b"],
+        reportedCompleteBy: ["persona:a", "persona:stranger"],
+      }),
+    ),
+    "1 of 2 agents reported done",
+  );
 });

@@ -32,6 +32,7 @@ import type { UseMentionsResult } from "@/features/messages/lib/useMentions";
 import type { UseRichTextEditorResult } from "@/features/messages/lib/useRichTextEditor";
 import type { UseDraftsResult } from "@/features/messages/lib/useDrafts";
 import { invokeTauri } from "@/shared/api/tauri";
+import { useComposerNewTask } from "./useComposerNewTask";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 import type { AcpRuntime, ChannelType, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
@@ -44,10 +45,10 @@ import {
   isProviderBackedAgent,
   MENTION_REFERENCE_TAG,
   mergeOutgoingTagsWithReferenceMentions,
+  nonMemberMentionPubkeys,
   type PendingNonMemberMentionSend,
   persistCanceledDraftIfUnchanged,
   runReportingFinishSendFailures,
-  threadRootForWorkContext,
   type SendMessageWithMentionFlowInput,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
@@ -95,6 +96,7 @@ type UseMentionSendFlowOptions = {
     explicitAgentPubkeys: string[];
   }) => void;
   resolvePostSendContent?: (effectiveExplicitAgentPubkeys: string[]) => string;
+  threadRootId?: string | null;
 };
 export function useMentionSendFlow({
   channelId,
@@ -117,7 +119,9 @@ export function useMentionSendFlow({
   setSpoileredAttachmentUrls,
   onSuccessfulExplicitAgentAudience,
   resolvePostSendContent,
+  threadRootId = null,
 }: UseMentionSendFlowOptions) {
+  const newTask = useComposerNewTask(channelId, channelType, threadRootId);
   const [pendingNonMemberSend, setPendingNonMemberSend] =
     React.useState<PendingNonMemberMentionSend | null>(null);
   const [nonMemberPromptError, setNonMemberPromptError] = React.useState<
@@ -540,19 +544,22 @@ export function useMentionSendFlow({
               ),
             ]),
           );
-          // This step toasts here rather than at the outer catch so the
-          // attach failure's own message survives; the outer catch reports
+          // Toasts here rather than at the outer catch so the attach
+          // failure's own message survives; the outer catch reports
           // everything after it, which used to be reported nowhere at all.
           let finalOutgoingTags: string[][] | undefined;
           try {
-            finalOutgoingTags = await attachOutgoingWorkContext(
-              sendChannelId ?? draft.capturedChannelId ?? "",
-              finalContent,
-              agentMentionPubkeys,
+            finalOutgoingTags = await attachOutgoingWorkContext({
+              channelId: sendChannelId ?? draft.capturedChannelId ?? "",
+              content: finalContent,
+              agentPubkeys: agentMentionPubkeys,
               mediaTags,
               outgoingTags,
-              threadRootForWorkContext(draft.capturedThreadContext),
-            );
+              threadContext: draft.capturedThreadContext,
+              channelType,
+              newTask: newTask.isRequested(),
+              threadHasOpenTask: newTask.hasOpenTask,
+            });
           } catch (error) {
             handleFinishSendFailure(error);
             return;
@@ -566,6 +573,7 @@ export function useMentionSendFlow({
             draft.capturedThreadContext,
           );
           if (signal?.aborted) return;
+          newTask.consume(); // Per-send, not a mode.
           if (effectiveExplicitAgentPubkeys.length > 0) {
             // Promote only explicitly authored agents that remained effective
             // for this successful send. "Send without inviting" removes its
@@ -636,9 +644,13 @@ export function useMentionSendFlow({
       }
     },
     [
+      channelType,
       clearComposer,
       contentRef,
       drafts,
+      newTask.consume,
+      newTask.hasOpenTask,
+      newTask.isRequested,
       ensureManagedAgentMentionsReady,
       getManagedAgentsByPubkey,
       mentions.isAgentPubkey,
@@ -657,19 +669,13 @@ export function useMentionSendFlow({
   );
 
   const getNonMemberMentionPubkeys = React.useCallback(
-    (pubkeys: string[]) => {
-      if (
-        channelType === null ||
-        channelType === "dm" ||
-        !mentions.hasResolvedMembers
-      ) {
-        return [];
-      }
-
-      return uniqueNormalizedPubkeys(pubkeys).filter(
-        (pubkey) => !mentions.memberPubkeys.has(pubkey),
-      );
-    },
+    (pubkeys: string[]) =>
+      nonMemberMentionPubkeys({
+        pubkeys,
+        channelType,
+        hasResolvedMembers: mentions.hasResolvedMembers,
+        memberPubkeys: mentions.memberPubkeys,
+      }),
     [channelType, mentions.hasResolvedMembers, mentions.memberPubkeys],
   );
 
@@ -964,6 +970,7 @@ export function useMentionSendFlow({
   }, []);
 
   return {
+    newTaskToggle: newTask.control,
     isPreparingMentionSend:
       isMentionSendPending ||
       isCompleteSendPending ||

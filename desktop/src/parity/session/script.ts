@@ -194,7 +194,7 @@ import {
   meshInstalledModels,
   meshModelCatalog,
 } from "@/shared/api/tauriMesh";
-import { advanceInitiative, ensureChatTask } from "@/shared/api/initiative";
+import { advanceInitiative, attachThreadTask } from "@/shared/api/initiative";
 import {
   executeCompanyBlueprint,
   completeCompanyBlueprint,
@@ -1248,15 +1248,16 @@ export const SESSION_STEPS: SessionStep[] = [
       reason: "parity oracle",
     }),
   ),
-  step("initiative-chat-task", "ensure_chat_task", (ctx) =>
-    ensureChatTask({
-      companyHead: BOGUS_UUID,
+  step("initiative-chat-task", "attach_thread_task", (ctx) =>
+    attachThreadTask({
       channelId: ctx.channelId,
       sendId: ctx.messageId,
       agentPubkey: ctx.identityPubkey,
       title: "parity oracle task",
-      clientOrganizationId: null,
+      mode: "open",
       threadRoot: null,
+      conversationScope: false,
+      clientOrganizationId: null,
       relayPubkey: BOGUS_PUBKEY,
     }),
   ),
@@ -1862,7 +1863,7 @@ export const REPLAY_CAPTURES: Record<
   get_user_notes: { args: { identityPubkey: "pubkey" } },
   get_notes_timeline: { args: { identityPubkey: "pubkeys.0" } },
   get_presence: { args: { identityPubkey: "pubkeys.0" } },
-  ensure_chat_task: {
+  attach_thread_task: {
     args: {
       channelId: "channelId",
       messageId: "sendId",

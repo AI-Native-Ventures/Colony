@@ -145,7 +145,7 @@ test("an agent-directed message is charged to a Task the relay confirmed first",
     .toBeGreaterThan(0);
 
   const commands = await readCommands(page);
-  const taskIndex = commands.indexOf("ensure_chat_task");
+  const taskIndex = commands.indexOf("attach_thread_task");
   const sendIndex = commands.indexOf("send_channel_message");
   expect(taskIndex).toBeGreaterThanOrEqual(0);
   expect(sendIndex).toBeGreaterThanOrEqual(0);
@@ -218,7 +218,7 @@ test("a message with no agent in it is not charged to anything", async ({
   for (const event of events) {
     expect(event.tags.some((tag) => tag[0] === "task")).toBe(false);
   }
-  expect(await readCommands(page)).not.toContain("ensure_chat_task");
+  expect(await readCommands(page)).not.toContain("attach_thread_task");
 });
 
 // A turn nobody can account for is worse than a turn that did not happen: the

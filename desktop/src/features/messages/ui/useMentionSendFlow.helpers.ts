@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import type { ManagedAgent } from "@/shared/api/types";
+import type { ChannelType, ManagedAgent } from "@/shared/api/types";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
 import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown";
@@ -70,26 +70,40 @@ export function mergeOutgoingTagsWithReferenceMentions(
 }
 
 /**
- * `threadRoot` is the root event id of the thread this send replies in, and
- * `null` at channel root. It reaches the Task so the relay can scope its
- * task-created notice into that thread; without it every notice landed at
- * channel root, where it read as the work having been started somewhere the
- * owner was not looking.
+ * Ask the relay which task this send is charged to, and return the tags that
+ * name it.
+ *
+ * The thread root is `null` at channel root, where the relay claims the
+ * thread under the send's own id and rebinds it once the message arrives, and
+ * `null` in a DM as well: a DM is one thread for its whole life, so the relay
+ * keys it by the conversation and a root would only ever narrow it.
  */
-export async function attachOutgoingWorkContext(
-  channelId: string,
-  content: string,
-  agentPubkeys: readonly string[],
-  mediaTags: string[][] | undefined,
-  outgoingTags?: string[][],
-  threadRoot?: string | null,
-) {
+export async function attachOutgoingWorkContext(input: {
+  channelId: string;
+  content: string;
+  agentPubkeys: readonly string[];
+  mediaTags: string[][] | undefined;
+  outgoingTags?: string[][];
+  threadContext: PendingNonMemberMentionSend["capturedThreadContext"];
+  channelType: ChannelType | null;
+  /** The composer's "New task" switch. */
+  newTask: boolean;
+  /** Whether this thread or DM already holds an open task. */
+  threadHasOpenTask: boolean;
+}) {
+  const conversationScope = input.channelType === "dm";
   return await attachWorkContext({
-    channelId,
-    content,
-    agentPubkeys,
-    outgoingTags: mergeOutgoingTags(mediaTags, outgoingTags ?? []) ?? [],
-    threadRoot: threadRoot ?? null,
+    channelId: input.channelId,
+    content: input.content,
+    agentPubkeys: input.agentPubkeys,
+    outgoingTags:
+      mergeOutgoingTags(input.mediaTags, input.outgoingTags ?? []) ?? [],
+    threadRoot: conversationScope
+      ? null
+      : threadRootForWorkContext(input.threadContext),
+    conversationScope,
+    newTask: input.newTask,
+    threadHasOpenTask: input.threadHasOpenTask,
   });
 }
 
@@ -275,6 +289,31 @@ export function persistCanceledDraftIfUnchanged(
     draft.savedImeta,
     [...draft.savedSpoileredAttachmentUrls],
     draft.savedMentionRefs,
+  );
+}
+
+/**
+ * The mentioned pubkeys that are not members of this channel.
+ *
+ * Empty until the member list has resolved, and empty in a DM: "not a member"
+ * is not a fact yet in the first case and not a concept in the second, and
+ * either way prompting to invite somebody would be a guess.
+ */
+export function nonMemberMentionPubkeys(input: {
+  pubkeys: string[];
+  channelType: ChannelType | null;
+  hasResolvedMembers: boolean;
+  memberPubkeys: ReadonlySet<string>;
+}): string[] {
+  if (
+    input.channelType === null ||
+    input.channelType === "dm" ||
+    !input.hasResolvedMembers
+  ) {
+    return [];
+  }
+  return uniqueNormalizedPubkeys(input.pubkeys).filter(
+    (pubkey) => !input.memberPubkeys.has(pubkey),
   );
 }
 

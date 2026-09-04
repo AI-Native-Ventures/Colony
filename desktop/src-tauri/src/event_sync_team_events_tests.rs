@@ -136,7 +136,7 @@ fn migrate_teams_skips_builtins() {
 /// from each other), but the RELAY still validates `Task.owningTeamId`
 /// against the owner's published `KIND_TEAM` events
 /// (`company_broker::load_team_refs`). If this team is skipped like every
-/// other built-in, `ensure_chat_task` can hand out a Task naming a team the
+/// other built-in, `attach_thread_task` can hand out a Task naming a team the
 /// relay has never heard of.
 #[test]
 fn migrate_teams_publishes_the_relay_coordination_team_despite_builtin() {

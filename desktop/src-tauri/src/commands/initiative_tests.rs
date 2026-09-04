@@ -105,14 +105,14 @@ fn coordination_team() -> TeamRecord {
     }
 }
 
-/// Reproduces the send-blocking bug directly: `ensure_chat_task` used to
+/// Reproduces the send-blocking bug directly: `attach_thread_task` used to
 /// refuse a managed agent record with `persona_id: None` with "that agent
 /// is not a company employee", permanently, because nothing ever backfills
 /// one for it (`backfill_persona_snapshots` explicitly skips such
 /// records). This asserts the fixed behavior: `resolve_chat_agent_persona`
 /// repairs the record in place and hands back a persona that is a real
 /// member of a valid coordination team — not just the ambiguous-work
-/// fallback — so the Task `plan_implicit_task` builds from it can actually
+/// fallback, so the Task the relay opens from it can actually
 /// assign the work.
 ///
 /// Against the pre-fix code (the original `.ok_or_else("that agent is not
@@ -169,7 +169,7 @@ fn chat_agent_with_no_persona_is_repaired_onto_the_coordination_team() {
 }
 
 /// The one case that must stay un-repairable: no agent record at all.
-/// Preserves the exact error string every other caller of `ensure_chat_task`
+/// Preserves the exact error string every other caller of `attach_thread_task`
 /// has always seen for an unknown agent.
 #[test]
 fn unknown_agent_still_fails_loudly() {
@@ -193,7 +193,7 @@ fn unknown_agent_still_fails_loudly() {
 /// Reproduces the send-blocking bug directly: a fresh install (teams.json
 /// does not exist yet) that has never approved a company blueprint must
 /// still resolve *some* owning team for an agent whose persona is a
-/// member of nothing, or every `@mention` send in `ensure_chat_task`
+/// member of nothing, or every `@mention` send in `attach_thread_task`
 /// fails with "this company has no coordination team to own ambiguous
 /// work" and is silently swallowed by `useMentionSendFlow`.
 ///
@@ -415,7 +415,7 @@ const THREAD_ROOT: &str = "5910f909aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55f
 /// refuses anything that is not an event id rather than letting it into
 /// the signed action's content.
 #[test]
-fn ensure_chat_task_forwards_a_valid_thread_root_and_refuses_the_rest() {
+fn a_thread_attach_forwards_a_valid_thread_root_and_refuses_the_rest() {
     assert_eq!(
         validated_thread_root(Some(THREAD_ROOT.to_string())).expect("a real event id"),
         Some(THREAD_ROOT.to_string())

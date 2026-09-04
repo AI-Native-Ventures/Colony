@@ -20,8 +20,9 @@ export type PersistentAgentAudienceSnapshot = Readonly<{
 }>;
 
 type PersistentAgentAudienceScopeInput = {
-  ownerPubkey: string;
-  channelId: string;
+  /** Absent while the identity is still loading, which is not a scope. */
+  ownerPubkey: string | null;
+  channelId: string | null;
   threadRootId?: string | null;
 };
 
@@ -121,7 +122,7 @@ export function getPersistentAgentAudienceScope({
   channelId,
   threadRootId = null,
 }: PersistentAgentAudienceScopeInput): string | null {
-  const owner = ownerPubkey.trim().toLowerCase();
+  const owner = (ownerPubkey ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(owner) || !channelId) return null;
   if (!threadRootId) return null;
   return `${owner}:${channelId}:thread:${threadRootId}`;
