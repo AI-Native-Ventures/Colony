@@ -15,7 +15,10 @@
 //! agreement between clients.
 
 use buzz_core::{
-    company::{ThreadAttach, ThreadAttachMode, THREAD_ATTACH_SCHEMA, THREAD_SLOT_PREFIX},
+    company::{
+        ThreadAttach, ThreadAttachMode, THREAD_ATTACH_SCHEMA, THREAD_SLOT_PREFIX,
+        THREAD_TASK_PREFIX,
+    },
     company_roster::step_idempotency_key,
     kind::KIND_TASK,
 };
