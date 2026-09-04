@@ -77,7 +77,7 @@ pub fn plan_task_completion(
         target: coordinate(relay_pubkey, &task.id),
         expected_head: Some(head_event_id.to_string()),
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(next),
+        payload: CompanyActionPayload::Task(Box::new(next)),
     })
 }
 
@@ -144,7 +144,7 @@ pub fn plan_task_rename(
         target: coordinate(relay_pubkey, &task.id),
         expected_head: Some(head_event_id.to_string()),
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(next),
+        payload: CompanyActionPayload::Task(Box::new(next)),
     })
 }
 
@@ -171,7 +171,7 @@ pub fn plan_task_snooze(
         target: coordinate(relay_pubkey, &task.id),
         expected_head: Some(head_event_id.to_string()),
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(next),
+        payload: CompanyActionPayload::Task(Box::new(next)),
     })
 }
 
@@ -214,7 +214,7 @@ pub fn plan_task_bounce(
         target: coordinate(relay_pubkey, &upstream.id),
         expected_head: Some(head_event_id.to_string()),
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(next),
+        payload: CompanyActionPayload::Task(Box::new(next)),
     })
 }
 
@@ -314,6 +314,9 @@ mod tests {
             outcome_reason: None,
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_800_000_000,
             updated_at: 1_800_000_100,
         }

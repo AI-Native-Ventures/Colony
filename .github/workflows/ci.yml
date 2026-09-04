@@ -1265,6 +1265,13 @@ jobs:
           # relay. Like e2e_interrupts it seeds its owner fixture directly in
           # Postgres (DATABASE_URL), and RELAY_HTTP_URL feeds its NIP-11 lookup.
           cargo test -p buzz-test-client --test e2e_company_work -- --ignored --nocapture --test-threads 1
+          # One open task per thread: attach-or-open arbitration, the explicit
+          # new-task switch, the hidden chat task, a second member's own task,
+          # DM conversation scope, and completion reports closing a task with
+          # its sub-task. Same fixture shape as e2e_company_work (DATABASE_URL
+          # for the owner seed, RELAY_HTTP_URL for the NIP-11 lookup), and
+          # single-threaded because it arbitrates on shared thread rows.
+          cargo test -p buzz-test-client --test e2e_thread_tasks -- --ignored --nocapture --test-threads 1
           # Discovery entity mention hydration against the live relay: strict
           # ["discovery", kind, id] message tags, permission-checked
           # resolve_entities, and the opaque cross-community refusal. This

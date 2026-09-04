@@ -29,6 +29,7 @@ pub mod nip_oa;
 pub mod party;
 pub mod party_resolution;
 pub mod task_transition;
+pub mod thread_task;
 pub mod user_initiative;
 
 pub use builders::*;

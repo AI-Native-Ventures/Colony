@@ -69,6 +69,8 @@ pub mod relay_members;
 pub mod replica_fence;
 /// Thread metadata persistence.
 pub mod thread;
+/// One open task per thread: the claim rows that arbitrate it.
+pub mod thread_tasks;
 /// Per-community usage rollup queries for Prometheus gauges.
 pub mod usage;
 /// User profile persistence.
@@ -3039,6 +3041,262 @@ impl Db {
             head,
             receipt,
         })
+    }
+
+    /// Commit one thread attach: its action, its receipt, and the task head
+    /// when the request opened a task rather than joining one.
+    ///
+    /// Authority here is community membership, not ownership. A thread attach
+    /// creates nothing a member could have created by hand: the task's id,
+    /// title, team, and cost centre are all relay decisions, and the member is
+    /// only saying which conversation their next turn belongs to. Refusing
+    /// non-owners would mean a second member in a thread could never have
+    /// their own work recorded, which is precisely the case that makes cost
+    /// land on the wrong team. The narrower checks that DO belong to specific
+    /// requests - an agent may only open a sub-task of a task it is assigned
+    /// to - are the relay's, made before this commit.
+    ///
+    /// `head_event` is `None` when the request attached to a task that
+    /// already existed; `claim_head_event_id` then names that existing head,
+    /// so the idempotency claim still points at the head this request
+    /// resolved to and a retry replays to the same answer.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn apply_thread_attach_once(
+        &self,
+        community: CommunityId,
+        action_event: &nostr::Event,
+        head_event: Option<&nostr::Event>,
+        head_d_tag: Option<&str>,
+        receipt_event: &nostr::Event,
+        claim_head_event_id: &[u8],
+        idempotency_key: Uuid,
+        actor_pubkey_hex: &str,
+    ) -> Result<event::ThreadAttachApply> {
+        if action_event.kind.as_u16() as u32 != buzz_core::kind::KIND_COMPANY_ACTION {
+            return Err(DbError::InvalidData(format!(
+                "thread attach action has kind {}, expected {}",
+                action_event.kind.as_u16(),
+                buzz_core::kind::KIND_COMPANY_ACTION
+            )));
+        }
+        if receipt_event.kind.as_u16() as u32 != buzz_core::kind::KIND_COMPANY_RECEIPT {
+            return Err(DbError::InvalidData(format!(
+                "thread attach receipt has kind {}, expected {}",
+                receipt_event.kind.as_u16(),
+                buzz_core::kind::KIND_COMPANY_RECEIPT
+            )));
+        }
+        let head_pair = match (head_event, head_d_tag) {
+            (Some(head), Some(d_tag)) => {
+                if head.kind.as_u16() as u32 != buzz_core::kind::KIND_TASK {
+                    return Err(DbError::InvalidData(format!(
+                        "thread attach head has kind {}, expected a Task head",
+                        head.kind.as_u16()
+                    )));
+                }
+                if d_tag.len() > event::D_TAG_MAX_LEN {
+                    return Err(DbError::InvalidData(format!(
+                        "thread attach head d tag exceeds {} bytes",
+                        event::D_TAG_MAX_LEN
+                    )));
+                }
+                Some((head, d_tag))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(DbError::InvalidData(
+                    "a thread attach head needs its d tag, and a d tag needs its head".to_owned(),
+                ));
+            }
+        };
+
+        let mut tx = self.pool.begin().await?;
+
+        // Membership under the same lock ownership transfer takes, so a member
+        // removed while this request was in flight cannot still write.
+        let member: Option<String> = sqlx::query_scalar(
+            "SELECT role FROM relay_members \
+             WHERE community_id = $1 AND lower(pubkey) = $2 \
+             FOR UPDATE",
+        )
+        .bind(community.as_uuid())
+        .bind(actor_pubkey_hex.to_ascii_lowercase())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if member.is_none() {
+            tx.rollback().await?;
+            return Ok(event::ThreadAttachApply::NotMember);
+        }
+
+        let claimed: Option<Vec<u8>> = sqlx::query_scalar(
+            r#"
+            INSERT INTO company_action_claims
+                (community_id, idempotency_key, action_event_id, head_event_id, receipt_event_id)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            RETURNING action_event_id
+            "#,
+        )
+        .bind(community.as_uuid())
+        .bind(idempotency_key)
+        .bind(action_event.id.as_bytes().as_slice())
+        .bind(claim_head_event_id)
+        .bind(receipt_event.id.as_bytes().as_slice())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if claimed.is_none() {
+            let original_action_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT action_event_id FROM company_action_claims \
+                 WHERE community_id = $1 AND idempotency_key = $2",
+            )
+            .bind(community.as_uuid())
+            .bind(idempotency_key)
+            .fetch_optional(&mut *tx)
+            .await?;
+            tx.rollback().await?;
+            return original_action_event_id
+                .map(
+                    |original_action_event_id| event::ThreadAttachApply::Duplicate {
+                        original_action_event_id,
+                    },
+                )
+                .ok_or_else(|| {
+                    DbError::InvalidData(
+                        "thread attach claim conflict had no durable winning row".to_owned(),
+                    )
+                });
+        }
+
+        let (action, action_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            action_event,
+            None,
+            None,
+        )
+        .await?;
+        if !action_inserted {
+            tx.rollback().await?;
+            return Ok(event::ThreadAttachApply::ActionAlreadyStored);
+        }
+
+        let stored_head = match head_pair {
+            Some((head_event, head_d_tag)) => {
+                // A task opened by this request must not exist yet. If one
+                // does, another writer won the same coordinate and this
+                // request has to be answered from what is stored instead.
+                let current_head_event_id: Option<Vec<u8>> = sqlx::query_scalar(
+                    "SELECT id FROM events \
+                     WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 \
+                       AND deleted_at IS NULL \
+                     ORDER BY created_at DESC, id ASC LIMIT 1",
+                )
+                .bind(community.as_uuid())
+                .bind(buzz_core::kind::KIND_TASK as i32)
+                .bind(head_event.pubkey.to_bytes().as_slice())
+                .bind(head_d_tag)
+                .fetch_optional(&mut *tx)
+                .await?;
+                if current_head_event_id.is_some() {
+                    tx.rollback().await?;
+                    return Ok(event::ThreadAttachApply::StaleHead {
+                        current_head_event_id,
+                    });
+                }
+                let (head, inserted) = replace_parameterized_event_tx(
+                    &mut tx, community, head_event, head_d_tag, None,
+                )
+                .await?;
+                if !inserted.was_inserted() {
+                    tx.rollback().await?;
+                    return Err(DbError::InvalidData(
+                        "thread attach head lost NIP-33 replacement ordering".to_owned(),
+                    ));
+                }
+                Some(head)
+            }
+            None => None,
+        };
+
+        let (receipt, receipt_inserted) = event::insert_event_with_thread_metadata_tx(
+            &mut tx,
+            community,
+            receipt_event,
+            None,
+            None,
+        )
+        .await?;
+        if !receipt_inserted {
+            tx.rollback().await?;
+            return Err(DbError::InvalidData(
+                "thread attach receipt event was already stored".to_owned(),
+            ));
+        }
+
+        tx.commit().await?;
+        Ok(event::ThreadAttachApply::Applied {
+            action,
+            head: stored_head,
+            receipt,
+        })
+    }
+
+    /// Claim a thread's slot, or read back whoever already holds it.
+    pub async fn claim_thread_task(
+        &self,
+        community: CommunityId,
+        key: thread_tasks::ThreadSlotKey<'_>,
+        proposed_task_id: &str,
+        force_new: bool,
+    ) -> Result<thread_tasks::ThreadClaim> {
+        thread_tasks::claim_thread_task(&self.pool, community, key, proposed_task_id, force_new)
+            .await
+    }
+
+    /// Read a thread slot without claiming it.
+    pub async fn read_thread_task(
+        &self,
+        community: CommunityId,
+        key: thread_tasks::ThreadSlotKey<'_>,
+    ) -> Result<Option<String>> {
+        thread_tasks::read_thread_task(&self.pool, community, key).await
+    }
+
+    /// Free every slot pointing at a task that has closed.
+    pub async fn release_thread_task(&self, community: CommunityId, task_id: &str) -> Result<u64> {
+        thread_tasks::release_thread_task(&self.pool, community, task_id).await
+    }
+
+    /// Move a claim made before its thread had a root onto the real root.
+    pub async fn rebind_thread_task(
+        &self,
+        community: CommunityId,
+        task_id: &str,
+        new_thread_key: &str,
+    ) -> Result<bool> {
+        thread_tasks::rebind_thread_task(&self.pool, community, task_id, new_thread_key).await
+    }
+
+    /// Record one sub-task under its parent, refusing past the cap.
+    pub async fn record_thread_subtask(
+        &self,
+        community: CommunityId,
+        parent_task_id: &str,
+        task_id: &str,
+        cap: usize,
+    ) -> Result<bool> {
+        thread_tasks::record_thread_subtask(&self.pool, community, parent_task_id, task_id, cap)
+            .await
+    }
+
+    /// Every sub-task a parent holds, for the cascade its closing performs.
+    pub async fn thread_subtask_ids(
+        &self,
+        community: CommunityId,
+        parent_task_id: &str,
+    ) -> Result<Vec<String>> {
+        thread_tasks::thread_subtask_ids(&self.pool, community, parent_task_id).await
     }
 
     /// Whether `pubkey_hex` is the community's current human owner.

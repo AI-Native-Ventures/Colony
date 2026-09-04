@@ -182,6 +182,9 @@ pub fn plan_implicit_task(
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: now,
         updated_at: now,
     };
@@ -196,7 +199,7 @@ pub fn plan_implicit_task(
         // Asserting a head here would turn a safe retry into a conflict.
         expected_head: None,
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(task),
+        payload: CompanyActionPayload::Task(Box::new(task)),
     };
 
     Ok(ImplicitTaskPlan {
@@ -356,6 +359,9 @@ pub fn plan_user_task(
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: request.now,
         updated_at: request.now,
     };
@@ -373,7 +379,7 @@ pub fn plan_user_task(
         // conflict.
         expected_head: None,
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(task),
+        payload: CompanyActionPayload::Task(Box::new(task)),
     };
 
     Ok(UserTaskPlan {
@@ -473,7 +479,7 @@ mod tests {
 
     fn task_of(plan: &ImplicitTaskPlan) -> &CompanyTask {
         match &plan.action.payload {
-            CompanyActionPayload::Task(task) => task,
+            CompanyActionPayload::Task(task) => task.as_ref(),
             other => panic!("expected a task payload, got {other:?}"),
         }
     }
@@ -660,7 +666,7 @@ mod tests {
 
     fn user_task_of(plan: &UserTaskPlan) -> &CompanyTask {
         match &plan.action.payload {
-            CompanyActionPayload::Task(task) => task,
+            CompanyActionPayload::Task(task) => task.as_ref(),
             other => panic!("expected a task payload, got {other:?}"),
         }
     }

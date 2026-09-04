@@ -349,6 +349,9 @@ fn chat_task(id: &str, team: &CompanyTeamRef, stamp: i64) -> CompanyTask {
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: stamp,
         updated_at: stamp,
     }
@@ -496,7 +499,7 @@ pub async fn create_chat_task(client: &mut BuzzTestClient, ws: &Workspace) -> St
             &action(
                 &ws.relay,
                 CompanyActionOperation::Create,
-                CompanyActionPayload::Task(record),
+                CompanyActionPayload::Task(Box::new(record)),
                 coordinate(buzz_core::kind::KIND_TASK, &ws.relay, &task_id),
             ),
         )

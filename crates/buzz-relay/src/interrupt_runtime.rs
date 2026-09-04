@@ -1988,7 +1988,7 @@ async fn process_snooze_wake_candidate(
 
     let head = build_head(
         &state.relay_keypair,
-        &CompanyActionPayload::Task(replacement.clone()),
+        &CompanyActionPayload::Task(Box::new(replacement.clone())),
         Some(&previous_event),
     )?;
     let (stored_head, inserted) = state

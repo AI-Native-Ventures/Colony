@@ -5,8 +5,9 @@ use std::{collections::HashSet, str::FromStr};
 use buzz_core::{
     block::canonical_json,
     company::{
-        serde_enum_slug, validate_company, Cohort, CompanyContractError, CompanyProfile,
-        CompanyTask, Initiative, Template, TemplateStage, COMMUNITY_PROFILE_ID,
+        serde_enum_slug, validate_company, validate_thread_attach, Cohort, CompanyContractError,
+        CompanyProfile, CompanyTask, Initiative, Template, TemplateStage, ThreadAttach,
+        COMMUNITY_PROFILE_ID,
     },
     kind::{
         KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT,
@@ -51,6 +52,10 @@ pub enum CompanyActionOperation {
     Update,
     /// Replace an existing head while applying a lifecycle transition.
     Transition,
+    /// Ask which task a send in one thread is charged to, opening the
+    /// thread's task when it has none. The relay decides; the request names
+    /// no task, so nothing is replaced and no head is asserted.
+    Attach,
 }
 
 impl CompanyActionOperation {
@@ -59,6 +64,7 @@ impl CompanyActionOperation {
             Self::Create => "create",
             Self::Update => "update",
             Self::Transition => "transition",
+            Self::Attach => "attach",
         }
     }
 
@@ -67,6 +73,7 @@ impl CompanyActionOperation {
             "create" => Ok(Self::Create),
             "update" => Ok(Self::Update),
             "transition" => Ok(Self::Transition),
+            "attach" => Ok(Self::Attach),
             _ => Err(CompanySdkError::InvalidEnvelope("company action")),
         }
     }
@@ -86,11 +93,19 @@ pub enum CompanyActionPayload {
     /// A complete Initiative.
     Initiative(Initiative),
     /// A complete Company Task.
-    Task(CompanyTask),
+    ///
+    /// Boxed because it is by far the largest variant (about 544 bytes
+    /// against roughly 150 for the smallest), and an unboxed one makes every
+    /// payload that size no matter which variant it carries. The box is
+    /// invisible on the wire: serde serialises through it, so the action JSON
+    /// is byte-identical to what it was before.
+    Task(Box<CompanyTask>),
     /// A complete Cohort.
     Cohort(Cohort),
     /// A complete pipeline Template.
     Template(Template),
+    /// A question about which task a send in one thread belongs to.
+    ThreadAttach(ThreadAttach),
 }
 
 impl CompanyActionPayload {
@@ -101,6 +116,10 @@ impl CompanyActionPayload {
             Self::Task(_) => KIND_TASK,
             Self::Cohort(_) => KIND_COHORT,
             Self::Template(_) => KIND_TEMPLATE,
+            // A slot lives in the Task coordinate space so one target
+            // grammar covers every company request. The prefix on its id
+            // keeps it from ever colliding with a real task.
+            Self::ThreadAttach(_) => KIND_TASK,
         }
     }
 
@@ -113,6 +132,7 @@ impl CompanyActionPayload {
             Self::Task(task) => &task.id,
             Self::Cohort(cohort) => &cohort.id,
             Self::Template(template) => &template.id,
+            Self::ThreadAttach(request) => &request.id,
         }
     }
 }
@@ -627,9 +647,12 @@ fn validate_action(action: &CompanyAction) -> Result<(), CompanySdkError> {
     if target_pubkey != action.relay_pubkey {
         return Err(CompanySdkError::TagContentMismatch("company action"));
     }
+    // An attach names no head for the same reason a create does not: it is
+    // asking which task exists, and an assertion about one would turn an
+    // ordinary retry into a conflict.
     match (action.operation, action.expected_head.as_deref()) {
-        (CompanyActionOperation::Create, None) => {}
-        (CompanyActionOperation::Create, Some(_))
+        (CompanyActionOperation::Create | CompanyActionOperation::Attach, None) => {}
+        (CompanyActionOperation::Create | CompanyActionOperation::Attach, Some(_))
         | (CompanyActionOperation::Update | CompanyActionOperation::Transition, None) => {
             return Err(CompanySdkError::InvalidEnvelope("company action"));
         }
@@ -665,6 +688,9 @@ fn validate_payload(payload: &CompanyActionPayload) -> Result<(), CompanySdkErro
         CompanyActionPayload::Task(task) => validate_task_content(task),
         CompanyActionPayload::Cohort(cohort) => validate_cohort_content(cohort),
         CompanyActionPayload::Template(template) => validate_template_content(template),
+        CompanyActionPayload::ThreadAttach(request) => {
+            validate_thread_attach(request).map_err(Into::into)
+        }
     }
 }
 
@@ -1263,6 +1289,9 @@ mod tests {
             outcome_reason: None,
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_785_400_000,
             updated_at: 1_785_400_100,
         }
@@ -1300,7 +1329,7 @@ mod tests {
     fn company_action(operation: CompanyActionOperation) -> CompanyAction {
         let relay_pubkey = relay_keys().public_key().to_hex();
         let expected_head = match operation {
-            CompanyActionOperation::Create => None,
+            CompanyActionOperation::Create | CompanyActionOperation::Attach => None,
             CompanyActionOperation::Update | CompanyActionOperation::Transition => {
                 Some("11".repeat(32))
             }

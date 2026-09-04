@@ -466,6 +466,17 @@ pub const KIND_ASK_STATE: u32 = 30200;
 /// names the image hash and gate verdict it was made against.
 pub const KIND_CONTENT_DECISION: u32 = 40025;
 
+/// Colony task completion report: one assignee saying its own part is done.
+///
+/// Agent-signable, unlike a Company Action, which only a human owner may
+/// sign. A thread-scoped task is shared by every agent that answers in its
+/// thread, so the agents themselves are the only parties that can say when
+/// their share of it finished, and the relay closes the task once every
+/// assignee has reported. Regular (non-replaceable): each report is evidence
+/// of one moment, and the durable state it produces lives on the relay's own
+/// task head, not on the report.
+pub const KIND_TASK_REPORT: u32 = 40026;
+
 /// Kinds that use the author-only-unless-shared read model.
 ///
 /// Events of these kinds may only be delivered to foreign readers when the
@@ -1052,6 +1063,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_CONTENT_LIBRARY,
     KIND_ASK_STATE,
     KIND_CONTENT_DECISION,
+    KIND_TASK_REPORT,
     KIND_TEAM,
     KIND_MANAGED_AGENT,
     KIND_TEAM_CATALOG,

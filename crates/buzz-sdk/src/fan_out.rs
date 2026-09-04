@@ -365,6 +365,9 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
                 outcome_reason: None,
                 bounce_reason: None,
                 bounce_count: 0,
+                reported_complete_by: Vec::new(),
+                hidden: false,
+                parent_task_id: None,
                 created_at: request.now,
                 updated_at: request.now,
             };
@@ -384,7 +387,7 @@ pub fn plan_fan_out(request: &FanOutRequest) -> Result<FanOutPlan, String> {
                 // turn a safe retry into a conflict.
                 expected_head: None,
                 expected_references: Vec::new(),
-                payload: CompanyActionPayload::Task(task),
+                payload: CompanyActionPayload::Task(Box::new(task)),
             });
 
             previous_task_id = Some(task_id);
@@ -550,7 +553,7 @@ mod tests {
 
     fn task_payload(action: &CompanyAction) -> &CompanyTask {
         match &action.payload {
-            CompanyActionPayload::Task(task) => task,
+            CompanyActionPayload::Task(task) => task.as_ref(),
             other => panic!("expected a task payload, got {other:?}"),
         }
     }
@@ -695,6 +698,9 @@ mod tests {
             outcome_reason: None,
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_000,
             updated_at: 1_000,
         };
@@ -765,6 +771,9 @@ mod tests {
             outcome_reason: Some("booked a meeting".to_string()),
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_000,
             updated_at: 1_000,
         };
@@ -922,7 +931,7 @@ mod tests {
             .task_actions
             .iter()
             .filter_map(|action| match &action.payload {
-                CompanyActionPayload::Task(task) => Some(task),
+                CompanyActionPayload::Task(task) => Some(task.as_ref()),
                 _ => None,
             })
             .collect();

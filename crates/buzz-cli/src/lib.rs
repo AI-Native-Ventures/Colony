@@ -1390,6 +1390,46 @@ pub enum TasksCmd {
         #[arg(long)]
         id: String,
     },
+    /// Ask the relay which task a send in one thread is charged to, opening
+    /// the thread's task when it has none
+    Attach {
+        /// Channel the send happens in
+        #[arg(long)]
+        channel: String,
+        /// Root event id of the thread the send replies in
+        #[arg(long)]
+        thread: Option<String>,
+        /// Treat the whole conversation as the thread, which is what a DM is
+        #[arg(long, default_value_t = false)]
+        conversation: bool,
+        /// Stable identity of this send; a retry reuses it
+        #[arg(long)]
+        send_id: String,
+        /// open (this send is work), attach (it is not), new (a second task)
+        #[arg(long, default_value = "open")]
+        mode: String,
+        /// The instruction, used as the title when a task is opened
+        #[arg(long)]
+        title: String,
+        /// Persona of the agent the send names
+        #[arg(long)]
+        agent_persona: Option<String>,
+        /// Client this work is delivered to, when it is client delivery
+        #[arg(long)]
+        client_organization: Option<String>,
+        /// Parent task, when opening a sub-task under a thread's task
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Report your own share of a task complete; the relay closes the task
+    /// once every assignee has
+    ReportComplete {
+        #[arg(long)]
+        task: String,
+        /// Short note stored with the report
+        #[arg(long)]
+        note: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
