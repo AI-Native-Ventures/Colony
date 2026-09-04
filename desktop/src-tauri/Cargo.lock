@@ -1143,6 +1143,7 @@ dependencies = [
  "dirs",
  "hex",
  "infer",
+ "keyring",
  "nostr 0.44.6",
  "rand 0.10.2",
  "reqwest 0.13.4",
