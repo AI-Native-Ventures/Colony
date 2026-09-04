@@ -148,22 +148,34 @@ pub fn parse_blob(raw: Option<&str>) -> Result<BTreeMap<String, String>, CliErro
         .map_err(|e| CliError::Other(format!("keyring blob is not a JSON string map: {e}")))
 }
 
+/// Merge `value` into `raw` under `key` and return the new blob.
+///
+/// Every other key in the blob is preserved verbatim: the desktop stores the
+/// founder identity, agent keys (`agent:<pubkey>`), and discovery credentials
+/// in the same object, so no writer may ever replace it.
+pub fn merge_secret(raw: Option<&str>, key: &str, value: &str) -> Result<String, CliError> {
+    let mut map = parse_blob(raw)?;
+    map.insert(key.to_string(), value.to_string());
+    serde_json::to_string(&map).map_err(|e| CliError::Other(format!("serialize keyring blob: {e}")))
+}
+
+/// Read the value stored under `key` out of a raw blob, if any.
+pub fn secret_from_blob(raw: Option<&str>, key: &str) -> Result<Option<String>, CliError> {
+    Ok(parse_blob(raw)?.get(key).map(|s| s.to_string()))
+}
+
 /// Merge `nsec` into `raw` under the `identity` key and return the new blob.
 ///
 /// Every other key in the blob is preserved verbatim: the desktop stores agent
 /// keys and discovery credentials in the same object, so `init` must never
 /// replace it.
 pub fn merge_identity(raw: Option<&str>, nsec: &str) -> Result<String, CliError> {
-    let mut map = parse_blob(raw)?;
-    map.insert(IDENTITY_BLOB_KEY.to_string(), nsec.to_string());
-    serde_json::to_string(&map).map_err(|e| CliError::Other(format!("serialize keyring blob: {e}")))
+    merge_secret(raw, IDENTITY_BLOB_KEY, nsec)
 }
 
 /// Read the stored nsec out of a raw blob, if any.
 pub fn identity_from_blob(raw: Option<&str>) -> Result<Option<String>, CliError> {
-    Ok(parse_blob(raw)?
-        .get(IDENTITY_BLOB_KEY)
-        .map(|s| s.to_string()))
+    secret_from_blob(raw, IDENTITY_BLOB_KEY)
 }
 
 /// Pick the winning tier given the candidate secrets from each one.
