@@ -38,10 +38,10 @@ use buzz_core::kind::{
     KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
     KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD,
-    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, KIND_WORKSPACE_TAB_ACTION,
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
-    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TASK_REPORT, KIND_TEAM, KIND_TEXT_NOTE,
+    KIND_USAGE_RECORD, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    KIND_WORKSPACE_TAB_ACTION, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -661,6 +661,11 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // sending it back. Message-shaped; the refusal to approve a failing
         // gate report is in `parse_content_decision`.
         KIND_CONTENT_DECISION => Ok(Scope::MessagesWrite),
+        // Colony task completion report (40026): one assignee saying its own
+        // share of a shared thread task is done. Agent-authored, so it is a
+        // message-shaped write rather than an owner-authority one; the
+        // assignment check is the report handler's.
+        KIND_TASK_REPORT => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -815,6 +820,10 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_CONTENT_BRAND_KIT
             | KIND_CONTENT_LIBRARY
             | KIND_CONTENT_DECISION
+            // A completion report names its task, never a channel: the task
+            // knows which channel it lives in, and a stray `h` tag must not
+            // channel-scope the report.
+            | KIND_TASK_REPORT
             // Block manifests and relay-authored catalog heads are immutable or
             // addressable global definitions. Instances remain kind:9 messages.
             | KIND_BLOCK_MANIFEST

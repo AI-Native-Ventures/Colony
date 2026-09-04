@@ -103,10 +103,22 @@ pub(crate) async fn handle_thread_attach(
         request.conversation_scope,
     );
 
+    tracing::info!(
+        action = %action_event.id.to_hex(),
+        mode = ?request.mode,
+        thread = %key,
+        "thread attach: deciding which task this send belongs to"
+    );
     let decision = match decide_task(tenant, state, request, &actor_hex, &key).await {
         Ok(decision) => decision,
         Err(message) => return refuse(state, tenant, action_event, action, message).await,
     };
+    tracing::info!(
+        action = %action_event.id.to_hex(),
+        task_id = %decision.task_id,
+        slot = decision.slot.as_str(),
+        "thread attach: task decided"
+    );
 
     let existing_head = load_head(tenant, state, KIND_TASK, &decision.task_id).await?;
     let mut opened_task: Option<CompanyTask> = None;
@@ -142,6 +154,12 @@ pub(crate) async fn handle_thread_attach(
         Some(&hex::encode(&claim_head_id)),
     )?;
 
+    tracing::info!(
+        action = %action_event.id.to_hex(),
+        task_id = %decision.task_id,
+        opens_head = head_event.is_some(),
+        "thread attach: committing"
+    );
     let outcome = state
         .db
         .apply_thread_attach_once(
@@ -203,6 +221,11 @@ pub(crate) async fn handle_thread_attach(
                     emit_task_transition(tenant, state, "task_created", task).await;
                 }
             }
+            tracing::info!(
+                action = %action_event.id.to_hex(),
+                task_id = %decision.task_id,
+                "thread attach: applied"
+            );
             Ok(CompanyBrokerOutcome::Applied)
         }
         buzz_db::event::ThreadAttachApply::Duplicate {
@@ -904,6 +927,92 @@ mod tests {
             created_at: 1_767_225_600,
             updated_at: 1_767_225_600,
         }
+    }
+
+    fn chat_task() -> CompanyTask {
+        let mut task = sample_task();
+        task.id = format!("{THREAD_TASK_PREFIX}chat-slot");
+        task.title = CHAT_TASK_TITLE.to_owned();
+        task.hidden = true;
+        task.assignee_persona_ids.clear();
+        task.reported_complete_by.clear();
+        task
+    }
+
+    /// A hidden chat task emits no coordination row, and an early version of
+    /// this path skipped its receipt with it. The receipt is what the asking
+    /// client waits on, so a chat-slot attach that writes none leaves the
+    /// caller hanging until its own timeout rather than telling it which task
+    /// its greeting was charged to.
+    #[test]
+    fn a_chat_slot_attach_still_answers_with_a_receipt_naming_its_head() {
+        let relay = nostr::Keys::generate();
+        let actor = nostr::Keys::generate();
+        let task = chat_task();
+        let head = build_head(
+            &relay,
+            &CompanyActionPayload::Task(Box::new(task.clone())),
+            None,
+        )
+        .expect("the hidden task still gets a head");
+
+        let request = buzz_core::company::ThreadAttach {
+            schema: buzz_core::company::THREAD_ATTACH_SCHEMA.to_owned(),
+            id: format!("{}deadbeef", buzz_core::company::THREAD_SLOT_PREFIX),
+            channel_id: "engineering".to_owned(),
+            thread_root: Some("abc".to_owned()),
+            conversation_scope: false,
+            mode: ThreadAttachMode::Attach,
+            title: "are you there?".to_owned(),
+            send_id: "send-1".to_owned(),
+            agent_persona_id: None,
+            client_organization_id: None,
+            parent_task_id: None,
+            created_at: task.created_at,
+        };
+        let action = CompanyAction {
+            relay_pubkey: relay.public_key().to_hex(),
+            operation: buzz_sdk::company::CompanyActionOperation::Attach,
+            request_id: uuid::Uuid::new_v4(),
+            idempotency_key: uuid::Uuid::new_v4(),
+            target: format!("{KIND_TASK}:{}:{}", relay.public_key().to_hex(), request.id),
+            expected_head: None,
+            expected_references: Vec::new(),
+            payload: CompanyActionPayload::ThreadAttach(request),
+        };
+        let action_event = buzz_sdk::company::build_company_action(&action)
+            .expect("the attach builds")
+            .sign_with_keys(&actor)
+            .expect("the attach signs");
+
+        let receipt = build_receipt(
+            &relay,
+            &action_event,
+            &action,
+            CompanyReceiptOutcome::Applied,
+            Some(&head.id.to_hex()),
+        )
+        .expect("a hidden task's attach is still receipted");
+        let parsed = buzz_sdk::company::parse_company_receipt(&receipt).expect("receipt parses");
+        assert_eq!(parsed.outcome, CompanyReceiptOutcome::Applied);
+        assert_eq!(
+            parsed.head_event_id.as_deref(),
+            Some(head.id.to_hex().as_str())
+        );
+        assert_eq!(parsed.action_event_id, action_event.id.to_hex());
+        assert_eq!(parsed.actor_pubkey, actor.public_key().to_hex());
+    }
+
+    #[test]
+    fn a_hidden_chat_task_is_still_a_valid_task_head() {
+        let task = chat_task();
+        assert!(task.hidden);
+        assert!(build_head(
+            &nostr::Keys::generate(),
+            &CompanyActionPayload::Task(Box::new(task)),
+            None
+        )
+        .is_ok());
     }
 
     #[test]
