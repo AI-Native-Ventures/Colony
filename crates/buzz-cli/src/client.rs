@@ -181,6 +181,11 @@ fn relay_server_tag(relay_url: &str) -> Option<String> {
     }
 }
 
+/// Root of the relay's member self-serve community provisioning API
+/// (`crates/buzz-relay/src/api/self_provisioning.rs`). The desktop app calls
+/// the same four routes from `desktop/src-tauri/src/colony_provisioning.rs`.
+const COMMUNITIES_API_PATH: &str = "/api/communities";
+
 /// Maximum number of attempts per request (initial attempt + two retries).
 const RETRY_MAX_ATTEMPTS: u32 = 3;
 
@@ -915,6 +920,90 @@ impl BuzzClient {
             }
         })
         .await
+    }
+
+    /// `GET /api/communities/config` - what this relay will actually
+    /// provision, and whether it provisions at all.
+    ///
+    /// Unauthenticated by design: the relay always answers `200`, including
+    /// when self-serve provisioning is disabled, so a caller can tell "this
+    /// relay mints nothing" from "this relay is unreachable" instead of
+    /// hardcoding a domain suffix and printing an address no relay here owns.
+    pub async fn provisioning_config(&self) -> Result<String, CliError> {
+        let url = format!("{}{COMMUNITIES_API_PATH}/config", self.relay_url);
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/communities/availability?name=<name>` - is this slug free?
+    ///
+    /// Unauthenticated, and answers `200` with `available: false` plus a
+    /// `reason` for a name the relay itself rejects, so an unusable name is a
+    /// readable answer rather than an error.
+    ///
+    /// `name` is form-urlencoded rather than interpolated: this route is the
+    /// one place a caller-supplied string reaches a URL, and `check` does no
+    /// local validation precisely so a caller can probe names the relay would
+    /// refuse.
+    pub async fn community_availability(&self, name: &str) -> Result<String, CliError> {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("name", name)
+            .finish();
+        let url = format!(
+            "{}{COMMUNITIES_API_PATH}/availability?{query}",
+            self.relay_url
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `POST /api/communities` - create `<name>.<provisioning domain>`, owned
+    /// by this client's key. NIP-98 signed.
+    ///
+    /// Deliberately single-attempt, unlike the reads here. Creation is
+    /// non-idempotent and create-only relay-side, so a retry after a create
+    /// the relay actually committed comes back `409 taken: that community
+    /// name is already in use` - which reads as "someone beat you to it"
+    /// rather than "you already own it". A transport failure surfaces as
+    /// [`CliError::Network`] (`retryable: true`) and leaves the re-run
+    /// decision with the caller, who can settle it with `communities list`.
+    pub async fn create_community(&self, name: &str) -> Result<String, CliError> {
+        let url = format!("{}{COMMUNITIES_API_PATH}", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({ "name": name }))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+        let resp = self
+            .with_auth_tag(
+                self.http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .body(body),
+            )
+            .send()
+            .await?;
+        self.handle_response(resp).await
+    }
+
+    /// `GET /api/communities/mine` - the communities this client's key owns on
+    /// this deployment. NIP-98 signed.
+    pub async fn list_my_communities(&self) -> Result<String, CliError> {
+        self.get_authed(&format!("{COMMUNITIES_API_PATH}/mine"))
+            .await
     }
 
     /// Submit a signed Nostr event via POST /events.
@@ -2659,6 +2748,297 @@ mod retry_policy_tests {
             attempts.load(Ordering::SeqCst),
             3,
             "all 3 attempts must fire before surfacing DeliveryUnknown"
+        );
+    }
+}
+
+/// Wire-level tests for the self-serve community provisioning calls.
+///
+/// These run against a local axum server standing in for the relay's
+/// `/api/communities` surface, so what is asserted is the request the relay
+/// would actually receive: method, path, query encoding, body, and whether a
+/// NIP-98 `Authorization` header is present. The auth split is the part worth
+/// pinning - `config` and `check` must stay unauthenticated, and `create` and
+/// `list` must stay signed.
+#[cfg(test)]
+mod communities_api_tests {
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::{Query, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use nostr::Keys;
+    use tokio::net::TcpListener;
+
+    use super::super::error::{exit_code, CliError};
+    use super::BuzzClient;
+
+    /// One captured request: what the server saw.
+    #[derive(Clone, Debug, Default)]
+    struct Seen {
+        path: String,
+        name_param: Option<String>,
+        authorization: Option<String>,
+        body: String,
+    }
+
+    type Captured = Arc<Mutex<Vec<Seen>>>;
+
+    /// Status and body the stand-in relay answers every route with.
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct Harness {
+        captured: Captured,
+        reply: Reply,
+    }
+
+    fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        if let Ok(mut log) = harness.captured.lock() {
+            log.push(seen);
+        }
+        (harness.reply.status, harness.reply.body.to_string())
+    }
+
+    /// Spawn a stand-in relay exposing the four provisioning routes, all
+    /// answering `reply`. Returns its base URL and the capture log.
+    async fn provisioning_server(reply: Reply) -> (String, Captured) {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let harness = Harness {
+            captured: captured.clone(),
+            reply,
+        };
+
+        let app = Router::new()
+            .route(
+                "/api/communities/config",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/communities/config".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/api/communities/availability",
+                get(
+                    |State(h): State<Harness>,
+                     headers: HeaderMap,
+                     Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/communities/availability".into(),
+                                name_param: q.get("name").cloned(),
+                                authorization: header_string(&headers),
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/communities",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/communities".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/communities/mine",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/communities/mine".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .with_state(harness);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), captured)
+    }
+
+    fn header_string(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    fn ok_reply(body: &'static str) -> Reply {
+        Reply {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    fn test_client(base_url: &str) -> BuzzClient {
+        BuzzClient::new(base_url.to_string(), Keys::generate(), None, None).unwrap()
+    }
+
+    fn only(captured: &Captured) -> Seen {
+        let log = captured.lock().unwrap();
+        assert_eq!(log.len(), 1, "expected exactly one request, got {:?}", *log);
+        log[0].clone()
+    }
+
+    #[tokio::test]
+    async fn config_is_an_unauthenticated_get() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"self_serve":false}"#)).await;
+        let body = test_client(&base).provisioning_config().await.unwrap();
+
+        assert_eq!(body, r#"{"self_serve":false}"#, "body is passed through");
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities/config");
+        assert!(
+            seen.authorization.is_none(),
+            "config must not send a NIP-98 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn availability_sends_the_name_as_an_encoded_query_param() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"available":true}"#)).await;
+        // A name the relay would reject still has to arrive intact: `check`
+        // deliberately does no local validation, and the space and slash here
+        // would corrupt the URL if the value were interpolated raw.
+        test_client(&base)
+            .community_availability("acme labs/x")
+            .await
+            .unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities/availability");
+        assert_eq!(
+            seen.name_param.as_deref(),
+            Some("acme labs/x"),
+            "the name must survive percent-encoding round trip"
+        );
+        assert!(
+            seen.authorization.is_none(),
+            "availability must not send a NIP-98 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_posts_a_name_body_with_nip98_auth() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"community":{}}"#)).await;
+        test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities");
+        assert_eq!(seen.body, r#"{"name":"acme-labs"}"#);
+        let auth = seen.authorization.expect("create must be NIP-98 signed");
+        assert!(
+            auth.starts_with("Nostr "),
+            "expected a NIP-98 Authorization header, got {auth:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_gets_mine_with_nip98_auth() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"communities":[]}"#)).await;
+        test_client(&base).list_my_communities().await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities/mine");
+        let auth = seen.authorization.expect("list must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    /// A taken name is a relay refusal, not a client bug: it must surface the
+    /// relay's own message and land on the relay/network exit code rather than
+    /// being reported as a usage error.
+    #[tokio::test]
+    async fn conflict_surfaces_the_relay_message_and_exit_code_two() {
+        let (base, _captured) = provisioning_server(Reply {
+            status: StatusCode::CONFLICT,
+            body: r#"{"error":"taken: that community name is already in use"}"#,
+        })
+        .await;
+
+        let err = test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap_err();
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 409);
+                assert_eq!(body, "taken: that community name is already in use");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 2);
+    }
+
+    /// Membership is the relay's gate, and it refuses with 403. That has to
+    /// reach the caller as an auth error (exit 3) so an agent can tell "I am
+    /// not allowed" from "the relay is unwell".
+    #[tokio::test]
+    async fn forbidden_maps_to_the_auth_exit_code() {
+        let (base, _captured) = provisioning_server(Reply {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"error":"only members of this community can create new communities"}"#,
+        })
+        .await;
+
+        let err = test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::Relay { status: 403, .. }));
+        assert_eq!(exit_code(&err), 3);
+    }
+
+    /// A create that fails must not be silently retried: a second POST after a
+    /// commit the relay already made would come back "taken" and read as
+    /// someone else holding the name.
+    #[tokio::test]
+    async fn create_is_attempted_exactly_once_on_failure() {
+        let (base, captured) = provisioning_server(Reply {
+            status: StatusCode::BAD_GATEWAY,
+            body: r#"{"error":"bad gateway"}"#,
+        })
+        .await;
+
+        let err = test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::Relay { status: 502, .. }));
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "create must not retry a non-idempotent POST"
         );
     }
 }

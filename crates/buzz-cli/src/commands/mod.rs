@@ -3,6 +3,7 @@ pub mod asks;
 pub mod blocks;
 pub mod channel_templates;
 pub mod channels;
+pub mod communities;
 pub mod company;
 pub mod content;
 pub mod decisions;

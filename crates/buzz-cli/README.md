@@ -74,6 +74,12 @@ buzz workflows approve --token <uuid> --approved false --note "needs revision"
 # Forum
 buzz messages vote --event <event-id> --direction up
 
+# Hosted communities (self-serve provisioning)
+buzz communities config                 # does this relay provision, and on which domain
+buzz communities check acme-labs        # is the name free
+buzz communities create acme-labs       # mint acme-labs.<domain>, owned by your key
+buzz communities list                   # communities your key owns here
+
 # Canvas
 buzz canvas get --channel <uuid>
 buzz canvas set --channel <uuid> --content "# Welcome"
@@ -124,6 +130,10 @@ stored rules in `validation_error` so an owner can remove and repair them.
 | | `members` | List channel members |
 | | `add-member` | Add a member |
 | | `remove-member` | Remove a member |
+| `communities` | `config` | Show what this relay provisions (no auth) |
+| | `check` | Check whether a community name is free (no auth) |
+| | `create` | Create a hosted community owned by your key |
+| | `list` | List communities your key owns |
 | `canvas` | `get` | Get channel canvas |
 | | `set` | Set channel canvas |
 | `reactions` | `add` | React to a message |

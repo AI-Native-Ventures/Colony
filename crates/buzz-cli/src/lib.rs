@@ -295,6 +295,46 @@ enum Cmd {
     /// Plan, render, and approve social content (kinds 30195-30198, 40025)
     #[command(subcommand)]
     Content(ContentCmd),
+    /// Inspect and create hosted communities on this relay (self-serve provisioning)
+    #[command(subcommand)]
+    Communities(CommunitiesCmd),
+}
+
+/// Subcommands for `buzz communities`: the relay's member self-serve
+/// provisioning surface (`/api/communities`), the same one the desktop app's
+/// create-community dialog drives. `config` and `check` need no auth;
+/// `create` and `list` are NIP-98 signed with the CLI's key, and that key is
+/// what ends up owning anything created.
+///
+/// A relay with `BUZZ_SELF_PROVISION_DOMAIN` unset provisions nothing and
+/// answers `config` saying so - check that before assuming a failure is
+/// yours.
+#[derive(Subcommand)]
+pub enum CommunitiesCmd {
+    /// Show what this relay provisions: whether self-serve is enabled, the
+    /// domain new hosts are minted under, whether creation is open to
+    /// non-members, and the per-owner cap.
+    Config,
+    /// Check whether a community name is free on this relay. A name the
+    /// relay would refuse comes back as `available: false` with a `reason`
+    /// rather than an error.
+    Check {
+        /// Candidate name, e.g. `acme-labs`
+        name: String,
+    },
+    /// Create `<name>.<provisioning domain>`, owned by the CLI's key.
+    ///
+    /// The relay requires the signer to already be a member of the community
+    /// this request lands on (unless the deployment runs in public mode) and
+    /// enforces the per-owner cap. A name already taken comes back as a
+    /// conflict.
+    Create {
+        /// New community name: lowercase letters, numbers, and single
+        /// hyphens, e.g. `acme-labs`
+        name: String,
+    },
+    /// List the communities the CLI's key owns on this deployment.
+    List,
 }
 
 /// Subcommands for `buzz content`: the content calendar.
@@ -3392,6 +3432,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
+        Cmd::Communities(sub) => commands::communities::dispatch(sub, &client).await,
         Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
@@ -3460,6 +3501,38 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&args).is_ok(),
                 "should parse: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn communities_command_surface_parses() {
+        for args in [
+            vec!["buzz", "communities", "config"],
+            vec!["buzz", "communities", "check", "acme-labs"],
+            vec!["buzz", "communities", "create", "acme-labs"],
+            vec!["buzz", "communities", "list"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "should parse: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    /// `check` and `create` each take exactly one positional name. A bare
+    /// `create` would otherwise reach the relay as an empty slug.
+    #[test]
+    fn communities_check_and_create_require_a_name() {
+        for args in [
+            vec!["buzz", "communities", "check"],
+            vec!["buzz", "communities", "create"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "should not parse: {}",
                 args.join(" ")
             );
         }
@@ -3934,6 +4007,7 @@ mod tests {
             "blocks",
             "canvas",
             "channels",
+            "communities",
             "company",
             "content",
             "decisions",
@@ -4067,6 +4141,10 @@ mod tests {
             ]
         );
         assert_eq!(names(&cmd, "canvas"), vec!["get", "set"]);
+        assert_eq!(
+            names(&cmd, "communities"),
+            vec!["check", "config", "create", "list"]
+        );
         assert_eq!(names(&cmd, "reactions"), vec!["add", "get", "remove"]);
         assert_eq!(
             names(&cmd, "emoji"),
