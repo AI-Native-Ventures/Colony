@@ -539,7 +539,7 @@ async fn a_closed_task_frees_its_thread_for_the_next_piece_of_work() {
         target: format!("{KIND_TASK}:{}:{}", fixture.relay, first.id),
         expected_head: Some(head.id.to_hex()),
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(closed),
+        payload: CompanyActionPayload::Task(Box::new(closed)),
     };
     let (outcome, _) = broker(&mut client, &owner, &fixture.relay, &close_action).await;
     assert_eq!(

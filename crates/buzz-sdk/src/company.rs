@@ -93,7 +93,13 @@ pub enum CompanyActionPayload {
     /// A complete Initiative.
     Initiative(Initiative),
     /// A complete Company Task.
-    Task(CompanyTask),
+    ///
+    /// Boxed because it is by far the largest variant (about 544 bytes
+    /// against roughly 150 for the smallest), and an unboxed one makes every
+    /// payload that size no matter which variant it carries. The box is
+    /// invisible on the wire: serde serialises through it, so the action JSON
+    /// is byte-identical to what it was before.
+    Task(Box<CompanyTask>),
     /// A complete Cohort.
     Cohort(Cohort),
     /// A complete pipeline Template.

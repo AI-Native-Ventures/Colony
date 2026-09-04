@@ -506,7 +506,7 @@ fn read_payload(file: &str) -> Result<CompanyActionPayload, CliError> {
             .map(CompanyActionPayload::Initiative)
             .map_err(|error| CliError::Usage(format!("invalid initiative record: {error}"))),
         "colony.task/v1" => serde_json::from_value::<CompanyTask>(value.clone())
-            .map(CompanyActionPayload::Task)
+            .map(|task| CompanyActionPayload::Task(Box::new(task)))
             .map_err(|error| CliError::Usage(format!("invalid task record: {error}"))),
         other => Err(CliError::Usage(format!("unsupported schema `{other}`"))),
     }
@@ -555,7 +555,7 @@ async fn complete_task(client: &BuzzClient, id: &str) -> Result<(), CliError> {
     task.updated_at = task.updated_at.max(chrono::Utc::now().timestamp());
     publish_action(
         client,
-        CompanyActionPayload::Task(task),
+        CompanyActionPayload::Task(Box::new(task)),
         Some(event.id.to_hex()),
     )
     .await

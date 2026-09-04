@@ -203,7 +203,7 @@ fn kickoff_action(
         // conflict.
         expected_head: None,
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(task),
+        payload: CompanyActionPayload::Task(Box::new(task)),
     };
     (task_id, action)
 }

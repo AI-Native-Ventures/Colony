@@ -499,7 +499,7 @@ pub async fn create_chat_task(client: &mut BuzzTestClient, ws: &Workspace) -> St
             &action(
                 &ws.relay,
                 CompanyActionOperation::Create,
-                CompanyActionPayload::Task(record),
+                CompanyActionPayload::Task(Box::new(record)),
                 coordinate(buzz_core::kind::KIND_TASK, &ws.relay, &task_id),
             ),
         )

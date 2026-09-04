@@ -124,7 +124,7 @@ pub(crate) async fn handle_thread_attach(
             };
             let head = build_head(
                 &state.relay_keypair,
-                &CompanyActionPayload::Task(task.clone()),
+                &CompanyActionPayload::Task(Box::new(task.clone())),
                 None,
             )?;
             let id = head.id.as_bytes().to_vec();
@@ -606,7 +606,7 @@ pub(crate) async fn write_task_head(
 ) -> Result<bool, String> {
     let head = build_head(
         &state.relay_keypair,
-        &CompanyActionPayload::Task(replacement.clone()),
+        &CompanyActionPayload::Task(Box::new(replacement.clone())),
         Some(previous_event),
     )?;
     let (stored_head, inserted) = state

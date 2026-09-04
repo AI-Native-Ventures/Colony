@@ -773,7 +773,7 @@ async fn an_implicit_chat_task_recovers_from_interruption_before_evidence_gated_
     .expect("implicit chat task plans");
     assert_eq!(plan.owning_team_id, fixture.team.id);
     let planned_task = match &plan.action.payload {
-        CompanyActionPayload::Task(task) => task,
+        CompanyActionPayload::Task(task) => task.as_ref(),
         other => panic!("implicit plan produced {other:?}"),
     };
     assert_eq!(
@@ -1208,7 +1208,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
             &action(
                 &fixture.relay,
                 CompanyActionOperation::Create,
-                CompanyActionPayload::Task(record.clone()),
+                CompanyActionPayload::Task(Box::new(record.clone())),
                 coordinate(KIND_TASK, &fixture.relay, &task_id),
                 None,
             ),
@@ -1231,7 +1231,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
         &action(
             &fixture.relay,
             CompanyActionOperation::Transition,
-            CompanyActionPayload::Task(replacement.clone()),
+            CompanyActionPayload::Task(Box::new(replacement.clone())),
             coordinate(KIND_TASK, &fixture.relay, &first_id),
             Some(first_head.clone()),
         ),
@@ -1257,7 +1257,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
         &action(
             &fixture.relay,
             CompanyActionOperation::Transition,
-            CompanyActionPayload::Task(stale),
+            CompanyActionPayload::Task(Box::new(stale)),
             coordinate(KIND_TASK, &fixture.relay, &first_id),
             // The head this names was replaced a moment ago.
             Some(first_head),
@@ -1285,7 +1285,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
         &action(
             &fixture.relay,
             CompanyActionOperation::Transition,
-            CompanyActionPayload::Task(illegal),
+            CompanyActionPayload::Task(Box::new(illegal)),
             coordinate(KIND_TASK, &fixture.relay, &first_id),
             Some(current.id.to_hex()),
         ),
@@ -1303,7 +1303,7 @@ async fn the_relay_authors_every_company_head_and_receipts_every_request() {
     let replay = action(
         &fixture.relay,
         CompanyActionOperation::Create,
-        CompanyActionPayload::Task(replay_record),
+        CompanyActionPayload::Task(Box::new(replay_record)),
         coordinate(KIND_TASK, &fixture.relay, &replay_id),
         None,
     );
@@ -1456,7 +1456,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
         &action(
             &fixture.relay,
             CompanyActionOperation::Create,
-            CompanyActionPayload::Task(task_a.clone()),
+            CompanyActionPayload::Task(Box::new(task_a.clone())),
             coordinate(KIND_TASK, &fixture.relay, &task_a_id),
             None,
         ),
@@ -1478,7 +1478,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
             &action(
                 &fixture.relay,
                 CompanyActionOperation::Create,
-                CompanyActionPayload::Task(task_b.clone()),
+                CompanyActionPayload::Task(Box::new(task_b.clone())),
                 coordinate(KIND_TASK, &fixture.relay, &task_b_id),
                 None,
             ),
@@ -1525,7 +1525,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
             &action(
                 &fixture.relay,
                 CompanyActionOperation::Update,
-                CompanyActionPayload::Task(completed_a),
+                CompanyActionPayload::Task(Box::new(completed_a)),
                 coordinate(KIND_TASK, &fixture.relay, &task_a_id),
                 Some(a_head_id.clone()),
             ),
@@ -1571,7 +1571,7 @@ async fn a_completed_dependency_wakes_its_blocked_dependent_exactly_once() {
         &action(
             &fixture.relay,
             CompanyActionOperation::Update,
-            CompanyActionPayload::Task(completed_again),
+            CompanyActionPayload::Task(Box::new(completed_again)),
             coordinate(KIND_TASK, &fixture.relay, &task_a_id),
             Some(a_head_id),
         ),
@@ -1946,7 +1946,7 @@ async fn seed_live_work_context() {
         action(
             &relay,
             CompanyActionOperation::Create,
-            CompanyActionPayload::Task({
+            CompanyActionPayload::Task(Box::new({
                 let mut record = task(&task_id, &team, stamp);
                 record.initiative_id = Some(initiative_id.clone());
                 // Client delivery for a named client, so the classification the
@@ -1955,7 +1955,7 @@ async fn seed_live_work_context() {
                 record.client_organization_id = Some("acme".to_string());
                 record.status = TaskStatus::InProgress;
                 record
-            }),
+            })),
             coordinate(KIND_TASK, &relay, &task_id),
             None,
         ),

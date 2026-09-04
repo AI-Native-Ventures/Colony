@@ -449,7 +449,7 @@ async fn wake_dependent_if_ready(
     // exactly like a hand-written one.
     let head = build_head(
         &state.relay_keypair,
-        &CompanyActionPayload::Task(replacement),
+        &CompanyActionPayload::Task(Box::new(replacement)),
         Some(&previous_event),
     )?;
     let (stored_head, inserted) = state
@@ -577,7 +577,7 @@ async fn block_dependent_if_live(
 
     let head = build_head(
         &state.relay_keypair,
-        &CompanyActionPayload::Task(replacement),
+        &CompanyActionPayload::Task(Box::new(replacement)),
         Some(&previous_event),
     )?;
     let (stored_head, inserted) = state
@@ -1697,8 +1697,12 @@ mod tests {
         assert_eq!(tag_count(&initiative_head, "w"), 1);
         assert_eq!(scalar_tag_value(&initiative_head, "w"), Some("proposed"));
 
-        let task_head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
-            .expect("build task head");
+        let task_head = build_head(
+            &relay,
+            &CompanyActionPayload::Task(Box::new(sample_task())),
+            None,
+        )
+        .expect("build task head");
         assert_eq!(task_head.kind.as_u16() as u32, KIND_TASK);
         assert!(!task_head.tags.iter().any(|tag| tag.as_slice()[0] == "h"));
         let parsed = parse_task_event(&task_head).expect("parse task head");
@@ -1747,8 +1751,8 @@ mod tests {
         let relay = Keys::generate();
         let mut task = sample_task();
         task.reviewer_team_id = Some("team-qa".to_string());
-        let head =
-            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        let head = build_head(&relay, &CompanyActionPayload::Task(Box::new(task)), None)
+            .expect("build task head");
 
         assert_eq!(tag_count(&head, "g"), 2);
         let mut mirrors = scalar_tag_values(&head, "g");
@@ -1769,8 +1773,8 @@ mod tests {
         let relay = Keys::generate();
         let mut task = sample_task();
         task.reviewer_team_id = Some("team-marketing".to_string());
-        let head =
-            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        let head = build_head(&relay, &CompanyActionPayload::Task(Box::new(task)), None)
+            .expect("build task head");
 
         assert_eq!(tag_count(&head, "g"), 1);
         parse_task_event(&head).expect("a single mirror must parse");
@@ -1787,8 +1791,8 @@ mod tests {
             "write-homepage-brief".to_string(),
             "approve-budget".to_string(),
         ];
-        let head =
-            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        let head = build_head(&relay, &CompanyActionPayload::Task(Box::new(task)), None)
+            .expect("build task head");
         assert_eq!(tag_count(&head, "v"), 2);
         assert_eq!(scalar_tag_values(&head, "v").len(), 2);
         for edge in ["write-homepage-brief", "approve-budget"] {
@@ -1874,8 +1878,8 @@ mod tests {
         task.subject = None;
         task.depends_on = Vec::new();
 
-        let head =
-            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        let head = build_head(&relay, &CompanyActionPayload::Task(Box::new(task)), None)
+            .expect("build task head");
         for name in ["initiative", "client", "i", "s", "u", "v"] {
             assert!(
                 !head.tags.iter().any(|tag| tag.as_slice()[0] == name),
@@ -1898,8 +1902,12 @@ mod tests {
     #[test]
     fn lying_single_letter_mirrors_are_refused() {
         let relay = Keys::generate();
-        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
-            .expect("build task head");
+        let mut head = build_head(
+            &relay,
+            &CompanyActionPayload::Task(Box::new(sample_task())),
+            None,
+        )
+        .expect("build task head");
         head.tags = head
             .tags
             .into_iter()
@@ -1925,8 +1933,8 @@ mod tests {
         let relay = Keys::generate();
         let mut task = sample_task();
         task.depends_on = Vec::new();
-        let mut head =
-            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(Box::new(task)), None)
+            .expect("build task head");
         head.tags.retain(|tag| {
             !matches!(
                 tag.as_slice().first().map(String::as_str),
@@ -1945,8 +1953,12 @@ mod tests {
     #[test]
     fn lying_dependency_edges_are_refused() {
         let relay = Keys::generate();
-        let mut head = build_head(&relay, &CompanyActionPayload::Task(sample_task()), None)
-            .expect("build task head");
+        let mut head = build_head(
+            &relay,
+            &CompanyActionPayload::Task(Box::new(sample_task())),
+            None,
+        )
+        .expect("build task head");
         head.tags = head
             .tags
             .into_iter()
@@ -1972,8 +1984,8 @@ mod tests {
         let relay = Keys::generate();
         let mut task = sample_task();
         task.reviewer_team_id = Some("team-qa".to_string());
-        let mut head =
-            build_head(&relay, &CompanyActionPayload::Task(task), None).expect("build task head");
+        let mut head = build_head(&relay, &CompanyActionPayload::Task(Box::new(task)), None)
+            .expect("build task head");
         assert_eq!(tag_count(&head, "g"), 2);
         head.tags.retain(|tag| {
             tag.as_slice().first().map(String::as_str) != Some("g")
