@@ -3,6 +3,7 @@ mod client;
 mod commands;
 pub mod company_scan;
 mod error;
+pub mod identity;
 mod links;
 pub mod llm;
 pub mod seat;
@@ -10,7 +11,6 @@ mod validate;
 pub mod worker;
 
 use clap::{Parser, Subcommand};
-use nostr::Keys;
 use uuid::Uuid;
 
 pub use client::BuzzClient;
@@ -82,7 +82,7 @@ Buzz CLI — interact with a Buzz relay
 
 Configuration (flags override env vars):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
-  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
+  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [optional once `buzz identity init` has run]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
 
 The 'pack' subcommand runs locally and does not require a relay connection.
@@ -298,6 +298,9 @@ enum Cmd {
     /// Inspect and create hosted communities on this relay (self-serve provisioning)
     #[command(subcommand)]
     Communities(CommunitiesCmd),
+    /// Create and inspect the local identity key (no relay connection needed)
+    #[command(subcommand)]
+    Identity(IdentityCmd),
 }
 
 /// Subcommands for `buzz communities`: the relay's member self-serve
@@ -335,6 +338,30 @@ pub enum CommunitiesCmd {
     },
     /// List the communities the CLI's key owns on this deployment.
     List,
+}
+
+/// Subcommands for `buzz identity`: the local founder key.
+///
+/// These are local-only. The key is stored in the same OS keyring slot Buzz
+/// Desktop reads at boot, so an identity minted here is adopted by the app and
+/// the agent and the app share one identity.
+#[derive(clap::Subcommand)]
+pub enum IdentityCmd {
+    /// Generate a keypair and store it (keyring first, 0600 file fallback)
+    Init {
+        /// Replace an identity that is already stored
+        #[arg(long)]
+        force: bool,
+        /// Also print the secret key as an nsec
+        #[arg(long)]
+        show_secret: bool,
+    },
+    /// Print the pubkey of the resolved identity and where it came from
+    Show {
+        /// Also print the secret key as an nsec
+        #[arg(long)]
+        show_secret: bool,
+    },
 }
 
 /// Subcommands for `buzz content`: the content calendar.
@@ -3395,13 +3422,37 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return commands::price_feed::sign_feed(catalog, key.clone(), out.clone());
     }
 
-    // Auth: private key is required for all relay operations.
-    // The keypair IS the identity — no tokens, no other auth.
-    let private_key_str = cli.private_key.ok_or_else(|| {
-        CliError::Auth("BUZZ_PRIVATE_KEY is required (use --private-key or set env var)".into())
-    })?;
-    let keys = Keys::parse(&private_key_str)
-        .map_err(|e| CliError::Key(format!("invalid BUZZ_PRIVATE_KEY: {e}")))?;
+    // An empty `BUZZ_PRIVATE_KEY` is an unset one. Clap hands back `Some("")`
+    // for an exported-but-blank env var, which would otherwise shadow a stored
+    // identity and fail with a parse error instead of using it.
+    let env_private_key = cli.private_key.filter(|value| !value.trim().is_empty());
+
+    // Identity management is local: it needs no relay and, by definition, runs
+    // before any key exists. Same reasoning as Pack above.
+    if let Cmd::Identity(ref sub) = cli.command {
+        return match sub {
+            IdentityCmd::Init { force, show_secret } => {
+                commands::identity::cmd_init(*force, *show_secret)
+            }
+            IdentityCmd::Show { show_secret } => {
+                commands::identity::cmd_show(env_private_key.as_deref(), *show_secret)
+            }
+        };
+    }
+
+    // Auth: an identity is required for all relay operations. The keypair IS
+    // the identity: no tokens, no other auth. Resolution order is
+    // `BUZZ_PRIVATE_KEY` first, then the stored identity (OS keyring, then the
+    // 0600 file), so a founder who ran `buzz identity init` needs no env var.
+    let no_identity = || {
+        CliError::Auth(
+            "no identity: set BUZZ_PRIVATE_KEY (or --private-key), or run `buzz identity init`"
+                .into(),
+        )
+    };
+    let keys = identity::resolve_identity(env_private_key.as_deref())?
+        .ok_or_else(no_identity)?
+        .keys;
 
     // NIP-OA: parse and verify the auth tag if provided.
     let (auth_tag, auth_tag_json) = match cli.auth_tag {
@@ -3459,6 +3510,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Employees(sub) => commands::employees::dispatch(sub, &client).await,
         Cmd::Jobs(sub) => commands::jobs::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
+        Cmd::Identity(_) => unreachable!("handled above"),
     }
 }
 
@@ -4017,6 +4069,7 @@ mod tests {
             "employees",
             "feed",
             "grants",
+            "identity",
             "initiatives",
             "issues",
             "jobs",
