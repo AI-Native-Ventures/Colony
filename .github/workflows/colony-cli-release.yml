@@ -1,0 +1,200 @@
+name: Colony CLI release
+
+# Builds `buzz` and `buzz-acp` as standalone downloadable binaries and
+# publishes them to the public AI-Native-Ventures/colony-releases repo, the
+# same repo the desktop release publishes to.
+#
+# Why this exists: until now `buzz` only reached a machine as a sidecar
+# inside Colony.app, symlinked into ~/.local/bin by the desktop app. A coding
+# agent on a machine without the app had nothing to run. scripts/install-cli.sh
+# consumes what this workflow publishes.
+#
+# Two independent jobs, one per platform, with no `needs` between them so a
+# slow platform never holds the other back:
+#   build-macos-arm64 - the same self-hosted Mac runner the desktop release
+#                       uses (labels: self-hosted, macOS, colony-builder).
+#                       Its persistent workspace keeps the cargo cache warm.
+#   build-linux-x64   - hosted ubuntu-latest. The repo is public, so minutes
+#                       are free. No Swatinem/rust-cache here: hermit sets its
+#                       own CARGO_HOME, which makes that action save 0 bytes
+#                       while still reporting success.
+#
+# Each job publishes twice: to the immutable versioned release cli-v<version>,
+# and to the rolling colony-cli-latest release under unversioned asset names.
+# The rolling tag is what install-cli.sh downloads by default, so the install
+# URL never changes. It cannot use /releases/latest/download, because that
+# points at whatever the desktop release published last.
+#
+# Signing: the binaries are ad-hoc signed on macOS (the same posture as the
+# desktop app's dmg, which is also ad-hoc signed) and unsigned on Linux. They
+# are not notarized. Gatekeeper does not quarantine files extracted from a
+# tarball by the install script, so this is enough for the curl-to-shell path.
+
+on:
+  push:
+    tags: ["cli-v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version e.g. 0.1.0 (no prefix). Leave blank to use the workspace version from Cargo.toml."
+        required: false
+
+permissions:
+  contents: read
+
+# Never cancel a release mid-publish.
+concurrency:
+  group: colony-cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RELEASE_REPO: AI-Native-Ventures/colony-releases
+  ROLLING_TAG: colony-cli-latest
+
+jobs:
+  build-macos-arm64:
+    name: Build and publish macOS (Apple Silicon)
+    if: github.repository == 'AI-Native-Ventures/Colony'
+    runs-on: [self-hosted, macOS, colony-builder]
+    timeout-minutes: 120
+    env:
+      TARGET: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A tag push is the normal release path and is held to the same rule the
+      # desktop release uses: the run's ref, HEAD, and the tag must resolve to
+      # one commit. A dispatch has no tag to check, so it only validates the
+      # version string.
+      - name: Resolve the release version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: scripts/resolve-cli-release-version.sh
+
+      # This runner is a real machine whose disk is shared with development
+      # worktrees, so it can already be nearly full when a release starts. A
+      # release that dies part way through a cargo build reads like a build
+      # bug rather than a full disk. Check first and say plainly what filled it.
+      - name: Check the runner has room to build
+        env:
+          MIN_FREE_GIB: "15"
+        run: |
+          set -euo pipefail
+          AVAIL_GIB=$(($(df -Pk . | awk 'NR==2 {print $4}') / 1024 / 1024))
+          echo "Free space on the release volume: ${AVAIL_GIB} GiB (minimum ${MIN_FREE_GIB} GiB)"
+          if [ "$AVAIL_GIB" -ge "$MIN_FREE_GIB" ]; then
+            exit 0
+          fi
+          echo "::error::Only ${AVAIL_GIB} GiB free on the release runner, and a CLI release build needs at least ${MIN_FREE_GIB} GiB. Free space and re-run this job at the same tag."
+          echo "Largest cargo target directories under ${HOME} (usually one per git worktree):"
+          find "$HOME" -maxdepth 6 -type d -name target -prune 2>/dev/null \
+            | while read -r d; do du -sk "$d" 2>/dev/null; done \
+            | sort -rn | head -10 \
+            | awk '{printf "  %7.1f GiB  %s\n", $1/1024/1024, $2}'
+          exit 1
+
+      # Resolve the target directory here, in the one step where cargo is on
+      # PATH. The self-hosted runner can carry an ambient CARGO_TARGET_DIR, and
+      # a later step guessing ./target would look at the wrong tree.
+      - name: Build the CLI binaries
+        run: |
+          set -euo pipefail
+          . ./bin/activate-hermit
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release --target "$TARGET" -p buzz-cli -p buzz-acp
+          TARGET_ROOT="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          echo "BIN_DIR=${TARGET_ROOT}/${TARGET}/release" >> "$GITHUB_ENV"
+          echo "resolved BIN_DIR=${TARGET_ROOT}/${TARGET}/release"
+
+      - name: Ad-hoc sign the binaries
+        run: |
+          set -euo pipefail
+          for bin in buzz buzz-acp; do
+            codesign --force --sign - "${BIN_DIR}/${bin}"
+            codesign --verify --strict "${BIN_DIR}/${bin}"
+          done
+
+      - name: Package the tarball
+        run: scripts/package-cli-release.sh
+
+      # Minted after the build so its one-hour lifetime cannot expire before
+      # the upload. Same App as the desktop release publisher, scoped down to
+      # colony-releases only.
+      - name: Create release publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          owner: AI-Native-Ventures
+          repositories: colony-releases
+          permission-contents: write
+
+      - name: Publish to colony-releases
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: scripts/publish-cli-release.sh
+
+  build-linux-x64:
+    name: Build and publish Linux (x86_64)
+    if: github.repository == 'AI-Native-Ventures/Colony'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the release version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: scripts/resolve-cli-release-version.sh
+
+      - name: Activate Hermit
+        id: activate-hermit
+        continue-on-error: true
+        uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+        with:
+          cache: "true"
+
+      - name: Retry Hermit activation
+        if: steps.activate-hermit.outcome == 'failure'
+        run: ./scripts/ci-activate-hermit.sh
+
+      - name: Build the CLI binaries
+        run: |
+          set -euo pipefail
+          cargo build --release --target "$TARGET" -p buzz-cli -p buzz-acp
+          TARGET_ROOT="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          echo "BIN_DIR=${TARGET_ROOT}/${TARGET}/release" >> "$GITHUB_ENV"
+          echo "resolved BIN_DIR=${TARGET_ROOT}/${TARGET}/release"
+
+      - name: Package the tarball
+        run: scripts/package-cli-release.sh
+
+      - name: Create release publisher token
+        id: publisher
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.BUZZ_RELEASE_TAGGER_CLIENT_ID }}
+          private-key: ${{ secrets.BUZZ_RELEASE_TAGGER_PRIVATE_KEY }}
+          owner: AI-Native-Ventures
+          repositories: colony-releases
+          permission-contents: write
+
+      - name: Publish to colony-releases
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+        run: scripts/publish-cli-release.sh
