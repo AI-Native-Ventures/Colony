@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use buzz_core::{
     company::{
-        all_assignees_reported, validate_task, CommercialPurpose, CompanyTask, DoerKind,
-        TaskStatus, ThreadAttach, ThreadAttachMode, MAX_THREAD_SUBTASKS,
+        all_assignees_reported, validate_task, CommercialPurpose, CompanyTask, CompanyTeamRef,
+        DoerKind, TaskStatus, ThreadAttach, ThreadAttachMode, MAX_THREAD_SUBTASKS,
     },
     kind::{
         KIND_COMPANY_ACTION, KIND_COMPANY_RECEIPT, KIND_MANAGED_AGENT, KIND_TASK, KIND_TASK_REPORT,
@@ -50,7 +50,7 @@ const TASK_SCHEMA: &str = "colony.task/v1";
 /// not work. It exists so a greeting still charges somewhere; it is never
 /// shown, so the wording only has to be honest in a database.
 const CHAT_TASK_TITLE: &str = "Thread chat";
-/// Upper bound on owner rows read to find whose Team events are canonical.
+/// Upper bound on owner rows read while collecting a community's teams.
 const MAX_OWNER_LOOKUP: i64 = 8;
 
 /// Resolve which task one send is charged to, opening one when the thread has
@@ -376,8 +376,7 @@ async fn build_thread_task(
     action_event: &Event,
 ) -> Result<CompanyTask, String> {
     let company = load_company(tenant, state).await?;
-    let owner_pubkey = community_owner(tenant, state).await?;
-    let teams = load_team_refs(tenant, state, &owner_pubkey).await?;
+    let teams = load_thread_teams(tenant, state, action_event.pubkey).await?;
     let persona = request.agent_persona_id.as_deref().unwrap_or_default();
     let team = owning_team_for_chat(&teams, persona)?;
     let cost_centre_id = internal_cost_centre(&company)?.to_owned();
@@ -437,21 +436,54 @@ async fn build_thread_task(
     Ok(task)
 }
 
-/// The community owner whose Team events are canonical.
-async fn community_owner(
+/// Every team this community's owners have published, and the asking member's
+/// own, in that member's favour when both name a team.
+///
+/// Team events are client-authored, so "whose teams are canonical" has to be
+/// decided rather than assumed. Reading one arbitrary owner's teams is what
+/// this did first, and it was wrong the moment a community had two owner rows:
+/// a relay that bootstraps its configured owner at startup, plus whoever the
+/// workspace actually belongs to, is the ordinary case, and picking the first
+/// row returned meant every attach in that community refused with "this
+/// company has no coordination team to own ambiguous work" while the teams sat
+/// in the database under the other key.
+///
+/// The asking member is read first so a member who publishes their own teams
+/// is not overruled by an owner's stale head at the same id, and the first
+/// live head for an id wins after that.
+async fn load_thread_teams(
     tenant: &TenantContext,
     state: &Arc<AppState>,
-) -> Result<nostr::PublicKey, String> {
+    actor: nostr::PublicKey,
+) -> Result<Vec<CompanyTeamRef>, String> {
     let owners = state
         .db
         .list_relay_owners(tenant.community(), MAX_OWNER_LOOKUP)
         .await
-        .map_err(|error| format!("database error reading this community's owner: {error}"))?;
-    let owner = owners
-        .first()
-        .ok_or_else(|| "this community has no owner, so it has no teams".to_owned())?;
-    nostr::PublicKey::parse(owner)
-        .map_err(|error| format!("this community's owner key is unreadable: {error}"))
+        .map_err(|error| format!("database error reading this community's owners: {error}"))?;
+
+    let mut authors = vec![actor];
+    for owner in owners {
+        match nostr::PublicKey::parse(&owner) {
+            Ok(owner) if owner != actor => authors.push(owner),
+            Ok(_) => {}
+            // One unreadable owner row must not blank the whole team list: the
+            // other owners still hold usable teams.
+            Err(error) => {
+                tracing::warn!(%error, "skipping an unreadable community owner key");
+            }
+        }
+    }
+
+    let mut teams: Vec<CompanyTeamRef> = Vec::new();
+    for author in authors {
+        for team in load_team_refs(tenant, state, &author).await? {
+            if !teams.iter().any(|held| held.id == team.id) {
+                teams.push(team);
+            }
+        }
+    }
+    Ok(teams)
 }
 
 /// Check that an agent opening a sub-task is assigned to its parent.
