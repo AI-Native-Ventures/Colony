@@ -73,77 +73,91 @@ async fn relay_self() -> String {
         .to_string()
 }
 
-/// One pool for the whole suite.
+/// A pool that lives exactly as long as the work it is opened for.
 ///
-/// Built once on purpose. Every fixture helper used to open its own pool and
-/// never close it, so a run leaked a Postgres connection per seeded member and
-/// per community lookup. Postgres has a connection ceiling, and once a run got
-/// close enough to it the RELAY could no longer acquire one: its next query
-/// waited on the pool's own 30 second acquire timeout, which is exactly the
-/// timeout the client saw, at whichever event happened to be next. That is why
-/// a case late in the file failed at a different point each round while the
-/// same code passed earlier in the same run.
-static E2E_POOL: tokio::sync::OnceCell<sqlx::Pool<sqlx::Postgres>> =
-    tokio::sync::OnceCell::const_new();
-
-async fn e2e_db_pool() -> &'static sqlx::Pool<sqlx::Postgres> {
-    E2E_POOL
-        .get_or_init(|| async {
-            let database_url = std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
-            sqlx::postgres::PgPoolOptions::new()
-                .max_connections(2)
-                .connect(&database_url)
-                .await
-                .expect("connect to e2e Postgres")
-        })
+/// Two ways to get this wrong have already cost a CI round each, and this
+/// shape avoids both. Opening a pool per call and never closing it leaks a
+/// Postgres connection every time, and once a run approaches the server's
+/// ceiling the RELAY cannot acquire one, so its next query sits on an acquire
+/// timeout and the client times out first. Caching one pool in a `static`
+/// leaks something worse: every `#[tokio::test]` builds its own runtime, so
+/// the second case onwards inherits a pool whose background tasks belong to a
+/// runtime that no longer exists, and every acquire on it times out.
+///
+/// So the pool is per call, closed before returning, and its acquire timeout
+/// is short: a hold shows up as a fast, named failure rather than a stall.
+async fn with_e2e_db<F, Fut, T>(work: F) -> T
+where
+    F: FnOnce(sqlx::Pool<sqlx::Postgres>) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&database_url)
         .await
+        .expect("connect to e2e Postgres");
+    let outcome = work(pool.clone()).await;
+    pool.close().await;
+    outcome
 }
 
-/// The deployment community, looked up once.
-static E2E_COMMUNITY: tokio::sync::OnceCell<Uuid> = tokio::sync::OnceCell::const_new();
+/// The deployment community, looked up once per process.
+///
+/// A plain value rather than a cached pool: it is a `Uuid`, so it carries no
+/// runtime-bound state across the per-test runtimes.
+static E2E_COMMUNITY: std::sync::OnceLock<Uuid> = std::sync::OnceLock::new();
 
 async fn community_id() -> Uuid {
-    *E2E_COMMUNITY
-        .get_or_init(|| async {
-            let pool = e2e_db_pool().await;
-            let host = relay_url().replace("wss://", "").replace("ws://", "");
-            sqlx::query_scalar("SELECT id FROM communities WHERE lower(host) = lower($1)")
-                .bind(&host)
-                .fetch_optional(pool)
-                .await
-                .expect("query the deployment community")
-                .unwrap_or_else(|| panic!("community for host {host} must exist"))
-        })
-        .await
+    if let Some(community) = E2E_COMMUNITY.get() {
+        return *community;
+    }
+    let host = relay_url().replace("wss://", "").replace("ws://", "");
+    let community: Uuid = with_e2e_db(|pool| async move {
+        sqlx::query_scalar("SELECT id FROM communities WHERE lower(host) = lower($1)")
+            .bind(&host)
+            .fetch_optional(&pool)
+            .await
+            .expect("query the deployment community")
+            .unwrap_or_else(|| panic!("community for host {host} must exist"))
+    })
+    .await;
+    *E2E_COMMUNITY.get_or_init(|| community)
 }
 
 /// Seed one member. `agent_owner` marks the key as an agent, which is what
 /// the relay's sub-task authorization keys off.
 async fn seed_member(keys: &Keys, role: &str, agent_owner: Option<&Keys>) {
-    let pool = e2e_db_pool().await;
     let community = community_id().await;
-    sqlx::query(
-        "INSERT INTO users (community_id, pubkey, agent_owner_pubkey) VALUES ($1, $2, $3) \
-         ON CONFLICT (community_id, pubkey) DO UPDATE SET agent_owner_pubkey = EXCLUDED.agent_owner_pubkey",
-    )
-    .bind(community)
-    .bind(keys.public_key().to_bytes())
-    .bind(agent_owner.map(|owner| owner.public_key().to_bytes().to_vec()))
-    .execute(pool)
-    .await
-    .expect("seed the member as a user");
-    sqlx::query(
-        "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
-         VALUES ($1, $2, $3, NULL) \
-         ON CONFLICT (community_id, pubkey) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(community)
-    .bind(keys.public_key().to_hex())
-    .bind(role)
-    .execute(pool)
-    .await
-    .expect("seed the member role");
+    let pubkey_bytes = keys.public_key().to_bytes().to_vec();
+    let pubkey_hex = keys.public_key().to_hex();
+    let agent_owner = agent_owner.map(|owner| owner.public_key().to_bytes().to_vec());
+    with_e2e_db(|pool| async move {
+        sqlx::query(
+            "INSERT INTO users (community_id, pubkey, agent_owner_pubkey) VALUES ($1, $2, $3) \
+             ON CONFLICT (community_id, pubkey) DO UPDATE SET agent_owner_pubkey = EXCLUDED.agent_owner_pubkey",
+        )
+        .bind(community)
+        .bind(pubkey_bytes)
+        .bind(agent_owner)
+        .execute(&pool)
+        .await
+        .expect("seed the member as a user");
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+             VALUES ($1, $2, $3, NULL) \
+             ON CONFLICT (community_id, pubkey) DO UPDATE SET role = EXCLUDED.role",
+        )
+        .bind(community)
+        .bind(pubkey_hex)
+        .bind(role)
+        .execute(&pool)
+        .await
+        .expect("seed the member role");
+    })
+    .await;
 }
 
 async fn create_channel(keys: &Keys) -> String {
