@@ -617,9 +617,14 @@ async fn a_closed_task_frees_its_thread_for_the_next_piece_of_work() {
     let head = head_of(&mut client, &fixture.relay, &first.id)
         .await
         .expect("the task head is stored");
-    let mut closed = first.clone();
+    let stored = parse_task_event(&head).expect("the stored head parses");
+    let mut closed = stored.clone();
     closed.status = TaskStatus::Cancelled;
-    closed.updated_at = closed.updated_at.max(now());
+    // Built from the head as STORED, and strictly newer than it. A
+    // replacement is compare-and-set on both the head id and the timestamp,
+    // so reusing the value this test read a moment earlier is refused with
+    // "updatedAt must strictly increase" rather than applied.
+    closed.updated_at = stored.updated_at.max(now()) + 1;
     let close_action = CompanyAction {
         relay_pubkey: fixture.relay.clone(),
         operation: CompanyActionOperation::Transition,

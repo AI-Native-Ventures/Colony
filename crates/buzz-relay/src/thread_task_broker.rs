@@ -742,7 +742,13 @@ fn thread_root_backfill(previous: &CompanyTask, root_hex: &str) -> Option<Compan
     }
     let mut replacement = previous.clone();
     replacement.thread_root = Some(root_hex.to_owned());
-    replacement.updated_at = previous.updated_at + 1;
+    // `updatedAt` deliberately stays where it was. Nothing about the work
+    // changed, and a client that read this task before its root was known
+    // computes its next replacement's timestamp from what it read: bumping
+    // here would make that client's perfectly ordinary "mark done" fail with
+    // "updatedAt must strictly increase" for no reason a person could see.
+    // The head event id does change, so a client still re-reads the head
+    // before a compare-and-set write, which it has to do anyway.
     Some(replacement)
 }
 
@@ -899,7 +905,10 @@ mod tests {
         let root = "b".repeat(64);
         let replacement = thread_root_backfill(&task, &root).expect("the head is rewritten");
         assert_eq!(replacement.thread_root.as_deref(), Some(root.as_str()));
-        assert_eq!(replacement.updated_at, task.updated_at + 1);
+        assert_eq!(
+            replacement.updated_at, task.updated_at,
+            "learning a root is not work happening, and a bump here would refuse the owner's next write"
+        );
         assert_eq!(
             replacement.id, task.id,
             "it is the same task, told where it lives"

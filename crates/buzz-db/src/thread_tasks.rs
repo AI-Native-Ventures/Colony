@@ -275,10 +275,22 @@ pub async fn record_thread_subtask(
     cap: usize,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
+    // `FOR UPDATE` cannot be combined with an aggregate, and there is no
+    // parent row here to lock in any case: the parent is an event, and the
+    // rows being counted are exactly the ones a racing writer would add. A
+    // transaction-scoped advisory lock keyed on the parent serialises the
+    // count and the insert without inventing a row to lock, and releases
+    // itself on commit or rollback.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "thread-subtasks:{}:{parent_task_id}",
+            community.as_uuid()
+        ))
+        .execute(&mut *tx)
+        .await?;
     let existing: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM thread_subtasks \
-         WHERE community_id = $1 AND parent_task_id = $2 \
-         FOR UPDATE",
+         WHERE community_id = $1 AND parent_task_id = $2",
     )
     .bind(community.as_uuid())
     .bind(parent_task_id)

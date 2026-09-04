@@ -109,8 +109,16 @@ record nobody asked to change.
 
 A send that starts its own thread is claimed under its `sendId`, because the
 root event it will become does not exist yet. When that message arrives, the
-relay moves the claim onto the real root, so the first reply in the thread does
-not look like a brand-new thread.
+relay moves the claim onto the real root, and rewrites the Task head so it
+names that root: readers filter on `threadRoot`, so without it a Task opened by
+a thread's FIRST message would be invisible to "which Task belongs to this
+thread" while one opened from a reply was not.
+
+That rewrite keeps `updatedAt` exactly where it was, because nothing about the
+work changed and a client that read the Task beforehand computes its next
+replacement's timestamp from what it read. The head's event id does change, so
+a client performing a compare-and-set write (the desktop's "mark done") must
+re-read the head first, which it has to do anyway.
 
 ## Task Completion Report (kind `40026`)
 
