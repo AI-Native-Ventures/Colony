@@ -836,25 +836,46 @@ function addMatchesForPatterns(
     while (match !== null) {
       const from = position + match.index;
       const to = from + match[0].length;
+      const outsideEnd = { inclusiveEnd: false };
+      // Presentation only: a full-key label needs zero cloned inline padding
+      // when it fragments. This does not establish a recipient binding.
+      const literalClass = / \([0-9a-f]{64}\)(?: \d+)?$/i.test(match[0])
+        ? " mention-literal-key"
+        : "";
       if (options?.hidePrefix && /^[@#]/.test(match[0])) {
         decorations.push(
-          Decoration.inline(from, from + 1, {
-            class: "mention-prefix-hidden",
-            spellcheck: "false",
-          }),
+          Decoration.inline(
+            from,
+            from + 1,
+            {
+              class: `mention-prefix-hidden${literalClass}`,
+              spellcheck: "false",
+            },
+            outsideEnd,
+          ),
         );
         decorations.push(
-          Decoration.inline(from + 1, to, {
-            class: className,
-            spellcheck: "false",
-          }),
+          Decoration.inline(
+            from + 1,
+            to,
+            {
+              class: `${className}${literalClass}`,
+              spellcheck: "false",
+            },
+            outsideEnd,
+          ),
         );
       } else {
         decorations.push(
-          Decoration.inline(from, to, {
-            class: className,
-            spellcheck: "false",
-          }),
+          Decoration.inline(
+            from,
+            to,
+            {
+              class: `${className}${literalClass}`,
+              spellcheck: "false",
+            },
+            outsideEnd,
+          ),
         );
       }
       match = pattern.exec(text);

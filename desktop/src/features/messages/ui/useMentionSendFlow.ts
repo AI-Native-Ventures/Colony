@@ -802,6 +802,10 @@ export function useMentionSendFlow({
         }
 
         await completeSend(pendingDraft, pubkeys);
+      } catch (error) {
+        toast.error(
+          getErrorMessage(error, "Could not prepare mentions. Please retry."),
+        );
       } finally {
         isMentionSendPendingRef.current = false;
         setIsMentionSendPending(false);

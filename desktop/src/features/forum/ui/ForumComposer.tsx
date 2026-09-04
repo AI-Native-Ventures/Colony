@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { EditorContent } from "@tiptap/react";
 import { ChevronDown } from "lucide-react";
+import { toast } from "sonner";
 import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
@@ -17,7 +18,6 @@ import {
 import { useLinkEditor } from "@/features/messages/lib/useLinkEditor";
 import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
-import { toast } from "sonner";
 
 import { AgentMentionAuthorizationError } from "@/features/messages/lib/agentMentionRevalidation";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
@@ -290,8 +290,10 @@ export function ForumComposer({
             toast.error(error.message);
           }
         }
-      } catch {
-        // Keep the draft intact when mention extraction fails.
+      } catch (error) {
+        // Authorization and ambiguous-name failures must be visible, not a
+        // silent no-op. This path has not cleared the draft or its selections.
+        toast.error(error instanceof Error ? error.message : String(error));
       } finally {
         isSubmissionPendingRef.current = false;
         setIsSubmissionPending(false);
