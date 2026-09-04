@@ -26,6 +26,9 @@ pub(crate) struct PresetHarness {
     /// model discovery.
     pub(crate) provider_env_var: Option<&'static str>,
     pub(crate) underlying_cli: Option<&'static str>,
+    /// State-specific setup guidance for the wrapped vendor CLI, shown when the
+    /// adapter is present but its CLI is not.
+    pub(crate) underlying_cli_install_hint: Option<&'static str>,
 }
 
 /// Build one preset catalog entry through an injectable command resolver.
@@ -56,6 +59,16 @@ pub(crate) fn preset_catalog_entry(
         .and_then(resolve)
         .map(|path| path.display().to_string());
 
+    // An adapter preset needs two installs. When neither is present, name both,
+    // so a user reading the card is not sent back for the second component
+    // after following the first. #7335 carries the vendor half.
+    let install_hint = match (&availability, def.underlying_cli_install_hint) {
+        (AcpAvailabilityStatus::NotInstalled, Some(cli_hint)) => {
+            format!("{} {}", def.install_hint, cli_hint)
+        }
+        _ => def.install_hint.to_string(),
+    };
+
     AcpRuntimeCatalogEntry {
         id: def.id.to_string(),
         label: def.label.to_string(),
@@ -79,7 +92,7 @@ pub(crate) fn preset_catalog_entry(
         max_tokens_env_var: None,
         context_limit_env_var: None,
         max_rounds_env_var: None,
-        install_hint: def.install_hint.to_string(),
+        install_hint,
         install_instructions_url: def.install_instructions_url.to_string(),
         can_auto_install: false,
         // Presets carry one flat install hint, so builtin external-CLI copy
@@ -105,12 +118,16 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         command: "pi-acp",
         args: &[],
         install_instructions_url: "https://github.com/svkozak/pi-acp",
-        install_hint: "Buzz talks to Pi through the pi-acp adapter. Install Pi with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`, then install the adapter with `npm install -g pi-acp`.",
+        install_hint: "Install the Pi ACP adapter with npm install -g pi-acp.",
         underlying_cli: Some("pi"),
+        underlying_cli_install_hint: Some(
+            "Install Pi with npm install -g --ignore-scripts @earendil-works/pi-coding-agent.",
+        ),
         // Pi carries no provider env key: the adapter reads its own config.
         provider_env_var: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "devin",
         label: "Devin",
         command: "devin",
@@ -121,6 +138,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "cursor",
         label: "Cursor",
         command: "cursor-agent",
@@ -131,6 +149,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "omp",
         label: "Oh My Pi",
         command: "omp",
@@ -141,6 +160,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "grok",
         label: "Grok Build",
         command: "grok",
@@ -154,6 +174,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     // (first-class runtime with provider/model metadata) — it must not
     // reappear here, the id would be shadowed by the builtin.
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "kimi",
         label: "Kimi Code",
         command: "kimi",
@@ -164,6 +185,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "amp",
         label: "Amp",
         command: "amp-acp",
@@ -174,6 +196,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: Some("amp"),
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "hermes",
         label: "Hermes Agent",
         command: "hermes-acp",
@@ -184,6 +207,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
         underlying_cli: None,
     },
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "openclaw",
         label: "OpenClaw",
         command: "openclaw",
@@ -202,6 +226,7 @@ pub(crate) const PRESET_HARNESSES: &[PresetHarness] = &[
     },
 
     PresetHarness {
+        underlying_cli_install_hint: None,
         id: "prime-agent",
         label: "Prime Agent",
         command: "prime-agent",
@@ -319,6 +344,7 @@ mod tests {
 
     /// Amp-shaped preset: an ACP adapter wrapping a separately installed CLI.
     const ADAPTER_PRESET: PresetHarness = PresetHarness {
+        underlying_cli_install_hint: None,
         id: "amp-test",
         label: "Amp Test",
         command: "amp-acp",

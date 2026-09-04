@@ -171,6 +171,7 @@ fn classifies_cli_missing_when_adapter_found_but_cli_absent() {
 /// Amp-shaped preset: an ACP adapter (`amp-acp`) wrapping a separately
 /// installed vendor CLI (`amp`).
 const ADAPTER_PRESET: PresetHarness = PresetHarness {
+    underlying_cli_install_hint: None,
     id: "amp-test",
     label: "Amp Test",
     command: "amp-acp",
