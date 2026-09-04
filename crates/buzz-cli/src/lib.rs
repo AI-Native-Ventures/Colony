@@ -298,6 +298,9 @@ enum Cmd {
     /// Inspect and create hosted communities on this relay (self-serve provisioning)
     #[command(subcommand)]
     Communities(CommunitiesCmd),
+    /// Read Colony Credit prices and balance, and open a hosted checkout
+    #[command(subcommand)]
+    Credits(CreditsCmd),
     /// Create and inspect the local identity key (no relay connection needed)
     #[command(subcommand)]
     Identity(IdentityCmd),
@@ -395,6 +398,51 @@ pub enum CommunitiesCmd {
     },
     /// List the communities the CLI's key owns on this deployment.
     List,
+}
+
+/// Subcommands for `buzz credits`: the relay's card top-up surface
+/// (`/api/payments`, plus the gateway's balance read at
+/// `/api/gateway/account`), the same routes the desktop onboarding flow
+/// drives.
+///
+/// The agent guides the founder to pay, it never pays for them: checkout
+/// happens on the gateway's own hosted page, so `pay` hands back a URL for a
+/// person to open. Only the gateway's webhook credits an account, so `verify`
+/// reports a payment and never completes one.
+///
+/// `packs` needs no auth. `balance`, `pay`, and `verify` are NIP-98 signed
+/// with the CLI's key, and that key is the account the balance and the
+/// top-up belong to. A relay with no gateway configured does not mount
+/// `balance` at all and answers `404`.
+#[derive(Subcommand)]
+pub enum CreditsCmd {
+    /// Show the prepaid balance held by the CLI's key, in nanoUSD.
+    Balance,
+    /// List the credit packs this relay sells, with a price per currency.
+    Packs {
+        /// Which price list to ask for. This relay derives the charging
+        /// currency from its configured gateway and reports it in the
+        /// response's `currency` field, so the flag is a hint rather than a
+        /// selector.
+        #[arg(long, value_parser = ["USD", "ZAR"])]
+        currency: Option<String>,
+    },
+    /// Open a hosted checkout for one pack and print its URL, then the JSON.
+    ///
+    /// Prints nothing a person can pay with beyond the link: no price is
+    /// sent, because the relay prices the pack.
+    Pay {
+        /// Pack id from `buzz credits packs`
+        pack_id: String,
+        /// Receipt email passed through to the hosted checkout page
+        #[arg(long)]
+        email: String,
+    },
+    /// Report whether one checkout reference has been paid. Credits nothing.
+    Verify {
+        /// The reference `buzz credits pay` returned
+        reference: String,
+    },
 }
 
 /// Subcommands for `buzz identity`: the local founder key.
@@ -3542,6 +3590,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Communities(sub) => commands::communities::dispatch(sub, &client).await,
         Cmd::Invites(sub) => commands::invites::dispatch(sub, &client).await,
+        Cmd::Credits(sub) => commands::credits::dispatch(sub, &client).await,
         Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
@@ -4120,6 +4169,7 @@ mod tests {
             "communities",
             "company",
             "content",
+            "credits",
             "decisions",
             "discovery",
             "dms",
@@ -4256,6 +4306,10 @@ mod tests {
         assert_eq!(
             names(&cmd, "communities"),
             vec!["check", "config", "create", "list"]
+        );
+        assert_eq!(
+            names(&cmd, "credits"),
+            vec!["balance", "packs", "pay", "verify"]
         );
         assert_eq!(names(&cmd, "reactions"), vec!["add", "get", "remove"]);
         assert_eq!(

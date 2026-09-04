@@ -191,6 +191,17 @@ const COMMUNITIES_API_PATH: &str = "/api/communities";
 /// `desktop/src/shared/api/invites.ts`.
 const INVITES_API_PATH: &str = "/api/invites";
 
+/// Root of the relay's card top-up API (`crates/buzz-relay/src/api/payments.rs`),
+/// the same routes the desktop onboarding flow drives from
+/// `desktop/src/features/onboarding/paymentsService.ts`. `packs` is public;
+/// `initialize` and `verify` are NIP-98 signed.
+const PAYMENTS_API_PATH: &str = "/api/payments";
+
+/// The relay's prepaid balance read (`crates/buzz-relay/src/gateway/mod.rs`).
+/// NIP-98 signed, and mounted only when a gateway is configured, so a relay
+/// without one answers `404` rather than a balance.
+const GATEWAY_ACCOUNT_PATH: &str = "/api/gateway/account";
+
 /// Maximum number of attempts per request (initial attempt + two retries).
 const RETRY_MAX_ATTEMPTS: u32 = 3;
 
@@ -1152,6 +1163,117 @@ impl BuzzClient {
             let url = url.clone();
             async move {
                 let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/payments/packs` - the credit packs this relay sells and the
+    /// currency it charges in.
+    ///
+    /// Unauthenticated by design (`crates/buzz-relay/src/api/payments.rs`):
+    /// a price list is public, and checkout still authenticates. The client
+    /// never holds a price of its own, so this is the only way to learn what
+    /// a top-up costs.
+    ///
+    /// `currency` is an optional hint appended as a query parameter. The
+    /// relay in this repo derives the charging currency from its configured
+    /// gateway and ignores the parameter; it is sent so a caller can state
+    /// which price list it wants and so a relay that later honours it needs
+    /// no CLI change. Read the `currency` field of the response for the
+    /// currency that actually applies.
+    pub async fn credit_packs(&self, currency: Option<&str>) -> Result<String, CliError> {
+        let url = match currency {
+            Some(currency) => {
+                let query = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("currency", currency)
+                    .finish();
+                format!("{}{PAYMENTS_API_PATH}/packs?{query}", self.relay_url)
+            }
+            None => format!("{}{PAYMENTS_API_PATH}/packs", self.relay_url),
+        };
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/gateway/account` - the NIP-98 signer's prepaid balance.
+    ///
+    /// Signed, and mounted only when the relay has a gateway configured
+    /// (`crates/buzz-relay/src/gateway/mod.rs`), so a relay without one
+    /// answers `404` rather than a zero balance. That refusal surfaces as
+    /// [`CliError::Relay`] carrying the relay's own message.
+    pub async fn credits_balance(&self) -> Result<String, CliError> {
+        self.get_authed(GATEWAY_ACCOUNT_PATH).await
+    }
+
+    /// `POST /api/payments/initialize` - open a hosted checkout for one pack
+    /// and return the relay's JSON, which carries the checkout URL and the
+    /// reference to verify against. NIP-98 signed.
+    ///
+    /// Only the pack id and a receipt email travel. No price is sent: the
+    /// relay prices the pack, because a client that could name its own price
+    /// could name zero.
+    ///
+    /// Deliberately single-attempt, like `create_community`. Opening checkout
+    /// starts a real charge attempt and the relay rate-limits it tightly, so
+    /// a blind retry after an ambiguous failure would burn the allowance and
+    /// could leave a second pending intent behind. A transport failure
+    /// surfaces as [`CliError::Network`] and leaves the re-run decision with
+    /// the caller.
+    pub async fn initialize_payment(&self, pack_id: &str, email: &str) -> Result<String, CliError> {
+        let url = format!("{}{PAYMENTS_API_PATH}/initialize", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({ "packId": pack_id, "email": email }))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+        let resp = self
+            .with_auth_tag(
+                self.http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .body(body),
+            )
+            .send()
+            .await?;
+        self.handle_response(resp).await
+    }
+
+    /// `POST /api/payments/verify` - report whether one reference has been
+    /// paid. NIP-98 signed.
+    ///
+    /// A pure read: only the provider webhooks ever credit an account, so
+    /// this moves no money and is safe to retry. The event is re-signed on
+    /// each attempt so the NIP-98 nonce stays unique.
+    pub async fn verify_payment(&self, reference: &str) -> Result<String, CliError> {
+        let url = format!("{}{PAYMENTS_API_PATH}/verify", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({ "reference": reference }))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
                 self.handle_response(resp).await
             }
         })
@@ -3866,5 +3988,268 @@ mod tests {
             built.headers().get("x-auth-tag").is_none(),
             "x-auth-tag header must not be present when no auth tag is configured"
         );
+    }
+}
+
+/// Wire-level tests for the credit top-up calls.
+///
+/// These run against a local axum server standing in for the relay's
+/// `/api/payments` surface plus the gateway's `/api/gateway/account`, so what
+/// is asserted is the request the relay would actually receive: method, path,
+/// query, body, and whether a NIP-98 `Authorization` header is present. The
+/// auth split is the part worth pinning, and it is the relay's, not a guess:
+/// `packs` is served by a handler that takes no headers at all
+/// (`crates/buzz-relay/src/api/payments.rs`), while `initialize`, `verify`,
+/// and the gateway account read all authenticate before doing anything.
+#[cfg(test)]
+mod credits_api_tests {
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::{Query, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use nostr::Keys;
+    use tokio::net::TcpListener;
+
+    use super::super::error::{exit_code, CliError};
+    use super::BuzzClient;
+
+    /// One captured request: what the server saw.
+    #[derive(Clone, Debug, Default)]
+    struct Seen {
+        path: String,
+        currency_param: Option<String>,
+        authorization: Option<String>,
+        body: String,
+    }
+
+    type Captured = Arc<Mutex<Vec<Seen>>>;
+
+    /// Status and body the stand-in relay answers every route with.
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct Harness {
+        captured: Captured,
+        reply: Reply,
+    }
+
+    fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        if let Ok(mut log) = harness.captured.lock() {
+            log.push(seen);
+        }
+        (harness.reply.status, harness.reply.body.to_string())
+    }
+
+    fn header_string(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    /// Spawn a stand-in relay exposing the four top-up routes, all answering
+    /// `reply`. Returns its base URL and the capture log.
+    async fn payments_server(reply: Reply) -> (String, Captured) {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let harness = Harness {
+            captured: captured.clone(),
+            reply,
+        };
+
+        let app = Router::new()
+            .route(
+                "/api/payments/packs",
+                get(
+                    |State(h): State<Harness>,
+                     headers: HeaderMap,
+                     Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/packs".into(),
+                                currency_param: q.get("currency").cloned(),
+                                authorization: header_string(&headers),
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/gateway/account",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/gateway/account".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/api/payments/initialize",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/initialize".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/payments/verify",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/verify".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .with_state(harness);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), captured)
+    }
+
+    fn ok_reply(body: &'static str) -> Reply {
+        Reply {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    fn test_client(base_url: &str) -> BuzzClient {
+        BuzzClient::new(base_url.to_string(), Keys::generate(), None, None).unwrap()
+    }
+
+    fn only(captured: &Captured) -> Seen {
+        let log = captured.lock().unwrap();
+        assert_eq!(log.len(), 1, "expected exactly one request, got {:?}", *log);
+        log[0].clone()
+    }
+
+    #[tokio::test]
+    async fn packs_is_an_unauthenticated_get_with_no_query_by_default() {
+        let (base, captured) = payments_server(ok_reply(r#"{"packs":[],"currency":"ZAR"}"#)).await;
+        let body = test_client(&base).credit_packs(None).await.unwrap();
+
+        assert_eq!(
+            body, r#"{"packs":[],"currency":"ZAR"}"#,
+            "body is passed through"
+        );
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/packs");
+        assert_eq!(seen.currency_param, None, "no currency means no query pair");
+        assert!(
+            seen.authorization.is_none(),
+            "packs must not send a NIP-98 header: the relay handler takes no headers"
+        );
+    }
+
+    #[tokio::test]
+    async fn packs_sends_the_requested_currency_as_a_query_param() {
+        let (base, captured) = payments_server(ok_reply(r#"{"packs":[]}"#)).await;
+        test_client(&base).credit_packs(Some("ZAR")).await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/packs");
+        assert_eq!(seen.currency_param.as_deref(), Some("ZAR"));
+        assert!(seen.authorization.is_none(), "still unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn balance_gets_the_gateway_account_with_nip98_auth() {
+        let (base, captured) = payments_server(ok_reply(r#"{"balance_nanousd":"0"}"#)).await;
+        test_client(&base).credits_balance().await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/gateway/account");
+        let auth = seen.authorization.expect("balance must be NIP-98 signed");
+        assert!(
+            auth.starts_with("Nostr "),
+            "expected a NIP-98 Authorization header, got {auth:?}"
+        );
+    }
+
+    /// The body names a pack and an email and nothing else. A price here
+    /// would be a price the client chose, and a client that can choose a
+    /// price can choose zero.
+    #[tokio::test]
+    async fn pay_posts_a_pack_id_and_email_with_nip98_auth() {
+        let (base, captured) = payments_server(ok_reply(
+            r#"{"authorizationUrl":"https://pay","reference":"r"}"#,
+        ))
+        .await;
+        test_client(&base)
+            .initialize_payment("starter", "founder@example.com")
+            .await
+            .unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/initialize");
+        assert_eq!(
+            seen.body, r#"{"email":"founder@example.com","packId":"starter"}"#,
+            "only the pack id and receipt email travel"
+        );
+        let auth = seen.authorization.expect("pay must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    #[tokio::test]
+    async fn verify_posts_the_reference_with_nip98_auth() {
+        let (base, captured) = payments_server(ok_reply(r#"{"paid":false,"usdCents":0}"#)).await;
+        test_client(&base).verify_payment("ref_1").await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/verify");
+        assert_eq!(seen.body, r#"{"reference":"ref_1"}"#);
+        let auth = seen.authorization.expect("verify must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    /// A relay with no gateway configured never mounts the balance route, so
+    /// the refusal is a `404` and must surface the relay's own message on the
+    /// relay/network exit code rather than reading as an empty account.
+    #[tokio::test]
+    async fn a_relay_without_a_gateway_surfaces_its_message_and_exit_code_two() {
+        let (base, _captured) = payments_server(Reply {
+            status: StatusCode::NOT_FOUND,
+            body: r#"{"error":"payment_unavailable"}"#,
+        })
+        .await;
+
+        let err = test_client(&base).credits_balance().await.unwrap_err();
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 404);
+                assert_eq!(body, "payment_unavailable");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 2);
     }
 }
