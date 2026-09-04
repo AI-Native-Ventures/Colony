@@ -15,6 +15,7 @@ pub mod fan_out;
 pub mod feed;
 pub mod grants;
 pub mod identity;
+pub mod invites;
 pub mod issues;
 pub mod jobs;
 pub mod ledger;

@@ -186,6 +186,11 @@ fn relay_server_tag(relay_url: &str) -> Option<String> {
 /// the same four routes from `desktop/src-tauri/src/colony_provisioning.rs`.
 const COMMUNITIES_API_PATH: &str = "/api/communities";
 
+/// Root of the relay's invite API (`crates/buzz-relay/src/api/invites.rs`).
+/// The desktop app calls the same routes from
+/// `desktop/src/shared/api/invites.ts`.
+const INVITES_API_PATH: &str = "/api/invites";
+
 /// Maximum number of attempts per request (initial attempt + two retries).
 const RETRY_MAX_ATTEMPTS: u32 = 3;
 
@@ -1004,6 +1009,153 @@ impl BuzzClient {
     pub async fn list_my_communities(&self) -> Result<String, CliError> {
         self.get_authed(&format!("{COMMUNITIES_API_PATH}/mine"))
             .await
+    }
+
+    /// `POST /api/invites` - mint an invite code. NIP-98 signed, and the
+    /// relay accepts it only from an owner or admin of the community the
+    /// relay URL resolves to.
+    ///
+    /// `ttl_secs` and `max_uses` are omitted from the body when `None`, which
+    /// is how the relay is told to apply its own defaults: the default TTL,
+    /// and unlimited uses. Bounds on both are relay-side, so an out-of-range
+    /// value comes back as the relay's own `400` message rather than a guess
+    /// made here.
+    ///
+    /// Deliberately single-attempt, for the same reason
+    /// [`BuzzClient::create_community`] is: minting is not idempotent, so a
+    /// retry after a mint the relay committed leaves a second live code
+    /// nobody knows about. A transport failure surfaces as
+    /// [`CliError::Network`] and leaves the re-run decision with the caller.
+    pub async fn mint_invite(
+        &self,
+        ttl_secs: Option<u64>,
+        max_uses: Option<i32>,
+    ) -> Result<String, CliError> {
+        let url = format!("{}{INVITES_API_PATH}", self.relay_url);
+        let mut payload = serde_json::Map::new();
+        if let Some(ttl_secs) = ttl_secs {
+            payload.insert("ttl_secs".into(), serde_json::json!(ttl_secs));
+        }
+        if let Some(max_uses) = max_uses {
+            payload.insert("max_uses".into(), serde_json::json!(max_uses));
+        }
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::Value::Object(payload))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+        let resp = self
+            .with_auth_tag(
+                self.http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .body(body),
+            )
+            .send()
+            .await?;
+        self.handle_response(resp).await
+    }
+
+    /// `POST /api/invites/claim` - redeem `code`, signed by this client's key,
+    /// which is the key that ends up a member.
+    ///
+    /// This route is exempt from the relay's membership gate by design: the
+    /// whole point is that the signer is not a member yet. It is idempotent -
+    /// a second claim answers `already_member` - so it keeps the standard
+    /// retry policy.
+    ///
+    /// `policy_receipt` is required only on a relay with a configured join
+    /// policy, which otherwise refuses the claim with `join_policy_required`.
+    /// Mint one with [`BuzzClient::accept_invite_policy`].
+    pub async fn claim_invite(
+        &self,
+        code: &str,
+        policy_receipt: Option<&str>,
+    ) -> Result<String, CliError> {
+        let url = format!("{}{INVITES_API_PATH}/claim", self.relay_url);
+        let mut payload = serde_json::Map::new();
+        payload.insert("code".into(), serde_json::json!(code));
+        if let Some(receipt) = policy_receipt {
+            payload.insert("policy_receipt".into(), serde_json::json!(receipt));
+        }
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::Value::Object(payload))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `POST /api/invites/accept-policy` - exchange an explicit acceptance of
+    /// the relay's join policy for the short-lived receipt
+    /// [`BuzzClient::claim_invite`] needs.
+    ///
+    /// Unauthenticated: the receipt is bound to the code and the policy
+    /// version, not to a key, which is why the relay does not sign-gate it.
+    /// A relay with no configured policy answers `404
+    /// join_policy_not_configured`, and needs no receipt to claim.
+    pub async fn accept_invite_policy(
+        &self,
+        code: &str,
+        policy_version: &str,
+        age_confirmed: bool,
+    ) -> Result<String, CliError> {
+        let url = format!("{}{INVITES_API_PATH}/accept-policy", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "code": code,
+                "policy_version": policy_version,
+                "age_confirmed": age_confirmed,
+            }))
+            .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let resp = self
+                    .http
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .body(body)
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/join-policy` - the policy a claimer has to accept, and the
+    /// `version` string `accept-policy` echoes back. Unauthenticated.
+    pub async fn join_policy(&self) -> Result<String, CliError> {
+        let url = format!("{}/api/join-policy", self.relay_url);
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
     }
 
     /// Submit a signed Nostr event via POST /events.
@@ -3039,6 +3191,368 @@ mod communities_api_tests {
             captured.lock().unwrap().len(),
             1,
             "create must not retry a non-idempotent POST"
+        );
+    }
+}
+
+/// Wire tests for the invite routes, against an axum stand-in relay.
+///
+/// The parts worth pinning are the ones a caller cannot see from the printed
+/// JSON: `create` and `claim` must both carry a NIP-98 `Authorization`
+/// header, `claim` must send the bare code whether it was given a code or a
+/// landing URL, and `create` must not retry a mint the relay may already have
+/// committed.
+#[cfg(test)]
+mod invites_api_tests {
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use nostr::Keys;
+    use tokio::net::TcpListener;
+
+    use super::super::commands::invites::code_for_relay;
+    use super::super::error::{exit_code, CliError};
+    use super::BuzzClient;
+
+    /// One captured request: what the stand-in relay saw.
+    #[derive(Clone, Debug, Default)]
+    struct Seen {
+        path: String,
+        authorization: Option<String>,
+        body: String,
+    }
+
+    type Captured = Arc<Mutex<Vec<Seen>>>;
+
+    /// Status and body the stand-in relay answers every route with.
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct Harness {
+        captured: Captured,
+        reply: Reply,
+    }
+
+    fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        if let Ok(mut log) = harness.captured.lock() {
+            log.push(seen);
+        }
+        (harness.reply.status, harness.reply.body.to_string())
+    }
+
+    fn header_string(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    /// Spawn a stand-in relay exposing the invite routes, all answering
+    /// `reply`. Returns its base URL and the capture log.
+    async fn invites_server(reply: Reply) -> (String, Captured) {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let harness = Harness {
+            captured: captured.clone(),
+            reply,
+        };
+
+        fn post_route(path: &'static str) -> axum::routing::MethodRouter<Harness> {
+            post(
+                move |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: path.into(),
+                            authorization: header_string(&headers),
+                            body,
+                        },
+                    )
+                },
+            )
+        }
+
+        let app = Router::new()
+            .route("/api/invites", post_route("/api/invites"))
+            .route("/api/invites/claim", post_route("/api/invites/claim"))
+            .route(
+                "/api/invites/accept-policy",
+                post_route("/api/invites/accept-policy"),
+            )
+            .route(
+                "/api/join-policy",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/join-policy".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .with_state(harness);
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) => panic!("bind failed: {e}"),
+        };
+        let addr: SocketAddr = match listener.local_addr() {
+            Ok(addr) => addr,
+            Err(e) => panic!("local_addr failed: {e}"),
+        };
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    fn ok_reply(body: &'static str) -> Reply {
+        Reply {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    fn test_client(base_url: &str) -> BuzzClient {
+        match BuzzClient::new(base_url.to_string(), Keys::generate(), None, None) {
+            Ok(client) => client,
+            Err(e) => panic!("client construction failed: {e:?}"),
+        }
+    }
+
+    fn only(captured: &Captured) -> Seen {
+        let log = match captured.lock() {
+            Ok(log) => log,
+            Err(e) => panic!("capture log poisoned: {e}"),
+        };
+        assert_eq!(log.len(), 1, "expected exactly one request, got {:?}", *log);
+        log[0].clone()
+    }
+
+    fn nostr_auth(seen: &Seen, what: &str) {
+        let auth = match seen.authorization.as_deref() {
+            Some(auth) => auth,
+            None => panic!("{what} must send a NIP-98 Authorization header"),
+        };
+        assert!(
+            auth.starts_with("Nostr "),
+            "{what} must send a NIP-98 header, got {auth:?}"
+        );
+    }
+
+    /// An omitted TTL and use cap must be omitted from the body, not sent as
+    /// nulls or client-side defaults: the relay owns both defaults, and its
+    /// TTL bounds reject a value this client would have to guess.
+    #[tokio::test]
+    async fn create_posts_an_empty_body_with_nip98_auth_by_default() {
+        let (base, captured) = invites_server(ok_reply(r#"{"code":"v2.abc"}"#)).await;
+        let body = match test_client(&base).mint_invite(None, None).await {
+            Ok(body) => body,
+            Err(e) => panic!("mint failed: {e:?}"),
+        };
+
+        assert_eq!(body, r#"{"code":"v2.abc"}"#, "body is passed through");
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/invites");
+        assert_eq!(seen.body, "{}");
+        nostr_auth(&seen, "create");
+    }
+
+    #[tokio::test]
+    async fn create_sends_ttl_and_max_uses_when_given() {
+        let (base, captured) = invites_server(ok_reply(r#"{"code":"v2.abc"}"#)).await;
+        if let Err(e) = test_client(&base).mint_invite(Some(3600), Some(5)).await {
+            panic!("mint failed: {e:?}");
+        }
+
+        let seen = only(&captured);
+        // serde_json orders object keys lexically, so the wire body is not in
+        // declaration order. What matters is that both values arrive.
+        assert_eq!(seen.body, r#"{"max_uses":5,"ttl_secs":3600}"#);
+    }
+
+    /// Minting is not idempotent: a retried POST after a mint the relay
+    /// committed leaves a second live code nobody knows about.
+    #[tokio::test]
+    async fn create_is_attempted_exactly_once_on_failure() {
+        let (base, captured) = invites_server(Reply {
+            status: StatusCode::BAD_GATEWAY,
+            body: r#"{"error":"bad gateway"}"#,
+        })
+        .await;
+
+        let err = match test_client(&base).mint_invite(None, None).await {
+            Err(err) => err,
+            Ok(body) => panic!("expected a failure, got {body}"),
+        };
+        assert!(matches!(err, CliError::Relay { status: 502, .. }));
+        assert_eq!(
+            captured.lock().map(|log| log.len()).unwrap_or_default(),
+            1,
+            "create must not retry a non-idempotent POST"
+        );
+    }
+
+    /// Only owners and admins may mint, and the relay says so with 403. That
+    /// has to reach the caller as an auth error (exit 3) rather than as a
+    /// relay fault.
+    #[tokio::test]
+    async fn create_forbidden_maps_to_the_auth_exit_code() {
+        let (base, _captured) = invites_server(Reply {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"error":"only relay owners and admins can create invites"}"#,
+        })
+        .await;
+
+        let err = match test_client(&base).mint_invite(None, None).await {
+            Err(err) => err,
+            Ok(body) => panic!("expected a failure, got {body}"),
+        };
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 403);
+                assert_eq!(body, "only relay owners and admins can create invites");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 3);
+    }
+
+    #[tokio::test]
+    async fn claim_posts_the_code_with_nip98_auth() {
+        let (base, captured) = invites_server(ok_reply(r#"{"status":"joined"}"#)).await;
+        let body = match test_client(&base).claim_invite("v2.abcdef", None).await {
+            Ok(body) => body,
+            Err(e) => panic!("claim failed: {e:?}"),
+        };
+
+        assert_eq!(body, r#"{"status":"joined"}"#, "body is passed through");
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/invites/claim");
+        assert_eq!(seen.body, r#"{"code":"v2.abcdef"}"#);
+        nostr_auth(&seen, "claim");
+    }
+
+    /// Both accepted argument forms must reach the relay as the same bare
+    /// code: the landing URL is the thing a person actually pastes.
+    #[tokio::test]
+    async fn claim_accepts_both_the_code_and_the_landing_url_forms() {
+        let (base, captured) = invites_server(ok_reply(r#"{"status":"joined"}"#)).await;
+        let client = test_client(&base);
+        let landing = format!("{base}/invite/v2.abcdef");
+
+        for input in ["v2.abcdef", landing.as_str()] {
+            let code = match code_for_relay(&client, input) {
+                Ok(code) => code,
+                Err(e) => panic!("{input:?} should resolve, got {e:?}"),
+            };
+            if let Err(e) = client.claim_invite(&code, None).await {
+                panic!("claim of {input:?} failed: {e:?}");
+            }
+        }
+
+        let log = match captured.lock() {
+            Ok(log) => log.clone(),
+            Err(e) => panic!("capture log poisoned: {e}"),
+        };
+        assert_eq!(log.len(), 2, "expected one request per form, got {log:?}");
+        for seen in &log {
+            assert_eq!(seen.path, "/api/invites/claim");
+            assert_eq!(seen.body, r#"{"code":"v2.abcdef"}"#);
+            nostr_auth(seen, "claim");
+        }
+    }
+
+    #[tokio::test]
+    async fn claim_sends_a_policy_receipt_when_given_one() {
+        let (base, captured) = invites_server(ok_reply(r#"{"status":"joined"}"#)).await;
+        if let Err(e) = test_client(&base)
+            .claim_invite("v2.abcdef", Some("receipt.xyz"))
+            .await
+        {
+            panic!("claim failed: {e:?}");
+        }
+
+        let seen = only(&captured);
+        assert_eq!(
+            seen.body,
+            r#"{"code":"v2.abcdef","policy_receipt":"receipt.xyz"}"#
+        );
+    }
+
+    /// The relay refuses a policy-gated claim with 403 `join_policy_required`.
+    /// That message is the only signal telling a caller to run
+    /// `invites accept-policy` first, so it has to survive intact.
+    #[tokio::test]
+    async fn a_policy_gated_claim_surfaces_the_relay_message() {
+        let (base, _captured) = invites_server(Reply {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"error":"join_policy_required"}"#,
+        })
+        .await;
+
+        let err = match test_client(&base).claim_invite("v2.abcdef", None).await {
+            Err(err) => err,
+            Ok(body) => panic!("expected a failure, got {body}"),
+        };
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 403);
+                assert_eq!(body, "join_policy_required");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 3);
+    }
+
+    /// The receipt is bound to the code and policy version rather than to a
+    /// key, so the relay does not sign-gate this route and neither does the
+    /// client.
+    #[tokio::test]
+    async fn accept_policy_posts_unauthenticated() {
+        let (base, captured) = invites_server(ok_reply(r#"{"receipt":"r.1"}"#)).await;
+        if let Err(e) = test_client(&base)
+            .accept_invite_policy("v2.abcdef", "2026-01-01", true)
+            .await
+        {
+            panic!("accept-policy failed: {e:?}");
+        }
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/invites/accept-policy");
+        assert_eq!(
+            seen.body,
+            r#"{"age_confirmed":true,"code":"v2.abcdef","policy_version":"2026-01-01"}"#
+        );
+        assert!(
+            seen.authorization.is_none(),
+            "accept-policy must not send a NIP-98 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_policy_is_an_unauthenticated_get() {
+        let (base, captured) = invites_server(ok_reply(r#"{"policy":null}"#)).await;
+        let body = match test_client(&base).join_policy().await {
+            Ok(body) => body,
+            Err(e) => panic!("join-policy failed: {e:?}"),
+        };
+
+        assert_eq!(body, r#"{"policy":null}"#);
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/join-policy");
+        assert!(
+            seen.authorization.is_none(),
+            "join-policy must not send a NIP-98 header"
         );
     }
 }
