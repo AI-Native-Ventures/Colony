@@ -301,6 +301,63 @@ enum Cmd {
     /// Create and inspect the local identity key (no relay connection needed)
     #[command(subcommand)]
     Identity(IdentityCmd),
+    /// Mint and claim relay invites (`/api/invites`)
+    #[command(subcommand)]
+    Invites(InvitesCmd),
+}
+
+/// Subcommands for `buzz invites`: the relay's invite surface
+/// (`/api/invites`), the same one the desktop app's invite dialog and join
+/// screen drive.
+///
+/// `create` is signed by the CLI's key and needs that key to be an owner or
+/// admin of the community the relay URL resolves to. `claim` is signed by the
+/// key that is joining, and is exempt from the relay's membership gate by
+/// design - a stranger has to be able to redeem a code.
+///
+/// `accept-policy` and `policy` matter only on a relay configured with a join
+/// policy; without one, `claim` needs neither.
+#[derive(Subcommand)]
+pub enum InvitesCmd {
+    /// Mint an invite code and print its shareable landing URL.
+    Create {
+        /// Invite lifetime in seconds. Omitted, the relay applies its own
+        /// default (72 h) and enforces its own bounds.
+        #[arg(long)]
+        ttl_secs: Option<u64>,
+        /// Maximum redemptions before the invite is exhausted. Omitted, the
+        /// invite is unlimited.
+        #[arg(long)]
+        max_uses: Option<i32>,
+    },
+    /// Redeem an invite with this CLI's key, joining the community.
+    ///
+    /// Takes either the bare code or the landing URL `create` printed. A
+    /// landing URL for a different relay is refused rather than claimed
+    /// against the configured one.
+    Claim {
+        /// Invite code, landing URL, or `buzz://join?...` deep link
+        invite: String,
+        /// Receipt from `invites accept-policy`, required only on a relay
+        /// with a configured join policy
+        #[arg(long)]
+        policy_receipt: Option<String>,
+    },
+    /// Accept this relay's join policy for an invite and print the receipt
+    /// `claim --policy-receipt` needs.
+    AcceptPolicy {
+        /// Invite code, landing URL, or `buzz://join?...` deep link
+        invite: String,
+        /// Policy version being accepted, as reported by `invites policy`
+        #[arg(long)]
+        policy_version: String,
+        /// Assert the minimum-age requirement, when the relay requires one
+        #[arg(long)]
+        age_confirmed: bool,
+    },
+    /// Print this relay's join policy, including the version string
+    /// `accept-policy` has to echo back.
+    Policy,
 }
 
 /// Subcommands for `buzz communities`: the relay's member self-serve
@@ -3484,6 +3541,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Communities(sub) => commands::communities::dispatch(sub, &client).await,
+        Cmd::Invites(sub) => commands::invites::dispatch(sub, &client).await,
         Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
@@ -4071,6 +4129,7 @@ mod tests {
             "grants",
             "identity",
             "initiatives",
+            "invites",
             "issues",
             "jobs",
             "ledger",
