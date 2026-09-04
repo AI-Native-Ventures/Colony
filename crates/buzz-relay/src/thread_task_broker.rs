@@ -472,7 +472,7 @@ async fn authorize_agent_subtask(
         .ok_or_else(|| "the parent task does not exist".to_owned())?;
     let parent = buzz_sdk::company::parse_task_event(&parent)
         .map_err(|error| format!("the parent task is unreadable: {error}"))?;
-    if !parent.assignee_persona_ids.iter().any(|id| *id == persona) {
+    if !parent.assignee_persona_ids.contains(&persona) {
         return Err("only an assignee of the parent may open a sub-task under it".to_owned());
     }
     Ok(())
@@ -701,20 +701,13 @@ pub(crate) async fn handle_task_report(
     let previous = buzz_sdk::company::parse_task_event(&previous_event)
         .map_err(|error| format!("that task is unreadable: {error}"))?;
 
-    if !previous
-        .assignee_persona_ids
-        .iter()
-        .any(|id| *id == persona)
-    {
+    if !previous.assignee_persona_ids.contains(&persona) {
         return Err("only an assignee of this task may report it complete".to_owned());
     }
     // A repeat report is the same claim, so it is answered rather than
     // refused: an agent retrying after a lost connection must not be told its
     // work does not count.
-    if previous
-        .reported_complete_by
-        .iter()
-        .any(|id| *id == persona)
+    if previous.reported_complete_by.contains(&persona)
         || matches!(
             previous.status,
             TaskStatus::Completed | TaskStatus::Cancelled

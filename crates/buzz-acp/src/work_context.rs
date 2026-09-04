@@ -225,9 +225,7 @@ pub fn hydrate(
     // team. Anything else is a message wrong about who is accountable, and
     // accepting it would charge the turn to a team that never took the work.
     if task.owning_team_id != reference.owning_team_id
-        && !responder_teams
-            .iter()
-            .any(|team| *team == reference.owning_team_id)
+        && !responder_teams.contains(&reference.owning_team_id)
     {
         return Err("the message and the task disagree about the owning team".to_string());
     }
@@ -528,8 +526,7 @@ async fn fetch_responder_teams(
         if content
             .persona_ids
             .unwrap_or_default()
-            .iter()
-            .any(|id| *id == persona_id)
+            .contains(&persona_id)
         {
             teams.push(team_id);
         }
