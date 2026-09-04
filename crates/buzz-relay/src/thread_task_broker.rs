@@ -21,6 +21,7 @@ use buzz_core::{
     company::{
         all_assignees_reported, validate_task, CommercialPurpose, CompanyTask, CompanyTeamRef,
         DoerKind, TaskStatus, ThreadAttach, ThreadAttachMode, MAX_THREAD_SUBTASKS,
+        THREAD_TASK_PREFIX,
     },
     kind::{
         KIND_COMPANY_ACTION, KIND_COMPANY_RECEIPT, KIND_MANAGED_AGENT, KIND_TASK, KIND_TASK_REPORT,
@@ -732,7 +733,14 @@ async fn record_thread_root(
 /// alone for the same reason, plus a simpler one: rewriting a finished record
 /// to improve a filter is not worth touching the record at all.
 fn thread_root_backfill(previous: &CompanyTask, root_hex: &str) -> Option<CompanyTask> {
-    if previous.thread_root.is_some()
+    // Only tasks this path minted are rewritten. A task an older client path
+    // created is somebody else's record: the client that made it is holding a
+    // head id it is about to complete against, and replacing that head under
+    // it turns an ordinary completion into a compare-and-set refusal. That is
+    // what broke the live Blocks gate, whose agent completes exactly such a
+    // task, while every thread task this relay opens is still taught its root.
+    if !previous.id.starts_with(THREAD_TASK_PREFIX)
+        || previous.thread_root.is_some()
         || matches!(
             previous.status,
             TaskStatus::Completed | TaskStatus::Cancelled
@@ -912,6 +920,17 @@ mod tests {
         assert_eq!(
             replacement.id, task.id,
             "it is the same task, told where it lives"
+        );
+    }
+
+    #[test]
+    fn a_task_this_path_did_not_mint_is_never_rewritten() {
+        let mut legacy = sample_task();
+        legacy.id = "chat:0f2a91b4".to_owned();
+        legacy.thread_root = None;
+        assert!(
+            thread_root_backfill(&legacy, &"b".repeat(64)).is_none(),
+            "an older client is holding this head's id to complete against"
         );
     }
 

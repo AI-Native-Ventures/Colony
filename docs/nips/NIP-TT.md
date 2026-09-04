@@ -114,11 +114,15 @@ names that root: readers filter on `threadRoot`, so without it a Task opened by
 a thread's FIRST message would be invisible to "which Task belongs to this
 thread" while one opened from a reply was not.
 
-That rewrite keeps `updatedAt` exactly where it was, because nothing about the
-work changed and a client that read the Task beforehand computes its next
-replacement's timestamp from what it read. The head's event id does change, so
-a client performing a compare-and-set write (the desktop's "mark done") must
-re-read the head first, which it has to do anyway.
+That rewrite is confined to Tasks this path minted, whose ids carry the
+`thread-task:` prefix. A Task an older client path created is somebody else's
+record: the client that made it holds the head id it is about to complete
+against, and replacing that head under it turns an ordinary completion into a
+compare-and-set refusal. The rewrite also keeps `updatedAt` exactly where it
+was, because nothing about the work changed and a client that read the Task
+beforehand computes its next replacement's timestamp from what it read. The
+head's event id does change, so a client performing a compare-and-set write on
+a thread Task re-reads the head first.
 
 ## Task Completion Report (kind `40026`)
 

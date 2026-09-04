@@ -34,6 +34,14 @@ pub const MAX_THREAD_SUBTASKS: usize = 20;
 /// knows which task the relay will hand back. The prefix keeps the two id
 /// namespaces from ever colliding.
 pub const THREAD_SLOT_PREFIX: &str = "thread-slot:";
+/// Prefix every task the thread-attach path mints carries.
+///
+/// The relay rewrites a task head to teach it its thread root, and this is
+/// what keeps that rewrite off records it did not create: a task minted by an
+/// older client path is somebody else's record, and churning its head would
+/// invalidate the compare-and-set token whichever client is about to complete
+/// it already holds.
+pub const THREAD_TASK_PREFIX: &str = "thread-task:";
 /// Schema string every pipeline Template carries.
 pub const TEMPLATE_SCHEMA: &str = "colony.template/v1";
 const MAX_ID_LEN: usize = 128;

@@ -99,7 +99,7 @@ pub fn thread_task_id(
         "thread-task",
         &format!("{channel_id}:{thread_key}:{send_id}:{}", slot.as_str()),
     );
-    format!("thread-task:{derived}")
+    format!("{THREAD_TASK_PREFIX}{derived}")
 }
 
 /// What a client supplies to charge one send to its thread's task.
