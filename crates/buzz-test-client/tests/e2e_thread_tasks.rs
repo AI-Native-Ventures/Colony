@@ -160,6 +160,38 @@ async fn seed_member(keys: &Keys, role: &str, agent_owner: Option<&Keys>) {
     .await;
 }
 
+/// Send one event, retrying past a silent transport window.
+///
+/// `e2e_company_work` learned this the hard way and its comment is worth
+/// repeating: the relay going quiet for one window proves nothing about the
+/// write, so a stalled window reported as "team accepted: Timeout" is a
+/// transport event dressed up as a relay verdict. Only `Timeout` is retried.
+/// An answered-but-rejected write is returned untouched, because a relay that
+/// says no is an answer, and retrying past it would hide exactly the failures
+/// this suite exists to catch.
+///
+/// Safe because the same signed event carries the same id: an addressable
+/// event replaces itself, and a re-sent one the relay already stored comes
+/// back as a duplicate rather than as a second write. This is not a sleep
+/// waiting for something to become true; it is a resend of an idempotent
+/// write whose answer went missing.
+async fn send_past_transport_stall(
+    client: &mut BuzzTestClient,
+    event: nostr::Event,
+    what: &str,
+) -> buzz_ws_client::OkResponse {
+    for attempt in 0..8 {
+        match client.send_event(event.clone()).await {
+            Ok(ok) => return ok,
+            Err(buzz_test_client::TestClientError::Timeout) => {
+                eprintln!("{what} send attempt {attempt} timed out, retrying");
+            }
+            Err(error) => panic!("{what}: {error}"),
+        }
+    }
+    panic!("{what}: the relay never answered eight send attempts");
+}
+
 async fn create_channel(keys: &Keys) -> String {
     let client = reqwest::Client::new();
     let channel_uuid = Uuid::new_v4();
@@ -199,10 +231,8 @@ async fn publish_team(client: &mut BuzzTestClient, keys: &Keys, team: &CompanyTe
     .sign_with_keys(keys)
     .expect("team signs");
     assert!(
-        client
-            .send_event(event)
+        send_past_transport_stall(client, event, "team accepted")
             .await
-            .expect("team accepted")
             .accepted,
         "the relay must accept the team head this suite validates against"
     );
@@ -229,10 +259,8 @@ async fn publish_managed_agent(
     .sign_with_keys(owner)
     .expect("managed agent signs");
     assert!(
-        client
-            .send_event(event)
+        send_past_transport_stall(client, event, "managed agent accepted")
             .await
-            .expect("managed agent accepted")
             .accepted,
         "the relay must accept the managed-agent head personas resolve through"
     );
@@ -250,7 +278,7 @@ async fn broker(
         .sign_with_keys(keys)
         .expect("action signs");
     let action_id = event.id.to_hex();
-    let ok = client.send_event(event).await.expect("relay answers");
+    let ok = send_past_transport_stall(client, event, "the relay answers every action").await;
     eprintln!(
         "action {} accepted={} message={:?}",
         &action_id[..12],
@@ -433,10 +461,8 @@ async fn a_task_opened_by_a_threads_first_message_learns_its_root() {
     .expect("message signs");
     let root = message.id.to_hex();
     assert!(
-        client
-            .send_event(message)
+        send_past_transport_stall(&mut client, message, "the relay answers the message")
             .await
-            .expect("relay answers the message")
             .accepted,
         "the thread root message is stored"
     );
@@ -942,10 +968,8 @@ async fn a_task_closes_when_every_assignee_has_reported_and_takes_its_sub_task_w
     .sign_with_keys(&agent)
     .expect("report signs");
     assert!(
-        agent_client
-            .send_event(report)
+        send_past_transport_stall(&mut agent_client, report, "the relay answers the report")
             .await
-            .expect("relay answers the report")
             .accepted,
         "an assignee may report its own share complete"
     );
