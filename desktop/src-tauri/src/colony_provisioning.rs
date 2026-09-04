@@ -107,17 +107,32 @@ pub async fn colony_create_community(
     parse_response(response).await
 }
 
-/// `GET /api/communities/mine` — NIP-98 signed with the active identity.
+/// `GET /api/communities/mine[?scope=owner|member]` - NIP-98 signed with the
+/// active identity.
+///
+/// `scope` is optional and defaults to the relay's own default (`owner`), so
+/// callers that omit it get exactly the listing this command has always
+/// returned. `scope = "member"` asks for every community the signer belongs
+/// to, which is what community discovery needs.
+///
+/// The NIP-98 `u` tag covers the bare path only: the relay validates the
+/// signature against `/api/communities/mine` and never the query string, so
+/// the scope filter rides along without changing how the header is built.
 #[tauri::command]
-pub async fn colony_list_my_communities(state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn colony_list_my_communities(
+    state: State<'_, AppState>,
+    scope: Option<String>,
+) -> Result<Value, String> {
     let base = relay_api_base_url_with_override(&state);
     let url = format!("{base}/api/communities/mine");
     let auth = build_nip98_auth_header(&Method::GET, &url, &[], &state)?;
 
-    let response = state
-        .http_client
-        .get(&url)
-        .header("Authorization", auth)
+    let mut request = state.http_client.get(&url).header("Authorization", auth);
+    if let Some(scope) = scope.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        request = request.query(&[("scope", scope)]);
+    }
+
+    let response = request
         .send()
         .await
         .map_err(|e| format!("relay unreachable: {e}"))?;

@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 445,
-    "rust_lines": 173437,
+    "rust_lines": 173452,
     "tauri_coupled": 177,
     "portable": 268,
     "portable_lines": 98972,
@@ -750,7 +750,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:276",
+        "src/features/communities/useCommunityInit.ts:286",
         "src/features/communities/useNestNotifications.ts:18",
         "src/features/communities/useNestNotifications.ts:34"
       ]
@@ -948,7 +948,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/hostedCommunityApi.ts:54",
+        "src/features/communities/hostedCommunityApi.ts:62",
         "src/parity/session/script.ts:1307",
         "src/parity/session/script.ts:1308"
       ]
@@ -2329,7 +2329,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/communities/useCommunityInit.ts:262",
+        "src/features/communities/useCommunityInit.ts:272",
         "src/parity/session/script.ts:316",
         "src/shared/api/tauriIdentity.ts:37"
       ]

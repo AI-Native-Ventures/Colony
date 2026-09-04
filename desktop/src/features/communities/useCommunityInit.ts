@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useSeedCommunitiesFromRelay } from "./seedCommunitiesFromRelay";
+
 import { relayClient } from "@/shared/api/relayClient";
 import { resetRateLimitGate } from "@/shared/api/relayRateLimitGate";
 import {
@@ -139,6 +141,14 @@ export function useCommunityInit(
     needsSetup: false,
     appliedKey: null,
   });
+
+  // Once the backend has this community's relay installed, ask that relay which
+  // other communities this identity belongs to and add the missing ones. Purely
+  // additive and failure-silent; see seedCommunitiesFromRelay.ts.
+  useSeedCommunitiesFromRelay(
+    activeCommunity?.relayUrl ?? null,
+    result.isReady && result.appliedKey === communityKey,
+  );
 
   // Track whether this is the initial mount or a community switch.
   // On the initial mount we skip resetting singletons (they're fresh).
