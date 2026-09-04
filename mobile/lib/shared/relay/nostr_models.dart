@@ -26,6 +26,10 @@ abstract final class EventKind {
   static const companyProfile = 30179;
   static const initiative = 30180;
   static const task = 30181;
+  // One assignee reporting its own share of a shared thread task done. The
+  // relay closes the task once every assignee has reported; quiet closes
+  // nothing.
+  static const taskReport = 40026;
   static const companyAction = 40013;
   static const companyReceipt = 40014;
   // Canonical external parties and the Lead/Client views over them. Mobile

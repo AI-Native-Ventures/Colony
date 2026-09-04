@@ -71,6 +71,21 @@ pub(crate) fn is_company_action_candidate(event: &Event) -> bool {
     event.kind.as_u16() as u32 == KIND_COMPANY_ACTION
 }
 
+/// Whether this company action is a thread attach rather than a governance
+/// request.
+///
+/// Read off the envelope's own `company-action` tag, before any parsing, so
+/// ingest can tell the two apart while deciding which auth rules apply: a
+/// governance request changes company state and is owner-only, while an
+/// attach only asks which task a send in one thread belongs to.
+pub(crate) fn is_thread_attach_candidate(event: &Event) -> bool {
+    is_company_action_candidate(event)
+        && event.tags.iter().any(|tag| {
+            let parts = tag.as_slice();
+            parts.len() >= 3 && parts[0] == "company-action" && parts[2] == "attach"
+        })
+}
+
 fn scalar_tag(name: &str, value: &str) -> Result<Tag, String> {
     Tag::parse([name, value]).map_err(|error| format!("failed to build `{name}` tag: {error}"))
 }
@@ -215,6 +230,12 @@ pub(crate) fn build_head(
             }
             (KIND_TEMPLATE, tags, serde_json::to_value(template))
         }
+        // A thread attach asks which task a send belongs to. It is answered
+        // by `thread_task_broker` before this point and never becomes a head
+        // of its own, so there is nothing here to build.
+        CompanyActionPayload::ThreadAttach(_) => {
+            return Err("a thread attach has no canonical head of its own".to_owned());
+        }
     };
     let content =
         content.map_err(|error| format!("failed to serialize company payload: {error}"))?;
@@ -236,7 +257,7 @@ fn serialized_slug<T: Serialize>(value: &T) -> Result<String, String> {
 }
 
 /// Build the exact four-tag relay-signed receipt the SDK parser accepts.
-fn build_receipt(
+pub(crate) fn build_receipt(
     relay: &Keys,
     action_event: &Event,
     action: &CompanyAction,
@@ -651,7 +672,7 @@ const MAX_TEAM_REFS: usize = 500;
 /// teams — has no valid representation here. Passing one through would fail
 /// validation for the WHOLE list, breaking every Task action in the community;
 /// skipping keeps the failure scoped to a Task that actually names such a team.
-async fn load_team_refs(
+pub(crate) async fn load_team_refs(
     tenant: &TenantContext,
     state: &AppState,
     owner_pubkey: &nostr::PublicKey,
@@ -729,6 +750,9 @@ async fn validate_payload_against_state(
     previous_head: Option<&Event>,
 ) -> Result<(), String> {
     match &action.payload {
+        // Routed to `thread_task_broker` before this point: an attach carries
+        // no entity to validate against stored state.
+        CompanyActionPayload::ThreadAttach(_) => {}
         CompanyActionPayload::Company(profile) => {
             validate_company(profile).map_err(|error| error.to_string())?;
             if let Some(previous) = previous_head {
@@ -799,7 +823,10 @@ async fn validate_payload_against_state(
 ///
 /// Takes no identifier: there is one profile per community, at one fixed
 /// coordinate, and `tenant` already says which community is being served.
-async fn load_company(tenant: &TenantContext, state: &AppState) -> Result<CompanyProfile, String> {
+pub(crate) async fn load_company(
+    tenant: &TenantContext,
+    state: &AppState,
+) -> Result<CompanyProfile, String> {
     let head = load_head(tenant, state, KIND_COMPANY_PROFILE, COMMUNITY_PROFILE_ID)
         .await?
         .ok_or_else(|| "this community has no operating profile yet".to_owned())?;
@@ -881,6 +908,23 @@ pub(crate) async fn handle_company_action(
         .await
         .map_err(|error| format!("database error registering company actor: {error}"))?;
 
+    // A thread attach is not a governance request: it asks which task a send
+    // belongs to, and every field of the answer is a relay decision. It is
+    // therefore authorized by membership, in its own broker, rather than by
+    // the human-owner check every other company action must pass. Routed
+    // before that check for exactly that reason.
+    if let CompanyActionPayload::ThreadAttach(request) = &action.payload {
+        let request = request.clone();
+        return crate::thread_task_broker::handle_thread_attach(
+            tenant,
+            state,
+            action_event,
+            &action,
+            &request,
+        )
+        .await;
+    }
+
     authorize_company_actor(tenant, state, action_event).await?;
 
     let payload_kind = match &action.payload {
@@ -889,6 +933,8 @@ pub(crate) async fn handle_company_action(
         CompanyActionPayload::Task(_) => KIND_TASK,
         CompanyActionPayload::Cohort(_) => KIND_COHORT,
         CompanyActionPayload::Template(_) => KIND_TEMPLATE,
+        // Routed above; a thread attach never reaches the head pipeline.
+        CompanyActionPayload::ThreadAttach(_) => KIND_TASK,
     };
     let entity_id = match &action.payload {
         CompanyActionPayload::Company(_) => COMMUNITY_PROFILE_ID.to_owned(),
@@ -896,6 +942,7 @@ pub(crate) async fn handle_company_action(
         CompanyActionPayload::Task(task) => task.id.clone(),
         CompanyActionPayload::Cohort(cohort) => cohort.id.clone(),
         CompanyActionPayload::Template(template) => template.id.clone(),
+        CompanyActionPayload::ThreadAttach(request) => request.id.clone(),
     };
     let previous_head = load_head(tenant, state, payload_kind, &entity_id).await?;
 
@@ -1027,6 +1074,12 @@ pub(crate) async fn handle_company_action(
                 {
                     emit_task_transition(tenant, state, transition, task).await;
                 }
+                // A closed task frees its thread, so the next work-implying
+                // message there opens a new task rather than reopening a
+                // finished one, and its sub-tasks close with it.
+                if matches!(task.status, TaskStatus::Completed | TaskStatus::Cancelled) {
+                    crate::thread_task_broker::release_and_cascade(tenant, state, task).await;
+                }
                 if task.status == TaskStatus::Completed {
                     derive_ready_dependents(tenant, state, &task.id).await;
                 } else if task.status == TaskStatus::Ready
@@ -1113,11 +1166,15 @@ fn check_expectations(action: &CompanyAction, previous_head: Option<&Event>) -> 
                 _ => Err("the record changed since this request was prepared".to_owned()),
             }
         }
+        // An attach asserts nothing about any head: it asks which task a send
+        // belongs to, and is answered by `thread_task_broker` before this
+        // check is reached.
+        (CompanyActionOperation::Attach, _) => Ok(()),
     }
 }
 
 /// Store and dispatch a conflict receipt for a legitimate owner request.
-async fn refuse(
+pub(crate) async fn refuse(
     state: &Arc<AppState>,
     tenant: &TenantContext,
     action_event: &Event,
@@ -1601,6 +1658,9 @@ mod tests {
             outcome_reason: None,
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_000,
             updated_at: 1_000,
         }

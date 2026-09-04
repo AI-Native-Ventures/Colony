@@ -314,6 +314,9 @@ mod tests {
             outcome_reason: None,
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_800_000_000,
             updated_at: 1_800_000_100,
         }

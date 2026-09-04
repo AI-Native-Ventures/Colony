@@ -2244,7 +2244,13 @@ async fn ingest_event_inner(
     // the owner's signature. Routed here, after the ban/timeout write-block, so
     // a restricted owner cannot change company state.
     if crate::company_broker::is_company_action_candidate(&event) {
-        if auth.channel_ids().is_some() {
+        // A thread attach is exempt from the channel-scope refusal below: it
+        // changes no company state, it is authorized by membership rather
+        // than ownership, and the agents that open sub-tasks hold exactly the
+        // channel-scoped tokens that refusal exists to stop from governing.
+        if auth.channel_ids().is_some()
+            && !crate::company_broker::is_thread_attach_candidate(&event)
+        {
             return Err(IngestError::AuthFailed(
                 "restricted: channel-scoped tokens cannot mutate company state".into(),
             ));
@@ -2269,6 +2275,17 @@ async fn ingest_event_inner(
                 Ok(IngestResult::refused(event_id_hex, message))
             }
         };
+    }
+
+    // One assignee reporting its own share of a shared thread task done.
+    // Agent-signed, so it is deliberately not a company action: a task worked
+    // by several agents can only be closed by the agents that worked it, and
+    // a Company Action can only be signed by the human owner.
+    if crate::thread_task_broker::is_task_report_candidate(&event) {
+        crate::thread_task_broker::handle_task_report(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // Party mutations are community-global governance requests authorized by
@@ -3786,6 +3803,26 @@ async fn ingest_event_inner(
             warn!(
                 event_id = %event_id_hex,
                 "auto-resolve from owner thread reply failed: {error}"
+            );
+        }
+    }
+
+    // A send that starts its own thread is charged to a task claimed under
+    // the send id, because the root event it will become does not exist until
+    // this moment. Now it does: move the claim onto the real root, or the
+    // first reply in this thread would look like a brand-new thread and open
+    // a second task for one conversation.
+    if matches!(kind_u32, KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2) {
+        if let Err(error) = crate::thread_task_broker::rebind_pending_thread_claim(
+            tenant,
+            state,
+            &stored_event.event,
+        )
+        .await
+        {
+            warn!(
+                event_id = %event_id_hex,
+                "rebinding this thread's task claim failed: {error}"
             );
         }
     }

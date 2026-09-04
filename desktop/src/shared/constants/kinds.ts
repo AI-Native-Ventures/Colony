@@ -89,6 +89,11 @@ export const KIND_MANAGED_AGENT = 30177;
 export const KIND_COMPANY_PROFILE = 30179;
 export const KIND_INITIATIVE = 30180;
 export const KIND_TASK = 30181;
+/** One assignee reporting its own share of a shared thread task done. Agent
+ * signable, unlike a company action, which only the human owner may sign: the
+ * relay closes the task once every assignee has reported. Mirror of
+ * buzz-core's KIND_TASK_REPORT. */
+export const KIND_TASK_REPORT = 40026;
 /** A named, bounded set of typed SubjectRef members. Inert data: no lifecycle
  * status, nothing consumes it yet. Mirror of buzz-core's KIND_COHORT. */
 export const KIND_COHORT = 30201;

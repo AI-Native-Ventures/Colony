@@ -94,6 +94,8 @@ pub mod subscription;
 pub mod telemetry;
 /// Row-zero host binding: resolve the request community from the connection host.
 pub mod tenant;
+/// One open task per thread: attach-or-open, completion reports, cascade close.
+pub(crate) mod thread_task_broker;
 /// Relay-side tunnel session directory and routing.
 pub mod tunnel;
 /// Webhook secret generation and constant-time comparison.

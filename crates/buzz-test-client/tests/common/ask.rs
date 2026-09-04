@@ -349,6 +349,9 @@ fn chat_task(id: &str, team: &CompanyTeamRef, stamp: i64) -> CompanyTask {
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: stamp,
         updated_at: stamp,
     }

@@ -10,20 +10,25 @@
 //! the current company owner, so an agent asks for a change in chat and an
 //! owner authorizes it.
 
+use buzz_core::company::ThreadAttachMode;
 use buzz_core::company::{
     CompanyProfile, CompanyTask, Initiative, TaskStatus, COMMUNITY_PROFILE_ID,
 };
 use buzz_core::kind::{
     KIND_COHORT, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE, KIND_TASK,
-    KIND_TEMPLATE,
+    KIND_TASK_REPORT, KIND_TEMPLATE,
 };
 use buzz_sdk::company::{
     build_company_action, parse_company_event, parse_initiative_event, parse_task_event,
     CompanyAction, CompanyActionOperation, CompanyActionPayload,
 };
+use buzz_sdk::thread_task::{plan_thread_attach, ThreadAttachRequest};
 use nostr::{Event, JsonUtil, PublicKey};
 use serde_json::{json, Value};
 use uuid::Uuid;
+
+/// Schema every completion report carries.
+const TASK_REPORT_SCHEMA: &str = "colony.task-report/v1";
 
 use crate::client::BuzzClient;
 use crate::error::CliError;
@@ -155,6 +160,156 @@ pub async fn dispatch_tasks(command: TasksCmd, client: &BuzzClient) -> Result<()
         TasksCmd::Get { id } => get_task(client, &id).await,
         TasksCmd::Put { file } => put_from_file(client, &file).await,
         TasksCmd::Complete { id } => complete_task(client, &id).await,
+        TasksCmd::Attach {
+            channel,
+            thread,
+            conversation,
+            send_id,
+            mode,
+            title,
+            agent_persona,
+            client_organization,
+            parent,
+        } => {
+            attach_thread_task(
+                client,
+                AttachArgs {
+                    channel,
+                    thread,
+                    conversation,
+                    send_id,
+                    mode,
+                    title,
+                    agent_persona,
+                    client_organization,
+                    parent,
+                },
+            )
+            .await
+        }
+        TasksCmd::ReportComplete { task, note } => {
+            report_task_complete(client, &task, note.as_deref()).await
+        }
+    }
+}
+
+/// Everything `buzz tasks attach` was given, kept together so the call does
+/// not need nine positional arguments.
+struct AttachArgs {
+    channel: String,
+    thread: Option<String>,
+    conversation: bool,
+    send_id: String,
+    mode: String,
+    title: String,
+    agent_persona: Option<String>,
+    client_organization: Option<String>,
+    parent: Option<String>,
+}
+
+/// Ask the relay which task this send belongs to.
+///
+/// The answer is the relay's, not this process's: a thread holds one open
+/// task, and two clients preparing the same send must not be able to talk
+/// themselves into two. The receipt names the head that answered, so a caller
+/// can read the task straight back out of it.
+async fn attach_thread_task(client: &BuzzClient, args: AttachArgs) -> Result<(), CliError> {
+    let mode = match args.mode.as_str() {
+        "open" => ThreadAttachMode::Open,
+        "attach" => ThreadAttachMode::Attach,
+        "new" => ThreadAttachMode::New,
+        other => {
+            return Err(CliError::Usage(format!(
+                "unknown attach mode `{other}`; use open, attach, or new"
+            )));
+        }
+    };
+    let relay = relay_self(client).await?;
+    let signer = client.keys().public_key();
+    let action = plan_thread_attach(ThreadAttachRequest {
+        channel_id: &args.channel,
+        thread_root: args.thread.as_deref(),
+        conversation_scope: args.conversation,
+        send_id: &args.send_id,
+        mode,
+        title: &args.title,
+        agent_persona_id: args.agent_persona.as_deref(),
+        client_organization_id: args.client_organization.as_deref(),
+        parent_task_id: args.parent.as_deref(),
+        owner_pubkey: &signer.to_hex(),
+        relay_pubkey: &relay.to_hex(),
+        now: chrono::Utc::now().timestamp(),
+    })
+    .map_err(CliError::Usage)?;
+
+    let builder = build_company_action(&action)
+        .map_err(|error| CliError::Usage(format!("invalid thread attach: {error}")))?;
+    let event = client.sign_event(builder)?;
+    let event_id = event.id.to_hex();
+    let response = client.submit_event(event).await?;
+    let accepted = response_accepted(&response);
+    let receipt = fetch_receipt(client, &event_id).await.ok();
+    println!(
+        "{}",
+        json!({
+            "event_id": event_id,
+            "accepted": accepted,
+            "message": response_message(&response),
+            "request_id": action.request_id,
+            "idempotency_key": action.idempotency_key,
+            "receipt": receipt
+        })
+    );
+    if accepted {
+        Ok(())
+    } else {
+        let message = response_message(&response);
+        let reason = message
+            .strip_prefix("conflict: ")
+            .unwrap_or(&message)
+            .to_owned();
+        Err(CliError::Conflict(reason))
+    }
+}
+
+/// Report this agent's own share of a task complete.
+///
+/// Not a Company Action: those may only be signed by the human owner, and a
+/// task worked by several agents can only be closed by the agents that worked
+/// it. The relay records the report and closes the task once every assignee
+/// has filed one. Nothing here can close a task early, and no amount of
+/// silence closes one at all.
+async fn report_task_complete(
+    client: &BuzzClient,
+    task_id: &str,
+    note: Option<&str>,
+) -> Result<(), CliError> {
+    let content = serde_json::to_string(&json!({
+        "schema": TASK_REPORT_SCHEMA,
+        "note": note,
+    }))
+    .map_err(|error| CliError::Other(format!("cannot build the report: {error}")))?;
+    let tag = nostr::Tag::parse(["task", task_id])
+        .map_err(|error| CliError::Usage(format!("invalid task id: {error}")))?;
+    let builder =
+        nostr::EventBuilder::new(nostr::Kind::Custom(KIND_TASK_REPORT as u16), content).tags([tag]);
+    let event = client.sign_event(builder)?;
+    let event_id = event.id.to_hex();
+    let response = client.submit_event(event).await?;
+    let accepted = response_accepted(&response);
+    println!(
+        "{}",
+        json!({
+            "event_id": event_id,
+            "accepted": accepted,
+            "message": response_message(&response),
+            "task_id": task_id
+        })
+    );
+    if accepted {
+        Ok(())
+    } else {
+        Err(CliError::Conflict(response_message(&response)))
     }
 }
 
@@ -296,6 +451,10 @@ async fn list_tasks(
         .into_iter()
         .filter(|task| company.is_none_or(|company| json_field(task, "companyId") == Some(company)))
         .filter(|task| initiative.is_none_or(|id| json_field(task, "initiativeId") == Some(id)))
+        // The hidden per-thread chat task exists so a turn that was not work
+        // still charges somewhere. Listing it would put "are you there?" back
+        // on the board this whole change exists to clear.
+        .filter(|task| task.get("hidden").and_then(Value::as_bool) != Some(true))
         .collect();
     println!("{}", json!({ "tasks": tasks }));
     Ok(())
@@ -360,6 +519,9 @@ pub(crate) fn payload_kind(payload: &CompanyActionPayload) -> u32 {
         CompanyActionPayload::Task(_) => KIND_TASK,
         CompanyActionPayload::Cohort(_) => KIND_COHORT,
         CompanyActionPayload::Template(_) => KIND_TEMPLATE,
+        // A thread attach addresses a slot in the Task coordinate space; it
+        // is never published through this path, which writes whole records.
+        CompanyActionPayload::ThreadAttach(_) => KIND_TASK,
     }
 }
 
@@ -370,6 +532,7 @@ pub(crate) fn payload_id(payload: &CompanyActionPayload) -> &str {
         CompanyActionPayload::Task(task) => &task.id,
         CompanyActionPayload::Cohort(cohort) => &cohort.id,
         CompanyActionPayload::Template(template) => &template.id,
+        CompanyActionPayload::ThreadAttach(request) => &request.id,
     }
 }
 

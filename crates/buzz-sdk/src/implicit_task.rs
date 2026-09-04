@@ -182,6 +182,9 @@ pub fn plan_implicit_task(
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: now,
         updated_at: now,
     };
@@ -356,6 +359,9 @@ pub fn plan_user_task(
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: request.now,
         updated_at: request.now,
     };
