@@ -15,9 +15,7 @@ import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomple
 import {
   coalesceAgentAutocompleteCandidates,
   coalesceAutocompleteCandidatesByKey,
-  filterAdmittedMentionPubkeys,
   filterCachedAgentSuggestions,
-  getAdmittedAgentPubkeys,
   getAgentIdentityPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
@@ -201,15 +199,20 @@ export function useMentions(
     () =>
       getMentionableAgentPubkeys({
         currentPubkey,
+        phase: "prepare",
         eligibilityScope: mentionChannelId
           ? { type: "channel", channelId: mentionChannelId }
-          : { type: "managed-only" },
+          : options?.channelType === "dm"
+            ? { type: "owned", channelId }
+            : { type: "managed-only" },
         managedAgentPubkeys,
         relayAgents: relayAgentsQuery.data,
         sharedChannelIds,
       }),
     [
       currentPubkey,
+      channelId,
+      options?.channelType,
       managedAgentPubkeys,
       mentionChannelId,
       relayAgentsQuery.data,
@@ -451,10 +454,6 @@ export function useMentions(
     relayAgentNamesByPubkey,
     relayAgentsQuery.data,
   ]);
-  const admittedAgentPubkeys = React.useMemo(
-    () => getAdmittedAgentPubkeys(mentionCandidates),
-    [mentionCandidates],
-  );
   const mentionCandidatesWithTeams = React.useMemo(
     () => [
       ...mentionCandidates,
@@ -847,21 +846,12 @@ export function useMentions(
         personaMentionMapRef.current.keys(),
         entityMentions.cohortMentionMapRef.current,
       );
-      // Only agent pubkeys the directory has admitted survive the extraction, so
-      // a candidate that went stale between autocomplete and send is dropped
-      // rather than p-tagged.
-      return filterAdmittedMentionPubkeys(
-        extracted,
-        new Set([
-          ...agentIdentityPubkeys,
-          ...selectedAgentMentionPubkeysRef.current,
-        ]),
-        admittedAgentPubkeys,
-      );
+      // Selections are intent, not cached authorization. Never discard a
+      // selected key because a refresh removed it from the picker; #7124
+      // moves that decision to the prepare and publish revalidation passes.
+      return extracted;
     },
     [
-      admittedAgentPubkeys,
-      agentIdentityPubkeys,
       entityMentions.blockMentionMapRef,
       entityMentions.cohortMentionMapRef,
       mentionCandidates,
@@ -876,7 +866,9 @@ export function useMentions(
     currentPubkey,
     eligibilityScope: mentionChannelId
       ? { type: "channel", channelId: mentionChannelId }
-      : { type: "managed-only" },
+      : options?.channelType === "dm"
+        ? { type: "owned", channelId }
+        : { type: "managed-only" },
     sharedChannelIds,
     ownerOnly: agentAccessOwnerOnlyQuery.data,
     ownerPolicyError: agentAccessOwnerOnlyQuery.error,

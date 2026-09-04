@@ -123,3 +123,50 @@ for (const [name, refetchOwnerProfiles] of [
     );
   });
 }
+
+test("an intended agent that is no longer admitted fails the send", async () => {
+  await assert.rejects(
+    revalidateAgentMentionPubkeys({
+      ...options(async () => ({
+        profiles: { [AGENT]: { ownerPubkey: OTHER_OWNER } },
+        missing: [],
+      })),
+      intendedAgentPubkeys: [AGENT],
+    }),
+    (error) => error.name === "AgentMentionAuthorizationError",
+  );
+});
+
+test("a stale key nobody intended is filtered out quietly", async () => {
+  const result = await revalidateAgentMentionPubkeys({
+    ...options(async () => ({
+      profiles: { [AGENT]: { ownerPubkey: OTHER_OWNER } },
+      missing: [],
+    })),
+  });
+
+  assert.deepEqual(result, [HUMAN]);
+});
+
+test("prepare admits an owner's own shared agent before the channel exists", async () => {
+  const result = await revalidateAgentMentionPubkeys({
+    ...options(async () => ({
+      profiles: { [AGENT]: { ownerPubkey: CURRENT } },
+      missing: [],
+    })),
+    phase: "prepare",
+    eligibilityScope: { type: "owned", channelId: null },
+    fetchRelayAgents: async () => [
+      {
+        pubkey: AGENT,
+        ownerPubkey: CURRENT,
+        respondTo: "owner-only",
+        respondToAllowlist: [],
+        channelIds: ["general"],
+      },
+    ],
+    intendedAgentPubkeys: [AGENT],
+  });
+
+  assert.deepEqual(result, [HUMAN, AGENT]);
+});

@@ -47,6 +47,7 @@ import {
   persistCanceledDraftIfUnchanged,
   runReportingFinishSendFailures,
   type SendMessageWithMentionFlowInput,
+  mentionRevalidationOptions,
   uniqueNormalizedPubkeys,
 } from "./useMentionSendFlow.helpers";
 
@@ -372,7 +373,11 @@ export function useMentionSendFlow({
       let uploadStarted = false;
       try {
         const admittedMentionPubkeys = uniqueNormalizedPubkeys(
-          await mentions.revalidateMentionPubkeys(mentionPubkeys),
+          await mentions.revalidateMentionPubkeys(
+            mentionPubkeys,
+            draft.capturedChannelId,
+            mentionRevalidationOptions(draft, "prepare"),
+          ),
         );
         if (!isMountedRef.current) return persistPreflightDraft();
         const admittedMentionPubkeySet = new Set(admittedMentionPubkeys);
@@ -532,8 +537,21 @@ export function useMentionSendFlow({
             return;
           }
           if (signal?.aborted) return;
+          // The pass immediately before signing and publish is always fresh:
+          // mention authorization is re-validated here unconditionally,
+          // whatever did or did not separate it from the admission pass
+          // above (#5681), and bounded to this destination and this mention
+          // set for remote agents (#6224).
           const revalidatedMentionPubkeys =
-            await mentions.revalidateMentionPubkeys(mentionPubkeys);
+            await mentions.revalidateMentionPubkeys(
+              mentionPubkeys,
+              sendChannelId ?? draft.capturedChannelId,
+              mentionRevalidationOptions(
+                draft,
+                "publish",
+                preparedAgentPubkeys,
+              ),
+            );
           if (signal?.aborted) return;
           const revalidatedExplicitAgentPubkeys =
             filterEffectiveExplicitAgentPubkeys(

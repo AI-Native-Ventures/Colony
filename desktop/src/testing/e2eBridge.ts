@@ -1034,6 +1034,7 @@ type RawSendChannelMessageResponse = {
 
 type RawRelayAgent = {
   pubkey: string;
+  owner_pubkey?: string | null;
   name: string;
   agent_type: string;
   channels: string[];
@@ -4803,6 +4804,14 @@ function syncMockRelayAgentsFromManagedAgents() {
     },
   );
 
+  // Owned discovery includes nonmembers, but membership must come from the
+  // actual roster, including additions and newly created DMs.
+  for (const agent of baseAgents) {
+    if (agent.owner_pubkey !== MOCK_IDENTITY_PUBKEY) continue;
+    const membership = getManagedAgentRelayMembership(agent.pubkey);
+    agent.channel_ids = membership.channelIds;
+    agent.channels = membership.channels;
+  }
   mockRelayAgents = [...baseAgents, ...managedAgentsAsRelay];
 }
 
@@ -13710,7 +13719,9 @@ export function maybeInstallE2eTauriMocks() {
           (agent) =>
             requested.has(agent.pubkey.toLowerCase()) &&
             !revoked.has(agent.pubkey.toLowerCase()) &&
-            (!channelId || agent.channel_ids.includes(channelId)),
+            (!channelId ||
+              agent.channel_ids.includes(channelId) ||
+              agent.owner_pubkey === MOCK_IDENTITY_PUBKEY),
         );
       }
       case "record_org_placement":

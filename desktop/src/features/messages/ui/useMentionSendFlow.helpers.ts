@@ -6,6 +6,7 @@ import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown
 import { attachWorkContext } from "@/features/company/attachWorkContext";
 import { mergeOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
+import type { MentionRevalidationOptions } from "@/features/messages/lib/agentMentionRevalidation";
 import type { QueuedMediaAttachment } from "@/features/messages/lib/backgroundMediaUploadStore";
 import type {
   DraftMentionRef,
@@ -328,4 +329,38 @@ export function isManagedAgentRunning(agent: ManagedAgent) {
 
 export function isProviderBackedAgent(agent: ManagedAgent) {
   return agent.backend.type === "provider";
+}
+
+/** Explicit Send without inviting retains nonmembers only as reference tags. */
+export function withoutInvitingRecipients(draft: PendingNonMemberMentionSend) {
+  const nonMemberPubkeys = new Set(draft.nonMemberPubkeys.map(normalizePubkey));
+  return {
+    mentionPubkeys: draft.mentionPubkeys.filter(
+      (pubkey) => !nonMemberPubkeys.has(normalizePubkey(pubkey)),
+    ),
+    outgoingTags: mergeOutgoingTagsWithReferenceMentions(
+      draft.outgoingTags,
+      nonMemberPubkeys,
+    ),
+  };
+}
+
+/**
+ * Carry captured recipient identity through composer clearing and uploads.
+ *
+ * Colony's pending send records one explicit agent set; upstream's split into
+ * inline and addressed sets arrives with #6315.
+ */
+export function mentionRevalidationOptions(
+  draft: Pick<PendingNonMemberMentionSend, "explicitAgentPubkeys">,
+  phase: "prepare" | "publish",
+  preparedAgentPubkeys: readonly string[] = [],
+): MentionRevalidationOptions {
+  return {
+    phase,
+    intendedAgentPubkeys: uniqueNormalizedPubkeys([
+      ...(draft.explicitAgentPubkeys ?? []),
+      ...preparedAgentPubkeys,
+    ]),
+  };
 }

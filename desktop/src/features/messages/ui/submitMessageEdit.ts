@@ -1,3 +1,7 @@
+import {
+  AgentMentionAuthorizationError,
+  type MentionRevalidationOptions,
+} from "@/features/messages/lib/agentMentionRevalidation";
 import type { QueuedMediaAttachment } from "@/features/messages/lib/backgroundMediaUploadStore";
 import { enqueueBackgroundMediaUpload } from "@/features/messages/lib/backgroundMediaUploadStore";
 import { hasMention } from "@/features/messages/lib/hasMention";
@@ -43,7 +47,11 @@ type SubmitMessageEditOptions = Omit<
   ownerPubkey: string | null;
   restoreComposer: (draft: EditDraft) => void;
   restoreMentionRefs: (refs: DraftMentionRef[]) => void;
-  revalidateMentionPubkeys: (pubkeys: readonly string[]) => Promise<string[]>;
+  revalidateMentionPubkeys: (
+    pubkeys: readonly string[],
+    channelId?: string | null,
+    options?: MentionRevalidationOptions,
+  ) => Promise<string[]>;
   shouldRestoreComposer: () => boolean;
   setDeferredUploadPending: (isPending: boolean) => void;
   save: (
@@ -131,8 +139,20 @@ export async function submitMessageEdit({
       ],
     );
     if (signal?.aborted) return;
-    const revalidatedMentionPubkeys =
-      await revalidateMentionPubkeys(addedMentionPubkeys);
+    // An edit that adds a mention re-checks authorization immediately before
+    // saving, bounded to the agents this edit actually names (#7124).
+    const revalidatedMentionPubkeys = await revalidateMentionPubkeys(
+      addedMentionPubkeys,
+      undefined,
+      {
+        intendedAgentPubkeys: draft.mentionRefs
+          .filter(
+            (ref): ref is DraftActorMentionRef =>
+              "pubkey" in ref && ref.isAgent === true,
+          )
+          .map((ref) => ref.pubkey),
+      },
+    );
     if (signal?.aborted) return;
     await save(
       finalContent,
@@ -148,8 +168,10 @@ export async function submitMessageEdit({
       onComplete: async (uploaded, signal) => {
         try {
           await finishEdit(uploaded, signal);
-        } catch {
+        } catch (error) {
           restoreDraft();
+          if (error instanceof AgentMentionAuthorizationError)
+            setUploadError(error.message);
         } finally {
           setDeferredUploadPending(false);
         }
@@ -169,7 +191,9 @@ export async function submitMessageEdit({
 
   try {
     await finishEdit([]);
-  } catch {
+  } catch (error) {
     restoreDraft();
+    if (error instanceof AgentMentionAuthorizationError)
+      setUploadError(error.message);
   }
 }

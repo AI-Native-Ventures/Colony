@@ -16,6 +16,20 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
+export type MentionRevalidationOptions = {
+  phase?: "prepare" | "publish";
+  intendedAgentPubkeys?: readonly string[];
+};
+
+export class AgentMentionAuthorizationError extends Error {
+  constructor() {
+    super(
+      "Could not authorize a mentioned agent. Check its access and channel membership, then retry or remove the mention.",
+    );
+    this.name = "AgentMentionAuthorizationError";
+  }
+}
+
 type DirectoryResult<T> = {
   data: T | undefined;
   error: Error | null;
@@ -32,7 +46,11 @@ export async function revalidateAgentMentionPubkeys({
   refetchManagedAgents,
   fetchRelayAgents,
   refetchOwnerProfiles,
+  phase = "publish",
+  intendedAgentPubkeys,
 }: {
+  phase?: "prepare" | "publish";
+  intendedAgentPubkeys?: readonly string[];
   pubkeys: readonly string[];
   agentPubkeys: ReadonlySet<string>;
   currentPubkey: string | null;
@@ -77,6 +95,7 @@ export async function revalidateAgentMentionPubkeys({
   const mentionablePubkeys = getMentionableAgentPubkeys({
     currentPubkey,
     eligibilityScope,
+    phase,
     managedAgentPubkeys: managedPubkeys,
     relayAgents: relayDirectoryReady ? relayAgents : [],
     sharedChannelIds,
@@ -104,6 +123,19 @@ export async function revalidateAgentMentionPubkeys({
       );
     }),
   );
+  // An agent the composer intended to address and that is no longer admitted
+  // fails the send loudly instead of publishing a message that silently drops
+  // it. Only the intended set raises this: a stale key nobody asked for is
+  // still filtered out quietly.
+  const intended = (intendedAgentPubkeys ?? []).map(normalizePubkey);
+  if (
+    intended.some(
+      (pubkey) =>
+        requestedAgentPubkeys.has(pubkey) && !admittedPubkeys.has(pubkey),
+    )
+  ) {
+    throw new AgentMentionAuthorizationError();
+  }
   return filterAdmittedMentionPubkeys(pubkeys, agentPubkeys, admittedPubkeys);
 }
 
@@ -135,12 +167,21 @@ export function useAgentMentionRevalidation({
     [queryClient],
   );
   return React.useCallback(
-    (pubkeys: readonly string[]) =>
-      revalidateAgentMentionPubkeys({
+    (
+      pubkeys: readonly string[],
+      destinationChannelId?: string | null,
+      options: MentionRevalidationOptions = {},
+    ) => {
+      // A new DM can acquire its channel during preparation. Validate the
+      // actual destination at publication, not the composer's original null id.
+      const scope: AgentEligibilityScope = destinationChannelId
+        ? { type: "channel", channelId: destinationChannelId }
+        : eligibilityScope;
+      return revalidateAgentMentionPubkeys({
         pubkeys,
         agentPubkeys: new Set([...agentPubkeys, ...getSelectedAgentPubkeys()]),
         currentPubkey,
-        eligibilityScope,
+        eligibilityScope: scope,
         sharedChannelIds,
         ownerOnly,
         ownerPolicyError,
@@ -148,12 +189,13 @@ export function useAgentMentionRevalidation({
         fetchRelayAgents: (requestedPubkeys) =>
           revalidateRelayAgents(
             requestedPubkeys,
-            eligibilityScope.type === "channel"
-              ? eligibilityScope.channelId
-              : undefined,
+            "channelId" in scope ? (scope.channelId ?? undefined) : undefined,
           ),
         refetchOwnerProfiles,
-      }),
+        phase: options.phase,
+        intendedAgentPubkeys: options.intendedAgentPubkeys,
+      });
+    },
     [
       agentPubkeys,
       currentPubkey,
