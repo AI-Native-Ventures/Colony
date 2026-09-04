@@ -653,9 +653,17 @@ impl BuzzClient {
     }
 
     /// Get the relay base URL.
-    #[allow(dead_code)]
     pub fn relay_url(&self) -> &str {
         &self.relay_url
+    }
+
+    /// The WebSocket form of this client's relay URL.
+    ///
+    /// This is the form the managed-agent store and the ACP harness expect:
+    /// the record's `relay_url` becomes the harness's `BUZZ_RELAY_URL`, which
+    /// opens a NIP-01 socket rather than an HTTP connection.
+    pub fn relay_ws_url(&self) -> String {
+        to_ws_url(&self.relay_url)
     }
 
     /// Return the owner pubkey carried by the NIP-OA auth tag, if any.

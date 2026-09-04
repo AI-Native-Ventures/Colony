@@ -6,6 +6,7 @@ mod error;
 pub mod identity;
 mod links;
 pub mod llm;
+pub mod managed_agents;
 pub mod seat;
 mod validate;
 pub mod worker;
@@ -659,6 +660,43 @@ impl RespondToArg {
 
 #[derive(Subcommand)]
 pub enum AgentsCmd {
+    /// Mint a managed agent: a local key, an owner-signed NIP-OA profile, and
+    /// a record Buzz Desktop adopts on its next launch
+    #[command(
+        after_help = "The agent gets its own Nostr key, kept in the same OS keyring blob as \
+your identity under `agent:<pubkey>` (or, when the keyring is unreachable, inline in the \
+0600 store). Its kind:0 profile carries a NIP-OA auth tag signed by YOUR key, which is \
+what the relay accepts the agent on.\n\n\
+Running it is a separate step; this command only mints it.\n\n\
+Examples:\n  \
+buzz agents create --name scout\n  \
+buzz agents create --name scout --harness claude --prompt @./scout-prompt.md\n  \
+buzz agents create --name scout --harness codex --model gpt-5 --provider openai"
+    )]
+    Create {
+        /// Agent handle, unique among your managed agents
+        #[arg(long)]
+        name: String,
+        /// Instructions: literal text, `@path` to read a file, or `-` for stdin
+        #[arg(long)]
+        prompt: Option<String>,
+        /// ACP harness the agent runs on
+        #[arg(long, default_value = crate::managed_agents::DEFAULT_HARNESS)]
+        harness: String,
+        /// Desired model id, as the harness names it
+        #[arg(long)]
+        model: Option<String>,
+        /// Inference provider id
+        #[arg(long)]
+        provider: Option<String>,
+    },
+    /// List the managed agents on this machine
+    List,
+    /// Show one managed agent by name or pubkey
+    Show {
+        /// Agent name (case-insensitive) or hex pubkey
+        name_or_pubkey: String,
+    },
     /// Open a prefilled create-agent form in the owner's Buzz Desktop
     DraftCreate {
         /// Current channel UUID; the new agent is added here after save
@@ -4247,8 +4285,11 @@ mod tests {
             vec![
                 "archive",
                 "archived",
+                "create",
                 "draft-create",
                 "draft-update",
+                "list",
+                "show",
                 "unarchive"
             ]
         );
@@ -4427,7 +4468,7 @@ mod tests {
     #[test]
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
-            ("agents", 5),
+            ("agents", 8),
             ("blocks", 11),
             ("canvas", 2),
             ("channels", 16),
