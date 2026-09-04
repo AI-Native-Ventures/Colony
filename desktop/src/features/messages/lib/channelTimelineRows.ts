@@ -7,28 +7,22 @@ import {
 
 const CHANNEL_TIMELINE_KINDS = new Set<number>(CHANNEL_TIMELINE_CONTENT_KINDS);
 
-function hasThreadAnchorTag(tags: string[][]): boolean {
-  return tags.some(
-    (tag) =>
-      tag[0] === "e" &&
-      typeof tag[1] === "string" &&
-      (tag[3] === "root" || tag[3] === "reply"),
-  );
-}
-
 /**
- * A relay-authored task lifecycle row (kind 40099, a task transition payload)
- * with no thread anchor.
+ * A relay-authored task lifecycle row: kind 40099 whose payload is one of the
+ * task transition types.
  *
- * These belong to a task, not to the channel conversation. Unanchored, they
- * land between real messages as relay-signed captions the owner cannot delete,
- * one per message that ever created a task. The row is still stored and still
- * renders inside the task thread and thread dialogs; only the channel's main
- * timeline drops it.
+ * These belong to a task, not to the channel conversation. In the channel's
+ * main timeline they land between real messages as relay-signed captions the
+ * owner cannot delete, one per message that ever created a task. The row is
+ * still stored and still renders inside the thread panel and the task thread
+ * dialog; only the channel's main timeline drops it.
+ *
+ * A thread anchor makes no difference. An anchored row carrying only an `e`
+ * `root` marker is exactly the shape the relay emits, and it still rendered at
+ * channel level, so the rule is now unconditional on the tags.
  */
-function isUnanchoredTaskTransition(event: RelayEvent): boolean {
+export function isTaskTransitionRow(event: RelayEvent): boolean {
   if (event.kind !== KIND_SYSTEM_MESSAGE) return false;
-  if (hasThreadAnchorTag(event.tags)) return false;
   let payload: unknown;
   try {
     payload = JSON.parse(event.content);
@@ -48,5 +42,5 @@ function isUnanchoredTaskTransition(event: RelayEvent): boolean {
  */
 export function isChannelTimelineRow(event: RelayEvent): boolean {
   if (!CHANNEL_TIMELINE_KINDS.has(event.kind)) return false;
-  return !isUnanchoredTaskTransition(event);
+  return !isTaskTransitionRow(event);
 }

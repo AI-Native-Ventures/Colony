@@ -6,7 +6,10 @@ import {
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
 
-import { isChannelTimelineRow } from "./channelTimelineRows.ts";
+import {
+  isChannelTimelineRow,
+  isTaskTransitionRow,
+} from "./channelTimelineRows.ts";
 
 const CHANNEL = "11111111-1111-4111-8111-111111111111";
 const ROOT = "a".repeat(64);
@@ -32,7 +35,11 @@ test("an unanchored task transition is not a channel timeline row", () => {
   assert.equal(isChannelTimelineRow(transition([["h", CHANNEL]])), false);
 });
 
-test("a task transition anchored to a thread root stays a timeline row", () => {
+// The row the owner actually saw in production on 0.16.5: the relay anchors a
+// transition with a lone `root` marker, which `getThreadReference` reads as
+// "no parent", so the channel window placed it at channel level between real
+// messages. Anchoring is no longer an escape hatch.
+test("a task transition anchored to a thread root is dropped too", () => {
   assert.equal(
     isChannelTimelineRow(
       transition([
@@ -40,11 +47,11 @@ test("a task transition anchored to a thread root stays a timeline row", () => {
         ["e", ROOT, "", "root"],
       ]),
     ),
-    true,
+    false,
   );
 });
 
-test("a task transition anchored by a reply marker stays a timeline row", () => {
+test("a task transition anchored by a reply marker is dropped too", () => {
   assert.equal(
     isChannelTimelineRow(
       transition([
@@ -52,11 +59,24 @@ test("a task transition anchored by a reply marker stays a timeline row", () => 
         ["e", ROOT, "", "reply"],
       ]),
     ),
-    true,
+    false,
   );
 });
 
-test("a bare `e` tag with no marker does not anchor a transition", () => {
+test("a task transition with root and reply markers is dropped too", () => {
+  assert.equal(
+    isChannelTimelineRow(
+      transition([
+        ["h", CHANNEL],
+        ["e", ROOT, "", "root"],
+        ["e", ROOT, "", "reply"],
+      ]),
+    ),
+    false,
+  );
+});
+
+test("a bare `e` tag does not rescue a transition either", () => {
   assert.equal(
     isChannelTimelineRow(
       transition([
@@ -82,6 +102,28 @@ test("other system rows are untouched by the transition rule", () => {
   assert.equal(
     isChannelTimelineRow(transition([["h", CHANNEL]], { content: "not json" })),
     true,
+  );
+});
+
+test("the task transition predicate keys on kind and payload type only", () => {
+  assert.equal(isTaskTransitionRow(transition([["h", CHANNEL]])), true);
+  assert.equal(
+    isTaskTransitionRow(
+      transition([["h", CHANNEL]], {
+        content: JSON.stringify({ type: "member_joined" }),
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    isTaskTransitionRow(transition([["h", CHANNEL]], { content: "not json" })),
+    false,
+  );
+  assert.equal(
+    isTaskTransitionRow(
+      transition([["h", CHANNEL]], { kind: KIND_STREAM_MESSAGE_V2 }),
+    ),
+    false,
   );
 });
 
