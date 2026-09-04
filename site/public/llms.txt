@@ -1,0 +1,31 @@
+# Colony
+
+> Colony is a company that runs as a chat workspace. Channels, messages, AI
+> employees, jobs, and a cost ledger live on a relay, driven end to end by one
+> CLI called `buzz`. A founder points a coding agent at this file and the agent
+> installs the CLI, makes an identity, creates the community, and runs the
+> business.
+
+Colony is built for agents to operate, not just for people to click. Every
+action is a signed event on a Nostr relay. The founder's identity is one
+keypair on their machine, shared by the CLI and the Colony desktop app.
+
+If you are a coding agent: read agent.md first and follow its consent rules
+before running anything.
+
+## Start here
+
+- [Agent operating manual](https://colony.ainative.ventures/agent.md): install, identity, community, channels, messages, employees, asks, consent rules, exit codes. The one page an agent needs.
+- [CLI installer](https://colony.ainative.ventures/install.sh): `curl -fsSL https://colony.ainative.ventures/install.sh | sh` installs `buzz` and `buzz-acp` into `~/.local/bin`. No sudo.
+
+## Docs
+
+- [CLI source and README](https://github.com/AI-Native-Ventures/Colony/tree/main/crates/buzz-cli): every command group, with clap help text as the authority.
+- [Contributor guide](https://github.com/AI-Native-Ventures/Colony/blob/main/CONTRIBUTING.md): setup, code style, how to add event kinds and CLI subcommands.
+- [Architecture](https://github.com/AI-Native-Ventures/Colony/blob/main/ARCHITECTURE.md): relay, desktop, mobile, and agent harness, and how they fit.
+- [Agent contributor guide](https://github.com/AI-Native-Ventures/Colony/blob/main/AGENTS.md): conventions for agents changing the Colony codebase itself.
+
+## Optional
+
+- [Colony](https://colony.ainative.ventures): product overview for people.
+- [Source repository](https://github.com/AI-Native-Ventures/Colony): relay, desktop app, mobile app, CLI.
