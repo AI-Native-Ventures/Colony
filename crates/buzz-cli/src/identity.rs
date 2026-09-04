@@ -35,6 +35,12 @@ pub const DEFAULT_KEYRING_SERVICE: &str = "buzz-desktop";
 /// desktop item.
 pub const KEYRING_SERVICE_ENV: &str = "BUZZ_KEYRING_SERVICE";
 
+/// Environment variable that overrides the desktop app-data directory. Exists
+/// for the same reason as [`KEYRING_SERVICE_ENV`]: a test must be able to
+/// exercise the file fallback and the migration marker without writing into
+/// the real Buzz Desktop directory.
+pub const APP_DATA_DIR_ENV: &str = "BUZZ_APP_DATA_DIR";
+
 /// Account (username) of the single keyring entry holding the JSON secret
 /// blob. Matches `BLOB_KEY` in the desktop's `secret_store.rs`.
 pub const BLOB_ACCOUNT: &str = "secrets";
@@ -105,8 +111,14 @@ pub fn keyring_service() -> String {
     }
 }
 
-/// The desktop app-data directory: `<platform-data-dir>/xyz.block.buzz.app`.
+/// The desktop app-data directory: `<platform-data-dir>/xyz.block.buzz.app`,
+/// or whatever [`APP_DATA_DIR_ENV`] points at.
 pub fn app_data_dir() -> Result<PathBuf, CliError> {
+    if let Ok(dir) = std::env::var(APP_DATA_DIR_ENV) {
+        if !dir.trim().is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
     let data_dir = dirs::data_dir().ok_or_else(|| {
         CliError::Other("could not resolve platform app-data directory".to_string())
     })?;
@@ -532,6 +544,59 @@ mod tests {
             Keys::parse(&nsec).unwrap().public_key(),
             keys.public_key(),
             "nsec must round-trip to the same pubkey"
+        );
+    }
+
+    // ---- live OS keyring ----
+
+    /// Round-trips a real OS keyring entry under a throwaway service name and
+    /// proves the merge keeps every other secret.
+    ///
+    /// Ignored by default: it needs a real keyring (a logged-in desktop
+    /// session on macOS, a running Secret Service on Linux), which CI does not
+    /// have. The seed is written by this same process, so macOS grants the
+    /// binary access to the item it created and no approval dialog appears.
+    /// Run it with:
+    /// `cargo test -p buzz-cli -- --ignored live_keyring_merge`
+    #[test]
+    #[ignore = "touches the OS keyring; run manually"]
+    fn live_keyring_merge_preserves_other_secrets() {
+        let service = format!("buzz-cli-test-{}", std::process::id());
+        let store = KeyringBlobStore::new(service.clone());
+
+        let seed = serde_json::json!({
+            "agent:deadbeef": "nsec-agent",
+            "discovery:apollo": "token",
+        })
+        .to_string();
+        store.write_blob(&seed).expect("seed the throwaway blob");
+
+        let keys = Keys::generate();
+        let nsec = nsec_of(&keys).expect("encode nsec");
+        let existing = store.read_blob().expect("read the throwaway blob");
+        let merged = merge_identity(existing.as_deref(), &nsec).expect("merge");
+        store.write_blob(&merged).expect("write the merged blob");
+
+        let raw = store.read_blob().expect("re-read the throwaway blob");
+        let map = parse_blob(raw.as_deref()).expect("parse");
+
+        // Clean up before asserting so a failure never leaks a keychain item.
+        if let Ok(entry) = keyring::Entry::new(&service, BLOB_ACCOUNT) {
+            let _ = entry.delete_credential();
+        }
+
+        assert_eq!(map.len(), 3, "merge must not drop the seeded secrets");
+        assert_eq!(
+            map.get("agent:deadbeef").map(String::as_str),
+            Some("nsec-agent")
+        );
+        assert_eq!(
+            map.get("discovery:apollo").map(String::as_str),
+            Some("token")
+        );
+        assert_eq!(
+            map.get(IDENTITY_BLOB_KEY).map(String::as_str),
+            Some(nsec.as_str())
         );
     }
 
