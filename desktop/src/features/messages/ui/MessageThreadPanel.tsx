@@ -46,7 +46,7 @@ import { ComposerActivityAccessory } from "./ComposerActivityAccessory";
 import { ComposerDockBackdrop } from "./ComposerDockBackdrop";
 import { MessageComposer } from "./MessageComposer";
 import { ThreadMessageSkeleton } from "./MessageThreadPanelSkeleton";
-import { MessageRow, type ThreadDepthGuideAction } from "./MessageRow";
+import { ThreadReplyRow, type ThreadDepthGuideAction } from "./ThreadReplyRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 import { UnreadDivider } from "./UnreadDivider";
@@ -552,7 +552,7 @@ export function MessageThreadPanel({
             data-testid="message-thread-head"
           >
             <div className="rounded-2xl">
-              <MessageRow
+              <ThreadReplyRow
                 actionBarPlacement="inside"
                 channelId={channelId}
                 currentPubkey={currentPubkey}
@@ -698,7 +698,7 @@ export function MessageThreadPanel({
                       key={entry.message.renderKey ?? entry.message.id}
                     >
                       {showUnreadDivider ? <UnreadDivider /> : null}
-                      <MessageRow
+                      <ThreadReplyRow
                         channelId={channelId}
                         currentPubkey={currentPubkey}
                         collapseDepthGuideActions={collapseDepthGuideActions}
