@@ -6,7 +6,6 @@ import {
 } from "@/features/channels/useLiveChannelUpdates";
 import {
   countUnreadAppBadgeObservedEvents,
-  countUnreadBadgeObservedEvents,
   countUnreadHighPriorityObservedEvents,
   countUnreadObservedEvents,
   hasUnreadTopLevelObservedEvent,
@@ -383,13 +382,14 @@ export function useUnreadChannels(
   const handleChannelMessage = React.useCallback(
     (channelId: string, event: RelayEvent) => {
       const channel = channelsRef.current.find((ch) => ch.id === channelId);
-      const isHighPriority =
-        channel?.channelType === "dm" ||
-        (normalizedPubkey !== null &&
-          isHighPriorityEventForUser(event, normalizedPubkey));
       const isThreadedReply =
         getThreadReference(event.tags).parentId !== null &&
         !isBroadcastReply(event.tags);
+      const isHighPriority =
+        channel?.channelType === "dm" ||
+        isThreadedReply ||
+        (normalizedPubkey !== null &&
+          isHighPriorityEventForUser(event, normalizedPubkey));
       const didRecordUnreadEvent = recordUnreadEvent(
         channelId,
         makeObservedUnreadEvent({
@@ -857,27 +857,25 @@ export function useUnreadChannels(
         ) {
           topLevelUnread.add(channel.id);
         }
-        const badgeCount = countUnreadBadgeObservedEvents(
-          observedEvents,
-          readAtForObservedEvent,
-        );
-        counts.set(channel.id, badgeCount);
+        // #7134: the sidebar numeral counts unread rooms, not messages, and
+        // ordinary room activity stays quiet, so the row's count is the plain
+        // unread count. The Dock badge keeps its own projection.
+        counts.set(channel.id, unreadCount);
         unreadChannelNotificationCount += countUnreadAppBadgeObservedEvents(
           observedEvents,
           readAtForObservedEvent,
         );
 
-        // DM channels: any unread DM is high-priority.
-        if (channel.channelType === "dm") {
-          highPriority.add(channel.id);
-        } else if (
+        // DM channels: any unread DM is high-priority. Non-DM: high-priority
+        // only if at least one mention, broadcast, or relevant thread reply
+        // remains unread in its own channel/thread context.
+        if (
+          channel.channelType === "dm" ||
           countUnreadHighPriorityObservedEvents(
             observedEvents,
             readAtForObservedEvent,
           ) > 0
         ) {
-          // Non-DM: high-priority only if at least one mention/broadcast
-          // remains unread in its own channel/thread context.
           highPriority.add(channel.id);
         }
       }

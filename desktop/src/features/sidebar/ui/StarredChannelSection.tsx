@@ -17,7 +17,6 @@ type StarredChannelSectionProps = {
   sortMode: ChannelSortMode;
   starredChannelIds?: ReadonlySet<string>;
   streamChannels: Channel[];
-  unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
   onDeleteChannel: (channel: Channel) => void;
   onLeaveChannel: (channel: Channel) => void;
@@ -45,7 +44,6 @@ export function StarredChannelSection({
   sortMode,
   starredChannelIds,
   streamChannels,
-  unreadChannelCounts,
   unreadChannelIds,
   onDeleteChannel,
   onLeaveChannel,
@@ -101,7 +99,6 @@ export function StarredChannelSection({
       sortMode={sortMode}
       starredChannelIds={starredChannelIds}
       title="Starred"
-      unreadChannelCounts={unreadChannelCounts}
       unreadChannelIds={unreadChannelIds}
     />
   );

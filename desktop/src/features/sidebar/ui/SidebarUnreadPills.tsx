@@ -2,21 +2,24 @@ import {
   MoreUnreadButton,
   type UnreadDmPreview,
 } from "@/features/sidebar/ui/MoreUnreadButton";
-import { unreadCountLabel } from "@/shared/ui/UnreadPill";
+import { sidebarOverflowUnreadLabel } from "@/features/sidebar/lib/useSidebarUnreadOverflow";
 
 /** The "N new" pill that floats over the top edge of the channel list. */
 export function SidebarUnreadAbovePill({
   count,
+  highPriority,
   onScrollToNextAbove,
 }: {
   count: number;
+  highPriority: boolean;
   onScrollToNextAbove: () => void;
 }) {
   if (count <= 0) return null;
   return (
     <MoreUnreadButton
       count={count}
-      label={unreadCountLabel(count)}
+      emphasis={highPriority ? "primary" : "default"}
+      label={sidebarOverflowUnreadLabel(count)}
       onClick={onScrollToNextAbove}
       position="top"
       testId="sidebar-more-unread-above"
@@ -32,12 +35,14 @@ export function SidebarUnreadAbovePill({
 export function SidebarUnreadBelowPill({
   count,
   dmPreviews,
+  highPriority,
   nextUnreadDmId,
   onScrollToChannel,
   onScrollToNextBelow,
 }: {
   count: number;
   dmPreviews: UnreadDmPreview[];
+  highPriority: boolean;
   nextUnreadDmId: string | undefined;
   onScrollToChannel: (channelId: string) => void;
   onScrollToNextBelow: () => void;
@@ -48,7 +53,8 @@ export function SidebarUnreadBelowPill({
       bottomClassName="bottom-full"
       count={count}
       dmPreviews={dmPreviews}
-      label={unreadCountLabel(count)}
+      emphasis={highPriority ? "primary" : "default"}
+      label={sidebarOverflowUnreadLabel(count)}
       onClick={() =>
         nextUnreadDmId
           ? onScrollToChannel(nextUnreadDmId)

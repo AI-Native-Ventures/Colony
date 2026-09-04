@@ -30,7 +30,6 @@ type ProjectChannelSectionProps = {
   selectedChannelId: string | null;
   sortMode: ChannelSortMode;
   starredChannelIds?: ReadonlySet<string>;
-  unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
   onDeleteChannel: (channel: Channel) => void;
   onLeaveChannel: (channel: Channel) => void;
@@ -70,7 +69,6 @@ export function ProjectChannelSection({
   selectedChannelId,
   sortMode,
   starredChannelIds,
-  unreadChannelCounts,
   unreadChannelIds,
   onDeleteChannel,
   onLeaveChannel,
@@ -131,7 +129,6 @@ export function ProjectChannelSection({
       selectedChannelId={selectedChannelId}
       starredChannelIds={starredChannelIds}
       title="Projects"
-      unreadChannelCounts={unreadChannelCounts}
       unreadChannelIds={unreadChannelIds}
     />
   );

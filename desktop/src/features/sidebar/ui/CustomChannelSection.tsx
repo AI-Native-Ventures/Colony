@@ -359,7 +359,6 @@ export function ChannelGroupSection({
   onSortModeChange,
   actionsTestId,
   title,
-  unreadChannelCounts,
   unreadChannelIds,
   sections,
   assignments,
@@ -410,7 +409,6 @@ export function ChannelGroupSection({
   onSortModeChange?: (mode: ChannelSortMode) => void;
   actionsTestId?: string;
   title: string;
-  unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
   hasUnread?: boolean;
   onMarkAllRead?: () => void;
@@ -446,7 +444,6 @@ export function ChannelGroupSection({
                       channel={channel}
                       activeWorking={activeWorkingByChannelId?.get(channel.id)}
                       hasUnread={unreadChannelIds.has(channel.id)}
-                      unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                       isMuted={mutedChannelIds?.has(channel.id)}
                       isProjectChannel={projectChannelIds?.has(channel.id)}
                       isActive={
@@ -461,7 +458,6 @@ export function ChannelGroupSection({
                     channel={channel}
                     activeWorking={activeWorkingByChannelId?.get(channel.id)}
                     hasUnread={unreadChannelIds.has(channel.id)}
-                    unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                     isMuted={mutedChannelIds?.has(channel.id)}
                     isProjectChannel={projectChannelIds?.has(channel.id)}
                     isActive={
@@ -558,7 +554,6 @@ export function CustomChannelSection({
   isActiveChannel,
   activeWorkingByChannelId,
   selectedChannelId,
-  unreadChannelCounts,
   unreadChannelIds,
   sections,
   assignments,
@@ -595,7 +590,6 @@ export function CustomChannelSection({
   isActiveChannel: boolean;
   activeWorkingByChannelId?: ReadonlyMap<string, ActiveChannelTurnSummary>;
   selectedChannelId: string | null;
-  unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
   sections: ChannelSection[];
   assignments: Record<string, string>;
@@ -754,9 +748,6 @@ export function CustomChannelSection({
                                   channel.id,
                                 )}
                                 hasUnread={unreadChannelIds.has(channel.id)}
-                                unreadCount={
-                                  unreadChannelCounts.get(channel.id) ?? 0
-                                }
                                 isMuted={mutedChannelIds?.has(channel.id)}
                                 isActive={
                                   isActiveChannel &&
