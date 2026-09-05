@@ -4,6 +4,7 @@ use nostr::{EventBuilder, Keys, Kind, PublicKey};
 use serde_json::json;
 
 use crate::agent_management::{build_create, build_update, CreateAgentDraft, UpdateAgentDraft};
+use crate::agent_run;
 use crate::client::BuzzClient;
 use crate::commands::blocks::resolve_active_manifest;
 use crate::error::CliError;
@@ -37,6 +38,16 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
             model,
             provider,
         } => cmd_create(client, &name, prompt.as_deref(), &harness, model, provider).await,
+
+        AgentsCmd::Run {
+            name_or_pubkey,
+            harness,
+            detach,
+        } => cmd_run(client, &name_or_pubkey, harness.as_deref(), detach),
+
+        AgentsCmd::Status => cmd_status(),
+
+        AgentsCmd::Stop { name_or_pubkey } => cmd_stop(&name_or_pubkey),
 
         AgentsCmd::List => {
             let records = managed_agents::load_store()?;
@@ -364,6 +375,248 @@ async fn cmd_create(
             "npub": npub,
             "name": name,
             "stored_in": stored_in.as_str(),
+        })
+    );
+    Ok(())
+}
+
+// ── run | status | stop ────────────────────────────────────────────────────
+
+/// Resolve the NIP-OA attestation the agent authenticates with.
+///
+/// The stored one is used verbatim whenever it is present, because it is the
+/// tag already published in the agent's kind:0 profile. Recomputing is the
+/// path for a record written without one, and it is only possible when the
+/// signing key IS the owner the record names: an attestation is a signature
+/// over the agent pubkey by the owner key, so another founder's key cannot
+/// produce it, and shipping a tag signed by the wrong key would fail at the
+/// relay with a message that looks like a relay fault.
+fn resolve_agent_auth_tag(
+    record: &serde_json::Value,
+    agent_pubkey_hex: &str,
+    owner_keys: &Keys,
+) -> Result<String, CliError> {
+    if let Some(stored) = record
+        .get("auth_tag")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(stored.to_string());
+    }
+    let signer_hex = owner_keys.public_key().to_hex();
+    if let Some(owner) = record
+        .get("owner_pubkey")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !owner.eq_ignore_ascii_case(&signer_hex) {
+            return Err(CliError::Auth(format!(
+                "agent {agent_pubkey_hex} has no stored attestation and is owned by {owner}, \
+                 not by your key {signer_hex}; run it as its owner"
+            )));
+        }
+    }
+    let agent_pubkey = PublicKey::parse(agent_pubkey_hex)
+        .map_err(|e| CliError::Other(format!("agent pubkey {agent_pubkey_hex} is invalid: {e}")))?;
+    buzz_sdk::nip_oa::compute_auth_tag(owner_keys, &agent_pubkey, "")
+        .map_err(|e| CliError::Other(format!("failed to compute NIP-OA auth tag: {e}")))
+}
+
+/// `buzz agents run`: spawn `buzz-acp` for one managed agent.
+///
+/// Everything that can be refused is refused before a process exists: a
+/// missing agent, an agent already running under this CLI, an unknown or
+/// uninstalled harness, an unreadable key, and an attestation this key cannot
+/// produce. A half-started agent is worse than a refused one, because the
+/// relay-side symptom (silence in the channel) looks identical to a healthy
+/// agent nobody has mentioned yet.
+fn cmd_run(
+    client: &BuzzClient,
+    name_or_pubkey: &str,
+    harness: Option<&str>,
+    detach: bool,
+) -> Result<(), CliError> {
+    let records = managed_agents::load_store()?;
+    let record = managed_agents::find_instance(&records, name_or_pubkey).ok_or_else(|| {
+        CliError::NotFound(format!(
+            "no managed agent named '{name_or_pubkey}' on this machine (run `buzz agents list`)"
+        ))
+    })?;
+    let pubkey = managed_agents::record_pubkey(record).to_string();
+    let name = managed_agents::record_name(record).to_string();
+
+    let pidfile = agent_run::pidfile_path(&pubkey)?;
+    if let Ok(running) = agent_run::read_run_record(&pidfile) {
+        if agent_run::process_is_running(running.pid) {
+            return Err(CliError::Usage(format!(
+                "agent '{name}' is already running as pid {} (stop it first with \
+                 `buzz agents stop {name}`)",
+                running.pid
+            )));
+        }
+    }
+
+    let harness = agent_run::resolve_harness(harness, record, &|command| {
+        agent_run::find_on_path(command).is_some()
+    })?;
+    let nsec = managed_agents::read_agent_secret(&pubkey, record)?;
+    let auth_tag = resolve_agent_auth_tag(record, &pubkey, client.keys())?;
+    let relay_url = record
+        .get("relay_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| client.relay_ws_url());
+
+    let acp_bin = agent_run::resolve_acp_binary()?;
+    // A harness that does not resolve is passed through by name rather than
+    // refused, exactly as the desktop does: the harness reports the miss with
+    // its own message, which names the binary it looked for.
+    let agent_command = agent_run::find_on_path(harness.agent_command)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| harness.agent_command.to_string());
+    let mcp_command = (!harness.mcp_command.is_empty())
+        .then(|| agent_run::find_on_path(harness.mcp_command))
+        .flatten()
+        .map(|path| path.display().to_string());
+    let git_helper =
+        agent_run::find_on_path("git-credential-nostr").map(|path| path.display().to_string());
+
+    // Consent is the calling agent's question to ask; making the choice
+    // visible is this command's job. See `HarnessSpec::login`.
+    if let Some(login) = harness.login {
+        eprintln!(
+            "note: agent '{name}' runs on the '{}' harness, which uses {login}.",
+            harness.id
+        );
+    }
+
+    let env = agent_run::plan_env(&agent_run::RunInputs {
+        record,
+        agent_nsec: &nsec,
+        auth_tag: &auth_tag,
+        owner_hex: &client.keys().public_key().to_hex(),
+        relay_url: &relay_url,
+        harness,
+        agent_command: &agent_command,
+        mcp_command: mcp_command.as_deref(),
+        git_credential_helper: git_helper.as_deref(),
+    });
+    let plan = agent_run::RunPlan {
+        acp_bin,
+        workdir: agent_run::default_agent_workdir(),
+        env,
+    };
+
+    let log = detach.then(|| agent_run::log_path(&pubkey)).transpose()?;
+    let mut child = agent_run::spawn(&plan, log.as_deref())?;
+    let run_record = agent_run::RunRecord {
+        pubkey: pubkey.clone(),
+        name: name.clone(),
+        harness: harness.id.to_string(),
+        pid: child.id(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        log: log.as_ref().map(|path| path.display().to_string()),
+        detached: detach,
+    };
+    agent_run::write_run_record(&pidfile, &run_record)?;
+
+    println!(
+        "{}",
+        json!({
+            "pubkey": pubkey,
+            "name": name,
+            "harness": harness.id,
+            "pid": run_record.pid,
+            "detached": detach,
+            "relay_url": relay_url,
+            "log": run_record.log,
+            "pidfile": pidfile.display().to_string(),
+        })
+    );
+
+    if detach {
+        return Ok(());
+    }
+
+    // Foreground. The child leads its own process group, so a Ctrl-C in the
+    // terminal reaches this process and not the agent: the pidfile is left in
+    // place on that path deliberately, and `buzz agents stop` is what ends the
+    // agent. A child that exits on its own is cleaned up here.
+    let status = child
+        .wait()
+        .map_err(|e| CliError::Other(format!("waiting for buzz-acp: {e}")))?;
+    let _ = std::fs::remove_file(&pidfile);
+    if status.success() {
+        return Ok(());
+    }
+    Err(CliError::Other(format!(
+        "buzz-acp exited with {status} (log streamed above)"
+    )))
+}
+
+/// `buzz agents status`: every CLI-run agent and whether it is still alive.
+fn cmd_status() -> Result<(), CliError> {
+    let listed: Vec<serde_json::Value> = agent_run::list_run_records()?
+        .into_iter()
+        .map(|record| {
+            json!({
+                "pubkey": record.pubkey,
+                "name": record.name,
+                "harness": record.harness,
+                "pid": record.pid,
+                "alive": agent_run::process_is_running(record.pid),
+                "started_at": record.started_at,
+                "detached": record.detached,
+                "log": record.log,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::Value::Array(listed));
+    Ok(())
+}
+
+/// `buzz agents stop`: end one CLI-run agent and clear its pidfile.
+fn cmd_stop(name_or_pubkey: &str) -> Result<(), CliError> {
+    let records = agent_run::list_run_records()?;
+    // Pubkey first, so a name that happens to look like a pubkey can never
+    // shadow the real key. Same rule as `managed_agents::find_instance`.
+    let record = records
+        .iter()
+        .find(|record| record.pubkey == name_or_pubkey)
+        .or_else(|| {
+            records
+                .iter()
+                .find(|record| record.name.eq_ignore_ascii_case(name_or_pubkey))
+        })
+        .ok_or_else(|| {
+            CliError::NotFound(format!(
+                "no agent named '{name_or_pubkey}' was started by this CLI \
+                 (run `buzz agents status`)"
+            ))
+        })?;
+
+    let outcome = agent_run::stop_process(record.pid)?;
+    let pidfile = agent_run::pidfile_path(&record.pubkey)?;
+    if let Err(e) = std::fs::remove_file(&pidfile) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(CliError::Other(format!(
+                "stopped {} but could not remove {}: {e}",
+                record.pid,
+                pidfile.display()
+            )));
+        }
+    }
+    println!(
+        "{}",
+        json!({
+            "pubkey": record.pubkey,
+            "name": record.name,
+            "pid": record.pid,
+            "outcome": outcome.as_str(),
         })
     );
     Ok(())

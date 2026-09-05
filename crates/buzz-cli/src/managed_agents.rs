@@ -99,6 +99,15 @@ pub struct HarnessSpec {
     pub mcp_command: &'static str,
     /// Args the runtime needs to speak ACP on stdio.
     pub agent_args: &'static [&'static str],
+    /// Which of the founder's existing logins the runtime bills to, or `None`
+    /// when it needs no login of its own.
+    ///
+    /// `buzz agents run` prints this before spawning. Binding a founder's
+    /// Claude or Codex subscription to an agent is a consent decision that
+    /// belongs to a human (company-employees law 3), and the calling agent is
+    /// the one that has to ask; the CLI's job is only to make the choice
+    /// visible rather than silent.
+    pub login: Option<&'static str>,
 }
 
 /// Every harness `--harness` accepts, in the order they are listed in help.
@@ -108,30 +117,35 @@ pub const HARNESSES: &[HarnessSpec] = &[
         agent_command: "claude-agent-acp",
         mcp_command: "",
         agent_args: &[],
+        login: Some("your Claude Code login on this machine"),
     },
     HarnessSpec {
         id: "codex",
         agent_command: "codex-acp",
         mcp_command: "buzz-dev-mcp",
         agent_args: &[],
+        login: Some("your Codex login on this machine"),
     },
     HarnessSpec {
         id: "opencode",
         agent_command: "opencode",
         mcp_command: "",
         agent_args: &["acp"],
+        login: Some("your opencode configuration on this machine"),
     },
     HarnessSpec {
         id: "goose",
         agent_command: "goose",
         mcp_command: "",
         agent_args: &[],
+        login: Some("your goose configuration on this machine"),
     },
     HarnessSpec {
         id: "buzz-agent",
         agent_command: "buzz-agent",
         mcp_command: "buzz-dev-mcp",
         agent_args: &[],
+        login: None,
     },
 ];
 
@@ -150,6 +164,29 @@ pub fn harness_spec(id: &str) -> Result<&'static HarnessSpec, CliError> {
             .join(", ");
         CliError::Usage(format!("unknown harness '{id}' (expected one of: {known})"))
     })
+}
+
+/// Reverse-lookup: the catalog entry whose binary is `command`.
+pub fn harness_for_command(command: &str) -> Option<&'static HarnessSpec> {
+    HARNESSES.iter().find(|h| h.agent_command == command)
+}
+
+/// The harness a stored record pins, if any.
+///
+/// `agent_command_override` is read first because that is where
+/// [`build_record`] writes the `--harness` choice and where the desktop's
+/// `effective_agent_command` reads it from; `agent_command` is the fallback
+/// for records written before the override existed. A record naming a binary
+/// outside the catalog (a custom harness configured in the desktop) yields
+/// `None`, which sends the caller to its own fallback rather than guessing at
+/// args the CLI does not know.
+pub fn harness_for_record(record: &Value) -> Option<&'static HarnessSpec> {
+    ["agent_command_override", "agent_command"]
+        .iter()
+        .filter_map(|key| record.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .find_map(harness_for_command)
 }
 
 // ── Store file ─────────────────────────────────────────────────────────────
@@ -333,6 +370,52 @@ pub fn store_agent_secret_in(
     }
 }
 
+/// Read an agent's nsec back: the keyring blob first, then the inline
+/// `private_key_nsec` the keyringless fallback leaves in the `0o600` store.
+///
+/// The order matches [`store_agent_secret`]'s: the keyring is the durable home
+/// and the file is the fallback, so a key that has since been lifted into the
+/// keyring wins over a stale inline copy.
+///
+/// # Errors
+///
+/// [`CliError::NotFound`] when the key exists in neither place. That is a real
+/// state, not a bug: the desktop can create an agent whose key lives in a
+/// keyring this process cannot unlock, and running it would otherwise fail far
+/// later with an opaque signature error.
+pub fn read_agent_secret(pubkey: &str, record: &Value) -> Result<String, CliError> {
+    read_agent_secret_in(&KeyringBlobStore::for_default_service(), pubkey, record)
+}
+
+/// [`read_agent_secret`] against an explicit blob store, so the precedence can
+/// be exercised without the founder's real keyring.
+pub fn read_agent_secret_in(
+    store: &impl BlobStore,
+    pubkey: &str,
+    record: &Value,
+) -> Result<String, CliError> {
+    if let Ok(raw) = store.read_blob() {
+        if let Some(nsec) = identity::secret_from_blob(raw.as_deref(), &agent_secret_key(pubkey))? {
+            if !nsec.trim().is_empty() {
+                return Ok(nsec);
+            }
+        }
+    }
+    record
+        .get("private_key_nsec")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|nsec| !nsec.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CliError::NotFound(format!(
+                "no private key for agent {pubkey}: it is neither in the keyring under \
+                 `{}` nor inline in the agent store",
+                agent_secret_key(pubkey)
+            ))
+        })
+}
+
 // ── Record construction ────────────────────────────────────────────────────
 
 /// Everything `buzz agents create` needs to describe the agent it minted.
@@ -453,6 +536,51 @@ mod tests {
             harness_spec("buzz-agent").unwrap().mcp_command,
             "buzz-dev-mcp"
         );
+    }
+
+    #[test]
+    fn only_login_based_harnesses_declare_a_login() {
+        for id in ["claude", "codex", "opencode", "goose"] {
+            assert!(
+                harness_spec(id).unwrap().login.is_some(),
+                "{id} runs on the founder's login and must say so"
+            );
+        }
+        assert!(
+            harness_spec("buzz-agent").unwrap().login.is_none(),
+            "the bundled agent needs no login of its own"
+        );
+    }
+
+    #[test]
+    fn a_record_resolves_back_to_the_harness_it_was_created_with() {
+        for harness in HARNESSES {
+            let mut agent = sample(None);
+            agent.harness = harness;
+            let record = build_record(&agent, "now");
+            assert_eq!(
+                harness_for_record(&record).map(|h| h.id),
+                Some(harness.id),
+                "harness '{}' did not round-trip through its record",
+                harness.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_override_wins_over_a_stale_agent_command() {
+        let record = json!({
+            "agent_command": "goose",
+            "agent_command_override": "codex-acp",
+        });
+        assert_eq!(harness_for_record(&record).map(|h| h.id), Some("codex"));
+    }
+
+    #[test]
+    fn a_custom_harness_binary_pins_nothing() {
+        let record = json!({ "agent_command": "my-own-acp-adapter" });
+        assert!(harness_for_record(&record).is_none());
+        assert!(harness_for_record(&json!({})).is_none());
     }
 
     #[test]
@@ -830,6 +958,37 @@ mod tests {
         );
         assert_eq!(map.get("agent:abc").map(String::as_str), Some("nsec-new"));
         assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn the_key_is_read_back_from_the_keyring_before_the_inline_copy() {
+        let seed = json!({ "agent:abc": "nsec-keyring" }).to_string();
+        let store = FakeBlob::seeded(Some(&seed));
+        let record = json!({ "private_key_nsec": "nsec-stale-inline" });
+
+        assert_eq!(
+            read_agent_secret_in(&store, "abc", &record).unwrap(),
+            "nsec-keyring"
+        );
+    }
+
+    #[test]
+    fn the_inline_key_is_used_when_the_keyring_has_none() {
+        let store = FakeBlob::seeded(None);
+        let record = json!({ "private_key_nsec": "nsec-inline" });
+        assert_eq!(
+            read_agent_secret_in(&store, "abc", &record).unwrap(),
+            "nsec-inline"
+        );
+    }
+
+    #[test]
+    fn a_key_stored_nowhere_is_a_named_error_not_an_empty_string() {
+        let store = FakeBlob::seeded(None);
+        let err = read_agent_secret_in(&store, "abc", &json!({}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("agent:abc"), "unexpected error: {err}");
     }
 
     #[test]
