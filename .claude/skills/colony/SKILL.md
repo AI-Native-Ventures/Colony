@@ -432,10 +432,28 @@ Colony bills for agent turns. The cost ledger is readable now:
 buzz ledger --help
 ```
 
-Buying credits from the CLI is not available yet. `buzz credits balance`,
-`buzz credits packs`, `buzz credits pay`, and `buzz credits verify` are being
-built (ticket: credits CLI group). Until they land, the founder buys credits
-in the Colony desktop app or on the web.
+Reading the balance works today:
+
+```sh
+buzz credits balance
+```
+
+Two relay routes can answer that question and a given relay usually mounts
+only one, so the printed JSON names which one did in a `source` field:
+
+| `source` | Route | What the number means |
+| --- | --- | --- |
+| `gateway` | `GET /api/gateway/account` | The gateway account, on a relay that has a gateway configured. |
+| `payments` | `POST /api/payments/balance` | The payments ledger, in `usdCents`. Always mounted, so this is what production answers. |
+
+Read the field rather than assuming a shape: the two routes report different
+keys. An error here means neither route answered, not that the balance is
+zero.
+
+Buying credits from the CLI is not available yet. `buzz credits packs`,
+`buzz credits pay`, and `buzz credits verify` are being built (ticket:
+credits CLI group). Until they land, the founder buys credits in the Colony
+desktop app or on the web.
 
 When `credits pay` does land it returns a checkout URL. You print that URL and
 hand it to the founder. You do not open it, you do not fill it in, and you do
@@ -461,7 +479,7 @@ Do not use these. They are documented so you do not go looking.
 
 | Command | State |
 | --- | --- |
-| `buzz credits balance\|packs\|pay\|verify` | In progress. |
+| `buzz credits packs\|pay\|verify` | In progress. `buzz credits balance` works. |
 | `buzz agents run\|start\|stop\|status` | Not started. |
 
 Everything else on this page exists in the CLI you just installed. When in

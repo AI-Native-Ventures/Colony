@@ -1221,6 +1221,41 @@ impl BuzzClient {
         self.get_authed(GATEWAY_ACCOUNT_PATH).await
     }
 
+    /// `POST /api/payments/balance` - the same signer's prepaid balance, in
+    /// `usdCents`, from the payments ledger rather than the gateway.
+    ///
+    /// This route is always mounted, so it answers on a relay that has no
+    /// gateway and therefore no `/api/gateway/account`
+    /// (`crates/buzz-relay/src/router.rs`). The body is `{}` because identity
+    /// travels in the NIP-98 signature, and the empty object is what the
+    /// desktop client sends too.
+    ///
+    /// A pure read, so it keeps the standard retry policy. The event is
+    /// re-signed on each attempt so the NIP-98 nonce stays unique.
+    pub async fn payments_balance(&self) -> Result<String, CliError> {
+        let url = format!("{}{PAYMENTS_API_PATH}/balance", self.relay_url);
+        let body = bytes::Bytes::from_static(b"{}");
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
     /// `POST /api/payments/initialize` - open a hosted checkout for one pack
     /// and return the relay's JSON, which carries the checkout URL and the
     /// reference to verify against. NIP-98 signed.
@@ -4046,13 +4081,22 @@ mod credits_api_tests {
     struct Harness {
         captured: Captured,
         reply: Reply,
+        /// Answers for named paths, consulted before `reply`. The balance
+        /// fallback is the one flow where two routes have to answer
+        /// differently within a single run.
+        per_path: std::collections::HashMap<&'static str, Reply>,
     }
 
     fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        let reply = harness
+            .per_path
+            .get(seen.path.as_str())
+            .unwrap_or(&harness.reply)
+            .clone();
         if let Ok(mut log) = harness.captured.lock() {
             log.push(seen);
         }
-        (harness.reply.status, harness.reply.body.to_string())
+        (reply.status, reply.body.to_string())
     }
 
     fn header_string(headers: &HeaderMap) -> Option<String> {
@@ -4062,13 +4106,23 @@ mod credits_api_tests {
             .map(str::to_string)
     }
 
-    /// Spawn a stand-in relay exposing the four top-up routes, all answering
+    /// Spawn a stand-in relay exposing the top-up routes, all answering
     /// `reply`. Returns its base URL and the capture log.
     async fn payments_server(reply: Reply) -> (String, Captured) {
+        payments_server_with(reply, std::collections::HashMap::new()).await
+    }
+
+    /// As [`payments_server`], but `per_path` overrides the answer for the
+    /// paths it names.
+    async fn payments_server_with(
+        reply: Reply,
+        per_path: std::collections::HashMap<&'static str, Reply>,
+    ) -> (String, Captured) {
         let captured: Captured = Arc::new(Mutex::new(Vec::new()));
         let harness = Harness {
             captured: captured.clone(),
             reply,
+            per_path,
         };
 
         let app = Router::new()
@@ -4102,6 +4156,22 @@ mod credits_api_tests {
                         },
                     )
                 }),
+            )
+            .route(
+                "/api/payments/balance",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/balance".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
             )
             .route(
                 "/api/payments/initialize",
@@ -4251,6 +4321,96 @@ mod credits_api_tests {
         .await;
 
         let err = test_client(&base).credits_balance().await.unwrap_err();
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 404);
+                assert_eq!(body, "payment_unavailable");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 2);
+    }
+
+    /// A 404 answer for one named path, everything else `reply`.
+    fn absent(path: &'static str) -> std::collections::HashMap<&'static str, Reply> {
+        std::collections::HashMap::from([(
+            path,
+            Reply {
+                status: StatusCode::NOT_FOUND,
+                body: r#"{"error":"not_found"}"#,
+            },
+        )])
+    }
+
+    fn paths(captured: &Captured) -> Vec<String> {
+        let log = captured.lock().unwrap();
+        log.iter().map(|seen| seen.path.clone()).collect()
+    }
+
+    /// A relay that mounts the gateway answers from it, and nothing asks the
+    /// payments route.
+    #[tokio::test]
+    async fn balance_reads_the_gateway_when_it_is_mounted() {
+        let (base, captured) = payments_server(ok_reply(r#"{"balance_nanousd":"250"}"#)).await;
+        let body = crate::commands::credits::resolve_balance(&test_client(&base))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            body, r#"{"balance_nanousd":"250","source":"gateway"}"#,
+            "the gateway body is passed through, tagged with its source"
+        );
+        assert_eq!(paths(&captured), vec!["/api/gateway/account".to_string()]);
+    }
+
+    /// Production has no gateway, so `/api/gateway/account` 404s on every
+    /// host. That must read as "ask the payments ledger", not as an error.
+    #[tokio::test]
+    async fn balance_falls_back_to_payments_when_the_gateway_is_absent() {
+        let (base, captured) = payments_server_with(
+            ok_reply(r#"{"usdCents":1234}"#),
+            absent("/api/gateway/account"),
+        )
+        .await;
+        let body = crate::commands::credits::resolve_balance(&test_client(&base))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            body, r#"{"source":"payments","usdCents":1234}"#,
+            "the payments body is passed through, tagged with its source"
+        );
+        assert_eq!(
+            paths(&captured),
+            vec![
+                "/api/gateway/account".to_string(),
+                "/api/payments/balance".to_string()
+            ],
+            "the gateway is asked first and only then the payments route"
+        );
+        let log = captured.lock().unwrap();
+        let payments = log.last().expect("the payments request was captured");
+        assert_eq!(payments.body, "{}", "identity travels in the signature");
+        let auth = payments
+            .authorization
+            .clone()
+            .expect("the payments balance must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    /// With neither route mounted the payments error is the one reported: it
+    /// is the route the relay was expected to have.
+    #[tokio::test]
+    async fn balance_with_neither_route_reports_the_payments_error_and_exit_code_two() {
+        let (base, _captured) = payments_server(Reply {
+            status: StatusCode::NOT_FOUND,
+            body: r#"{"error":"payment_unavailable"}"#,
+        })
+        .await;
+
+        let err = crate::commands::credits::resolve_balance(&test_client(&base))
+            .await
+            .unwrap_err();
         match err {
             CliError::Relay { status, ref body } => {
                 assert_eq!(status, 404);

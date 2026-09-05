@@ -34,15 +34,52 @@ fn checkout_url(body: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Print the prepaid balance of the CLI's key.
+/// Tag a balance body with the route that answered it.
 ///
-/// A relay with no gateway configured does not mount this route at all, so
-/// its refusal comes back as a relay error and exits 2 rather than reading
-/// as an empty account.
+/// A JSON object gains a `source` field; anything else is passed through
+/// untouched, because rewriting a body we did not understand would be worse
+/// than printing the relay's own answer verbatim.
+fn tag_source(body: &str, source: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Object(mut map)) => {
+            map.insert("source".into(), serde_json::Value::String(source.into()));
+            serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| body.into())
+        }
+        _ => body.to_string(),
+    }
+}
+
+/// Print the prepaid balance of the CLI's key, from whichever route answers.
+///
+/// Two relays answer this question and a given relay usually mounts only
+/// one. `GET /api/gateway/account` exists when a gateway is configured and
+/// reports the gateway account; `POST /api/payments/balance` is always
+/// mounted and reports the payments ledger in `usdCents`. So the gateway is
+/// asked first and a `404` from it means "no gateway here", not "no
+/// credits", and the payments route is asked instead.
+///
+/// The printed JSON carries a `source` field naming which one answered:
+/// `"gateway"` or `"payments"`. Any error other than a gateway `404`
+/// surfaces as before, and when both routes are absent the payments error is
+/// the one reported, because that is the route the relay was expected to
+/// have.
 pub async fn cmd_balance(client: &BuzzClient) -> Result<(), CliError> {
-    let resp = client.credits_balance().await?;
+    let resp = resolve_balance(client).await?;
     println!("{resp}");
     Ok(())
+}
+
+/// Ask both balance routes in order and return the tagged JSON that
+/// [`cmd_balance`] prints. Split out so the fallback can be tested against a
+/// stand-in relay without capturing stdout.
+pub(crate) async fn resolve_balance(client: &BuzzClient) -> Result<String, CliError> {
+    match client.credits_balance().await {
+        Ok(body) => Ok(tag_source(&body, "gateway")),
+        Err(CliError::Relay { status: 404, .. }) => {
+            Ok(tag_source(&client.payments_balance().await?, "payments"))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Print the credit packs this relay sells.
@@ -125,6 +162,36 @@ mod tests {
                 checkout_url(body).is_none(),
                 "{body:?} should not yield a URL"
             );
+        }
+    }
+
+    #[test]
+    fn tags_a_balance_object_with_the_route_that_answered() {
+        assert_eq!(
+            tag_source(r#"{"usdCents":1234}"#, "payments"),
+            r#"{"source":"payments","usdCents":1234}"#
+        );
+        assert_eq!(
+            tag_source(r#"{"balance_nanousd":"0"}"#, "gateway"),
+            r#"{"balance_nanousd":"0","source":"gateway"}"#
+        );
+    }
+
+    /// An existing `source` field is the relay's, and ours is the truthful
+    /// one: the caller needs to know which route answered.
+    #[test]
+    fn overwrites_a_source_field_the_relay_already_sent() {
+        assert_eq!(
+            tag_source(r#"{"source":"elsewhere","usdCents":1}"#, "payments"),
+            r#"{"source":"payments","usdCents":1}"#
+        );
+    }
+
+    /// Anything that is not a JSON object is printed as the relay sent it.
+    #[test]
+    fn passes_a_non_object_body_through_untouched() {
+        for body in ["[]", "null", "not json", ""] {
+            assert_eq!(tag_source(body, "payments"), body);
         }
     }
 }
