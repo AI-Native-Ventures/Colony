@@ -187,6 +187,109 @@ pub fn resolve_harness(
     )))
 }
 
+// ── Claude adapter freshness ───────────────────────────────────────────────
+
+/// Lowest `@anthropic-ai/claude-agent-sdk` the Anthropic API still accepts.
+///
+/// Below it every turn fails with `400 Claude Code <x> does not support this
+/// model; version <y> or newer is required`, which reads like a model problem
+/// while the agent simply never answers. The bound moves, so it lives here as
+/// one constant rather than being spelled out at each call site.
+pub const MIN_CLAUDE_AGENT_SDK: &str = "0.3.251";
+
+/// The one command that fixes a stale adapter.
+pub const CLAUDE_ADAPTER_INSTALL_COMMAND: &str =
+    "npm install -g @agentclientprotocol/claude-agent-acp@latest";
+
+/// Relative path of the bundled SDK manifest, under a package root.
+const CLAUDE_SDK_MANIFEST: &str = "node_modules/@anthropic-ai/claude-agent-sdk/package.json";
+
+/// How many ancestors of the resolved adapter are searched for the manifest.
+///
+/// The npm layout puts the binary at `<pkg>/dist/index.js` (two levels), and a
+/// hoisted install moves the SDK up to the shared `node_modules` a couple of
+/// levels above that. Six covers both without walking to the filesystem root.
+const CLAUDE_SDK_SEARCH_DEPTH: usize = 6;
+
+/// Version of the `@anthropic-ai/claude-agent-sdk` bundled with the
+/// `claude-agent-acp` adapter at `adapter_bin`.
+///
+/// The global npm bin entry is a symlink into the package tree, so the link is
+/// followed first and the manifest is then looked for under each ancestor of
+/// the real file. Every failure (a missing binary, an unreadable manifest, a
+/// package.json without a version) is `None`: a freshness check that cannot
+/// read the version has nothing to say, and guessing would warn founders whose
+/// adapter is fine.
+pub fn claude_agent_sdk_version(adapter_bin: &Path) -> Option<String> {
+    let resolved = std::fs::canonicalize(adapter_bin).ok()?;
+    let mut dir = resolved.parent();
+    for _ in 0..CLAUDE_SDK_SEARCH_DEPTH {
+        let current = dir?;
+        let manifest = current.join(CLAUDE_SDK_MANIFEST);
+        if let Ok(raw) = std::fs::read_to_string(&manifest) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+                if let Some(version) = record_str(&parsed, "version") {
+                    return Some(version.to_string());
+                }
+            }
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+/// Dotted numeric components of `raw`, ignoring any `-prerelease` or `+build`
+/// suffix. `None` when there is no leading number to compare.
+fn version_parts(raw: &str) -> Option<Vec<u64>> {
+    let core = raw
+        .trim()
+        .trim_start_matches('v')
+        .split(['-', '+'])
+        .next()?;
+    let parts: Vec<u64> = core
+        .split('.')
+        .map(|part| part.parse::<u64>())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// Whether `found` orders below `minimum`, comparing component by component
+/// and treating a missing component as zero. `None` when either side does not
+/// parse, which is reported as "nothing to say" rather than as stale.
+pub fn version_is_below(found: &str, minimum: &str) -> Option<bool> {
+    let found = version_parts(found)?;
+    let minimum = version_parts(minimum)?;
+    let width = found.len().max(minimum.len());
+    for index in 0..width {
+        let a = found.get(index).copied().unwrap_or(0);
+        let b = minimum.get(index).copied().unwrap_or(0);
+        if a != b {
+            return Some(a < b);
+        }
+    }
+    Some(false)
+}
+
+/// One warning line for a `claude-agent-acp` older than
+/// [`MIN_CLAUDE_AGENT_SDK`], or `None` when it is current or unreadable.
+///
+/// The caller prints this and spawns anyway. A stale adapter still starts, and
+/// a founder whose bound moved between releases must not be locked out of
+/// running an agent by a check the CLI cannot re-verify against the live API.
+pub fn stale_claude_adapter_warning(adapter_bin: &Path) -> Option<String> {
+    let found = claude_agent_sdk_version(adapter_bin)?;
+    if !version_is_below(&found, MIN_CLAUDE_AGENT_SDK)? {
+        return None;
+    }
+    Some(format!(
+        "warning: {} bundles @anthropic-ai/claude-agent-sdk {found}, below the {MIN_CLAUDE_AGENT_SDK} \
+         the Anthropic API requires, so every turn will fail with a 400 and the agent will look \
+         silent. Fix it with: {CLAUDE_ADAPTER_INSTALL_COMMAND}",
+        adapter_bin.display()
+    ))
+}
+
 // ── Environment ────────────────────────────────────────────────────────────
 
 /// Everything the launcher needs to build one agent's environment.
@@ -900,6 +1003,114 @@ mod tests {
         ] {
             assert!(SCRUBBED_ENV.contains(&key), "{key} must be scrubbed");
         }
+    }
+
+    // ---- claude adapter freshness ----
+
+    /// Build the npm layout the global adapter really has: a `bin` symlink
+    /// pointing at `<pkg>/dist/index.js`, with the SDK manifest under the
+    /// package's own `node_modules`.
+    #[cfg(unix)]
+    fn fake_adapter(root: &Path, sdk_version: Option<&str>) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let pkg = root.join("lib/node_modules/@agentclientprotocol/claude-agent-acp");
+        std::fs::create_dir_all(pkg.join("dist")).unwrap();
+        let entry = pkg.join("dist/index.js");
+        std::fs::write(&entry, "#!/usr/bin/env node\n").unwrap();
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        if let Some(version) = sdk_version {
+            let sdk = pkg.join("node_modules/@anthropic-ai/claude-agent-sdk");
+            std::fs::create_dir_all(&sdk).unwrap();
+            std::fs::write(
+                sdk.join("package.json"),
+                format!(r#"{{"name":"@anthropic-ai/claude-agent-sdk","version":"{version}"}}"#),
+            )
+            .unwrap();
+        }
+
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let link = bin.join("claude-agent-acp");
+        std::os::unix::fs::symlink(&entry, &link).unwrap();
+        link
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_sdk_version_is_read_through_the_bin_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = fake_adapter(dir.path(), Some("0.3.257"));
+        assert_eq!(claude_agent_sdk_version(&link).as_deref(), Some("0.3.257"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_adapter_without_a_bundled_sdk_reports_no_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = fake_adapter(dir.path(), None);
+        assert!(claude_agent_sdk_version(&link).is_none());
+        assert!(
+            stale_claude_adapter_warning(&link).is_none(),
+            "an unreadable version must say nothing, not warn"
+        );
+    }
+
+    #[test]
+    fn a_missing_adapter_reports_no_version() {
+        assert!(
+            claude_agent_sdk_version(Path::new("/definitely/not/here/claude-agent-acp")).is_none()
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_stale_adapter_warns_with_the_versions_and_the_install_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = fake_adapter(dir.path(), Some("0.3.220"));
+        let warning = stale_claude_adapter_warning(&link).expect("0.3.220 is below the minimum");
+        assert_eq!(warning.lines().count(), 1, "the warning must be one line");
+        assert!(warning.contains("0.3.220"), "got: {warning}");
+        assert!(warning.contains(MIN_CLAUDE_AGENT_SDK), "got: {warning}");
+        assert!(
+            warning.contains(CLAUDE_ADAPTER_INSTALL_COMMAND),
+            "got: {warning}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_current_adapter_warns_about_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        for version in [MIN_CLAUDE_AGENT_SDK, "0.3.257", "0.4.0", "1.0.0"] {
+            let root = dir.path().join(version);
+            let link = fake_adapter(&root, Some(version));
+            assert!(
+                stale_claude_adapter_warning(&link).is_none(),
+                "{version} must not warn"
+            );
+        }
+    }
+
+    #[test]
+    fn version_comparison_is_numeric_and_not_lexicographic() {
+        assert_eq!(version_is_below("0.3.220", "0.3.251"), Some(true));
+        assert_eq!(version_is_below("0.3.9", "0.3.251"), Some(true));
+        assert_eq!(version_is_below("0.3.251", "0.3.251"), Some(false));
+        assert_eq!(version_is_below("0.3.257", "0.3.251"), Some(false));
+        assert_eq!(version_is_below("0.10.0", "0.9.99"), Some(false));
+        assert_eq!(version_is_below("1.0", "0.3.251"), Some(false));
+        assert_eq!(version_is_below("0.3", "0.3.251"), Some(true));
+        assert_eq!(version_is_below("v0.3.257", "0.3.251"), Some(false));
+        assert_eq!(version_is_below("0.3.251-beta.1", "0.3.251"), Some(false));
+    }
+
+    #[test]
+    fn an_unparseable_version_is_never_called_stale() {
+        assert_eq!(version_is_below("unknown", MIN_CLAUDE_AGENT_SDK), None);
+        assert_eq!(version_is_below("", MIN_CLAUDE_AGENT_SDK), None);
+        assert_eq!(version_is_below("0.3.251", "latest"), None);
     }
 
     // ---- harness resolution ----

@@ -485,6 +485,18 @@ fn cmd_run(
     let git_helper =
         agent_run::find_on_path("git-credential-nostr").map(|path| path.display().to_string());
 
+    // A claude adapter older than the API's moving minimum connects, subscribes
+    // and then fails every turn with a 400 that names a model, so the founder
+    // sees silence rather than an error. Warn and spawn anyway: the bound moves
+    // and this check cannot re-verify it against the live API.
+    if harness.id == "claude" {
+        if let Some(warning) =
+            agent_run::stale_claude_adapter_warning(std::path::Path::new(&agent_command))
+        {
+            eprintln!("{warning}");
+        }
+    }
+
     // Consent is the calling agent's question to ask; making the choice
     // visible is this command's job. See `HarnessSpec::login`.
     if let Some(login) = harness.login {
