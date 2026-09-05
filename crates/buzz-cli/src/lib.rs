@@ -1,4 +1,5 @@
 pub mod agent_management;
+pub mod agent_run;
 mod client;
 mod commands;
 pub mod company_scan;
@@ -689,6 +690,59 @@ buzz agents create --name scout --harness codex --model gpt-5 --provider openai"
         /// Inference provider id
         #[arg(long)]
         provider: Option<String>,
+    },
+    /// Run a managed agent headless, with no Buzz Desktop involved
+    #[command(
+        after_help = "Spawns `buzz-acp` with the same environment Buzz Desktop injects: the \
+agent's own key, the relay, its NIP-OA attestation, the harness, and its \
+prompt/model/provider. The process leads its own group, so stopping it stops \
+the harness, its MCP servers, and the agent subprocess together.\n\n\
+It is NOT stamped with the desktop's ownership marker, so a desktop launched \
+later neither reaps it nor adopts it. That also means the desktop's agent \
+list will not show it as running; `buzz agents status` is where a CLI-run \
+agent appears.\n\n\
+Foreground by default, streaming the harness log to the terminal. `--detach` \
+returns immediately and writes the log next to the pidfile under \
+{app_data}/agents/cli-runs/.\n\n\
+A login-based harness (claude, codex, opencode, goose) runs on YOUR login on \
+this machine. The command prints which one before starting; asking the \
+founder's permission first is the calling agent's job, not the CLI's.\n\n\
+Examples:\n  \
+buzz agents run scout\n  \
+buzz agents run scout --detach --harness claude"
+    )]
+    Run {
+        /// Agent name (case-insensitive) or hex pubkey
+        name_or_pubkey: String,
+        /// Harness to run on, overriding the one the agent was created with
+        #[arg(long)]
+        harness: Option<String>,
+        /// Return immediately, leaving the agent running in the background
+        #[arg(long, default_value_t = false)]
+        detach: bool,
+    },
+    /// Report every agent this CLI has started and whether it is still alive
+    #[command(
+        after_help = "Reads the pidfiles under {app_data}/agents/cli-runs/. A pidfile whose \
+process is gone is reported with `\"alive\": false` rather than deleted; \
+`buzz agents stop` removes it.\n\n\
+Agents started by Buzz Desktop are not listed here: the desktop keeps its own \
+lifecycle state and this command deliberately does not read it.\n\n\
+Examples:\n  \
+buzz agents status"
+    )]
+    Status,
+    /// Stop an agent this CLI started
+    #[command(
+        after_help = "SIGTERM to the agent's whole process group, then SIGKILL after 10 \
+seconds, then the pidfile is removed. Stopping an agent that has already \
+exited is not an error; it just clears the stale pidfile.\n\n\
+Examples:\n  \
+buzz agents stop scout"
+    )]
+    Stop {
+        /// Agent name (case-insensitive) or hex pubkey
+        name_or_pubkey: String,
     },
     /// List the managed agents on this machine
     List,
@@ -4329,7 +4383,10 @@ mod tests {
                 "draft-create",
                 "draft-update",
                 "list",
+                "run",
                 "show",
+                "status",
+                "stop",
                 "unarchive"
             ]
         );
@@ -4508,7 +4565,7 @@ mod tests {
     #[test]
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
-            ("agents", 8),
+            ("agents", 11),
             ("blocks", 11),
             ("canvas", 2),
             ("channels", 16),
