@@ -573,7 +573,7 @@ export function useMentionSendFlow({
             draft.capturedThreadContext,
           );
           if (signal?.aborted) return;
-          newTask.consume(); // Per-send, not a mode.
+          newTask.afterSend(); // Per-send, not a mode.
           if (effectiveExplicitAgentPubkeys.length > 0) {
             // Promote only explicitly authored agents that remained effective
             // for this successful send. "Send without inviting" removes its
@@ -648,7 +648,7 @@ export function useMentionSendFlow({
       clearComposer,
       contentRef,
       drafts,
-      newTask.consume,
+      newTask.afterSend,
       newTask.hasOpenTask,
       newTask.isRequested,
       ensureManagedAgentMentionsReady,

@@ -1,6 +1,12 @@
 import * as React from "react";
 
-import { useThreadOpenTask } from "@/features/company/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+
+import {
+  conversationTasksQueryKey,
+  threadTasksQueryKey,
+  useThreadOpenTask,
+} from "@/features/company/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import type { ChannelType } from "@/shared/api/types";
 import { Switch } from "@/shared/ui/switch";
@@ -49,8 +55,16 @@ export type ComposerNewTaskState = {
   hasOpenTask: boolean;
   /** Read at send time, so a switch flipped during an upload still counts. */
   isRequested: () => boolean;
-  /** Called once the send that carried the switch has gone out. */
-  consume: () => void;
+  /**
+   * Called once the send has gone out: drops the switch, and re-reads what
+   * work this thread holds.
+   *
+   * The send is what changed that answer. Without the re-read, the thread that
+   * just opened its first task goes on believing it has none until the cached
+   * read happens to expire, so neither the switch nor the header's "Mark done"
+   * appears for the member who just started the work.
+   */
+  afterSend: () => void;
   /** The control itself, or `null` where it would mean nothing. */
   control: React.ReactNode;
 };
@@ -60,8 +74,10 @@ export function useComposerNewTask(
   channelType: ChannelType | null,
   threadRootId: string | null,
 ): ComposerNewTaskState {
+  const queryClient = useQueryClient();
   const { activeCommunity } = useCommunities();
-  const openTask = useThreadOpenTask(activeCommunity?.id ?? "", {
+  const communityId = activeCommunity?.id ?? "";
+  const openTask = useThreadOpenTask(communityId, {
     channelId,
     channelType,
     threadRootId,
@@ -82,12 +98,20 @@ export function useComposerNewTask(
     () => stateRef.current.requested && stateRef.current.hasOpenTask,
     [],
   );
-  const consume = React.useCallback(() => setRequestedScope(null), []);
+  const afterSend = React.useCallback(() => {
+    setRequestedScope(null);
+    void queryClient.invalidateQueries({
+      queryKey: threadTasksQueryKey(communityId, threadRootId ?? ""),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: conversationTasksQueryKey(communityId, channelId ?? ""),
+    });
+  }, [channelId, communityId, queryClient, threadRootId]);
 
   return {
     hasOpenTask,
     isRequested,
-    consume,
+    afterSend,
     control: hasOpenTask ? (
       <ComposerNewTaskToggle
         checked={requested}

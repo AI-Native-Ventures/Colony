@@ -49,15 +49,32 @@ async function readPublishedEvents(page: Page): Promise<PublishedEvent[]> {
 
 /** The `mode` of every thread attach the app has asked for, in order. */
 async function readAttachModes(page: Page): Promise<string[]> {
-  const events = await readPublishedEvents(page);
-  return events
-    .filter((event) => event.kind === 40013)
-    .map((event) => {
-      const parsed = JSON.parse(event.content) as {
-        payload?: { record?: { mode?: string } };
-      };
-      return parsed.payload?.record?.mode ?? "";
-    });
+  return page.evaluate(() => {
+    const payloads =
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_PAYLOADS__?: {
+            command: string;
+            payload: unknown;
+          }[];
+        }
+      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? [];
+    return payloads
+      .filter((entry) => entry.command === "attach_thread_task")
+      .map((entry) => (entry.payload as { mode?: string }).mode ?? "");
+  });
+}
+
+/** How many owner-signed company actions the mock relay has answered. */
+async function readBrokerActionCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __BUZZ_E2E_MOCK_COMPANY_BROKER__?: () => { actionEventIds: string[] };
+        }
+      ).__BUZZ_E2E_MOCK_COMPANY_BROKER__?.().actionEventIds.length ?? 0,
+  );
 }
 
 async function mentionJasonAndSend(page: Page, instruction: string) {
@@ -110,21 +127,21 @@ test("the thread header names the work open in it and can close it", async ({
   const instruction = "cut the release video";
   const panel = await openThreadWithWork(page, instruction);
 
-  await expect(panel.getByTestId("thread-open-task-title")).toHaveText(
+  // The title is the instruction that opened the work, mention and all: the
+  // relay titles the task with what was asked for, not with the thread root.
+  await expect(panel.getByTestId("thread-open-task-title")).toContainText(
     instruction,
   );
 
   // Closing the thread's work from the thread: the alternative is leaving the
-  // conversation the work is about to end it somewhere else.
+  // conversation the work is about to end it somewhere else. What the mock can
+  // prove is that the close reaches the relay as an owner-signed action;
+  // whether the task then closes is the relay's half, proven relay-side.
+  const before = await readBrokerActionCount(page);
   const markDone = panel.getByTestId("thread-mark-done");
   await expect(markDone).toBeVisible();
   await markDone.click();
-  await expect
-    .poll(async () => {
-      const events = await readPublishedEvents(page);
-      return events.filter((event) => event.kind === 40013).length;
-    })
-    .toBeGreaterThan(1);
+  await expect.poll(() => readBrokerActionCount(page)).toBeGreaterThan(before);
 });
 
 test("the composer's switch asks for a second task in the same thread", async ({

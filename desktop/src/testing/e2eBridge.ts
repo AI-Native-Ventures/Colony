@@ -3739,18 +3739,27 @@ function brokerMockCompanyAction(event: RelayEvent): boolean {
     } else {
       const title =
         typeof record?.title === "string" ? record.title : "Chat work";
-      // A thread attach carries the thread it belongs to and whether it is
-      // the hidden chat slot; the head the relay writes mirrors both, and the
-      // thread surfaces find the task by exactly those fields.
-      const task = mockTaskRecord(config, title, {
-        id: config.taskId,
-        title,
-        initiativeId: config.initiativeId ?? null,
-        threadRoot:
-          typeof record?.threadRoot === "string" ? record.threadRoot : null,
-        sourceChannelId:
-          typeof record?.channelId === "string" ? record.channelId : undefined,
-      });
+      // A transition (complete, snooze, bounce) carries the whole task the
+      // action was derived from, so the head the relay writes is that record
+      // rather than one rebuilt from a title. A thread attach carries only
+      // the thread it belongs to, and the head mirrors that; the thread
+      // surfaces find the task by exactly those fields.
+      const task =
+        record?.schema === "colony.task/v1"
+          ? (record as ReturnType<typeof mockTaskRecord>)
+          : mockTaskRecord(config, title, {
+              id: config.taskId,
+              title,
+              initiativeId: config.initiativeId ?? null,
+              threadRoot:
+                typeof record?.threadRoot === "string"
+                  ? record.threadRoot
+                  : null,
+              sourceChannelId:
+                typeof record?.channelId === "string"
+                  ? record.channelId
+                  : undefined,
+            });
       const tags: string[][] = [
         ["d", task.id],
         ["team", task.owningTeamId],
@@ -3791,6 +3800,10 @@ function filterMockCompanyEvents(filter: MockFilter): RelayEvent[] {
   const pool = kinds.includes(40014) ? mockCompanyReceipts : mockCompanyHeads;
   return pool.filter((event) => {
     if (!kinds.includes(event.kind)) return false;
+    // A read by event id is how a receipt names the exact head it wrote, and
+    // serving every head to it would answer with whichever happened to be
+    // first once a thread holds more than one task.
+    if (filter.ids && !filter.ids.includes(event.id)) return false;
     for (const [key, values] of Object.entries(filter)) {
       if (!key.startsWith("#") || !Array.isArray(values)) continue;
       const name = key.slice(1);
@@ -14643,6 +14656,51 @@ export function maybeInstallE2eTauriMocks() {
           },
         );
         return { signedAction: JSON.stringify(action) };
+      }
+      case "complete_queue_task": {
+        // The native command takes the relay-signed head and re-derives the
+        // task from it rather than trusting a caller-built record, so this
+        // does the same: parse the head it was handed, mark that record
+        // complete, and sign the action carrying it.
+        const config = activeConfig?.mock?.companyWorkContext;
+        if (!config) {
+          throw new Error("no company is seeded for this task");
+        }
+        const request = payload as {
+          taskHead: string;
+          outcomeReason?: string;
+        };
+        const head = JSON.parse(request.taskHead) as RelayEvent;
+        const task = JSON.parse(head.content) as Record<string, unknown> & {
+          id: string;
+          owningTeamId: string;
+          costCentreId: string;
+        };
+        const completed = {
+          ...task,
+          status: "completed",
+          outcomeReason: request.outcomeReason ?? null,
+          updatedAt: Math.floor(Date.now() / 1000),
+        };
+        const action = await signWithIdentity(
+          identity ?? DEFAULT_REAL_IDENTITY,
+          {
+            kind: 40013,
+            content: JSON.stringify({ payload: { record: completed } }),
+            tags: [
+              ["p", MOCK_RELAY_SELF_PUBKEY],
+              ["a", `30181:${MOCK_RELAY_SELF_PUBKEY}:${completed.id}`],
+              [
+                "company-action",
+                "1",
+                "replace",
+                "6f1d2b3c-0000-4000-8000-000000000003",
+                "6f1d2b3c-0000-4000-8000-000000000004",
+              ],
+            ],
+          },
+        );
+        return JSON.stringify(action);
       }
       case "create_initiative": {
         // Which persona answers for the initiative, what it is charged to,
