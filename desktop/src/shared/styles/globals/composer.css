@@ -92,6 +92,25 @@
   );
 }
 
+/*
+ * ProseMirror requires a non-collapsing `white-space` on its editable root,
+ * and TipTap only supplies one from a `<style data-tiptap-style>` tag it
+ * injects at runtime and removes again whenever the last `.tiptap` element
+ * leaves the DOM. Any editor mounted while that tag is absent computes
+ * `white-space: normal`, and then a trailing space is a collapsed one: the
+ * caret sits in it but the browser drops it on the next insertion, so text
+ * typed after an agent mention lands inside the mention instead of after it
+ * ("@Morgarita " + "hello" became "@Morgaritahello", which unbinds the
+ * mention and drops the agent from the send). Declaring it here means the
+ * composer never depends on that tag existing.
+ *
+ * `break-spaces` is the value TipTap itself settles on, so this changes
+ * nothing wherever its tag was present.
+ */
+.tiptap.ProseMirror {
+  white-space: break-spaces;
+}
+
 .rich-text-composer .tiptap {
   outline: none;
   min-height: 1lh;
