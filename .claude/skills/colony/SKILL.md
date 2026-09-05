@@ -303,6 +303,9 @@ names them. Reassign those reports first.
 
 Hiring changes the shape of the founder's company. Ask before you hire.
 
+If a claude-harness agent goes silent, run
+`npm install -g @agentclientprotocol/claude-agent-acp@latest`.
+
 ## Work: jobs, tasks, initiatives
 
 Work is filed as jobs against an employee, and grouped by Tasks and
