@@ -320,6 +320,35 @@ test("timeline agent send remains one-shot and returns to the placeholder", asyn
     .toEqual({ collapsed: true, inside: true });
 });
 
+/**
+ * The test above depends on the trailing space after a mention being a real
+ * character rather than a collapsed one, and that is a stylesheet property,
+ * not an editor one. TipTap supplies it from a `<style data-tiptap-style>`
+ * tag it injects at runtime and removes whenever the last `.tiptap` element
+ * leaves the DOM, so an editor mounted while the tag is gone renders with
+ * `white-space: normal` and the browser eats the trailing space on the next
+ * insertion — which is how "@Morgarita " + "hello" became "@Morgaritahello"
+ * on CI while every local run passed. Assert the app's own stylesheet carries
+ * it, by asking with TipTap's tag removed.
+ */
+test("the composer keeps a non-collapsing white-space without TipTap's injected style", async ({
+  page,
+}) => {
+  await installAudienceFixtures(page);
+  await openGeneral(page);
+
+  const input = channelComposer(page).getByTestId("message-input");
+  await expect(input).toBeVisible();
+  const whiteSpace = await input.evaluate((element) => {
+    for (const tag of document.querySelectorAll("style[data-tiptap-style]")) {
+      tag.remove();
+    }
+    return getComputedStyle(element).whiteSpace;
+  });
+
+  expect(["pre-wrap", "break-spaces"]).toContain(whiteSpace);
+});
+
 test("persistent agents restore through the native inline mention UI", async ({
   page,
 }) => {
