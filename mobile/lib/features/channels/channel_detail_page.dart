@@ -47,6 +47,8 @@ import 'send_message_provider.dart';
 import '../profile/user_profile_sheet.dart';
 import 'small_avatar.dart';
 import 'thread_detail_page.dart';
+import 'thread_tasks/thread_task_header_bar.dart';
+import 'thread_tasks/thread_task_providers.dart';
 import 'timeline_message.dart';
 
 part 'channel_detail_page/message_list.dart';
@@ -379,6 +381,17 @@ class ChannelDetailPage extends HookConsumerWidget {
               child: typingEntries.isEmpty
                   ? const SizedBox.shrink()
                   : ChannelTypingIndicator(entries: typingEntries),
+            ),
+          // A DM is one thread for its whole life, so the conversation's open
+          // task belongs at the foot of the conversation rather than in a
+          // thread panel it will never have.
+          if (resolvedChannel.isDm)
+            ThreadTaskHeaderBar(
+              scope: ThreadTaskScope(
+                channelId: channel.id,
+                conversationScope: true,
+                threadRoot: null,
+              ),
             ),
           if (!resolvedChannel.isForum &&
               resolvedChannel.isMember &&
