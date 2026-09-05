@@ -1,16 +1,18 @@
 pub mod agent_management;
+pub mod agent_run;
 mod client;
 mod commands;
 pub mod company_scan;
 mod error;
+pub mod identity;
 mod links;
 pub mod llm;
+pub mod managed_agents;
 pub mod seat;
 mod validate;
 pub mod worker;
 
 use clap::{Parser, Subcommand};
-use nostr::Keys;
 use uuid::Uuid;
 
 pub use client::BuzzClient;
@@ -82,7 +84,7 @@ Buzz CLI — interact with a Buzz relay
 
 Configuration (flags override env vars):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
-  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
+  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [optional once `buzz identity init` has run]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
 
 The 'pack' subcommand runs locally and does not require a relay connection.
@@ -295,6 +297,178 @@ enum Cmd {
     /// Plan, render, and approve social content (kinds 30195-30198, 40025)
     #[command(subcommand)]
     Content(ContentCmd),
+    /// Inspect and create hosted communities on this relay (self-serve provisioning)
+    #[command(subcommand)]
+    Communities(CommunitiesCmd),
+    /// Read Colony Credit prices and balance, and open a hosted checkout
+    #[command(subcommand)]
+    Credits(CreditsCmd),
+    /// Create and inspect the local identity key (no relay connection needed)
+    #[command(subcommand)]
+    Identity(IdentityCmd),
+    /// Mint and claim relay invites (`/api/invites`)
+    #[command(subcommand)]
+    Invites(InvitesCmd),
+}
+
+/// Subcommands for `buzz invites`: the relay's invite surface
+/// (`/api/invites`), the same one the desktop app's invite dialog and join
+/// screen drive.
+///
+/// `create` is signed by the CLI's key and needs that key to be an owner or
+/// admin of the community the relay URL resolves to. `claim` is signed by the
+/// key that is joining, and is exempt from the relay's membership gate by
+/// design - a stranger has to be able to redeem a code.
+///
+/// `accept-policy` and `policy` matter only on a relay configured with a join
+/// policy; without one, `claim` needs neither.
+#[derive(Subcommand)]
+pub enum InvitesCmd {
+    /// Mint an invite code and print its shareable landing URL.
+    Create {
+        /// Invite lifetime in seconds. Omitted, the relay applies its own
+        /// default (72 h) and enforces its own bounds.
+        #[arg(long)]
+        ttl_secs: Option<u64>,
+        /// Maximum redemptions before the invite is exhausted. Omitted, the
+        /// invite is unlimited.
+        #[arg(long)]
+        max_uses: Option<i32>,
+    },
+    /// Redeem an invite with this CLI's key, joining the community.
+    ///
+    /// Takes either the bare code or the landing URL `create` printed. A
+    /// landing URL for a different relay is refused rather than claimed
+    /// against the configured one.
+    Claim {
+        /// Invite code, landing URL, or `buzz://join?...` deep link
+        invite: String,
+        /// Receipt from `invites accept-policy`, required only on a relay
+        /// with a configured join policy
+        #[arg(long)]
+        policy_receipt: Option<String>,
+    },
+    /// Accept this relay's join policy for an invite and print the receipt
+    /// `claim --policy-receipt` needs.
+    AcceptPolicy {
+        /// Invite code, landing URL, or `buzz://join?...` deep link
+        invite: String,
+        /// Policy version being accepted, as reported by `invites policy`
+        #[arg(long)]
+        policy_version: String,
+        /// Assert the minimum-age requirement, when the relay requires one
+        #[arg(long)]
+        age_confirmed: bool,
+    },
+    /// Print this relay's join policy, including the version string
+    /// `accept-policy` has to echo back.
+    Policy,
+}
+
+/// Subcommands for `buzz communities`: the relay's member self-serve
+/// provisioning surface (`/api/communities`), the same one the desktop app's
+/// create-community dialog drives. `config` and `check` need no auth;
+/// `create` and `list` are NIP-98 signed with the CLI's key, and that key is
+/// what ends up owning anything created.
+///
+/// A relay with `BUZZ_SELF_PROVISION_DOMAIN` unset provisions nothing and
+/// answers `config` saying so - check that before assuming a failure is
+/// yours.
+#[derive(Subcommand)]
+pub enum CommunitiesCmd {
+    /// Show what this relay provisions: whether self-serve is enabled, the
+    /// domain new hosts are minted under, whether creation is open to
+    /// non-members, and the per-owner cap.
+    Config,
+    /// Check whether a community name is free on this relay. A name the
+    /// relay would refuse comes back as `available: false` with a `reason`
+    /// rather than an error.
+    Check {
+        /// Candidate name, e.g. `acme-labs`
+        name: String,
+    },
+    /// Create `<name>.<provisioning domain>`, owned by the CLI's key.
+    ///
+    /// The relay requires the signer to already be a member of the community
+    /// this request lands on (unless the deployment runs in public mode) and
+    /// enforces the per-owner cap. A name already taken comes back as a
+    /// conflict.
+    Create {
+        /// New community name: lowercase letters, numbers, and single
+        /// hyphens, e.g. `acme-labs`
+        name: String,
+    },
+    /// List the communities the CLI's key owns on this deployment.
+    List,
+}
+
+/// Subcommands for `buzz credits`: the relay's card top-up surface
+/// (`/api/payments`, plus the gateway's balance read at
+/// `/api/gateway/account`), the same routes the desktop onboarding flow
+/// drives.
+///
+/// The agent guides the founder to pay, it never pays for them: checkout
+/// happens on the gateway's own hosted page, so `pay` hands back a URL for a
+/// person to open. Only the gateway's webhook credits an account, so `verify`
+/// reports a payment and never completes one.
+///
+/// `packs` needs no auth. `balance`, `pay`, and `verify` are NIP-98 signed
+/// with the CLI's key, and that key is the account the balance and the
+/// top-up belong to. A relay with no gateway configured does not mount
+/// `balance` at all and answers `404`.
+#[derive(Subcommand)]
+pub enum CreditsCmd {
+    /// Show the prepaid balance held by the CLI's key, in nanoUSD.
+    Balance,
+    /// List the credit packs this relay sells, with a price per currency.
+    Packs {
+        /// Which price list to ask for. This relay derives the charging
+        /// currency from its configured gateway and reports it in the
+        /// response's `currency` field, so the flag is a hint rather than a
+        /// selector.
+        #[arg(long, value_parser = ["USD", "ZAR"])]
+        currency: Option<String>,
+    },
+    /// Open a hosted checkout for one pack and print its URL, then the JSON.
+    ///
+    /// Prints nothing a person can pay with beyond the link: no price is
+    /// sent, because the relay prices the pack.
+    Pay {
+        /// Pack id from `buzz credits packs`
+        pack_id: String,
+        /// Receipt email passed through to the hosted checkout page
+        #[arg(long)]
+        email: String,
+    },
+    /// Report whether one checkout reference has been paid. Credits nothing.
+    Verify {
+        /// The reference `buzz credits pay` returned
+        reference: String,
+    },
+}
+
+/// Subcommands for `buzz identity`: the local founder key.
+///
+/// These are local-only. The key is stored in the same OS keyring slot Buzz
+/// Desktop reads at boot, so an identity minted here is adopted by the app and
+/// the agent and the app share one identity.
+#[derive(clap::Subcommand)]
+pub enum IdentityCmd {
+    /// Generate a keypair and store it (keyring first, 0600 file fallback)
+    Init {
+        /// Replace an identity that is already stored
+        #[arg(long)]
+        force: bool,
+        /// Also print the secret key as an nsec
+        #[arg(long)]
+        show_secret: bool,
+    },
+    /// Print the pubkey of the resolved identity and where it came from
+    Show {
+        /// Also print the secret key as an nsec
+        #[arg(long)]
+        show_secret: bool,
+    },
 }
 
 /// Subcommands for `buzz content`: the content calendar.
@@ -487,6 +661,96 @@ impl RespondToArg {
 
 #[derive(Subcommand)]
 pub enum AgentsCmd {
+    /// Mint a managed agent: a local key, an owner-signed NIP-OA profile, and
+    /// a record Buzz Desktop adopts on its next launch
+    #[command(
+        after_help = "The agent gets its own Nostr key, kept in the same OS keyring blob as \
+your identity under `agent:<pubkey>` (or, when the keyring is unreachable, inline in the \
+0600 store). Its kind:0 profile carries a NIP-OA auth tag signed by YOUR key, which is \
+what the relay accepts the agent on.\n\n\
+Running it is a separate step; this command only mints it.\n\n\
+Examples:\n  \
+buzz agents create --name scout\n  \
+buzz agents create --name scout --harness claude --prompt @./scout-prompt.md\n  \
+buzz agents create --name scout --harness codex --model gpt-5 --provider openai"
+    )]
+    Create {
+        /// Agent handle, unique among your managed agents
+        #[arg(long)]
+        name: String,
+        /// Instructions: literal text, `@path` to read a file, or `-` for stdin
+        #[arg(long)]
+        prompt: Option<String>,
+        /// ACP harness the agent runs on
+        #[arg(long, default_value = crate::managed_agents::DEFAULT_HARNESS)]
+        harness: String,
+        /// Desired model id, as the harness names it
+        #[arg(long)]
+        model: Option<String>,
+        /// Inference provider id
+        #[arg(long)]
+        provider: Option<String>,
+    },
+    /// Run a managed agent headless, with no Buzz Desktop involved
+    #[command(
+        after_help = "Spawns `buzz-acp` with the same environment Buzz Desktop injects: the \
+agent's own key, the relay, its NIP-OA attestation, the harness, and its \
+prompt/model/provider. The process leads its own group, so stopping it stops \
+the harness, its MCP servers, and the agent subprocess together.\n\n\
+It is NOT stamped with the desktop's ownership marker, so a desktop launched \
+later neither reaps it nor adopts it. That also means the desktop's agent \
+list will not show it as running; `buzz agents status` is where a CLI-run \
+agent appears.\n\n\
+Foreground by default, streaming the harness log to the terminal. `--detach` \
+returns immediately and writes the log next to the pidfile under \
+{app_data}/agents/cli-runs/.\n\n\
+A login-based harness (claude, codex, opencode, goose) runs on YOUR login on \
+this machine. The command prints which one before starting; asking the \
+founder's permission first is the calling agent's job, not the CLI's.\n\n\
+Examples:\n  \
+buzz agents run scout\n  \
+buzz agents run scout --detach --harness claude"
+    )]
+    Run {
+        /// Agent name (case-insensitive) or hex pubkey
+        name_or_pubkey: String,
+        /// Harness to run on, overriding the one the agent was created with
+        #[arg(long)]
+        harness: Option<String>,
+        /// Return immediately, leaving the agent running in the background
+        #[arg(long, default_value_t = false)]
+        detach: bool,
+    },
+    /// Report every agent this CLI has started and whether it is still alive
+    #[command(
+        after_help = "Reads the pidfiles under {app_data}/agents/cli-runs/. A pidfile whose \
+process is gone is reported with `\"alive\": false` rather than deleted; \
+`buzz agents stop` removes it.\n\n\
+Agents started by Buzz Desktop are not listed here: the desktop keeps its own \
+lifecycle state and this command deliberately does not read it.\n\n\
+Examples:\n  \
+buzz agents status"
+    )]
+    Status,
+    /// Stop an agent this CLI started
+    #[command(
+        after_help = "SIGTERM to the agent's whole process group, then SIGKILL after 10 \
+seconds, then the pidfile is removed. Stopping an agent that has already \
+exited is not an error; it just clears the stale pidfile.\n\n\
+Examples:\n  \
+buzz agents stop scout"
+    )]
+    Stop {
+        /// Agent name (case-insensitive) or hex pubkey
+        name_or_pubkey: String,
+    },
+    /// List the managed agents on this machine
+    List,
+    /// Show one managed agent by name or pubkey
+    Show {
+        /// Agent name (case-insensitive) or hex pubkey
+        name_or_pubkey: String,
+    },
     /// Open a prefilled create-agent form in the owner's Buzz Desktop
     DraftCreate {
         /// Current channel UUID; the new agent is added here after save
@@ -1217,6 +1481,46 @@ pub enum TasksCmd {
     Complete {
         #[arg(long)]
         id: String,
+    },
+    /// Ask the relay which task a send in one thread is charged to, opening
+    /// the thread's task when it has none
+    Attach {
+        /// Channel the send happens in
+        #[arg(long)]
+        channel: String,
+        /// Root event id of the thread the send replies in
+        #[arg(long)]
+        thread: Option<String>,
+        /// Treat the whole conversation as the thread, which is what a DM is
+        #[arg(long, default_value_t = false)]
+        conversation: bool,
+        /// Stable identity of this send; a retry reuses it
+        #[arg(long)]
+        send_id: String,
+        /// open (this send is work), attach (it is not), new (a second task)
+        #[arg(long, default_value = "open")]
+        mode: String,
+        /// The instruction, used as the title when a task is opened
+        #[arg(long)]
+        title: String,
+        /// Persona of the agent the send names
+        #[arg(long)]
+        agent_persona: Option<String>,
+        /// Client this work is delivered to, when it is client delivery
+        #[arg(long)]
+        client_organization: Option<String>,
+        /// Parent task, when opening a sub-task under a thread's task
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Report your own share of a task complete; the relay closes the task
+    /// once every assignee has
+    ReportComplete {
+        #[arg(long)]
+        task: String,
+        /// Short note stored with the report
+        #[arg(long)]
+        note: Option<String>,
     },
 }
 
@@ -3355,13 +3659,37 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return commands::price_feed::sign_feed(catalog, key.clone(), out.clone());
     }
 
-    // Auth: private key is required for all relay operations.
-    // The keypair IS the identity — no tokens, no other auth.
-    let private_key_str = cli.private_key.ok_or_else(|| {
-        CliError::Auth("BUZZ_PRIVATE_KEY is required (use --private-key or set env var)".into())
-    })?;
-    let keys = Keys::parse(&private_key_str)
-        .map_err(|e| CliError::Key(format!("invalid BUZZ_PRIVATE_KEY: {e}")))?;
+    // An empty `BUZZ_PRIVATE_KEY` is an unset one. Clap hands back `Some("")`
+    // for an exported-but-blank env var, which would otherwise shadow a stored
+    // identity and fail with a parse error instead of using it.
+    let env_private_key = cli.private_key.filter(|value| !value.trim().is_empty());
+
+    // Identity management is local: it needs no relay and, by definition, runs
+    // before any key exists. Same reasoning as Pack above.
+    if let Cmd::Identity(ref sub) = cli.command {
+        return match sub {
+            IdentityCmd::Init { force, show_secret } => {
+                commands::identity::cmd_init(*force, *show_secret)
+            }
+            IdentityCmd::Show { show_secret } => {
+                commands::identity::cmd_show(env_private_key.as_deref(), *show_secret)
+            }
+        };
+    }
+
+    // Auth: an identity is required for all relay operations. The keypair IS
+    // the identity: no tokens, no other auth. Resolution order is
+    // `BUZZ_PRIVATE_KEY` first, then the stored identity (OS keyring, then the
+    // 0600 file), so a founder who ran `buzz identity init` needs no env var.
+    let no_identity = || {
+        CliError::Auth(
+            "no identity: set BUZZ_PRIVATE_KEY (or --private-key), or run `buzz identity init`"
+                .into(),
+        )
+    };
+    let keys = identity::resolve_identity(env_private_key.as_deref())?
+        .ok_or_else(no_identity)?
+        .keys;
 
     // NIP-OA: parse and verify the auth tag if provided.
     let (auth_tag, auth_tag_json) = match cli.auth_tag {
@@ -3392,6 +3720,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Tasks(sub) => commands::company::dispatch_tasks(sub, &client).await,
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
+        Cmd::Communities(sub) => commands::communities::dispatch(sub, &client).await,
+        Cmd::Invites(sub) => commands::invites::dispatch(sub, &client).await,
+        Cmd::Credits(sub) => commands::credits::dispatch(sub, &client).await,
         Cmd::Workspace(sub) => commands::workspace::dispatch(sub, &client).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
@@ -3418,6 +3749,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Employees(sub) => commands::employees::dispatch(sub, &client).await,
         Cmd::Jobs(sub) => commands::jobs::dispatch(sub, &client).await,
         Cmd::Pack(_) => unreachable!("handled above"),
+        Cmd::Identity(_) => unreachable!("handled above"),
     }
 }
 
@@ -3460,6 +3792,38 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&args).is_ok(),
                 "should parse: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn communities_command_surface_parses() {
+        for args in [
+            vec!["buzz", "communities", "config"],
+            vec!["buzz", "communities", "check", "acme-labs"],
+            vec!["buzz", "communities", "create", "acme-labs"],
+            vec!["buzz", "communities", "list"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_ok(),
+                "should parse: {}",
+                args.join(" ")
+            );
+        }
+    }
+
+    /// `check` and `create` each take exactly one positional name. A bare
+    /// `create` would otherwise reach the relay as an empty slug.
+    #[test]
+    fn communities_check_and_create_require_a_name() {
+        for args in [
+            vec!["buzz", "communities", "check"],
+            vec!["buzz", "communities", "create"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "should not parse: {}",
                 args.join(" ")
             );
         }
@@ -3934,8 +4298,10 @@ mod tests {
             "blocks",
             "canvas",
             "channels",
+            "communities",
             "company",
             "content",
+            "credits",
             "decisions",
             "discovery",
             "dms",
@@ -3943,7 +4309,9 @@ mod tests {
             "employees",
             "feed",
             "grants",
+            "identity",
             "initiatives",
+            "invites",
             "issues",
             "jobs",
             "ledger",
@@ -4011,8 +4379,14 @@ mod tests {
             vec![
                 "archive",
                 "archived",
+                "create",
                 "draft-create",
                 "draft-update",
+                "list",
+                "run",
+                "show",
+                "status",
+                "stop",
                 "unarchive"
             ]
         );
@@ -4067,6 +4441,14 @@ mod tests {
             ]
         );
         assert_eq!(names(&cmd, "canvas"), vec!["get", "set"]);
+        assert_eq!(
+            names(&cmd, "communities"),
+            vec!["check", "config", "create", "list"]
+        );
+        assert_eq!(
+            names(&cmd, "credits"),
+            vec!["balance", "packs", "pay", "verify"]
+        );
         assert_eq!(names(&cmd, "reactions"), vec!["add", "get", "remove"]);
         assert_eq!(
             names(&cmd, "emoji"),
@@ -4183,7 +4565,7 @@ mod tests {
     #[test]
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
-            ("agents", 5),
+            ("agents", 11),
             ("blocks", 11),
             ("canvas", 2),
             ("channels", 16),

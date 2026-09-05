@@ -112,6 +112,16 @@ const CHAIN_FIELDS = [
   "doerKind",
   "wakeAt",
 ];
+/** What the relay omits from a task that opened no sub-task, hid nothing and
+ * has had no assignee report its share: all three are skipped on serialize
+ * when unused, so an absent key is the ordinary case rather than a legacy
+ * one. */
+const THREAD_TASK_DEFAULTS = {
+  reportedCompleteBy: [],
+  hidden: false,
+  parentTaskId: null,
+};
+
 const CHAIN_FIELD_DEFAULTS = {
   dependsOn: [],
   subject: null,
@@ -205,7 +215,7 @@ test("initiative and task heads parse into their exact records", () => {
   assert.equal(task.ok, true);
   // The subject key is literally `ref` because the Rust field is the raw
   // identifier `r#ref`; deepEqual proves the JSON spelling survived.
-  assert.deepEqual(task.value, TASK);
+  assert.deepEqual(task.value, { ...TASK, ...THREAD_TASK_DEFAULTS });
   assert.equal("ref" in task.value.subject, true);
 });
 
@@ -235,7 +245,11 @@ test("a task head written before the chain fields existed still parses", () => {
   );
   const parsed = parseTaskHead(event, RELAY_PUBKEY);
   assert.equal(parsed.ok, true);
-  assert.deepEqual(parsed.value, { ...TASK, ...CHAIN_FIELD_DEFAULTS });
+  assert.deepEqual(parsed.value, {
+    ...TASK,
+    ...CHAIN_FIELD_DEFAULTS,
+    ...THREAD_TASK_DEFAULTS,
+  });
 });
 
 /** The relay OMITS `reviewerTeamId` rather than nulling it, so an absent key
@@ -1220,4 +1234,127 @@ test("read-back backoff doubles and then holds at its cap", () => {
   );
   // Capped, so a long tail never becomes an unbounded one.
   assert.equal(taskReadBackDelay(20, 150, 2_000), 2_000);
+});
+
+const HIDDEN_TEST_THREAD = "b".repeat(64);
+
+// The three fields only appear on a head that uses them, and a client that
+// refused them would blank the Tasks page the moment a thread task closed.
+test("a task head using the thread-task fields parses them", () => {
+  const parsed = parseTaskHead(
+    taskHead({
+      reportedCompleteBy: ["relay1:horizonlabs:sales-lead"],
+      hidden: true,
+      parentTaskId: "horizonlabs:launch-outbound:parent",
+    }),
+    RELAY_PUBKEY,
+  );
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.value.reportedCompleteBy, [
+    "relay1:horizonlabs:sales-lead",
+  ]);
+  assert.equal(parsed.value.hidden, true);
+  assert.equal(parsed.value.parentTaskId, "horizonlabs:launch-outbound:parent");
+});
+
+// A hidden task carries the cost of turns that were not work. It is an
+// accounting record, and every surface reads through this repository, so a
+// surface that forgot to filter would leak them into the Tasks page.
+test("hidden tasks are never listed", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [
+      taskHead({ id: "horizonlabs:t:work", threadRoot: HIDDEN_TEST_THREAD }),
+      taskHead({
+        id: "horizonlabs:t:chat",
+        title: "Thread chat",
+        hidden: true,
+        threadRoot: HIDDEN_TEST_THREAD,
+      }),
+    ],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  const all = await repository.listTasks({});
+  assert.deepEqual(
+    all.value.map((task) => task.id),
+    ["horizonlabs:t:work"],
+  );
+  const thread = await repository.listThreadTasks({
+    threadRoot: HIDDEN_TEST_THREAD,
+  });
+  assert.deepEqual(
+    thread.value.map((task) => task.id),
+    ["horizonlabs:t:work"],
+  );
+});
+
+// A DM is one thread for its whole life, so its tasks name no thread root
+// and are found by the channel they were opened in instead.
+test("a conversation's tasks are the rootless ones from its channel", async () => {
+  resetCompanyRepositoryState();
+  const repository = createCompanyRepository({
+    fetchEvents: async () => [
+      taskHead({
+        id: "horizonlabs:t:dm",
+        threadRoot: null,
+        sourceChannelId: "dm-abc",
+      }),
+      taskHead({
+        id: "horizonlabs:t:other-dm",
+        threadRoot: null,
+        sourceChannelId: "dm-xyz",
+      }),
+      taskHead({
+        id: "horizonlabs:t:threaded",
+        threadRoot: HIDDEN_TEST_THREAD,
+        sourceChannelId: "dm-abc",
+      }),
+    ],
+    relaySelf: async () => RELAY_PUBKEY,
+  });
+
+  const result = await repository.listConversationTasks("dm-abc");
+  assert.deepEqual(
+    result.value.map((task) => task.id),
+    ["horizonlabs:t:dm"],
+  );
+
+  const noChannel = await repository.listConversationTasks("  ");
+  assert.equal(noChannel.ok, false);
+  assert.equal(noChannel.code, "invalid-record");
+});
+
+// A thread attach is answered with a head event id and nothing else: the
+// relay decides which task the send belongs to, so the client has no
+// coordinate to read by. A hidden task has to come back here, because the
+// message still carries the id of whatever it was charged to.
+test("a task can be read back by the head event a receipt named", async () => {
+  resetCompanyRepositoryState();
+  const chat = taskHead({
+    id: "horizonlabs:t:chat",
+    title: "Thread chat",
+    hidden: true,
+  });
+  const filters = [];
+  const repository = createCompanyRepository({
+    fetchEvents: async (filter) => {
+      filters.push(filter);
+      return filter.ids?.includes(chat.id) ? [chat] : [];
+    },
+    relaySelf: async () => RELAY_PUBKEY,
+    delay: async () => {},
+    taskReadBackAttempts: 2,
+    taskReadBackIntervalMs: 1,
+  });
+
+  const found = await repository.getTaskByHeadEvent(chat.id);
+  assert.equal(found.ok, true);
+  assert.equal(found.value.id, "horizonlabs:t:chat");
+  assert.equal(found.value.hidden, true);
+  assert.deepEqual(filters[0].ids, [chat.id]);
+
+  const missing = await repository.getTaskByHeadEvent("f".repeat(64));
+  assert.equal(missing.ok, false);
+  assert.equal(missing.code, "missing-head");
 });

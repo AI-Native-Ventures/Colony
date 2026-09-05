@@ -44,43 +44,66 @@ export async function advanceInitiative(
   });
 }
 
-/** The Task an agent-directed message will be charged to. */
-export type ChatTaskResult = {
-  taskId: string;
-  owningTeamId: string;
-  /** The signed Company Action that creates it. */
+/**
+ * What a send asks its thread for.
+ *
+ * `open` says the message implies work: attach to the thread's open task, or
+ * open one titled with this instruction. `attach` says it does not: join the
+ * open task if there is one, otherwise the hidden chat task, so the turn is
+ * still charged without putting "are you there?" on the Tasks page. `new` is
+ * the composer's explicit second task in a thread that already has one.
+ */
+export type ThreadAttachMode = "open" | "attach" | "new";
+
+/** The signed question one send asks about which Task it belongs to. */
+export type ThreadAttachResult = {
+  /** The signed Company Action to publish. */
   signedAction: string;
 };
 
-export type EnsureChatTaskInput = {
-  /** The relay-signed company head, exactly as it was read. */
-  companyHead: string;
+export type AttachThreadTaskInput = {
   channelId: string;
   /** This client's stable identity for this send. A retry reuses it. */
   sendId: string;
-  agentPubkey: string;
+  /** Agent this send names, `null` when it names none. */
+  agentPubkey: string | null;
   title: string;
-  clientOrganizationId: string | null;
+  mode: ThreadAttachMode;
   /**
    * Root event id of the thread this send replies in, `null` at channel root.
-   * The relay scopes its task-created notice into a thread only when the Task
-   * names one.
+   * A send that starts its own thread is claimed under its `sendId` instead,
+   * and the relay rebinds that claim onto the real root once the message
+   * arrives.
    */
   threadRoot: string | null;
+  /** True for a DM, where the conversation itself is the thread. */
+  conversationScope: boolean;
+  clientOrganizationId?: string | null;
+  /** Parent task, when this send opens a sub-task under one. */
+  parentTaskId?: string | null;
   relayPubkey: string;
 };
 
-export async function ensureChatTask(
-  input: EnsureChatTaskInput,
-): Promise<ChatTaskResult> {
-  return await invokeTauri<ChatTaskResult>("ensure_chat_task", {
-    companyHead: input.companyHead,
+/**
+ * Ask the relay which Task this send is charged to.
+ *
+ * The client proposes no task id. Two devices preparing the same send would
+ * each read "this thread has no open task" and each create one, so the
+ * decision belongs where there is exactly one copy of the answer.
+ */
+export async function attachThreadTask(
+  input: AttachThreadTaskInput,
+): Promise<ThreadAttachResult> {
+  return await invokeTauri<ThreadAttachResult>("attach_thread_task", {
     channelId: input.channelId,
     sendId: input.sendId,
     agentPubkey: input.agentPubkey,
     title: input.title,
-    clientOrganizationId: input.clientOrganizationId,
+    mode: input.mode,
     threadRoot: input.threadRoot,
+    conversationScope: input.conversationScope,
+    clientOrganizationId: input.clientOrganizationId ?? null,
+    parentTaskId: input.parentTaskId ?? null,
     relayPubkey: input.relayPubkey,
   });
 }

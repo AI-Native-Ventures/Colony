@@ -38,10 +38,10 @@ use buzz_core::kind::{
     KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
     KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USAGE_RECORD,
-    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, KIND_WORKSPACE_TAB_ACTION,
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
-    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TASK_REPORT, KIND_TEAM, KIND_TEXT_NOTE,
+    KIND_USAGE_RECORD, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    KIND_WORKSPACE_TAB_ACTION, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -661,6 +661,11 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         // sending it back. Message-shaped; the refusal to approve a failing
         // gate report is in `parse_content_decision`.
         KIND_CONTENT_DECISION => Ok(Scope::MessagesWrite),
+        // Colony task completion report (40026): one assignee saying its own
+        // share of a shared thread task is done. Agent-authored, so it is a
+        // message-shaped write rather than an owner-authority one; the
+        // assignment check is the report handler's.
+        KIND_TASK_REPORT => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -815,6 +820,10 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_CONTENT_BRAND_KIT
             | KIND_CONTENT_LIBRARY
             | KIND_CONTENT_DECISION
+            // A completion report names its task, never a channel: the task
+            // knows which channel it lives in, and a stray `h` tag must not
+            // channel-scope the report.
+            | KIND_TASK_REPORT
             // Block manifests and relay-authored catalog heads are immutable or
             // addressable global definitions. Instances remain kind:9 messages.
             | KIND_BLOCK_MANIFEST
@@ -2244,7 +2253,13 @@ async fn ingest_event_inner(
     // the owner's signature. Routed here, after the ban/timeout write-block, so
     // a restricted owner cannot change company state.
     if crate::company_broker::is_company_action_candidate(&event) {
-        if auth.channel_ids().is_some() {
+        // A thread attach is exempt from the channel-scope refusal below: it
+        // changes no company state, it is authorized by membership rather
+        // than ownership, and the agents that open sub-tasks hold exactly the
+        // channel-scoped tokens that refusal exists to stop from governing.
+        if auth.channel_ids().is_some()
+            && !crate::company_broker::is_thread_attach_candidate(&event)
+        {
             return Err(IngestError::AuthFailed(
                 "restricted: channel-scoped tokens cannot mutate company state".into(),
             ));
@@ -2269,6 +2284,17 @@ async fn ingest_event_inner(
                 Ok(IngestResult::refused(event_id_hex, message))
             }
         };
+    }
+
+    // One assignee reporting its own share of a shared thread task done.
+    // Agent-signed, so it is deliberately not a company action: a task worked
+    // by several agents can only be closed by the agents that worked it, and
+    // a Company Action can only be signed by the human owner.
+    if crate::thread_task_broker::is_task_report_candidate(&event) {
+        crate::thread_task_broker::handle_task_report(tenant, state, &event)
+            .await
+            .map_err(|error| IngestError::Rejected(format!("invalid: {error}")))?;
+        return Ok(IngestResult::stored(event_id_hex));
     }
 
     // Party mutations are community-global governance requests authorized by
@@ -3786,6 +3812,26 @@ async fn ingest_event_inner(
             warn!(
                 event_id = %event_id_hex,
                 "auto-resolve from owner thread reply failed: {error}"
+            );
+        }
+    }
+
+    // A send that starts its own thread is charged to a task claimed under
+    // the send id, because the root event it will become does not exist until
+    // this moment. Now it does: move the claim onto the real root, or the
+    // first reply in this thread would look like a brand-new thread and open
+    // a second task for one conversation.
+    if matches!(kind_u32, KIND_STREAM_MESSAGE | KIND_STREAM_MESSAGE_V2) {
+        if let Err(error) = crate::thread_task_broker::rebind_pending_thread_claim(
+            tenant,
+            state,
+            &stored_event.event,
+        )
+        .await
+        {
+            warn!(
+                event_id = %event_id_hex,
+                "rebinding this thread's task claim failed: {error}"
             );
         }
     }

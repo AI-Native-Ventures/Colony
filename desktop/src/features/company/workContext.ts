@@ -1,14 +1,16 @@
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { relayClient } from "@/shared/api/relayClient";
-import type { ChatTaskResult } from "@/shared/api/initiative";
-import { ensureChatTask } from "@/shared/api/initiative";
+import type {
+  ThreadAttachMode,
+  ThreadAttachResult,
+} from "@/shared/api/initiative";
+import { attachThreadTask } from "@/shared/api/initiative";
 import type { RelayEvent } from "@/shared/api/types";
-import { KIND_COMPANY_PROFILE } from "@/shared/constants/kinds";
+import { KIND_COMPANY_RECEIPT } from "@/shared/constants/kinds";
 
 import { companyRepository } from "./companyRepository";
 import type { CompanyTask } from "./contracts";
-import { COMMUNITY_PROFILE_ID, newestHead } from "./contracts";
-import { companyActionBroker } from "./workRepository";
+import { companyActionBroker, parseCompanyReceipt } from "./workRepository";
 import type { CompanyActionBroker } from "./workRepository";
 
 /**
@@ -16,9 +18,15 @@ import type { CompanyActionBroker } from "./workRepository";
  *
  * A paid turn with no work context is money spent that no cost centre, team, or
  * commercial purpose can be traced to, and the classification cannot be
- * recovered afterwards. So the Task is created and confirmed by the relay
- * *before* the instruction is sent, and the message carries references to the
- * canonical record rather than to what this client hoped it would be.
+ * recovered afterwards. So the Task is confirmed by the relay *before* the
+ * instruction is sent, and the message carries references to the canonical
+ * record rather than to what this client hoped it would be.
+ *
+ * Which Task that is, is the relay's decision, not this client's. A thread
+ * holds at most one open Task, and two devices preparing the same send would
+ * each read "no open task" and each open one. So nothing here proposes a task
+ * id: it asks, publishes the question, and reads the answer out of the
+ * receipt.
  *
  * Only three references go on the message. Cost centre, client, commercial
  * purpose, and accounting classification are deliberately absent: they are
@@ -32,6 +40,8 @@ export type ResolvedWorkContext = {
   taskId: string;
   initiativeId: string | null;
   owningTeamId: string;
+  /** Whether the turn was charged to the thread's hidden chat task. */
+  hidden: boolean;
   tags: WorkContextTags;
 };
 
@@ -39,36 +49,43 @@ export type WorkContextRequest = {
   channelId: string;
   /** This client's stable identity for this send. A retry reuses it. */
   sendId: string;
-  agentPubkey: string;
-  /** The instruction being sent, used as the Task title. */
+  /** The agent this send names, `null` when it names none. */
+  agentPubkey: string | null;
+  /** The instruction being sent, used as the Task title when one is opened. */
   title: string;
+  /** What this send asks its thread for. */
+  mode: ThreadAttachMode;
   clientOrganizationId?: string | null;
   /**
    * Root event id of the thread this send replies in, absent at channel root.
-   * Carried so the relay can scope its task-created notice into the thread
-   * that asked for the work instead of dropping it at channel root.
+   * A send that starts its own thread is claimed under its send id instead,
+   * and the relay rebinds that claim onto the real root when the message
+   * arrives, so the first reply does not read as a brand-new thread.
    */
   threadRoot?: string | null;
+  /** True in a DM, where the conversation itself is the thread. */
+  conversationScope?: boolean;
 };
 
 export type WorkContextDependencies = {
   relaySelf: () => Promise<string | null>;
-  fetchCompanyHead: (relaySelfPubkey: string) => Promise<RelayEvent | null>;
-  ensureTask: (input: {
-    companyHead: string;
+  attach: (input: {
     channelId: string;
     sendId: string;
-    agentPubkey: string;
+    agentPubkey: string | null;
     title: string;
-    clientOrganizationId: string | null;
+    mode: ThreadAttachMode;
     threadRoot: string | null;
+    conversationScope: boolean;
+    clientOrganizationId: string | null;
     relayPubkey: string;
-  }) => Promise<ChatTaskResult>;
+  }) => Promise<ThreadAttachResult>;
   broker: Pick<CompanyActionBroker, "submit">;
+  /** The head one already-applied company action produced, from its receipt. */
+  headForAction: (actionEventId: string) => Promise<string | null>;
   loadTask: (
-    taskId: string,
-    headEventId: string | null,
-  ) => ReturnType<typeof companyRepository.getTaskAfterAction>;
+    headEventId: string,
+  ) => ReturnType<typeof companyRepository.getTaskByHeadEvent>;
 };
 
 /**
@@ -107,54 +124,46 @@ export function createWorkContextResolver(
         "This community's relay has no stable identity, so agent work cannot be recorded against it.",
       );
     }
-    const companyEvent = await dependencies.fetchCompanyHead(relayPubkey);
-    if (!companyEvent) {
-      throw new Error(
-        "This community has not described its business yet, so this work has no cost centre to charge.",
-      );
-    }
 
-    const planned = await dependencies.ensureTask({
-      companyHead: JSON.stringify(companyEvent),
+    const planned = await dependencies.attach({
       channelId: request.channelId,
       sendId: request.sendId,
       agentPubkey: request.agentPubkey,
       title: request.title,
-      clientOrganizationId: request.clientOrganizationId ?? null,
+      mode: request.mode,
       threadRoot: request.threadRoot ?? null,
+      conversationScope: request.conversationScope ?? false,
+      clientOrganizationId: request.clientOrganizationId ?? null,
       relayPubkey,
     });
 
     const outcome = await dependencies.broker.submit(planned.signedAction);
-    // A conflict means the Task already exists. A superseded submission
-    // means the relay's idempotency claim on this exact send was already won
-    // — by an earlier attempt, most likely — which is the same goal state
-    // reached a different way: `planned.taskId` is derived from the send
-    // itself (channel + send id), not from which event won the claim, so it
-    // names the same Task either way. Anything else has not been recorded,
-    // and sending the instruction anyway would buy an agent turn nothing can
-    // account for.
-    if (
-      outcome.status !== "applied" &&
-      outcome.status !== "conflict" &&
-      outcome.status !== "superseded"
-    ) {
+    // An applied receipt names the Task head this send resolved to, including
+    // when the relay attached to a Task that already existed: rewriting that
+    // head to say the same thing would churn a record nobody asked to change,
+    // so the receipt points at the head that is already stored.
+    //
+    // A superseded submission means an earlier attempt at this exact send
+    // already won the idempotency claim. That is the same goal state reached a
+    // different way, and the winning action's own receipt names the Task it
+    // was answered with. Anything else has not been recorded, and sending the
+    // instruction anyway would buy an agent turn nothing can account for.
+    let headEventId: string | null = null;
+    if (outcome.status === "applied") {
+      headEventId = outcome.headEventId;
+    } else if (outcome.status === "superseded") {
+      headEventId = await dependencies.headForAction(outcome.winnerEventId);
+    } else {
+      throw new Error(`${outcome.message} The message has not been sent.`);
+    }
+
+    if (!headEventId) {
       throw new Error(
-        outcome.status === "no-receipt"
-          ? `${outcome.message} The message has not been sent.`
-          : `${outcome.message} The message has not been sent.`,
+        "The relay did not say which task this message belongs to, so it has not been sent. Trying again is safe.",
       );
     }
 
-    // Only an applied receipt names a Task head, and reading that exact
-    // event sidesteps whatever indexing the `#d` tag filter otherwise waits
-    // on. A conflict names no event at all. A superseded claim names the
-    // company ACTION event that won the idempotency claim, signed by the
-    // owner under a different kind, so it is not a head id and reading it as
-    // one can only ever miss. Both go by coordinate instead.
-    const headEventId =
-      outcome.status === "applied" ? outcome.headEventId : null;
-    const task = await dependencies.loadTask(planned.taskId, headEventId);
+    const task = await dependencies.loadTask(headEventId);
     if (!task.ok) {
       throw new Error(
         "The work record for this message could not be read back, so the message has not been sent. Trying again is safe.",
@@ -165,24 +174,40 @@ export function createWorkContextResolver(
       taskId: task.value.id,
       initiativeId: task.value.initiativeId,
       owningTeamId: task.value.owningTeamId,
+      hidden: task.value.hidden,
       tags: workContextTags(task.value),
     };
   };
 }
 
+/**
+ * The head event one applied company action produced.
+ *
+ * Only used for the superseded path, where this client holds the winning
+ * action's id but never saw its receipt.
+ */
+async function headForAction(actionEventId: string): Promise<string | null> {
+  const relaySelfPubkey = await getRelaySelf();
+  if (!relaySelfPubkey) return null;
+  const candidate: RelayEvent | null = await relayClient.fetchFirstEvent({
+    kinds: [KIND_COMPANY_RECEIPT],
+    authors: [relaySelfPubkey],
+    "#e": [actionEventId],
+    limit: 1,
+  });
+  if (!candidate) return null;
+  const receipt = parseCompanyReceipt(
+    candidate,
+    relaySelfPubkey,
+    actionEventId,
+  );
+  return receipt?.outcome === "applied" ? receipt.headEventId : null;
+}
+
 export const resolveWorkContext = createWorkContextResolver({
   relaySelf: getRelaySelf,
-  fetchCompanyHead: async (relaySelfPubkey) =>
-    newestHead(
-      await relayClient.fetchEvents({
-        kinds: [KIND_COMPANY_PROFILE],
-        authors: [relaySelfPubkey],
-        "#d": [COMMUNITY_PROFILE_ID],
-        limit: 8,
-      }),
-    ),
-  ensureTask: ensureChatTask,
+  attach: attachThreadTask,
   broker: companyActionBroker,
-  loadTask: (taskId, headEventId) =>
-    companyRepository.getTaskAfterAction(taskId, headEventId),
+  headForAction,
+  loadTask: (headEventId) => companyRepository.getTaskByHeadEvent(headEventId),
 });

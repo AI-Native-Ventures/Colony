@@ -19,6 +19,29 @@ pub const INITIATIVE_SCHEMA: &str = "colony.initiative/v1";
 const TASK_SCHEMA: &str = "colony.task/v1";
 /// Schema string every Cohort carries.
 pub const COHORT_SCHEMA: &str = "colony.cohort/v1";
+/// Schema string every thread attach request carries.
+pub const THREAD_ATTACH_SCHEMA: &str = "colony.thread-attach/v1";
+/// How many sub-tasks one thread task may hold.
+///
+/// Sub-tasks exist so two pieces of work can run in parallel under one
+/// conversation, not so a thread can become a project board. Twenty is well
+/// past any conversation a person actually runs and far short of a number
+/// that would make the parent's cascade close expensive.
+pub const MAX_THREAD_SUBTASKS: usize = 20;
+/// Prefix every thread slot coordinate carries.
+///
+/// A slot is not a task: it is the coordinate a client can compute before it
+/// knows which task the relay will hand back. The prefix keeps the two id
+/// namespaces from ever colliding.
+pub const THREAD_SLOT_PREFIX: &str = "thread-slot:";
+/// Prefix every task the thread-attach path mints carries.
+///
+/// The relay rewrites a task head to teach it its thread root, and this is
+/// what keeps that rewrite off records it did not create: a task minted by an
+/// older client path is somebody else's record, and churning its head would
+/// invalidate the compare-and-set token whichever client is about to complete
+/// it already holds.
+pub const THREAD_TASK_PREFIX: &str = "thread-task:";
 /// Schema string every pipeline Template carries.
 pub const TEMPLATE_SCHEMA: &str = "colony.template/v1";
 const MAX_ID_LEN: usize = 128;
@@ -255,6 +278,23 @@ pub enum DoerKind {
     Human,
 }
 
+/// Who is asking for a task lifecycle change.
+///
+/// The transition table encodes the doer's own workflow: an agent's output
+/// passes a review gate, a human's does not. The community owner is not a doer
+/// on that workflow, they are the authority over it, so an owner-signed
+/// replacement may close open work outright. Every `KIND_COMPANY_ACTION` is
+/// owner-signed by construction; relay-derived moves (dependency wakes, snooze
+/// wakes) act on the doer's behalf and use `Doer`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskActor {
+    /// The task's doer, or a relay-derived move made on its behalf.
+    #[default]
+    Doer,
+    /// The community owner, signing a Company Action.
+    Owner,
+}
+
 /// Which kind of entity a task's subject reference points at.
 ///
 /// A subject is deliberately not a party id: a recruitment firm's work is about
@@ -399,10 +439,133 @@ pub struct CompanyTask {
     /// How many times this task's delivered output has been bounced back.
     #[serde(default)]
     pub bounce_count: u32,
+    /// Assignees that have reported their own part of this task complete.
+    ///
+    /// A thread-scoped task is shared by every agent that answers in its
+    /// thread, so "one agent said done" is not the same claim as "the work is
+    /// done". The task closes on its own only once this set covers
+    /// `assignee_persona_ids`; an owner may still close it directly at any
+    /// time. Never auto-closes on quiet: a thread nobody has written in for a
+    /// week is a thread waiting, not a task finished.
+    ///
+    /// Skipped on serialize when empty, like `reviewer_team_id`, so a head
+    /// that never used it stays byte-identical to what older clients parse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reported_complete_by: Vec<String>,
+    /// Whether this task exists only to carry the cost of turns that were not
+    /// work: "are you there?" charges somewhere, and that somewhere must not
+    /// appear on the Tasks page or produce coordination rows in chat.
+    #[serde(default, skip_serializing_if = "is_not_hidden")]
+    pub hidden: bool,
+    /// Task this one was opened underneath, for parallel work inside one
+    /// thread. A sub-task closes when its parent closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
     /// Unix timestamp at which the task was created.
     pub created_at: i64,
     /// Unix timestamp at which the task was last updated.
     pub updated_at: i64,
+}
+
+/// Serde helper: a task that is not hidden writes no `hidden` field at all.
+fn is_not_hidden(hidden: &bool) -> bool {
+    !*hidden
+}
+
+/// Whether every assignee has reported its own part of a task complete.
+///
+/// An unassigned task can never satisfy this: "nobody has said no" is not
+/// evidence that work happened, and treating an empty assignee list as
+/// unanimous consent would close a task the moment it was opened.
+pub fn all_assignees_reported(task: &CompanyTask) -> bool {
+    !task.assignee_persona_ids.is_empty()
+        && task
+            .assignee_persona_ids
+            .iter()
+            .all(|assignee| task.reported_complete_by.contains(assignee))
+}
+
+/// What a client is asking the relay to do with one agent-directed send.
+///
+/// The client never proposes a task id. It says which of three things it
+/// wants, and the relay answers with the task the turn is charged to, so two
+/// devices racing on the same thread cannot open two tasks for one thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadAttachMode {
+    /// This send implies work. Attach to the thread's open task, or open one
+    /// titled with this instruction when the thread has none.
+    Open,
+    /// This send does not imply work. Attach to the thread's open task if it
+    /// has one, otherwise to the thread's hidden chat task, which is created
+    /// on first use. Never opens a visible task.
+    Attach,
+    /// This send explicitly asks for a second, parallel task. The previous
+    /// task stays open, and later `Attach`/`Open` sends go to this one.
+    New,
+}
+
+/// One client's request to charge a send to this thread's task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThreadAttach {
+    /// Exact content schema identifier.
+    pub schema: String,
+    /// Stable slot coordinate this request is addressed to.
+    pub id: String,
+    /// Channel the send happens in.
+    pub channel_id: String,
+    /// Root event id of the thread the send replies in. `None` for a send
+    /// that starts its own thread, whose root event does not exist yet.
+    pub thread_root: Option<String>,
+    /// Whether the whole conversation is the thread, which is what a DM is.
+    #[serde(default)]
+    pub conversation_scope: bool,
+    /// What the client is asking for.
+    pub mode: ThreadAttachMode,
+    /// The instruction being sent, used as the title when a task is opened.
+    pub title: String,
+    /// This client's stable identity for this send. A retry reuses it.
+    pub send_id: String,
+    /// Persona of the agent the send is addressed to, when it names one.
+    pub agent_persona_id: Option<String>,
+    /// Explicit client-delivery context, when the composer had any.
+    pub client_organization_id: Option<String>,
+    /// Parent task, when this request opens a sub-task under one.
+    pub parent_task_id: Option<String>,
+    /// Unix timestamp the request was prepared at.
+    pub created_at: i64,
+}
+
+/// Validate one thread attach request in isolation.
+///
+/// Relay-side authority (is this actor a member, is this agent an assignee of
+/// the parent it names) is deliberately not checked here: this is the wire
+/// contract, and it must be checkable by a client that holds no community
+/// state at all.
+pub fn validate_thread_attach(request: &ThreadAttach) -> Result<(), CompanyContractError> {
+    validate_schema(&request.schema, THREAD_ATTACH_SCHEMA, "thread attach")?;
+    validate_id(&request.id, "threadAttach.id")?;
+    if !request.id.starts_with(THREAD_SLOT_PREFIX) {
+        return Err(CompanyContractError::InvalidIdentifier("threadAttach.id"));
+    }
+    validate_id(&request.channel_id, "threadAttach.channelId")?;
+    validate_optional_id(request.thread_root.as_deref(), "threadAttach.threadRoot")?;
+    validate_required_text(&request.title, "threadAttach.title", MAX_NAME_LEN)?;
+    validate_id(&request.send_id, "threadAttach.sendId")?;
+    validate_optional_id(
+        request.agent_persona_id.as_deref(),
+        "threadAttach.agentPersonaId",
+    )?;
+    validate_optional_id(
+        request.client_organization_id.as_deref(),
+        "threadAttach.clientOrganizationId",
+    )?;
+    validate_optional_id(
+        request.parent_task_id.as_deref(),
+        "threadAttach.parentTaskId",
+    )?;
+    Ok(())
 }
 
 /// A named, bounded set of subjects fan-out will run over.
@@ -688,14 +851,48 @@ pub const fn is_initiative_status_transition_allowed(
 /// hatch - this function only says the shape is reachable, not that any
 /// replacement claiming it is a real bounce. Any non-terminal task may
 /// snooze, and a snoozed task wakes back to ready. Completion skips review
-/// only for human tasks — nobody reviews a phone call — while agent work
+/// only for human tasks - nobody reviews a phone call - while agent work
 /// always passes the `InReview` quality gate.
+///
+/// This is the doer's own table. Use `is_task_status_transition_allowed_for`
+/// when the actor's authority is known; an owner may close open work outright.
 pub const fn is_task_status_transition_allowed(
     from: TaskStatus,
     to: TaskStatus,
     doer_kind: DoerKind,
 ) -> bool {
+    is_task_status_transition_allowed_for(from, to, doer_kind, TaskActor::Doer)
+}
+
+/// Return whether `actor` may move a task from `from` to `to`.
+///
+/// The doer's table (`is_task_status_transition_allowed`) plus the owner's
+/// authority: an owner-signed replacement may take a task from any open status
+/// straight to `Completed` or `Cancelled`, without walking it through the
+/// review gate first. Thread-scoped tasks are minted `inProgress` with
+/// `doerKind: agent`, so without this an owner's "Mark done" would need two
+/// writes and a head re-read between them. Agent-signed writes and completion
+/// reports keep the doer's table exactly as it was.
+pub const fn is_task_status_transition_allowed_for(
+    from: TaskStatus,
+    to: TaskStatus,
+    doer_kind: DoerKind,
+    actor: TaskActor,
+) -> bool {
     if from as u8 == to as u8 {
+        return true;
+    }
+    if matches!(actor, TaskActor::Owner)
+        && matches!(
+            from,
+            TaskStatus::Ready
+                | TaskStatus::InProgress
+                | TaskStatus::InReview
+                | TaskStatus::Blocked
+                | TaskStatus::Snoozed
+        )
+        && matches!(to, TaskStatus::Completed | TaskStatus::Cancelled)
+    {
         return true;
     }
     match (from, to) {
@@ -806,12 +1003,17 @@ pub fn validate_initiative_update(
 
 /// Validate immutable coordinates, timestamps, and lifecycle state for a
 /// replacement task head.
+///
+/// `actor` says whose authority the replacement carries: `TaskActor::Owner`
+/// for an owner-signed Company Action, `TaskActor::Doer` for anything moving a
+/// task on its doer's behalf.
 pub fn validate_task_update(
     previous: &CompanyTask,
     replacement: &CompanyTask,
     company: &CompanyProfile,
     initiative: Option<&Initiative>,
     teams: &[CompanyTeamRef],
+    actor: TaskActor,
 ) -> Result<(), CompanyContractError> {
     validate_task(replacement, company, initiative, teams)?;
     validate_immutable(&previous.schema, &replacement.schema, "task.schema")?;
@@ -822,10 +1024,11 @@ pub fn validate_task_update(
         replacement.created_at,
         replacement.updated_at,
     )?;
-    if !is_task_status_transition_allowed(
+    if !is_task_status_transition_allowed_for(
         previous.status,
         replacement.status,
         replacement.doer_kind,
+        actor,
     ) {
         return Err(CompanyContractError::InvalidStatusTransition("task"));
     }
@@ -1065,6 +1268,34 @@ pub fn validate_task(
         "task.outcomeReason",
         MAX_REASON_LEN,
     )?;
+    validate_optional_id(task.parent_task_id.as_deref(), "task.parentTaskId")?;
+    if task.parent_task_id.as_deref() == Some(task.id.as_str()) {
+        return Err(CompanyContractError::MismatchedReference(
+            "task.parentTaskId",
+        ));
+    }
+    ensure_cardinality(
+        &task.reported_complete_by,
+        "task.reportedCompleteBy",
+        MAX_ASSIGNEES,
+    )?;
+    let mut reporters = HashSet::new();
+    for reporter in &task.reported_complete_by {
+        validate_id(reporter, "task.reportedCompleteBy")?;
+        if !reporters.insert(reporter.as_str()) {
+            return Err(CompanyContractError::DuplicateIdentifier(
+                "task.reportedCompleteBy",
+            ));
+        }
+        // A completion report from somebody the task was never assigned to is
+        // not evidence about this task, and counting it toward the close rule
+        // would let an unrelated agent finish somebody else's work.
+        if !task.assignee_persona_ids.iter().any(|id| id == reporter) {
+            return Err(CompanyContractError::MissingReference(
+                "task.reportedCompleteBy",
+            ));
+        }
+    }
     // "40 completed" says nothing; a human-doer task must say what happened.
     // Agent completion has no such requirement - it passes the review gate
     // instead, which is its own evidence.
@@ -1743,6 +1974,9 @@ mod tests {
                 outcome_reason: None,
                 bounce_reason: None,
                 bounce_count: 0,
+                reported_complete_by: Vec::new(),
+                hidden: false,
+                parent_task_id: None,
                 created_at: 1_785_400_400,
                 updated_at: 1_785_400_500,
             },
@@ -1774,6 +2008,9 @@ mod tests {
                 outcome_reason: None,
                 bounce_reason: None,
                 bounce_count: 0,
+                reported_complete_by: Vec::new(),
+                hidden: false,
+                parent_task_id: None,
                 created_at: 1_785_400_600,
                 updated_at: 1_785_400_700,
             },
@@ -2169,6 +2406,80 @@ mod tests {
         }
     }
 
+    /// The owner is the authority over the workflow, not a doer on it: a
+    /// thread task minted `inProgress` with `doerKind: agent` closes on one
+    /// owner-signed write rather than being walked through the review gate.
+    #[test]
+    fn an_owner_closes_open_work_from_any_live_status() {
+        for from in [
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+            TaskStatus::Blocked,
+            TaskStatus::Snoozed,
+        ] {
+            for to in [TaskStatus::Completed, TaskStatus::Cancelled] {
+                assert!(
+                    is_task_status_transition_allowed_for(
+                        from,
+                        to,
+                        DoerKind::Agent,
+                        TaskActor::Owner
+                    ),
+                    "the owner must be able to move {from:?} -> {to:?}"
+                );
+            }
+        }
+        // Agent-signed writes keep the review gate they always had.
+        assert!(!is_task_status_transition_allowed_for(
+            TaskStatus::InProgress,
+            TaskStatus::Completed,
+            DoerKind::Agent,
+            TaskActor::Doer
+        ));
+    }
+
+    /// Owner authority opens exactly two arms and nothing else. A terminal
+    /// task stays terminal, and `completed -> ready` stays a bounce, guarded by
+    /// `validate_bounce_delta` rather than by who signed it.
+    #[test]
+    fn owner_authority_does_not_reopen_terminal_work() {
+        for from in [TaskStatus::Completed, TaskStatus::Cancelled] {
+            for to in [
+                TaskStatus::Proposed,
+                TaskStatus::InProgress,
+                TaskStatus::InReview,
+                TaskStatus::Blocked,
+                TaskStatus::Snoozed,
+            ] {
+                assert!(
+                    !is_task_status_transition_allowed_for(
+                        from,
+                        to,
+                        DoerKind::Agent,
+                        TaskActor::Owner
+                    ),
+                    "the owner must not move {from:?} -> {to:?}"
+                );
+            }
+        }
+        // The one arm out of completed is the bounce, and it is the same arm
+        // for the owner as for anyone else.
+        assert!(is_task_status_transition_allowed_for(
+            TaskStatus::Completed,
+            TaskStatus::Ready,
+            DoerKind::Agent,
+            TaskActor::Owner
+        ));
+        // A proposed task has no doer yet, so there is nothing to close.
+        assert!(!is_task_status_transition_allowed_for(
+            TaskStatus::Proposed,
+            TaskStatus::Completed,
+            DoerKind::Agent,
+            TaskActor::Owner
+        ));
+    }
+
     /// Agent work keeps the mandatory review gate; a human completing their
     /// own phone call does not route through QA.
     #[test]
@@ -2317,10 +2628,15 @@ mod tests {
         let mut replacement = previous.clone();
         replacement.title = "Build and launch the Tennant Group website".to_string();
         replacement.updated_at += 1;
-        assert!(
-            validate_task_update(&previous, &replacement, &company, Some(&initiative), &teams)
-                .is_ok()
-        );
+        assert!(validate_task_update(
+            &previous,
+            &replacement,
+            &company,
+            Some(&initiative),
+            &teams,
+            TaskActor::Doer,
+        )
+        .is_ok());
 
         let mut invalid_transition = replacement.clone();
         invalid_transition.status = TaskStatus::Ready;
@@ -2330,7 +2646,8 @@ mod tests {
                 &invalid_transition,
                 &company,
                 Some(&initiative),
-                &teams
+                &teams,
+                TaskActor::Doer,
             ),
             Err(CompanyContractError::InvalidStatusTransition("task"))
         );
@@ -2343,7 +2660,8 @@ mod tests {
                 &changed_created_at,
                 &company,
                 Some(&initiative),
-                &teams
+                &teams,
+                TaskActor::Doer,
             ),
             Err(CompanyContractError::ImmutableField("createdAt"))
         );
@@ -2351,15 +2669,67 @@ mod tests {
         let mut changed_id = replacement.clone();
         changed_id.id = "different-task".to_string();
         assert_eq!(
-            validate_task_update(&previous, &changed_id, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &changed_id,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::ImmutableField("task.id"))
         );
 
         let mut stale = replacement;
         stale.updated_at = previous.updated_at;
         assert_eq!(
-            validate_task_update(&previous, &stale, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &stale,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    /// The shape a thread task's "Mark done" takes: one owner-signed
+    /// replacement moving an in-progress agent task straight to completed. The
+    /// same replacement signed by the doer keeps hitting the review gate.
+    #[test]
+    fn an_owner_completes_an_in_progress_agent_task_in_one_write() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let previous = task_fixtures().remove(0);
+        assert_eq!(previous.status, TaskStatus::InProgress);
+        assert_eq!(previous.doer_kind, DoerKind::Agent);
+
+        let mut completed = previous.clone();
+        completed.status = TaskStatus::Completed;
+        completed.updated_at += 1;
+
+        assert!(validate_task_update(
+            &previous,
+            &completed,
+            &company,
+            Some(&initiative),
+            &teams,
+            TaskActor::Owner,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_task_update(
+                &previous,
+                &completed,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
+            Err(CompanyContractError::InvalidStatusTransition("task"))
         );
     }
 
@@ -2377,7 +2747,14 @@ mod tests {
         no_reason.bounce_count = 1;
         no_reason.updated_at += 1;
         assert_eq!(
-            validate_task_update(&previous, &no_reason, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &no_reason,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::InvalidBounce(
                 "a bounce must attach a reason"
             ))
@@ -2389,7 +2766,14 @@ mod tests {
         wrong_count.bounce_count = 2;
         wrong_count.updated_at += 1;
         assert_eq!(
-            validate_task_update(&previous, &wrong_count, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &wrong_count,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::InvalidBounce(
                 "a completed-to-ready transition must advance bounceCount by exactly one"
             ))
@@ -2400,10 +2784,15 @@ mod tests {
         real_bounce.bounce_reason = Some(BounceReason::FreeText("missed the brief".to_string()));
         real_bounce.bounce_count = 1;
         real_bounce.updated_at += 1;
-        assert!(
-            validate_task_update(&previous, &real_bounce, &company, Some(&initiative), &teams)
-                .is_ok()
-        );
+        assert!(validate_task_update(
+            &previous,
+            &real_bounce,
+            &company,
+            Some(&initiative),
+            &teams,
+            TaskActor::Doer,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2417,7 +2806,14 @@ mod tests {
         tampered.bounce_count = 1;
         tampered.updated_at += 1;
         assert_eq!(
-            validate_task_update(&previous, &tampered, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &tampered,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::InvalidBounce(
                 "bounceCount may only advance via a completed-to-ready bounce"
             ))
@@ -2789,5 +3185,99 @@ mod tests {
             classify_cost(CommercialPurpose::Uncertain, Some("tennant-group")),
             CostClassification::NeedsReview
         );
+    }
+
+    fn thread_attach_fixture() -> ThreadAttach {
+        ThreadAttach {
+            schema: THREAD_ATTACH_SCHEMA.to_string(),
+            id: format!("{THREAD_SLOT_PREFIX}b0d2f1a4"),
+            channel_id: "engineering".to_string(),
+            thread_root: Some("thread-event-2".to_string()),
+            conversation_scope: false,
+            mode: ThreadAttachMode::Open,
+            title: "Cut the release video".to_string(),
+            send_id: "send-0001".to_string(),
+            agent_persona_id: Some("frontend-engineer".to_string()),
+            client_organization_id: None,
+            parent_task_id: None,
+            created_at: 1_785_400_400,
+        }
+    }
+
+    #[test]
+    fn a_thread_attach_must_address_a_slot_and_not_a_task() {
+        assert!(validate_thread_attach(&thread_attach_fixture()).is_ok());
+        let mut borrowed_task_id = thread_attach_fixture();
+        borrowed_task_id.id = "build-tennant-site".to_string();
+        assert!(validate_thread_attach(&borrowed_task_id).is_err());
+    }
+
+    #[test]
+    fn a_thread_attach_needs_a_channel_a_send_and_a_title() {
+        for mutate in [
+            (|request: &mut ThreadAttach| request.channel_id = String::new())
+                as fn(&mut ThreadAttach),
+            |request: &mut ThreadAttach| request.send_id = String::new(),
+            |request: &mut ThreadAttach| request.title = "   ".to_string(),
+        ] {
+            let mut request = thread_attach_fixture();
+            mutate(&mut request);
+            assert!(validate_thread_attach(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn a_task_closes_only_once_every_assignee_has_reported() {
+        let mut task = task_fixtures().remove(0);
+        assert_eq!(task.assignee_persona_ids.len(), 2);
+        assert!(!all_assignees_reported(&task));
+        task.reported_complete_by = vec!["frontend-engineer".to_string()];
+        assert!(
+            !all_assignees_reported(&task),
+            "one agent saying done is not the same claim as the work being done"
+        );
+        task.reported_complete_by
+            .push("content-specialist".to_string());
+        assert!(all_assignees_reported(&task));
+    }
+
+    #[test]
+    fn an_unassigned_task_is_never_unanimously_complete() {
+        let mut task = task_fixtures().remove(0);
+        task.assignee_persona_ids.clear();
+        task.reported_complete_by.clear();
+        assert!(
+            !all_assignees_reported(&task),
+            "nobody having said no is not evidence that work happened"
+        );
+    }
+
+    #[test]
+    fn a_completion_report_from_a_non_assignee_is_refused() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let initiative = initiative_fixture();
+        let mut task = task_fixtures().remove(0);
+        task.reported_complete_by = vec!["marketing-lead".to_string()];
+        assert!(validate_task(&task, &company, Some(&initiative), &teams).is_err());
+    }
+
+    #[test]
+    fn a_task_cannot_be_its_own_parent() {
+        let company = company_fixture();
+        let teams = team_fixtures();
+        let initiative = initiative_fixture();
+        let mut task = task_fixtures().remove(0);
+        task.parent_task_id = Some(task.id.clone());
+        assert!(validate_task(&task, &company, Some(&initiative), &teams).is_err());
+    }
+
+    #[test]
+    fn a_task_that_uses_neither_new_field_serialises_exactly_as_it_did_before() {
+        let task = task_fixtures().remove(0);
+        let json = serde_json::to_value(&task).expect("task serialises");
+        assert!(json.get("reportedCompleteBy").is_none());
+        assert!(json.get("hidden").is_none());
+        assert!(json.get("parentTaskId").is_none());
     }
 }

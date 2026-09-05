@@ -115,6 +115,20 @@ export type ThreadTaskQuery = {
   threadRoot: string;
 };
 
+/**
+ * Hidden tasks are never listed.
+ *
+ * A hidden task exists so a turn that was not work ("are you there?") still
+ * charges somewhere. It is an accounting record, and putting it on the Tasks
+ * page, in a queue, or in a thread's task history would put the greeting back
+ * in front of the owner as if it were work. Filtered here rather than at each
+ * surface, because every surface reads through this repository and a surface
+ * that forgot would leak them.
+ */
+function isListableTask(task: CompanyTask): boolean {
+  return !task.hidden;
+}
+
 /** The exact string build_head mirrors the subject into its `u` tag. */
 function subjectMirrorKey(subject: SubjectRef): string {
   return `${subject.kind}:${subject.ref}`;
@@ -374,7 +388,9 @@ export function createCompanyRepository(
         (events, relaySelfPubkey) => ({
           ok: true,
           value: collectHeads(events, relaySelfPubkey, parseTaskHead)
-            .filter((task) => taskMatchesQuery(task, query))
+            .filter(
+              (task) => isListableTask(task) && taskMatchesQuery(task, query),
+            )
             .sort((left, right) => left.id.localeCompare(right.id)),
         }),
       );
@@ -414,9 +430,47 @@ export function createCompanyRepository(
           value: collectHeads(events, relaySelfPubkey, parseTaskHead)
             .filter(
               (task) =>
+                isListableTask(task) &&
                 task.threadRoot !== null &&
                 normalizeHex(task.threadRoot) ===
                   normalizeHex(query.threadRoot),
+            )
+            .sort(threadHistoryOrder),
+        }),
+      );
+    },
+
+    /**
+     * One DM conversation's task history, same order as a thread's.
+     *
+     * A DM is one thread for its whole life, so its tasks name no thread root
+     * at all. They are found by the channel they were opened in instead, which
+     * is not an indexed mirror either, so this narrows client-side under the
+     * same MAX_RECORDS ceiling `listThreadTasks` documents.
+     */
+    async listConversationTasks(
+      channelId: string,
+    ): Promise<CompanyParseResult<CompanyTask[]>> {
+      if (channelId.trim() === "") {
+        return companyFailure<CompanyTask[]>(
+          "invalid-record",
+          "Listing a conversation's tasks requires the channel it happens in.",
+        );
+      }
+      return read<CompanyTask[]>(
+        (relaySelfPubkey) => ({
+          kinds: [KIND_TASK],
+          authors: [relaySelfPubkey],
+          limit: MAX_RECORDS,
+        }),
+        (events, relaySelfPubkey) => ({
+          ok: true,
+          value: collectHeads(events, relaySelfPubkey, parseTaskHead)
+            .filter(
+              (task) =>
+                isListableTask(task) &&
+                task.threadRoot === null &&
+                task.sourceChannelId === channelId,
             )
             .sort(threadHistoryOrder),
         }),
@@ -557,6 +611,64 @@ export function createCompanyRepository(
         // that won it, which the owner signed under a different kind. The
         // coordinate read is the one that resolves that Task.
         last = await readByCoordinate();
+        if (last.ok) return last;
+        if (last.code === "cancelled") return last;
+        if (attempt < attempts - 1) {
+          await wait(taskReadBackDelay(attempt, intervalMs));
+        }
+      }
+      return last;
+    },
+
+    /**
+     * Read the Task a relay receipt named, without knowing its id.
+     *
+     * A thread attach is answered with a head event id and nothing else: the
+     * relay decides which Task the send belongs to, so the client has no
+     * coordinate to read by. Hidden tasks come back here on purpose - the
+     * message still has to carry the id of whatever it was charged to, even
+     * when that is the thread's hidden chat task.
+     *
+     * Retried on the same backoff as `getTaskAfterAction` and for the same
+     * reason: the receipt already proved the write landed, so a miss is the
+     * read side lagging it.
+     */
+    async getTaskByHeadEvent(
+      headEventId: string,
+    ): Promise<CompanyParseResult<CompanyTask>> {
+      const attempts =
+        dependencies.taskReadBackAttempts ?? DEFAULT_TASK_READBACK_ATTEMPTS;
+      const intervalMs =
+        dependencies.taskReadBackIntervalMs ??
+        DEFAULT_TASK_READBACK_INTERVAL_MS;
+      const wait = dependencies.delay ?? defaultDelay;
+
+      let last: CompanyParseResult<CompanyTask> = companyFailure(
+        "missing-head",
+        "That task does not exist on this community.",
+      );
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        last = await read<CompanyTask>(
+          (relaySelfPubkey) => ({
+            kinds: [KIND_TASK],
+            authors: [relaySelfPubkey],
+            ids: [headEventId],
+            limit: 1,
+          }),
+          (events, relaySelfPubkey) => {
+            const task = collectHeads(
+              events,
+              relaySelfPubkey,
+              parseTaskHead,
+            )[0];
+            return task
+              ? { ok: true, value: task }
+              : companyFailure<CompanyTask>(
+                  "missing-head",
+                  "That task does not exist on this community.",
+                );
+          },
+        );
         if (last.ok) return last;
         if (last.code === "cancelled") return last;
         if (attempt < attempts - 1) {

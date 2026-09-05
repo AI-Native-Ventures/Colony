@@ -50,8 +50,18 @@ export function createColonyCommunity(name: string) {
   return invoke<ColonyCreateResponse>("colony_create_community", { name });
 }
 
-export function listColonyCommunities() {
-  return invoke<ColonyCommunitiesResponse>("colony_list_my_communities");
+/**
+ * Which memberships the relay should report. `owner` (the default) keeps the
+ * response identical to what every existing caller already receives; `member`
+ * also lists communities the identity merely belongs to, which is what the
+ * rail needs to discover a community an agent created.
+ */
+export type ColonyCommunitiesScope = "owner" | "member";
+
+export function listColonyCommunities(scope?: ColonyCommunitiesScope) {
+  return invoke<ColonyCommunitiesResponse>("colony_list_my_communities", {
+    scope,
+  });
 }
 
 export type HostedCommunityApiError = {
@@ -78,6 +88,9 @@ export type HostedCommunity = {
   normalized_host?: string;
   owner_pubkey?: string;
   archived_at?: string | null;
+  /** Only present under `scope=member`: the signer's role in the community. */
+  role?: string;
+  created_at?: string;
 };
 
 export type HostedCommunitiesResponse = {

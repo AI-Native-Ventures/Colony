@@ -2658,6 +2658,36 @@ CREATE TABLE task_wake_claims (
     PRIMARY KEY (community_id, task_id, wake_at)
 );
 
+-- 0070: one open task per thread, arbitrated by a row rather than by
+-- agreement between clients. Task heads are relay-authored NIP-33 events with
+-- no column to constrain, so two clients preparing the same send would each
+-- read "no open task" and each create one; the winning INSERT here is the
+-- decision, and the loser reads the winner's task id back out.
+CREATE TABLE thread_open_tasks (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    channel_id TEXT NOT NULL,
+    thread_key TEXT NOT NULL,
+    owner_pubkey TEXT NOT NULL,
+    slot TEXT NOT NULL CHECK (slot IN ('work', 'chat')),
+    task_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, channel_id, thread_key, owner_pubkey, slot)
+);
+
+CREATE INDEX thread_open_tasks_task_idx ON thread_open_tasks (community_id, task_id);
+
+-- Sub-tasks opened under a thread's task, so the cap is countable in the same
+-- transaction that would exceed it and a parent's cascade close has a durable
+-- child list to walk.
+CREATE TABLE thread_subtasks (
+    community_id UUID NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+    parent_task_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (community_id, parent_task_id, task_id)
+);
+
 -- Durable idempotency claims for relay-brokered Colony party actions.
 -- Merge actions retain both the surviving head and the retired-handle alias.
 CREATE TABLE party_action_claims (
@@ -3710,6 +3740,8 @@ SELECT attach_community_write_fence('scheduled_workflow_fires');
 SELECT attach_community_write_fence('subscriptions');
 SELECT attach_community_write_fence('task_wake_claims');
 SELECT attach_community_write_fence('thread_metadata');
+SELECT attach_community_write_fence('thread_open_tasks');
+SELECT attach_community_write_fence('thread_subtasks');
 SELECT attach_community_write_fence('users');
 SELECT attach_community_write_fence('workflow_approvals');
 SELECT attach_community_write_fence('workflow_runs');

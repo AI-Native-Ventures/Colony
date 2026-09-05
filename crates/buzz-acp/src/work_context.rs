@@ -25,9 +25,15 @@ use buzz_core::{
     },
     employee::parse_employee_head,
     interrupt::AgentTier,
-    kind::{KIND_COMPANY_PROFILE, KIND_EMPLOYEE, KIND_INITIATIVE, KIND_TASK},
+    kind::{
+        KIND_COMPANY_PROFILE, KIND_EMPLOYEE, KIND_INITIATIVE, KIND_MANAGED_AGENT, KIND_TASK,
+        KIND_TEAM,
+    },
 };
 use buzz_sdk::company::{parse_company_event, parse_initiative_event, parse_task_event};
+
+/// Upper bound on team heads read while resolving one agent's teams.
+const MAX_RESPONDER_TEAM_HEADS: usize = 500;
 use nostr::Event;
 
 /// The pointers a message carries to the work it belongs to.
@@ -189,12 +195,18 @@ fn relay_authored(
 ///
 /// Every disagreement between the message and the records is a refusal. The
 /// message is a claim about where the cost belongs; the records are the answer.
+/// `responder_teams` is every team the agent about to answer belongs to.
+/// A thread task is shared: whichever agent replies, the turn it spends is
+/// that agent's team's cost, not the cost of whichever team happened to own
+/// the task when somebody else opened it. Empty means the responder's teams
+/// could not be resolved, and the task's owning team stands as before.
 pub fn hydrate(
     reference: &WorkReference,
     task_event: &Event,
     initiative_event: Option<&Event>,
     company_event: &Event,
     relay_pubkey: &nostr::PublicKey,
+    responder_teams: &[String],
 ) -> Result<HydratedWorkContext, String> {
     relay_authored(task_event, relay_pubkey, "task")?;
     relay_authored(company_event, relay_pubkey, "company")?;
@@ -207,10 +219,14 @@ pub fn hydrate(
     if task.id != reference.task_id {
         return Err("the task record does not match the reference".to_string());
     }
-    // The message names a team. If the Task says another one owns it, the
-    // message is wrong about who is accountable, and accepting it would charge
-    // the turn to a team that never took the work.
-    if task.owning_team_id != reference.owning_team_id {
+    // The message names a team. It may name the team that owns the task, or a
+    // team the responding agent belongs to: a thread task is shared, so a
+    // second agent answering in the same thread legitimately carries its own
+    // team. Anything else is a message wrong about who is accountable, and
+    // accepting it would charge the turn to a team that never took the work.
+    if task.owning_team_id != reference.owning_team_id
+        && !responder_teams.contains(&reference.owning_team_id)
+    {
         return Err("the message and the task disagree about the owning team".to_string());
     }
     if !company
@@ -254,7 +270,16 @@ pub fn hydrate(
     let metric = AgentWorkContext {
         task_id: task.id.clone(),
         initiative_id: task.initiative_id.clone(),
-        owning_team_id: task.owning_team_id.clone(),
+        // The team that pays is the team of the agent that answered. The
+        // task's own `owningTeamId` stays what it always was, "who opened
+        // this", which is what the Tasks page shows; it is not a claim about
+        // whose budget every later turn in the thread comes out of.
+        // Ambiguity (an agent in several teams, or in none we can see) falls
+        // back to the task's team rather than picking one.
+        owning_team_id: match responder_teams {
+            [only] => only.clone(),
+            _ => task.owning_team_id.clone(),
+        },
         cost_centre_id: task.cost_centre_id.clone(),
         commercial_purpose: task.commercial_purpose,
         cost_classification,
@@ -426,15 +451,87 @@ pub async fn resolve_for_event(
         .first()
         .ok_or_else(|| "this community has no operating profile yet".to_string())?;
 
+    let responder_teams = fetch_responder_teams(rest, agent_pubkey).await;
     let mut context = hydrate(
         &reference,
         task_event,
         initiative_event.as_ref(),
         company_event,
         &relay_pubkey,
+        &responder_teams,
     )?;
     context.rank = fetch_agent_rank_context(rest, agent_pubkey).await;
     Ok(Some(context))
+}
+
+/// Every team the agent about to answer belongs to.
+///
+/// Resolved in two reads: the agent's own managed-agent head names its
+/// persona, and a team head lists the personas in it. Failure is deliberately
+/// not an error. A turn must still run when team records are missing or
+/// ambiguous; it simply settles against the task's owning team, exactly as it
+/// did before this existed.
+async fn fetch_responder_teams(
+    rest: &crate::relay::RestClient,
+    agent_pubkey: &nostr::PublicKey,
+) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct ManagedAgentContent {
+        #[serde(default)]
+        persona_id: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct TeamContent {
+        #[serde(default)]
+        persona_ids: Option<Vec<String>>,
+    }
+
+    let agent_filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(KIND_MANAGED_AGENT as u16))
+        .identifier(agent_pubkey.to_hex())
+        .limit(4);
+    let Ok(agent_events) = rest.query_events(&[agent_filter]).await else {
+        return Vec::new();
+    };
+    let Some(persona_id) = agent_events.iter().find_map(|event| {
+        serde_json::from_str::<ManagedAgentContent>(&event.content)
+            .ok()
+            .and_then(|content| content.persona_id)
+            .filter(|id| !id.trim().is_empty())
+    }) else {
+        return Vec::new();
+    };
+
+    let team_filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(KIND_TEAM as u16))
+        .limit(MAX_RESPONDER_TEAM_HEADS);
+    let Ok(team_events) = rest.query_events(&[team_filter]).await else {
+        return Vec::new();
+    };
+
+    let mut teams: Vec<String> = Vec::new();
+    for event in team_events {
+        let Some(team_id) = event.tags.iter().find_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() >= 2 && parts[0] == "d").then(|| parts[1].clone())
+        }) else {
+            continue;
+        };
+        if teams.contains(&team_id) {
+            continue;
+        }
+        let Ok(content) = serde_json::from_str::<TeamContent>(&event.content) else {
+            continue;
+        };
+        if content
+            .persona_ids
+            .unwrap_or_default()
+            .contains(&persona_id)
+        {
+            teams.push(team_id);
+        }
+    }
+    teams
 }
 
 /// Whether this community has published its operating profile yet.
@@ -714,6 +811,9 @@ mod tests {
             outcome_reason: None,
             bounce_reason: None,
             bounce_count: 0,
+            reported_complete_by: Vec::new(),
+            hidden: false,
+            parent_task_id: None,
             created_at: 1_780_000_000,
             updated_at: 1_780_000_000,
         }
@@ -876,6 +976,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
 
@@ -909,6 +1010,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         assert_eq!(
@@ -925,12 +1027,106 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         // Client delivery with no client named cannot be a cost of goods sold.
         assert_eq!(
             review.metric.cost_classification,
             buzz_core::company::CostClassification::NeedsReview
+        );
+    }
+
+    // A thread task is shared by every agent that answers in its thread, so
+    // the turn each of them spends is their own team's cost. Charging both to
+    // whichever team happened to own the task when somebody else opened it is
+    // exactly the misattribution this rule exists to stop.
+    #[test]
+    fn two_agents_in_one_thread_each_charge_their_own_team() {
+        let keys = relay();
+        let head = task_head(&task(), &keys);
+        let opener = hydrate(
+            &reference(),
+            &head,
+            None,
+            &company_head(&keys),
+            &keys.public_key(),
+            &["company-team:abc:horizonlabs:engineering".to_string()],
+        )
+        .expect("hydrate for the agent whose team opened the task");
+        assert_eq!(
+            opener.metric.owning_team_id,
+            "company-team:abc:horizonlabs:engineering"
+        );
+
+        let responder = hydrate(
+            &reference(),
+            &head,
+            None,
+            &company_head(&keys),
+            &keys.public_key(),
+            &["company-team:abc:horizonlabs:sales".to_string()],
+        )
+        .expect("hydrate for a second agent answering in the same thread");
+        assert_eq!(
+            responder.metric.owning_team_id, "company-team:abc:horizonlabs:sales",
+            "the turn is charged to the team of the agent that answered"
+        );
+        assert_eq!(
+            responder.task.owning_team_id, "company-team:abc:horizonlabs:engineering",
+            "the task still records who opened it"
+        );
+    }
+
+    #[test]
+    fn an_agent_in_several_teams_falls_back_to_the_task_team() {
+        let keys = relay();
+        let context = hydrate(
+            &reference(),
+            &task_head(&task(), &keys),
+            None,
+            &company_head(&keys),
+            &keys.public_key(),
+            &[
+                "company-team:abc:horizonlabs:sales".to_string(),
+                "company-team:abc:horizonlabs:marketing".to_string(),
+            ],
+        )
+        .expect("hydrate");
+        assert_eq!(
+            context.metric.owning_team_id, "company-team:abc:horizonlabs:engineering",
+            "ambiguity picks nobody's budget, it falls back to the task's team"
+        );
+    }
+
+    #[test]
+    fn a_message_naming_a_team_the_responder_belongs_to_is_accepted() {
+        let keys = relay();
+        let mut sales_reference = reference();
+        sales_reference.owning_team_id = "company-team:abc:horizonlabs:sales".to_string();
+        assert!(
+            hydrate(
+                &sales_reference,
+                &task_head(&task(), &keys),
+                None,
+                &company_head(&keys),
+                &keys.public_key(),
+                &["company-team:abc:horizonlabs:sales".to_string()],
+            )
+            .is_ok(),
+            "a second agent answering carries its own team, not the opener's"
+        );
+        assert!(
+            hydrate(
+                &sales_reference,
+                &task_head(&task(), &keys),
+                None,
+                &company_head(&keys),
+                &keys.public_key(),
+                &[],
+            )
+            .is_err(),
+            "a team belonging to neither the task nor the responder is still a refusal"
         );
     }
 
@@ -948,6 +1144,7 @@ mod tests {
             Some(&initiative_head(&keys)),
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         assert_eq!(
@@ -972,6 +1169,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .is_err());
         assert!(hydrate(
@@ -980,6 +1178,7 @@ mod tests {
             None,
             &company_head(&forged),
             &keys.public_key(),
+            &[],
         )
         .is_err());
     }
@@ -999,7 +1198,8 @@ mod tests {
                 &task_head(&task(), &keys),
                 None,
                 &company_head(&keys),
-                &public
+                &public,
+                &[],
             )
             .is_err(),
             "a task id that does not match its record must be refused"
@@ -1013,7 +1213,8 @@ mod tests {
                 &task_head(&task(), &keys),
                 None,
                 &company_head(&keys),
-                &public
+                &public,
+                &[],
             )
             .is_err(),
             "a team the task does not name must be refused"
@@ -1027,7 +1228,8 @@ mod tests {
                 &task_head(&inside, &keys),
                 None,
                 &company_head(&keys),
-                &public
+                &public,
+                &[],
             )
             .is_err(),
             "a message omitting the task's initiative must be refused"
@@ -1041,7 +1243,8 @@ mod tests {
                 &task_head(&inside, &keys),
                 None,
                 &company_head(&keys),
-                &public
+                &public,
+                &[],
             )
             .is_err(),
             "an initiative that could not be read must be refused"
@@ -1059,6 +1262,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect_err("a task must not charge a cost centre the company does not have");
         assert!(error.contains("cost centre"), "unexpected: {error}");
@@ -1092,6 +1296,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         let section = work_context_section(&context);
@@ -1126,6 +1331,7 @@ mod tests {
             Some(&initiative_head(&keys)),
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         let section = work_context_section(&context);
@@ -1154,6 +1360,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         let section = work_context_section(&context);
@@ -1176,6 +1383,7 @@ mod tests {
             None,
             &company_head(&keys),
             &keys.public_key(),
+            &[],
         )
         .expect("hydrate");
         context.rank = rank;

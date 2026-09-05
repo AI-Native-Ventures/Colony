@@ -1,0 +1,1 @@
+../../../.claude/skills/colony/SKILL.md

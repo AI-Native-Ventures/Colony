@@ -5,6 +5,10 @@ import '../channels/channel_management_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_messages_provider.dart';
+import 'channels_provider.dart';
+import 'mentions/mention_candidates_provider.dart';
+import 'thread_tasks/attach_work_context.dart';
+import 'thread_tasks/thread_task_providers.dart';
 
 /// Sends messages by signing an event with the user's nsec and publishing it
 /// over the relay's NIP-42-authenticated WebSocket session.
@@ -15,6 +19,7 @@ class SendMessage {
   final void Function(String channelId, NostrEvent event) _addLocalMessage;
   final void Function(String channelId, String eventId) _completeLocalMessage;
   final void Function(String channelId, String eventId) _removeLocalMessage;
+  final AttachWorkContext _attachWorkContext;
 
   SendMessage({
     required SignedEventRelay signedEventRelay,
@@ -25,12 +30,14 @@ class SendMessage {
     required void Function(String channelId, String eventId)
     completeLocalMessage,
     required void Function(String channelId, String eventId) removeLocalMessage,
+    required AttachWorkContext attachWorkContext,
   }) : _signedEventRelay = signedEventRelay,
        _fetchMembers = fetchMembers,
        _readUserCache = readUserCache,
        _addLocalMessage = addLocalMessage,
        _completeLocalMessage = completeLocalMessage,
-       _removeLocalMessage = removeLocalMessage;
+       _removeLocalMessage = removeLocalMessage,
+       _attachWorkContext = attachWorkContext;
 
   /// Send a text message to a channel.
   ///
@@ -62,12 +69,24 @@ class SendMessage {
         if (seenMentions.add(pk.toLowerCase())) pk,
     ];
 
-    final tags = <List<String>>[
-      ['h', channelId],
-      if (parentEventId != null) ..._buildReplyTags(parentEventId, rootEventId),
-      for (final pk in normalizedMentions) ['p', pk],
-      ...mediaTags,
-    ];
+    // Which task this send is charged to is settled before it goes out. A
+    // paid agent turn with no work context is money spent that no cost centre,
+    // team, or commercial purpose can be traced to, and the classification
+    // cannot be recovered afterwards, so a refusal here is a refusal to send
+    // rather than a send that quietly goes unattributed.
+    final tags = await _attachWorkContext(
+      channelId: channelId,
+      content: content,
+      mentionPubkeys: normalizedMentions,
+      threadRoot: rootEventId ?? parentEventId,
+      outgoingTags: <List<String>>[
+        ['h', channelId],
+        if (parentEventId != null)
+          ..._buildReplyTags(parentEventId, rootEventId),
+        for (final pk in normalizedMentions) ['p', pk],
+        ...mediaTags,
+      ],
+    );
 
     NostrEvent? localMessage;
     try {
@@ -163,6 +182,24 @@ class SendMessage {
 final sendMessageProvider = Provider<SendMessage>((ref) {
   final config = ref.watch(relayConfigProvider);
   return SendMessage(
+    attachWorkContext: WorkContextAttacher(
+      client: ref.read(threadTaskClientProvider),
+      ownerPubkey: () => ref.read(companySignerPubkeyProvider),
+      agentPubkeys: (channelId) =>
+          ref.read(mentionAgentPubkeysProvider(channelId)),
+      isConversation: (channelId) =>
+          ref
+              .read(channelsProvider)
+              .value
+              ?.any((channel) => channel.id == channelId && channel.isDm) ??
+          false,
+      openTask: (scope) => ref.read(threadOpenTaskProvider(scope).future),
+      newTaskRequest: () => ref.read(composerNewTaskProvider),
+      consumeNewTaskRequest: () =>
+          ref.read(composerNewTaskProvider.notifier).consume(),
+      invalidateOpenTask: (scope) =>
+          ref.invalidate(threadOpenTaskProvider(scope)),
+    ).call,
     signedEventRelay: SignedEventRelay(
       session: ref.read(relaySessionProvider.notifier),
       nsec: config.nsec,

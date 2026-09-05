@@ -2,17 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  finalizeEvent,
-  generateSecretKey,
-  getPublicKey,
-} from "nostr-tools/pure";
-
-import {
-  createCompanyRepository,
-  resetCompanyRepositoryState,
-} from "./companyRepository.ts";
-import { canonicalCompanyJson } from "./contracts.ts";
-import {
   createWorkContextResolver,
   mergeWorkContextTags,
   workContextTags,
@@ -20,17 +9,8 @@ import {
 
 const RELAY = "a".repeat(64);
 const AGENT = "b".repeat(64);
-const TASK_ID = "horizonlabs:chat:6f1d2b3c-0000-4000-8000-000000000001";
-
-const COMPANY_HEAD = {
-  id: "c".repeat(64),
-  pubkey: RELAY,
-  created_at: 1_780_000_100,
-  kind: 30179,
-  tags: [["d", "horizonlabs"]],
-  content: "{}",
-  sig: "0".repeat(128),
-};
+const TASK_ID = "thread-task:6f1d2b3c-0000-4000-8000-000000000001";
+const HEAD_EVENT_ID = "h".repeat(64);
 
 function task(overrides = {}) {
   return {
@@ -49,34 +29,14 @@ function task(overrides = {}) {
     sourceChannelId: "engineering",
     sourceEventId: null,
     implicit: true,
+    threadRoot: null,
+    reportedCompleteBy: [],
+    hidden: false,
+    parentTaskId: null,
     createdAt: 1_780_000_000,
     updatedAt: 1_780_000_000,
     ...overrides,
   };
-}
-
-const TASK_RELAY_SECRET = generateSecretKey();
-const TASK_RELAY_PUBKEY = getPublicKey(TASK_RELAY_SECRET);
-
-/** The exact head the relay's broker signs for an implicit chat task, so the
- * read-back is exercised against the shape it actually meets. */
-function chatTaskHead() {
-  const record = task();
-  return finalizeEvent(
-    {
-      kind: 30181,
-      created_at: 1_780_000_100,
-      tags: [
-        ["d", record.id],
-        ["team", record.owningTeamId],
-        ["g", record.owningTeamId],
-        ["cost-centre", record.costCentreId],
-        ["w", record.status],
-      ],
-      content: canonicalCompanyJson(record),
-    },
-    TASK_RELAY_SECRET,
-  );
 }
 
 const REQUEST = {
@@ -84,35 +44,30 @@ const REQUEST = {
   sendId: "send-0001",
   agentPubkey: AGENT,
   title: "Take a look at the failing deploy",
+  mode: "open",
 };
 
 function resolver({
   brokerOutcome = {
     status: "applied",
     receiptEventId: "r".repeat(64),
-    headEventId: "h".repeat(64),
+    headEventId: HEAD_EVENT_ID,
     target: "t",
   },
   taskResult = { ok: true, value: task() },
-  companyHead = COMPANY_HEAD,
-  readTask = null,
+  headForAction = async () => null,
 } = {}) {
   const order = [];
+  const attachCalls = [];
   const loadTaskCalls = [];
-  const ensureTaskCalls = [];
   const resolve = createWorkContextResolver({
     relaySelf: async () => RELAY,
-    fetchCompanyHead: async () => companyHead,
-    ensureTask: async (input) => {
-      order.push("ensure");
-      ensureTaskCalls.push(input);
+    attach: async (input) => {
+      order.push("attach");
+      attachCalls.push(input);
       assert.equal(input.sendId, "send-0001");
       assert.equal(input.relayPubkey, RELAY);
-      return {
-        taskId: TASK_ID,
-        owningTeamId: "company-team:abc:horizonlabs:engineering",
-        signedAction: "signed-action",
-      };
+      return { signedAction: "signed-action" };
     },
     broker: {
       submit: async () => {
@@ -120,23 +75,27 @@ function resolver({
         return brokerOutcome;
       },
     },
-    loadTask: async (taskId, headEventId) => {
+    headForAction,
+    loadTask: async (headEventId) => {
       order.push("read-back");
-      loadTaskCalls.push([taskId, headEventId]);
-      return readTask ? await readTask(taskId, headEventId) : taskResult;
+      loadTaskCalls.push(headEventId);
+      return taskResult;
     },
   });
-  return { resolve, order, loadTaskCalls, ensureTaskCalls };
+  return { resolve, order, attachCalls, loadTaskCalls };
 }
 
-test("the task is created and confirmed before the message has any tags", async () => {
+// The client proposes no task id: the relay decides which task the send
+// belongs to, and the answer only exists once the question has been asked.
+test("the task is confirmed by the relay before the message has any tags", async () => {
   const { resolve, order } = resolver();
   const context = await resolve(REQUEST);
-  assert.deepEqual(order, ["ensure", "publish", "read-back"]);
+  assert.deepEqual(order, ["attach", "publish", "read-back"]);
   assert.deepEqual(context, {
     taskId: TASK_ID,
     initiativeId: null,
     owningTeamId: "company-team:abc:horizonlabs:engineering",
+    hidden: false,
     tags: [
       ["task", TASK_ID],
       ["team", "company-team:abc:horizonlabs:engineering"],
@@ -182,76 +141,20 @@ test("merging replaces any work reference the caller already had", () => {
   assert.equal(merged.filter((tag) => tag[0] === "team").length, 1);
 });
 
-// The Task already existing is the state this was trying to reach, so a replay
-// of the same send is a success rather than a reason to refuse to send.
-test("a conflict means the task is already there, and the send proceeds", async () => {
-  const { resolve } = resolver({
-    brokerOutcome: {
-      status: "conflict",
-      receiptEventId: "r".repeat(64),
-      target: "t",
-      message: "This record changed while the request was in flight.",
-    },
-  });
-  const context = await resolve(REQUEST);
-  assert.equal(context.taskId, TASK_ID);
-});
-
-// An applied receipt names the exact event the relay just wrote. Reading it
-// by that id, rather than waiting on the `#d` tag filter to catch up, is
-// what a single-shot `getTask` had no way to do.
-test("an applied receipt's head event id is handed to the read-back", async () => {
-  const { resolve, loadTaskCalls } = resolver({
-    brokerOutcome: {
-      status: "applied",
-      receiptEventId: "r".repeat(64),
-      headEventId: "h".repeat(64),
-      target: "t",
-    },
-  });
+// An applied receipt names the task head this send resolved to, including
+// when the relay attached to a task that already existed: it points at the
+// head already stored rather than rewriting it to say the same thing.
+test("an applied receipt's head event id is what the task is read back by", async () => {
+  const { resolve, loadTaskCalls } = resolver();
   await resolve(REQUEST);
-  assert.deepEqual(loadTaskCalls, [[TASK_ID, "h".repeat(64)]]);
+  assert.deepEqual(loadTaskCalls, [HEAD_EVENT_ID]);
 });
 
-// A conflict receipt names no head, so the read-back falls back to its
-// ordinary coordinate lookup rather than being handed a stale or absent id.
-test("a conflict carries no head event id to the read-back", async () => {
-  const { resolve, loadTaskCalls } = resolver({
-    brokerOutcome: {
-      status: "conflict",
-      receiptEventId: "r".repeat(64),
-      target: "t",
-      message: "This record changed while the request was in flight.",
-    },
-  });
-  await resolve(REQUEST);
-  assert.deepEqual(loadTaskCalls, [[TASK_ID, null]]);
-});
-
-// The relay's idempotency claim on this send was already won - by an
-// earlier attempt at this exact send, most likely, since `created_at` is
-// real wall-clock time and every retry signs a different event id.
-// `planned.taskId` is derived from the send itself (channel + send id), not
-// from which event won the claim, so it names the same Task either way:
-// this is the same goal state a "conflict" reaches, not a failure.
-test("a superseded submission means the send already succeeded, and proceeds", async () => {
-  const { resolve } = resolver({
-    brokerOutcome: {
-      status: "superseded",
-      actionEventId: "a".repeat(64),
-      winnerEventId: "w".repeat(64),
-      message: "This exact change was already applied by an earlier attempt.",
-    },
-  });
-  const context = await resolve(REQUEST);
-  assert.equal(context.taskId, TASK_ID);
-});
-
-// The relay's rejection names the company ACTION event that won the
-// idempotency claim, signed by the owner. That is not the task head, which
-// the relay signs itself under a different kind, so it must never be handed
-// to a read-back that looks up task heads by id.
-test("a superseded claim carries no head event id to the read-back", async () => {
+// The relay recognised this exact send as a replay of an earlier attempt.
+// That is the goal state a retry was trying to reach, and the winning
+// action's own receipt names the task it was answered with.
+test("a superseded submission reads the winning action's task", async () => {
+  const seen = [];
   const { resolve, loadTaskCalls } = resolver({
     brokerOutcome: {
       status: "superseded",
@@ -259,62 +162,21 @@ test("a superseded claim carries no head event id to the read-back", async () =>
       winnerEventId: "w".repeat(64),
       message: "This exact change was already applied by an earlier attempt.",
     },
-  });
-  await resolve(REQUEST);
-  assert.deepEqual(loadTaskCalls, [[TASK_ID, null]]);
-});
-
-// The whole path, against a relay that answers an `ids` lookup only for
-// events it actually holds under that id. Retrying a message with the same
-// text rebuilds the same task id and the same idempotency key under a new
-// event id, so the relay answers "superseded by original action <id>". Taking
-// that id as a task head id queried a filter nothing could satisfy, on all
-// eight attempts, and every retry of that text failed the same way forever.
-test("a superseded submission reads its task back by coordinate", async () => {
-  resetCompanyRepositoryState();
-  const head = chatTaskHead();
-  const winningActionEventId = "d".repeat(64);
-  const filters = [];
-  const repository = createCompanyRepository({
-    fetchEvents: async (filter) => {
-      filters.push(filter);
-      if (filter.ids) return filter.ids.includes(head.id) ? [head] : [];
-      return filter["#d"]?.includes(TASK_ID) ? [head] : [];
+    headForAction: async (actionEventId) => {
+      seen.push(actionEventId);
+      return HEAD_EVENT_ID;
     },
-    relaySelf: async () => TASK_RELAY_PUBKEY,
-    delay: async () => {},
-    taskReadBackAttempts: 2,
-    taskReadBackIntervalMs: 1,
   });
-
-  const { resolve } = resolver({
-    brokerOutcome: {
-      status: "superseded",
-      actionEventId: "a".repeat(64),
-      winnerEventId: winningActionEventId,
-      message: "This exact change was already applied by an earlier attempt.",
-    },
-    readTask: (taskId, headEventId) =>
-      repository.getTaskAfterAction(taskId, headEventId),
-  });
-
   const context = await resolve(REQUEST);
+  assert.deepEqual(seen, ["w".repeat(64)]);
+  assert.deepEqual(loadTaskCalls, [HEAD_EVENT_ID]);
   assert.equal(context.taskId, TASK_ID);
-  assert.ok(
-    filters.some((filter) => filter["#d"]?.includes(TASK_ID)),
-    "the coordinate read must run",
-  );
-  assert.ok(
-    filters.every((filter) => !filter.ids?.includes(winningActionEventId)),
-    "the winning action event id must never be read as a task head",
-  );
 });
 
-// A superseded claim is only evidence that SOME attempt won it. If the Task
-// it produced genuinely cannot be read back - a bug, a wrong community, a
-// claim for something else entirely - this must still fail honestly rather
-// than assume success it never confirmed.
-test("a superseded submission whose task never appears still fails honestly", async () => {
+// A superseded claim is only evidence that SOME attempt won it. If the task
+// it produced cannot be named, this must fail honestly rather than assume a
+// success it never confirmed.
+test("a superseded claim whose task cannot be named stops the send", async () => {
   const { resolve } = resolver({
     brokerOutcome: {
       status: "superseded",
@@ -322,7 +184,7 @@ test("a superseded submission whose task never appears still fails honestly", as
       winnerEventId: "w".repeat(64),
       message: "This exact change was already applied by an earlier attempt.",
     },
-    taskResult: { ok: false, code: "missing-head", message: "gone" },
+    headForAction: async () => null,
   });
   await assert.rejects(() => resolve(REQUEST), /has not been sent/i);
 });
@@ -341,6 +203,12 @@ test("an unrecorded task stops the send rather than buying an unattributed turn"
       message: "The relay refused this company change.",
     },
     {
+      status: "conflict",
+      receiptEventId: "r".repeat(64),
+      target: "t",
+      message: "This record changed while the request was in flight.",
+    },
+    {
       status: "failed",
       receiptEventId: "r".repeat(64),
       target: "t",
@@ -355,8 +223,9 @@ test("an unrecorded task stops the send rather than buying an unattributed turn"
   }
 });
 
-// The head is what the harness re-reads. A message pinned to a Task this
-// client never confirmed would attribute a turn to work the relay never stored.
+// The head is what the harness re-reads. A message pinned to a task this
+// client never confirmed would attribute a turn to work the relay never
+// stored.
 test("a task that cannot be read back stops the send", async () => {
   const { resolve } = resolver({
     taskResult: { ok: false, code: "missing-head", message: "gone" },
@@ -364,16 +233,10 @@ test("a task that cannot be read back stops the send", async () => {
   await assert.rejects(() => resolve(REQUEST), /has not been sent/i);
 });
 
-test("no profile and no relay identity both stop the send", async () => {
-  await assert.rejects(
-    () => resolver({ companyHead: null }).resolve(REQUEST),
-    /has not described its business/i,
-  );
-
+test("no relay identity stops the send", async () => {
   const withoutRelay = createWorkContextResolver({
     relaySelf: async () => null,
-    fetchCompanyHead: async () => COMPANY_HEAD,
-    ensureTask: async () => {
+    attach: async () => {
       throw new Error("must not be reached");
     },
     broker: {
@@ -381,6 +244,7 @@ test("no profile and no relay identity both stop the send", async () => {
         throw new Error("must not be reached");
       },
     },
+    headForAction: async () => null,
     loadTask: async () => ({ ok: true, value: task() }),
   });
   await assert.rejects(() => withoutRelay(REQUEST), /no stable identity/i);
@@ -388,24 +252,42 @@ test("no profile and no relay identity both stop the send", async () => {
 
 const THREAD_ROOT = "5910f909".padEnd(64, "a");
 
-/**
- * The Task a thread reply creates has to name the thread it came from.
- *
- * The relay scopes its task-created system row into a thread only when the
- * Task carries a thread root, so without this the notice lands at channel
- * root and reads as if the work had started outside the conversation that
- * asked for it.
- */
-test("a thread reply forwards its thread root to the task", async () => {
-  const { resolve, ensureTaskCalls } = resolver();
-  await resolve({ ...REQUEST, threadRoot: THREAD_ROOT });
-  assert.equal(ensureTaskCalls.length, 1);
-  assert.equal(ensureTaskCalls[0].threadRoot, THREAD_ROOT);
+// The relay keys a thread by its root, so this is what makes the second
+// message in a conversation join the task the first one opened.
+test("a thread reply forwards its thread root and its mode", async () => {
+  const { resolve, attachCalls } = resolver();
+  await resolve({ ...REQUEST, threadRoot: THREAD_ROOT, mode: "attach" });
+  assert.equal(attachCalls.length, 1);
+  assert.equal(attachCalls[0].threadRoot, THREAD_ROOT);
+  assert.equal(attachCalls[0].mode, "attach");
+  assert.equal(attachCalls[0].conversationScope, false);
 });
 
+// A send that starts its own thread has no root yet: the relay claims it
+// under the send id and rebinds that claim when the message arrives.
 test("a send at channel root forwards no thread root", async () => {
-  const { resolve, ensureTaskCalls } = resolver();
+  const { resolve, attachCalls } = resolver();
   await resolve(REQUEST);
-  assert.equal(ensureTaskCalls.length, 1);
-  assert.equal(ensureTaskCalls[0].threadRoot, null);
+  assert.equal(attachCalls[0].threadRoot, null);
+  assert.equal(attachCalls[0].mode, "open");
+});
+
+// A DM is one thread for its whole life, so the relay keys it by the
+// conversation rather than by any root inside it.
+test("a DM asks for conversation scope", async () => {
+  const { resolve, attachCalls } = resolver();
+  await resolve({ ...REQUEST, conversationScope: true, threadRoot: null });
+  assert.equal(attachCalls[0].conversationScope, true);
+  assert.equal(attachCalls[0].threadRoot, null);
+});
+
+// The turn still has to be charged, so the send proceeds and the message
+// carries the hidden task's id like any other.
+test("a turn charged to the hidden chat task still tags the message", async () => {
+  const { resolve } = resolver({
+    taskResult: { ok: true, value: task({ hidden: true }) },
+  });
+  const context = await resolve({ ...REQUEST, mode: "attach" });
+  assert.equal(context.hidden, true);
+  assert.deepEqual(context.tags[0], ["task", TASK_ID]);
 });

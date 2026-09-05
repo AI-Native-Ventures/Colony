@@ -5,6 +5,12 @@ class _ComposeBarLayout extends StatelessWidget {
   final int uploadingCount;
   final ValueChanged<String> onRemoveAttachment;
   final String? uploadError;
+
+  /// Why the last send did not go out, when it did not.
+  final String? sendError;
+
+  /// The "New task" switch, rendered only where a thread already holds work.
+  final Widget newTaskToggle;
   final bool isExpanded;
   final TextEditingController controller;
   final FocusNode focusNode;
@@ -33,6 +39,8 @@ class _ComposeBarLayout extends StatelessWidget {
     required this.uploadingCount,
     required this.onRemoveAttachment,
     required this.uploadError,
+    required this.sendError,
+    required this.newTaskToggle,
     required this.isExpanded,
     required this.controller,
     required this.focusNode,
@@ -80,18 +88,20 @@ class _ComposeBarLayout extends StatelessWidget {
             ),
             const SizedBox(height: Grid.xxs),
           ],
-          if (uploadError case final error?) ...[
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                error,
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.error,
+          for (final error in [uploadError, sendError])
+            if (error != null) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  error,
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.colors.error,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: Grid.xxs),
-          ],
+              const SizedBox(height: Grid.xxs),
+            ],
+          newTaskToggle,
           // Keep the default state out of the focus system entirely so
           // restored native focus cannot expand a newly opened channel.
           if (isExpanded)

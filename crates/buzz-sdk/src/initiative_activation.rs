@@ -185,6 +185,9 @@ fn kickoff_action(
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: initiative.updated_at,
         updated_at: initiative.updated_at,
     };
@@ -200,7 +203,7 @@ fn kickoff_action(
         // conflict.
         expected_head: None,
         expected_references: Vec::new(),
-        payload: CompanyActionPayload::Task(task),
+        payload: CompanyActionPayload::Task(Box::new(task)),
     };
     (task_id, action)
 }

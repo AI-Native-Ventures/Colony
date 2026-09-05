@@ -1,17 +1,77 @@
 use buzz_core::kind::KIND_IA_ARCHIVED_LIST;
 use buzz_sdk::builders::{build_archive_identity_request, build_unarchive_identity_request};
-use nostr::PublicKey;
+use nostr::{EventBuilder, Keys, Kind, PublicKey};
 use serde_json::json;
 
 use crate::agent_management::{build_create, build_update, CreateAgentDraft, UpdateAgentDraft};
+use crate::agent_run;
 use crate::client::BuzzClient;
 use crate::commands::blocks::resolve_active_manifest;
 use crate::error::CliError;
+use crate::identity;
+use crate::managed_agents::{self, NewAgent, SecretLocation};
 use crate::validate::{read_or_stdin, validate_hex64};
 use crate::{AgentsCmd, RespondToArg};
 
+/// Read a `--prompt` value: `-` is stdin, a leading `@` names a file, and
+/// anything else is the literal instructions.
+///
+/// The `@` form matters because a system prompt is usually a paragraph or
+/// more, and shell quoting mangles it. A bare path is deliberately NOT treated
+/// as a file: silently sending the string "./prompt.md" as an agent's
+/// instructions is the failure mode this distinction exists to prevent, and it
+/// is invisible until the agent behaves oddly.
+fn read_prompt_arg(value: &str) -> Result<String, CliError> {
+    match value.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| CliError::Usage(format!("read prompt file {path}: {e}"))),
+        None => read_or_stdin(value),
+    }
+}
+
 pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), CliError> {
     match command {
+        AgentsCmd::Create {
+            name,
+            prompt,
+            harness,
+            model,
+            provider,
+        } => cmd_create(client, &name, prompt.as_deref(), &harness, model, provider).await,
+
+        AgentsCmd::Run {
+            name_or_pubkey,
+            harness,
+            detach,
+        } => cmd_run(client, &name_or_pubkey, harness.as_deref(), detach),
+
+        AgentsCmd::Status => cmd_status(),
+
+        AgentsCmd::Stop { name_or_pubkey } => cmd_stop(&name_or_pubkey),
+
+        AgentsCmd::List => {
+            let records = managed_agents::load_store()?;
+            let listed: Vec<serde_json::Value> = managed_agents::instances(&records)
+                .into_iter()
+                .map(managed_agents::summarize)
+                .collect();
+            println!("{}", serde_json::Value::Array(listed));
+            Ok(())
+        }
+
+        AgentsCmd::Show { name_or_pubkey } => {
+            let records = managed_agents::load_store()?;
+            let record =
+                managed_agents::find_instance(&records, &name_or_pubkey).ok_or_else(|| {
+                    CliError::NotFound(format!(
+                        "no managed agent named '{name_or_pubkey}' on this machine \
+                         (run `buzz agents list`)"
+                    ))
+                })?;
+            println!("{}", managed_agents::summarize(record));
+            Ok(())
+        }
+
         AgentsCmd::DraftCreate {
             channel,
             display_name,
@@ -182,6 +242,396 @@ pub async fn dispatch(command: AgentsCmd, client: &BuzzClient) -> Result<(), Cli
 
         AgentsCmd::Archived => cmd_archived(client).await,
     }
+}
+
+/// A fresh agent's announcement: the owner-signed NIP-OA attestation, the
+/// agent-signed kind:0 profile that carries it, and the agent-scoped client
+/// that publishes it.
+struct AttestedProfile {
+    /// The `["auth", owner, conditions, sig]` tag, as JSON. Kept as a string
+    /// because that is the form the store record and `x-auth-tag` both take.
+    auth_tag_json: String,
+    /// The kind:0 profile, signed by the agent, carrying the auth tag.
+    event: nostr::Event,
+    /// Signs NIP-98 for `POST /events` as the agent and sets `x-auth-tag`.
+    client: BuzzClient,
+}
+
+/// Attest `agent_keys` with `owner_keys` and build the agent's kind:0 profile.
+///
+/// The event is signed by the AGENT and carries the OWNER's attestation: that
+/// pairing is the whole mechanism, and it is why a second client is built here
+/// rather than reusing the caller's. No network call happens; publishing is the
+/// caller's step, which is what makes the wire shape testable.
+fn build_attested_profile(
+    relay_url: &str,
+    owner_keys: &Keys,
+    agent_keys: &Keys,
+    name: &str,
+) -> Result<AttestedProfile, CliError> {
+    let agent_pubkey = agent_keys.public_key();
+    let auth_tag_json = buzz_sdk::nip_oa::compute_auth_tag(owner_keys, &agent_pubkey, "")
+        .map_err(|e| CliError::Other(format!("failed to compute NIP-OA auth tag: {e}")))?;
+    let auth_tag = buzz_sdk::nip_oa::parse_auth_tag(&auth_tag_json)
+        .map_err(|e| CliError::Other(format!("failed to parse the auth tag just computed: {e}")))?;
+
+    let client = BuzzClient::new(
+        relay_url.to_string(),
+        agent_keys.clone(),
+        Some(auth_tag),
+        Some(auth_tag_json.clone()),
+    )?;
+    let content = json!({ "display_name": name }).to_string();
+    let event = client.sign_event(EventBuilder::new(Kind::Custom(0), content))?;
+
+    Ok(AttestedProfile {
+        auth_tag_json,
+        event,
+        client,
+    })
+}
+
+/// Mint a managed agent: a fresh key, an owner-signed NIP-OA attestation, a
+/// published kind:0 profile, and a local record Buzz Desktop adopts.
+///
+/// Reproduces `create_managed_agent` in
+/// `desktop/src-tauri/src/commands/agents.rs`. The ordering is deliberate: the
+/// profile is published BEFORE anything durable is written locally, so a relay
+/// rejection leaves nothing behind and the command can simply be re-run. The
+/// reverse order would leave a half-created agent that no command can finish.
+async fn cmd_create(
+    client: &BuzzClient,
+    name: &str,
+    prompt: Option<&str>,
+    harness: &str,
+    model: Option<String>,
+    provider: Option<String>,
+) -> Result<(), CliError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CliError::Usage("agent name is required".into()));
+    }
+    let harness = managed_agents::harness_spec(harness)?;
+
+    let prompt = prompt.map(read_prompt_arg).transpose()?;
+    let system_prompt = prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let model = model.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let provider = provider.as_deref().map(str::trim).filter(|v| !v.is_empty());
+
+    let mut records = managed_agents::load_store()?;
+    if let Some(existing) = managed_agents::find_instance(&records, name) {
+        return Err(CliError::Usage(format!(
+            "a managed agent named '{name}' already exists ({})",
+            managed_agents::record_pubkey(existing)
+        )));
+    }
+
+    // 1. Mint the agent's own keypair.
+    let agent_keys = Keys::generate();
+    let agent_pubkey = agent_keys.public_key();
+    let pubkey_hex = agent_pubkey.to_hex();
+    let npub = identity::npub_of(&agent_keys)?;
+
+    // 2 + 3. Attest the agent with the owner key the CLI signs as, and publish
+    //    the agent-signed kind:0 profile that carries the attestation.
+    let profile = build_attested_profile(client.relay_url(), client.keys(), &agent_keys, name)?;
+    let auth_tag_json = profile.auth_tag_json;
+    profile.client.submit_event(profile.event).await?;
+
+    // 4. Store the nsec where the desktop reads it from.
+    let nsec = identity::nsec_of(&agent_keys)?;
+    let stored_in = managed_agents::store_agent_secret(&pubkey_hex, &nsec)?;
+
+    // 5. Append the record the desktop lists the agent from.
+    let relay_url = client.relay_ws_url();
+    let owner_hex = client.keys().public_key().to_hex();
+    let now = chrono::Utc::now().to_rfc3339();
+    let record = managed_agents::build_record(
+        &NewAgent {
+            name,
+            pubkey: &pubkey_hex,
+            owner_pubkey: &owner_hex,
+            auth_tag: &auth_tag_json,
+            relay_url: &relay_url,
+            harness,
+            system_prompt,
+            model,
+            provider,
+            // Only the keyringless fallback keeps the key on disk.
+            inline_nsec: (stored_in == SecretLocation::File).then_some(nsec.as_str()),
+        },
+        &now,
+    );
+    records.push(record);
+    managed_agents::write_store(&records)?;
+
+    println!(
+        "{}",
+        json!({
+            "pubkey": pubkey_hex,
+            "npub": npub,
+            "name": name,
+            "stored_in": stored_in.as_str(),
+        })
+    );
+    Ok(())
+}
+
+// ── run | status | stop ────────────────────────────────────────────────────
+
+/// Resolve the NIP-OA attestation the agent authenticates with.
+///
+/// The stored one is used verbatim whenever it is present, because it is the
+/// tag already published in the agent's kind:0 profile. Recomputing is the
+/// path for a record written without one, and it is only possible when the
+/// signing key IS the owner the record names: an attestation is a signature
+/// over the agent pubkey by the owner key, so another founder's key cannot
+/// produce it, and shipping a tag signed by the wrong key would fail at the
+/// relay with a message that looks like a relay fault.
+fn resolve_agent_auth_tag(
+    record: &serde_json::Value,
+    agent_pubkey_hex: &str,
+    owner_keys: &Keys,
+) -> Result<String, CliError> {
+    if let Some(stored) = record
+        .get("auth_tag")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(stored.to_string());
+    }
+    let signer_hex = owner_keys.public_key().to_hex();
+    if let Some(owner) = record
+        .get("owner_pubkey")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !owner.eq_ignore_ascii_case(&signer_hex) {
+            return Err(CliError::Auth(format!(
+                "agent {agent_pubkey_hex} has no stored attestation and is owned by {owner}, \
+                 not by your key {signer_hex}; run it as its owner"
+            )));
+        }
+    }
+    let agent_pubkey = PublicKey::parse(agent_pubkey_hex)
+        .map_err(|e| CliError::Other(format!("agent pubkey {agent_pubkey_hex} is invalid: {e}")))?;
+    buzz_sdk::nip_oa::compute_auth_tag(owner_keys, &agent_pubkey, "")
+        .map_err(|e| CliError::Other(format!("failed to compute NIP-OA auth tag: {e}")))
+}
+
+/// `buzz agents run`: spawn `buzz-acp` for one managed agent.
+///
+/// Everything that can be refused is refused before a process exists: a
+/// missing agent, an agent already running under this CLI, an unknown or
+/// uninstalled harness, an unreadable key, and an attestation this key cannot
+/// produce. A half-started agent is worse than a refused one, because the
+/// relay-side symptom (silence in the channel) looks identical to a healthy
+/// agent nobody has mentioned yet.
+fn cmd_run(
+    client: &BuzzClient,
+    name_or_pubkey: &str,
+    harness: Option<&str>,
+    detach: bool,
+) -> Result<(), CliError> {
+    let records = managed_agents::load_store()?;
+    let record = managed_agents::find_instance(&records, name_or_pubkey).ok_or_else(|| {
+        CliError::NotFound(format!(
+            "no managed agent named '{name_or_pubkey}' on this machine (run `buzz agents list`)"
+        ))
+    })?;
+    let pubkey = managed_agents::record_pubkey(record).to_string();
+    let name = managed_agents::record_name(record).to_string();
+
+    let pidfile = agent_run::pidfile_path(&pubkey)?;
+    if let Ok(running) = agent_run::read_run_record(&pidfile) {
+        if agent_run::process_is_running(running.pid) {
+            return Err(CliError::Usage(format!(
+                "agent '{name}' is already running as pid {} (stop it first with \
+                 `buzz agents stop {name}`)",
+                running.pid
+            )));
+        }
+    }
+
+    let harness = agent_run::resolve_harness(harness, record, &|command| {
+        agent_run::find_on_path(command).is_some()
+    })?;
+    let nsec = managed_agents::read_agent_secret(&pubkey, record)?;
+    let auth_tag = resolve_agent_auth_tag(record, &pubkey, client.keys())?;
+    let relay_url = record
+        .get("relay_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| client.relay_ws_url());
+
+    let acp_bin = agent_run::resolve_acp_binary()?;
+    // A harness that does not resolve is passed through by name rather than
+    // refused, exactly as the desktop does: the harness reports the miss with
+    // its own message, which names the binary it looked for.
+    let agent_command = agent_run::find_on_path(harness.agent_command)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| harness.agent_command.to_string());
+    let mcp_command = (!harness.mcp_command.is_empty())
+        .then(|| agent_run::find_on_path(harness.mcp_command))
+        .flatten()
+        .map(|path| path.display().to_string());
+    let git_helper =
+        agent_run::find_on_path("git-credential-nostr").map(|path| path.display().to_string());
+
+    // A claude adapter older than the API's moving minimum connects, subscribes
+    // and then fails every turn with a 400 that names a model, so the founder
+    // sees silence rather than an error. Warn and spawn anyway: the bound moves
+    // and this check cannot re-verify it against the live API.
+    if harness.id == "claude" {
+        if let Some(warning) =
+            agent_run::stale_claude_adapter_warning(std::path::Path::new(&agent_command))
+        {
+            eprintln!("{warning}");
+        }
+    }
+
+    // Consent is the calling agent's question to ask; making the choice
+    // visible is this command's job. See `HarnessSpec::login`.
+    if let Some(login) = harness.login {
+        eprintln!(
+            "note: agent '{name}' runs on the '{}' harness, which uses {login}.",
+            harness.id
+        );
+    }
+
+    let env = agent_run::plan_env(&agent_run::RunInputs {
+        record,
+        agent_nsec: &nsec,
+        auth_tag: &auth_tag,
+        owner_hex: &client.keys().public_key().to_hex(),
+        relay_url: &relay_url,
+        harness,
+        agent_command: &agent_command,
+        mcp_command: mcp_command.as_deref(),
+        git_credential_helper: git_helper.as_deref(),
+    });
+    let plan = agent_run::RunPlan {
+        acp_bin,
+        workdir: agent_run::default_agent_workdir(),
+        env,
+    };
+
+    let log = detach.then(|| agent_run::log_path(&pubkey)).transpose()?;
+    let mut child = agent_run::spawn(&plan, log.as_deref())?;
+    let run_record = agent_run::RunRecord {
+        pubkey: pubkey.clone(),
+        name: name.clone(),
+        harness: harness.id.to_string(),
+        pid: child.id(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        log: log.as_ref().map(|path| path.display().to_string()),
+        detached: detach,
+    };
+    agent_run::write_run_record(&pidfile, &run_record)?;
+
+    println!(
+        "{}",
+        json!({
+            "pubkey": pubkey,
+            "name": name,
+            "harness": harness.id,
+            "pid": run_record.pid,
+            "detached": detach,
+            "relay_url": relay_url,
+            "log": run_record.log,
+            "pidfile": pidfile.display().to_string(),
+        })
+    );
+
+    if detach {
+        return Ok(());
+    }
+
+    // Foreground. The child leads its own process group, so a Ctrl-C in the
+    // terminal reaches this process and not the agent: the pidfile is left in
+    // place on that path deliberately, and `buzz agents stop` is what ends the
+    // agent. A child that exits on its own is cleaned up here.
+    let status = child
+        .wait()
+        .map_err(|e| CliError::Other(format!("waiting for buzz-acp: {e}")))?;
+    let _ = std::fs::remove_file(&pidfile);
+    if status.success() {
+        return Ok(());
+    }
+    Err(CliError::Other(format!(
+        "buzz-acp exited with {status} (log streamed above)"
+    )))
+}
+
+/// `buzz agents status`: every CLI-run agent and whether it is still alive.
+fn cmd_status() -> Result<(), CliError> {
+    let listed: Vec<serde_json::Value> = agent_run::list_run_records()?
+        .into_iter()
+        .map(|record| {
+            json!({
+                "pubkey": record.pubkey,
+                "name": record.name,
+                "harness": record.harness,
+                "pid": record.pid,
+                "alive": agent_run::process_is_running(record.pid),
+                "started_at": record.started_at,
+                "detached": record.detached,
+                "log": record.log,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::Value::Array(listed));
+    Ok(())
+}
+
+/// `buzz agents stop`: end one CLI-run agent and clear its pidfile.
+fn cmd_stop(name_or_pubkey: &str) -> Result<(), CliError> {
+    let records = agent_run::list_run_records()?;
+    // Pubkey first, so a name that happens to look like a pubkey can never
+    // shadow the real key. Same rule as `managed_agents::find_instance`.
+    let record = records
+        .iter()
+        .find(|record| record.pubkey == name_or_pubkey)
+        .or_else(|| {
+            records
+                .iter()
+                .find(|record| record.name.eq_ignore_ascii_case(name_or_pubkey))
+        })
+        .ok_or_else(|| {
+            CliError::NotFound(format!(
+                "no agent named '{name_or_pubkey}' was started by this CLI \
+                 (run `buzz agents status`)"
+            ))
+        })?;
+
+    let outcome = agent_run::stop_process(record.pid)?;
+    let pidfile = agent_run::pidfile_path(&record.pubkey)?;
+    if let Err(e) = std::fs::remove_file(&pidfile) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(CliError::Other(format!(
+                "stopped {} but could not remove {}: {e}",
+                record.pid,
+                pidfile.display()
+            )));
+        }
+    }
+    println!(
+        "{}",
+        json!({
+            "pubkey": record.pubkey,
+            "name": record.name,
+            "pid": record.pid,
+            "outcome": outcome.as_str(),
+        })
+    );
+    Ok(())
 }
 
 /// Require `BUZZ_AUTH_TAG` and parse the owner pubkey from it. Used only by
@@ -557,6 +1007,80 @@ mod tests {
 
     fn hex128(c: char) -> String {
         std::iter::repeat_n(c, 128).collect()
+    }
+
+    // --- (a) the wire shape `agents create` puts on the relay ---
+
+    /// Every auth tag on an event, as raw string slices.
+    fn auth_tags(event: &nostr::Event) -> Vec<Vec<String>> {
+        event
+            .tags
+            .iter()
+            .map(|t| t.clone().to_vec())
+            .filter(|t| t.first().map(String::as_str) == Some("auth"))
+            .collect()
+    }
+
+    #[test]
+    fn the_minted_profile_is_one_agent_signed_kind_0() {
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let profile =
+            build_attested_profile("http://localhost:3000", &owner, &agent, "scout").unwrap();
+
+        assert_eq!(profile.event.kind, Kind::Custom(0));
+        assert_eq!(
+            profile.event.pubkey,
+            agent.public_key(),
+            "the profile is signed by the agent, not the owner"
+        );
+        profile
+            .event
+            .verify()
+            .expect("the kind:0 profile must carry a valid signature");
+        let content: serde_json::Value = serde_json::from_str(&profile.event.content).unwrap();
+        assert_eq!(content["display_name"], "scout");
+    }
+
+    #[test]
+    fn the_profiles_auth_tag_verifies_against_the_owner_key() {
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let profile =
+            build_attested_profile("http://localhost:3000", &owner, &agent, "scout").unwrap();
+
+        let on_event = auth_tags(&profile.event);
+        assert_eq!(on_event.len(), 1, "exactly one auth tag: {on_event:?}");
+        assert_eq!(
+            serde_json::to_value(&on_event[0]).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&profile.auth_tag_json).unwrap(),
+            "the tag on the wire must be the one recorded in the store"
+        );
+
+        // Decode and verify the Schnorr signature over the NIP-OA preimage.
+        let attested_owner =
+            buzz_sdk::nip_oa::verify_auth_tag(&profile.auth_tag_json, &agent.public_key())
+                .expect("the auth tag must verify against the agent it attests");
+        assert_eq!(
+            attested_owner,
+            owner.public_key(),
+            "the tag must name the CLI's own identity as owner"
+        );
+    }
+
+    #[test]
+    fn an_auth_tag_minted_for_one_agent_does_not_verify_for_another() {
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let impostor = Keys::generate();
+        let profile =
+            build_attested_profile("http://localhost:3000", &owner, &agent, "scout").unwrap();
+
+        assert!(
+            buzz_sdk::nip_oa::verify_auth_tag(&profile.auth_tag_json, &impostor.public_key())
+                .is_err(),
+            "the attestation is bound to one agent pubkey"
+        );
     }
 
     // --- (b) auth-selection matrix: extract_owner_auth_tag ---

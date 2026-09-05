@@ -388,6 +388,43 @@ pub enum CompanyActionApply {
     },
 }
 
+/// The outcome of one thread attach commit.
+///
+/// Separate from [`CompanyActionApply`] because an attach may legitimately
+/// write no head at all: attaching to a thread's existing task changes
+/// nothing about that task, and inventing a replacement head just to have one
+/// to report would rewrite a record nobody asked to change.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Preserve direct StoredEvent handoff for relay fan-out.
+pub enum ThreadAttachApply {
+    /// The action, the receipt, and the new task head when there was one,
+    /// committed together.
+    Applied {
+        /// Stored member-signed action.
+        action: StoredEvent,
+        /// Stored relay-authored task head, absent when the request attached
+        /// to a task that already existed.
+        head: Option<StoredEvent>,
+        /// Stored relay-signed receipt.
+        receipt: StoredEvent,
+    },
+    /// Another batch already owns this community-local retry key.
+    Duplicate {
+        /// Raw event ID of the action that originally won the claim.
+        original_action_event_id: Vec<u8>,
+    },
+    /// This exact action event is already stored, so it cannot be applied.
+    ActionAlreadyStored,
+    /// The action author is not a member of this community.
+    NotMember,
+    /// Compare-and-set failed: the stored head is not the one the request
+    /// expected to open against.
+    StaleHead {
+        /// Raw event ID of the head that is actually stored, if any.
+        current_head_event_id: Option<Vec<u8>>,
+    },
+}
+
 impl CompanyActionApply {
     /// Panic unless the batch committed. Test helper for arranging a head.
     #[cfg(test)]

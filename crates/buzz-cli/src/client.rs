@@ -181,6 +181,27 @@ fn relay_server_tag(relay_url: &str) -> Option<String> {
     }
 }
 
+/// Root of the relay's member self-serve community provisioning API
+/// (`crates/buzz-relay/src/api/self_provisioning.rs`). The desktop app calls
+/// the same four routes from `desktop/src-tauri/src/colony_provisioning.rs`.
+const COMMUNITIES_API_PATH: &str = "/api/communities";
+
+/// Root of the relay's invite API (`crates/buzz-relay/src/api/invites.rs`).
+/// The desktop app calls the same routes from
+/// `desktop/src/shared/api/invites.ts`.
+const INVITES_API_PATH: &str = "/api/invites";
+
+/// Root of the relay's card top-up API (`crates/buzz-relay/src/api/payments.rs`),
+/// the same routes the desktop onboarding flow drives from
+/// `desktop/src/features/onboarding/paymentsService.ts`. `packs` is public;
+/// `initialize` and `verify` are NIP-98 signed.
+const PAYMENTS_API_PATH: &str = "/api/payments";
+
+/// The relay's prepaid balance read (`crates/buzz-relay/src/gateway/mod.rs`).
+/// NIP-98 signed, and mounted only when a gateway is configured, so a relay
+/// without one answers `404` rather than a balance.
+const GATEWAY_ACCOUNT_PATH: &str = "/api/gateway/account";
+
 /// Maximum number of attempts per request (initial attempt + two retries).
 const RETRY_MAX_ATTEMPTS: u32 = 3;
 
@@ -632,9 +653,17 @@ impl BuzzClient {
     }
 
     /// Get the relay base URL.
-    #[allow(dead_code)]
     pub fn relay_url(&self) -> &str {
         &self.relay_url
+    }
+
+    /// The WebSocket form of this client's relay URL.
+    ///
+    /// This is the form the managed-agent store and the ACP harness expect:
+    /// the record's `relay_url` becomes the harness's `BUZZ_RELAY_URL`, which
+    /// opens a NIP-01 socket rather than an HTTP connection.
+    pub fn relay_ws_url(&self) -> String {
+        to_ws_url(&self.relay_url)
     }
 
     /// Return the owner pubkey carried by the NIP-OA auth tag, if any.
@@ -909,6 +938,383 @@ impl BuzzClient {
                 let auth = sign_nip98(&self.keys, "GET", &url, None)?;
                 let resp = self
                     .with_auth_tag(self.http.get(&url).header("Authorization", auth))
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/communities/config` - what this relay will actually
+    /// provision, and whether it provisions at all.
+    ///
+    /// Unauthenticated by design: the relay always answers `200`, including
+    /// when self-serve provisioning is disabled, so a caller can tell "this
+    /// relay mints nothing" from "this relay is unreachable" instead of
+    /// hardcoding a domain suffix and printing an address no relay here owns.
+    pub async fn provisioning_config(&self) -> Result<String, CliError> {
+        let url = format!("{}{COMMUNITIES_API_PATH}/config", self.relay_url);
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/communities/availability?name=<name>` - is this slug free?
+    ///
+    /// Unauthenticated, and answers `200` with `available: false` plus a
+    /// `reason` for a name the relay itself rejects, so an unusable name is a
+    /// readable answer rather than an error.
+    ///
+    /// `name` is form-urlencoded rather than interpolated: this route is the
+    /// one place a caller-supplied string reaches a URL, and `check` does no
+    /// local validation precisely so a caller can probe names the relay would
+    /// refuse.
+    pub async fn community_availability(&self, name: &str) -> Result<String, CliError> {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("name", name)
+            .finish();
+        let url = format!(
+            "{}{COMMUNITIES_API_PATH}/availability?{query}",
+            self.relay_url
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `POST /api/communities` - create `<name>.<provisioning domain>`, owned
+    /// by this client's key. NIP-98 signed.
+    ///
+    /// Deliberately single-attempt, unlike the reads here. Creation is
+    /// non-idempotent and create-only relay-side, so a retry after a create
+    /// the relay actually committed comes back `409 taken: that community
+    /// name is already in use` - which reads as "someone beat you to it"
+    /// rather than "you already own it". A transport failure surfaces as
+    /// [`CliError::Network`] (`retryable: true`) and leaves the re-run
+    /// decision with the caller, who can settle it with `communities list`.
+    pub async fn create_community(&self, name: &str) -> Result<String, CliError> {
+        let url = format!("{}{COMMUNITIES_API_PATH}", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({ "name": name }))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+        let resp = self
+            .with_auth_tag(
+                self.http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .body(body),
+            )
+            .send()
+            .await?;
+        self.handle_response(resp).await
+    }
+
+    /// `GET /api/communities/mine` - the communities this client's key owns on
+    /// this deployment. NIP-98 signed.
+    pub async fn list_my_communities(&self) -> Result<String, CliError> {
+        self.get_authed(&format!("{COMMUNITIES_API_PATH}/mine"))
+            .await
+    }
+
+    /// `POST /api/invites` - mint an invite code. NIP-98 signed, and the
+    /// relay accepts it only from an owner or admin of the community the
+    /// relay URL resolves to.
+    ///
+    /// `ttl_secs` and `max_uses` are omitted from the body when `None`, which
+    /// is how the relay is told to apply its own defaults: the default TTL,
+    /// and unlimited uses. Bounds on both are relay-side, so an out-of-range
+    /// value comes back as the relay's own `400` message rather than a guess
+    /// made here.
+    ///
+    /// Deliberately single-attempt, for the same reason
+    /// [`BuzzClient::create_community`] is: minting is not idempotent, so a
+    /// retry after a mint the relay committed leaves a second live code
+    /// nobody knows about. A transport failure surfaces as
+    /// [`CliError::Network`] and leaves the re-run decision with the caller.
+    pub async fn mint_invite(
+        &self,
+        ttl_secs: Option<u64>,
+        max_uses: Option<i32>,
+    ) -> Result<String, CliError> {
+        let url = format!("{}{INVITES_API_PATH}", self.relay_url);
+        let mut payload = serde_json::Map::new();
+        if let Some(ttl_secs) = ttl_secs {
+            payload.insert("ttl_secs".into(), serde_json::json!(ttl_secs));
+        }
+        if let Some(max_uses) = max_uses {
+            payload.insert("max_uses".into(), serde_json::json!(max_uses));
+        }
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::Value::Object(payload))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+        let resp = self
+            .with_auth_tag(
+                self.http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .body(body),
+            )
+            .send()
+            .await?;
+        self.handle_response(resp).await
+    }
+
+    /// `POST /api/invites/claim` - redeem `code`, signed by this client's key,
+    /// which is the key that ends up a member.
+    ///
+    /// This route is exempt from the relay's membership gate by design: the
+    /// whole point is that the signer is not a member yet. It is idempotent -
+    /// a second claim answers `already_member` - so it keeps the standard
+    /// retry policy.
+    ///
+    /// `policy_receipt` is required only on a relay with a configured join
+    /// policy, which otherwise refuses the claim with `join_policy_required`.
+    /// Mint one with [`BuzzClient::accept_invite_policy`].
+    pub async fn claim_invite(
+        &self,
+        code: &str,
+        policy_receipt: Option<&str>,
+    ) -> Result<String, CliError> {
+        let url = format!("{}{INVITES_API_PATH}/claim", self.relay_url);
+        let mut payload = serde_json::Map::new();
+        payload.insert("code".into(), serde_json::json!(code));
+        if let Some(receipt) = policy_receipt {
+            payload.insert("policy_receipt".into(), serde_json::json!(receipt));
+        }
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::Value::Object(payload))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `POST /api/invites/accept-policy` - exchange an explicit acceptance of
+    /// the relay's join policy for the short-lived receipt
+    /// [`BuzzClient::claim_invite`] needs.
+    ///
+    /// Unauthenticated: the receipt is bound to the code and the policy
+    /// version, not to a key, which is why the relay does not sign-gate it.
+    /// A relay with no configured policy answers `404
+    /// join_policy_not_configured`, and needs no receipt to claim.
+    pub async fn accept_invite_policy(
+        &self,
+        code: &str,
+        policy_version: &str,
+        age_confirmed: bool,
+    ) -> Result<String, CliError> {
+        let url = format!("{}{INVITES_API_PATH}/accept-policy", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "code": code,
+                "policy_version": policy_version,
+                "age_confirmed": age_confirmed,
+            }))
+            .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let resp = self
+                    .http
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .body(body)
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/join-policy` - the policy a claimer has to accept, and the
+    /// `version` string `accept-policy` echoes back. Unauthenticated.
+    pub async fn join_policy(&self) -> Result<String, CliError> {
+        let url = format!("{}/api/join-policy", self.relay_url);
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/payments/packs` - the credit packs this relay sells and the
+    /// currency it charges in.
+    ///
+    /// Unauthenticated by design (`crates/buzz-relay/src/api/payments.rs`):
+    /// a price list is public, and checkout still authenticates. The client
+    /// never holds a price of its own, so this is the only way to learn what
+    /// a top-up costs.
+    ///
+    /// `currency` is an optional hint appended as a query parameter. The
+    /// relay in this repo derives the charging currency from its configured
+    /// gateway and ignores the parameter; it is sent so a caller can state
+    /// which price list it wants and so a relay that later honours it needs
+    /// no CLI change. Read the `currency` field of the response for the
+    /// currency that actually applies.
+    pub async fn credit_packs(&self, currency: Option<&str>) -> Result<String, CliError> {
+        let url = match currency {
+            Some(currency) => {
+                let query = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("currency", currency)
+                    .finish();
+                format!("{}{PAYMENTS_API_PATH}/packs?{query}", self.relay_url)
+            }
+            None => format!("{}{PAYMENTS_API_PATH}/packs", self.relay_url),
+        };
+        self.with_retry_body(|| {
+            let url = url.clone();
+            async move {
+                let resp = self.http.get(&url).send().await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `GET /api/gateway/account` - the NIP-98 signer's prepaid balance.
+    ///
+    /// Signed, and mounted only when the relay has a gateway configured
+    /// (`crates/buzz-relay/src/gateway/mod.rs`), so a relay without one
+    /// answers `404` rather than a zero balance. That refusal surfaces as
+    /// [`CliError::Relay`] carrying the relay's own message.
+    pub async fn credits_balance(&self) -> Result<String, CliError> {
+        self.get_authed(GATEWAY_ACCOUNT_PATH).await
+    }
+
+    /// `POST /api/payments/balance` - the same signer's prepaid balance, in
+    /// `usdCents`, from the payments ledger rather than the gateway.
+    ///
+    /// This route is always mounted, so it answers on a relay that has no
+    /// gateway and therefore no `/api/gateway/account`
+    /// (`crates/buzz-relay/src/router.rs`). The body is `{}` because identity
+    /// travels in the NIP-98 signature, and the empty object is what the
+    /// desktop client sends too.
+    ///
+    /// A pure read, so it keeps the standard retry policy. The event is
+    /// re-signed on each attempt so the NIP-98 nonce stays unique.
+    pub async fn payments_balance(&self) -> Result<String, CliError> {
+        let url = format!("{}{PAYMENTS_API_PATH}/balance", self.relay_url);
+        let body = bytes::Bytes::from_static(b"{}");
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
+                self.handle_response(resp).await
+            }
+        })
+        .await
+    }
+
+    /// `POST /api/payments/initialize` - open a hosted checkout for one pack
+    /// and return the relay's JSON, which carries the checkout URL and the
+    /// reference to verify against. NIP-98 signed.
+    ///
+    /// Only the pack id and a receipt email travel. No price is sent: the
+    /// relay prices the pack, because a client that could name its own price
+    /// could name zero.
+    ///
+    /// Deliberately single-attempt, like `create_community`. Opening checkout
+    /// starts a real charge attempt and the relay rate-limits it tightly, so
+    /// a blind retry after an ambiguous failure would burn the allowance and
+    /// could leave a second pending intent behind. A transport failure
+    /// surfaces as [`CliError::Network`] and leaves the re-run decision with
+    /// the caller.
+    pub async fn initialize_payment(&self, pack_id: &str, email: &str) -> Result<String, CliError> {
+        let url = format!("{}{PAYMENTS_API_PATH}/initialize", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({ "packId": pack_id, "email": email }))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+        let resp = self
+            .with_auth_tag(
+                self.http
+                    .post(&url)
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .body(body),
+            )
+            .send()
+            .await?;
+        self.handle_response(resp).await
+    }
+
+    /// `POST /api/payments/verify` - report whether one reference has been
+    /// paid. NIP-98 signed.
+    ///
+    /// A pure read: only the provider webhooks ever credit an account, so
+    /// this moves no money and is safe to retry. The event is re-signed on
+    /// each attempt so the NIP-98 nonce stays unique.
+    pub async fn verify_payment(&self, reference: &str) -> Result<String, CliError> {
+        let url = format!("{}{PAYMENTS_API_PATH}/verify", self.relay_url);
+        let body = bytes::Bytes::from(
+            serde_json::to_vec(&serde_json::json!({ "reference": reference }))
+                .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
+        );
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let resp = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
                     .send()
                     .await?;
                 self.handle_response(resp).await
@@ -2663,6 +3069,659 @@ mod retry_policy_tests {
     }
 }
 
+/// Wire-level tests for the self-serve community provisioning calls.
+///
+/// These run against a local axum server standing in for the relay's
+/// `/api/communities` surface, so what is asserted is the request the relay
+/// would actually receive: method, path, query encoding, body, and whether a
+/// NIP-98 `Authorization` header is present. The auth split is the part worth
+/// pinning - `config` and `check` must stay unauthenticated, and `create` and
+/// `list` must stay signed.
+#[cfg(test)]
+mod communities_api_tests {
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::{Query, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use nostr::Keys;
+    use tokio::net::TcpListener;
+
+    use super::super::error::{exit_code, CliError};
+    use super::BuzzClient;
+
+    /// One captured request: what the server saw.
+    #[derive(Clone, Debug, Default)]
+    struct Seen {
+        path: String,
+        name_param: Option<String>,
+        authorization: Option<String>,
+        body: String,
+    }
+
+    type Captured = Arc<Mutex<Vec<Seen>>>;
+
+    /// Status and body the stand-in relay answers every route with.
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct Harness {
+        captured: Captured,
+        reply: Reply,
+    }
+
+    fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        if let Ok(mut log) = harness.captured.lock() {
+            log.push(seen);
+        }
+        (harness.reply.status, harness.reply.body.to_string())
+    }
+
+    /// Spawn a stand-in relay exposing the four provisioning routes, all
+    /// answering `reply`. Returns its base URL and the capture log.
+    async fn provisioning_server(reply: Reply) -> (String, Captured) {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let harness = Harness {
+            captured: captured.clone(),
+            reply,
+        };
+
+        let app = Router::new()
+            .route(
+                "/api/communities/config",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/communities/config".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/api/communities/availability",
+                get(
+                    |State(h): State<Harness>,
+                     headers: HeaderMap,
+                     Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/communities/availability".into(),
+                                name_param: q.get("name").cloned(),
+                                authorization: header_string(&headers),
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/communities",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/communities".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/communities/mine",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/communities/mine".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .with_state(harness);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), captured)
+    }
+
+    fn header_string(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    fn ok_reply(body: &'static str) -> Reply {
+        Reply {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    fn test_client(base_url: &str) -> BuzzClient {
+        BuzzClient::new(base_url.to_string(), Keys::generate(), None, None).unwrap()
+    }
+
+    fn only(captured: &Captured) -> Seen {
+        let log = captured.lock().unwrap();
+        assert_eq!(log.len(), 1, "expected exactly one request, got {:?}", *log);
+        log[0].clone()
+    }
+
+    #[tokio::test]
+    async fn config_is_an_unauthenticated_get() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"self_serve":false}"#)).await;
+        let body = test_client(&base).provisioning_config().await.unwrap();
+
+        assert_eq!(body, r#"{"self_serve":false}"#, "body is passed through");
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities/config");
+        assert!(
+            seen.authorization.is_none(),
+            "config must not send a NIP-98 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn availability_sends_the_name_as_an_encoded_query_param() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"available":true}"#)).await;
+        // A name the relay would reject still has to arrive intact: `check`
+        // deliberately does no local validation, and the space and slash here
+        // would corrupt the URL if the value were interpolated raw.
+        test_client(&base)
+            .community_availability("acme labs/x")
+            .await
+            .unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities/availability");
+        assert_eq!(
+            seen.name_param.as_deref(),
+            Some("acme labs/x"),
+            "the name must survive percent-encoding round trip"
+        );
+        assert!(
+            seen.authorization.is_none(),
+            "availability must not send a NIP-98 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_posts_a_name_body_with_nip98_auth() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"community":{}}"#)).await;
+        test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities");
+        assert_eq!(seen.body, r#"{"name":"acme-labs"}"#);
+        let auth = seen.authorization.expect("create must be NIP-98 signed");
+        assert!(
+            auth.starts_with("Nostr "),
+            "expected a NIP-98 Authorization header, got {auth:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_gets_mine_with_nip98_auth() {
+        let (base, captured) = provisioning_server(ok_reply(r#"{"communities":[]}"#)).await;
+        test_client(&base).list_my_communities().await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/communities/mine");
+        let auth = seen.authorization.expect("list must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    /// A taken name is a relay refusal, not a client bug: it must surface the
+    /// relay's own message and land on the relay/network exit code rather than
+    /// being reported as a usage error.
+    #[tokio::test]
+    async fn conflict_surfaces_the_relay_message_and_exit_code_two() {
+        let (base, _captured) = provisioning_server(Reply {
+            status: StatusCode::CONFLICT,
+            body: r#"{"error":"taken: that community name is already in use"}"#,
+        })
+        .await;
+
+        let err = test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap_err();
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 409);
+                assert_eq!(body, "taken: that community name is already in use");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 2);
+    }
+
+    /// Membership is the relay's gate, and it refuses with 403. That has to
+    /// reach the caller as an auth error (exit 3) so an agent can tell "I am
+    /// not allowed" from "the relay is unwell".
+    #[tokio::test]
+    async fn forbidden_maps_to_the_auth_exit_code() {
+        let (base, _captured) = provisioning_server(Reply {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"error":"only members of this community can create new communities"}"#,
+        })
+        .await;
+
+        let err = test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::Relay { status: 403, .. }));
+        assert_eq!(exit_code(&err), 3);
+    }
+
+    /// A create that fails must not be silently retried: a second POST after a
+    /// commit the relay already made would come back "taken" and read as
+    /// someone else holding the name.
+    #[tokio::test]
+    async fn create_is_attempted_exactly_once_on_failure() {
+        let (base, captured) = provisioning_server(Reply {
+            status: StatusCode::BAD_GATEWAY,
+            body: r#"{"error":"bad gateway"}"#,
+        })
+        .await;
+
+        let err = test_client(&base)
+            .create_community("acme-labs")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CliError::Relay { status: 502, .. }));
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "create must not retry a non-idempotent POST"
+        );
+    }
+}
+
+/// Wire tests for the invite routes, against an axum stand-in relay.
+///
+/// The parts worth pinning are the ones a caller cannot see from the printed
+/// JSON: `create` and `claim` must both carry a NIP-98 `Authorization`
+/// header, `claim` must send the bare code whether it was given a code or a
+/// landing URL, and `create` must not retry a mint the relay may already have
+/// committed.
+#[cfg(test)]
+mod invites_api_tests {
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use nostr::Keys;
+    use tokio::net::TcpListener;
+
+    use super::super::commands::invites::code_for_relay;
+    use super::super::error::{exit_code, CliError};
+    use super::BuzzClient;
+
+    /// One captured request: what the stand-in relay saw.
+    #[derive(Clone, Debug, Default)]
+    struct Seen {
+        path: String,
+        authorization: Option<String>,
+        body: String,
+    }
+
+    type Captured = Arc<Mutex<Vec<Seen>>>;
+
+    /// Status and body the stand-in relay answers every route with.
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct Harness {
+        captured: Captured,
+        reply: Reply,
+    }
+
+    fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        if let Ok(mut log) = harness.captured.lock() {
+            log.push(seen);
+        }
+        (harness.reply.status, harness.reply.body.to_string())
+    }
+
+    fn header_string(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    /// Spawn a stand-in relay exposing the invite routes, all answering
+    /// `reply`. Returns its base URL and the capture log.
+    async fn invites_server(reply: Reply) -> (String, Captured) {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let harness = Harness {
+            captured: captured.clone(),
+            reply,
+        };
+
+        fn post_route(path: &'static str) -> axum::routing::MethodRouter<Harness> {
+            post(
+                move |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: path.into(),
+                            authorization: header_string(&headers),
+                            body,
+                        },
+                    )
+                },
+            )
+        }
+
+        let app = Router::new()
+            .route("/api/invites", post_route("/api/invites"))
+            .route("/api/invites/claim", post_route("/api/invites/claim"))
+            .route(
+                "/api/invites/accept-policy",
+                post_route("/api/invites/accept-policy"),
+            )
+            .route(
+                "/api/join-policy",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/join-policy".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .with_state(harness);
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) => panic!("bind failed: {e}"),
+        };
+        let addr: SocketAddr = match listener.local_addr() {
+            Ok(addr) => addr,
+            Err(e) => panic!("local_addr failed: {e}"),
+        };
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), captured)
+    }
+
+    fn ok_reply(body: &'static str) -> Reply {
+        Reply {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    fn test_client(base_url: &str) -> BuzzClient {
+        match BuzzClient::new(base_url.to_string(), Keys::generate(), None, None) {
+            Ok(client) => client,
+            Err(e) => panic!("client construction failed: {e:?}"),
+        }
+    }
+
+    fn only(captured: &Captured) -> Seen {
+        let log = match captured.lock() {
+            Ok(log) => log,
+            Err(e) => panic!("capture log poisoned: {e}"),
+        };
+        assert_eq!(log.len(), 1, "expected exactly one request, got {:?}", *log);
+        log[0].clone()
+    }
+
+    fn nostr_auth(seen: &Seen, what: &str) {
+        let auth = match seen.authorization.as_deref() {
+            Some(auth) => auth,
+            None => panic!("{what} must send a NIP-98 Authorization header"),
+        };
+        assert!(
+            auth.starts_with("Nostr "),
+            "{what} must send a NIP-98 header, got {auth:?}"
+        );
+    }
+
+    /// An omitted TTL and use cap must be omitted from the body, not sent as
+    /// nulls or client-side defaults: the relay owns both defaults, and its
+    /// TTL bounds reject a value this client would have to guess.
+    #[tokio::test]
+    async fn create_posts_an_empty_body_with_nip98_auth_by_default() {
+        let (base, captured) = invites_server(ok_reply(r#"{"code":"v2.abc"}"#)).await;
+        let body = match test_client(&base).mint_invite(None, None).await {
+            Ok(body) => body,
+            Err(e) => panic!("mint failed: {e:?}"),
+        };
+
+        assert_eq!(body, r#"{"code":"v2.abc"}"#, "body is passed through");
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/invites");
+        assert_eq!(seen.body, "{}");
+        nostr_auth(&seen, "create");
+    }
+
+    #[tokio::test]
+    async fn create_sends_ttl_and_max_uses_when_given() {
+        let (base, captured) = invites_server(ok_reply(r#"{"code":"v2.abc"}"#)).await;
+        if let Err(e) = test_client(&base).mint_invite(Some(3600), Some(5)).await {
+            panic!("mint failed: {e:?}");
+        }
+
+        let seen = only(&captured);
+        // serde_json orders object keys lexically, so the wire body is not in
+        // declaration order. What matters is that both values arrive.
+        assert_eq!(seen.body, r#"{"max_uses":5,"ttl_secs":3600}"#);
+    }
+
+    /// Minting is not idempotent: a retried POST after a mint the relay
+    /// committed leaves a second live code nobody knows about.
+    #[tokio::test]
+    async fn create_is_attempted_exactly_once_on_failure() {
+        let (base, captured) = invites_server(Reply {
+            status: StatusCode::BAD_GATEWAY,
+            body: r#"{"error":"bad gateway"}"#,
+        })
+        .await;
+
+        let err = match test_client(&base).mint_invite(None, None).await {
+            Err(err) => err,
+            Ok(body) => panic!("expected a failure, got {body}"),
+        };
+        assert!(matches!(err, CliError::Relay { status: 502, .. }));
+        assert_eq!(
+            captured.lock().map(|log| log.len()).unwrap_or_default(),
+            1,
+            "create must not retry a non-idempotent POST"
+        );
+    }
+
+    /// Only owners and admins may mint, and the relay says so with 403. That
+    /// has to reach the caller as an auth error (exit 3) rather than as a
+    /// relay fault.
+    #[tokio::test]
+    async fn create_forbidden_maps_to_the_auth_exit_code() {
+        let (base, _captured) = invites_server(Reply {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"error":"only relay owners and admins can create invites"}"#,
+        })
+        .await;
+
+        let err = match test_client(&base).mint_invite(None, None).await {
+            Err(err) => err,
+            Ok(body) => panic!("expected a failure, got {body}"),
+        };
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 403);
+                assert_eq!(body, "only relay owners and admins can create invites");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 3);
+    }
+
+    #[tokio::test]
+    async fn claim_posts_the_code_with_nip98_auth() {
+        let (base, captured) = invites_server(ok_reply(r#"{"status":"joined"}"#)).await;
+        let body = match test_client(&base).claim_invite("v2.abcdef", None).await {
+            Ok(body) => body,
+            Err(e) => panic!("claim failed: {e:?}"),
+        };
+
+        assert_eq!(body, r#"{"status":"joined"}"#, "body is passed through");
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/invites/claim");
+        assert_eq!(seen.body, r#"{"code":"v2.abcdef"}"#);
+        nostr_auth(&seen, "claim");
+    }
+
+    /// Both accepted argument forms must reach the relay as the same bare
+    /// code: the landing URL is the thing a person actually pastes.
+    #[tokio::test]
+    async fn claim_accepts_both_the_code_and_the_landing_url_forms() {
+        let (base, captured) = invites_server(ok_reply(r#"{"status":"joined"}"#)).await;
+        let client = test_client(&base);
+        let landing = format!("{base}/invite/v2.abcdef");
+
+        for input in ["v2.abcdef", landing.as_str()] {
+            let code = match code_for_relay(&client, input) {
+                Ok(code) => code,
+                Err(e) => panic!("{input:?} should resolve, got {e:?}"),
+            };
+            if let Err(e) = client.claim_invite(&code, None).await {
+                panic!("claim of {input:?} failed: {e:?}");
+            }
+        }
+
+        let log = match captured.lock() {
+            Ok(log) => log.clone(),
+            Err(e) => panic!("capture log poisoned: {e}"),
+        };
+        assert_eq!(log.len(), 2, "expected one request per form, got {log:?}");
+        for seen in &log {
+            assert_eq!(seen.path, "/api/invites/claim");
+            assert_eq!(seen.body, r#"{"code":"v2.abcdef"}"#);
+            nostr_auth(seen, "claim");
+        }
+    }
+
+    #[tokio::test]
+    async fn claim_sends_a_policy_receipt_when_given_one() {
+        let (base, captured) = invites_server(ok_reply(r#"{"status":"joined"}"#)).await;
+        if let Err(e) = test_client(&base)
+            .claim_invite("v2.abcdef", Some("receipt.xyz"))
+            .await
+        {
+            panic!("claim failed: {e:?}");
+        }
+
+        let seen = only(&captured);
+        assert_eq!(
+            seen.body,
+            r#"{"code":"v2.abcdef","policy_receipt":"receipt.xyz"}"#
+        );
+    }
+
+    /// The relay refuses a policy-gated claim with 403 `join_policy_required`.
+    /// That message is the only signal telling a caller to run
+    /// `invites accept-policy` first, so it has to survive intact.
+    #[tokio::test]
+    async fn a_policy_gated_claim_surfaces_the_relay_message() {
+        let (base, _captured) = invites_server(Reply {
+            status: StatusCode::FORBIDDEN,
+            body: r#"{"error":"join_policy_required"}"#,
+        })
+        .await;
+
+        let err = match test_client(&base).claim_invite("v2.abcdef", None).await {
+            Err(err) => err,
+            Ok(body) => panic!("expected a failure, got {body}"),
+        };
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 403);
+                assert_eq!(body, "join_policy_required");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 3);
+    }
+
+    /// The receipt is bound to the code and policy version rather than to a
+    /// key, so the relay does not sign-gate this route and neither does the
+    /// client.
+    #[tokio::test]
+    async fn accept_policy_posts_unauthenticated() {
+        let (base, captured) = invites_server(ok_reply(r#"{"receipt":"r.1"}"#)).await;
+        if let Err(e) = test_client(&base)
+            .accept_invite_policy("v2.abcdef", "2026-01-01", true)
+            .await
+        {
+            panic!("accept-policy failed: {e:?}");
+        }
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/invites/accept-policy");
+        assert_eq!(
+            seen.body,
+            r#"{"age_confirmed":true,"code":"v2.abcdef","policy_version":"2026-01-01"}"#
+        );
+        assert!(
+            seen.authorization.is_none(),
+            "accept-policy must not send a NIP-98 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_policy_is_an_unauthenticated_get() {
+        let (base, captured) = invites_server(ok_reply(r#"{"policy":null}"#)).await;
+        let body = match test_client(&base).join_policy().await {
+            Ok(body) => body,
+            Err(e) => panic!("join-policy failed: {e:?}"),
+        };
+
+        assert_eq!(body, r#"{"policy":null}"#);
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/join-policy");
+        assert!(
+            seen.authorization.is_none(),
+            "join-policy must not send a NIP-98 header"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2972,5 +4031,393 @@ mod tests {
             built.headers().get("x-auth-tag").is_none(),
             "x-auth-tag header must not be present when no auth tag is configured"
         );
+    }
+}
+
+/// Wire-level tests for the credit top-up calls.
+///
+/// These run against a local axum server standing in for the relay's
+/// `/api/payments` surface plus the gateway's `/api/gateway/account`, so what
+/// is asserted is the request the relay would actually receive: method, path,
+/// query, body, and whether a NIP-98 `Authorization` header is present. The
+/// auth split is the part worth pinning, and it is the relay's, not a guess:
+/// `packs` is served by a handler that takes no headers at all
+/// (`crates/buzz-relay/src/api/payments.rs`), while `initialize`, `verify`,
+/// and the gateway account read all authenticate before doing anything.
+#[cfg(test)]
+mod credits_api_tests {
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::extract::{Query, State};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use nostr::Keys;
+    use tokio::net::TcpListener;
+
+    use super::super::error::{exit_code, CliError};
+    use super::BuzzClient;
+
+    /// One captured request: what the server saw.
+    #[derive(Clone, Debug, Default)]
+    struct Seen {
+        path: String,
+        currency_param: Option<String>,
+        authorization: Option<String>,
+        body: String,
+    }
+
+    type Captured = Arc<Mutex<Vec<Seen>>>;
+
+    /// Status and body the stand-in relay answers every route with.
+    #[derive(Clone)]
+    struct Reply {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    #[derive(Clone)]
+    struct Harness {
+        captured: Captured,
+        reply: Reply,
+        /// Answers for named paths, consulted before `reply`. The balance
+        /// fallback is the one flow where two routes have to answer
+        /// differently within a single run.
+        per_path: std::collections::HashMap<&'static str, Reply>,
+    }
+
+    fn record(harness: &Harness, seen: Seen) -> (StatusCode, String) {
+        let reply = harness
+            .per_path
+            .get(seen.path.as_str())
+            .unwrap_or(&harness.reply)
+            .clone();
+        if let Ok(mut log) = harness.captured.lock() {
+            log.push(seen);
+        }
+        (reply.status, reply.body.to_string())
+    }
+
+    fn header_string(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    /// Spawn a stand-in relay exposing the top-up routes, all answering
+    /// `reply`. Returns its base URL and the capture log.
+    async fn payments_server(reply: Reply) -> (String, Captured) {
+        payments_server_with(reply, std::collections::HashMap::new()).await
+    }
+
+    /// As [`payments_server`], but `per_path` overrides the answer for the
+    /// paths it names.
+    async fn payments_server_with(
+        reply: Reply,
+        per_path: std::collections::HashMap<&'static str, Reply>,
+    ) -> (String, Captured) {
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let harness = Harness {
+            captured: captured.clone(),
+            reply,
+            per_path,
+        };
+
+        let app = Router::new()
+            .route(
+                "/api/payments/packs",
+                get(
+                    |State(h): State<Harness>,
+                     headers: HeaderMap,
+                     Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/packs".into(),
+                                currency_param: q.get("currency").cloned(),
+                                authorization: header_string(&headers),
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/gateway/account",
+                get(|State(h): State<Harness>, headers: HeaderMap| async move {
+                    record(
+                        &h,
+                        Seen {
+                            path: "/api/gateway/account".into(),
+                            authorization: header_string(&headers),
+                            ..Seen::default()
+                        },
+                    )
+                }),
+            )
+            .route(
+                "/api/payments/balance",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/balance".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/payments/initialize",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/initialize".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .route(
+                "/api/payments/verify",
+                post(
+                    |State(h): State<Harness>, headers: HeaderMap, body: String| async move {
+                        record(
+                            &h,
+                            Seen {
+                                path: "/api/payments/verify".into(),
+                                authorization: header_string(&headers),
+                                body,
+                                ..Seen::default()
+                            },
+                        )
+                    },
+                ),
+            )
+            .with_state(harness);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), captured)
+    }
+
+    fn ok_reply(body: &'static str) -> Reply {
+        Reply {
+            status: StatusCode::OK,
+            body,
+        }
+    }
+
+    fn test_client(base_url: &str) -> BuzzClient {
+        BuzzClient::new(base_url.to_string(), Keys::generate(), None, None).unwrap()
+    }
+
+    fn only(captured: &Captured) -> Seen {
+        let log = captured.lock().unwrap();
+        assert_eq!(log.len(), 1, "expected exactly one request, got {:?}", *log);
+        log[0].clone()
+    }
+
+    #[tokio::test]
+    async fn packs_is_an_unauthenticated_get_with_no_query_by_default() {
+        let (base, captured) = payments_server(ok_reply(r#"{"packs":[],"currency":"ZAR"}"#)).await;
+        let body = test_client(&base).credit_packs(None).await.unwrap();
+
+        assert_eq!(
+            body, r#"{"packs":[],"currency":"ZAR"}"#,
+            "body is passed through"
+        );
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/packs");
+        assert_eq!(seen.currency_param, None, "no currency means no query pair");
+        assert!(
+            seen.authorization.is_none(),
+            "packs must not send a NIP-98 header: the relay handler takes no headers"
+        );
+    }
+
+    #[tokio::test]
+    async fn packs_sends_the_requested_currency_as_a_query_param() {
+        let (base, captured) = payments_server(ok_reply(r#"{"packs":[]}"#)).await;
+        test_client(&base).credit_packs(Some("ZAR")).await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/packs");
+        assert_eq!(seen.currency_param.as_deref(), Some("ZAR"));
+        assert!(seen.authorization.is_none(), "still unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn balance_gets_the_gateway_account_with_nip98_auth() {
+        let (base, captured) = payments_server(ok_reply(r#"{"balance_nanousd":"0"}"#)).await;
+        test_client(&base).credits_balance().await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/gateway/account");
+        let auth = seen.authorization.expect("balance must be NIP-98 signed");
+        assert!(
+            auth.starts_with("Nostr "),
+            "expected a NIP-98 Authorization header, got {auth:?}"
+        );
+    }
+
+    /// The body names a pack and an email and nothing else. A price here
+    /// would be a price the client chose, and a client that can choose a
+    /// price can choose zero.
+    #[tokio::test]
+    async fn pay_posts_a_pack_id_and_email_with_nip98_auth() {
+        let (base, captured) = payments_server(ok_reply(
+            r#"{"authorizationUrl":"https://pay","reference":"r"}"#,
+        ))
+        .await;
+        test_client(&base)
+            .initialize_payment("starter", "founder@example.com")
+            .await
+            .unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/initialize");
+        assert_eq!(
+            seen.body, r#"{"email":"founder@example.com","packId":"starter"}"#,
+            "only the pack id and receipt email travel"
+        );
+        let auth = seen.authorization.expect("pay must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    #[tokio::test]
+    async fn verify_posts_the_reference_with_nip98_auth() {
+        let (base, captured) = payments_server(ok_reply(r#"{"paid":false,"usdCents":0}"#)).await;
+        test_client(&base).verify_payment("ref_1").await.unwrap();
+
+        let seen = only(&captured);
+        assert_eq!(seen.path, "/api/payments/verify");
+        assert_eq!(seen.body, r#"{"reference":"ref_1"}"#);
+        let auth = seen.authorization.expect("verify must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    /// A relay with no gateway configured never mounts the balance route, so
+    /// the refusal is a `404` and must surface the relay's own message on the
+    /// relay/network exit code rather than reading as an empty account.
+    #[tokio::test]
+    async fn a_relay_without_a_gateway_surfaces_its_message_and_exit_code_two() {
+        let (base, _captured) = payments_server(Reply {
+            status: StatusCode::NOT_FOUND,
+            body: r#"{"error":"payment_unavailable"}"#,
+        })
+        .await;
+
+        let err = test_client(&base).credits_balance().await.unwrap_err();
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 404);
+                assert_eq!(body, "payment_unavailable");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 2);
+    }
+
+    /// A 404 answer for one named path, everything else `reply`.
+    fn absent(path: &'static str) -> std::collections::HashMap<&'static str, Reply> {
+        std::collections::HashMap::from([(
+            path,
+            Reply {
+                status: StatusCode::NOT_FOUND,
+                body: r#"{"error":"not_found"}"#,
+            },
+        )])
+    }
+
+    fn paths(captured: &Captured) -> Vec<String> {
+        let log = captured.lock().unwrap();
+        log.iter().map(|seen| seen.path.clone()).collect()
+    }
+
+    /// A relay that mounts the gateway answers from it, and nothing asks the
+    /// payments route.
+    #[tokio::test]
+    async fn balance_reads_the_gateway_when_it_is_mounted() {
+        let (base, captured) = payments_server(ok_reply(r#"{"balance_nanousd":"250"}"#)).await;
+        let body = crate::commands::credits::resolve_balance(&test_client(&base))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            body, r#"{"balance_nanousd":"250","source":"gateway"}"#,
+            "the gateway body is passed through, tagged with its source"
+        );
+        assert_eq!(paths(&captured), vec!["/api/gateway/account".to_string()]);
+    }
+
+    /// Production has no gateway, so `/api/gateway/account` 404s on every
+    /// host. That must read as "ask the payments ledger", not as an error.
+    #[tokio::test]
+    async fn balance_falls_back_to_payments_when_the_gateway_is_absent() {
+        let (base, captured) = payments_server_with(
+            ok_reply(r#"{"usdCents":1234}"#),
+            absent("/api/gateway/account"),
+        )
+        .await;
+        let body = crate::commands::credits::resolve_balance(&test_client(&base))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            body, r#"{"source":"payments","usdCents":1234}"#,
+            "the payments body is passed through, tagged with its source"
+        );
+        assert_eq!(
+            paths(&captured),
+            vec![
+                "/api/gateway/account".to_string(),
+                "/api/payments/balance".to_string()
+            ],
+            "the gateway is asked first and only then the payments route"
+        );
+        let log = captured.lock().unwrap();
+        let payments = log.last().expect("the payments request was captured");
+        assert_eq!(payments.body, "{}", "identity travels in the signature");
+        let auth = payments
+            .authorization
+            .clone()
+            .expect("the payments balance must be NIP-98 signed");
+        assert!(auth.starts_with("Nostr "), "got {auth:?}");
+    }
+
+    /// With neither route mounted the payments error is the one reported: it
+    /// is the route the relay was expected to have.
+    #[tokio::test]
+    async fn balance_with_neither_route_reports_the_payments_error_and_exit_code_two() {
+        let (base, _captured) = payments_server(Reply {
+            status: StatusCode::NOT_FOUND,
+            body: r#"{"error":"payment_unavailable"}"#,
+        })
+        .await;
+
+        let err = crate::commands::credits::resolve_balance(&test_client(&base))
+            .await
+            .unwrap_err();
+        match err {
+            CliError::Relay { status, ref body } => {
+                assert_eq!(status, 404);
+                assert_eq!(body, "payment_unavailable");
+            }
+            other => panic!("expected CliError::Relay, got {other:?}"),
+        }
+        assert_eq!(exit_code(&err), 2);
     }
 }

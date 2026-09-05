@@ -303,6 +303,9 @@ fn default_task(
         outcome_reason: None,
         bounce_reason: None,
         bounce_count: 0,
+        reported_complete_by: Vec::new(),
+        hidden: false,
+        parent_task_id: None,
         created_at: created_at_secs,
         updated_at: created_at_secs,
     }
