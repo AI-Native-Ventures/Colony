@@ -126,14 +126,11 @@ function MessageComposerImpl({
   const effectiveDraftKey = draftKey ?? channelId;
   const ownerPubkey = identityQuery.data?.pubkey ?? null;
   const audienceThreadRootId = audienceContext?.threadRootId ?? null;
-  const audienceScope =
-    audienceThreadRootId && channelId && ownerPubkey
-      ? getPersistentAgentAudienceScope({
-          ownerPubkey,
-          channelId,
-          threadRootId: audienceThreadRootId,
-        })
-      : null;
+  const audienceScope = getPersistentAgentAudienceScope({
+    ownerPubkey,
+    channelId,
+    threadRootId: audienceThreadRootId,
+  });
   const effectiveDraftKeyRef = React.useRef(effectiveDraftKey);
   effectiveDraftKeyRef.current = effectiveDraftKey;
   const preEditSnapshotRef = React.useRef<{
@@ -339,6 +336,7 @@ function MessageComposerImpl({
           }
         : undefined,
     resolvePostSendContent: persistentMentionHydration.resolvePostSendContent,
+    threadRootId: audienceThreadRootId ?? typingRootEventId,
   });
   React.useEffect(() => {
     onDeferredEditPendingChange?.(isDeferredEditPending);
@@ -984,6 +982,7 @@ function MessageComposerImpl({
               <EditorContent editor={richText.editor} />
             </div>
 
+            {mentionSendFlow.newTaskToggle}
             <ComposerDockToolbar
               layoutMode={layoutMode}
               composerDisabled={composerDisabled}

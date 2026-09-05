@@ -220,6 +220,7 @@ export default defineConfig({
         "**/agents.spec.ts",
         "**/agent-snapshot-recipient.spec.ts",
         "**/company-work-context.spec.ts",
+        "**/thread-scoped-tasks.spec.ts",
         "**/task-thread-delivery.spec.ts",
         "**/onboarding.spec.ts",
         "**/onboarding-v2-credits.spec.ts",

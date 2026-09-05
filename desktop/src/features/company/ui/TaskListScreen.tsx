@@ -7,6 +7,8 @@ import {
   filterWorkRows,
   formatTaskAge,
   groupWorkRows,
+  nestSubTasks,
+  reportedCompleteSummary,
   shortIdLabel,
   sortWorkRows,
   WORK_LIST_GROUP_LABELS,
@@ -50,11 +52,14 @@ function TaskRow({
   // A task with no source channel has nowhere to open: every implicit task has
   // one, but a hand-created task predating that field does not.
   const openable = Boolean(onOpen && task.sourceChannelId);
+  const reportedSummary = reportedCompleteSummary(task);
   return (
     <li
       className={cn(
         "flex items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-muted/40",
         openable && "cursor-pointer",
+        // A sub-task reads as a sub-task by sitting under its parent.
+        task.parentTaskId && "ml-4 border-l border-border/60 pl-2",
       )}
       data-task-id={task.id}
       data-testid="task-list-row"
@@ -100,6 +105,9 @@ function TaskRow({
           <span className="tabular-nums">
             {formatTaskAge(task.updatedAt, nowSeconds)}
           </span>
+          {reportedSummary ? (
+            <span data-testid="task-reported-complete">{reportedSummary}</span>
+          ) : null}
         </div>
       </div>
     </li>
@@ -304,7 +312,7 @@ export function TaskListScreen({
                     {group.label} · {group.rows.length}
                   </h3>
                   <ul className="mt-1">
-                    {group.rows.map((row) => (
+                    {nestSubTasks(group.rows).map((row) => (
                       <TaskRow
                         key={row.task.id}
                         nowSeconds={nowSeconds}

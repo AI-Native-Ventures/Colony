@@ -1,8 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 
+import type { ChannelType } from "@/shared/api/types";
+
 import { companyRepository } from "./companyRepository";
 import type { TaskQuery } from "./companyRepository";
 import type { CompanyParseResult } from "./contracts";
+import { isTerminalTaskStatus } from "./contracts";
 
 /**
  * React Query access to a community's company records.
@@ -50,6 +53,13 @@ export function taskQueryKey(communityId: string, taskId: string) {
 
 export function threadTasksQueryKey(communityId: string, threadRoot: string) {
   return [COMPANY_ROOT, communityId, "thread-tasks", threadRoot] as const;
+}
+
+export function conversationTasksQueryKey(
+  communityId: string,
+  channelId: string,
+) {
+  return [COMPANY_ROOT, communityId, "conversation-tasks", channelId] as const;
 }
 
 /**
@@ -156,4 +166,51 @@ export function useThreadTasks(
     enabled: enabled && communityId !== "" && !!threadRoot,
     staleTime: 15_000,
   });
+}
+
+/** One DM conversation's tasks: the conversation is the thread. */
+export function useConversationTasks(
+  communityId: string,
+  channelId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: conversationTasksQueryKey(communityId, channelId ?? ""),
+    queryFn: async () =>
+      requireAvailable(
+        await companyRepository.listConversationTasks(channelId as string),
+      ),
+    enabled: enabled && communityId !== "" && !!channelId,
+    staleTime: 15_000,
+  });
+}
+
+/**
+ * The task a thread currently has open, or `null`.
+ *
+ * A thread holds at most one, so "the newest live one" is the whole rule.
+ * Terminal tasks are history, and hidden tasks never reach this list at all:
+ * the repository drops them, because a task that only carries the cost of
+ * small talk is not work anyone can be shown or asked to close.
+ */
+export function useThreadOpenTask(
+  communityId: string,
+  input: {
+    channelId: string | null;
+    channelType: ChannelType | null;
+    threadRootId: string | null;
+  },
+) {
+  const isConversation = input.channelType === "dm";
+  const threadQuery = useThreadTasks(
+    communityId,
+    isConversation ? null : input.threadRootId,
+  );
+  const conversationQuery = useConversationTasks(
+    communityId,
+    isConversation ? input.channelId : null,
+  );
+  const result = isConversation ? conversationQuery.data : threadQuery.data;
+  const tasks = result?.ok ? result.value : [];
+  return tasks.find((task) => !isTerminalTaskStatus(task.status)) ?? null;
 }

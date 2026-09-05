@@ -51,10 +51,60 @@ export function filterWorkRows(
 ): WorkListRow[] {
   return rows.filter(
     (row) =>
+      // A hidden task only carries the cost of turns that were not work. The
+      // repository already drops them; this is the second lock, because a
+      // list that showed one would put "are you there?" in Work at
+      // InProgress beside real instructions.
+      !row.task.hidden &&
       (filter.showImplicit || !row.task.implicit) &&
       (filter.initiativeId === null ||
         row.task.initiativeId === filter.initiativeId),
   );
+}
+
+/**
+ * Put each sub-task directly under the parent it was split out of.
+ *
+ * Sub-tasks are the "two things at once in one conversation" case, so reading
+ * them anywhere but beside their parent loses the only thing that explains
+ * them. A sub-task whose parent is not in this list (filtered out, or fallen
+ * off the read ceiling) keeps its own place rather than disappearing.
+ */
+export function nestSubTasks(rows: readonly WorkListRow[]): WorkListRow[] {
+  const parents = new Set(rows.map((row) => row.task.id));
+  const childrenByParent = new Map<string, WorkListRow[]>();
+  for (const row of rows) {
+    const parent = row.task.parentTaskId;
+    if (!parent || !parents.has(parent)) continue;
+    const bucket = childrenByParent.get(parent);
+    if (bucket) bucket.push(row);
+    else childrenByParent.set(parent, [row]);
+  }
+  const nested: WorkListRow[] = [];
+  for (const row of rows) {
+    const parent = row.task.parentTaskId;
+    if (parent && parents.has(parent)) continue;
+    nested.push(row, ...(childrenByParent.get(row.task.id) ?? []));
+  }
+  return nested;
+}
+
+/**
+ * How far through a shared task's assignees are, when only some have
+ * reported.
+ *
+ * Null when nobody has reported (there is nothing to say) and when everybody
+ * has (the task is closed, and its status already says so). Only the partial
+ * state is worth a line: it is the difference between work nobody has touched
+ * and work waiting on one last agent.
+ */
+export function reportedCompleteSummary(task: CompanyTask): string | null {
+  const total = task.assigneePersonaIds.length;
+  const reported = task.assigneePersonaIds.filter((assignee) =>
+    task.reportedCompleteBy.includes(assignee),
+  ).length;
+  if (reported === 0 || reported >= total) return null;
+  return `${reported} of ${total} agents reported done`;
 }
 
 export const WORK_LIST_SORTS = [

@@ -8,11 +8,13 @@
 //! caller that passed a hand-edited initiative would otherwise get the owner's
 //! signature on it.
 
+use buzz_core_pkg::company::ThreadAttachMode;
 use buzz_sdk_pkg::{
     company::{parse_company_event, parse_initiative_event},
     company_blueprint::sign_action,
-    implicit_task::{plan_implicit_task, plan_user_task, UserTaskRequest},
+    implicit_task::{plan_user_task, UserTaskRequest},
     initiative_activation::{next_step, InitiativeIntent, InitiativeStep},
+    thread_task::{plan_thread_attach, ThreadAttachRequest},
     user_initiative::{plan_user_initiative, UserInitiativePlan, UserInitiativeRequest},
 };
 use nostr::JsonUtil;
@@ -78,7 +80,7 @@ fn teams_to_company_refs(
 ///
 /// One `teams.json` serves every community this device has joined, so the
 /// stored list is not a company: it is every company the device knows.
-/// Handing all of it to `plan_implicit_task` let a send in one community be
+/// Handing all of it to the thread-task planner let a send in one community be
 /// charged to a team whose members live only in another.
 ///
 /// Two rules, the second deliberately stricter. A team pinned to another
@@ -160,7 +162,7 @@ fn plan_team_refs(
 /// Holds `managed_agents_store_lock` across the whole load, seed, and save.
 /// This is a read-modify-write of one shared `teams.json`, and all three
 /// callers reach it without a guard: `advance_initiative` and
-/// `create_user_task` never take one, and `ensure_chat_task` has already
+/// `create_user_task` never take one, and `attach_thread_task` has already
 /// dropped the guard it held for the persona repair by the time it gets here.
 /// Two of them running concurrently would each load the same store, each seed
 /// into their own copy, and the later save would drop whatever the earlier one
@@ -319,7 +321,7 @@ pub async fn advance_initiative(
 /// What changed while resolving a chat message's Task-attributable persona.
 #[derive(Debug)]
 struct PersonaBackfillOutcome {
-    /// The persona `plan_implicit_task` should charge the work to.
+    /// The persona the relay should charge the work to.
     persona_id: String,
     /// Whether `agents` needs to be written back.
     agents_changed: bool,
@@ -333,7 +335,7 @@ struct PersonaBackfillOutcome {
 /// agent at `pubkey_normalized`, permanently repairing the record if it has
 /// no persona linked yet.
 ///
-/// Pulled out of `ensure_chat_task` so the repair logic is testable without an
+/// Pulled out of `attach_thread_task` so the repair logic is testable without an
 /// `AppHandle` — mirrors `teams_to_company_refs` above. Mutates `agents`,
 /// `personas`, and `teams` in place; the caller only needs to persist whatever
 /// the returned outcome flags as changed.
@@ -378,7 +380,7 @@ fn resolve_chat_agent_persona(
 
     // Deterministic from the agent's own pubkey (already a valid company
     // identifier: lowercase hex), so a retry after a lost receipt — or a
-    // second `ensure_chat_task` call before this backfill's save lands — mints
+    // second `attach_thread_task` call before this backfill's save lands — mints
     // the same identity rather than a new one each time.
     let persona_id = format!("legacy-employee:{}", agent.pubkey.trim().to_lowercase());
 
@@ -434,15 +436,16 @@ fn resolve_chat_agent_persona(
     })
 }
 
-/// The Task an agent-directed message will be charged to.
+/// The request one agent-directed send makes of the relay before it publishes.
+///
+/// No task id: which task the send is charged to is the relay's decision, and
+/// a client that named one would be claiming an answer rather than asking the
+/// question. The caller publishes this action and reads the task out of the
+/// receipt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChatTaskResult {
-    /// The stable Task identifier this send is charged to.
-    pub task_id: String,
-    /// The single team accountable for it.
-    pub owning_team_id: String,
-    /// The signed Company Action that creates it.
+pub struct ThreadAttachResult {
+    /// The signed Company Action asking which task this send belongs to.
     pub signed_action: String,
 }
 
@@ -466,30 +469,47 @@ fn validated_thread_root(thread_root: Option<String>) -> Result<Option<String>, 
     Ok(Some(trimmed.to_owned()))
 }
 
-/// Build the Task for one agent-directed message.
+/// Which of the three things a send can ask its thread for.
+fn thread_attach_mode(mode: &str) -> Result<ThreadAttachMode, String> {
+    match mode {
+        "open" => Ok(ThreadAttachMode::Open),
+        "attach" => Ok(ThreadAttachMode::Attach),
+        "new" => Ok(ThreadAttachMode::New),
+        _ => Err("a send asks its thread to open, attach, or start a new task".to_string()),
+    }
+}
+
+/// Ask the relay which Task one agent-directed send is charged to.
 ///
-/// Every paid agent turn is charged to a Task. Most instructions in chat do not
-/// name one, so Colony creates one rather than letting the turn run
-/// unattributed: an unattributed turn is money spent that no cost centre, team,
-/// or commercial purpose can be traced to, and the classification cannot be
-/// recovered afterwards.
+/// Every paid agent turn is charged to a Task, and this is how a send finds
+/// out which one: an unattributed turn is money spent that no cost centre,
+/// team, or commercial purpose can be traced to, and the classification cannot
+/// be recovered afterwards.
+///
+/// The desktop used to mint the Task itself, so one piece of work discussed
+/// over five messages produced five Tasks. It no longer decides: a thread
+/// holds at most one open Task, and only the relay's database can arbitrate
+/// that between a desktop and a phone preparing the same send. This signs the
+/// question; the answer arrives as the relay's receipt.
 ///
 /// `send_id` is the caller's stable identity for this send. Retrying the same
-/// send asks for the same Task, because the identifier is derived from it.
+/// send asks the same question, because every key here is derived from it.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn ensure_chat_task(
+pub async fn attach_thread_task(
     app: AppHandle,
-    company_head: String,
     channel_id: String,
     send_id: String,
-    agent_pubkey: String,
+    agent_pubkey: Option<String>,
     title: String,
-    client_organization_id: Option<String>,
+    mode: String,
     thread_root: Option<String>,
+    conversation_scope: bool,
+    client_organization_id: Option<String>,
+    parent_task_id: Option<String>,
     relay_pubkey: String,
     state: State<'_, AppState>,
-) -> Result<ChatTaskResult, String> {
+) -> Result<ThreadAttachResult, String> {
     let keys = state
         .signing_keys()
         .map_err(|_| "recording company work requires the community owner".to_string())?;
@@ -497,77 +517,85 @@ pub async fn ensure_chat_task(
     if !is_event_id(&relay_pubkey) {
         return Err("relay pubkey is not a valid public key".to_string());
     }
+    let mode = thread_attach_mode(mode.trim())?;
     let thread_root = validated_thread_root(thread_root)?;
-
-    let company_event = relay_head(&company_head, &relay_pubkey, "company")?;
-    let company = parse_company_event(&company_event)
-        .map_err(|error| format!("the company head is unreadable: {error}"))?;
 
     // The mention flow knows agents by public key; the company contract knows
     // them by persona. Live hire paths link one at creation time, but nothing
     // ever backfills a persona for a record that predates that (or was created
-    // without one) — `backfill_persona_snapshots` explicitly skips
-    // `persona_id: None` records — so such an agent could never send a chat
+    // without one). `backfill_persona_snapshots` explicitly skips
+    // `persona_id: None` records, so such an agent could never send a chat
     // message again. `resolve_chat_agent_persona` repairs the record in place
     // the first time this runs for it; a repeat call is a cheap read.
-    let normalized = agent_pubkey.trim().to_lowercase();
+    //
+    // A send that names no agent resolves no persona: the relay charges it to
+    // the thread's task all the same, and the team follows from whoever
+    // answers rather than from a mention this message never made.
+    let normalized = agent_pubkey
+        .map(|pubkey| pubkey.trim().to_lowercase())
+        .filter(|pubkey| !pubkey.is_empty());
     let relay_url = crate::relay::relay_ws_url_with_override(&state);
-    let agent_persona_id = {
-        let _store_guard = state
-            .managed_agents_store_lock
-            .lock()
-            .map_err(|error| error.to_string())?;
+    let agent_persona_id = match normalized.as_deref() {
+        None => None,
+        Some(pubkey) => {
+            let _store_guard = state
+                .managed_agents_store_lock
+                .lock()
+                .map_err(|error| error.to_string())?;
 
-        let mut agents = load_managed_agents(&app)?;
-        let mut personas = load_personas(&app)?;
-        let mut teams = load_teams(&app)?;
-        let now = crate::util::now_iso();
+            let mut agents = load_managed_agents(&app)?;
+            let mut personas = load_personas(&app)?;
+            let mut teams = load_teams(&app)?;
+            let now = crate::util::now_iso();
 
-        let outcome = resolve_chat_agent_persona(
-            &mut agents,
-            &mut personas,
-            &mut teams,
-            &normalized,
-            &relay_url,
-            &now,
-        )?;
+            let outcome = resolve_chat_agent_persona(
+                &mut agents,
+                &mut personas,
+                &mut teams,
+                pubkey,
+                &relay_url,
+                &now,
+            )?;
 
-        if outcome.agents_changed {
-            save_managed_agents(&app, &agents)?;
+            if outcome.agents_changed {
+                save_managed_agents(&app, &agents)?;
+            }
+            if outcome.personas_changed {
+                save_personas(&app, &personas)?;
+            }
+            if outcome.teams_changed {
+                save_teams(&app, &teams)?;
+            }
+
+            Some(outcome.persona_id)
         }
-        if outcome.personas_changed {
-            save_personas(&app, &personas)?;
-        }
-        if outcome.teams_changed {
-            save_teams(&app, &teams)?;
-        }
-
-        outcome.persona_id
     };
 
-    let teams = company_team_refs(&app, &state, &relay_url)?;
+    // Seeds this community's coordination team when it has none, so the relay
+    // has a team to charge the turn to before the question is even asked.
+    company_team_refs(&app, &state, &relay_url)?;
 
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
     let now = buzz_core_pkg::company_roster::approval_timestamp(&format!("{channel_id}:{send_id}"));
 
-    let plan = plan_implicit_task(
-        &company,
-        &teams,
-        &agent_persona_id,
-        &channel_id,
-        &send_id,
-        &title,
-        client_organization_id.as_deref(),
-        thread_root.as_deref(),
-        &relay_pubkey,
+    let action = plan_thread_attach(ThreadAttachRequest {
+        channel_id: &channel_id,
+        thread_root: thread_root.as_deref(),
+        conversation_scope,
+        send_id: &send_id,
+        mode,
+        title: &title,
+        agent_persona_id: agent_persona_id.as_deref(),
+        client_organization_id: client_organization_id.as_deref(),
+        parent_task_id: parent_task_id.as_deref(),
+        owner_pubkey: &keys.public_key().to_hex(),
+        relay_pubkey: &relay_pubkey,
         now,
-    )?;
+    })?;
 
-    Ok(ChatTaskResult {
-        task_id: plan.task_id,
-        owning_team_id: plan.owning_team_id,
-        signed_action: sign_action(&plan.action, &keys)?,
+    Ok(ThreadAttachResult {
+        signed_action: sign_action(&action, &keys)?,
     })
 }
 

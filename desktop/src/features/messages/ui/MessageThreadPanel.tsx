@@ -30,11 +30,7 @@ import { VideoReviewNavigationProvider } from "@/shared/ui/VideoReviewNavigation
 import { cn } from "@/shared/lib/cn";
 import { AuxiliaryPanel } from "@/shared/layout/AuxiliaryPanel";
 import { AuxiliaryPanelBody } from "@/shared/layout/AuxiliaryPanel";
-import {
-  AuxiliaryPanelHeader,
-  AuxiliaryPanelHeaderGroup,
-  AuxiliaryPanelTitle,
-} from "@/shared/layout/AuxiliaryPanel";
+import { AuxiliaryPanelHeader } from "@/shared/layout/AuxiliaryPanel";
 import {
   THREAD_PANEL_COLUMN_CLASS,
   THREAD_PANEL_COMPOSER_GUTTER_CLASS,
@@ -58,7 +54,7 @@ import {
   getActiveContinuationDepths,
   summarizeThreadRoot,
 } from "./MessageThreadPanel.helpers";
-import { ThreadReadStateToggle } from "./ThreadReadStateToggle";
+import { ThreadPanelHeaderContent } from "./ThreadPanelHeaderContent";
 import { ThreadCanvasSlot } from "./ThreadCanvasSlot";
 
 type MessageThreadPanelProps = ThreadPanelLayoutProps & {
@@ -937,40 +933,22 @@ export function MessageThreadPanel({
     ? summarizeThreadRoot(threadHead.body)
     : null;
   const threadHeaderContent = (
-    <>
-      <AuxiliaryPanelHeaderGroup
-        backButtonAriaLabel="Back to conversation"
-        backButtonTestId="message-thread-back"
-        // A focus drawer only sets `isSinglePanelView` to fill its container's
-        // width — it isn't the narrow single-column view, and it has the scrimmed
-        // sliver as its way back, so it takes no back control of its own. The
-        // narrow view still needs one.
-        leading={headerLeading}
-        onBack={isSinglePanelView && !isFocusMode ? onClose : undefined}
-      >
-        {showWorkspaceContext ? (
-          <div className="min-w-0 flex-1">
-            <AuxiliaryPanelTitle>{`#${channelName}`}</AuxiliaryPanelTitle>
-            {threadRootSummary ? (
-              <p
-                className="truncate text-xs text-muted-foreground"
-                title={threadRootSummary}
-              >
-                {threadRootSummary}
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
-        )}
-      </AuxiliaryPanelHeaderGroup>
-      <ThreadReadStateToggle
-        isUnread={(threadUnreadCount ?? 0) > 0}
-        message={threadHead}
-        onMarkRead={onMarkRead}
-        onMarkUnread={onMarkUnread}
-      />
-    </>
+    <ThreadPanelHeaderContent
+      channelId={channelId}
+      channelName={channelName}
+      channelType={channel?.channelType ?? null}
+      headerLeading={headerLeading}
+      isFocusMode={isFocusMode}
+      isSinglePanelView={isSinglePanelView}
+      onClose={onClose}
+      onMarkRead={onMarkRead}
+      onMarkUnread={onMarkUnread}
+      showWorkspaceContext={showWorkspaceContext}
+      threadHead={threadHead}
+      threadRootId={threadHead.rootId ?? threadHead.id}
+      threadRootSummary={threadRootSummary}
+      threadUnreadCount={threadUnreadCount}
+    />
   );
 
   return (

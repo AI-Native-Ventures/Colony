@@ -158,7 +158,7 @@ fn team_pinned_to_relay(team: &TeamRecord, canonical_relay: &str) -> bool {
 /// no relay ever has to resolve it. The coordination team is the exception
 /// the relay itself depends on: `company_broker::load_team_refs` validates a
 /// Task's `owningTeamId` against the owner's published `KIND_TEAM` events, so
-/// leaving it unpublished lets `ensure_chat_task` mint a Task the relay then
+/// leaving it unpublished lets `attach_thread_task` mint a Task the relay then
 /// refuses with "missing reference in task.owningTeamId".
 ///
 /// That exception demands a real pin rather than mere compatibility. An

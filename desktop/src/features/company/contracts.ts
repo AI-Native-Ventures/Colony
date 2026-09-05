@@ -196,6 +196,15 @@ export type CompanyTask = {
   bounceReason: BounceReason | null;
   /** How many times delivered output has been bounced back. */
   bounceCount: number;
+  /** Assignees that have reported their own share of this task complete. */
+  reportedCompleteBy: string[];
+  /**
+   * Whether this task exists only to carry the cost of turns that were not
+   * work. Never rendered: it is an accounting record, not a piece of work.
+   */
+  hidden: boolean;
+  /** The task this one was split out of, for parallel work in one thread. */
+  parentTaskId: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -472,6 +481,9 @@ const TASK_FIELDS: Record<string, FieldKind> = {
   outcomeReason: { type: "optionalString" },
   bounceReason: { type: "objectOrNull", fields: BOUNCE_REASON_FIELDS },
   bounceCount: { type: "integer" },
+  reportedCompleteBy: { type: "stringArray" },
+  hidden: { type: "boolean" },
+  parentTaskId: { type: "optionalString" },
   createdAt: { type: "integer" },
   updatedAt: { type: "integer" },
 };
@@ -503,6 +515,13 @@ const TASK_FIELD_DEFAULTS: Record<string, unknown> = {
   outcomeReason: null,
   bounceReason: null,
   bounceCount: 0,
+  // The thread-task fields. All three are skipped on serialize when unused,
+  // so an absent key is the ordinary case rather than only a legacy one: a
+  // task that reports nothing, hides nothing, and splits nothing serialises
+  // exactly as it did before they existed.
+  reportedCompleteBy: [],
+  hidden: false,
+  parentTaskId: null,
 };
 
 function scalarTags(event: RelayEvent, name: string): string[] {
