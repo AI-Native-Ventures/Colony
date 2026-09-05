@@ -27,6 +27,8 @@ import 'read_state/read_state_format.dart';
 import 'read_state/read_state_provider.dart';
 import 'send_message_provider.dart';
 import 'small_avatar.dart';
+import 'thread_tasks/thread_task_header_bar.dart';
+import 'thread_tasks/thread_task_providers.dart';
 import 'timeline_message.dart';
 
 /// Full-screen thread detail page.
@@ -154,10 +156,24 @@ class ThreadDetailPage extends HookConsumerWidget {
       }
     });
 
+    // The work open in this thread, shown under the title so a member reading
+    // the conversation can see which task they are talking about and close it
+    // without leaving for a task list.
+    final taskScope = ThreadTaskScope(
+      channelId: channelId,
+      conversationScope: false,
+      threadRoot: effectiveRootId,
+    );
+    final hasOpenTask =
+        ref.watch(threadOpenTaskProvider(taskScope)).value != null;
+    final taskBarHeight = hasOpenTask ? threadTaskHeaderHeight : 0.0;
+
     return FrostedScaffold(
-      appBar: const FrostedAppBar(
-        title: Text('Thread'),
+      appBar: FrostedAppBar(
+        title: const Text('Thread'),
         titleStyle: channelTitleTextStyle,
+        bottom: hasOpenTask ? ThreadTaskHeaderBar(scope: taskScope) : null,
+        bottomHeight: taskBarHeight,
       ),
       body: Column(
         children: [
@@ -171,7 +187,7 @@ class ThreadDetailPage extends HookConsumerWidget {
               padding: EdgeInsets.only(
                 left: Grid.gutter,
                 right: Grid.gutter,
-                top: frostedAppBarHeight(context),
+                top: frostedAppBarHeight(context, bottomHeight: taskBarHeight),
                 bottom: 0,
               ),
               itemCount: replies.length + 1, // +1 for thread head

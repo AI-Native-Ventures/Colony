@@ -3,7 +3,19 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:buzz/features/channels/send_message_provider.dart';
+import 'package:buzz/features/channels/thread_tasks/attach_work_context.dart';
 import 'package:buzz/shared/relay/relay.dart';
+
+/// A community with no company records attributes nothing and sends
+/// unchanged, which is what these tests are about.
+AttachWorkContext get _passthroughWorkContext =>
+    ({
+      required String channelId,
+      required String content,
+      required List<String> mentionPubkeys,
+      required List<List<String>> outgoingTags,
+      String? threadRoot,
+    }) async => outgoingTags;
 
 void main() {
   test(
@@ -23,6 +35,7 @@ void main() {
         addLocalMessage: (_, event) => localMessages.add(event),
         completeLocalMessage: (_, eventId) => completedIds.add(eventId),
         removeLocalMessage: (_, eventId) => removedIds.add(eventId),
+        attachWorkContext: _passthroughWorkContext,
       );
 
       final result = send(channelId: _channelId, content: 'hello');
@@ -56,6 +69,7 @@ void main() {
       addLocalMessage: (_, event) => localMessages.add(event),
       completeLocalMessage: (_, eventId) => completedIds.add(eventId),
       removeLocalMessage: (_, eventId) => removedIds.add(eventId),
+      attachWorkContext: _passthroughWorkContext,
     );
 
     final result = send(channelId: _channelId, content: 'hello');

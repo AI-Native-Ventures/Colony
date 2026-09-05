@@ -14,6 +14,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:nostr/nostr.dart' as nostr;
 
+import '../../shared/relay/company/thread_task_client.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
@@ -32,6 +33,8 @@ import 'mentions/mention_candidates.dart';
 import 'mentions/mention_candidates_provider.dart';
 import 'mentions/mention_ranking.dart';
 import 'photo_library.dart';
+import 'thread_tasks/composer_new_task_toggle.dart';
+import 'thread_tasks/thread_task_providers.dart';
 
 part 'compose_bar/helpers.dart';
 part 'compose_bar/markdown_editing_controller.dart';
@@ -44,6 +47,7 @@ part 'compose_bar/ios_attachment_popover.dart';
 part 'compose_bar/camera_preview.dart';
 part 'compose_bar/send_button.dart';
 part 'compose_bar/layout.dart';
+part 'compose_bar/work_context.dart';
 
 const _maxConcurrentImageUploads = 3;
 
@@ -132,10 +136,19 @@ class ComposeBar extends HookConsumerWidget {
           () => unawaited(iosAttachmentPopover.dispose()),
       [iosAttachmentPopover],
     );
+    final threadTaskScope = _composeBarTaskScope(
+      ref,
+      channelId: channelId,
+      threadRoot: rootId ?? threadHeadId,
+    );
     final isSending = useState(false);
     final showFormatting = useState(false);
     final attachments = useState<List<BlobDescriptor>>([]);
     final uploadError = useState<String?>(null);
+    // A send that could not be charged to any work must say so. Left
+    // unhandled, the failure escaped through `unawaited(send())` and the
+    // composer simply kept the text, which reads as a message that was sent.
+    final sendError = useState<String?>(null);
     final uploadingCount = useState(0);
     final clipboardHasImage = useState(false);
     final hasAttachments = attachments.value.isNotEmpty;
@@ -495,6 +508,7 @@ class ComposeBar extends HookConsumerWidget {
       );
 
       isSending.value = true;
+      sendError.value = null;
       try {
         if (nonMemberAgentPubkeys.isNotEmpty) {
           await ref
@@ -518,6 +532,10 @@ class ComposeBar extends HookConsumerWidget {
         if (context.mounted) {
           clearComposer();
         }
+      } catch (error) {
+        // The text stays in the composer: the message did not go out, and
+        // clearing it would lose the instruction as well as the send.
+        if (context.mounted) sendError.value = _formatSendError(error);
       } finally {
         if (context.mounted) isSending.value = false;
       }
@@ -937,6 +955,8 @@ class ComposeBar extends HookConsumerWidget {
           uploadingCount: uploadingCount.value,
           onRemoveAttachment: removeAttachment,
           uploadError: uploadError.value,
+          sendError: sendError.value,
+          newTaskToggle: ComposerNewTaskToggle(scope: threadTaskScope),
           isExpanded: isComposerExpanded.value,
           controller: controller,
           focusNode: focusNode,
