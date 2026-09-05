@@ -572,6 +572,16 @@ pub(crate) async fn resolve_agent_persona(
     Ok(None)
 }
 
+/// Whether a task in this status frees the thread slot it holds.
+///
+/// A closed task frees its thread whichever half of the close rule got it
+/// there: every assignee reporting complete, or the owner closing it directly
+/// in one write. Separated from the storage paths so the rule is testable on
+/// its own, and so the owner's path and the report path cannot drift.
+pub(crate) const fn closed_task_frees_its_thread(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Completed | TaskStatus::Cancelled)
+}
+
 /// Free a closed task's thread slot and close whatever hung off it.
 ///
 /// Called after a task head reaching a terminal state has committed, so the
@@ -893,7 +903,7 @@ pub(crate) fn report_closes_task(task: &CompanyTask) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::company::CompanyTask;
+    use buzz_core::company::{is_task_status_transition_allowed_for, CompanyTask, TaskActor};
 
     fn sample_task() -> CompanyTask {
         CompanyTask {
@@ -1080,6 +1090,49 @@ mod tests {
         task.assignee_persona_ids.clear();
         task.reported_complete_by.clear();
         assert!(!report_closes_task(&task));
+    }
+
+    /// The owner's half of the close rule, end to end at the level this
+    /// module decides it: a thread task is minted `inProgress` with
+    /// `doerKind: agent`, an owner-signed replacement may take it straight to
+    /// completed, and the head that lands frees the thread slot exactly as an
+    /// unanimous set of assignee reports would.
+    #[test]
+    fn an_owner_closing_a_thread_task_in_one_write_frees_the_thread() {
+        let previous = sample_task();
+        assert_eq!(previous.status, TaskStatus::InProgress);
+        assert_eq!(previous.doer_kind, DoerKind::Agent);
+        assert!(
+            !closed_task_frees_its_thread(previous.status),
+            "an open task holds its thread"
+        );
+
+        assert!(
+            is_task_status_transition_allowed_for(
+                previous.status,
+                TaskStatus::Completed,
+                previous.doer_kind,
+                TaskActor::Owner,
+            ),
+            "the owner closes a thread task without a review round trip"
+        );
+        // The same move signed by the doer still needs the review gate, so
+        // this is authority and not a loosened table.
+        assert!(!is_task_status_transition_allowed_for(
+            previous.status,
+            TaskStatus::Completed,
+            previous.doer_kind,
+            TaskActor::Doer,
+        ));
+
+        let mut closed = previous.clone();
+        closed.status = TaskStatus::Completed;
+        assert!(
+            closed_task_frees_its_thread(closed.status),
+            "the owner's direct completion must free the thread slot"
+        );
+        closed.status = TaskStatus::Cancelled;
+        assert!(closed_task_frees_its_thread(closed.status));
     }
 
     #[test]

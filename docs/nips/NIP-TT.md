@@ -38,6 +38,11 @@ that answered.
    complete, or when the owner closes it directly. `blocked` and `snoozed`
    never close on their own. There is no idle timer: a thread nobody has
    written in for a week is a thread waiting, not a Task finished.
+   An owner-signed replacement may move a Task from any open status (`ready`,
+   `inProgress`, `inReview`, `blocked`, `snoozed`) straight to `completed` or
+   `cancelled` in one write, so closing a thread task never needs a trip
+   through the review gate; agent-signed writes and completion reports keep the
+   doer's transition table unchanged.
 3. **Sequential work.** After a Task closes, the next work-implying message in
    that thread opens a new Task in the same thread.
 4. **Parallel work.** A client may send an explicit "new task" request that

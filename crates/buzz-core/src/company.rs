@@ -278,6 +278,23 @@ pub enum DoerKind {
     Human,
 }
 
+/// Who is asking for a task lifecycle change.
+///
+/// The transition table encodes the doer's own workflow: an agent's output
+/// passes a review gate, a human's does not. The community owner is not a doer
+/// on that workflow, they are the authority over it, so an owner-signed
+/// replacement may close open work outright. Every `KIND_COMPANY_ACTION` is
+/// owner-signed by construction; relay-derived moves (dependency wakes, snooze
+/// wakes) act on the doer's behalf and use `Doer`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskActor {
+    /// The task's doer, or a relay-derived move made on its behalf.
+    #[default]
+    Doer,
+    /// The community owner, signing a Company Action.
+    Owner,
+}
+
 /// Which kind of entity a task's subject reference points at.
 ///
 /// A subject is deliberately not a party id: a recruitment firm's work is about
@@ -834,14 +851,48 @@ pub const fn is_initiative_status_transition_allowed(
 /// hatch - this function only says the shape is reachable, not that any
 /// replacement claiming it is a real bounce. Any non-terminal task may
 /// snooze, and a snoozed task wakes back to ready. Completion skips review
-/// only for human tasks — nobody reviews a phone call — while agent work
+/// only for human tasks - nobody reviews a phone call - while agent work
 /// always passes the `InReview` quality gate.
+///
+/// This is the doer's own table. Use `is_task_status_transition_allowed_for`
+/// when the actor's authority is known; an owner may close open work outright.
 pub const fn is_task_status_transition_allowed(
     from: TaskStatus,
     to: TaskStatus,
     doer_kind: DoerKind,
 ) -> bool {
+    is_task_status_transition_allowed_for(from, to, doer_kind, TaskActor::Doer)
+}
+
+/// Return whether `actor` may move a task from `from` to `to`.
+///
+/// The doer's table (`is_task_status_transition_allowed`) plus the owner's
+/// authority: an owner-signed replacement may take a task from any open status
+/// straight to `Completed` or `Cancelled`, without walking it through the
+/// review gate first. Thread-scoped tasks are minted `inProgress` with
+/// `doerKind: agent`, so without this an owner's "Mark done" would need two
+/// writes and a head re-read between them. Agent-signed writes and completion
+/// reports keep the doer's table exactly as it was.
+pub const fn is_task_status_transition_allowed_for(
+    from: TaskStatus,
+    to: TaskStatus,
+    doer_kind: DoerKind,
+    actor: TaskActor,
+) -> bool {
     if from as u8 == to as u8 {
+        return true;
+    }
+    if matches!(actor, TaskActor::Owner)
+        && matches!(
+            from,
+            TaskStatus::Ready
+                | TaskStatus::InProgress
+                | TaskStatus::InReview
+                | TaskStatus::Blocked
+                | TaskStatus::Snoozed
+        )
+        && matches!(to, TaskStatus::Completed | TaskStatus::Cancelled)
+    {
         return true;
     }
     match (from, to) {
@@ -952,12 +1003,17 @@ pub fn validate_initiative_update(
 
 /// Validate immutable coordinates, timestamps, and lifecycle state for a
 /// replacement task head.
+///
+/// `actor` says whose authority the replacement carries: `TaskActor::Owner`
+/// for an owner-signed Company Action, `TaskActor::Doer` for anything moving a
+/// task on its doer's behalf.
 pub fn validate_task_update(
     previous: &CompanyTask,
     replacement: &CompanyTask,
     company: &CompanyProfile,
     initiative: Option<&Initiative>,
     teams: &[CompanyTeamRef],
+    actor: TaskActor,
 ) -> Result<(), CompanyContractError> {
     validate_task(replacement, company, initiative, teams)?;
     validate_immutable(&previous.schema, &replacement.schema, "task.schema")?;
@@ -968,10 +1024,11 @@ pub fn validate_task_update(
         replacement.created_at,
         replacement.updated_at,
     )?;
-    if !is_task_status_transition_allowed(
+    if !is_task_status_transition_allowed_for(
         previous.status,
         replacement.status,
         replacement.doer_kind,
+        actor,
     ) {
         return Err(CompanyContractError::InvalidStatusTransition("task"));
     }
@@ -2349,6 +2406,80 @@ mod tests {
         }
     }
 
+    /// The owner is the authority over the workflow, not a doer on it: a
+    /// thread task minted `inProgress` with `doerKind: agent` closes on one
+    /// owner-signed write rather than being walked through the review gate.
+    #[test]
+    fn an_owner_closes_open_work_from_any_live_status() {
+        for from in [
+            TaskStatus::Ready,
+            TaskStatus::InProgress,
+            TaskStatus::InReview,
+            TaskStatus::Blocked,
+            TaskStatus::Snoozed,
+        ] {
+            for to in [TaskStatus::Completed, TaskStatus::Cancelled] {
+                assert!(
+                    is_task_status_transition_allowed_for(
+                        from,
+                        to,
+                        DoerKind::Agent,
+                        TaskActor::Owner
+                    ),
+                    "the owner must be able to move {from:?} -> {to:?}"
+                );
+            }
+        }
+        // Agent-signed writes keep the review gate they always had.
+        assert!(!is_task_status_transition_allowed_for(
+            TaskStatus::InProgress,
+            TaskStatus::Completed,
+            DoerKind::Agent,
+            TaskActor::Doer
+        ));
+    }
+
+    /// Owner authority opens exactly two arms and nothing else. A terminal
+    /// task stays terminal, and `completed -> ready` stays a bounce, guarded by
+    /// `validate_bounce_delta` rather than by who signed it.
+    #[test]
+    fn owner_authority_does_not_reopen_terminal_work() {
+        for from in [TaskStatus::Completed, TaskStatus::Cancelled] {
+            for to in [
+                TaskStatus::Proposed,
+                TaskStatus::InProgress,
+                TaskStatus::InReview,
+                TaskStatus::Blocked,
+                TaskStatus::Snoozed,
+            ] {
+                assert!(
+                    !is_task_status_transition_allowed_for(
+                        from,
+                        to,
+                        DoerKind::Agent,
+                        TaskActor::Owner
+                    ),
+                    "the owner must not move {from:?} -> {to:?}"
+                );
+            }
+        }
+        // The one arm out of completed is the bounce, and it is the same arm
+        // for the owner as for anyone else.
+        assert!(is_task_status_transition_allowed_for(
+            TaskStatus::Completed,
+            TaskStatus::Ready,
+            DoerKind::Agent,
+            TaskActor::Owner
+        ));
+        // A proposed task has no doer yet, so there is nothing to close.
+        assert!(!is_task_status_transition_allowed_for(
+            TaskStatus::Proposed,
+            TaskStatus::Completed,
+            DoerKind::Agent,
+            TaskActor::Owner
+        ));
+    }
+
     /// Agent work keeps the mandatory review gate; a human completing their
     /// own phone call does not route through QA.
     #[test]
@@ -2497,10 +2628,15 @@ mod tests {
         let mut replacement = previous.clone();
         replacement.title = "Build and launch the Tennant Group website".to_string();
         replacement.updated_at += 1;
-        assert!(
-            validate_task_update(&previous, &replacement, &company, Some(&initiative), &teams)
-                .is_ok()
-        );
+        assert!(validate_task_update(
+            &previous,
+            &replacement,
+            &company,
+            Some(&initiative),
+            &teams,
+            TaskActor::Doer,
+        )
+        .is_ok());
 
         let mut invalid_transition = replacement.clone();
         invalid_transition.status = TaskStatus::Ready;
@@ -2510,7 +2646,8 @@ mod tests {
                 &invalid_transition,
                 &company,
                 Some(&initiative),
-                &teams
+                &teams,
+                TaskActor::Doer,
             ),
             Err(CompanyContractError::InvalidStatusTransition("task"))
         );
@@ -2523,7 +2660,8 @@ mod tests {
                 &changed_created_at,
                 &company,
                 Some(&initiative),
-                &teams
+                &teams,
+                TaskActor::Doer,
             ),
             Err(CompanyContractError::ImmutableField("createdAt"))
         );
@@ -2531,15 +2669,67 @@ mod tests {
         let mut changed_id = replacement.clone();
         changed_id.id = "different-task".to_string();
         assert_eq!(
-            validate_task_update(&previous, &changed_id, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &changed_id,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::ImmutableField("task.id"))
         );
 
         let mut stale = replacement;
         stale.updated_at = previous.updated_at;
         assert_eq!(
-            validate_task_update(&previous, &stale, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &stale,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::UpdatedAtNotMonotonic)
+        );
+    }
+
+    /// The shape a thread task's "Mark done" takes: one owner-signed
+    /// replacement moving an in-progress agent task straight to completed. The
+    /// same replacement signed by the doer keeps hitting the review gate.
+    #[test]
+    fn an_owner_completes_an_in_progress_agent_task_in_one_write() {
+        let company = company_fixture();
+        let initiative = initiative_fixture();
+        let teams = team_fixtures();
+        let previous = task_fixtures().remove(0);
+        assert_eq!(previous.status, TaskStatus::InProgress);
+        assert_eq!(previous.doer_kind, DoerKind::Agent);
+
+        let mut completed = previous.clone();
+        completed.status = TaskStatus::Completed;
+        completed.updated_at += 1;
+
+        assert!(validate_task_update(
+            &previous,
+            &completed,
+            &company,
+            Some(&initiative),
+            &teams,
+            TaskActor::Owner,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_task_update(
+                &previous,
+                &completed,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
+            Err(CompanyContractError::InvalidStatusTransition("task"))
         );
     }
 
@@ -2557,7 +2747,14 @@ mod tests {
         no_reason.bounce_count = 1;
         no_reason.updated_at += 1;
         assert_eq!(
-            validate_task_update(&previous, &no_reason, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &no_reason,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::InvalidBounce(
                 "a bounce must attach a reason"
             ))
@@ -2569,7 +2766,14 @@ mod tests {
         wrong_count.bounce_count = 2;
         wrong_count.updated_at += 1;
         assert_eq!(
-            validate_task_update(&previous, &wrong_count, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &wrong_count,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::InvalidBounce(
                 "a completed-to-ready transition must advance bounceCount by exactly one"
             ))
@@ -2580,10 +2784,15 @@ mod tests {
         real_bounce.bounce_reason = Some(BounceReason::FreeText("missed the brief".to_string()));
         real_bounce.bounce_count = 1;
         real_bounce.updated_at += 1;
-        assert!(
-            validate_task_update(&previous, &real_bounce, &company, Some(&initiative), &teams)
-                .is_ok()
-        );
+        assert!(validate_task_update(
+            &previous,
+            &real_bounce,
+            &company,
+            Some(&initiative),
+            &teams,
+            TaskActor::Doer,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2597,7 +2806,14 @@ mod tests {
         tampered.bounce_count = 1;
         tampered.updated_at += 1;
         assert_eq!(
-            validate_task_update(&previous, &tampered, &company, Some(&initiative), &teams),
+            validate_task_update(
+                &previous,
+                &tampered,
+                &company,
+                Some(&initiative),
+                &teams,
+                TaskActor::Doer,
+            ),
             Err(CompanyContractError::InvalidBounce(
                 "bounceCount may only advance via a completed-to-ready bounce"
             ))
