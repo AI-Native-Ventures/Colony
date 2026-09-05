@@ -728,6 +728,99 @@ async fn a_closed_task_frees_its_thread_for_the_next_piece_of_work() {
     assert_eq!(next.title, "Now write the changelog");
 }
 
+/// "Mark done" as a client actually performs it: ONE owner-signed write, from
+/// the `inProgress` a thread task is minted in straight to `completed`.
+///
+/// Before the owner's authority was threaded through the transition table this
+/// was refused with `invalid task status transition`, because a thread task
+/// carries `doerKind: agent` and the doer's table routes agent work through
+/// `inReview`. A client would have needed two writes and a head re-read
+/// between them to close a conversation.
+#[tokio::test]
+#[ignore = "requires a running relay with Postgres"]
+async fn an_owner_completes_a_thread_task_in_a_single_write() {
+    let owner = owner_keys();
+    let mut client = BuzzTestClient::connect(&relay_url(), &owner)
+        .await
+        .expect("connect as owner");
+    let fixture = setup(&mut client, &owner, &[]).await;
+    let signer = owner.public_key().to_hex();
+    let root = Uuid::new_v4().simple().to_string();
+
+    let first = attached_task(
+        &mut client,
+        &owner,
+        &fixture.relay,
+        &attach(
+            &fixture,
+            &signer,
+            Some(&root),
+            "send-1",
+            ThreadAttachMode::Open,
+            "Cut the release video",
+            Some(&fixture.team.lead_persona_id),
+        ),
+    )
+    .await;
+    assert_eq!(
+        first.status,
+        TaskStatus::InProgress,
+        "a thread task opens in progress"
+    );
+
+    let head = head_of(&mut client, &fixture.relay, &first.id)
+        .await
+        .expect("the task head is stored");
+    let stored = parse_task_event(&head).expect("the stored head parses");
+    let mut completed = stored.clone();
+    completed.status = TaskStatus::Completed;
+    completed.updated_at = stored.updated_at.max(now()) + 1;
+    let complete_action = CompanyAction {
+        relay_pubkey: fixture.relay.clone(),
+        operation: CompanyActionOperation::Transition,
+        request_id: Uuid::new_v4(),
+        idempotency_key: Uuid::new_v4(),
+        target: format!("{KIND_TASK}:{}:{}", fixture.relay, first.id),
+        expected_head: Some(head.id.to_hex()),
+        expected_references: Vec::new(),
+        payload: CompanyActionPayload::Task(Box::new(completed)),
+    };
+    let (outcome, _) = broker(&mut client, &owner, &fixture.relay, &complete_action).await;
+    assert_eq!(
+        outcome,
+        CompanyReceiptOutcome::Applied,
+        "the owner completes an in-progress agent task without a review round trip"
+    );
+
+    let closed_head = head_of(&mut client, &fixture.relay, &first.id)
+        .await
+        .expect("the completed head is stored");
+    let closed = parse_task_event(&closed_head).expect("the completed head parses");
+    assert_eq!(closed.status, TaskStatus::Completed);
+
+    // Completing frees the thread slot exactly as cancelling does, so the next
+    // work-implying message opens a new task rather than reopening this one.
+    let next = attached_task(
+        &mut client,
+        &owner,
+        &fixture.relay,
+        &attach(
+            &fixture,
+            &signer,
+            Some(&root),
+            "send-2",
+            ThreadAttachMode::Open,
+            "Now write the changelog",
+            Some(&fixture.team.lead_persona_id),
+        ),
+    )
+    .await;
+    assert_ne!(
+        next.id, first.id,
+        "work after a completion opens a new task in the same thread"
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires a running relay with Postgres"]
 async fn a_turn_that_is_not_work_lands_on_a_hidden_chat_task() {

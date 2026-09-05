@@ -25,7 +25,7 @@ use buzz_core::company::{
     is_task_status_transition_allowed, validate_cohort, validate_cohort_update, validate_company,
     validate_company_update, validate_initiative, validate_initiative_update, validate_task,
     validate_task_update, validate_template, validate_template_update, CompanyProfile, CompanyTask,
-    CompanyTeamRef, DoerKind, TaskStatus, COMMUNITY_PROFILE_ID,
+    CompanyTeamRef, DoerKind, TaskActor, TaskStatus, COMMUNITY_PROFILE_ID,
 };
 use buzz_core::kind::{
     KIND_COHORT, KIND_COMPANY_ACTION, KIND_COMPANY_PROFILE, KIND_COMPANY_RECEIPT, KIND_INITIATIVE,
@@ -790,8 +790,20 @@ async fn validate_payload_against_state(
             if let Some(previous) = previous_head {
                 let previous = parse_task_event(previous)
                     .map_err(|error| format!("stored task head is unreadable: {error}"))?;
-                validate_task_update(&previous, task, &company, initiative.as_ref(), &teams)
-                    .map_err(|error| error.to_string())?;
+                // Every Company Action that reaches this point is signed by
+                // the community owner (`CompanyActionApply::NotOwner` is the
+                // only other way out), so the replacement carries the owner's
+                // authority: it may close open work outright rather than
+                // walking a thread task through the review gate first.
+                validate_task_update(
+                    &previous,
+                    task,
+                    &company,
+                    initiative.as_ref(),
+                    &teams,
+                    TaskActor::Owner,
+                )
+                .map_err(|error| error.to_string())?;
             }
         }
         CompanyActionPayload::Cohort(cohort) => {
@@ -1077,7 +1089,7 @@ pub(crate) async fn handle_company_action(
                 // A closed task frees its thread, so the next work-implying
                 // message there opens a new task rather than reopening a
                 // finished one, and its sub-tasks close with it.
-                if matches!(task.status, TaskStatus::Completed | TaskStatus::Cancelled) {
+                if crate::thread_task_broker::closed_task_frees_its_thread(task.status) {
                     crate::thread_task_broker::release_and_cascade(tenant, state, task).await;
                 }
                 if task.status == TaskStatus::Completed {

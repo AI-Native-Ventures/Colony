@@ -10,7 +10,7 @@
 //! they can give a better error than a round trip to the relay would.
 
 use buzz_core::{
-    company::{BounceReason, CompanyTask, DoerKind, TaskStatus},
+    company::{BounceReason, CompanyTask, TaskStatus},
     company_roster::step_idempotency_key,
     kind::KIND_TASK,
 };
@@ -33,23 +33,26 @@ fn clamp_reason(value: &str) -> String {
     trimmed.chars().take(MAX_REASON_LEN).collect()
 }
 
-/// Complete a task a human performs, with the outcome that makes "40
+/// Complete a task the owner is closing, with the outcome that makes "40
 /// completed" mean something.
 ///
 /// Refuses anything that is not live in-progress or in-review work: a task
 /// still `ready` has not been started, and completing it here would record
-/// work nobody did. Refuses agent-performed tasks outright - agent
-/// completion goes through the review gate (`inReview -> completed`)
-/// instead, which this function does not build.
+/// work nobody did.
+///
+/// Agent-performed work completes here too, because a `KIND_COMPANY_ACTION` is
+/// owner-signed by construction and the owner is the authority over the
+/// workflow rather than a doer on it. That is what "the owner marks it done"
+/// means for a thread task, which is minted `inProgress` with `doerKind:
+/// agent`. The review gate still stands for the agent's own writes: an agent
+/// cannot sign this action at all, and `TaskActor::Doer` keeps refusing
+/// `inProgress -> completed` in `buzz_core::company`.
 pub fn plan_task_completion(
     task: &CompanyTask,
     head_event_id: &str,
     outcome_reason: &str,
     relay_pubkey: &str,
 ) -> Result<CompanyAction, String> {
-    if task.doer_kind != DoerKind::Human {
-        return Err("only a task a human performs completes this way".to_string());
-    }
     let trimmed = outcome_reason.trim();
     if trimmed.is_empty() {
         return Err("an outcome needs a reason".to_string());
@@ -221,7 +224,7 @@ pub fn plan_task_bounce(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buzz_core::company::{CommercialPurpose, TaskStatus};
+    use buzz_core::company::{CommercialPurpose, DoerKind, TaskActor, TaskStatus};
 
     const RELAY: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
     const HEAD: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -344,6 +347,7 @@ mod tests {
                     &company(),
                     Some(&initiative()),
                     &teams(),
+                    TaskActor::Owner,
                 )
                 .expect("a planned completion must satisfy the company contract");
             }
@@ -351,12 +355,39 @@ mod tests {
         }
     }
 
+    /// The owner's "Mark done" on a thread task: one write, from the
+    /// `inProgress` an agent-doer task is minted in, straight to completed.
     #[test]
-    fn an_agent_task_does_not_complete_through_the_queue() {
+    fn an_owner_completes_an_agent_task_in_one_write() {
         let previous = task(TaskStatus::InProgress, DoerKind::Agent);
-        let error = plan_task_completion(&previous, HEAD, "done", RELAY)
-            .expect_err("agent tasks must not complete via the queue's rule");
-        assert!(error.contains("human"), "unexpected error: {error}");
+        let action = plan_task_completion(&previous, HEAD, "closed by the owner", RELAY)
+            .expect("an owner may close an agent task directly");
+        match &action.payload {
+            CompanyActionPayload::Task(next) => {
+                assert_eq!(next.status, TaskStatus::Completed);
+                buzz_core::company::validate_task_update(
+                    &previous,
+                    next,
+                    &company(),
+                    Some(&initiative()),
+                    &teams(),
+                    TaskActor::Owner,
+                )
+                .expect("an owner-signed completion must satisfy the company contract");
+                // The agent's own workflow is untouched: the review gate is
+                // still the only way its writes reach completed.
+                assert!(buzz_core::company::validate_task_update(
+                    &previous,
+                    next,
+                    &company(),
+                    Some(&initiative()),
+                    &teams(),
+                    TaskActor::Doer,
+                )
+                .is_err());
+            }
+            other => panic!("expected a task payload, got {other:?}"),
+        }
     }
 
     #[test]
@@ -390,6 +421,7 @@ mod tests {
                     &company(),
                     Some(&initiative()),
                     &teams(),
+                    TaskActor::Owner,
                 )
                 .expect("a planned snooze must satisfy the company contract");
             }
@@ -418,6 +450,7 @@ mod tests {
                     &company(),
                     Some(&initiative()),
                     &teams(),
+                    TaskActor::Owner,
                 )
                 .expect("a planned bounce must satisfy the company contract");
             }
