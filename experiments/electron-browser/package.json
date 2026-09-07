@@ -1,0 +1,15 @@
+{
+  "name": "colony-electron-browser-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "test:electron": "node test/run-electron.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.2.0"
+  }
+}

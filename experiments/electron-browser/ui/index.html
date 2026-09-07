@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Colony Browser Prototype</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside>
+    <div class="wordmark">Colony<span> / LAB</span></div>
+    <div class="eyebrow">SHARED WORKSPACE</div>
+    <h1>Your browser.<br>Your teammate.</h1>
+    <p>Sign in once. Share a tab.<br>Take over whenever you need.</p>
+    <label for="business">Business</label>
+    <select id="business"><option value="colony">Colony</option><option value="horizon">Horizon Labs</option></select>
+    <button id="instagram" class="wide">Open Instagram</button>
+    <button id="website" class="wide subtle">Open Colony website</button>
+    <div class="divider"></div>
+    <label for="worker">Teammate</label><input id="worker" value="Social Media Manager" maxlength="48">
+    <label for="mode">Tab access</label><select id="mode"><option value="read">Read only</option><option value="interact">Read and interact</option></select>
+    <button id="share" class="wide">Share this tab</button>
+    <p class="small">Access applies to this tab and website only. A new site needs a new grant.</p>
+    <details><summary>Developer connection</summary><p class="small">Use this temporary grant with the supplied MCP adapter.</p><code id="grant">No tab shared</code></details>
+    <div class="footnote">PROTOTYPE · LOCAL ONLY<br>Separate browser data for each business.</div>
+  </aside>
+  <main>
+    <header><div><span class="eyebrow">BROWSER</span><strong id="account">Colony</strong></div><div class="control"><span id="controller">You are in control</span><button id="takeover">Take control</button></div></header>
+    <nav id="tabs" aria-label="Browser tabs"></nav>
+    <form id="navigation"><button type="button" id="back" aria-label="Back">←</button><button type="button" id="reload" aria-label="Reload">↻</button><input id="address" aria-label="Website address" type="text" placeholder="https://"><button type="submit">Go</button><button type="button" id="new" aria-label="New tab">＋</button></form>
+    <div id="empty">Open a website to begin.</div>
+  </main>
+  <div id="notice" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
