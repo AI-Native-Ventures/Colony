@@ -86,6 +86,13 @@ static NEST_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new
 /// when the Tauri app-data directory name starts with `"xyz.block.buzz.app.dev"`.
 /// Pass `false` for production (signed DMG) builds.
 pub fn init_nest_dir(is_dev: bool) {
+    if crate::electron_host::enabled() {
+        // The opt-in Electron shell must not rewrite the stable/dev agent nest.
+        let path =
+            dirs::data_dir().map(|root| root.join("xyz.block.buzz.app.dev-electron").join("nest"));
+        let _ = NEST_DIR.set(path);
+        return;
+    }
     let suffix = if is_dev { NEST_DIR_DEV } else { NEST_DIR_PROD };
     let path = dirs::home_dir().map(|h| h.join(suffix));
     // set() is a no-op when already initialized, which is correct: only the

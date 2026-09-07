@@ -84,11 +84,11 @@ export async function actOnRef(tab, args, method, check) {
 }
 
 export async function screenshot(tab, check) {
-  check();
+  const revision = check().revision;
   const result = await cdp(tab, "Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: true,
   });
-  check();
+  check({ revision });
   return { data: result.data };
 }

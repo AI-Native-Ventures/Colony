@@ -43,4 +43,15 @@ Reuse `crates/buzz-native` host interfaces and generated `desktop/native-invento
 - [Chrome app-bound encryption](https://security.googleblog.com/2024/07/improving-security-of-chrome-cookies-on.html): explains why reading a profile database is not equivalent to obtaining usable cookies.
 - [Device-bound sessions](https://blog.google/security/protecting-cookies-with-device-bound-session-credentials/): exported cookies cannot recreate the non-exportable key used for session refresh.
 
-The local `experiments/electron-browser/README.md` remains the record of the earlier prototype's narrower proof.
+The earlier prototype's narrower proof remains in branch history; its standalone app is not included in the actual-desktop integration.
+
+
+### Initial integration mechanism
+
+The first reviewable integration uses an opt-in `colony-native-host` executable.
+It retains existing Tauri-managed Rust state and command handlers behind private
+stdio, with one hidden blank webview used only for dispatch. Electron owns the
+actual React interface and remote browser views. The runtime is isolated from
+existing Tauri app data, identity, nest and release commands. Removing the final
+Tauri dependency follows command/lifecycle extraction and parity verification;
+the temporary compatibility host is not a completed standalone Rust service.

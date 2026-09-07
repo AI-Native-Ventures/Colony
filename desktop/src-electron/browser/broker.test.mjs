@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { startBroker, requestBroker } from "../src/broker.mjs";
+import { startBroker, requestBroker } from "./broker.mjs";
 
 test("local broker returns async results, propagates denial and restricts socket permissions", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "colony-broker-test-"));

@@ -14,6 +14,9 @@ use tokio_util::sync::CancellationToken;
 /// needed. Windows keeps only the OS variables required for process/DLL lookup.
 fn ffmpeg_command(path: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new(path);
+    // File-based media jobs and version probes must not inherit the desktop's
+    // private transport; interactive ffmpeg input is never used here.
+    command.stdin(std::process::Stdio::null());
     #[cfg(target_os = "windows")]
     let required_windows_env: Vec<(&'static str, std::ffi::OsString)> =
         ["SystemRoot", "WINDIR", "TEMP", "TMP"]

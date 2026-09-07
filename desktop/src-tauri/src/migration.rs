@@ -128,6 +128,12 @@ pub fn run_boot_migrations_after_reset(app: &tauri::AppHandle) {
 }
 
 fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
+    if crate::electron_host::enabled() {
+        // This opt-in runtime starts with independent data and identity. Never
+        // import stable/development agent records, keys or repository pointers.
+        crate::managed_agents::init_nest_dir(true);
+        return;
+    }
     // Initialize the process-lifetime nest directory before any filesystem
     // operation that calls nest_dir(). The discriminator matches the existing
     // pattern used by reconcile_target_dir: dev instances have an app-data-dir
@@ -143,13 +149,7 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
         false
     };
 
-    // On dev builds, copy `.repos-dir` from ~/.buzz → ~/.buzz-dev BEFORE
-    // control returns to lib.rs where resolve_repos_at_boot() reads it. This
-    // ensures the dev nest boots with the correct workspace on its first launch,
-    // matching what the prod nest had configured. Skip-if-dest-exists so it is
-    // idempotent and never clobbers a value the dev nest already set explicitly.
-    // Uses the composed helper so the gate + migration run through the same
-    // code path that the behavioral test exercises.
+    // Seed the dev repository pointer before restore; never repopulate after reset.
     if let (Some(home), Some(dev_nest)) = (dirs::home_dir(), crate::managed_agents::nest_dir()) {
         maybe_migrate_dev_repos_dir(is_dev, reset_completed, &home, &dev_nest);
     }

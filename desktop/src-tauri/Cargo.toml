@@ -7,6 +7,7 @@ members = ["crates/buzz-terminal"]
 
 [package]
 name = "buzz-desktop"
+default-run = "buzz-desktop"
 version = "0.16.7"
 description = "Buzz desktop app"
 authors = ["you"]
@@ -21,8 +22,14 @@ edition = "2021"
 name = "buzz_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "colony-native-host"
+path = "src/electron_host/main.rs"
+required-features = ["electron-host"]
+
 [features]
 default = ["system-keyring"]
+electron-host = []
 mesh-llm = ["dep:iroh", "dep:mesh-llm-sdk", "dep:mesh-llm-host-runtime", "dep:mesh-llm-client", "dep:mesh-llm-node", "dep:mesh-llm-system", "dep:mesh-llm-events"]
 # Test-only WebDriverIO harness: embedded W3C WebDriver server + execute/mock
 # surface. NEVER enabled for shipping builds; the harness build script enables

@@ -1,3 +1,4 @@
+import { BrowserSettings } from "@/features/browser/BrowserImport";
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -80,6 +81,7 @@ import { SettingsSectionHeader } from "./SettingsSectionHeader";
 import { VoiceSettingsCard } from "./VoiceSettingsCard";
 
 export type SettingsSection =
+  | "browser"
   | "profile"
   | "company"
   | "blocks"
@@ -102,6 +104,7 @@ export type SettingsSection =
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
 const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
+  "browser",
   "profile",
   "company",
   "blocks",
@@ -153,6 +156,7 @@ export type SettingsPanelProps = {
 };
 
 export const settingsSections: SettingsSectionDescriptor[] = [
+  { value: "browser", label: "Browser", icon: MonitorCog },
   {
     value: "appearance",
     label: "Appearance",
@@ -841,6 +845,8 @@ export function renderSettingsSection(
   props: SettingsPanelProps,
 ): React.ReactNode {
   switch (section) {
+    case "browser":
+      return <BrowserSettings />;
     case "profile":
       return (
         <ProfileSettingsCard

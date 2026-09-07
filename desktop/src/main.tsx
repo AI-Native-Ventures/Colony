@@ -1,3 +1,4 @@
+import { BrowserImportWelcome } from "@/features/browser/BrowserImport";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "@/app/App";
@@ -22,12 +23,13 @@ import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
 import { installTauriNativeBridge } from "@/shared/api/tauriNativeBridge";
+import { installElectronNativeBridge } from "@/shared/api/electronNativeBridge";
 import { registerAllTabKinds } from "@/features/workspace/kinds";
 
 // Install the default (Tauri) bridge before anything can call it. The e2e
 // mock replaces it in bootstrap via setNativeBridge when running under a
 // mock bridge; feature code never sees a missing bridge.
-installTauriNativeBridge();
+if (!installElectronNativeBridge()) installTauriNativeBridge();
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -98,6 +100,7 @@ function renderApp() {
                     <NostrBindConsentDialog />
                   </UpdaterProvider>
                   <Toaster />
+                  <BrowserImportWelcome />
                 </PoofBurstProvider>
               </EmojiBurstProvider>
             </TooltipProvider>

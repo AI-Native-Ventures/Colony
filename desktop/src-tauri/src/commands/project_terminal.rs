@@ -2,7 +2,7 @@
 //! the repository from the relay first when no local checkout exists.
 
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tauri::State;
 
 use crate::app_state::AppState;
@@ -58,6 +58,7 @@ fn merge_recovery_target_ref(target_commit: &str) -> String {
 #[cfg(target_os = "macos")]
 fn launch_terminal_at(path: &std::path::Path) -> Result<(), String> {
     let status = Command::new("open")
+        .stdin(Stdio::null())
         .arg("-a")
         .arg("Terminal")
         .arg(path)
@@ -80,6 +81,7 @@ fn launch_terminal_at(path: &std::path::Path) -> Result<(), String> {
     ];
     for (command, args) in candidates {
         if Command::new(command)
+            .stdin(Stdio::null())
             .args(args)
             .current_dir(path)
             .spawn()
@@ -94,6 +96,7 @@ fn launch_terminal_at(path: &std::path::Path) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn launch_terminal_at(path: &std::path::Path) -> Result<(), String> {
     Command::new("cmd")
+        .stdin(Stdio::null())
         .args(["/C", "start", "", "cmd"])
         .current_dir(path)
         .spawn()

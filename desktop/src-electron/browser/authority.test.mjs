@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Authority, normalizeUrl } from "../src/authority.mjs";
+import { Authority, normalizeUrl } from "./authority.mjs";
 
 function setup() {
   const authority = new Authority();
