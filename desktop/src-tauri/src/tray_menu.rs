@@ -221,6 +221,9 @@ pub enum TrayAction {
 }
 
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if crate::electron_host::enabled() {
+        return;
+    }
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

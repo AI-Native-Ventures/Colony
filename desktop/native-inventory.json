@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 445,
-    "rust_lines": 173480,
-    "tauri_coupled": 177,
-    "portable": 268,
-    "portable_lines": 98972,
+    "rust_total": 449,
+    "rust_lines": 174015,
+    "tauri_coupled": 179,
+    "portable": 270,
+    "portable_lines": 99202,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -108,6 +108,8 @@
       "src-tauri/src/discovery_worker/worker_host.rs",
       "src-tauri/src/discovery_worker/worker_host_tests.rs",
       "src-tauri/src/egress_guard_tests.rs",
+      "src-tauri/src/electron_host/mod.rs",
+      "src-tauri/src/electron_host/runtime.rs",
       "src-tauri/src/event_sync.rs",
       "src-tauri/src/huddle/agent_voice.rs",
       "src-tauri/src/huddle/agents.rs",
@@ -288,6 +290,8 @@
       "src-tauri/src/discovery_worker/worker_host_multi_source_tests.rs",
       "src-tauri/src/discovery_worker/worker_host_outbox_tests.rs",
       "src-tauri/src/egress_guard.rs",
+      "src-tauri/src/electron_host/main.rs",
+      "src-tauri/src/electron_host/wire.rs",
       "src-tauri/src/event_sync_team_events_tests.rs",
       "src-tauri/src/event_sync_tests.rs",
       "src-tauri/src/events.rs",
@@ -474,7 +478,7 @@
     ]
   },
   "params": {
-    "AppHandle": 362,
+    "AppHandle": 365,
     "State": 265,
     "Window": 7,
     "ipc::Request": 1,
@@ -482,7 +486,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 359,
+      "AppHandle": 362,
       "State": 265,
       "Window": 7,
       "ipc::Request": 1,
@@ -509,14 +513,14 @@
     ".opener()": 1,
     ".notification()": 1,
     ".updater()": 0,
-    ".get_webview_window(": 6,
+    ".get_webview_window(": 7,
     ".global_shortcut(": 1,
     ".request_restart(": 7,
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
     ".path()": 27,
-    ".exit(": 1
+    ".exit(": 5
   },
   "events": {
     "distinct": 34,
@@ -3768,7 +3772,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:147"
+        "src/features/terminal/terminalClient.ts:155"
       ]
     },
     "terminal_attach": {
@@ -3777,7 +3781,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:83"
+        "src/features/terminal/terminalClient.ts:89"
       ]
     },
     "terminal_close": {
@@ -3786,7 +3790,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:143"
+        "src/features/terminal/terminalClient.ts:151"
       ]
     },
     "terminal_detach": {
@@ -3795,7 +3799,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:136"
+        "src/features/terminal/terminalClient.ts:144"
       ]
     },
     "terminal_focus": {
@@ -3804,7 +3808,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:132"
+        "src/features/terminal/terminalClient.ts:140"
       ]
     },
     "terminal_input": {
@@ -3813,7 +3817,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:93"
+        "src/features/terminal/terminalClient.ts:101"
       ]
     },
     "terminal_resize": {
@@ -3822,7 +3826,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:102"
+        "src/features/terminal/terminalClient.ts:110"
       ]
     },
     "terminal_scroll": {
@@ -3831,7 +3835,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:128"
+        "src/features/terminal/terminalClient.ts:136"
       ]
     },
     "terminal_viewport_ready": {
@@ -3840,7 +3844,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:112"
+        "src/features/terminal/terminalClient.ts:120"
       ]
     },
     "title_bar_double_click": {

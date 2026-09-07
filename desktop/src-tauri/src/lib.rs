@@ -9,6 +9,7 @@ mod deep_link;
 mod discovery_credentials;
 mod discovery_worker;
 mod egress_guard;
+mod electron_host;
 mod event_sync;
 mod events;
 mod host;
@@ -121,19 +122,7 @@ pub fn run() {
             eprintln!("buzz-mesh: failed to build big-stack tokio runtime, using default: {error}");
         }
     }
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // Focus the existing window when a duplicate instance launches.
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
-            // Forward any deep link URLs from the duplicate launch.
-            for arg in &argv {
-                if arg.starts_with("buzz://") {
-                    handle_deep_link_url(app, arg);
-                }
-            }
-        }))
+    let builder = electron_host::single_instance(tauri::Builder::default())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -147,7 +136,7 @@ pub fn run() {
         .plugin(
             tauri::plugin::Builder::<_, ()>::new("initial-window-reveal")
                 .on_webview_ready(|webview| {
-                    if webview.label() != "main" {
+                    if webview.label() != "main" || electron_host::enabled() {
                         return;
                     }
 
@@ -237,6 +226,7 @@ pub fn run() {
     #[cfg(not(buzz_updater_enabled))]
     let builder = builder;
 
+    let builder = electron_host::configure(builder);
     let app = app_menu::install(builder)
         .register_asynchronous_uri_scheme_protocol("buzz-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
@@ -256,8 +246,10 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
-                tray_menu::init(&app_handle)?;
-                macos_notifications::init(&app_handle)?;
+                if !electron_host::enabled() {
+                    tray_menu::init(&app_handle)?;
+                    macos_notifications::init(&app_handle)?;
+                }
             }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
@@ -450,7 +442,10 @@ pub fn run() {
             // the now-inert ~/.sprout; the frontend dedupes the toast.
             // Suppressed when a reset completed this boot: the nest was wiped and
             // a fresh ~/.sprout-less state is exactly what we want.
-            if !reset_outcome.completed && migration::migrate_legacy_nest() {
+            if !electron_host::enabled()
+                && !reset_outcome.completed
+                && migration::migrate_legacy_nest()
+            {
                 let _ = app_handle.emit("legacy-nest-migrated", ());
             }
 
@@ -467,15 +462,7 @@ pub fn run() {
                 migration::migrate_dev_nest();
             }
 
-            // Create/update the local CLI symlink pointing to the
-            // bundled CLI binary. Non-fatal: agents find CLI via PATH.
-            if let Ok(exe) = std::env::current_exe() {
-                if let Some(parent) = exe.parent() {
-                    if let Err(error) = managed_agents::ensure_cli_symlink(parent, is_dev_nest) {
-                        eprintln!("buzz-desktop: failed to create CLI symlink: {error}");
-                    }
-                }
-            }
+            electron_host::ensure_cli_symlink(is_dev_nest);
 
             try_regenerate_nest(&app_handle);
 
@@ -576,6 +563,7 @@ pub fn run() {
                 });
             }
 
+            electron_host::start(&app_handle)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -936,7 +924,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             tray_menu::update_tray_agent_activity,
         ])
-        .build(tauri::generate_context!())
+        .build(electron_host::context(tauri::generate_context!()))
         .expect("error while building tauri application");
 
     let shutdown_done = Arc::new(AtomicBool::new(false));

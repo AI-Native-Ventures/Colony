@@ -355,6 +355,12 @@ jobs:
         run: just desktop-tauri-test
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      - name: Electron native compatibility host
+        run: |
+          cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --features electron-host --all-targets -- -D warnings
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --features electron-host electron_host::wire::tests
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload desktop e2e artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

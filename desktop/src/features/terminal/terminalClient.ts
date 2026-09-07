@@ -47,7 +47,13 @@ export class TerminalConnection {
   readonly subscriptionId: string;
   readonly viewport: TerminalViewport;
 
-  private constructor(response: AttachResponse) {
+  private readonly channel: NativeChannel<TerminalMessage>;
+
+  private constructor(
+    response: AttachResponse,
+    channel: NativeChannel<TerminalMessage>,
+  ) {
+    this.channel = channel;
     this.sessionId = response.sessionId;
     this.subscriptionId = response.subscriptionId;
     this.viewport = response.viewport;
@@ -84,12 +90,14 @@ export class TerminalConnection {
       request,
       onFrame: channel,
     });
-    connection = new TerminalConnection(response);
+    connection = new TerminalConnection(response, channel);
     for (const message of pending) deliver(message);
     return connection;
   }
 
   input(data: string): Promise<void> {
+    // Keep the delivery channel alive for this connection, including idle PTYs.
+    void this.channel;
     return invoke("terminal_input", { sessionId: this.sessionId, data });
   }
 

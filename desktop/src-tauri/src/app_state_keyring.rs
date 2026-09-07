@@ -7,6 +7,9 @@ fn dev_keyring_service(configured: Option<String>) -> String {
 }
 
 pub(crate) fn keyring_service() -> &'static str {
+    if crate::electron_host::enabled() {
+        return "buzz-desktop-dev.electron";
+    }
     if cfg!(debug_assertions) {
         static DEV_SERVICE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         DEV_SERVICE
@@ -48,7 +51,7 @@ pub(super) fn migration_marker_name(service: &str, default_name: &str) -> String
 /// and recovered on first boot under the new service, rather than treated
 /// as a fresh install (see `recover_legacy_or_generate` in `app_state.rs`).
 pub(crate) fn legacy_keyring_service() -> Option<&'static str> {
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) || crate::electron_host::enabled() {
         return None;
     }
     match keyring_service() {
