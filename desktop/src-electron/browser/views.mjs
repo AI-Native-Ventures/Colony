@@ -55,6 +55,7 @@ export class BrowserViews {
       loading: tab.view.webContents.isLoading(),
       error: tab.error || null,
       controller: controller?.worker || "You",
+      mode: controller?.mode || null,
     };
   }
 
@@ -210,7 +211,7 @@ export class BrowserViews {
     tab.view.webContents.close({ waitForBeforeUnload: false });
   }
 
-  async request({ token, method, args = {} }) {
+  async request({ token, method, args = {} }, validate = async () => {}) {
     const grant = this.authority.grants.get(token);
     if (!grant) throw new Error("Browser access revoked");
     const tab = this.get(grant.tabId);
@@ -219,7 +220,8 @@ export class BrowserViews {
       return [this.state(tab)];
     }
     this.authority.check(token, args.tabId);
-    const run = () => {
+    const run = async () => {
+      await validate();
       const check = (options) =>
         this.authority.check(token, args.tabId, options);
       check();

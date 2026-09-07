@@ -14,6 +14,7 @@ use crate::{
     util::now_iso,
 };
 
+mod electron_browser;
 mod electron_isolation;
 mod path;
 pub(in crate::managed_agents) use path::build_augmented_path;
@@ -298,6 +299,7 @@ pub fn build_managed_agent_summary(
 
     Ok(ManagedAgentSummary {
         pubkey: record.pubkey.clone(),
+        owner_identified: super::owner_scope::effective_owner_pubkey(record).is_some(),
         name: record.name.clone(),
         persona_id: record.persona_id.clone(),
         runtime: record.runtime.clone(),
@@ -572,6 +574,7 @@ fn spawn_agent_child_inner(
         }
     }
     browser_shared::apply_env(&mut command, &shared_browser_endpoint);
+    electron_browser::apply(&mut command, &runtime_key)?;
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {

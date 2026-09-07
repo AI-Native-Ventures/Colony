@@ -18,6 +18,7 @@ import { RendererHost } from "./renderer-host.mjs";
 import { BrowserViews } from "./browser/views.mjs";
 import { startBroker } from "./browser/broker.mjs";
 import { shellCommand } from "./shell-commands.mjs";
+import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
@@ -87,6 +88,8 @@ async function boot() {
     headers.set("Content-Security-Policy", csp);
     return new Response(response.body, { status: response.status, headers });
   });
+  const runtime = await mkdtemp(path.join(os.tmpdir(), "colony-browser-"));
+  resources.add(() => rm(runtime, { recursive: true, force: true }));
   const profileId = createHash("sha256")
     .update(app.getPath("userData"))
     .digest("hex")
@@ -94,6 +97,12 @@ async function boot() {
   const host = new NativeHost(paths.nativeHost, {
     env: {
       ...process.env,
+      COLONY_ELECTRON_BROWSER_ROOT: runtime,
+      COLONY_ELECTRON_BROWSER_COMMAND: process.execPath,
+      COLONY_ELECTRON_BROWSER_ADAPTER: path.join(
+        desktop,
+        "src-electron/browser/mcp.mjs",
+      ),
       COLONY_ELECTRON_PACKAGED: app.isPackaged ? "1" : "0",
       COLONY_ELECTRON_PROFILE_ID: profileId,
       // Old installed Tauri versions look for a known host basename and its
@@ -138,11 +147,23 @@ async function boot() {
     });
   };
   let imports = createImports();
-  const runtime = await mkdtemp(path.join(os.tmpdir(), "colony-browser-"));
-  resources.add(() => rm(runtime, { recursive: true, force: true }));
   const socketPath = path.join(runtime, "browser.sock");
+  let businessContext = null;
+  const managedBrowser = new ManagedBrowser({
+    root: runtime,
+    socketPath,
+    views,
+    context: () => businessContext,
+    roster: () =>
+      rendererHost.request("invoke", {
+        command: "list_managed_agents",
+        args: {},
+      }),
+  });
   const stopBroker = await startBroker(socketPath, (request) =>
-    views.request(request),
+    managedBrowser.bindings.has(request.token)
+      ? managedBrowser.request(request)
+      : views.request(request),
   );
   resources.add(stopBroker);
   if (devUrl)
@@ -187,6 +208,7 @@ async function boot() {
       }
       // Revocation is synchronous; cleanup fences new native calls until all
       // resources from the previous renderer have been retired.
+      businessContext = null;
       views.setBusiness(null);
       const resetting = rendererHost.reset();
       imports = createImports();
@@ -214,10 +236,25 @@ async function boot() {
       throw new Error("Untrusted desktop caller");
     if (!payload || typeof payload !== "object" || Array.isArray(payload))
       throw new Error("Invalid request");
+    if (
+      type === "invoke" &&
+      ["import_identity", "sign_out"].includes(payload.command)
+    ) {
+      businessContext = null;
+      views.setBusiness(null);
+    }
     if (["invoke", "listen", "unlisten", "emit"].includes(type))
       return rendererHost.request(type, payload);
     if (type === "shell") return shellCommand(window, payload);
     if (type === "business") {
+      const relay = payload.relay ? normalizeRelay(payload.relay) : null;
+      if (
+        businessContext?.id !== payload.id ||
+        businessContext?.relay !== relay
+      ) {
+        views.setBusiness(null);
+        businessContext = payload.id ? { id: payload.id, relay } : null;
+      }
       views.setBusiness(payload.id);
       return;
     }
@@ -228,6 +265,8 @@ async function boot() {
     if (type === "browser:bounds") return views.bounds(payload);
     if (type === "browser:action") return views.action(payload);
     if (type === "browser:close") return views.close(payload.id);
+    if (type === "browser:workers") return managedBrowser.list();
+    if (type === "browser:share") return managedBrowser.share(payload);
     if (type === "browser:grant") {
       const tab = views.get(payload.id);
       const grant = views.authority.grant(tab.id, payload.worker, payload.mode);

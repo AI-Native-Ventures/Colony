@@ -1,0 +1,68 @@
+//! Private scoped browser configuration for Electron-managed local processes.
+use super::super::ManagedAgentRuntimeKey;
+use std::{path::Path, process::Command};
+
+pub(super) fn apply(command: &mut Command, key: &ManagedAgentRuntimeKey) -> Result<(), String> {
+    command.env_remove("BUZZ_ACP_ELECTRON_BROWSER_CONFIG");
+    let keys = [
+        "COLONY_ELECTRON_BROWSER_ROOT",
+        "COLONY_ELECTRON_BROWSER_COMMAND",
+        "COLONY_ELECTRON_BROWSER_ADAPTER",
+    ];
+    for name in keys {
+        command.env_remove(name);
+    }
+    if !crate::electron_host::enabled() {
+        return Ok(());
+    }
+    let values = keys.map(|name| std::env::var(name).unwrap_or_default());
+    let config = configuration(&values[0], &values[1], &values[2], key)?;
+    command.env("BUZZ_ACP_ELECTRON_BROWSER_CONFIG", config);
+    // No fallback to a globally attachable DevTools browser in Electron.
+    command.env("BUZZ_ACP_BROWSER_MCP_COMMAND", "");
+    command.env("BUZZ_ACP_BROWSER_ENDPOINT", "");
+    command.env("BUZZ_ACP_BROWSER_TARGET_ID", "");
+    Ok(())
+}
+
+fn configuration(
+    root: &str,
+    command: &str,
+    adapter: &str,
+    key: &ManagedAgentRuntimeKey,
+) -> Result<String, String> {
+    if [root, command, adapter]
+        .iter()
+        .any(|value| value.is_empty() || !Path::new(value).is_absolute())
+    {
+        return Err("Electron browser connection is incomplete; restart Colony".into());
+    }
+    let grant = Path::new(root).join(format!("{}.json", key.runtime_id()));
+    Ok(serde_json::json!({"command": command, "adapter": adapter, "grant": grant}).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn scoped_path_is_stable_and_contains_no_credentials() {
+        let key = ManagedAgentRuntimeKey::new("a".repeat(64), "wss://LOCALHOST:443/").unwrap();
+        let value: serde_json::Value = serde_json::from_str(
+            &configuration(
+                "/private/runtime",
+                "/Applications/Beta.app/Contents/MacOS/Beta",
+                "/app.asar/browser.mjs",
+                &key,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value["grant"],
+            format!("/private/runtime/{}.json", key.runtime_id())
+        );
+        assert_eq!(value.as_object().unwrap().len(), 3);
+        assert!(configuration("relative", "/electron", "/adapter", &key).is_err());
+        assert!(configuration("/root", "", "/adapter", &key).is_err());
+    }
+}

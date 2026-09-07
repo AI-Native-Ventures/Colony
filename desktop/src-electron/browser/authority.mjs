@@ -19,7 +19,12 @@ export class Authority {
   grants = new Map();
 
   add(tab) {
-    this.tabs.set(tab.id, { ...tab, url: normalizeUrl(tab.url), revision: 0 });
+    this.tabs.set(tab.id, {
+      ...tab,
+      url: normalizeUrl(tab.url),
+      revision: 0,
+      grantEpoch: 0,
+    });
   }
 
   grant(tabId, worker, mode = "read") {
@@ -31,6 +36,7 @@ export class Authority {
       throw new Error("Invalid grant mode");
     if ([...this.grants.values()].some((g) => g.tabId === tabId))
       throw new Error("Tab already has a controller");
+    tab.grantEpoch += 1;
     const grant = {
       token: randomBytes(32).toString("hex"),
       tabId,
@@ -62,7 +68,17 @@ export class Authority {
     return tab;
   }
 
+  revokeToken(token) {
+    const grant = this.grants.get(token);
+    if (!grant) return;
+    this.grants.delete(token);
+    const tab = this.tabs.get(grant.tabId);
+    if (tab) tab.grantEpoch += 1;
+  }
+
   revoke(tabId) {
+    const tab = this.tabs.get(tabId);
+    if (tab) tab.grantEpoch += 1;
     for (const [key, grant] of this.grants)
       if (grant.tabId === tabId) this.grants.delete(key);
   }

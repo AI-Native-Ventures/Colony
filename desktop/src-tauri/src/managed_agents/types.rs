@@ -543,6 +543,9 @@ pub struct ManagedAgentProcess {
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedAgentSummary {
     pub pubkey: String,
+    /// Whether the saved record identifies its hiring owner. Browser sharing
+    /// rejects legacy records whose display-only ownership fallback is unknown.
+    pub owner_identified: bool,
     pub name: String,
     pub persona_id: Option<String>,
     /// The record's harness/runtime id (mirror of `ManagedAgentRecord.runtime`).

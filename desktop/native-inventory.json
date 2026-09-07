@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 451,
-    "rust_lines": 174237,
+    "rust_total": 452,
+    "rust_lines": 174319,
     "tauri_coupled": 179,
-    "portable": 272,
-    "portable_lines": 99377,
+    "portable": 273,
+    "portable_lines": 99456,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -388,6 +388,7 @@
       "src-tauri/src/managed_agents/retention/legacy_migration.rs",
       "src-tauri/src/managed_agents/retention/legacy_migration/tests.rs",
       "src-tauri/src/managed_agents/role_backfill.rs",
+      "src-tauri/src/managed_agents/runtime/electron_browser.rs",
       "src-tauri/src/managed_agents/runtime/electron_isolation.rs",
       "src-tauri/src/managed_agents/runtime/instance_reaper.rs",
       "src-tauri/src/managed_agents/runtime/lifecycle.rs",

@@ -55,3 +55,56 @@ managed-process integration with a deterministic local model fixture to prove
 MCP discovery and actual browser tool execution; label the model fixture
 explicitly. A real provider and owner-selected Instagram sign-in are the final
 live pilot gate, with drafts only and no publication.
+
+
+## Security gate discovered during implementation (2026-09-08)
+
+This design is a local draft, not ready to enable for arbitrary agents.
+Independent review reproduced an unassigned process reading a sibling worker's
+JSON grant and using it against the real local broker. Local agents currently
+run under the same OS user with general filesystem access. Bearer tokens and
+roster eligibility checks do not establish process isolation, and the browser
+profile itself also needs protection. The owner-only picker is an access policy
+for cooperating agents; it is not a boundary against a malicious local agent.
+
+The founder has been asked whether to include agent containment before enabling
+signed-in browser work (recommended) or limit this to an explicitly trusted-local-
+agent beta. That decision is pending. Do not publish this feature, describe it as
+cross-agent isolation, or connect real accounts until the scope is resolved.
+
+Current local implementation includes the owner controls, private ACP startup
+configuration, late-read MCP grant, explicit owner attribution, and worker status
+checks. New shares and queued tool calls check current eligibility. An already
+started page operation is not undone by a worker exit; immediate owner takeover
+is checked at existing page-operation boundaries. Real managed-process browser
+execution remains unproven.
+
+Independent review also reproduced and corrected two asynchronous races: takeover
+while a share awaited the native roster, and stale validation revoking a newer
+grant. Both regressions failed before the fixes and passed afterwards. Tab grant
+epochs now fence takeover, cleanup revokes only its own token, and per-worker
+serialization protects file replacement. A delayed-rename regression covers the
+replacement order. Re-review found no remaining blocker in those race fixes.
+
+
+The existing tool implementations confirm this is an execution-boundary issue:
+`crates/buzz-dev-mcp/src/paths.rs::resolve_path` accepts and canonicalizes absolute
+paths outside the working directory, and `shell.rs::run` starts a normal shell
+under the same OS user. Restricting only the browser tool's arguments cannot
+protect the host's browser storage from that shell. A containment phase must
+cover file tools, shell children, browser data and broker access together, while
+preserving explicitly granted project files and required model/network access.
+
+The acceptance test for containment should run an unassigned real agent with
+its normal tools and prove it cannot read another agent's grant or Chromium
+profile, cannot use another worker's browser connection, and cannot regain
+access after takeover/restart. The assigned agent must still complete useful
+browser work and owner-approved file operations. Token naming, prompt rules and
+hiding the grant path are not substitutes for that test.
+
+
+Local draft verification: full `just ci` passed after these corrections (6,845
+desktop tests, 2,894 native tests with 21 existing ignores, 967 mobile tests with
+one existing skip). Focused ACP configuration and persistent MCP subprocess tests
+passed. Independent re-review ran 13 authority/managed-worker tests successfully.
+These checks do not prove agent containment or real managed-agent browser work.
