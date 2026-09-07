@@ -1144,6 +1144,7 @@ dependencies = [
  "hex",
  "infer",
  "keyring",
+ "libc",
  "nostr 0.44.6",
  "rand 0.10.2",
  "reqwest 0.13.4",
@@ -1184,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-desktop"
-version = "0.16.6"
+version = "0.16.7"
 dependencies = [
  "anyhow",
  "arboard",
