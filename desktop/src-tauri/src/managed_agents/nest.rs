@@ -88,8 +88,10 @@ static NEST_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new
 pub fn init_nest_dir(is_dev: bool) {
     if crate::electron_host::enabled() {
         // The opt-in Electron shell must not rewrite the stable/dev agent nest.
-        let path =
-            dirs::data_dir().map(|root| root.join("xyz.block.buzz.app.dev-electron").join("nest"));
+        let path = dirs::data_dir().map(|root| {
+            root.join(crate::electron_host::data_identifier())
+                .join("nest")
+        });
         let _ = NEST_DIR.set(path);
         return;
     }

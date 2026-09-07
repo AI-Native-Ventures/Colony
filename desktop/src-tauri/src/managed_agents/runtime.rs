@@ -14,6 +14,7 @@ use crate::{
     util::now_iso,
 };
 
+mod electron_isolation;
 mod path;
 pub(in crate::managed_agents) use path::build_augmented_path;
 pub(crate) use path::{compose_path_entries, should_skip_claude_executable, should_use_inherited};

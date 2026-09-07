@@ -8,6 +8,39 @@ Ordinary Tauri development and release commands are unchanged. Live runtime
 validation for this phase is macOS only; Windows/Linux shell parity is a later
 gate, separate from portable metadata and cookie-store unit tests.
 
+## Installable macOS beta
+
+`pnpm --dir desktop electron:package` builds the frontend, Rust compatibility
+host and six real CLI/agent helpers, then packages a relocatable **Colony Electron
+Beta.app** and zip under `desktop/electron-dist`. Use `--debug` for a faster
+local validation build. It requires the repository's activated Hermit toolchain
+at build time; the resulting app starts without a terminal or checkout.
+
+The package stages only the built frontend, Electron runtime modules, CSP and
+version metadata. Native executables live together outside the application
+archive. Packaged runtime discovery prefers these bundled helpers instead of
+build-time workspace output. Placeholder executables fail packaging.
+
+The beta is ad-hoc signed for local testing, **not Developer ID signed or
+notarized**. It has no update feed and does not replace the Tauri distribution.
+Native state and the keyring service are scoped to the Electron profile, so a
+temporary test profile cannot reuse a business's normal agent records or keys.
+The development native namespace changes from the initial migration's shared
+development namespace; no existing profile is migrated automatically.
+
+After packaging, run the full relocated-app gate:
+
+```sh
+COLONY_SMOKE_APP="/absolute/path/to/Colony Electron Beta.app" node desktop/src-electron/smoke.mjs
+```
+
+This copies the bundle outside the checkout, preserves macOS framework symlinks,
+launches with a minimal PATH and no host override, asserts that the real native
+catalog resolves the bundled Colony Agent, then exercises the same browser,
+synthetic import, takeover and restart checks described below. A debug package
+passed this gate on Apple Silicon; release-profile and notarized-package proof
+remain separate.
+
 ## Run
 
 From the repository root, activate Hermit and install workspace dependencies:

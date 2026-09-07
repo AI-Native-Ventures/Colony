@@ -29,7 +29,8 @@
     "harness:test": "wdio run ./e2e-real-shell/wdio.conf.ts",
     "harness:typecheck": "tsc -p tsconfig.harness.json --noEmit",
     "electron:dev": "node ./scripts/electron-dev.mjs",
-    "electron:test": "node --test \"src-electron/**/*.test.mjs\""
+    "electron:test": "node --test \"src-electron/**/*.test.mjs\"",
+    "electron:package": "node ./scripts/electron-package.mjs"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
@@ -98,6 +99,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron/packager": "20.1.1",
     "@noble/hashes": "^2.0.1",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.3.0",
