@@ -18,16 +18,21 @@ import { RendererHost } from "./renderer-host.mjs";
 import { BrowserViews } from "./browser/views.mjs";
 import { startBroker } from "./browser/broker.mjs";
 import { shellCommand } from "./shell-commands.mjs";
+import { runtimePaths } from "./runtime-paths.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
-const devUrl = process.env.COLONY_ELECTRON_DEV_URL;
-if (devUrl && new URL(devUrl).origin !== "http://127.0.0.1:1425")
-  throw new Error("Unexpected development origin");
-app.setName("Colony Electron Development");
+const paths = runtimePaths({
+  packaged: app.isPackaged,
+  appPath: desktop,
+  resourcesPath: process.resourcesPath,
+  env: process.env,
+});
+const { devUrl } = paths;
+app.setName(paths.name);
 app.setPath(
   "userData",
   process.env.COLONY_ELECTRON_USER_DATA ||
-    path.join(app.getPath("appData"), "colony-electron-development"),
+    path.join(app.getPath("appData"), paths.profile),
 );
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
@@ -48,9 +53,7 @@ const cleanup = () => resources.run();
 
 async function boot() {
   await app.whenReady();
-  const config = JSON.parse(
-    await readFile(path.join(desktop, "src-tauri/tauri.conf.json"), "utf8"),
-  );
+  const config = JSON.parse(await readFile(paths.config, "utf8"));
   // Both Vite's refresh preamble and the built app's theme bootstrap are
   // inline. Authorize only scripts in our own entry document by content hash.
   const html = devUrl
@@ -84,12 +87,20 @@ async function boot() {
     headers.set("Content-Security-Policy", csp);
     return new Response(response.body, { status: response.status, headers });
   });
-  const executable = process.env.COLONY_NATIVE_HOST;
-  if (!executable || !path.isAbsolute(executable))
-    throw new Error(
-      "Set COLONY_NATIVE_HOST to the compiled electron-host binary",
-    );
-  const host = new NativeHost(executable);
+  const profileId = createHash("sha256")
+    .update(app.getPath("userData"))
+    .digest("hex")
+    .slice(0, 16);
+  const host = new NativeHost(paths.nativeHost, {
+    env: {
+      ...process.env,
+      COLONY_ELECTRON_PACKAGED: app.isPackaged ? "1" : "0",
+      COLONY_ELECTRON_PROFILE_ID: profileId,
+      // Old installed Tauri versions look for a known host basename and its
+      // full instance ID in the environment before reaping foreign workers.
+      COLONY_ELECTRON_INSTANCE_ID: `xyz.block.buzz.app.dev-electron.${profileId}`,
+    },
+  });
   const rendererHost = new RendererHost(host);
   resources.add(() => host.close());
   const window = new BrowserWindow({

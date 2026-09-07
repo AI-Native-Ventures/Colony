@@ -496,6 +496,9 @@ const HARNESS_BINARY_NAME: &str = "buzz-acp";
 /// when `resolve_pgids_and_kill` signals the PGID.
 #[cfg(unix)]
 pub(crate) fn sweep_untracked_bundle_harnesses(skip_pids: &[u32]) {
+    if !super::electron_isolation::allow_unmarked_bundle_sweep(crate::electron_host::enabled()) {
+        return;
+    }
     let Some(harness_exe) = expected_harness_exe_path() else {
         return;
     };

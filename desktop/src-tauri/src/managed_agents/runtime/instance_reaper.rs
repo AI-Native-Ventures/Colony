@@ -6,6 +6,8 @@ const DESKTOP_BINARY_NAMES: &[&str] = &[
     "Buzz",
     "buzz-desktop",
     "buzz_desktop",
+    "colony-native-host",
+    "colony-native-h",
     // Linux limits /proc/<pid>/comm to 15 visible bytes, truncating the
     // AppImage shim's real executable name, `buzz-desktop.bin`.
     "buzz-desktop.bi",
@@ -170,7 +172,12 @@ fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
         // Boundary-anchored search: the identifier in the config JSON is
         // followed by a non-identifier char (typically `"`). A raw substring
         // match would let `...app` match inside `...app.dev`.
-        if buffer_contains_identifier(&args_buf, identifier_bytes) {
+        let matches = if name.starts_with("colony-native-h") {
+            super::electron_isolation::matches_electron_instance(&args_buf, instance_id)
+        } else {
+            buffer_contains_identifier(&args_buf, identifier_bytes)
+        };
+        if matches {
             return true;
         }
     }
@@ -204,6 +211,14 @@ fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
             continue;
         };
         if !is_desktop_binary(comm.trim()) {
+            continue;
+        }
+        if comm.trim() == "colony-native-h" || comm.trim() == "colony-native-host" {
+            if std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| {
+                super::electron_isolation::matches_electron_instance(&env, instance_id)
+            }) {
+                return true;
+            }
             continue;
         }
         // Check cmdline for the identifier with boundary anchoring.

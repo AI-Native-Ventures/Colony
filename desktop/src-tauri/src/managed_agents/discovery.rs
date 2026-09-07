@@ -1,3 +1,6 @@
+mod command_paths;
+use command_paths::command_search_dirs;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -511,25 +514,6 @@ fn profile_target_dirs(root: &Path) -> [PathBuf; 2] {
     } else {
         [root.join("target/release"), root.join("target/debug")]
     }
-}
-
-fn command_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = profile_target_dirs(&workspace_root_dir()).to_vec();
-    if let Ok(current_dir) = std::env::current_dir() {
-        dirs.extend(profile_target_dirs(&current_dir));
-    }
-
-    dirs.extend(
-        std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf)),
-    );
-    dirs.into_iter().fold(Vec::new(), |mut unique, dir| {
-        if !unique.contains(&dir) {
-            unique.push(dir);
-        }
-        unique
-    })
 }
 
 fn is_executable_file(path: &Path) -> bool {

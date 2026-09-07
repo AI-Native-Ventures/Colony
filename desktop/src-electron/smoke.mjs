@@ -4,7 +4,14 @@ import { verifyImport } from "./import-smoke.mjs";
 // Real Electron + Rust smoke gate. No mock native bridge or personal browser data.
 import { _electron as electron } from "@playwright/test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, copyFile, readFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  rm,
+  copyFile,
+  cp,
+  readFile,
+  realpath,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,23 +19,42 @@ const desktop = fileURLToPath(new URL("..", import.meta.url));
 const appVersion = JSON.parse(
   await readFile(path.join(desktop, "package.json"), "utf8"),
 ).version;
-const data = await mkdtemp(path.join(os.tmpdir(), "colony-electron-smoke-"));
-const frozenHost = path.join(data, "colony-native-host");
-await copyFile(
-  path.join(desktop, "src-tauri/target/debug/colony-native-host"),
-  frozenHost,
+const data = await realpath(
+  await mkdtemp(path.join(os.tmpdir(), "colony-electron-smoke-")),
 );
+const packagedApp = process.env.COLONY_SMOKE_APP;
+const relocatedApp = path.join(data, "Relocated Colony.app");
+const frozenHost = path.join(data, "colony-native-host");
+if (packagedApp) {
+  await cp(packagedApp, relocatedApp, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+} else {
+  await copyFile(
+    path.join(desktop, "src-tauri/target/debug/colony-native-host"),
+    frozenHost,
+  );
+}
+const built = !!packagedApp || process.env.COLONY_SMOKE_BUILT === "1";
 const launch = () =>
   electron.launch({
-    args: [path.join(desktop, "src-electron/main.mjs")],
+    ...(packagedApp
+      ? {
+          executablePath: path.join(
+            relocatedApp,
+            "Contents/MacOS/Colony Electron Beta",
+          ),
+        }
+      : {}),
+    args: packagedApp ? [] : [path.join(desktop, "src-electron/main.mjs")],
+    cwd: data,
     env: {
       ...process.env,
-      COLONY_ELECTRON_DEV_URL:
-        process.env.COLONY_SMOKE_BUILT === "1"
-          ? undefined
-          : "http://127.0.0.1:1425",
+      COLONY_ELECTRON_DEV_URL: built ? undefined : "http://127.0.0.1:1425",
       COLONY_ELECTRON_USER_DATA: data,
-      COLONY_NATIVE_HOST: frozenHost,
+      COLONY_NATIVE_HOST: packagedApp ? undefined : frozenHost,
+      ...(packagedApp ? { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } : {}),
       BUZZ_PRIVATE_KEY: `${"0".repeat(63)}1`,
       BUZZ_SHARE_IDENTITY: "1",
       BUZZ_RELAY_URL: "ws://127.0.0.1:1",
@@ -76,7 +102,7 @@ try {
     .first()
     .waitFor();
   assert.deepEqual(cspErrors, [], "the app bootstrap must satisfy its CSP");
-  if (process.env.COLONY_SMOKE_BUILT === "1") {
+  if (built) {
     await page.reload();
     await page
       .getByText("Inbox", { exact: true })
@@ -122,6 +148,27 @@ try {
   assert.equal(result.event, true);
   assert.equal(result.unknown, true);
   console.log("Real renderer/Rust:", JSON.stringify(result));
+  if (packagedApp) {
+    const packagedState = await application.evaluate(({ app }) => ({
+      packaged: app.isPackaged,
+      appPath: app.getAppPath(),
+    }));
+    assert.equal(packagedState.packaged, true);
+    assert.ok(packagedState.appPath.startsWith(relocatedApp));
+    const runtimes = await page.evaluate(() =>
+      window.colonyDesktop.request("invoke", {
+        command: "discover_acp_providers",
+      }),
+    );
+    const builtin = runtimes.find((runtime) => runtime.id === "buzz-agent");
+    assert.ok(builtin, "bundled Colony Agent must be in the runtime catalog");
+    assert.equal(builtin.availability, "available");
+    assert.equal(
+      builtin.binary_path,
+      path.join(relocatedApp, "Contents/Resources/native/buzz-agent"),
+    );
+    console.log("Relocated app discovers its bundled Colony Agent: PASS");
+  }
   await page
     .getByRole("dialog", { name: "Bring your signed-in accounts" })
     .waitFor();
@@ -208,5 +255,6 @@ try {
   );
 } finally {
   await application?.close();
+  if (packagedApp) await rm(relocatedApp, { recursive: true, force: true });
   if (!application) await rm(data, { recursive: true, force: true });
 }

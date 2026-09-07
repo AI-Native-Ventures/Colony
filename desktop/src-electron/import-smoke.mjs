@@ -38,6 +38,9 @@ export async function verifyImport(application, page) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
+    const packagedRoot = await application.evaluate(({ app }) =>
+      app.isPackaged ? app.getAppPath() : null,
+    );
     const result = await application.evaluate(
       async ({ session }, { profilePath, modulePath }) => {
         const require = process
@@ -93,9 +96,11 @@ export async function verifyImport(application, page) {
       },
       {
         profilePath,
-        modulePath: fileURLToPath(
-          new URL("./browser-import/manager.mjs", import.meta.url),
-        ),
+        modulePath: packagedRoot
+          ? path.join(packagedRoot, "src-electron/browser-import/manager.mjs")
+          : fileURLToPath(
+              new URL("./browser-import/manager.mjs", import.meta.url),
+            ),
       },
     );
     assert.equal(result.result.imported, 1);

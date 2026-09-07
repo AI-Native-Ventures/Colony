@@ -11,6 +11,7 @@ node_modules
 .pnpm-store
 dist
 dist-ssr
+electron-dist
 playwright-report
 playwright-report.json
 test-results

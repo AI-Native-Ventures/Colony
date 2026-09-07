@@ -8,7 +8,7 @@ fn dev_keyring_service(configured: Option<String>) -> String {
 
 pub(crate) fn keyring_service() -> &'static str {
     if crate::electron_host::enabled() {
-        return "buzz-desktop-dev.electron";
+        return crate::electron_host::data_identifier();
     }
     if cfg!(debug_assertions) {
         static DEV_SERVICE: std::sync::OnceLock<String> = std::sync::OnceLock::new();

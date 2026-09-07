@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- feat(desktop): package the opt-in Electron app as a self-contained macOS beta with real agent helpers, separate profile state, and a relocated-app browser/import smoke test. The local beta is ad-hoc signed; release signing and automatic teammate browser assignment remain separate gates.
+
 - feat(desktop): add an opt-in Electron version of the existing Colony app with business-scoped browser tabs, owner-controlled agent access, and selected-site sign-in import at first launch or in Settings. The signed Tauri release remains unchanged.
 
 - feat(desktop): add a native Action Center for asks, tasks, messages, reminders, and workflow approvals.

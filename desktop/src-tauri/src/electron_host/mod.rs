@@ -13,6 +13,28 @@ pub(crate) fn enabled() -> bool {
     cfg!(feature = "electron-host") && std::env::var("COLONY_ELECTRON_HOST").as_deref() == Ok("1")
 }
 
+/// Whether the Electron parent is running from an installed application bundle.
+pub(crate) fn packaged() -> bool {
+    enabled() && std::env::var("COLONY_ELECTRON_PACKAGED").as_deref() == Ok("1")
+}
+
+/// Profile-scoped native storage and keyring namespace supplied by the parent.
+pub(crate) fn data_identifier() -> &'static str {
+    static IDENTIFIER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    IDENTIFIER.get_or_init(|| {
+        let profile = std::env::var("COLONY_ELECTRON_PROFILE_ID").unwrap_or_default();
+        profile_identifier(&profile)
+    })
+}
+
+fn profile_identifier(profile: &str) -> String {
+    if profile.len() == 16 && profile.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        format!("xyz.block.buzz.app.dev-electron.{profile}")
+    } else {
+        "xyz.block.buzz.app.dev-electron".to_string()
+    }
+}
+
 pub(crate) fn configure(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     #[cfg(feature = "electron-host")]
     if enabled() {
@@ -25,7 +47,7 @@ pub(crate) fn context(mut context: tauri::Context<tauri::Wry>) -> tauri::Context
     if enabled() {
         let config = context.config_mut();
         // Development migration never opens stable app data or existing views.
-        config.identifier = "xyz.block.buzz.app.dev-electron".into();
+        config.identifier = data_identifier().into();
         for window in &mut config.app.windows {
             window.visible = false;
             window.focus = false;
@@ -79,4 +101,26 @@ pub(crate) fn single_instance(builder: tauri::Builder<tauri::Wry>) -> tauri::Bui
             }
         }
     }))
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::profile_identifier;
+
+    #[test]
+    fn profiles_have_distinct_native_namespaces() {
+        assert_ne!(
+            profile_identifier("1111111111111111"),
+            profile_identifier("2222222222222222")
+        );
+        assert_eq!(
+            profile_identifier("../../production"),
+            profile_identifier("")
+        );
+        assert_eq!(profile_identifier("short"), profile_identifier(""));
+        assert_eq!(
+            profile_identifier("1234567890abcdef"),
+            "xyz.block.buzz.app.dev-electron.1234567890abcdef"
+        );
+    }
 }
