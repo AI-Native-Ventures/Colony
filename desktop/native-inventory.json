@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 449,
-    "rust_lines": 174012,
+    "rust_lines": 174015,
     "tauri_coupled": 179,
     "portable": 270,
     "portable_lines": 99202,
@@ -506,7 +506,7 @@
   },
   "apphandle_usage": {
     ".state::<": 112,
-    ".emit(": 49,
+    ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
     ".shell()": 0,

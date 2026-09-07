@@ -1,5 +1,7 @@
 use super::wire::{self, Request};
+use crate::host::TauriEventSink;
 use base64::Engine;
+use buzz_native::EventSink;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{
@@ -7,7 +9,7 @@ use std::sync::{
     Arc,
 };
 use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody};
-use tauri::{Emitter, Listener, Manager};
+use tauri::{Listener, Manager};
 
 fn response_body(body: &InvokeResponseBody) -> Result<Value, &'static str> {
     match body {
@@ -139,6 +141,7 @@ pub(super) fn start(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Err
         .spawn(move || {
             let pending = Arc::new(AtomicUsize::new(0));
             let mut subscriptions = HashMap::new();
+            let event_sink = TauriEventSink::new(app.clone());
             let mut input = std::io::stdin().lock();
             if wire::send(&json!({"type":"ready", "version":1})).is_err() {
                 app.exit(1);
@@ -196,7 +199,7 @@ pub(super) fn start(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Err
                             error(id, "Invalid native event");
                             continue;
                         }
-                        match app.emit(&event, payload) {
+                        match event_sink.emit_json(&event, payload) {
                             Ok(()) => {
                                 let _ =
                                     wire::send(&json!({"type":"response", "id":id, "result":null}));

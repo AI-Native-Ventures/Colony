@@ -90,3 +90,9 @@ by this PR.
 Visual inspection also caught the default Electron engine version in Settings.
 A live assertion failed with 44.2.0 versus Colony 0.16.7; the shell now reads the
 Colony package version, and the final built smoke passed that assertion.
+
+GitHub's initial path-detection gate found a native inventory mismatch caused by
+this phase's generic event forwarder. The failure reproduced locally (50 versus
+51 emit sites). Routing through the existing `TauriEventSink` keeps the event
+contract intact and the inventory gate unchanged; its 26 tests now pass, as do
+21 additional path/instance/schema contract tests. No guard was disabled.
