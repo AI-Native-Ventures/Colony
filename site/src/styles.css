@@ -332,6 +332,12 @@ p {
     margin-bottom: 55px;
   }
 }
+@media (max-width: 1280px) {
+  .field-ant-0,
+  .field-ant-1 {
+    top: 105px;
+  }
+}
 @media (max-width: 1080px) {
   .section-wrap,
   .example-shell {
@@ -341,7 +347,11 @@ p {
     font-size: 55px;
   }
   .field-ant-2,
-  .field-ant-3 {
+  .field-ant-3,
+  .field-ant-4,
+  .field-ant-5,
+  .field-ant-6,
+  .field-ant-7 {
     display: none;
   }
 }
