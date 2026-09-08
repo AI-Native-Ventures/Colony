@@ -1,78 +1,19 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <script>
-      // Colony's random-hue mechanic: one of the five brand hues is picked
-      // per page load and stamped on <html data-hue> plus the canvas custom
-      // properties, so a refresh re-rolls the whole page's color without a
-      // flash of a default first. This runs inline in <head>, ahead of the
-      // bundle, because the pick has to land before first paint.
-      //
-      // The table below duplicates src/brand/hue.ts's HUE_CANVAS,
-      // HUE_CANVAS_MID, HUE_CANVAS_LIGHT and HUE_ACCENT by hand, the same
-      // convention AntMark.tsx and palette.ts already use, because this
-      // script cannot import from the bundle it runs ahead of. Keep both
-      // copies identical.
-      (function () {
-        var HUES = [
-          {
-            name: "violet",
-            canvas: "#B394F9",
-            mid: "#DED4F7",
-            light: "#F3EFFA",
-            accent: "hsl(258 90% 66%)",
-          },
-          {
-            name: "blue",
-            canvas: "#72A5F8",
-            mid: "#D4E1F7",
-            light: "#EFF3FA",
-            accent: "hsl(217 91% 60%)",
-          },
-          {
-            name: "pink",
-            canvas: "#F17EB8",
-            mid: "#F8DDEB",
-            light: "#FBF4F7",
-            accent: "hsl(330 81% 60%)",
-          },
-          {
-            name: "amber",
-            canvas: "#F59F0A",
-            mid: "#FAEBD1",
-            light: "#FBF7EE",
-            accent: "hsl(38 92% 50%)",
-          },
-          {
-            name: "green",
-            canvas: "#33CC99",
-            mid: "#D9F2EA",
-            light: "#F1F9F6",
-            accent: "hsl(160 60% 45%)",
-          },
-        ];
-        var hue = HUES[Math.floor(Math.random() * HUES.length)];
-        var root = document.documentElement;
-        root.dataset.hue = hue.name;
-        root.style.setProperty("--colony-canvas", hue.canvas);
-        root.style.setProperty("--colony-canvas-mid", hue.mid);
-        root.style.setProperty("--colony-canvas-light", hue.light);
-        root.style.setProperty("--colony-accent", hue.accent);
-      })();
-    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Colony | Start or run your agency with an AI team</title>
+    <title>Colony | Create websites and social media posts with AI</title>
     <meta
       name="description"
-      content="Start or run a website or social media agency with Colony. Find potential clients and use AI assistants to create their websites and posts. Apply for early access."
+      content="Tell Colony what your client needs. Its AI assistants create websites, pictures and social media posts for you to review and change. Apply for early access."
     />
-    <meta property="og:title" content="Colony | Your AI team for agency work" />
+    <meta property="og:title" content="Colony | Tell it what to make. Check the work." />
     <meta
       property="og:description"
       content="Find potential clients. Build and update websites. Create social media posts. Apply for early access to Colony."
     />
-    <meta property="og:image" content="https://colony.ainative.ventures/og-agencies.png" />
+    <meta property="og:image" content="https://colony.ainative.ventures/og-work.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

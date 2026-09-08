@@ -1,4 +1,5 @@
 import { type FormEvent, useRef, useState } from "react";
+import { AntMark } from "@/brand/AntMark";
 import {
   APPLICATION_RECIPIENT,
   buildApplicationEmail,
@@ -59,15 +60,21 @@ export function ComingSoon() {
     >
       <div className="early-access__inner">
         <div className="early-access__intro">
-          <p className="early-access__eyebrow">Try Colony early</p>
-          <h2 id="early-access-title">Apply for early access.</h2>
+          <div className="early-access__ants" aria-hidden="true">
+            <AntMark className="early-access__ant early-access__ant--first" />
+            <AntMark className="early-access__ant early-access__ant--second" />
+            <AntMark className="early-access__ant early-access__ant--third" />
+          </div>
+          <p className="early-access__eyebrow">Apply for early access</p>
+          <h2 id="early-access-title">Try Colony with your own clients.</h2>
           <p>
-            Starting an agency or already have clients? Tell us what you want
-            help with. You don’t need a business name or website to apply.
+            Tell us if you want to make websites, social media posts, or both.
+            You can apply before you have your first client, a business name or
+            a website.
           </p>
           <p className="early-access__explanation">
-            We’re building and testing Colony. Early access is limited. Applying
-            does not give you access straight away.
+            Colony is still being built and tested. Early access is limited.
+            Applying does not give you access straight away.
           </p>
           <div className="early-access__delivery">
             <h3>Your application goes by email.</h3>

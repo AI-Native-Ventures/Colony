@@ -1,59 +1,114 @@
 .early-access {
-  color: #171717;
-  background: #f7f5ef;
-  padding: clamp(64px, 9vw, 128px) 24px;
-  scroll-margin-top: 36px;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: clamp(72px, 9vw, 136px) 24px;
+  color: #fff;
+  background:
+    radial-gradient(ellipse at 4% 9%, #612eaa 0%, transparent 49%),
+    radial-gradient(ellipse at 96% 85%, #176c72 0%, transparent 57%),
+    radial-gradient(ellipse at 75% 0%, #273f98 0%, transparent 62%),
+    linear-gradient(135deg, #241544, #191c40 62%, #123f4b);
+  scroll-margin-top: 28px;
 }
 
 .early-access__inner {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
   gap: clamp(40px, 7vw, 104px);
   max-width: 1160px;
   margin-inline: auto;
 }
 
+.early-access__intro {
+  padding-top: 12px;
+}
+
+.early-access__ants {
+  display: flex;
+  align-items: end;
+  gap: 18px;
+  width: fit-content;
+  margin-bottom: 36px;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
+}
+
+.early-access__ant {
+  display: block;
+  height: auto;
+  overflow: visible;
+}
+
+.early-access__ant--first {
+  width: 90px;
+  transform: rotate(-10deg);
+}
+
+.early-access__ant--second {
+  width: 62px;
+  color: #cfc0ff;
+  transform: translateY(-8px) rotate(5deg);
+}
+
+.early-access__ant--third {
+  width: 42px;
+  color: #afe8dc;
+  transform: translateY(-2px) rotate(-8deg);
+}
+
 .early-access__eyebrow {
   margin: 0 0 18px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+.early-access__intro > .early-access__eyebrow {
+  color: #ded6ff;
 }
 
 .early-access__intro h2 {
-  max-width: 11ch;
-  margin: 0 0 24px;
-  font-size: clamp(42px, 5.2vw, 68px);
-  font-weight: 600;
-  letter-spacing: -0.055em;
-  line-height: 1.02;
+  max-width: 12ch;
+  margin: 0 0 26px;
+  font-size: clamp(42px, 4.8vw, 64px);
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  line-height: 1.06;
+  text-wrap: balance;
 }
 
 .early-access__intro > p:not(.early-access__eyebrow) {
-  max-width: 41ch;
+  max-width: 39ch;
   margin: 0 0 22px;
   font-size: 18px;
-  line-height: 1.6;
+  line-height: 1.65;
 }
 
 .early-access__intro > p.early-access__explanation {
   font-size: 15px;
-  color: #52514e;
+  color: #dddcee;
 }
 
 .early-access__delivery {
-  margin-top: 36px;
-  border-left: 3px solid var(--colony-canvas, #b9a5ef);
-  padding-left: 20px;
-  font-size: 14px;
-  line-height: 1.6;
+  max-width: 42ch;
+  margin-top: 34px;
+  padding-top: 28px;
+  border-top: 1px solid #ffffff40;
+  color: #eeedf8;
+  font-size: 15px;
+  line-height: 1.65;
 }
 
 .early-access__delivery h3 {
-  margin: 0 0 10px;
-  font-size: 16px;
+  margin: 0 0 12px;
+  color: #fff;
+  font-size: 18px;
   font-weight: 650;
+  line-height: 1.4;
 }
 
 .early-access__delivery p {
@@ -64,42 +119,54 @@
   overflow-wrap: anywhere;
 }
 
+.early-access__application {
+  min-width: 0;
+  border: 1px solid #fff;
+  border-radius: 28px;
+  padding: clamp(24px, 3vw, 40px);
+  color: #1d1728;
+  background: #fff;
+  box-shadow: 0 24px 72px #100c2826;
+}
+
 .early-access__required {
-  margin: 0 0 22px;
-  color: #52514e;
-  font-size: 13px;
+  margin: 0 0 26px;
+  color: #625b70;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .early-access__field {
-  margin-bottom: 22px;
+  margin-bottom: 24px;
 }
 
 .early-access label {
   display: block;
-  margin: 0 0 8px;
-  font-size: 14px;
+  margin: 0 0 9px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.5;
 }
 
 .early-access label span {
   font-weight: 400;
-  color: #52514e;
+  color: #625b70;
 }
 
 .early-access input,
 .early-access select,
 .early-access textarea {
+  box-sizing: border-box;
   width: 100%;
-  min-height: 48px;
-  border: 1px solid #918e87;
-  border-radius: 6px;
-  padding: 12px 14px;
-  background: #fffefa;
-  color: #171717;
+  min-height: 52px;
+  border: 1px solid #8e859e;
+  border-radius: 12px;
+  padding: 13px 14px;
+  background: #fcfbfe;
+  color: #1d1728;
   font: inherit;
   font-size: 16px;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .early-access select {
@@ -112,76 +179,91 @@
 
 .early-access :is(input, select, textarea, button, a):focus-visible,
 .early-access__draft:focus-visible {
-  outline: 3px solid #64419f;
+  outline: 3px solid #6841ba;
   outline-offset: 4px;
 }
 
 .early-access__hint {
   margin: 8px 0 0;
-  font-size: 12px;
+  color: #625b70;
+  font-size: 14px;
   line-height: 1.6;
-  color: #52514e;
   overflow-wrap: anywhere;
 }
 
 .early-access__primary,
 .early-access__secondary {
   display: inline-flex;
-  min-height: 48px;
+  min-height: 52px;
   align-items: center;
   justify-content: center;
   gap: 18px;
-  border: 1px solid #171717;
-  border-radius: 999px;
-  padding: 13px 22px;
-  font-size: 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  padding: 14px 22px;
+  font: inherit;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
   text-align: center;
   text-decoration: none;
   cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
 }
 
 .early-access__primary {
-  background: #171717;
-  color: #fffefa;
+  color: #fff;
+  background: #231630;
 }
 
 .early-access__primary:hover {
-  background: #3b314e;
+  background: #4b2c75;
+}
+
+.early-access form > .early-access__primary {
+  width: 100%;
 }
 
 .early-access__secondary {
-  color: #171717;
-  background: transparent;
+  border-color: #8e859e;
+  color: #231630;
+  background: #fff;
 }
 
 .early-access__secondary:hover {
-  background: #e8e1f1;
+  border-color: #6841ba;
+  background: #f2edfc;
 }
 
 .early-access__form-note {
   margin-top: 14px;
+  text-align: center;
 }
 
 .early-access__draft {
   margin-top: 32px;
-  border-top: 2px solid #171717;
+  border-top: 1px solid #dcd6e5;
   padding-top: 28px;
   scroll-margin-block: 32px;
 }
 
+.early-access__draft > .early-access__eyebrow {
+  color: #6841ba;
+}
+
 .early-access__draft h3 {
   margin: 0 0 14px;
-  font-size: 25px;
-  font-weight: 600;
+  font-size: 26px;
+  font-weight: 650;
   letter-spacing: -0.025em;
-  line-height: 1.15;
+  line-height: 1.2;
 }
 
 .early-access__draft > p:not(.early-access__eyebrow):not(.early-access__hint) {
   margin: 0 0 20px;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
 }
 
@@ -207,21 +289,42 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .early-access__intro {
+    padding-top: 0;
+  }
+
   .early-access__intro h2 {
     max-width: 15ch;
   }
 
+  .early-access__ants {
+    margin-bottom: 28px;
+  }
+
   .early-access__delivery {
     margin-top: 24px;
+    padding-top: 24px;
   }
 }
 
 @media (max-width: 380px) {
   .early-access {
-    padding-inline: 18px;
+    padding-inline: 16px;
+  }
+
+  .early-access__application {
+    border-radius: 22px;
+    padding: 22px 18px;
   }
 
   .early-access__actions > * {
     width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .early-access__primary,
+  .early-access__secondary {
+    transition: none;
   }
 }
