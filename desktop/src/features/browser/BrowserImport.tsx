@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { getIdentity } from "@/shared/api/tauriIdentity";
+import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
+import { getStorageItem } from "@/shared/lib/safeStorage";
 import { electronDesktop } from "@/shared/api/electronNativeBridge";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { Button } from "@/shared/ui/button";
@@ -217,17 +220,49 @@ export function BrowserSettings() {
   );
 }
 export function BrowserImportWelcome() {
+  const { transaction } = useCommunityOnboarding();
+  const [completionVersion, setCompletionVersion] = useState(0);
+  useEffect(() => {
+    const refresh = () => setCompletionVersion((value) => value + 1);
+    window.addEventListener("colony:onboarding-complete", refresh);
+    return () =>
+      window.removeEventListener("colony:onboarding-complete", refresh);
+  }, []);
   const { activeCommunity } = useCommunities();
   const business = activeCommunity?.id;
   const [open, setOpen] = useState(false);
+  // The first-use prompt mounts outside QueryClientProvider. Read the native
+  // identity only after Electron/business eligibility, and discard stale reads.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: completionVersion invalidates the persisted completion marker.
   useEffect(() => {
+    let cancelled = false;
+    setOpen(false);
     if (
       electronDesktop() &&
       business &&
-      !localStorage.getItem("colony-browser-import-offered")
-    )
-      setOpen(true);
-  }, [business]);
+      !transaction &&
+      activeCommunity?.relayUrl &&
+      !getStorageItem("colony-browser-import-offered")
+    ) {
+      const relay = activeCommunity.relayUrl;
+      void getIdentity()
+        .then((identity) => {
+          if (
+            !cancelled &&
+            getStorageItem(
+              `buzz-community-onboarding-complete.v1:${encodeURIComponent(relay)}:${identity.pubkey}`,
+            ) === "true"
+          )
+            setOpen(true);
+        })
+        .catch(() => {
+          /* Optional import remains available in Settings. */
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [business, activeCommunity?.relayUrl, transaction, completionVersion]);
   if (!business || !electronDesktop()) return null;
   return (
     <Dialog

@@ -317,6 +317,8 @@ export function markCommunityOnboardingComplete(
   // The legacy gate is identity-scoped. Marking it here prevents the old profile
   // flow from reopening after the first community transaction completes.
   storage.setItem(`buzz-onboarding-complete.v1:${pubkey}`, "true");
+  if (typeof window !== "undefined")
+    window.dispatchEvent(new Event("colony:onboarding-complete"));
 }
 
 /**

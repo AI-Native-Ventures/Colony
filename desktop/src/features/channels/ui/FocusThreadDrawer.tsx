@@ -232,6 +232,7 @@ export function FocusThreadDrawer({
       <motion.aside
         animate={{ opacity: 1, x: 0 }}
         className={cn(
+          "colony-thread-surface",
           mode === "standalone"
             ? "contents"
             : "relative flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-background",

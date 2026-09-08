@@ -17,6 +17,12 @@ import {
   createNcryptsecBackup,
   getIdentity,
   importIdentity,
+  preparePendingSignup,
+  loadPendingSignup,
+  markPendingSignupRegistered,
+  clearPendingSignup,
+  discardPendingSignup,
+  saveRecoveryCode,
 } from "@/shared/api/tauriIdentity";
 
 import { createAuthService } from "../authService";
@@ -51,6 +57,12 @@ export function createWiredAuthService() {
       await importIdentity(blob, password);
     },
     getPubkey: async () => (await getIdentity()).pubkey,
+    prepareSignup: preparePendingSignup,
+    loadPendingSignup,
+    markRegistered: markPendingSignupRegistered,
+    clearPendingSignup,
+    discardPendingSignup,
+    saveRecoveryCode,
   });
 }
 

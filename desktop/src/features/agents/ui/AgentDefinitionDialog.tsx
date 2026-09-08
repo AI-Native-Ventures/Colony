@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
+import { AgentIdentityFields } from "./AgentIdentityFields";
 import { AgentCreationPreview } from "./AgentCreationPreview";
 import { PersonaDropdownField } from "./PersonaDropdownField";
 import type { EnvVarsValue } from "./EnvVarsEditor";
@@ -113,6 +114,8 @@ export function AgentDefinitionDialog({
   const runtimesLoading =
     runtimeCatalogStatus === "loading" || propRuntimesLoading;
   const [displayName, setDisplayName] = React.useState("");
+  const [roleTitle, setRoleTitle] = React.useState("");
+  const roleIdRef = React.useRef("");
   const [aiDefaultsOpen, setAiDefaultsOpen] = React.useState(false);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [avatarUrl, setAvatarUrl] = React.useState("");
@@ -184,6 +187,8 @@ export function AgentDefinitionDialog({
     }
 
     setDisplayName(initialValues.displayName);
+    setRoleTitle(initialValues.roleTitle ?? "");
+    roleIdRef.current = initialValues.roleId ?? `role-${crypto.randomUUID()}`;
     setAvatarUrl(initialValues.avatarUrl ?? "");
     setSystemPrompt(initialValues.systemPrompt);
     setRuntime(initialValues.runtime ?? "");
@@ -340,6 +345,9 @@ export function AgentDefinitionDialog({
           : undefined;
     const baseInput = {
       displayName: displayName.trim(),
+      ...(roleTitle.trim()
+        ? { roleId: roleIdRef.current, roleTitle: roleTitle.trim() }
+        : {}),
       avatarUrl: avatarUrl.trim() || undefined,
       systemPrompt: systemPrompt,
       runtime: runtimeForSubmit,
@@ -497,6 +505,7 @@ export function AgentDefinitionDialog({
   // source of truth with the readiness gate so display and Save can't drift.
   const canSubmit =
     canSubmitPersonaDialog({ displayName, isPending }) &&
+    (!initialValues?.roleTitle || roleTitle.trim().length > 0) &&
     // Defaults inherits the harness from global — no explicit pin required.
     (!isCreateMode ||
       aiConfigurationMode === "defaults" ||
@@ -746,33 +755,14 @@ export function AgentDefinitionDialog({
       />
 
       <div className="space-y-5">
-        <div className="space-y-1.5">
-          <label
-            className="text-sm font-medium text-foreground"
-            htmlFor="persona-display-name"
-          >
-            Agent name
-          </label>
-          <div
-            className={cn(
-              "flex min-h-11 items-center px-3",
-              PERSONA_FIELD_SHELL_CLASS,
-            )}
-          >
-            <Input
-              autoCorrect="off"
-              className={cn(
-                "h-8 px-0 py-0 leading-6",
-                PERSONA_FIELD_CONTROL_CLASS,
-              )}
-              disabled={isPending}
-              id="persona-display-name"
-              onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Fizz"
-              value={displayName}
-            />
-          </div>
-        </div>
+        <AgentIdentityFields
+          displayName={displayName}
+          roleTitle={roleTitle}
+          roleRequired={Boolean(initialValues?.roleTitle)}
+          disabled={isPending}
+          onNameChange={setDisplayName}
+          onRoleChange={setRoleTitle}
+        />
 
         <div className="space-y-1.5">
           <label

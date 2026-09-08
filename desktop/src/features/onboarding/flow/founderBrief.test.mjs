@@ -126,3 +126,15 @@ test("an unanswered flow still produces a sendable draft", () => {
   assert.ok(draft.firstTask.content.trim().length > 0);
   assert.doesNotThrow(() => buildOnboardingFirstTaskMessage(draft));
 });
+
+test("a persisted brief marker survives rebuilding completion after a retry", () => {
+  const answers = { company: "Horizon", firstTaskMarker: "stable-first-brief" };
+  assert.equal(
+    draftFromAnswers(answers).firstTask.deliveryMarker,
+    "stable-first-brief",
+  );
+  assert.equal(
+    draftFromAnswers(answers).firstTask.deliveryMarker,
+    "stable-first-brief",
+  );
+});

@@ -22,6 +22,7 @@ type ProfileAvatarWithStatusProps = {
   geometry?: ProfileAvatarStatusGeometry;
   iconClassName?: string;
   label: string;
+  identitySeed?: string;
   size: number;
   status?: PresenceStatus;
   statusTestId?: string;
@@ -56,6 +57,7 @@ export function ProfileAvatarWithStatus({
   geometry = DEFAULT_HOVER_PROFILE_STATUS_GEOMETRY,
   iconClassName,
   label,
+  identitySeed,
   size,
   status,
   statusTestId,
@@ -106,6 +108,7 @@ export function ProfileAvatarWithStatus({
         className={cn("h-full w-full rounded-full", avatarClassName)}
         iconClassName={iconClassName}
         label={label}
+        identitySeed={identitySeed}
         testId={testId}
       />
     </MaskedAvatarBadgeFrame>

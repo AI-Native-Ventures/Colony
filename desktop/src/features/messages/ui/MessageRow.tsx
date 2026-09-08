@@ -13,7 +13,8 @@ import {
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
 import type { TimelineMessage } from "@/features/messages/types";
-import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { AgentRoleSubtitle } from "@/features/agents/ui/AgentRoleSubtitle";
+import { useIsKnownAgentPubkey } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { isBlockMessage } from "@/features/blocks/blockTags";
 import { BlockMessageBoundary } from "@/features/blocks/ui/BlockMessageBoundary";
@@ -37,7 +38,6 @@ import {
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
@@ -247,21 +247,7 @@ export const MessageRow = React.memo(
       message.tags,
       profiles,
     );
-    // "Is this pubkey an agent" = the community-scoped baseline every surface
-    // shares (managed ∪ relay) plus the pubkey's own profile `isAgent` flag from this surface's lookup. Both are per-pubkey
-    // O(1) checks — no per-row rescan of `profiles` (that duplicated parent
-    // work in every mounted row and re-ran on each profile-lookup change).
-    const knownAgentPubkeys = useKnownAgentPubkeys();
-    const isKnownAgentPubkey = React.useCallback(
-      (pubkey: string) => {
-        const normalized = normalizePubkey(pubkey);
-        return (
-          knownAgentPubkeys.has(normalized) ||
-          profiles?.[normalized]?.isAgent === true
-        );
-      },
-      [knownAgentPubkeys, profiles],
-    );
+    const isKnownAgentPubkey = useIsKnownAgentPubkey(profiles);
     const profilePopoverRole =
       message.role === "bot" ||
       (message.pubkey && isKnownAgentPubkey(message.pubkey))
@@ -486,6 +472,9 @@ export const MessageRow = React.memo(
           avatarUrl={message.avatarUrl ?? null}
           className="shrink-0"
           displayName={message.author}
+          identitySeed={
+            profilePopoverRole === "bot" ? message.pubkey : undefined
+          }
           testId="message-avatar"
         />
         {showRespondToIndicator &&
@@ -668,12 +657,9 @@ export const MessageRow = React.memo(
         )}
         {agentOwnerNode}
         {inlineMetadataNode}
-        {message.personaDisplayName &&
-        message.personaDisplayName !== message.author ? (
-          <span className="text-xs text-muted-foreground">
-            {message.personaDisplayName}
-          </span>
-        ) : null}
+        {profilePopoverRole === "bot" && (
+          <AgentRoleSubtitle pubkey={message.pubkey} />
+        )}
       </MessageHeaderRow>
     );
     const bodyContainerClass = isDisplayedAsContinuation

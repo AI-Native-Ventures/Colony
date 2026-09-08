@@ -1,0 +1,282 @@
+/* Approved founder journey. Typography uses rem tokens and the existing ant art. */
+@layer components {
+  .onb-canvas.onb-founder-canvas {
+    --onb-founder-body: 0.9375rem;
+    --onb-founder-small: 0.8125rem;
+    --onb-founder-heading: clamp(1.75rem, 3.7vw, 2.375rem);
+    /* Match ThemeProvider's explicit root class. light-dark() is lowered by
+       the desktop CSS build, so relying on its generated colour-scheme
+       switches without a declaration leaves these colours invalid. */
+    --onb-founder-surface: #fffdfb;
+    --onb-founder-input: #ffffff;
+    --onb-founder-text: #171717;
+    --onb-founder-muted: #66616f;
+    --onb-founder-line: #d7d1e2;
+    --onb-founder-card-line: #ffffff;
+    --onb-founder-link: #654096;
+    --onb-founder-error: #9c2728;
+    --onb-founder-error-surface: #fff0ee;
+    isolation: isolate;
+    background:
+      radial-gradient(ellipse at 4% 0%, #d2b7ff 0%, transparent 52%),
+      radial-gradient(ellipse at 100% 95%, #769ce9 0%, transparent 59%),
+      linear-gradient(130deg, #b89aed, #ebe3dd 65%, #aec8ff) !important;
+    color: var(--onb-founder-text);
+    transition: none;
+  }
+  :root.dark .onb-canvas.onb-founder-canvas {
+    --onb-founder-surface: #222129;
+    --onb-founder-input: #2d2b35;
+    --onb-founder-text: #f5f2fc;
+    --onb-founder-muted: #bab2cb;
+    --onb-founder-line: #51485f;
+    --onb-founder-card-line: #524865;
+    --onb-founder-link: #d4b8ff;
+    --onb-founder-error: #ffb5b5;
+    --onb-founder-error-surface: #44272e;
+  }
+  .onb-canvas.onb-founder-canvas[data-onboarding-step="company"] {
+    background:
+      radial-gradient(ellipse at 0% 10%, #f79fca 0%, transparent 54%),
+      radial-gradient(ellipse at 100% 100%, #f2b343 0%, transparent 65%),
+      linear-gradient(125deg, #ebafd8, #f9dfbe 66%, #ffc06b) !important;
+  }
+  .onb-canvas.onb-founder-canvas .onb-stage {
+    display: flex;
+    align-items: safe center;
+    justify-content: center;
+    padding: 6rem 2rem 3rem;
+  }
+  .onb-canvas.onb-founder-canvas .onb-screen {
+    display: block;
+    max-width: 31rem;
+  }
+  .onb-canvas.onb-founder-canvas .onb-hero {
+    width: 100%;
+  }
+  .onb-canvas.onb-founder-canvas .onb-step {
+    top: 2rem;
+    left: auto;
+    right: 2rem;
+    color: #352b49;
+    font-family: inherit;
+    font-size: var(--onb-founder-small);
+    letter-spacing: normal;
+  }
+  .onb-simple-wordmark {
+    position: absolute;
+    top: 1.75rem;
+    left: 2rem;
+    width: 7.75rem;
+    height: auto;
+    z-index: 3;
+  }
+  .onb-founder-canvas .onb-scatter {
+    pointer-events: none;
+    /* Reserve the entire reading column, including the introductory copy.
+       Keep the original ant artwork visible in the surrounding margins. */
+    mask-image: linear-gradient(
+      to right,
+      #000 calc(50% - 17rem),
+      transparent calc(50% - 16.5rem),
+      transparent calc(50% + 16.5rem),
+      #000 calc(50% + 17rem)
+    );
+  }
+  .onb-founder-canvas .onb-scatter__ant,
+  .onb-founder-canvas .ant-leg-layer {
+    animation: none !important;
+  }
+  .onb-simple {
+    width: min(100%, 31rem);
+    margin: auto;
+    text-align: left;
+  }
+  .onb-simple-heading {
+    color: #171717;
+    margin-bottom: 1.5rem;
+  }
+  .onb-simple-heading h1 {
+    margin: 0 0 0.75rem;
+    font-size: var(--onb-founder-heading);
+    line-height: 1.08;
+    font-weight: 650;
+    letter-spacing: -0.045em;
+  }
+  .onb-simple-heading > p {
+    font-size: var(--onb-founder-body);
+    line-height: 1.5;
+    max-width: 29rem;
+    margin: 0;
+  }
+  .onb-simple-heading .onb-eyebrow {
+    font-size: var(--onb-founder-small);
+    font-weight: 550;
+    margin-bottom: 0.65rem;
+  }
+  .onb-simple-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6875rem;
+    background: var(--onb-founder-surface);
+    color: var(--onb-founder-text);
+    border: 1px solid var(--onb-founder-card-line);
+    border-radius: 1.25rem;
+    padding: 1.625rem;
+    box-shadow: 0 1.2rem 3.4rem #2b164322;
+  }
+  .onb-simple-card > label {
+    font-size: var(--onb-founder-small);
+    font-weight: 550;
+    margin-top: 0.5rem;
+  }
+  .onb-simple-card > label:first-child {
+    margin-top: 0;
+  }
+  .onb-simple-card input:not([type="checkbox"]),
+  .onb-simple-card textarea {
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.6875rem 0.8rem;
+    border: 1px solid var(--onb-founder-line);
+    border-radius: 0.6rem;
+    /* The shared Input carries background/text utilities in a later layer. */
+    background: var(--onb-founder-input) !important;
+    color: var(--onb-founder-text) !important;
+    font-size: var(--onb-founder-body);
+    line-height: 1.45;
+    box-shadow: none;
+  }
+  .onb-simple-card textarea {
+    resize: vertical;
+    min-height: 6.75rem;
+  }
+  .onb-simple-card input::placeholder,
+  .onb-simple-card textarea::placeholder {
+    color: var(--onb-founder-muted) !important;
+    opacity: 1;
+  }
+  .onb-simple-card input:focus-visible,
+  .onb-simple-card textarea:focus-visible {
+    outline: 2px solid #7851b7;
+    outline-offset: 2px;
+  }
+  .onb-simple-card > .onb-simple-button {
+    min-height: 2.75rem;
+    font-size: var(--onb-founder-body) !important;
+    border-radius: 0.6rem !important;
+  }
+  /* Explicit call-site classes: the shared Button has no variant attributes.
+     Keep this override local to the founder journey, above utility colours. */
+  .onb-simple-card > .onb-simple-primary {
+    background: #171717 !important;
+    color: #ffffff !important;
+  }
+  .onb-simple-card > .onb-simple-primary:hover:not(:disabled) {
+    background: #000000 !important;
+  }
+  .onb-simple-card > .onb-simple-primary:disabled {
+    background: #59545f !important;
+    opacity: 1 !important;
+    box-shadow: none;
+  }
+  .onb-simple-note,
+  .onb-simple-signin,
+  .onb-simple-options {
+    font-size: var(--onb-founder-small);
+    color: var(--onb-founder-muted);
+    line-height: 1.45;
+    margin: 0;
+  }
+  .onb-simple-signin {
+    text-align: center;
+    margin-top: 0.3rem;
+  }
+  .onb-simple-signin button,
+  .onb-simple-link,
+  .onb-simple-options button {
+    font-size: var(--onb-founder-small);
+    color: var(--onb-founder-link);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    cursor: pointer;
+  }
+  .onb-simple-options summary {
+    cursor: pointer;
+    margin-top: 0.4rem;
+  }
+  .onb-simple-options button {
+    margin-top: 0.6rem;
+  }
+  .onb-simple-error {
+    color: var(--onb-founder-error);
+    background: var(--onb-founder-error-surface);
+    border-radius: 0.5rem;
+    padding: 0.7rem;
+    font-size: var(--onb-founder-small);
+    line-height: 1.45;
+    margin: 0;
+  }
+  .onb-recovery-code {
+    font-family: var(--font-mono, monospace);
+    font-size: 1rem;
+    font-weight: 550;
+    overflow-wrap: anywhere;
+    background: var(--onb-founder-input);
+    border: 1px solid var(--onb-founder-line);
+    border-radius: 0.6rem;
+    padding: 1rem;
+    margin: 0;
+  }
+  .onb-simple-card .onb-simple-check {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-start;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+  .onb-simple-check input {
+    margin-top: 0.2rem;
+  }
+  .onb-founder-canvas .onb-exit {
+    top: auto;
+    bottom: 1rem;
+    color: #171717;
+  }
+  @media (min-width: 40rem) and (max-height: 48rem) {
+    .onb-canvas.onb-founder-canvas .onb-stage {
+      padding-top: 5rem;
+      padding-bottom: 2rem;
+    }
+  }
+  @media (max-width: 40rem) {
+    .onb-founder-canvas .onb-scatter {
+      mask-image: linear-gradient(#000 0 2.75rem, transparent 4.25rem);
+    }
+    .onb-canvas.onb-founder-canvas .onb-stage {
+      /* The narrow ant band never sits behind text as this area scrolls.
+         Offset + padding preserve the original initial content position. */
+      margin-top: 4.25rem;
+      height: calc(100% - 4.25rem);
+      padding: 1rem 1rem 2rem;
+    }
+    .onb-simple-card {
+      padding: 1.2rem;
+      border-radius: 1rem;
+    }
+    .onb-simple-wordmark {
+      left: 1rem;
+      top: 1.4rem;
+      width: 6.5rem;
+    }
+    .onb-canvas.onb-founder-canvas .onb-step {
+      top: 1.7rem;
+      right: 1rem;
+      font-size: 0.75rem;
+    }
+    .onb-simple-card input:not([type="checkbox"]),
+    .onb-simple-card textarea {
+      font-size: 1rem;
+    }
+  }
+}

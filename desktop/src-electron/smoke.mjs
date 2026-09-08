@@ -1,6 +1,7 @@
 import { waitForAnimations } from "../tests/helpers/animations.ts";
 import { verifyReload } from "./reload-smoke.mjs";
 import { verifyImport } from "./import-smoke.mjs";
+import { ELECTRON_BETA_RELAY } from "../scripts/electron-package-config.mjs";
 // Real Electron + Rust smoke gate. No mock native bridge or personal browser data.
 import { _electron as electron } from "@playwright/test";
 import assert from "node:assert/strict";
@@ -149,6 +150,20 @@ try {
   assert.equal(result.unknown, true);
   console.log("Real renderer/Rust:", JSON.stringify(result));
   if (packagedApp) {
+    // This reads the compiled default, unaffected by this test's local relay
+    // override. Previously the entire smoke passed with an app that sent
+    // real signup requests to the customer's own localhost:3000.
+    const relayConfig = await page.evaluate(async () => ({
+      relay: await window.colonyDesktop.request("invoke", {
+        command: "get_build_default_relay_url",
+      }),
+      autoConnect: await window.colonyDesktop.request("invoke", {
+        command: "auto_connect_default_relay_enabled",
+      }),
+    }));
+    assert.equal(relayConfig.relay, ELECTRON_BETA_RELAY.websocket);
+    assert.equal(relayConfig.autoConnect, false);
+    console.log("Packaged signup targets the hosted account service: PASS");
     const packagedState = await application.evaluate(({ app }) => ({
       packaged: app.isPackaged,
       appPath: app.getAppPath(),

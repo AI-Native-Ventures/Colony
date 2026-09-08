@@ -1,6 +1,10 @@
 import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
 import { ACCENT_COLORS } from "./ThemeProvider";
 import { SYNTAX_THEMES, type SyntaxThemeName } from "./theme-loader";
+import {
+  type WorkspaceGradientPattern,
+  parseWorkspaceGradientPattern,
+} from "./workspaceAppearance";
 
 /**
  * Bumped alongside the global accent key.
@@ -20,6 +24,7 @@ export type CommunityThemePreference = {
   theme: SyntaxThemeName;
   accent: string;
   followSystem: boolean;
+  gradientPattern: WorkspaceGradientPattern;
 };
 
 export const DEFAULT_COMMUNITY_THEME: CommunityThemePreference = Object.freeze({
@@ -27,6 +32,7 @@ export const DEFAULT_COMMUNITY_THEME: CommunityThemePreference = Object.freeze({
   theme: "buzz",
   accent: "#895AF6",
   followSystem: true,
+  gradientPattern: "soft-mesh",
 });
 
 const THEME_NAMES = new Set<string>(SYNTAX_THEMES);
@@ -68,6 +74,7 @@ export function parseCommunityThemePreference(
     theme: candidate.theme as SyntaxThemeName,
     accent: candidate.accent,
     followSystem: candidate.followSystem,
+    gradientPattern: parseWorkspaceGradientPattern(candidate.gradientPattern),
   };
 }
 
@@ -188,7 +195,9 @@ export function sameCommunityThemePreference(
   return (
     left.theme === right.theme &&
     left.accent === right.accent &&
-    left.followSystem === right.followSystem
+    left.followSystem === right.followSystem &&
+    parseWorkspaceGradientPattern(left.gradientPattern) ===
+      parseWorkspaceGradientPattern(right.gradientPattern)
   );
 }
 

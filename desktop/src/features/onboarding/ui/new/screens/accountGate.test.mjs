@@ -18,11 +18,11 @@ test("account_gate_requires_a_long_enough_password", () => {
   assert.equal(accountReady({ ...valid, password: "short" }), false);
 });
 
-test("account_gate_requires_a_name", () => {
-  assert.equal(accountReady({ ...valid, name: "   " }), false);
+test("account_gate_defers_profile_details", () => {
+  assert.equal(accountReady({ ...valid, name: "   " }), true);
 });
 
-test("account_gate_asks_for_nothing_beyond_the_three_fields", () => {
+test("account_gate_asks_only_email_and_password", () => {
   // The screen collects a name, an email and a password. City, country and
   // the photo left it: they are profile details, and the gate never depended
   // on them even when the screen still asked.

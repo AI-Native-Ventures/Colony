@@ -10,13 +10,8 @@
  * See docs/superpowers/specs/2026-08-22-auth-accounts-design.md.
  */
 
-import {
-  deriveAuthKey,
-  generateRecoveryCode,
-  hashRecoveryCode,
-  normaliseEmail,
-} from "./authCrypto";
-import type { OnboardingServices } from "./contracts";
+import { deriveAuthKey, hashRecoveryCode, normaliseEmail } from "./authCrypto";
+import type { OnboardingServices, PendingSignup } from "./contracts";
 
 /**
  * Why an auth attempt failed. Screens switch on `kind` and nothing else;
@@ -36,7 +31,10 @@ export type AuthFailure =
   | { kind: "invalid-credentials" }
   | { kind: "locked"; retryAfterSecs: number }
   | { kind: "unreachable" }
-  | { kind: "update-required" };
+  | { kind: "update-required" }
+  | { kind: "local-storage" }
+  | { kind: "local-identity" }
+  | { kind: "server" };
 
 /**
  * Everything the service touches that a test must not. The real wiring passes
@@ -51,8 +49,13 @@ export type AuthDeps = {
   importIdentity: (blob: string, password: string) => Promise<void>;
   /** The public half of the identity this device already generated. */
   getPubkey: () => Promise<string>;
-  /** Overrides recovery-code generation. Tests only; production omits it. */
-  generateCode?: () => string;
+  prepareSignup: (email: string) => Promise<PendingSignup>;
+  loadPendingSignup: () => Promise<PendingSignup | null>;
+  markRegistered: (attemptId: string) => Promise<PendingSignup>;
+  clearPendingSignup: (attemptId: string) => Promise<void>;
+  /** Discard only a prepared attempt definitively rejected by the relay. */
+  discardPendingSignup: (attemptId: string) => Promise<void>;
+  saveRecoveryCode: (attemptId: string) => Promise<string | null>;
 };
 
 /** The one KDF parameter set this build sends and accepts. */
@@ -105,7 +108,7 @@ function failureFromResponse(body: unknown): AuthFailure {
       };
     }
     default:
-      return { kind: "unreachable" };
+      return { kind: "server" };
   }
 }
 
@@ -146,15 +149,32 @@ async function guard<T>(attempt: () => Promise<T>): Promise<T> {
  */
 export function createAuthService(deps: AuthDeps): OnboardingServices["auth"] {
   return {
+    pendingSignup: deps.loadPendingSignup,
+    saveRecovery: deps.saveRecoveryCode,
+    acknowledgeRecovery: deps.clearPendingSignup,
     signUp: (email, password) =>
       guard(async () => {
-        const recoveryCode = deps.generateCode
-          ? deps.generateCode()
-          : generateRecoveryCode();
-        const authKey = await deriveAuthKey(email, password);
-        const passwordBlob = await deps.createBackup(password);
-        const recoveryBlob = await deps.createBackup(recoveryCode);
-        const pubkey = await deps.getPubkey();
+        let pending: PendingSignup;
+        try {
+          pending = await deps.prepareSignup(normaliseEmail(email));
+        } catch {
+          throw { kind: "local-storage" } satisfies AuthFailure;
+        }
+        const { recoveryCode, pubkey, attemptId } = pending;
+        if (pending.phase === "registered")
+          return { pubkey, recoveryCode, attemptId };
+        let authKey: string;
+        let passwordBlob: string;
+        let recoveryBlob: string;
+        try {
+          if ((await deps.getPubkey()) !== pubkey)
+            throw new Error("Identity changed");
+          authKey = await deriveAuthKey(email, password);
+          passwordBlob = await deps.createBackup(password);
+          recoveryBlob = await deps.createBackup(recoveryCode);
+        } catch {
+          throw { kind: "local-identity" } satisfies AuthFailure;
+        }
         const response = await deps.post("/api/accounts/signup", {
           email: normaliseEmail(email),
           pubkey,
@@ -165,13 +185,62 @@ export function createAuthService(deps: AuthDeps): OnboardingServices["auth"] {
           kdfVersion: KDF_VERSION,
         });
         if (!isOk(response.status)) {
-          throw failureFromResponse(response.body);
+          const failure = failureFromResponse(response.body);
+          // A successful POST can lose its response. Only the registered code
+          // proves this is our attempt, rather than somebody else's account.
+          if (
+            failure.kind !== "email-taken" &&
+            failure.kind !== "identity-taken"
+          )
+            throw failure;
+          const recovered = await deps.post("/api/accounts/recover", {
+            email: normaliseEmail(email),
+            recoveryCodeHash: await hashRecoveryCode(recoveryCode),
+          });
+          // A typed 401 proves this code did not register that email. Only
+          // this definitive rejection releases the prepared email so the
+          // founder can correct it. Network/5xx/locked/partial replies retain
+          // the original recovery checkpoint for an uncertain accepted POST.
+          if (
+            response.status === 409 &&
+            recovered.status === 401 &&
+            readString(recovered.body, "error") === "invalid_recovery_code"
+          ) {
+            try {
+              await deps.discardPendingSignup(attemptId);
+            } catch {
+              throw { kind: "local-storage" } satisfies AuthFailure;
+            }
+            throw failure;
+          }
+          if (
+            !isOk(recovered.status) ||
+            readString(recovered.body, "pubkey") !== pubkey ||
+            !readString(recovered.body, "recoveryBlob")
+          )
+            throw failure;
+          // Recovery proves this attempt's account, but does not install the
+          // password typed on this retry. Verify that exact password too.
+          const signedIn = await deps.post("/api/accounts/signin", {
+            email: normaliseEmail(email),
+            authKey,
+          });
+          if (!isOk(signedIn.status)) throw failureFromResponse(signedIn.body);
+          if (
+            readString(signedIn.body, "pubkey") !== pubkey ||
+            !readString(signedIn.body, "passwordBlob")
+          ) {
+            throw { kind: "server" } satisfies AuthFailure;
+          }
+        } else if (readString(response.body, "pubkey") !== pubkey) {
+          throw { kind: "server" } satisfies AuthFailure;
         }
-        const created = readString(response.body, "pubkey");
-        if (created === undefined) {
-          throw unreachable();
+        try {
+          await deps.markRegistered(attemptId);
+        } catch {
+          throw { kind: "local-storage" } satisfies AuthFailure;
         }
-        return { pubkey: created, recoveryCode };
+        return { pubkey, recoveryCode, attemptId };
       }),
     signIn: (email, password) =>
       guard(async () => {

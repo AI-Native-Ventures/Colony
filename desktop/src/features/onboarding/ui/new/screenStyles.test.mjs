@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(join(here, "onboarding-screens.css"), "utf8");
+const css =
+  readFileSync(join(here, "onboarding-screens.css"), "utf8") +
+  readFileSync(join(here, "onboarding-founder.css"), "utf8");
 
 /**
  * Only class names count. An earlier version of this scan read every onb-

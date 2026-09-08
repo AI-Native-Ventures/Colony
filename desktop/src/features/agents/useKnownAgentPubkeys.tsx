@@ -1,16 +1,24 @@
 import * as React from "react";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 
 import {
   useManagedAgentsQuery,
+  usePersonasQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { mergeKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
-import { useStableSet } from "@/shared/hooks/useStableReference";
+import { buildAgentRoleTitles } from "@/features/agents/agentIdentityPresentation";
+import { useStableMap, useStableSet } from "@/shared/hooks/useStableReference";
 
 const EMPTY_KNOWN_AGENT_PUBKEYS: ReadonlySet<string> = new Set();
 
 const KnownAgentPubkeysContext = React.createContext<ReadonlySet<string>>(
   EMPTY_KNOWN_AGENT_PUBKEYS,
+);
+
+const AgentRoleTitlesContext = React.createContext<ReadonlyMap<string, string>>(
+  new Map(),
 );
 
 /**
@@ -41,16 +49,25 @@ export function KnownAgentPubkeysProvider({
 }) {
   const managedAgents = useManagedAgentsQuery().data;
   const relayAgents = useRelayAgentsQuery().data;
+  const personas = usePersonasQuery().data;
 
   const merged = React.useMemo(
     () => mergeKnownAgentPubkeys(managedAgents, relayAgents),
     [managedAgents, relayAgents],
   );
   const stable = useStableSet(merged);
+  const roleTitles = useStableMap(
+    React.useMemo(
+      () => buildAgentRoleTitles(managedAgents, personas),
+      [managedAgents, personas],
+    ),
+  );
 
   return (
     <KnownAgentPubkeysContext.Provider value={stable}>
-      {children}
+      <AgentRoleTitlesContext.Provider value={roleTitles}>
+        {children}
+      </AgentRoleTitlesContext.Provider>
     </KnownAgentPubkeysContext.Provider>
   );
 }
@@ -81,4 +98,21 @@ export function KnownAgentPubkeysProvider({
  */
 export function useKnownAgentPubkeys(): ReadonlySet<string> {
   return React.useContext(KnownAgentPubkeysContext);
+}
+
+/** Content-stable community job titles without per-message query observers. */
+export function useAgentRoleTitles(): ReadonlyMap<string, string> {
+  return React.useContext(AgentRoleTitlesContext);
+}
+
+/** The shared agent baseline plus this surface's authenticated profile flags. */
+export function useIsKnownAgentPubkey(profiles?: UserProfileLookup) {
+  const known = useKnownAgentPubkeys();
+  return React.useCallback(
+    (pubkey: string) => {
+      const normalized = normalizePubkey(pubkey);
+      return known.has(normalized) || profiles?.[normalized]?.isAgent === true;
+    },
+    [known, profiles],
+  );
 }

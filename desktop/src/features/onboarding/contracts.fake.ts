@@ -1,10 +1,16 @@
-import type { OnboardingServices, ScrapeFailureReason } from "./contracts";
+import type {
+  OnboardingServices,
+  PendingSignup,
+  ScrapeFailureReason,
+} from "./contracts";
 
 export type FakeOptions = {
   scrapeOutcome?: "ok" | ScrapeFailureReason;
   paymentOutcome?: "paid" | "abandoned";
   delayMs?: number;
 };
+
+let pendingSignup: PendingSignup | null = null;
 
 const SAMPLE_DESCRIPTION =
   "Rosebank Auto Care is an independent vehicle workshop in Johannesburg. " +
@@ -42,12 +48,58 @@ export function createFakeServices(
 
   return {
     auth: {
+      pendingSignup: async () => {
+        if (pendingSignup || typeof localStorage === "undefined")
+          return pendingSignup;
+        // Synthetic reload fixture: reconstruct from public markers only.
+        // The fixed fake code is never persisted and is not an account secret.
+        for (const key of Object.keys(localStorage).filter((key) =>
+          key.startsWith("colony.onboarding.answers.identity:"),
+        )) {
+          try {
+            const draft = JSON.parse(localStorage.getItem(key) ?? "null");
+            if (
+              draft?.signupAttemptId === "e2e-signup-attempt" &&
+              draft.account?.email &&
+              !draft.recoveryAcknowledged
+            ) {
+              pendingSignup = {
+                pubkey: key.split(".identity:")[1],
+                email: draft.account.email,
+                attemptId: draft.signupAttemptId,
+                recoveryCode: "TRAIL-9F2K-4QD8-MZ71",
+                phase: "registered",
+              };
+              return pendingSignup;
+            }
+          } catch {
+            /* Ignore unrelated malformed synthetic drafts. */
+          }
+        }
+        return null;
+      },
+      saveRecovery: async () => {
+        const outcome =
+          typeof localStorage === "undefined"
+            ? null
+            : localStorage.getItem("colony.e2e.recoverySave");
+        if (outcome === "cancel") return null;
+        if (outcome === "fail") throw new Error("Synthetic save failure");
+        return "synthetic-recovery-code.txt";
+      },
+      acknowledgeRecovery: async () => {
+        pendingSignup = null;
+      },
       signUp: async (email) => {
         await wait();
-        return {
+        pendingSignup = {
           pubkey: `fake-${email}`,
+          email,
           recoveryCode: "TRAIL-9F2K-4QD8-MZ71",
+          attemptId: "e2e-signup-attempt",
+          phase: "registered",
         };
+        return pendingSignup;
       },
       signIn: async (email) => {
         await wait();

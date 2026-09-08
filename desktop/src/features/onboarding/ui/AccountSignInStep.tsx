@@ -195,7 +195,9 @@ export function AccountSignInStep({
                     // wrong on the one screen that already is the answer.
                     failure.kind === "identity-taken"
                     ? "This computer already has a Colony account under another email. Sign in with that email instead."
-                    : "We could not reach your workspace. Check your connection and try again."}
+                    : failure.kind === "server"
+                      ? "Colony could not complete sign-in. Please try again."
+                      : "We could not reach your workspace. Check your connection and try again."}
           </p>
         ) : null}
         {/* The two doors out of this screen sit under the form they belong to,

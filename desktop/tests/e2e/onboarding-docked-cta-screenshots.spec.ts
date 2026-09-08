@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
+import { createFounderAccount } from "../helpers/simpleFounder";
 
 const BLANK_TYLER_IDENTITY = {
   ...TEST_IDENTITIES.tyler,
@@ -30,14 +31,12 @@ test("machine onboarding: simple entry and account recovery", async ({
   await page.screenshot({ path: `${SHOT_DIR}/01-landing.png` });
 
   await expect(
-    page.getByRole("button", { name: "Start with Colony" }),
+    page.getByRole("button", { name: "Create account", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Sign in to an existing account" }),
+    page.getByRole("button", { name: "Sign in", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Sign in to an existing account" })
-    .click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   // The sign-in door now opens the email sign-in page first; key import sits
   // behind its private-key detour.
   await expect(
@@ -79,18 +78,13 @@ test("machine onboarding: simple entry and account recovery", async ({
   await expect(importCard).toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Start with Colony" }),
+    page.getByRole("button", { name: "Create account", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Start with Colony" }).click();
-  // A brand-new identity walks the canvas first run, which claims the
-  // workspace itself; it never passes through a community choice.
-  await expect(
-    page.getByRole("heading", { name: "Let's get your colony started." }),
-  ).toBeVisible();
+  await createFounderAccount(page, "founder@recovery-example.test");
   await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-page-backup")).toHaveCount(0);
   await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/02-first-run-account.png` });
+  await page.screenshot({ path: `${SHOT_DIR}/02-account-recovery.png` });
 });
 
 /**
@@ -131,23 +125,17 @@ for (const viewport of MACHINE_VIEWPORTS) {
   test(`machine key import and unlock stay inside a ${size} window`, async ({
     page,
   }) => {
-    // Walk in at a comfortable size and resize once the key-import screen is
-    // up. The landing screen's own action row collides with the docked CTA
-    // below roughly 560px of height, so navigating through it at 800x500 fails
-    // on the landing rather than on the screens under test here. That overlap
-    // belongs to the canvas-fit work, not to this spec.
+    // Reach key import before resizing so this test measures the existing
+    // import/unlock layout; account geometry has its own coverage below.
     await page.setViewportSize({ width: 1280, height: 800 });
     await installMockBridge(page, undefined, {
       skipCommunitySeed: true,
       skipOnboardingSeed: true,
     });
     await page.goto("/");
-    // The landing hero slides in, and an action clicked through the tail of
-    // that slide never reports itself stable.
+    // Settle the entry before opening the existing-account detour.
     await waitForAnimations(page);
-    await page
-      .getByRole("button", { name: "Sign in to an existing account" })
-      .click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
     // The sign-in door now opens the email sign-in page first; key import sits
     // behind its private-key detour.
     await expect(
@@ -250,39 +238,46 @@ test("simple account entry keeps one-column geometry on narrow windows", async (
     skipOnboardingSeed: true,
   });
   await page.goto("/");
-  const actions = page
-    .getByTestId("machine-onboarding-gate")
-    .getByRole("button")
-    .filter({ hasText: /Start with Colony|Sign in to an existing account/ });
-  await expect(actions).toHaveCount(2);
+  const account = page.getByTestId("onboarding-account");
+  await expect(account).toBeVisible();
+  await expect(
+    account.getByRole("button", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  const controls = account.locator(
+    'input[type="email"], input[type="password"], button[type="submit"]',
+  );
+  await expect(controls).toHaveCount(3);
   await waitForAnimations(page);
-  const geometry = await actions.evaluateAll((elements) => {
-    const first = elements[0];
-    const second = elements[1];
-    if (!(first instanceof HTMLElement) || !(second instanceof HTMLElement)) {
-      throw new Error("Expected both onboarding actions to be rendered");
-    }
-    const firstBox = first.getBoundingClientRect();
-    const secondBox = second.getBoundingClientRect();
+  const geometry = await controls.evaluateAll((elements) => {
+    const boxes = elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return {
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+        center: box.left + box.width / 2,
+      };
+    });
     return {
+      boxes,
       clientWidth: document.documentElement.clientWidth,
-      firstBottom: firstBox.bottom,
-      firstCenter: firstBox.left + firstBox.width / 2,
-      lefts: elements.map((element) => element.getBoundingClientRect().left),
-      rights: elements.map((element) => element.getBoundingClientRect().right),
       scrollWidth: document.documentElement.scrollWidth,
-      secondCenter: secondBox.left + secondBox.width / 2,
-      secondTop: secondBox.top,
     };
   });
-  expect(Math.abs(geometry.firstCenter - geometry.secondCenter)).toBeLessThan(
-    1,
-  );
-  expect(geometry.secondTop).toBeGreaterThan(geometry.firstBottom);
-  expect(geometry.lefts.every((left) => left >= 0)).toBe(true);
-  expect(geometry.rights.every((right) => right <= geometry.clientWidth)).toBe(
-    true,
-  );
+  for (let index = 1; index < geometry.boxes.length; index += 1) {
+    expect(
+      Math.abs(geometry.boxes[index].center - geometry.boxes[0].center),
+    ).toBeLessThan(1);
+    expect(geometry.boxes[index].top).toBeGreaterThan(
+      geometry.boxes[index - 1].bottom,
+    );
+  }
+  expect(
+    geometry.boxes.every(
+      (box) => box.left >= 0 && box.right <= geometry.clientWidth,
+    ),
+  ).toBe(true);
   expect(geometry.scrollWidth).toBe(geometry.clientWidth);
 });
 

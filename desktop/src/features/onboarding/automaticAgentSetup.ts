@@ -186,3 +186,38 @@ export async function ensureAutomaticAgentConfig(
       : offline;
   return applyPlan(plan, io);
 }
+
+/**
+ * Founder setup uses the built-in teammate by default, without selecting a
+ * personal CLI subscription discovered on the device. Existing working choices
+ * remain intact. All writes and the resulting catalog readiness are awaited.
+ */
+export async function ensureBuiltInFounderConfig(
+  overrides: Partial<AutomaticAgentSetupIo> = {},
+): Promise<void> {
+  const io = { ...WIRED_IO, ...overrides };
+  const [runtimes, current] = await Promise.all([
+    io.listRuntimes(),
+    io.loadConfig(),
+  ]);
+  if (resolveAgentReadiness(runtimes, current, "preferred").ready) return;
+  if (!(await relayHostsAgents(io)))
+    throw new Error(
+      "Your business is open, but Colony could not finish setting up your teammate. Try again.",
+    );
+  const runtime = runtimes.find(
+    (entry) => entry.id === COLONY_AGENT_RUNTIME_ID,
+  );
+  if (!runtime || runtime.requiresExternalCli)
+    throw new Error(
+      "The built-in teammate is unavailable in this version of Colony. Update the app and try again.",
+    );
+  await io.installRuntime(runtime.id);
+  await io.saveConfig(defaultColonyAgentConfig(current));
+  const [available, saved] = await Promise.all([
+    io.listRuntimes(),
+    io.loadConfig(),
+  ]);
+  if (!resolveAgentReadiness(available, saved, "preferred").ready)
+    throw new Error("Your teammate setup is not ready yet. Try again.");
+}

@@ -17,10 +17,10 @@ test("a returning member signs in with email and password from a new laptop", as
   });
   await page.goto("/");
 
-  // The landing offers two doors; sign-in opens the account detour.
-  await page
-    .getByRole("button", { name: "Sign in to an existing account" })
-    .click();
+  // Account entry is immediate; returning members use its sign-in action.
+  const account = page.getByTestId("onboarding-account");
+  await expect(account).toBeVisible();
+  await account.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Welcome back." }),
   ).toBeVisible();
@@ -29,7 +29,12 @@ test("a returning member signs in with email and password from a new laptop", as
   // The recovery fallback names its file, then folds away again.
   await page.getByTestId("signin-use-recovery-code").click();
   await expect(page.getByText("colony-recovery-code.txt")).toBeVisible();
+  await expect(page.getByLabel("Recovery code", { exact: true })).toBeVisible();
   await page.getByTestId("signin-use-password").click();
+  await expect(page.getByText("colony-recovery-code.txt")).toHaveCount(0);
+  await expect(page.getByLabel("Recovery code", { exact: true })).toHaveCount(
+    0,
+  );
 
   await page.getByLabel("Email").fill("founder@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
@@ -45,15 +50,20 @@ test("a returning member signs in with email and password from a new laptop", as
 });
 
 test("a taken email points at the sign-in door", async ({ page }, testInfo) => {
-  // addInitScript must run before the bridge installs: React reads state on
-  // mount and the bridge triggers it. The override keeps the canvas flow on
-  // in this build, the same way the first-run spec does.
-  await page.addInitScript(() => {
+  // The typed failure fixture belongs to the canvas auth service. Resume just
+  // after native identity setup, with no account or recovery completion seeded.
+  // Seed before bridge installation because React reads these flags on mount.
+  await page.addInitScript((pubkey) => {
     window.localStorage.setItem(
       "colony.e2e.authFailure",
       JSON.stringify({ kind: "email-taken" }),
     );
-  });
+    window.localStorage.setItem(`colony.identity.fresh:${pubkey}`, "true");
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, FIRST_RUN_IDENTITY.pubkey);
   await seedActiveIdentity(page, FIRST_RUN_IDENTITY);
   await installMockBridge(page, undefined, {
     skipOnboardingSeed: true,
@@ -61,20 +71,30 @@ test("a taken email points at the sign-in door", async ({ page }, testInfo) => {
   });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Start with Colony" }).click();
-  const nameInput = page.getByLabel("Your name");
-  await expect(nameInput).toBeVisible();
-
-  await page.getByLabel("Your name").fill("Aisha Bello");
+  const account = page.getByTestId("onboarding-account");
+  await expect(account).toBeVisible();
+  await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
   await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
   await page.getByLabel("Password").fill("correct horse battery");
-  await page.getByRole("button", { name: "Continue" }).click();
+  await page
+    .getByRole("button", { name: "Create account", exact: true })
+    .click();
 
-  const signInLink = page.getByTestId("onb-account-taken-sign-in");
+  const signInLink = account.getByRole("button", {
+    name: "Sign in",
+    exact: true,
+  });
   await expect(signInLink).toBeVisible();
-  await expect(
-    page.getByText("That email already has an account."),
-  ).toBeVisible();
+  await expect(account.getByRole("alert")).toHaveText(
+    "That email already has an account. Sign in to continue.",
+  );
+  await expect(page.getByLabel("Email", { exact: true })).toHaveValue(
+    "aisha@rosebankauto.co.za",
+  );
+  await expect(page.getByLabel("Password", { exact: true })).toHaveValue(
+    "correct horse battery",
+  );
+  await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
   await waitForAnimations(page);
   await page.screenshot({
     path: testInfo.outputPath("account-taken-sign-in.png"),

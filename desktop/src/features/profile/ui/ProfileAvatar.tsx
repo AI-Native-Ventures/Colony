@@ -4,6 +4,7 @@ import { UserRound } from "lucide-react";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { parseAnimatedAvatarUrl } from "@/shared/lib/animatedAvatar";
 import { cn } from "@/shared/lib/cn";
+import { identityColourClass } from "@/shared/lib/identityColour";
 import { getInitials } from "@/shared/lib/initials";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui/avatar";
@@ -13,6 +14,7 @@ type ProfileAvatarProps = {
   avatarUrl: string | null;
   avatarDataUrl?: string | null;
   label: string;
+  identitySeed?: string;
   className?: string;
   iconClassName?: string;
   imageClassName?: string;
@@ -24,6 +26,7 @@ export function ProfileAvatar({
   avatarUrl,
   avatarDataUrl,
   label,
+  identitySeed,
   className,
   iconClassName,
   imageClassName,
@@ -92,8 +95,12 @@ export function ProfileAvatar({
       {shouldShowFallback ? (
         <AvatarFallback
           className={cn(
-            "font-semibold text-primary",
-            plain || animated ? "bg-transparent" : "bg-primary/20",
+            "font-semibold",
+            plain || animated
+              ? "bg-transparent text-primary"
+              : identitySeed
+                ? identityColourClass(identitySeed)
+                : "bg-primary/20 text-primary",
           )}
           data-testid={testId ? `${testId}-fallback` : undefined}
           delayMs={src === undefined ? undefined : 200}

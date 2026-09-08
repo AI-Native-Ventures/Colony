@@ -260,3 +260,31 @@ test("a provider Colony Credits cannot serve never reads as ready", () => {
     { action: "skip", reason: "relay-has-no-hosted-agent" },
   );
 });
+
+test("founder defaults do not select a discovered personal CLI", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const { io, device } = fakeDevice({
+    runtimes: [...CLEAN_MACHINE, runtime("codex")],
+  });
+  await ensureBuiltInFounderConfig(io);
+  assert.equal(device.config.preferred_runtime, "buzz-agent");
+  assert.equal(device.config.credential_mode, "colony_credits");
+});
+test("founder setup propagates failed config write instead of declaring readiness", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const { io } = fakeDevice();
+  await assert.rejects(
+    () =>
+      ensureBuiltInFounderConfig({
+        ...io,
+        saveConfig: async () => {
+          throw new Error("synthetic write failure");
+        },
+      }),
+    /synthetic write failure/,
+  );
+});

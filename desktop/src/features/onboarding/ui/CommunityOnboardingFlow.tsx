@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { ensureAutomaticAgentConfig } from "@/features/onboarding/automaticAgentSetup";
+import { ensureBuiltInFounderConfig } from "@/features/onboarding/automaticAgentSetup";
 import {
   isOwnerLedCommunityOnboarding,
   markCommunityOnboardingComplete,
@@ -178,17 +178,18 @@ export function CommunityOnboardingFlow({
   const agentSetupRef = React.useRef<Promise<unknown> | null>(null);
   const startAgentSetup = React.useCallback(() => {
     if (!agentSetupRef.current) {
-      agentSetupRef.current = ensureAutomaticAgentConfig().catch((error) => {
-        // Setup never blocks entry: an unconfigured machine still lands the
-        // user in Colony, and Settings is still there to do it by hand.
-        console.warn("Automatic agent setup failed.", error);
+      agentSetupRef.current = ensureBuiltInFounderConfig().catch((error) => {
+        agentSetupRef.current = null;
+        throw error;
       });
     }
     return agentSetupRef.current;
   }, []);
   React.useEffect(() => {
     if (!isTeamIntroVisible || !isOwnerLed) return;
-    void startAgentSetup();
+    void startAgentSetup().catch(() => {
+      /* The awaited finalization presents retry. */
+    });
   }, [isOwnerLed, isTeamIntroVisible, startAgentSetup]);
   const finish = React.useCallback(async () => {
     if (!relayUrl) return;

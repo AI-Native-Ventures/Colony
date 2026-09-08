@@ -346,7 +346,7 @@ export function AccentPickerContent({
           className="text-sm font-normal text-muted-foreground/70"
           data-settings-subcopy
         >
-          Choose the highlight color used throughout Buzz.
+          Choose the colour used across your workspace.
         </p>
       </div>
       <div

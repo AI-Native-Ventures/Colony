@@ -27,7 +27,7 @@ jobs:
         run: just desktop-install-ci
       - name: Build self-contained app and zip
         run: pnpm --dir desktop electron:package
-      - name: Prove relocated app and persistent browser session
+      - name: Prove relocated app, signup and persistent browser session
         run: |
           set -euo pipefail
           COLONY_SMOKE_APP=$(node --input-type=module -e '
@@ -39,6 +39,7 @@ jobs:
           ')
           export COLONY_SMOKE_APP
           node desktop/src-electron/smoke.mjs
+          node desktop/src-electron/signup-smoke.mjs
           COLONY_ISOLATION_AGENT="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-agent" \
           COLONY_ISOLATION_MCP="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-dev-mcp" \
           COLONY_ISOLATION_ELECTRON="$COLONY_SMOKE_APP/Contents/MacOS/Colony Electron Beta" \

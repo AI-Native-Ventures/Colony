@@ -18,13 +18,16 @@ export const ONBOARDING_STEPS = [
   "account",
   "recovery",
   "company",
-  "building",
-  "brain",
-  "credits",
   "invite",
 ] as const;
 
-export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+// Legacy names remain readable while older saved answers migrate. They are
+// never rendered by the default journey.
+export type OnboardingStep =
+  | (typeof ONBOARDING_STEPS)[number]
+  | "building"
+  | "brain"
+  | "credits";
 
 export type OnboardingTrack = "byo" | "colony";
 
@@ -66,154 +69,54 @@ export type OnboardingAnswers = {
   paid: boolean;
   /** Hosted address claimed for this run, for idempotent resume. */
   communitySlug: string | null;
+  /** Chosen before a create request, retained across uncertain responses. */
+  provisioningCandidate?: string | null;
+  /** Public markers only. Recovery material lives in the native SecretStore. */
+  signupAttemptId?: string | null;
+  identityPubkey?: string | null;
+  firstTaskMarker?: string | null;
 };
 
-/**
- * Steps that do work the moment they are entered: building reads the user's
- * computer and spends Colony's own money on a scrape. Back must never land on
- * one of these, and resume must re-run them rather than restore a
- * half-finished result.
- */
-const WORKING_STEPS: ReadonlySet<OnboardingStep> = new Set(["building"]);
-
-/**
- * Whether this founder's brain choice is paid for with Colony credits.
- *
- * The brain screen offers three ways of paying and only one of them is
- * Colony's: a founder on their own Claude subscription or their own OpenRouter
- * key has nothing to buy, and asking them for money for thinking they already
- * pay for is how a first run loses someone who had already chosen.
- *
- * Unknown counts as needed: the track is null until the brain screen is
- * answered, and the screen is coming unless something says otherwise. The
- * count may then only shrink, once.
- */
-export function creditsNeeded(answers: OnboardingAnswers): boolean {
-  return (answers.track ?? "colony") === "colony";
+/** Funding is handled by the existing workspace, never by account setup. */
+export function creditsNeeded(_answers: OnboardingAnswers): boolean {
+  return false;
 }
 
-/**
- * The next screen, in order, skipping the ones this founder will not see.
- *
- * Credits is the only conditional one: the brain screen decides whether there
- * is anything to buy, and it decides it one screen earlier than the counter
- * does, so both read the same answer rather than each deciding for themselves.
- */
 export function nextStep(
   current: OnboardingStep,
-  answers: OnboardingAnswers,
+  _answers: OnboardingAnswers,
 ): OnboardingStep | "done" {
-  let index = ONBOARDING_STEPS.indexOf(current) + 1;
-  while (index < ONBOARDING_STEPS.length) {
-    const next = ONBOARDING_STEPS[index];
-    if (next !== "credits" || creditsNeeded(answers)) return next;
-    index += 1;
-  }
+  if (current === "account") return "recovery";
+  if (current === "recovery") return "company";
   return "done";
 }
 
-/**
- * What decides whether a screen is on this founder's path.
- *
- * `invitesEnabled` is the build flag, read once per run. `hasWebsite` used to
- * be here too, to drop the reading screen from the count when there was no
- * website; reading is a line inside `building` now, so the count no longer
- * moves with the answer.
- */
 export type StepVisibility = {
   invitesEnabled: boolean;
-  /**
-   * Whether this founder's brain choice is paid for with Colony credits, as
-   * `creditsNeeded` reads it off the answers.
-   *
-   * True until the brain screen is answered, for the same reason the website
-   * answer used to count the reading screen in while it was null: the screen
-   * is coming unless something says otherwise. The count may then only shrink,
-   * once.
-   */
   creditsNeeded: boolean;
 };
-
-/**
- * The screens this founder will actually see, in order.
- *
- * The counter used to render `index + 1 / ONBOARDING_STEPS.length`, which said
- * "/ 10" on a run that could never reach ten: invites ship dark, so the tenth
- * screen does not exist. A count of screens nobody will see is not a position,
- * it is a guess.
- *
- * The brain screen is on every path now. It used to be dropped when nothing
- * was detected, because it could then only offer one already-selected row; it
- * offers three ways of paying for the thinking, so there is a real choice on
- * it even on a computer with nothing installed. Credits is what moves instead:
- * only the founder who chose Colony's own agent has anything to buy.
- */
-export function visibleSteps(state: StepVisibility): OnboardingStep[] {
-  return ONBOARDING_STEPS.filter((step) => {
-    if (step === "invite") return state.invitesEnabled;
-    if (step === "credits") return state.creditsNeeded;
-    return true;
-  });
+export function visibleSteps(_state: StepVisibility): OnboardingStep[] {
+  return ["account", "company"];
 }
-
-/**
- * Where a screen sits on that path, as the counter renders it.
- *
- * A step that is not on the path (a resume that lands mid-change) reports
- * position 0 rather than a negative one, so the marker degrades to the first
- * screen instead of rendering "00".
- */
 export function stepPosition(
   step: OnboardingStep,
-  state: StepVisibility,
+  _state: StepVisibility,
 ): { index: number; total: number } {
-  const steps = visibleSteps(state);
-  return { index: Math.max(0, steps.indexOf(step)), total: steps.length };
+  return { index: step === "account" || step === "recovery" ? 0 : 1, total: 2 };
 }
-
-/**
- * Null means the screen shows no back control at all. Account and recovery
- * have nothing to go back to once the account exists, and the working steps
- * above must not be re-entered.
- */
-const BACK_TARGETS: Partial<Record<OnboardingStep, OnboardingStep>> = {
-  company: "account",
-  credits: "brain",
-  invite: "credits",
-};
-
-/**
- * Back never lands on a screen this founder was not shown.
- *
- * Invite sits behind credits, which a founder paying for their own thinking
- * never sees. Going back to it there would offer them the purchase their
- * choice had just made unnecessary, so it has no back control on that path.
- */
 export function backStep(
-  current: OnboardingStep,
-  state: StepVisibility,
+  _current: OnboardingStep,
+  _state: StepVisibility,
 ): OnboardingStep | null {
-  const target = BACK_TARGETS[current] ?? null;
-  if (target === null) return null;
-  return visibleSteps(state).includes(target) ? target : null;
+  return null;
 }
-
 export function resumeStep(answers: OnboardingAnswers): OnboardingStep {
   if (!answers.account) return "account";
   if (!answers.recoveryAcknowledged) return "recovery";
-  // Company, stage and website are one screen, so any of the three unanswered
-  // resumes onto it.
-  if (!answers.company || answers.stage === null || answers.hasWebsite === null)
-    return "company";
-  // Building produces both, and re-runs rather than restoring half of one.
-  if (!answers.track || !answers.description) return "building";
-  if (!answers.brain) return "brain";
-  // A founder on their own subscription or their own key has nothing to buy,
-  // so an unpaid run of theirs is finished rather than parked on credits.
-  if (!answers.paid && creditsNeeded(answers)) return "credits";
-  return "invite";
+  // Business context always remains editable; removed runtime, stage and
+  // payment questions must never return when an old draft is resumed.
+  return "company";
 }
-
-export function isWorkingStep(step: OnboardingStep): boolean {
-  return WORKING_STEPS.has(step);
+export function isWorkingStep(_step: OnboardingStep): boolean {
+  return false;
 }

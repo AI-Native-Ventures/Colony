@@ -2,8 +2,7 @@
 //!
 //! All secrets are stored as a single JSON blob under one keychain entry
 //! (service = the store's service name, username = `"secrets"`). This means
-//! exactly one OS prompt per process lifetime regardless of how many keys are
-//! stored — the same pattern used by Goose.
+//! one OS prompt per process lifetime regardless of key count, like Goose.
 //!
 //! The chosen backend is selected at compile time by the per-target feature in
 //! `Cargo.toml`. On macOS the legacy `keyring` crate (SecKeychain API) is used
@@ -17,12 +16,13 @@
 //! The store is deliberately NOT on any env-read path. `BUZZ_PRIVATE_KEY`
 //! resolution for harnessed agents and CI is handled upstream (an env
 //! short-circuit for the human key, child-process env injection for agents);
-//! adding an env tier here would duplicate that precedence and create a
-//! divergent-behavior trap.
+//! adding an env tier here would duplicate that precedence and diverge behavior.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+#[path = "secret_store_atomic_entry.rs"]
+mod atomic_entry;
 
 /// Result of probing the keyring before a migration: distinguishes "reachable
 /// but holds no entry" (safe to migrate into) from "unreachable this boot"

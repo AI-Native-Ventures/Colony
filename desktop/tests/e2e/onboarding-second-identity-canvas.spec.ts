@@ -3,6 +3,12 @@ import { expect, test } from "@playwright/test";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
+import {
+  createFounderAccount,
+  fillFounderBusiness,
+  openFounderBusiness,
+  saveFounderRecovery,
+} from "../helpers/simpleFounder";
 
 /**
  * Regression coverage for a real product bug: a genuinely new signup, on a
@@ -20,73 +26,31 @@ import { seedActiveIdentity } from "../helpers/onboarding";
 // screenshots already attached to the fix PR keep resolving.
 const DIR = "test-results/DEBUG-onboarding-sequence";
 
-// Shared canvas walk used by both scenarios: after "Start with Colony", every
-// screen must be the redesigned canvas flow, end to end, regardless of what
-// else is already on the machine.
+// Both identities must take the same account/recovery/business journey.
 async function walkCanvasFlow(
   page: import("@playwright/test").Page,
   shot: (label: string) => Promise<void>,
-  founderName: string,
   founderEmail: string,
   companyName: string,
 ) {
-  await expect(
-    page.getByRole("heading", { name: "Let's get your colony started." }),
-  ).toBeVisible();
+  await expect(page.getByTestId("onboarding-account")).toBeVisible();
+  await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
   await shot("account");
-  await page.getByLabel("Your name").fill(founderName);
-  await page.getByLabel("Email").fill(founderEmail);
-  await page.getByLabel("Password").fill("colonyprototype");
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Your way back in." }),
-  ).toBeVisible();
+  await createFounderAccount(page, founderEmail);
   await shot("recovery-code");
-  await page.getByLabel("I have saved my code").click();
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Now, your company." }),
-  ).toBeVisible();
-  await page.getByLabel("Company name").fill(companyName);
-  await page
-    .getByRole("button", { name: "Not yet, we are still building" })
-    .click();
-  await page.getByRole("button", { name: "No", exact: true }).click();
-  await shot("company");
-  await page.getByRole("button", { name: "Create workspace" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible({ timeout: 20_000 });
-  await shot("summary");
-  await page
-    .getByPlaceholder("We repair and service cars in Johannesburg.")
-    .fill("We service and repair cars for owners around Johannesburg.");
-  await page.getByRole("button", { name: "Looks right" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toBeVisible({ timeout: 20_000 });
-  await shot("assistant");
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Put something in the tin." }),
-  ).toBeVisible();
-  await shot("tin");
-  await page.getByTestId("onboarding-credits-later").click();
-
-  await expect(page.locator(".onb-canvas")).toHaveCount(0, {
-    timeout: 30_000,
-  });
-  await expect(page.getByTestId("app-top-chrome")).toBeVisible();
+  await saveFounderRecovery(page);
+  await fillFounderBusiness(
+    page,
+    companyName,
+    "We service and repair cars for owners around Johannesburg.",
+  );
+  await shot("business");
+  await openFounderBusiness(page);
   await shot("welcome");
 }
 
 // Scenario A: a genuinely fresh identity, nothing pre-seeded, walking the
-// real "Start with Colony" chain -- the scenario onboarding-first-run-
+// public account entry -- the scenario onboarding-first-run-
 // public.spec.ts already proves passes.
 test("scenario A: genuinely fresh machine, fresh identity", async ({
   page,
@@ -111,13 +75,10 @@ test("scenario A: genuinely fresh machine, fresh identity", async ({
   };
 
   await expect(page.getByTestId("machine-onboarding-gate")).toBeVisible();
-  await shot("machine-gate");
-  await page.getByRole("button", { name: "Start with Colony" }).click();
 
   await walkCanvasFlow(
     page,
     shot,
-    "Aisha Bello",
     "aisha@rosebankauto.co.za",
     "Rosebank Auto Care",
   );
@@ -134,15 +95,28 @@ test("scenario B: a second fresh identity on a machine that already has a commun
 }) => {
   const newIdentity = { ...TEST_IDENTITIES.alice, username: "" };
 
-  await page.addInitScript(() => {});
-  // installMockBridge's default (no skipCommunitySeed) seeds a community
-  // stamped with tyler's pubkey -- simulating a machine that already has a
-  // workspace from a first account. Then override the active identity to a
-  // SECOND, genuinely new pubkey: no machine-onboarding completion, no
-  // fresh-identity marker, no relay profile -- but communities.length is
-  // NOT zero, since that community already exists on this machine.
-  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  // Explicitly keep Tyler's existing community while Alice becomes the
+  // active identity. The normal bridge seeder stamps the active identity,
+  // which would accidentally turn this regression case into the control.
   await seedActiveIdentity(page, newIdentity);
+  await page.addInitScript((pubkey) => {
+    const community = {
+      id: "first-account-community",
+      name: "First account business",
+      relayUrl: "wss://default.example.com",
+      pubkey,
+      addedAt: new Date().toISOString(),
+    };
+    window.localStorage.setItem(
+      "buzz-communities",
+      JSON.stringify([community]),
+    );
+    window.localStorage.setItem("buzz-active-community-id", community.id);
+  }, TEST_IDENTITIES.tyler.pubkey);
+  await installMockBridge(page, undefined, {
+    skipOnboardingSeed: true,
+    skipCommunitySeed: true,
+  });
 
   await page.goto("/");
 
@@ -157,8 +131,13 @@ test("scenario B: a second fresh identity on a machine that already has a commun
   };
 
   await expect(page.getByTestId("machine-onboarding-gate")).toBeVisible();
-  await shot("machine-gate");
-  await page.getByRole("button", { name: "Start with Colony" }).click();
+  const savedOwners = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("buzz-communities") ?? "[]").map(
+      (item: { pubkey: string }) => item.pubkey,
+    ),
+  );
+  expect(savedOwners).toContain(TEST_IDENTITIES.tyler.pubkey);
+  expect(savedOwners).not.toContain(newIdentity.pubkey);
 
   // FIXED: this used to fork to the legacy OnboardingFlow's ProfileStep
   // ("What should we call you?") because isFreshFounder's community check
@@ -170,7 +149,6 @@ test("scenario B: a second fresh identity on a machine that already has a commun
   await walkCanvasFlow(
     page,
     shot,
-    "Zanele Nkosi",
     "zanele@rosebankauto.co.za",
     "Nkosi Logistics",
   );

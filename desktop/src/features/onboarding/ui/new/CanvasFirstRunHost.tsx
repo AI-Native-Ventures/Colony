@@ -15,9 +15,12 @@ import { DEFAULT_COMPLETE_FIRST_RUN_IO } from "../../flow/completeFirstRunIo";
 import { draftFromAnswers } from "../../flow/founderBrief";
 import {
   provisionWorkspace,
+  expectedWorkspaceApplied,
   type ProvisionOutcome,
 } from "../../flow/provisionWorkspace";
 import type { OnboardingAnswers } from "../../flow/steps";
+import { firstRunAnswersKey } from "../../flow/persistence";
+import { ensureBuiltInFounderConfig } from "../../automaticAgentSetup";
 import { NewOnboardingFlow } from "./NewOnboardingFlow";
 
 /**
@@ -79,6 +82,7 @@ export function CanvasFirstRunHost({
   appliedRef.current = communityApplied;
   const relayUrlRef = useRef(activeRelayUrl);
   relayUrlRef.current = activeRelayUrl;
+  const expectedRelayUrlRef = useRef(activeRelayUrl);
 
   // Internal auto-connect builds already have a community when the flow
   // mounts. Read once: the value flips as soon as provisioning succeeds, and
@@ -86,17 +90,27 @@ export function CanvasFirstRunHost({
   const hadCommunityAtMount = useRef(activeRelayUrl !== null).current;
 
   const provision = useCallback(
-    (companyName: string, storedSlug: string | null) =>
-      provisionWorkspace(companyName, storedSlug, {
-        check: checkColonyCommunityName,
-        create: createColonyCommunity,
-        listMine: listColonyCommunities,
-      }),
+    (
+      companyName: string,
+      storedSlug: string | null,
+      rememberCandidate: (slug: string | null) => void,
+    ) =>
+      provisionWorkspace(
+        companyName,
+        storedSlug,
+        {
+          check: checkColonyCommunityName,
+          create: createColonyCommunity,
+          listMine: listColonyCommunities,
+        },
+        rememberCandidate,
+      ),
     [],
   );
 
   const onProvisioned = useCallback(
     (outcome: Extract<ProvisionOutcome, { ok: true }>, companyName: string) => {
+      expectedRelayUrlRef.current = outcome.relayUrl;
       // The typed company name is the label; the claimed address never
       // surfaces in the interface.
       addCommunity({
@@ -117,7 +131,13 @@ export function CanvasFirstRunHost({
 
   const waitForApply = useCallback(async () => {
     const startedAt = Date.now();
-    while (!appliedRef.current || relayUrlRef.current === null) {
+    while (
+      !expectedWorkspaceApplied(
+        expectedRelayUrlRef.current,
+        relayUrlRef.current,
+        appliedRef.current,
+      )
+    ) {
       if (Date.now() - startedAt > APPLY_DEADLINE_MS) {
         throw new Error(
           "Your workspace is taking longer than expected to open. Try again.",
@@ -125,12 +145,16 @@ export function CanvasFirstRunHost({
       }
       await new Promise((resolve) => setTimeout(resolve, APPLY_POLL_MS));
     }
-    return relayUrlRef.current;
+    const relayUrl = expectedRelayUrlRef.current;
+    if (!relayUrl)
+      throw new Error("Your business has not finished opening. Try again.");
+    return relayUrl;
   }, []);
 
   const onComplete = useCallback(
     async (answers: OnboardingAnswers) => {
       const relayUrl = await waitForApply();
+      await ensureBuiltInFounderConfig();
       await completeFirstRun(
         {
           queryClient,
@@ -152,6 +176,8 @@ export function CanvasFirstRunHost({
   return (
     <NewOnboardingFlow
       key={currentPubkey}
+      currentPubkey={currentPubkey}
+      answersKey={firstRunAnswersKey(currentPubkey)}
       services={services}
       provisioning={provisioning}
       onComplete={onComplete}
