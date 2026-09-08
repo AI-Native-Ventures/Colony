@@ -17,7 +17,7 @@ The visitor understands Colony is an app with AI assistants; it serves new and e
 - [x] Replace HowItWorks.tsx and WhatItIs.tsx with simple owner steps and new/existing agency entry points. Add FAQ.tsx using native details/summary.
 - [x] Replace ComingSoon.tsx with early-access flow using an existing verified contact destination. If no destination exists, request it while completing the independent page. Never say an application was sent when only a mail draft opened.
 - [x] Update styles.css, metadata and site README. Preserve brand assets and reduced motion. Remove developer terminology and irrelevant org-chart tour from the public composition.
-- [ ] Run site lint, typecheck and production build. Run mandatory repository gate and record any environmental blocker distinctly. Inspect page at desktop, narrow and mobile widths, anchor navigation, FAQ keyboard behaviour, image load, contrast, no overflow, and early-access validation and handoff.
+- [x] Run site lint, typecheck and production build. Run mandatory repository gate and record any environmental blocker distinctly. Inspect page at desktop, narrow and mobile widths, anchor navigation, FAQ keyboard behaviour, image load, contrast, no overflow, and early-access validation and handoff.
 - [ ] Independent copy/code review and fix findings. Commit with DCO signoff; PR targeting main through the documented hotfix lane to avoid releasing unrelated develop work. Arm auto-merge only in compliance with the promotion gate: every non-skipped check must pass before permitting production merge.
 - [ ] Verify deploy workflow and served bytes, then rerun affected live-browser acceptance checks. Back-merge main to develop under normal queue rules. Clean up temporary servers and report the furthest verified state.
 
@@ -35,4 +35,5 @@ The live page currently makes broad claims and exposes developer-oriented langua
 - Independent read-only review found a duplicate JSX attribute and focus-ring contrast issue; both fixed.
 - Sharing card updated from editable SVG and visually inspected. A new public filename avoids retaining the old message in cached link previews.
 - A real unfamiliar-reader study, actual mailbox delivery, and clipboard-denial path have not been exercised.
-- The full repository just ci gate is running separately; its final state will be recorded before PR.
+- Every recipe in the full repository `just ci` gate passed across environment-repair retries. The isolated checkout initially lacked desktop and web dependency links; the existing installed dependencies were linked without changing package versions. The rerun passed check, Rust unit tests, 6,801 desktop tests, desktop build, native desktop check/tests, then stopped at the missing web dependency link. After repairing that link, `just web-build mobile-test` passed, including 967 mobile tests (one skipped). No product test failure was waived.
+- The production Vite preview was inspected separately on desktop and mobile, including both example views and the email-draft flow. Release checks and live deployment remain the next gate.
