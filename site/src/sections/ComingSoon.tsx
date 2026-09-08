@@ -77,8 +77,9 @@ export function ComingSoon() {
           <p className="early-access__eyebrow">Apply for early access</p>
           <h2 id="early-access-title">Bring your business to Colony.</h2>
           <p>
-            Starting a business, already running one, or exploring an idea? Tell
-            us about the work you want to do in Colony.
+            Starting a business or already running one? Tell us about the first
+            job you’d like help with. You can apply while you’re still exploring
+            an idea.
           </p>
           <p className="early-access__explanation">
             Colony is still being built and tested. Early access is limited.
