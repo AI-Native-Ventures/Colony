@@ -1,42 +1,41 @@
-// site/src/App.tsx
-// The landing page, in the order a stranger needs it: what this is, how it
-// works in four steps, who you talk to, the org chart those steps produce,
-// then the proof for each claim. Nothing is named before it has been shown.
-import scoutArt from "@/assets/scout.png";
-import { Approval } from "@/sections/Approval";
-import { Blocks } from "@/sections/Blocks";
+import { AntMark } from "@/brand/AntMark";
+import { AgencyWork } from "@/sections/AgencyWork";
 import { ComingSoon } from "@/sections/ComingSoon";
-import {
-  FindCustomers,
-  Pipeline,
-  SameRoom,
-  WorkDelivered,
-} from "@/sections/Evidence";
+import { FAQ } from "@/sections/FAQ";
 import { Footer } from "@/sections/Footer";
 import { Hero } from "@/sections/Hero";
 import { HowItWorks } from "@/sections/HowItWorks";
-import { MeetScout } from "@/sections/MeetScout";
-import { OrgChart } from "@/sections/OrgChart";
-import { TheRest } from "@/sections/TheRest";
 import { WhatItIs } from "@/sections/WhatItIs";
 
 export function App() {
   return (
-    <main className="min-h-screen bg-colony-canvas text-colony-ink">
-      <Hero />
-      <WhatItIs />
-      <HowItWorks />
-      <MeetScout />
-      <OrgChart scoutArt={scoutArt} />
-      <SameRoom />
-      <FindCustomers />
-      <Pipeline />
-      <Approval />
-      <WorkDelivered />
-      <Blocks />
-      <TheRest />
-      <ComingSoon />
+    <>
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+      <header className="site-header wrap">
+        <a className="brand" href="#main" aria-label="Colony home">
+          <AntMark className="brand-ant" />
+          <span>Colony</span>
+        </a>
+        <nav aria-label="Main navigation">
+          <a className="nav-explainer" href="#what-you-can-do">
+            What you can do
+          </a>
+          <a className="nav-apply" href="#early-access">
+            Apply for early access <span aria-hidden="true">↗</span>
+          </a>
+        </nav>
+      </header>
+      <main id="main">
+        <Hero />
+        <WhatItIs />
+        <AgencyWork />
+        <HowItWorks />
+        <FAQ />
+        <ComingSoon />
+      </main>
       <Footer />
-    </main>
+    </>
   );
 }

@@ -6,8 +6,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
-    "check": "biome check src",
-    "preview": "vite preview"
+    "check": "biome check src tests && node --experimental-strip-types --test tests/*.test.ts",
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
     "react": "^19.1.0",

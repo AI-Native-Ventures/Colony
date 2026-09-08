@@ -1,8 +1,8 @@
 # Colony marketing site: deploy runbook
 
 Static marketing site for Colony (Vite + React 19 + Tailwind, TypeScript). Deploys to
-Cloudflare Pages. This document is the manual deploy procedure; there is no CI/CD
-automation for this site yet.
+Cloudflare Pages. Production deploys automatically after a site change merges to `main`. The manual
+procedure below is the recovery path, not the normal publishing route.
 
 ## Build
 
@@ -103,3 +103,25 @@ contains the Colony headline ("Run your company with AI agents"), and both `/fav
 `/og.png` return HTTP 200 rather than 404. Rendered the live URL in a headless browser and
 confirmed it matches the local build: hero, scatter field, feature sections, download CTA,
 and footer all present, with no console errors.
+
+## Agency landing page and early access
+
+The page addresses people starting or running website and social media agencies.
+Examples are clearly labelled illustrations, not live AI output or customer evidence.
+The current early-access offer does not promise immediate signup or the complete planned feature set.
+
+Applications use a static email handoff to `basheer@ainative.ventures`, confirmed by the owner.
+The browser validates the fields, prepares an encoded email, and lets the applicant inspect it before
+opening their own email app. The applicant must send it. No server stores the form, no analytics receives
+its contents, and preparing or copying the draft is never presented as a successful submission.
+A selectable draft and copy button provide a fallback when no mail app is configured.
+Changing an answer clears an older draft. Business name and website are not required.
+
+`pnpm -C site check` runs Biome and the email encoding tests, so the deploy workflow also runs those
+tests. Use `pnpm -C site typecheck` and `pnpm -C site build` before opening a PR.
+
+The bakery photograph at `src/assets/examples/chocolate-cake.jpg` was generated with the built-in
+image-generation tool for this fictional example, then JPEG-encoded for delivery. Prompt: two rich
+chocolate cake slices on a cream ceramic plate on dark forest-green linen, warm natural side light,
+realistic crumbs, photoreal editorial food photography, no text, logos, people or watermark.
+The original generated PNG is preserved outside the distributed site.
