@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, RefreshCw } from "lucide-react";
 import { electronDesktop } from "@/shared/api/electronNativeBridge";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { updateTabPayload } from "../lib/workspaceTabs";
+import { BrowserTeammateControls } from "./BrowserTeammateControls";
 import type { TabBodyProps } from "./scratchpadKind";
 
 type BrowserState = {
@@ -13,6 +14,7 @@ type BrowserState = {
   loading: boolean;
   error: string | null;
   controller: string;
+  mode: "read" | "interact" | null;
 };
 
 /** Native Chromium view in the existing workspace tab, with React-owned controls. */
@@ -30,7 +32,6 @@ export function ElectronWebBody({ channelId, tab }: TabBodyProps) {
   const [error, setError] = useState<string | null>(null);
   const surface = useRef<HTMLDivElement>(null);
   const address = useRef<HTMLInputElement>(null);
-  const [connection, setConnection] = useState<string | null>(null);
 
   useEffect(() => {
     if (!api || !business) return;
@@ -185,6 +186,8 @@ export function ElectronWebBody({ channelId, tab }: TabBodyProps) {
             : state?.controller === "You"
               ? "You are in control"
               : state?.controller || "Opening browser…"}
+          {state?.mode &&
+            ` · ${state.mode === "read" ? "read only" : "can interact"}`}
         </span>
         <Link
           to="/settings"
@@ -193,25 +196,7 @@ export function ElectronWebBody({ channelId, tab }: TabBodyProps) {
         >
           Import sign-ins
         </Link>
-        <details>
-          <summary className="cursor-pointer">Agent connection</summary>
-          <button
-            type="button"
-            onClick={() => {
-              void api
-                ?.request<{ grantPath: string }>("browser:grant", {
-                  id: tab.id,
-                  worker: "Colony worker",
-                  mode: "read",
-                })
-                .then((result) => setConnection(result.grantPath))
-                .catch((reason) => setError(String(reason)));
-            }}
-          >
-            Share read-only access
-          </button>
-          {connection && <code className="ml-2">{connection}</code>}
-        </details>
+        <BrowserTeammateControls tabId={tab.id} business={business} />
       </div>
       {(error || state?.error) && (
         <p role="alert" className="px-3 py-2 text-sm text-destructive">

@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 451,
-    "rust_lines": 174237,
-    "tauri_coupled": 179,
-    "portable": 272,
-    "portable_lines": 99377,
+    "rust_total": 460,
+    "rust_lines": 176148,
+    "tauri_coupled": 181,
+    "portable": 279,
+    "portable_lines": 100681,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -135,6 +135,8 @@
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/coordination.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
+      "src-tauri/src/managed_agents/isolation/launch.rs",
+      "src-tauri/src/managed_agents/isolation/network.rs",
       "src-tauri/src/managed_agents/model_chain.rs",
       "src-tauri/src/managed_agents/nest.rs",
       "src-tauri/src/managed_agents/persona_events.rs",
@@ -363,6 +365,11 @@
       "src-tauri/src/managed_agents/env_vars/tests.rs",
       "src-tauri/src/managed_agents/git_bash.rs",
       "src-tauri/src/managed_agents/global_config/tests.rs",
+      "src-tauri/src/managed_agents/isolation.rs",
+      "src-tauri/src/managed_agents/isolation/agent_tests.rs",
+      "src-tauri/src/managed_agents/isolation/network_tests.rs",
+      "src-tauri/src/managed_agents/isolation/runtime_tests.rs",
+      "src-tauri/src/managed_agents/isolation/tests.rs",
       "src-tauri/src/managed_agents/managed_node_paths.rs",
       "src-tauri/src/managed_agents/mod.rs",
       "src-tauri/src/managed_agents/model_effort.rs",
@@ -388,10 +395,12 @@
       "src-tauri/src/managed_agents/retention/legacy_migration.rs",
       "src-tauri/src/managed_agents/retention/legacy_migration/tests.rs",
       "src-tauri/src/managed_agents/role_backfill.rs",
+      "src-tauri/src/managed_agents/runtime/electron_browser.rs",
       "src-tauri/src/managed_agents/runtime/electron_isolation.rs",
       "src-tauri/src/managed_agents/runtime/instance_reaper.rs",
       "src-tauri/src/managed_agents/runtime/lifecycle.rs",
       "src-tauri/src/managed_agents/runtime/metadata.rs",
+      "src-tauri/src/managed_agents/runtime/pair_placeholder.rs",
       "src-tauri/src/managed_agents/runtime/path.rs",
       "src-tauri/src/managed_agents/runtime/prime_agent_config.rs",
       "src-tauri/src/managed_agents/runtime/spend_tests.rs",
@@ -480,7 +489,7 @@
     ]
   },
   "params": {
-    "AppHandle": 365,
+    "AppHandle": 366,
     "State": 265,
     "Window": 7,
     "ipc::Request": 1,
@@ -488,7 +497,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 362,
+      "AppHandle": 363,
       "State": 265,
       "Window": 7,
       "ipc::Request": 1,

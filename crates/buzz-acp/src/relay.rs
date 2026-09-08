@@ -124,7 +124,9 @@ use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+#[cfg(test)]
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -4162,10 +4164,13 @@ async fn do_connect(
         .parse::<url::Url>()
         .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
 
-    let (ws, _response) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(parsed.as_str()))
-        .await
-        .map_err(|_| RelayError::ConnectionClosed)? // timeout → treat as connection failure
-        .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
+    let (ws, _response) = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        buzz_ws_client::transport::connect(parsed.as_str()),
+    )
+    .await
+    .map_err(|_| RelayError::ConnectionClosed)? // timeout → treat as connection failure
+    .map_err(|e| RelayError::WebSocket(Box::new(e)))?;
     debug!("connected to relay at {relay_url}");
 
     let mut ws = ws;

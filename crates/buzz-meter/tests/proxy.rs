@@ -955,3 +955,50 @@ async fn an_unknown_agent_in_the_url_is_rejected() {
     );
     handle.shutdown();
 }
+
+#[tokio::test]
+async fn exact_openai_base_preserves_provider_operation_paths() {
+    for (base_path, exact, expected) in [
+        ("/inference", true, "/inference/chat/completions?trace=1"),
+        ("/api/v1/", true, "/api/v1/chat/completions?trace=1"),
+        ("", true, "/chat/completions?trace=1"),
+        (
+            "/inference",
+            false,
+            "/inference/v1/chat/completions?trace=1",
+        ),
+    ] {
+        let fake = FakeUpstream::start(UpstreamReply::json(OPENAI_JSON)).await;
+        let base = format!("{}{base_path}", fake.base_url);
+        let (port, _rx, handle) = start_meter(MeterConfig {
+            openai_upstream: base.clone(),
+            openai_base_url: exact.then_some(base),
+            openai_api_key: Some(REAL_OPENAI_KEY.to_owned()),
+            ..MeterConfig::default()
+        })
+        .await
+        .unwrap();
+        let key = handle.issue_virtual_key("exact-base");
+        let response = client()
+            .post(format!(
+                "http://127.0.0.1:{port}/openai/k/{key}/v1/chat/completions?trace=1"
+            ))
+            .bearer_auth(&key)
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response.bytes().await.unwrap();
+        let requests = fake.requests();
+        assert_eq!(
+            format!(
+                "{}?{}",
+                requests[0].path,
+                requests[0].query.as_deref().unwrap()
+            ),
+            expected
+        );
+        handle.shutdown();
+    }
+}

@@ -17,6 +17,7 @@ pub(crate) mod effective_config;
 mod env_vars;
 pub(crate) mod git_bash;
 pub(crate) mod global_config;
+pub(crate) mod isolation;
 mod managed_node_paths;
 pub(crate) mod model_chain;
 mod model_effort;

@@ -5,7 +5,6 @@ import { requestBroker } from "./broker.mjs";
 const grantPath = process.argv[2];
 if (!grantPath)
   throw new Error("Usage: node src/mcp.mjs /path/to/tab-grant.json");
-const grant = JSON.parse(await readFile(grantPath, "utf8"));
 const schema = (properties) => ({
   type: "object",
   properties,
@@ -58,6 +57,14 @@ async function dispatch(message) {
     if (!tools.some((tool) => tool.name === name))
       throw new Error("Unknown browser tool");
     try {
+      let grant;
+      try {
+        grant = JSON.parse(await readFile(grantPath, "utf8"));
+      } catch {
+        throw new Error(
+          "No browser tab is shared. Ask the owner to choose a teammate and share a tab in Colony.",
+        );
+      }
       const result = await requestBroker(grant.socketPath, {
         token: grant.token,
         method: name,

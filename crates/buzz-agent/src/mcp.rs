@@ -63,6 +63,7 @@ const PASSTHROUGH_ENV: &[&str] = &[
     // Go and Python tooling reads the uppercase ones, and libcurl deliberately
     // ignores uppercase HTTP_PROXY (CGI ambiguity), so keeping only one form
     // silently breaks half the toolchain.
+    "BUZZ_WORKER_PROXY",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",

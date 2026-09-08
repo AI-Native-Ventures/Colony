@@ -915,20 +915,28 @@ impl Config {
                 OpenAiApi::Auto, // unused for Anthropic
             ),
             Provider::OpenAi => {
-                let openai_compat_default_base = if matches!(
+                let deepseek = matches!(
                     env("BUZZ_AGENT_PROVIDER")
                         .as_deref()
                         .map(str::trim)
                         .map(str::to_ascii_lowercase)
                         .as_deref(),
                     Some("deepseek")
-                ) {
+                );
+                let openai_compat_default_base = if deepseek {
                     "https://api.deepseek.com/v1"
                 } else {
                     "https://api.openai.com/v1"
                 };
                 (
-                    req("OPENAI_COMPAT_API_KEY")?,
+                    if deepseek {
+                        env("DEEPSEEK_API_KEY")
+                            .filter(|key| !key.trim().is_empty())
+                            .or_else(|| env("OPENAI_COMPAT_API_KEY"))
+                            .ok_or_else(|| "config: DEEPSEEK_API_KEY required".to_string())?
+                    } else {
+                        req("OPENAI_COMPAT_API_KEY")?
+                    },
                     resolve_model(
                         buzz_agent_model.as_deref(),
                         env("OPENAI_COMPAT_MODEL").as_deref(),

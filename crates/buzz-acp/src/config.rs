@@ -280,6 +280,16 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_BROWSER_TARGET_ID", default_value = "")]
     pub browser_target_id: String,
 
+    /// Desktop-owned scoped Electron browser server. No tab access by default.
+    #[arg(
+        long,
+        env = "BUZZ_ACP_ELECTRON_BROWSER_CONFIG",
+        default_value = "",
+        hide = true,
+        hide_env_values = true
+    )]
+    pub electron_browser_config: String,
+
     /// Idle timeout: max seconds of silence before killing a turn.
     /// Resets on any agent stdout activity.
     #[arg(long, env = "BUZZ_ACP_IDLE_TIMEOUT")]
@@ -646,6 +656,36 @@ pub fn default_channel_kinds() -> Vec<u32> {
     ]
 }
 
+/// Private Electron executable, adapter and worker-specific grant file.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElectronBrowserConfig {
+    /// Absolute Electron executable path.
+    pub command: String,
+    /// Absolute packaged MCP adapter path.
+    pub adapter: String,
+    /// Absolute per-worker grant file path; it need not exist at startup.
+    pub grant: String,
+}
+impl ElectronBrowserConfig {
+    /// Validate the desktop-owned transport without exposing its content on error.
+    pub fn parse(value: &str) -> Result<Option<Self>, ConfigError> {
+        if value.is_empty() {
+            return Ok(None);
+        }
+        let invalid =
+            || ConfigError::ConfigFile("Invalid scoped Electron browser configuration".into());
+        let config: Self = serde_json::from_str(value).map_err(|_| invalid())?;
+        if [&config.command, &config.adapter, &config.grant]
+            .iter()
+            .any(|path| !std::path::Path::new(path).is_absolute())
+        {
+            return Err(invalid());
+        }
+        Ok(Some(config))
+    }
+}
+
 pub struct Config {
     pub keys: Keys,
     pub relay_url: String,
@@ -660,6 +700,9 @@ pub struct Config {
     pub browser_endpoint: String,
     /// Page target id paired with `browser_endpoint`.
     pub browser_target_id: String,
+    /// Validated local Electron browser transport, replacing the global browser.
+    pub electron_browser: Option<ElectronBrowserConfig>,
+
     pub idle_timeout_secs: u64,
     pub max_turn_duration_secs: u64,
     pub agents: u32,
@@ -1071,6 +1114,7 @@ impl Config {
     /// tests can construct `CliArgs` via `CliArgs::try_parse_from` and exercise the full
     /// validation path without going through process args.
     pub fn from_args(mut args: CliArgs) -> Result<Self, ConfigError> {
+        let electron_browser = ElectronBrowserConfig::parse(&args.electron_browser_config)?;
         if args.provisioned && args.no_meter {
             return Err(ConfigError::ConfigFile(
                 "BUZZ_ACP_PROVISIONED cannot be combined with BUZZ_ACP_NO_METER".into(),
@@ -1305,6 +1349,7 @@ impl Config {
             browser_mcp_command: args.browser_mcp_command,
             browser_endpoint: args.browser_endpoint,
             browser_target_id: args.browser_target_id,
+            electron_browser,
             idle_timeout_secs,
             max_turn_duration_secs,
             agents: args.agents,
@@ -1689,6 +1734,7 @@ mod tests {
             browser_mcp_command: "".into(),
             browser_endpoint: "".into(),
             browser_target_id: "".into(),
+            electron_browser: None,
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
