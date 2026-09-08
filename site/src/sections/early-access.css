@@ -1,0 +1,227 @@
+.early-access {
+  color: #171717;
+  background: #f7f5ef;
+  padding: clamp(64px, 9vw, 128px) 24px;
+  scroll-margin-top: 36px;
+}
+
+.early-access__inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(40px, 7vw, 104px);
+  max-width: 1160px;
+  margin-inline: auto;
+}
+
+.early-access__eyebrow {
+  margin: 0 0 18px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.early-access__intro h2 {
+  max-width: 11ch;
+  margin: 0 0 24px;
+  font-size: clamp(42px, 5.2vw, 68px);
+  font-weight: 600;
+  letter-spacing: -0.055em;
+  line-height: 1.02;
+}
+
+.early-access__intro > p:not(.early-access__eyebrow) {
+  max-width: 41ch;
+  margin: 0 0 22px;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.early-access__intro > p.early-access__explanation {
+  font-size: 15px;
+  color: #52514e;
+}
+
+.early-access__delivery {
+  margin-top: 36px;
+  border-left: 3px solid var(--colony-canvas, #b9a5ef);
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.early-access__delivery h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.early-access__delivery p {
+  margin: 0 0 12px;
+}
+
+.early-access strong {
+  overflow-wrap: anywhere;
+}
+
+.early-access__required {
+  margin: 0 0 22px;
+  color: #52514e;
+  font-size: 13px;
+}
+
+.early-access__field {
+  margin-bottom: 22px;
+}
+
+.early-access label {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.early-access label span {
+  font-weight: 400;
+  color: #52514e;
+}
+
+.early-access input,
+.early-access select,
+.early-access textarea {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #918e87;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #fffefa;
+  color: #171717;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.early-access select {
+  padding-right: 36px;
+}
+
+.early-access textarea {
+  resize: vertical;
+}
+
+.early-access :is(input, select, textarea, button, a):focus-visible,
+.early-access__draft:focus-visible {
+  outline: 3px solid #64419f;
+  outline-offset: 4px;
+}
+
+.early-access__hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #52514e;
+  overflow-wrap: anywhere;
+}
+
+.early-access__primary,
+.early-access__secondary {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  border: 1px solid #171717;
+  border-radius: 999px;
+  padding: 13px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.early-access__primary {
+  background: #171717;
+  color: #fffefa;
+}
+
+.early-access__primary:hover {
+  background: #3b314e;
+}
+
+.early-access__secondary {
+  color: #171717;
+  background: transparent;
+}
+
+.early-access__secondary:hover {
+  background: #e8e1f1;
+}
+
+.early-access__form-note {
+  margin-top: 14px;
+}
+
+.early-access__draft {
+  margin-top: 32px;
+  border-top: 2px solid #171717;
+  padding-top: 28px;
+  scroll-margin-block: 32px;
+}
+
+.early-access__draft h3 {
+  margin: 0 0 14px;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.early-access__draft > p:not(.early-access__eyebrow):not(.early-access__hint) {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.early-access textarea.early-access__draft-text {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.early-access__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-block: 20px 14px;
+}
+
+.early-access__copy-status {
+  min-height: 1.6em;
+  margin-top: 14px;
+}
+
+@media (max-width: 760px) {
+  .early-access__inner {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .early-access__intro h2 {
+    max-width: 15ch;
+  }
+
+  .early-access__delivery {
+    margin-top: 24px;
+  }
+}
+
+@media (max-width: 380px) {
+  .early-access {
+    padding-inline: 18px;
+  }
+
+  .early-access__actions > * {
+    width: 100%;
+  }
+}
