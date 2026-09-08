@@ -67,10 +67,11 @@ roster eligibility checks do not establish process isolation, and the browser
 profile itself also needs protection. The owner-only picker is an access policy
 for cooperating agents; it is not a boundary against a malicious local agent.
 
-The founder has been asked whether to include agent containment before enabling
-signed-in browser work (recommended) or limit this to an explicitly trusted-local-
-agent beta. That decision is pending. Do not publish this feature, describe it as
-cross-agent isolation, or connect real accounts until the scope is resolved.
+The founder approved agent containment before enabling signed-in browser work on
+2026-09-08. The scope decision is resolved; see
+[the isolation design](2026-09-08-local-agent-isolation-design.md). The first local
+process-boundary gate is proven, but native launch adoption and real managed-browser
+execution remain outstanding. Keep this feature unpublished until those gates pass.
 
 Current local implementation includes the owner controls, private ACP startup
 configuration, late-read MCP grant, explicit owner attribution, and worker status
