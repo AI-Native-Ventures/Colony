@@ -2,6 +2,8 @@
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import type { OnboardingServices } from "../contracts";
 import { createPaymentsService } from "../paymentsService";
+import { assertFirstJobScope } from "../firstJobScope";
+import type { FirstJobScope } from "../firstJobStart";
 
 /** NIP-98 HTTP auth. */
 const NIP98_KIND = 27235;
@@ -39,10 +41,34 @@ const PAYMENTS_REQUEST_TIMEOUT_MS = 20_000;
  * the relay's decision (`COLONY_PAYMENT_PROVIDER`), so switching between
  * PayFast and Paystack is a relay env change with no desktop release.
  */
-export function createWiredPaymentsService(): OnboardingServices["payments"] {
+export function createWiredPaymentsService(
+  scope?: Pick<FirstJobScope, "ownerPubkey" | "relayUrl">,
+): OnboardingServices["payments"] {
+  const captured = scope ? Object.freeze({ ...scope }) : null;
+  const checkScope = async () => {
+    if (captured) await assertFirstJobScope(captured);
+  };
+  const baseForRequest = async () => {
+    await checkScope();
+    const base = await getRelayHttpUrl();
+    await checkScope();
+    if (captured) {
+      const expected = new URL(captured.relayUrl);
+      expected.protocol = expected.protocol === "wss:" ? "https:" : "http:";
+      if (
+        new URL(base).toString().replace(/\/+$/, "") !==
+        expected.toString().replace(/\/+$/, "")
+      ) {
+        throw new Error(
+          "The business connection changed before checkout. Reopen the original job to continue.",
+        );
+      }
+    }
+    return base;
+  };
   return createPaymentsService({
     post: async (path, body) => {
-      const base = await getRelayHttpUrl();
+      const base = await baseForRequest();
       const url = `${base.replace(/\/+$/, "")}${path}`;
       const serialized = JSON.stringify(body ?? {});
       // The relay verifies the `u` tag against the exact URL and requires a
@@ -58,6 +84,12 @@ export function createWiredPaymentsService(): OnboardingServices["payments"] {
           ["nonce", crypto.randomUUID()],
         ],
       });
+      await checkScope();
+      if (captured && authEvent.pubkey !== captured.ownerPubkey) {
+        throw new Error(
+          "The account changed before checkout. Return to the original account to continue.",
+        );
+      }
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -76,7 +108,7 @@ export function createWiredPaymentsService(): OnboardingServices["payments"] {
     // authenticates. Signing a read would mean a user could not see what a
     // top-up costs before they had an identity to sign with.
     get: async (path) => {
-      const base = await getRelayHttpUrl();
+      const base = await baseForRequest();
       const url = `${base.replace(/\/+$/, "")}${path}`;
       const response = await fetch(url, {
         method: "GET",

@@ -433,6 +433,9 @@ jobs:
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Onboarding fixture Chromium transport
+        if: matrix.shard == 1
+        run: node --test desktop/src-electron/onboarding-fixture/proxy.chromium.mjs
       - name: Desktop E2E build
         run: pnpm -C desktop build:e2e
       - name: Desktop smoke e2e

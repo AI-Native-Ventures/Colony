@@ -17,5 +17,28 @@ export function electronBetaBuildEnv(env) {
   // Signup uses this root's account API; a fresh identity must not join the
   // root community before onboarding provisions its own business.
   delete configured.BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY;
+  delete configured.BUZZ_ONBOARDING_FIXTURE_TRANSPORT;
   return configured;
+}
+
+/** Fixture transports are an explicit, separately named build, never a beta default. */
+export function electronPackageVariant(args) {
+  const fixture = args.includes("--onboarding-fixture");
+  return {
+    fixture,
+    name: fixture ? "Colony Onboarding Fixture" : "Colony Electron Beta",
+    bundleId: fixture
+      ? "ventures.ainative.colony.onboarding-fixture"
+      : "ventures.ainative.colony.electron-beta",
+    outputSuffix: fixture ? "-onboarding-fixture" : "",
+    helperFeatures: fixture
+      ? [
+          "--features",
+          "buzz-acp/onboarding-fixture,buzz-cli/onboarding-fixture",
+        ]
+      : [],
+    hostFeatures: fixture
+      ? "electron-host,onboarding-fixture"
+      : "electron-host",
+  };
 }

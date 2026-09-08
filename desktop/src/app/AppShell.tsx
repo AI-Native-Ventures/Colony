@@ -124,7 +124,8 @@ export function AppShell() {
     showHuddleInMainApp,
     viewHuddleChannel,
   } = useHuddlePresentation();
-  const hasCommunityRail = communitiesHook.communities.length > 1;
+  // Keep the community and Add control discoverable from the first business.
+  const hasCommunityRail = communitiesHook.communities.length > 0;
   const pulseEnabled = useFeatureEnabled("pulse");
   const projectsEnabled = useFeatureEnabled("projects");
   const workflowsEnabled = useFeatureEnabled("workflows");
@@ -760,7 +761,7 @@ export function AppShell() {
                 />
               ) : null}
               <SidebarProvider
-                className="relative z-10 min-h-0 flex-1 flex-col overflow-visible"
+                className="relative z-10 min-h-0 min-w-0 flex-1 flex-col overflow-visible"
                 data-testid="app-sidebar-layer"
                 onOpenChange={(nextOpen) => {
                   if (!workspaceOpen) setSidebarOpen(nextOpen);

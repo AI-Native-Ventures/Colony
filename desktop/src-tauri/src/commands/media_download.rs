@@ -286,6 +286,8 @@ async fn fetch_blob_bytes_with_cap(
     // A no-redirect client keeps the minted media auth token from being
     // forwarded across origins by a relay-issued 3xx (redirect-hop SSRF); a
     // 3xx is returned verbatim and rejected by the `is_success` check below.
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(url)?;
     let mut req = state.media_fetch_client.get(url).timeout(DOWNLOAD_TIMEOUT);
 
     // Every caller pre-validates `url` against the relay origin via

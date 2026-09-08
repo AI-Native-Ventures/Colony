@@ -138,3 +138,14 @@ test("a persisted brief marker survives rebuilding completion after a retry", ()
     "stable-first-brief",
   );
 });
+
+test("Canvas creates a reviewable setup suggestion, not an invented owner request", () => {
+  const draft = draftFromAnswers(answers());
+  assert.equal(draft.company.name, "Rosebank Auto Care");
+  assert.equal(draft.firstTask.mode, "suggestion");
+  assert.match(
+    draft.firstTask.content,
+    /three improvements.*reason.*next step.*review/,
+  );
+  assert.doesNotMatch(draft.firstTask.content, /Get to know|I am on it/);
+});

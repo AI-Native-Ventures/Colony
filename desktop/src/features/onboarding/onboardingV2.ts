@@ -32,6 +32,8 @@ export type OnboardingV2Draft = {
     selfDescribedGender: string;
   };
   company: {
+    /** Confirmed business name supplied by the simplified founder flow. */
+    name?: string;
     website: string;
     hasWebsite: boolean;
     canonicalUrl: string;
@@ -48,6 +50,8 @@ export type OnboardingV2Draft = {
     status: OnboardingCreditStatus;
   };
   firstTask: {
+    /** Absent for legacy drafts, which retain their original completion path. */
+    mode?: "suggestion";
     content: string;
     deliveryMarker: string;
     deliveredEventId: string | null;

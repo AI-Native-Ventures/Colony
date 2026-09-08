@@ -50,15 +50,8 @@ import { useUpwardPaginationWheel } from "./useUpwardPaginationWheel";
 import { useVirtualizedBottomSettle } from "./useVirtualizedBottomSettle";
 import { useVirtualizedPrependAnchor } from "./useVirtualizedPrependAnchor";
 
-export type TimelineVirtualizerApi = {
-  cancelBottomIntent: (reason?: "navigation" | "scroll") => void;
-  scrollToBottom: (behavior?: ScrollBehavior) => void;
-  settleAtBottom: () => void;
-  scrollToMessage: (
-    messageId: string,
-    options?: { behavior?: ScrollBehavior },
-  ) => boolean;
-};
+import type { TimelineVirtualizerApi } from "./timelineVirtualizerApi";
+export type { TimelineVirtualizerApi } from "./timelineVirtualizerApi";
 
 type TimelineMessageListProps = {
   channelId?: string | null;
@@ -910,6 +903,7 @@ function MessageRowItem({
       >
         <MessageRow
           channelId={channelId}
+          currentPubkey={currentPubkey}
           highlighted={false}
           hoverBackground={false}
           huddleMemberPubkeys={huddleMemberPubkeys}
@@ -971,6 +965,7 @@ function MessageRowItem({
     >
       <MessageRow
         channelId={channelId}
+        currentPubkey={currentPubkey}
         highlighted={message.id === highlightedMessageId || isSearchActive}
         isOpenThreadRoot={isOpenThreadRoot}
         huddleMemberPubkeys={huddleMemberPubkeys}

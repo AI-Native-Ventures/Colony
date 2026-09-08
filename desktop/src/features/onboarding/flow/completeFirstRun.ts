@@ -1,3 +1,5 @@
+import type { FirstJobSuggestion } from "../firstJobSuggestion";
+import type { FirstJobSetupScope } from "../firstJobSetup";
 // desktop/src/features/onboarding/flow/completeFirstRun.ts
 import type { FounderBriefSummary } from "../founderBriefSummary";
 import { founderBriefSummaryFrom } from "../founderBriefSummary";
@@ -72,6 +74,15 @@ export type CompleteFirstRunIo = {
   rememberFounderBrief: (summary: FounderBriefSummary) => void;
   takePendingWelcomeChannelForDirectEntry: () => void;
   navigateToChannel: (channelId: string) => void;
+  /** Required only for the new explicit-Start flow, before Welcome can mount. */
+  markExplicitHandoff?: (scope: FirstJobSetupScope) => Promise<void>;
+  /** Durable owner-signed setup root. This never dispatches agent work. */
+  deliverSuggestion?: (
+    payload: FirstJobSuggestion,
+    marker: string,
+  ) => Promise<{ eventId: string }>;
+  /** Focus the actual acknowledged setup root in the existing Welcome thread. */
+  navigateToThread?: (channelId: string, eventId: string) => void;
 };
 
 /**
@@ -84,6 +95,23 @@ export async function completeFirstRun(
   io: CompleteFirstRunIo,
 ): Promise<CompleteFirstRunResult> {
   deps.assertCurrent?.();
+  const suggestionMode = deps.draft?.firstTask.mode === "suggestion";
+  if (suggestionMode) {
+    if (
+      !io.markExplicitHandoff ||
+      !io.deliverSuggestion ||
+      !io.navigateToThread
+    ) {
+      throw new Error(
+        "The explicit first-job handoff is unavailable. Update Colony and retry.",
+      );
+    }
+    await io.markExplicitHandoff({
+      ownerPubkey: deps.pubkey,
+      relayUrl: deps.relayUrl,
+    });
+    deps.assertCurrent?.();
+  }
   const result = await io.initializeStarterChannels(deps.queryClient, {
     focus: true,
     pubkey: deps.pubkey,
@@ -123,6 +151,41 @@ export async function completeFirstRun(
   if (focusChannelId) {
     io.takePendingWelcomeChannelForDirectEntry();
     io.navigateToChannel(focusChannelId);
+  }
+
+  if (
+    suggestionMode &&
+    deps.draft &&
+    io.deliverSuggestion &&
+    io.navigateToThread
+  ) {
+    if (!focusChannelId)
+      throw new Error("The Welcome channel is not ready. Retry setup.");
+    const payload: FirstJobSuggestion = {
+      version: 1,
+      ownerPubkey: deps.pubkey,
+      relayUrl: deps.relayUrl,
+      channelId: focusChannelId,
+      requestId: deps.draft.firstTask.deliveryMarker,
+      businessName: deps.draft.company.name?.trim() || "Your business",
+      business: deps.draft.company.summary.trim(),
+      website: deps.draft.company.hasWebsite
+        ? deps.draft.company.canonicalUrl
+        : "",
+      brief: deps.draft.firstTask.content.trim(),
+    };
+    const sent = await io.deliverSuggestion(
+      payload,
+      onboardingFirstTaskMarker(deps.draft),
+    );
+    deps.assertCurrent?.();
+    if (!/^[a-f0-9]{64}$/.test(sent.eventId))
+      throw new Error(
+        "The suggestion's thread could not be verified. Retry setup.",
+      );
+    io.navigateToThread(focusChannelId, sent.eventId);
+    io.markComplete(deps.pubkey, deps.relayUrl);
+    return { focusChannelId, firstTaskEventId: sent.eventId };
   }
 
   if (deps.draft) {

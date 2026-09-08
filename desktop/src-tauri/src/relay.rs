@@ -286,6 +286,12 @@ pub async fn relay_error_message(response: reqwest::Response) -> String {
     format!("relay returned {status}")
 }
 
+/// Validate native fixture requests before reqwest can bypass DNS for literal IPs.
+#[cfg(feature = "onboarding-fixture")]
+pub(crate) fn validate_fixture_url(url: &str) -> Result<(), String> {
+    buzz_ws_client::onboarding_fixture::validate_process_url(url).map_err(|error| error.to_string())
+}
+
 // ── HTTP bridge: POST /query ────────────────────────────────────────────────
 
 /// Execute a one-shot query via the relay's HTTP bridge (`POST /query`).
@@ -310,6 +316,8 @@ pub async fn query_relay_at(
 ) -> Result<Vec<nostr::Event>, String> {
     crate::relay_admission::wait_for_rate_limit().await;
     let url = format!("{}/query", api_base_url);
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let body_bytes =
         serde_json::to_vec(filters).map_err(|e| format!("filter serialization failed: {e}"))?;
     let auth = build_nip98_auth_header(&Method::POST, &url, &body_bytes, state)?;
@@ -340,6 +348,8 @@ pub async fn query_relay_at_with_keys(
 ) -> Result<Vec<nostr::Event>, String> {
     crate::relay_admission::wait_for_rate_limit().await;
     let url = format!("{}/query", api_base_url);
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let body_bytes =
         serde_json::to_vec(filters).map_err(|e| format!("filter serialization failed: {e}"))?;
     let auth = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body_bytes)?;
@@ -447,6 +457,8 @@ pub async fn sync_managed_agent_profile(
     crate::egress_guard::assert_no_key_backup_bytes(&body_bytes, "agent profile sync")?;
 
     let url = format!("{}/events", relay_http_base_url(relay_url));
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let auth = build_nip98_auth_header_for_keys(agent_keys, &Method::POST, &url, &body_bytes)?;
 
     let mut request = state
@@ -567,6 +579,8 @@ pub async fn submit_signed_event_with_keys(
     }
     crate::relay_admission::wait_for_rate_limit().await;
     let url = format!("{}/events", relay_api_base_url_with_override(state));
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let body_bytes = event.as_json().into_bytes();
     crate::egress_guard::assert_no_key_backup_bytes(&body_bytes, "signed event submit (keys)")?;
     let auth_header = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body_bytes)?;

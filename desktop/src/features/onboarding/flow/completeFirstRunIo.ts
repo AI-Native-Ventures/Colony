@@ -1,3 +1,9 @@
+import { relayClient } from "@/shared/api/relayClient";
+import { signRelayEvent } from "@/shared/api/tauri";
+import { assertFirstJobScope } from "../firstJobScope";
+import { markExplicitFirstJobSetup } from "../firstJobSetup";
+import { withFirstJobBrowserLock } from "../firstJobStorage";
+import { createFirstJobSuggestionDelivery } from "../firstJobSuggestionDelivery";
 // desktop/src/features/onboarding/flow/completeFirstRunIo.ts
 import { sendChannelMessage } from "@/shared/api/sendChannelMessage";
 
@@ -11,11 +17,43 @@ import { takePendingWelcomeChannelForDirectEntry } from "../welcome";
 import { welcomeKickoffContextClientTag } from "../welcomeKickoffContext";
 import type { CompleteFirstRunIo } from "./completeFirstRun";
 
+// Access storage lazily: its getter can throw, and importing the app must still work.
+const suggestionDelivery = createFirstJobSuggestionDelivery({
+  storage: {
+    getItem: (key) => globalThis.localStorage.getItem(key),
+    setItem: (key, value) => globalThis.localStorage.setItem(key, value),
+  },
+  assertCurrent: assertFirstJobScope,
+  withLock: withFirstJobBrowserLock,
+  sign: signRelayEvent,
+  publish: (event, scope) =>
+    relayClient.publishEvent(
+      event,
+      "Colony could not confirm this suggestion was saved. Retry to check the same request.",
+      "Colony could not save this suggestion. Retry to check the same request.",
+      scope.relayUrl,
+    ),
+  now: Date.now,
+});
+
 /**
  * The real wiring for {@link completeFirstRun}. Lives apart from the pure
  * module so unit tests never import React, TanStack, or the Tauri bridge.
  */
 export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
+  markExplicitHandoff: async (scope) => {
+    await assertFirstJobScope(scope);
+    markExplicitFirstJobSetup(scope);
+  },
+  deliverSuggestion: suggestionDelivery.deliver,
+  navigateToThread: (channelId, eventId) => {
+    const params = new URLSearchParams({
+      thread: eventId,
+      threadRootId: eventId,
+      messageId: eventId,
+    });
+    window.location.hash = `/channels/${encodeURIComponent(channelId)}?${params}`;
+  },
   initializeStarterChannels: (queryClient, args) =>
     initializeStarterChannels(
       queryClient as Parameters<typeof initializeStarterChannels>[0],

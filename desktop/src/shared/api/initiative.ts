@@ -81,6 +81,11 @@ export type AttachThreadTaskInput = {
   clientOrganizationId?: string | null;
   /** Parent task, when this send opens a sub-task under one. */
   parentTaskId?: string | null;
+  /** Full dispatch digest: 64 lowercase hex characters, bound under the same claim. */
+  dispatchBinding?: string | null;
+  /** Opt into read-only attachment for this exact account and business; provide both. */
+  expectedOwnerPubkey?: string;
+  expectedRelayUrl?: string;
   relayPubkey: string;
 };
 
@@ -104,6 +109,13 @@ export async function attachThreadTask(
     conversationScope: input.conversationScope,
     clientOrganizationId: input.clientOrganizationId ?? null,
     parentTaskId: input.parentTaskId ?? null,
+    dispatchBinding: input.dispatchBinding ?? null,
+    ...(input.expectedOwnerPubkey === undefined
+      ? {}
+      : { expectedOwnerPubkey: input.expectedOwnerPubkey }),
+    ...(input.expectedRelayUrl === undefined
+      ? {}
+      : { expectedRelayUrl: input.expectedRelayUrl }),
     relayPubkey: input.relayPubkey,
   });
 }

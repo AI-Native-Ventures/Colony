@@ -17,6 +17,7 @@ import os from "node:os";
 import {
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
+  electronPackageVariant,
 } from "./electron-package-config.mjs";
 
 const exec = promisify(execFile);
@@ -24,6 +25,7 @@ const desktop = fileURLToPath(new URL("..", import.meta.url));
 const repo = path.dirname(desktop);
 const profile = process.argv.includes("--debug") ? "debug" : "release";
 const cargoProfile = profile === "debug" ? "dev" : "release";
+const variant = electronPackageVariant(process.argv);
 const buildEnv = electronBetaBuildEnv(process.env);
 const helpers = [
   "buzz-acp",
@@ -83,6 +85,7 @@ await run("cargo", [
   "--jobs",
   "4",
   ...packages.flatMap((name) => ["-p", name]),
+  ...variant.helperFeatures,
 ]);
 await run("just", ["_ensure-sidecar-stubs"]);
 await run("cargo", [
@@ -94,7 +97,7 @@ await run("cargo", [
   "--jobs",
   "4",
   "--features",
-  "electron-host",
+  variant.hostFeatures,
   "--bin",
   "colony-native-host",
 ]);
@@ -103,7 +106,7 @@ const hostTarget = await targetDir("desktop/src-tauri/Cargo.toml");
 const output = path.join(
   desktop,
   "electron-dist",
-  `${metadata.version}-${profile}-${process.arch}`,
+  `${metadata.version}-${profile}-${process.arch}${variant.outputSuffix}`,
 );
 await mkdir(output, { recursive: true });
 const stage = await mkdtemp(path.join(os.tmpdir(), "colony-electron-package-"));
@@ -120,7 +123,9 @@ try {
     path.join(appDir, "src-electron"),
     {
       recursive: true,
-      filter: (source) => !/\.(test\.mjs|md)$|smoke\.mjs$/.test(source),
+      filter: (source) =>
+        !/\.(test\.mjs|md)$|smoke\.mjs$/.test(source) &&
+        path.basename(source) !== "onboarding-fixture",
     },
   );
   const config = JSON.parse(
@@ -134,7 +139,7 @@ try {
     path.join(appDir, "package.json"),
     JSON.stringify({
       name: "colony-electron-beta",
-      productName: "Colony Electron Beta",
+      productName: variant.name,
       version: metadata.version,
       type: "module",
       main: "src-electron/main.mjs",
@@ -186,9 +191,9 @@ try {
   }
   const [bundle] = await packager({
     dir: appDir,
-    name: "Colony Electron Beta",
-    executableName: "Colony Electron Beta",
-    appBundleId: "ventures.ainative.colony.electron-beta",
+    name: variant.name,
+    executableName: variant.name,
+    appBundleId: variant.bundleId,
     appVersion: metadata.version,
     electronVersion: metadata.devDependencies.electron,
     platform: "darwin",
@@ -200,14 +205,14 @@ try {
     out: output,
     overwrite: true,
   });
-  const app = path.join(bundle, "Colony Electron Beta.app");
+  const app = path.join(bundle, `${variant.name}.app`);
   // Local ad-hoc signature enables the relocated beta to run. This is not
   // Developer ID signing or notarization and is recorded explicitly below.
   await run("codesign", ["--force", "--deep", "--sign", "-", app]);
   await run("codesign", ["--verify", "--deep", "--strict", app]);
   const zip = path.join(
     output,
-    `Colony-Electron-Beta-${metadata.version}-${profile}-${process.arch}.zip`,
+    `${variant.name.replaceAll(" ", "-")}-${metadata.version}-${profile}-${process.arch}.zip`,
   );
   await run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, zip]);
   await writeFile(
@@ -219,6 +224,7 @@ try {
         arch: process.arch,
         relay: ELECTRON_BETA_RELAY,
         signing: "ad-hoc; not notarized",
+        onboardingFixture: variant.fixture,
         app,
         zip,
         binaries,

@@ -14,6 +14,10 @@ use super::{
 use crate::app_state::AppState;
 use crate::provisioned_credits::{normalized_relay_http_origin, GatewayLease};
 
+mod start;
+mod start_scope;
+use start::start_pair;
+
 const STATUS_EVENT: &str = "managed-agent-runtime-status";
 
 /// Failure returned while rotating a provisioned-credit token.  A handoff can
@@ -309,7 +313,7 @@ pub(crate) fn start_managed_agent_runtime_pair_lazy(
     relay_url: String,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
-    start_pair(pubkey, relay_url, true, None, app)
+    start_pair(pubkey, relay_url, true, None, None, app)
 }
 
 /// Stage a replacement meter lease into live pairs on the matching relay
@@ -539,179 +543,15 @@ pub(crate) fn handoff_provisioned_credits_pairs(
     Ok(ProvisionedCreditsHandoff { remaining_old_keys })
 }
 
+/// Start one explicit local runtime pair, optionally fenced to its signing owner.
 #[tauri::command]
 pub fn start_managed_agent_runtime(
     pubkey: String,
     relay_url: String,
+    expected_owner_pubkey: Option<String>,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
-    start_managed_agent_runtime_pair_lazy(pubkey, relay_url, app)
-}
-
-fn start_pair(
-    pubkey: String,
-    relay_url: String,
-    lazy: bool,
-    expected_updated_at: Option<&str>,
-    app: AppHandle,
-) -> Result<ManagedAgentRuntimeStatus, String> {
-    let state = app.state::<AppState>();
-    let (key, spawn_record) = {
-        let _transition = state
-            .managed_agent_runtime_transition
-            .lock()
-            .map_err(|e| e.to_string())?;
-        if state.shutdown_started.load(Ordering::Acquire) {
-            return Err("desktop shutdown has started".into());
-        }
-        let _store = state
-            .managed_agents_store_lock
-            .lock()
-            .map_err(|e| e.to_string())?;
-        let mut records = load_managed_agents(&app)?;
-        let record = find_managed_agent_mut(&mut records, &pubkey)?;
-        if record.backend != BackendKind::Local {
-            return Err("managed runtime pairs require a local agent".into());
-        }
-        // The boundary is enforced here as well as in reconcile, because a
-        // start can also arrive straight from the UI with whatever community
-        // is open. An agent pinned elsewhere must not spawn against this
-        // relay, publish a profile on it, or read its channels.
-        if !crate::relay::agent_belongs_to_workspace(&record.relay_url, &relay_url) {
-            return Err(format!(
-                "{} belongs to another community ({}) and cannot run on {relay_url}",
-                record.name, record.relay_url
-            ));
-        }
-        if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
-            return Err("managed agent changed while runtime reconciliation was in flight".into());
-        }
-        let key = ManagedAgentRuntimeKey::new(pubkey, &relay_url)?;
-        let mut runtimes = state
-            .managed_agent_processes
-            .lock()
-            .map_err(|e| e.to_string())?;
-        let pair_running = runtimes
-            .get_mut(&key)
-            .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none());
-        if pair_running {
-            let status = status_for(&app, record, &key, runtimes.get(&key), None);
-            return Ok(status);
-        }
-        runtimes.remove(&key);
-        terminate_untracked_pair_runtime(&app, &key)?;
-        // The lease manager may perform blocking mint I/O. Drop all runtime
-        // locks before spawning so a concurrent rotation can never wait for a
-        // lock held by a start that is itself waiting on the per-key gate.
-        (key, record.clone())
-    };
-
-    let owner = state
-        .keys
-        .lock()
-        .ok()
-        .map(|keys| keys.public_key().to_hex());
-    let mut process =
-        spawn_agent_child(&app, &spawn_record, &key.relay_url, lazy, owner.as_deref())?;
-    let process_log_path = process.log_path.clone();
-
-    let _transition = state
-        .managed_agent_runtime_transition
-        .lock()
-        .map_err(|e| e.to_string())?;
-    let _store = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|e| e.to_string())?;
-    if state.shutdown_started.load(Ordering::Acquire) {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        return Err("desktop shutdown has started".into());
-    }
-    if !super::provisioned_process_matches_current_identity(&app, &key.relay_url, &process) {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        return Err("Colony Credits identity changed during spawn; retry reconnect".into());
-    }
-    let mut records = load_managed_agents(&app)?;
-    let record = find_managed_agent_mut(&mut records, &key.pubkey)?;
-    if expected_updated_at.is_some_and(|expected| record.updated_at != expected) {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        return Err("managed agent changed while runtime reconciliation was in flight".into());
-    }
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|e| e.to_string())?;
-    let pair_running = runtimes
-        .get_mut(&key)
-        .is_some_and(|runtime| runtime.child.try_wait().ok().flatten().is_none());
-    if pair_running {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        let status = status_for(&app, record, &key, runtimes.get(&key), None);
-        return Ok(status);
-    }
-    let now = crate::util::now_iso();
-    let receipt = ManagedAgentRuntimeReceipt {
-        key: key.clone(),
-        pid: process.child.id(),
-        desktop_instance_id: current_instance_id(&app),
-        started_at: now.clone(),
-    };
-    if let Err(error) = write_agent_runtime_receipt(&app, &receipt) {
-        let _ = terminate_process(process.child.id());
-        let _ = process.child.wait();
-        return Err(error);
-    }
-    record.runtime_pid = None;
-    record.updated_at = now.clone();
-    record.last_started_at = Some(now);
-    record.last_stopped_at = None;
-    record.last_error = None;
-    // Snapshot reconcile inputs while the record is in scope. The pair's own
-    // relay is the target: this spawn may serve a community other than the
-    // active workspace, and the profile must land where the process connects.
-    let reconcile_personas = load_personas(&app).unwrap_or_default();
-    let reconcile_data =
-        crate::commands::ProfileReconcileData::build(&app, record, &reconcile_personas);
-    runtimes.insert(key.clone(), ManagedAgentPairRuntime::starting(process));
-    let status = status_for(&app, record, &key, runtimes.get(&key), None);
-    drop(runtimes);
-    save_managed_agents(&app, &records)?;
-    emit_status(&app, &status);
-
-    // ── Profile reconciliation (fire-and-forget) ────────────────────────────
-    // Pair spawns (sidebar Start, runtime reconcile, restarts) used to skip
-    // this entirely, so an agent could run on a relay that had no kind:0 for
-    // it — and every surface resolving names from relay profiles alone then
-    // rendered the agent's raw pubkey. Same pattern as the UI start path;
-    // failures are appended to the pair log so they are actually findable.
-    let reconcile_app = app.clone();
-    let reconcile_pubkey = key.pubkey.clone();
-    let reconcile_relay = key.relay_url.clone();
-    tauri::async_runtime::spawn(async move {
-        let state = reconcile_app.state::<AppState>();
-        if let Err(error) = crate::commands::reconcile_profile_at(
-            &state,
-            &reconcile_app,
-            &reconcile_pubkey,
-            &reconcile_data,
-            &reconcile_relay,
-        )
-        .await
-        {
-            let _ = append_log_marker(
-                &process_log_path,
-                &format!("=== profile reconcile failed: {error} ==="),
-            );
-            eprintln!(
-                "buzz-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {error}"
-            );
-        }
-    });
-    Ok(status)
+    start_pair(pubkey, relay_url, true, None, expected_owner_pubkey, app)
 }
 
 #[tauri::command]
@@ -788,7 +628,7 @@ pub fn restart_managed_agent_runtime(
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
     stop_managed_agent_runtime(pubkey.clone(), relay_url.clone(), app.clone())?;
-    start_pair(pubkey, relay_url, true, None, app)
+    start_pair(pubkey, relay_url, true, None, None, app)
 }
 
 /// Probe whether this agent can operate on `requested_relay_url`.
@@ -920,6 +760,7 @@ pub async fn reconcile_managed_agent_runtimes(
                         key.relay_url.clone(),
                         true,
                         Some(&record.updated_at),
+                        None,
                         app.clone(),
                     ) {
                         Ok(mut status) => {

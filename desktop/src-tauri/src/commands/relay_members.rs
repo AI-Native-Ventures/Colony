@@ -26,6 +26,8 @@ pub async fn relay_requires_membership(
         .map(crate::relay::relay_http_base_url)
         .unwrap_or_else(|| relay_api_base_url_with_override(&state));
     let url = format!("{}/info", base_url.trim_end_matches('/'));
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = state
         .http_client
         .get(url)

@@ -32,6 +32,11 @@ use crate::{
     },
 };
 
+#[path = "initiative_scope.rs"]
+mod attach_scope;
+#[path = "initiative_dispatch_binding.rs"]
+mod dispatch_binding;
+
 /// What the caller has to publish next, and what it will do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -494,6 +499,10 @@ fn thread_attach_mode(mode: &str) -> Result<ThreadAttachMode, String> {
 ///
 /// `send_id` is the caller's stable identity for this send. Retrying the same
 /// send asks the same question, because every key here is derived from it.
+/// Optional `dispatch_binding` commits the complete dispatch in its request ID
+/// while preserving the shared claim key and the ordinary visible Task title.
+/// Optional expected owner and relay fields fence first-job calls to existing
+/// staffing only, without the legacy local persona repair or team seeding.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn attach_thread_task(
@@ -508,8 +517,12 @@ pub async fn attach_thread_task(
     client_organization_id: Option<String>,
     parent_task_id: Option<String>,
     relay_pubkey: String,
+    dispatch_binding: Option<String>,
+    expected_owner_pubkey: Option<String>,
+    expected_relay_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ThreadAttachResult, String> {
+    dispatch_binding::validate(dispatch_binding.as_deref())?;
     let keys = state
         .signing_keys()
         .map_err(|_| "recording company work requires the community owner".to_string())?;
@@ -519,6 +532,20 @@ pub async fn attach_thread_task(
     }
     let mode = thread_attach_mode(mode.trim())?;
     let thread_root = validated_thread_root(thread_root)?;
+    let relay_url = if expected_owner_pubkey.is_some() || expected_relay_url.is_some() {
+        attach_scope::current_relay(&state)?
+    } else {
+        crate::relay::relay_ws_url_with_override(&state)
+    };
+    let scope = attach_scope::AttachScope::capture(
+        expected_owner_pubkey,
+        expected_relay_url,
+        &keys.public_key().to_hex(),
+        &relay_url,
+    )?;
+    if let Some(scope) = &scope {
+        scope.check(&state)?;
+    }
 
     // The mention flow knows agents by public key; the company contract knows
     // them by persona. Live hire paths link one at creation time, but nothing
@@ -534,46 +561,53 @@ pub async fn attach_thread_task(
     let normalized = agent_pubkey
         .map(|pubkey| pubkey.trim().to_lowercase())
         .filter(|pubkey| !pubkey.is_empty());
-    let relay_url = crate::relay::relay_ws_url_with_override(&state);
-    let agent_persona_id = match normalized.as_deref() {
-        None => None,
-        Some(pubkey) => {
-            let _store_guard = state
-                .managed_agents_store_lock
-                .lock()
-                .map_err(|error| error.to_string())?;
+    let agent_persona_id = if let Some(scope) = &scope {
+        let persona = scope.persona(&app, normalized.as_deref())?;
+        scope.check(&state)?;
+        Some(persona)
+    } else {
+        match normalized.as_deref() {
+            None => None,
+            Some(pubkey) => {
+                let _store_guard = state
+                    .managed_agents_store_lock
+                    .lock()
+                    .map_err(|error| error.to_string())?;
 
-            let mut agents = load_managed_agents(&app)?;
-            let mut personas = load_personas(&app)?;
-            let mut teams = load_teams(&app)?;
-            let now = crate::util::now_iso();
+                let mut agents = load_managed_agents(&app)?;
+                let mut personas = load_personas(&app)?;
+                let mut teams = load_teams(&app)?;
+                let now = crate::util::now_iso();
 
-            let outcome = resolve_chat_agent_persona(
-                &mut agents,
-                &mut personas,
-                &mut teams,
-                pubkey,
-                &relay_url,
-                &now,
-            )?;
+                let outcome = resolve_chat_agent_persona(
+                    &mut agents,
+                    &mut personas,
+                    &mut teams,
+                    pubkey,
+                    &relay_url,
+                    &now,
+                )?;
 
-            if outcome.agents_changed {
-                save_managed_agents(&app, &agents)?;
+                if outcome.agents_changed {
+                    save_managed_agents(&app, &agents)?;
+                }
+                if outcome.personas_changed {
+                    save_personas(&app, &personas)?;
+                }
+                if outcome.teams_changed {
+                    save_teams(&app, &teams)?;
+                }
+
+                Some(outcome.persona_id)
             }
-            if outcome.personas_changed {
-                save_personas(&app, &personas)?;
-            }
-            if outcome.teams_changed {
-                save_teams(&app, &teams)?;
-            }
-
-            Some(outcome.persona_id)
         }
     };
 
     // Seeds this community's coordination team when it has none, so the relay
     // has a team to charge the turn to before the question is even asked.
-    company_team_refs(&app, &state, &relay_url)?;
+    if scope.is_none() {
+        company_team_refs(&app, &state, &relay_url)?;
+    }
 
     // Derived from the send rather than read from the clock, so a retry
     // produces the same bytes and the relay recognises the replay.
@@ -593,10 +627,13 @@ pub async fn attach_thread_task(
         relay_pubkey: &relay_pubkey,
         now,
     })?;
+    let action = dispatch_binding::bind(action, dispatch_binding.as_deref())?;
 
-    Ok(ThreadAttachResult {
-        signed_action: sign_action(&action, &keys)?,
-    })
+    let signed_action = sign_action(&action, &keys)?;
+    if let Some(scope) = &scope {
+        scope.check(&state)?;
+    }
+    Ok(ThreadAttachResult { signed_action })
 }
 
 /// The Task a human created directly.

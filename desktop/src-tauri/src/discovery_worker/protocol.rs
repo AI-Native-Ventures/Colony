@@ -544,6 +544,8 @@ pub(super) async fn fetch_relay_pubkey(
     state: &AppState,
     api_base_url: &str,
 ) -> Result<PublicKey, String> {
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(api_base_url)?;
     let response = state
         .http_client
         .get(api_base_url)

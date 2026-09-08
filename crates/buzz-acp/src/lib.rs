@@ -11,6 +11,8 @@ mod filter;
 mod meter_env;
 mod meter_publish;
 mod observer;
+#[cfg(all(test, feature = "onboarding-fixture"))]
+mod onboarding_fixture_mcp_tests;
 mod pool;
 mod pool_lifecycle;
 mod queue;
@@ -2395,7 +2397,7 @@ async fn tokio_main() -> Result<()> {
     let ctx = Arc::new(PromptContext {
         completion_check: config.completion_check,
         deadline_extend_tx: Some(deadline_extend_tx.clone()),
-        mcp_servers: build_mcp_servers(&config),
+        mcp_servers: build_runtime_mcp_servers(&config)?,
         initial_message: config.initial_message.clone(),
         idle_timeout: Duration::from_secs(config.idle_timeout_secs),
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
@@ -5956,6 +5958,31 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 /// construction sites agree on what an agent sees.
 const BROWSER_MCP_SERVER_NAME: &str = "buzz-browser";
 
+fn build_runtime_mcp_servers(config: &Config) -> Result<Vec<McpServer>> {
+    let servers = build_mcp_servers(config);
+    #[cfg(feature = "onboarding-fixture")]
+    let servers = {
+        let fixture = buzz_ws_client::onboarding_fixture::FixtureTransport::from_env()?;
+        let mut servers = servers;
+        if let Some(server) = servers
+            .iter_mut()
+            .find(|server| server.command == config.mcp_command)
+        {
+            // buzz-agent clears inherited env before applying this trusted MCP
+            // declaration. Forward only the validated public transport, after
+            // all ordinary entries; the browser receives no fixture override.
+            let name = buzz_ws_client::onboarding_fixture::CONFIG_ENV;
+            server.env.retain(|entry| entry.name != name);
+            server.env.push(EnvVar {
+                name: name.into(),
+                value: fixture.config_json().into(),
+            });
+        }
+        servers
+    };
+    Ok(servers)
+}
+
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     let mut servers = Vec::new();
 
@@ -7759,7 +7786,7 @@ mod build_mcp_servers_tests {
     /// Env-var-touching tests must run serially — env vars are process-global.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn test_config() -> Config {
+    pub(super) fn test_config() -> Config {
         Config {
             completion_check: false,
             keys: nostr::Keys::generate(),

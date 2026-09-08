@@ -633,9 +633,13 @@ impl BuzzClient {
         auth_tag: Option<Tag>,
         auth_tag_json: Option<String>,
     ) -> Result<Self, CliError> {
-        let http = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .timeout(env_duration_secs("BUZZ_TIMEOUT_SECS", 30))
-            .connect_timeout(env_duration_secs("BUZZ_CONNECT_TIMEOUT_SECS", 15))
+            .connect_timeout(env_duration_secs("BUZZ_CONNECT_TIMEOUT_SECS", 15));
+        #[cfg(feature = "onboarding-fixture")]
+        let builder = buzz_ws_client::onboarding_fixture::configure_process_http(builder)
+            .map_err(|error| CliError::Other(error.to_string()))?;
+        let http = builder
             .build()
             .map_err(|e| CliError::Other(e.to_string()))?;
         Ok(Self {
@@ -849,6 +853,9 @@ impl BuzzClient {
     /// membership-scoped resource.
     pub async fn get_public(&self, path: &str) -> Result<String, CliError> {
         let url = format!("{}{path}", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let resp = self
             .http
             .get(&url)
@@ -869,6 +876,9 @@ impl BuzzClient {
     /// Each filter is ORed by the relay (standard Nostr REQ behavior).
     pub async fn query_multi(&self, filters: &[serde_json::Value]) -> Result<String, CliError> {
         let url = format!("{}/query", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(filters)
                 .map_err(|e| CliError::Other(format!("filter serialization failed: {e}")))?,
@@ -899,6 +909,9 @@ impl BuzzClient {
     #[allow(dead_code)]
     pub async fn count(&self, filter: &serde_json::Value) -> Result<String, CliError> {
         let url = format!("{}/count", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&[filter])
                 .map_err(|e| CliError::Other(format!("filter serialization failed: {e}")))?,
@@ -932,6 +945,9 @@ impl BuzzClient {
     /// stored events.
     pub async fn get_authed(&self, path: &str) -> Result<String, CliError> {
         let url = format!("{}{path}", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         self.with_retry_body(|| {
             let url = url.clone();
             async move {
@@ -955,6 +971,9 @@ impl BuzzClient {
     /// hardcoding a domain suffix and printing an address no relay here owns.
     pub async fn provisioning_config(&self) -> Result<String, CliError> {
         let url = format!("{}{COMMUNITIES_API_PATH}/config", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         self.with_retry_body(|| {
             let url = url.clone();
             async move {
@@ -983,6 +1002,9 @@ impl BuzzClient {
             "{}{COMMUNITIES_API_PATH}/availability?{query}",
             self.relay_url
         );
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         self.with_retry_body(|| {
             let url = url.clone();
             async move {
@@ -1005,6 +1027,9 @@ impl BuzzClient {
     /// decision with the caller, who can settle it with `communities list`.
     pub async fn create_community(&self, name: &str) -> Result<String, CliError> {
         let url = format!("{}{COMMUNITIES_API_PATH}", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&serde_json::json!({ "name": name }))
                 .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
@@ -1051,6 +1076,9 @@ impl BuzzClient {
         max_uses: Option<i32>,
     ) -> Result<String, CliError> {
         let url = format!("{}{INVITES_API_PATH}", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let mut payload = serde_json::Map::new();
         if let Some(ttl_secs) = ttl_secs {
             payload.insert("ttl_secs".into(), serde_json::json!(ttl_secs));
@@ -1093,6 +1121,9 @@ impl BuzzClient {
         policy_receipt: Option<&str>,
     ) -> Result<String, CliError> {
         let url = format!("{}{INVITES_API_PATH}/claim", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let mut payload = serde_json::Map::new();
         payload.insert("code".into(), serde_json::json!(code));
         if let Some(receipt) = policy_receipt {
@@ -1138,6 +1169,9 @@ impl BuzzClient {
         age_confirmed: bool,
     ) -> Result<String, CliError> {
         let url = format!("{}{INVITES_API_PATH}/accept-policy", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&serde_json::json!({
                 "code": code,
@@ -1167,6 +1201,9 @@ impl BuzzClient {
     /// `version` string `accept-policy` echoes back. Unauthenticated.
     pub async fn join_policy(&self) -> Result<String, CliError> {
         let url = format!("{}/api/join-policy", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         self.with_retry_body(|| {
             let url = url.clone();
             async move {
@@ -1201,6 +1238,9 @@ impl BuzzClient {
             }
             None => format!("{}{PAYMENTS_API_PATH}/packs", self.relay_url),
         };
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         self.with_retry_body(|| {
             let url = url.clone();
             async move {
@@ -1234,6 +1274,9 @@ impl BuzzClient {
     /// re-signed on each attempt so the NIP-98 nonce stays unique.
     pub async fn payments_balance(&self) -> Result<String, CliError> {
         let url = format!("{}{PAYMENTS_API_PATH}/balance", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from_static(b"{}");
         self.with_retry_body(|| {
             let url = url.clone();
@@ -1272,6 +1315,9 @@ impl BuzzClient {
     /// the caller.
     pub async fn initialize_payment(&self, pack_id: &str, email: &str) -> Result<String, CliError> {
         let url = format!("{}{PAYMENTS_API_PATH}/initialize", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&serde_json::json!({ "packId": pack_id, "email": email }))
                 .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
@@ -1298,6 +1344,9 @@ impl BuzzClient {
     /// each attempt so the NIP-98 nonce stays unique.
     pub async fn verify_payment(&self, reference: &str) -> Result<String, CliError> {
         let url = format!("{}{PAYMENTS_API_PATH}/verify", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&serde_json::json!({ "reference": reference }))
                 .map_err(|e| CliError::Other(format!("request serialization failed: {e}")))?,
@@ -1346,6 +1395,9 @@ impl BuzzClient {
     /// Submit a moderation command (kinds 9040–9044) with non-idempotent retry policy.
     async fn submit_moderation_event(&self, event: nostr::Event) -> Result<String, CliError> {
         let url = format!("{}/events", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&event)
                 .map_err(|e| CliError::Other(format!("event serialization failed: {e}")))?,
@@ -1497,6 +1549,9 @@ impl BuzzClient {
     /// re-run is safe regardless of the failure kind.
     async fn submit_stored_event(&self, event: nostr::Event) -> Result<String, CliError> {
         let url = format!("{}/events", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let body = bytes::Bytes::from(
             serde_json::to_vec(&event)
                 .map_err(|e| CliError::Other(format!("event serialization failed: {e}")))?,
@@ -1610,6 +1665,9 @@ impl BuzzClient {
             Duration::from_secs(120)
         };
         let url = format!("{}/upload", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let upload_body = bytes::Bytes::from(bytes);
 
         // The full upload operation — network send AND response body read — lives inside
@@ -1666,6 +1724,9 @@ impl BuzzClient {
         }
 
         let legacy_url = format!("{}/media/upload", self.relay_url);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&legacy_url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         let mut descriptor = self
             .with_retry_body(|| {
                 let upload_body = upload_body.clone();
@@ -1703,11 +1764,18 @@ impl BuzzClient {
     /// Download a Blossom media blob using BUD-01 `t=get` auth.
     pub async fn download_media(&self, input: &str) -> Result<bytes::Bytes, CliError> {
         let url = media_url_from_input(&self.relay_url, input)?;
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| CliError::Other(error.to_string()))?;
         // Use a dedicated client: 120 s timeout, no redirect forwarding.
-        let client = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             // Do not forward Authorization or x-auth-tag to redirect targets.
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        #[cfg(feature = "onboarding-fixture")]
+        let builder = buzz_ws_client::onboarding_fixture::configure_process_http(builder)
+            .map_err(|error| CliError::Other(error.to_string()))?;
+        let client = builder
             .build()
             .map_err(|e| CliError::Other(format!("http client init failed: {e}")))?;
         self.with_retry_body(|| {
@@ -4419,5 +4487,45 @@ mod credits_api_tests {
             other => panic!("expected CliError::Relay, got {other:?}"),
         }
         assert_eq!(exit_code(&err), 2);
+    }
+}
+
+#[cfg(all(test, feature = "onboarding-fixture"))]
+mod onboarding_fixture_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fixture_request_guard_rejects_literal_ip_before_dispatch() {
+        let trap = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        // Intentionally bypass the constructor's fixture setup to verify the
+        // request guard itself, including callers with an injected raw client.
+        let client = BuzzClient {
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_millis(50))
+                .build()
+                .unwrap(),
+            relay_url: format!("http://{}", trap.local_addr().unwrap()),
+            keys: Keys::generate(),
+            auth_tag: None,
+            auth_tag_json: None,
+        };
+        let error = client.get_public("/info").await.unwrap_err();
+        assert!(
+            error.to_string().contains("fixture"),
+            "must reject before reqwest: {error}"
+        );
+        let error = client
+            .query(&serde_json::json!({"kinds": [9]}))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("fixture"),
+            "signed query must reject before reqwest: {error}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), trap.accept())
+                .await
+                .is_err()
+        );
     }
 }

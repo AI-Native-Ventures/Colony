@@ -76,11 +76,17 @@ export async function listManagedAgentRuntimes(): Promise<
   );
 }
 
+/** Start an explicit pair; first-job callers also pin the native signing owner. */
 export async function startManagedAgentRuntime(
   pubkey: string,
   relayUrl: string,
+  expectedOwnerPubkey?: string,
 ): Promise<ManagedAgentRuntimeStatus> {
-  return invokeTauri("start_managed_agent_runtime", { pubkey, relayUrl });
+  return invokeTauri("start_managed_agent_runtime", {
+    pubkey,
+    relayUrl,
+    ...(expectedOwnerPubkey === undefined ? {} : { expectedOwnerPubkey }),
+  });
 }
 
 export async function stopManagedAgentRuntime(

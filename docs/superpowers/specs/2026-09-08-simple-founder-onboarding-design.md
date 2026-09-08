@@ -1,15 +1,15 @@
 # Simple founder onboarding
 
-Status: the approved account/recovery/business journey and signup configuration
-repair are implemented in desktop source. The latest scoped account browser
-checks (19) and source unit checks (451) pass; their scope is recorded in
-[the verification report](../reports/2026-09-08-colony-redesign-proof.md).
-The first PR's real-app visual acceptance claim was rejected and is superseded.
-Corrected-source browser checks and fresh final screenshots replace that failed
-visual gate; packaged verification remains separate. The latest beta
-smoke attempt failed on a completion-state fixture; a corrected fixture and
-successful package rerun are required. No merge, available beta or live hosted
-signup success is claimed. The earlier clickable preview remains a simulation.
+Status: the approved account/recovery/business journey, signup configuration
+repair and corrected workspace visuals merged in [PR #655](https://github.com/AI-Native-Ventures/Colony/pull/655).
+The available normal beta and its packaged checks are recorded in
+[the redesign verification report](../reports/2026-09-08-colony-redesign-proof.md).
+The initial PR screenshots were rejected; the corrected real-app screenshots
+replace that failed visual gate. The explicit first-job handoff is a follow-up,
+tracked in [its proof ledger](../reports/2026-09-08-first-job-handoff-proof.md).
+Its joined native fixture proves persisted account-to-completed-work behaviour;
+live completion refresh and final delivery remain separate gates. Hosted signup,
+real payment settlement and autonomous model quality are not claimed.
 
 The user also clarified that this must preserve Colony's channels-and-threads
 execution environment. The illustrative Work sidebar/dashboard in the first

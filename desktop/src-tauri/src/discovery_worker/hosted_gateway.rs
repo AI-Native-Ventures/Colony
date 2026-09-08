@@ -92,6 +92,8 @@ async fn post<T: Serialize>(
         .map_err(|_| "Discovery provider request is invalid".to_owned())?;
     let url = format!("{}{path}", api_base_url.trim_end_matches('/'));
     let auth = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body)?;
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = state
         .http_client
         .post(&url)

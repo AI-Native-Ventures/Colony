@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   electronBetaBuildEnv,
   ELECTRON_BETA_RELAY,
+  electronPackageVariant,
 } from "./electron-package-config.mjs";
 
 test("installable beta uses the same hosted account service as stable and canary", async () => {
@@ -22,6 +23,28 @@ test("installable beta uses the same hosted account service as stable and canary
     assert.ok(source.includes(ELECTRON_BETA_RELAY.websocket));
     assert.ok(source.includes(ELECTRON_BETA_RELAY.http));
   }
+});
+
+test("fixture transport must be explicitly selected and cannot overwrite the beta", () => {
+  const beta = electronPackageVariant(["--debug"]);
+  const fixture = electronPackageVariant(["--debug", "--onboarding-fixture"]);
+  assert.equal(beta.fixture, false);
+  assert.deepEqual(beta.helperFeatures, []);
+  assert.equal(beta.hostFeatures, "electron-host");
+  assert.equal(fixture.fixture, true);
+  assert.notEqual(fixture.name, beta.name);
+  assert.notEqual(fixture.bundleId, beta.bundleId);
+  assert.notEqual(fixture.outputSuffix, beta.outputSuffix);
+  assert.match(fixture.hostFeatures, /onboarding-fixture/);
+  assert.match(fixture.helperFeatures[1], /buzz-acp\/onboarding-fixture/);
+  assert.match(fixture.helperFeatures[1], /buzz-cli\/onboarding-fixture/);
+  assert.equal(
+    Object.hasOwn(
+      electronBetaBuildEnv({ BUZZ_ONBOARDING_FIXTURE_TRANSPORT: "fixture" }),
+      "BUZZ_ONBOARDING_FIXTURE_TRANSPORT",
+    ),
+    false,
+  );
 });
 
 test("a developer shell cannot silently redirect the installable beta to a local relay", () => {

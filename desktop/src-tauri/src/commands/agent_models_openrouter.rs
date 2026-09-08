@@ -61,6 +61,8 @@ pub(super) async fn discover_openrouter_models(
     };
     let redaction_env = redaction_env_with_value(env, "OPENROUTER_API_KEY", &api_key);
     let url = openrouter_models_url_for_discovery(env);
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = client
         .get(&url)
         .bearer_auth(&api_key)

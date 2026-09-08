@@ -298,6 +298,10 @@ pub enum MeterError {
     /// The upstream HTTP client could not be built.
     #[error("could not build the upstream HTTP client: {0}")]
     Client(#[source] reqwest::Error),
+    /// Explicit fixture transport could not be configured safely.
+    #[cfg(feature = "onboarding-fixture")]
+    #[error("could not configure fixture transport: {0}")]
+    Fixture(#[from] buzz_ws_client::onboarding_fixture::FixtureError),
 }
 
 /// Control surface for a running checkpoint.
@@ -379,10 +383,10 @@ pub async fn start_meter_on(
         .map_err(MeterError::Bind)?;
     let port = listener.local_addr().map_err(MeterError::Bind)?.port();
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(MeterError::Client)?;
+    let builder = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10));
+    #[cfg(feature = "onboarding-fixture")]
+    let builder = buzz_ws_client::onboarding_fixture::configure_process_http(builder)?;
+    let client = builder.build().map_err(MeterError::Client)?;
 
     let (calls_tx, calls_rx) = mpsc::channel(CALL_CHANNEL_CAPACITY);
     let keys: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
@@ -575,6 +579,10 @@ async fn forward(
         url.push_str(query);
     }
 
+    #[cfg(feature = "onboarding-fixture")]
+    if buzz_ws_client::onboarding_fixture::validate_process_url(&url).is_err() {
+        return local_error(StatusCode::BAD_GATEWAY, UPSTREAM_FAILED_BODY);
+    }
     let sent = state
         .client
         .request(method, &url)

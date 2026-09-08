@@ -5,18 +5,7 @@ import {
 } from "../onboardingV2";
 import type { OnboardingAnswers } from "./steps";
 
-/**
- * Carry this flow's answers into the draft Scout's opening brief is built
- * from.
- *
- * The previous first-run flow collected the founder and company details and
- * left them on the community-onboarding transaction; the delivery path reads
- * that draft after the community exists and sends the brief as the first
- * message. Replacing the flow without this bridge would have left the draft
- * empty, so onboarding would still look finished while every agent started
- * knowing nothing about the company. Nothing about delivery changes: it still
- * reads the same field on the same transaction.
- */
+/** Carry confirmed answers into an editable setup suggestion; no work starts here. */
 export function draftFromAnswers(
   answers: OnboardingAnswers,
 ): OnboardingV2Draft {
@@ -37,6 +26,7 @@ export function draftFromAnswers(
     },
     company: {
       ...base.company,
+      name: answers.company?.trim() || "Your business",
       website,
       hasWebsite: answers.hasWebsite ?? false,
       canonicalUrl: website,
@@ -45,23 +35,16 @@ export function draftFromAnswers(
     },
     firstTask: {
       ...base.firstTask,
+      mode: "suggestion",
       deliveryMarker: answers.firstTaskMarker ?? base.firstTask.deliveryMarker,
-      // The brief itself is the first task now. The flow no longer asks for
-      // one, and an empty content field would skip delivery entirely.
+      // Suggested by setup, editable by the founder before explicit Start.
       content: firstTaskFor(answers),
     },
   };
 }
 
-/**
- * What Scout is asked to do first.
- *
- * Kept deliberately small and concrete: the company summary is already in the
- * brief above it, so this is the instruction, not a restatement.
- */
+/** A concrete, reviewable starting suggestion, not an invented owner instruction. */
 export function firstTaskFor(answers: OnboardingAnswers): string {
-  const company = answers.company?.trim();
-  return company
-    ? `Get to know ${company} and tell me what you would work on first.`
-    : "Get to know this company and tell me what you would work on first.";
+  const company = answers.company?.trim() || "your business";
+  return `Review ${company}’s online presence and suggest three improvements, each with a reason and a next step, for review.`;
 }

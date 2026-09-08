@@ -289,6 +289,8 @@ async fn fetch_url(
     url: &str,
     label: &str,
 ) -> Result<reqwest::Response, String> {
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(url)?;
     let response = client
         .get(url)
         .send()

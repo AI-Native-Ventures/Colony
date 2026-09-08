@@ -213,6 +213,9 @@ async fn run_openrouter_connect(
         "code_verifier": verifier,
         "code_challenge_method": "S256",
     });
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(OPENROUTER_TOKEN_URL)
+        .map_err(|message| OpenRouterConnectOutcome::Failed { message })?;
     let response = http
         .post(OPENROUTER_TOKEN_URL)
         .timeout(EXCHANGE_TIMEOUT)

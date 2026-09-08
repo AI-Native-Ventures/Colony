@@ -690,6 +690,10 @@ pub(crate) fn spawn_transcription_task(
                 }
             };
             let url = format!("{relay_base_url}/events");
+            #[cfg(feature = "onboarding-fixture")]
+            if crate::relay::validate_fixture_url(&url).is_err() {
+                continue;
+            }
             let auth_header = match crate::relay::build_nip98_auth_header_for_keys(
                 &keys,
                 &reqwest::Method::POST,
