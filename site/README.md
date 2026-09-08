@@ -11,8 +11,8 @@ pnpm -C site build
 ```
 
 This runs `tsc && vite build` and writes output to `site/dist`. Confirm `site/dist/index.html`
-exists before deploying, along with `site/dist/favicon.svg` and `site/dist/og.png`. Both are
-referenced by root-absolute path (`/favicon.svg`, `/og.png`) from `site/index.html`, so a
+exists before deploying, along with `site/dist/favicon.svg` and `site/dist/og-work.png`. Both are
+referenced by root-absolute path (`/favicon.svg`, `/og-work.png`) from `site/index.html`, so a
 missing file 404s in production even though the build itself succeeds.
 
 `site/dist` is gitignored. Nothing under it is committed; every deploy rebuilds from source.
@@ -96,7 +96,7 @@ promoted from `develop` to `main`; it does nothing while it sits on `develop` al
   Since this fork has zero releases as of this fix, both links use the releases list
   (`/releases`) rather than `/releases/latest`, which 404s with no releases published.
 
-## Verification performed for this preview deploy
+## Historical preview verification (original design)
 
 Fetched the live preview and confirmed: the page returns HTTP 200, the rendered page
 contains the Colony headline ("Run your company with AI agents"), and both `/favicon.svg` and
@@ -125,3 +125,18 @@ image-generation tool for this fictional example, then JPEG-encoded for delivery
 chocolate cake slices on a cream ceramic plate on dark forest-green linen, warm natural side light,
 realistic crumbs, photoreal editorial food photography, no text, logos, people or watermark.
 The original generated PNG is preserved outside the distributed site.
+
+## Clear-copy and multicolour brand rebuild
+
+The current page leads with the work a visitor can create: websites and social media posts.
+A fictional bakery example shows the client instructions, both outputs and a reversible example
+change. This is a local illustration, not a live AI request or proof of completed product work.
+The instructions come first on phones, followed by the website and Instagram post.
+
+The visual direction uses layered multicolour gradients, the existing exact ant mark, and rounded
+conversation panels. It replaces the earlier page composition and random single-hue theme script.
+Decorative ants are hidden from assistive technology, do not intercept clicks, and finish their
+intro animation after four seconds. Reduced-motion preferences disable that motion.
+
+The social sharing image is `/og-work.png`, rendered from `og-source.svg` using Sharp.
+The existing ant path and masked eye remain unchanged. No additional runtime dependency was added.

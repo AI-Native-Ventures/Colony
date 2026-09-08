@@ -1,0 +1,572 @@
+.example-shell {
+  position: relative;
+  width: min(1200px, calc(100% - 80px));
+  margin: 0 auto;
+  scroll-margin-top: 28px;
+}
+.example-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin: 0 6px 12px;
+  font-size: 13px;
+  color: #504460;
+}
+.example-caption > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.example-caption > span:last-child {
+  font-size: 12px;
+  padding: 5px 9px;
+  background: #ffffff94;
+  border: 1px solid #fff9;
+  border-radius: 6px;
+}
+.tiny-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7953a9;
+}
+.job-window {
+  border: 1px solid #fffc;
+  border-radius: 22px;
+  background: #ffffffba;
+  box-shadow:
+    0 28px 70px -24px #6650874d,
+    0 4px 12px #2b114d0a;
+  overflow: hidden;
+}
+.job-topbar {
+  padding: 18px 25px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #5b427118;
+  background: #ffffff8c;
+}
+.job-client {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.client-icon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #d8dfd7;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #e4ece2;
+  color: #456047;
+  font-family: Georgia, serif;
+  font-size: 25px;
+}
+.job-client strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.job-client :where(div) > span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.job-label {
+  padding: 7px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: #f0ecf5;
+  color: #6c587e;
+}
+.job-layout {
+  display: grid;
+  grid-template-columns: 0.9fr 1.55fr;
+}
+.job-conversation {
+  padding: 25px;
+  background: #faf8fdb3;
+  border-right: 1px solid #5b427114;
+}
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 18px;
+}
+.panel-title h2 {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+  margin: 0;
+}
+.step-pill {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #ece4fa;
+  color: #76529b;
+  font-size: 12px;
+  font-weight: 700;
+}
+.step-pill.green {
+  background: #dbefe5;
+  color: #286244;
+}
+.scenario {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+.message {
+  font-size: 14px;
+  line-height: 1.55;
+}
+.message p {
+  margin-bottom: 9px;
+}
+.message p:last-child {
+  margin-bottom: 0;
+}
+.message-author {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+  margin-bottom: 7px;
+  color: #655573;
+}
+.from-you {
+  padding: 16px;
+  background: #efe7fa;
+  border-radius: 14px 14px 3px 14px;
+  border: 1px solid #e7ddf1;
+}
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+.attachments span {
+  font-size: 11px;
+  background: #fff9;
+  border: 1px solid #ded4e9;
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+.from-colony {
+  display: flex;
+  gap: 11px;
+  padding: 20px 0;
+}
+.assistant-icon {
+  display: grid;
+  place-items: center;
+  color: #8a62b6;
+  background: #ebe2f2;
+  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+.assistant-icon svg {
+  width: 25px;
+}
+.change-request {
+  border-top: 1px dashed #b9a9c8;
+  padding-top: 16px;
+}
+.change-request p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #64596e;
+}
+.example-change {
+  display: inline-flex;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #d5c7e2;
+  border-radius: 9px;
+  background: white;
+  color: #60407d;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+.example-change:hover {
+  background: #f0e6fc;
+  border-color: #a980d0;
+}
+.job-results {
+  padding: 25px;
+  min-width: 0;
+}
+.deliverables {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.deliverables article {
+  min-width: 0;
+}
+.result-label {
+  font-size: 12px;
+  color: #6b6275;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.bakery-page,
+.social-post {
+  border: 1px solid #e3dfd7;
+  box-shadow: 0 6px 15px #24152e08;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.bakery-page {
+  background: #f5f0e5;
+  color: #344536;
+}
+.bakery-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 16px 0;
+}
+.bakery-nav strong {
+  font-size: 16px;
+  font-family: Georgia, serif;
+  line-height: 0.9;
+}
+.bakery-nav :where(strong) span {
+  display: block;
+  font-family: "Inter Tight", sans-serif;
+  font-size: 7px;
+  letter-spacing: 2px;
+  margin-top: 6px;
+}
+.bakery-nav > span {
+  font-size: 8px;
+}
+.bakery-heading {
+  padding: 24px 16px 16px;
+}
+.bakery-heading > span {
+  font-size: 7px;
+  letter-spacing: 1px;
+}
+.bakery-heading h3 {
+  font-family: Georgia, serif;
+  font-weight: 400;
+  font-size: clamp(29px, 3vw, 41px);
+  line-height: 1.03;
+  letter-spacing: -1.6px;
+  margin: 10px 0 0;
+}
+.bakery-page > img {
+  width: calc(100% - 32px);
+  height: 140px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin: 0 16px;
+}
+.bakery-hours {
+  flex-direction: column;
+  padding: 16px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.bakery-hours > span {
+  font-family: Georgia, serif;
+  font-size: 13px;
+}
+.bakery-hours p {
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.6;
+}
+.bakery-hours strong {
+  font-weight: 500;
+}
+.social-post {
+  background: white;
+}
+.social-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px;
+}
+.social-name > span {
+  width: 23px;
+  height: 23px;
+  display: grid;
+  place-items: center;
+  background: #344536;
+  color: #f5f0e5;
+  font-family: Georgia, serif;
+  font-size: 20px;
+  border-radius: 50%;
+}
+.social-name strong {
+  font-size: 10px;
+}
+.post-photo {
+  position: relative;
+  aspect-ratio: 1 / 1.06;
+  background: #344536;
+}
+.post-photo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(#0a231943, transparent 90%);
+}
+.post-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.post-photo h3 {
+  position: absolute;
+  z-index: 1;
+  inset: 15px auto auto 14px;
+  font:
+    400 clamp(25px, 2.6vw, 36px) / 0.98 Georgia,
+    serif;
+  letter-spacing: -1px;
+  color: white;
+  margin: 0;
+}
+.post-caption {
+  padding: 11px;
+}
+.post-caption > span {
+  font-size: 20px;
+  line-height: 1;
+}
+.post-caption p {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+}
+.highlight-change {
+  background: #d4efd5;
+  box-shadow: 0 0 0 3px #d4efd5;
+  border-radius: 3px;
+}
+.result-status {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #586c5a;
+  padding: 13px 15px;
+  margin-top: 20px;
+  background: #e8f1e6c4;
+  border: 1px solid #dfe8da;
+  border-radius: 9px;
+}
+.example-disclosure {
+  max-width: 840px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #665d6f;
+  margin: 17px auto 0;
+  text-align: center;
+}
+@media (max-width: 1080px) {
+  .job-layout {
+    grid-template-columns: 1fr 1.45fr;
+  }
+  .job-conversation,
+  .job-results {
+    padding: 20px;
+  }
+  .deliverables {
+    gap: 12px;
+  }
+  .job-label {
+    display: none;
+  }
+}
+@media (max-width: 850px) {
+  .job-layout {
+    grid-template-columns: 1fr;
+  }
+  .job-conversation {
+    border-right: 0;
+    border-bottom: 1px solid #e5dfee;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 22px;
+  }
+  .job-conversation .panel-title,
+  .job-conversation .scenario {
+    grid-column: 1 / -1;
+  }
+  .from-you {
+    grid-row: span 2;
+  }
+  .from-colony {
+    padding-top: 0;
+  }
+  .change-request {
+    grid-column: 2;
+  }
+  .job-results {
+    padding: 24px;
+  }
+  .bakery-page > img {
+    height: 175px;
+  }
+  .bakery-heading h3 {
+    font-size: 39px;
+  }
+  .post-photo h3 {
+    font-size: 34px;
+  }
+  .post-caption p {
+    font-size: 13px;
+  }
+  .bakery-hours p {
+    font-size: 13px;
+  }
+}
+@media (max-width: 600px) {
+  .example-caption {
+    align-items: start;
+    flex-direction: column;
+    gap: 7px;
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+  .example-caption > span:last-child {
+    font-size: 11px;
+  }
+  .job-topbar {
+    padding: 16px;
+  }
+  .job-window {
+    border-radius: 18px;
+  }
+  .job-client strong {
+    font-size: 14px;
+  }
+  .job-client :where(div) > span {
+    font-size: 11px;
+  }
+  .job-conversation {
+    display: block;
+    padding: 19px;
+  }
+  .panel-title h2 {
+    font-size: 14px;
+  }
+  .scenario {
+    font-size: 14px;
+  }
+  .from-you {
+    font-size: 14px;
+  }
+  .from-colony {
+    padding-top: 22px;
+  }
+  .change-request p {
+    font-size: 14px;
+  }
+  .example-change {
+    min-height: 43px;
+    font-size: 13px;
+  }
+  .job-results {
+    padding: 20px 16px;
+  }
+  .deliverables {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .result-label {
+    font-size: 13px;
+  }
+  .bakery-nav {
+    padding: 18px 20px 0;
+  }
+  .bakery-nav strong {
+    font-size: 20px;
+  }
+  .bakery-nav > span {
+    font-size: 10px;
+  }
+  .bakery-heading {
+    padding: 24px 20px 18px;
+  }
+  .bakery-heading > span {
+    font-size: 9px;
+  }
+  .bakery-heading h3 {
+    font-size: 45px;
+  }
+  .bakery-page > img {
+    width: calc(100% - 40px);
+    margin-inline: 20px;
+    height: 180px;
+  }
+  .bakery-hours {
+    padding: 18px 20px;
+  }
+  .bakery-hours p {
+    font-size: 13px;
+  }
+  .bakery-hours > span {
+    font-size: 15px;
+  }
+  .post-photo {
+    aspect-ratio: 1.15;
+  }
+  .post-photo h3 {
+    font-size: 41px;
+    left: 20px;
+    top: 21px;
+  }
+  .social-name {
+    padding: 13px;
+    gap: 10px;
+  }
+  .social-name strong {
+    font-size: 12px;
+  }
+  .social-name > span {
+    width: 28px;
+    height: 28px;
+  }
+  .post-caption {
+    padding: 15px;
+  }
+  .post-caption p {
+    font-size: 13px;
+  }
+  .result-status {
+    font-size: 13px;
+  }
+  .example-disclosure {
+    font-size: 12px;
+    padding: 0 6px;
+  }
+}

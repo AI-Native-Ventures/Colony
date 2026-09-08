@@ -13,7 +13,7 @@ const questions = [
   ],
   [
     "Will Colony find paying clients for me?",
-    "Colony’s discovery tools help you find potential clients across different industries. Finding a business does not mean it will buy your services. You decide who to contact and what to offer.",
+    "Tell Colony what kind of business you want to work with. It helps you find businesses you could contact. Finding a business does not mean it will buy your services. You decide who to contact and what to offer.",
   ],
   [
     "Can I use it for another kind of business?",
