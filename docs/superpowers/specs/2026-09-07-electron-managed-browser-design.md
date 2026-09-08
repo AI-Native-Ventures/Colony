@@ -61,24 +61,25 @@ live pilot gate, with drafts only and no publication.
 
 This design is a local draft, not ready to enable for arbitrary agents.
 Independent review reproduced an unassigned process reading a sibling worker's
-JSON grant and using it against the real local broker. Local agents currently
-run under the same OS user with general filesystem access. Bearer tokens and
+JSON grant and using it against the real local broker before OS isolation was
+integrated. The old launch path ran agents with general filesystem access. Bearer tokens and
 roster eligibility checks do not establish process isolation, and the browser
 profile itself also needs protection. The owner-only picker is an access policy
 for cooperating agents; it is not a boundary against a malicious local agent.
 
 The founder approved agent containment before enabling signed-in browser work on
 2026-09-08. The scope decision is resolved; see
-[the isolation design](2026-09-08-local-agent-isolation-design.md). The first local
-process-boundary gate is proven, but native launch adoption and real managed-browser
-execution remain outstanding. Keep this feature unpublished until those gates pass.
+[the isolation design](2026-09-08-local-agent-isolation-design.md). The native launch boundary and real managed-browser execution are now locally
+proven with synthetic data in the packaged app. Full checks and develop delivery
+remain separate gates. See the isolation design for the current supported scope.
 
 Current local implementation includes the owner controls, private ACP startup
 configuration, late-read MCP grant, explicit owner attribution, and worker status
 checks. New shares and queued tool calls check current eligibility. An already
 started page operation is not undone by a worker exit; immediate owner takeover
-is checked at existing page-operation boundaries. Real managed-process browser
-execution remains unproven.
+is checked at existing page-operation boundaries. Managed-process browser execution,
+read-only access, takeover, process restart and app relaunch are covered by the
+packaged synthetic proof.
 
 Independent review also reproduced and corrected two asynchronous races: takeover
 while a share awaited the native roster, and stale validation revoking a newer

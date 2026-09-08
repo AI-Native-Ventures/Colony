@@ -2103,6 +2103,9 @@ async fn tokio_main() -> Result<()> {
                 .meter_openai_upstream
                 .clone()
                 .unwrap_or(defaults.openai_upstream),
+            // Desktop supplies an exact provider base separately from the existing
+            // root-style upstream overrides (including Colony Credits).
+            openai_base_url: std::env::var("BUZZ_METER_OPENAI_BASE_URL").ok(),
             anthropic_provider: config.meter_anthropic_provider.clone(),
             openai_provider: config.meter_openai_provider.clone(),
         };
@@ -2127,7 +2130,14 @@ async fn tokio_main() -> Result<()> {
                 .as_deref()
                 .is_some_and(|key| !key.trim().is_empty()),
         };
-        match buzz_meter::start_meter(meter_config).await {
+        let meter_port = match std::env::var("BUZZ_ACP_METER_PORT") {
+            Ok(value) => value
+                .parse::<u16>()
+                .map_err(|_| anyhow::anyhow!("Invalid host-assigned metering port"))?,
+            Err(std::env::VarError::NotPresent) => 0,
+            Err(_) => return Err(anyhow::anyhow!("Invalid host-assigned metering port")),
+        };
+        match buzz_meter::start_meter_on(meter_config, meter_port).await {
             Ok((port, mut calls, handle)) => {
                 if let Err(_meter) = meter_env::set_active_meter(meter_env::ActiveMeter {
                     port,
@@ -2193,9 +2203,9 @@ async fn tokio_main() -> Result<()> {
             }
             Err(error) => {
                 tracing::error!("metering checkpoint failed to start: {error}");
-                if config.provisioned {
+                if config.provisioned || std::env::var_os("BUZZ_WORKER_PROXY").is_some() {
                     return Err(anyhow::anyhow!(
-                        "provisioned Colony Credits metering checkpoint failed to start"
+                        "required metering checkpoint failed to start"
                     ));
                 }
                 None

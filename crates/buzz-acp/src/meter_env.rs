@@ -70,6 +70,7 @@ pub const OPENAI_CREDENTIAL_VARS: &[&str] = &[
     "OPENAI_API_KEY",
     "OPENAI_COMPAT_API_KEY",
     "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
 ];
 
 /// Base-URL variables pointing agents at the checkpoint.
@@ -89,7 +90,8 @@ fn base_url_vars(port: u16, virtual_key: &str) -> Vec<(String, String)> {
         // `buzz-agent` on the `openai-compat` provider reads this name and no
         // other, so without it a metered agent falls back to the vendor
         // default and bills a real provider with a Colony gateway token.
-        ("OPENAI_COMPAT_BASE_URL".to_string(), openai_v1),
+        ("OPENAI_COMPAT_BASE_URL".to_string(), openai_v1.clone()),
+        ("OPENROUTER_BASE_URL".to_string(), openai_v1),
         ("OPENAI_HOST".to_string(), openai_root),
     ]
 }
@@ -313,6 +315,10 @@ mod tests {
         // metered agent to the vendor default carrying a Colony token.
         assert_eq!(
             get("OPENAI_COMPAT_BASE_URL"),
+            "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
+        );
+        assert_eq!(
+            get("OPENROUTER_BASE_URL"),
             "http://127.0.0.1:51234/openai/k/colony-vk-abc123/v1"
         );
         assert_eq!(

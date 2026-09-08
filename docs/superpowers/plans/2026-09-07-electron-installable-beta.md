@@ -36,12 +36,12 @@ an unscoped DevTools endpoint to a worker.
 
 ## Gate 2: managed browser work
 
-- [ ] Inspect the existing ACP browser MCP injection and managed-agent spawn
+- [x] Inspect the existing ACP browser MCP injection and managed-agent spawn
   authority. Bind grants to the selected local worker and active business.
-- [ ] Replace manual grant-file setup with owner controls identifying the
+- [x] Replace manual grant-file setup with owner controls identifying the
   teammate and read/interact scope. Deliver configuration through local native
   state, never relay events or public agent definitions.
-- [ ] Prove a real managed process receives the scoped server; prove takeover,
+- [x] Prove a real managed process receives the scoped server; prove takeover,
   business switch, tab close, restart and agent stop revoke access. Keep the
   existing native browser absence behavior for Tauri.
 - [ ] Exercise an authenticated Colony Instagram draft after owner-selected
@@ -75,3 +75,16 @@ proven. No production promotion is included in this phase.
   not establish causation. No speculative product fix was applied.
 - Release-profile CI packaging, notarization, distribution, live managed worker
   lifecycle and authenticated Instagram work remain unproven.
+
+## Gate 2 follow-up (2026-09-08)
+
+The managed browser implementation now runs under the macOS Electron worker
+isolation boundary. The packaged synthetic workflow proves real managed-agent
+browser work, sibling denial, takeover, read-only access, process restart and app
+relaunch. Browser authority tests additionally cover business changes and tab
+closure. This is not an authenticated Instagram pilot. See the local-agent
+isolation plan for current validation and delivery status.
+
+PR #645 merged to develop; its release-profile beta workflow passed. That earlier
+artifact does not contain the follow-up isolation implementation. Neither phase
+is a production promotion or notarized public release.

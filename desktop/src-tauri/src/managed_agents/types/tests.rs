@@ -758,6 +758,8 @@ fn summary_fixture(
 ) -> super::ManagedAgentSummary {
     super::ManagedAgentSummary {
         owner_identified: false,
+        isolated: false,
+        browser_generation: None,
         pubkey: "aa".repeat(32),
         name: "test".into(),
         persona_id: None,

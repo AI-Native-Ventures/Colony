@@ -26,10 +26,21 @@ export function runtimeId(pubkey, relay) {
     throw Error("Invalid teammate identity");
   return `${pubkey.toLowerCase()}__${createHash("sha256").update(normalizeRelay(relay)).digest("hex")}`;
 }
+/** Native launch nonce prevents surviving descendants from reading renewed grants. */
+export function grantFilename(row) {
+  if (
+    typeof row.browser_generation !== "string" ||
+    !/^[a-f0-9]{32}$/.test(row.browser_generation)
+  )
+    throw Error("Missing isolated browser launch generation");
+  return `${runtimeId(row.pubkey, row.relay_url)}__${row.browser_generation}.json`;
+}
 function eligible(row, relay) {
   try {
     return (
       row.owner_identified === true &&
+      row.isolated === true &&
+      !!grantFilename(row) &&
       row.backend?.type === "local" &&
       row.status === "running" &&
       Number.isInteger(row.pid) &&
@@ -103,14 +114,14 @@ export class ManagedBrowser {
       this.views.authority.tabs.get(id)?.grantEpoch !== epoch
     )
       throw Error("Browser tab changed");
-    const file = path.join(
-      this.root,
-      `${runtimeId(row.pubkey, row.relay_url)}.json`,
-    );
+    const file = path.join(this.root, grantFilename(row));
     // A teammate has at most one shared tab in this beta. Revoke an older token
     // before replacing its file, so an already-running adapter cannot reuse it.
     for (const [token, binding] of this.bindings)
-      if (binding.file === file) {
+      if (
+        binding.pubkey === row.pubkey &&
+        binding.context.relay === context.relay
+      ) {
         this.views.authority.revokeToken(token);
         this.bindings.delete(token);
       }
@@ -123,6 +134,7 @@ export class ManagedBrowser {
       pubkey: row.pubkey,
       pid: row.pid,
       started: row.last_started_at,
+      generation: row.browser_generation,
       context,
     };
     this.bindings.set(grant.token, binding);
@@ -164,7 +176,8 @@ export class ManagedBrowser {
       if (
         !row ||
         row.pid !== binding.pid ||
-        row.last_started_at !== binding.started
+        row.last_started_at !== binding.started ||
+        row.browser_generation !== binding.generation
       )
         throw Error("Teammate is no longer running or its settings changed");
       this.views.authority.check(token, binding.tabId);

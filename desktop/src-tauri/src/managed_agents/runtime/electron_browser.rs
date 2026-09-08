@@ -2,7 +2,11 @@
 use super::super::ManagedAgentRuntimeKey;
 use std::{path::Path, process::Command};
 
-pub(super) fn apply(command: &mut Command, key: &ManagedAgentRuntimeKey) -> Result<(), String> {
+pub(super) fn apply(
+    command: &mut Command,
+    key: &ManagedAgentRuntimeKey,
+    generation: &str,
+) -> Result<(), String> {
     command.env_remove("BUZZ_ACP_ELECTRON_BROWSER_CONFIG");
     let keys = [
         "COLONY_ELECTRON_BROWSER_ROOT",
@@ -16,7 +20,7 @@ pub(super) fn apply(command: &mut Command, key: &ManagedAgentRuntimeKey) -> Resu
         return Ok(());
     }
     let values = keys.map(|name| std::env::var(name).unwrap_or_default());
-    let config = configuration(&values[0], &values[1], &values[2], key)?;
+    let config = configuration(&values[0], &values[1], &values[2], key, generation)?;
     command.env("BUZZ_ACP_ELECTRON_BROWSER_CONFIG", config);
     // No fallback to a globally attachable DevTools browser in Electron.
     command.env("BUZZ_ACP_BROWSER_MCP_COMMAND", "");
@@ -30,6 +34,7 @@ fn configuration(
     command: &str,
     adapter: &str,
     key: &ManagedAgentRuntimeKey,
+    generation: &str,
 ) -> Result<String, String> {
     if [root, command, adapter]
         .iter()
@@ -37,7 +42,10 @@ fn configuration(
     {
         return Err("Electron browser connection is incomplete; restart Colony".into());
     }
-    let grant = Path::new(root).join(format!("{}.json", key.runtime_id()));
+    if generation.len() != 32 || !generation.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid native browser launch generation".into());
+    }
+    let grant = Path::new(root).join(format!("{}__{generation}.json", key.runtime_id()));
     Ok(serde_json::json!({"command": command, "adapter": adapter, "grant": grant}).to_string())
 }
 
@@ -45,7 +53,8 @@ fn configuration(
 mod tests {
     use super::*;
     #[test]
-    fn scoped_path_is_stable_and_contains_no_credentials() {
+    fn scoped_path_binds_the_launch_generation_and_contains_no_credentials() {
+        let generation = "b".repeat(32);
         let key = ManagedAgentRuntimeKey::new("a".repeat(64), "wss://LOCALHOST:443/").unwrap();
         let value: serde_json::Value = serde_json::from_str(
             &configuration(
@@ -53,16 +62,17 @@ mod tests {
                 "/Applications/Beta.app/Contents/MacOS/Beta",
                 "/app.asar/browser.mjs",
                 &key,
+                &generation,
             )
             .unwrap(),
         )
         .unwrap();
         assert_eq!(
             value["grant"],
-            format!("/private/runtime/{}.json", key.runtime_id())
+            format!("/private/runtime/{}__{generation}.json", key.runtime_id())
         );
         assert_eq!(value.as_object().unwrap().len(), 3);
-        assert!(configuration("relative", "/electron", "/adapter", &key).is_err());
-        assert!(configuration("/root", "", "/adapter", &key).is_err());
+        assert!(configuration("relative", "/electron", "/adapter", &key, &generation).is_err());
+        assert!(configuration("/root", "", "/adapter", &key, &generation).is_err());
     }
 }

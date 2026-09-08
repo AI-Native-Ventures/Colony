@@ -107,3 +107,93 @@ async fn real_mcp_reads_and_shell_children_obey_the_os_boundary() {
     child.kill().await.unwrap();
     child.wait().await.unwrap();
 }
+
+#[test]
+#[ignore = "Requires COLONY_ISOLATION_ELECTRON pointing to the packaged executable"]
+fn electron_node_adapter_boots_beneath_an_isolated_parent() {
+    let binary = PathBuf::from(
+        std::env::var_os("COLONY_ISOLATION_ELECTRON").expect("Set COLONY_ISOLATION_ELECTRON"),
+    )
+    .canonicalize()
+    .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("worker");
+    fs::create_dir(&workspace).unwrap();
+    let mut policy = WorkerPolicy::new(&workspace).unwrap();
+    policy
+        .allow_runtime(binary.parent().unwrap().parent().unwrap())
+        .unwrap();
+    policy
+        .allow_log_metadata(&root.path().join("host-log"))
+        .unwrap();
+    let output = policy
+        .command(OsStr::new("/bin/sh"))
+        .unwrap()
+        .env("ELECTRON_RUN_AS_NODE", "1")
+        .args([
+            "-c",
+            "\"$1\" -e 'console.log(\"ISOLATED_NODE_READY\")'; result=$?; exit $result",
+            "parent",
+        ])
+        .arg(binary)
+        .stderr(std::fs::File::create(root.path().join("host-log")).unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        fs::read_to_string(root.path().join("host-log")).unwrap()
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ISOLATED_NODE_READY"));
+}
+
+#[test]
+fn https_probe_child() {
+    if std::env::var("COLONY_ISOLATION_HTTPS_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
+    let response = client.get("https://example.com").send().unwrap();
+    assert!(response.status().is_success(), "{}", response.status());
+    println!("VERIFIED_HTTPS_READY");
+}
+
+#[test]
+#[ignore = "Live public HTTPS verification through the private gateway; no credentials"]
+fn isolated_http_client_verifies_public_tls_through_gateway() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("worker");
+    fs::create_dir(&workspace).unwrap();
+    let binary = std::env::current_exe().unwrap();
+    let gateway = super::network::WorkerNetwork::start(vec![super::network::Destination::resolve(
+        "https://example.com",
+    )
+    .unwrap()])
+    .unwrap();
+    let mut policy = WorkerPolicy::new(&workspace).unwrap();
+    policy.allow_runtime(&binary).unwrap();
+    policy.allow_loopback_port(gateway.port()).unwrap();
+    let output = policy
+        .command(binary.as_os_str())
+        .unwrap()
+        .env("COLONY_ISOLATION_HTTPS_CHILD", "1")
+        .env("HTTPS_PROXY", gateway.proxy_url())
+        .env("NO_PROXY", "")
+        .args([
+            "managed_agents::isolation::runtime_tests::https_probe_child",
+            "--exact",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("VERIFIED_HTTPS_READY"));
+}

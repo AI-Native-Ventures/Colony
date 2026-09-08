@@ -32,22 +32,9 @@ mod browser_shared;
 mod prime_agent_config;
 mod provisioned;
 pub(crate) use provisioned::{
-    configure_runtime_cli, provisioned_spawn_env, spawn_agent_child_with_lease,
+    apply_spend_env_policy, configure_runtime_cli, provisioned_spawn_env,
+    spawn_agent_child_with_lease,
 };
-
-/// Apply the final Spend-related environment policy to a managed child.
-///
-/// `env_remove` is intentional even when the Desktop inherited the variable:
-/// it records an explicit removal in `Command` and prevents the child from
-/// bypassing metering after all user-controlled layers have been resolved.
-fn apply_spend_env_policy(command: &mut std::process::Command, provisioned: bool) {
-    command.env_remove("BUZZ_ACP_NO_METER");
-    if provisioned {
-        command.env("BUZZ_ACP_PROVISIONED", "true");
-    } else {
-        command.env_remove("BUZZ_ACP_PROVISIONED");
-    }
-}
 
 /// Verify that a provisioned lease is still owned by the current signing
 /// identity. Callers run this at the transition-lock commit point, after
@@ -300,6 +287,10 @@ pub fn build_managed_agent_summary(
     Ok(ManagedAgentSummary {
         pubkey: record.pubkey.clone(),
         owner_identified: super::owner_scope::effective_owner_pubkey(record).is_some(),
+        isolated: pair_runtime.is_some_and(|runtime| runtime.isolation_network.is_some()),
+        browser_generation: pair_runtime
+            .filter(|runtime| runtime.isolation_network.is_some())
+            .map(|runtime| runtime.start_nonce.clone()),
         name: record.name.clone(),
         persona_id: record.persona_id.clone(),
         runtime: record.runtime.clone(),
@@ -445,6 +436,9 @@ fn spawn_agent_child_inner(
             })?;
     let effective_command = &descriptor.command;
     let agent_args = &descriptor.args;
+    super::isolation::launch::ensure_supported(
+        known_acp_runtime(effective_command).map(|runtime| runtime.id),
+    )?;
     prime_agent_config::ensure_prime_agent_default_config(effective_command);
     let runtime_meta = known_acp_runtime(effective_command);
     let effective_relay_url = runtime_key.relay_url.clone();
@@ -529,9 +523,7 @@ fn spawn_agent_child_inner(
     if let Some(home) = super::default_agent_workdir() {
         command.current_dir(home);
     }
-    command.stdin(std::process::Stdio::null());
-    command.stdout(std::process::Stdio::from(stdout));
-    command.stderr(std::process::Stdio::from(stderr));
+    command.env_remove("BUZZ_WORKER_PROXY");
     if let Some(ref path) = augmented_path {
         command.env("PATH", path);
     }
@@ -574,7 +566,8 @@ fn spawn_agent_child_inner(
         }
     }
     browser_shared::apply_env(&mut command, &shared_browser_endpoint);
-    electron_browser::apply(&mut command, &runtime_key)?;
+    let start_nonce = uuid::Uuid::new_v4().simple().to_string();
+    electron_browser::apply(&mut command, &runtime_key, &start_nonce)?;
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
@@ -892,8 +885,7 @@ fn spawn_agent_child_inner(
     // or ambient opt-out must never disable Spend for Desktop-managed agents.
     apply_spend_env_policy(&mut command, provisioned_lease.is_some());
 
-    // Stamp desktop ownership and an unpredictable harness-generation identity.
-    let start_nonce = uuid::Uuid::new_v4().simple().to_string();
+    // Stamp desktop ownership and the private browser launch generation.
     command
         .env("BUZZ_MANAGED_AGENT", current_instance_id(app))
         .env("BUZZ_MANAGED_AGENT_START_NONCE", &start_nonce);
@@ -914,6 +906,12 @@ fn spawn_agent_child_inner(
             credential_mode: global.credential_mode,
         },
     );
+
+    let (mut command, isolation_network) =
+        super::isolation::launch::wrap(app, &runtime_key, command, &log_path)?;
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::from(stdout));
+    command.stderr(std::process::Stdio::from(stderr));
 
     // Spawn the harness in its own process group so we can kill the entire
     // tree (harness + MCP servers + agent subprocesses) on shutdown.
@@ -956,6 +954,9 @@ fn spawn_agent_child_inner(
 
     // Receipt persistence belongs to the caller's atomic register transition.
 
+    #[cfg(windows)]
+    drop(isolation_network);
+
     // Windows: assign the harness to a Job Object so its whole tree dies with
     // the handle. The Unix process-group equivalent is set above.
     #[cfg(windows)]
@@ -978,6 +979,7 @@ fn spawn_agent_child_inner(
         adapter_availability: spawned_adapter_availability,
         start_nonce,
         provisioned_lease: spawned_provisioned_lease,
+        isolation_network,
     })
 }
 

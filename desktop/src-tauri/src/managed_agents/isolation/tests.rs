@@ -336,6 +336,19 @@ mod macos {
     }
 
     #[test]
+    fn worker_cannot_replace_its_host_owned_workspace_entry() {
+        let fixture = Fixture::new();
+        passed(fixture.shell(
+            r#"
+            rmdir "$HOME/tmp"
+            if rmdir "$HOME"; then exit 91; fi
+            test -d "$HOME"
+        "#,
+            &[],
+        ));
+    }
+
+    #[test]
     fn does_not_inherit_host_environment() {
         let fixture = Fixture::new();
         let output = fixture

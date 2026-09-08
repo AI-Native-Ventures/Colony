@@ -39,6 +39,12 @@ jobs:
           ')
           export COLONY_SMOKE_APP
           node desktop/src-electron/smoke.mjs
+          COLONY_ISOLATION_AGENT="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-agent" \
+          COLONY_ISOLATION_MCP="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-dev-mcp" \
+          COLONY_ISOLATION_ELECTRON="$COLONY_SMOKE_APP/Contents/MacOS/Colony Electron Beta" \
+          cargo test --release --manifest-path desktop/src-tauri/Cargo.toml \
+            --features electron-host --lib managed_agents::isolation -- \
+            --include-ignored --skip isolated_http_client_verifies_public_tls_through_gateway
       - name: Upload proven beta
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

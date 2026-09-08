@@ -41,39 +41,66 @@ boundary already available on this Mac and require proof before enabling it.
 Gate 1 alone is not an isolated product. The policy must be adopted by the
 actual launch path and pass the remaining gates before any such claim.
 
-## Gate 1 findings
+## Runtime implementation
 
-The policy is currently compiled only into native tests. It does not yet isolate
-agents launched by the desktop. Keeping that separation avoids enabling browser
-sharing on the strength of a standalone sandbox test.
+The policy now wraps the complete native-launched ACP harness in the macOS
+Electron beta, including the real agent, MCP servers and shell descendants.
+Only the built-in Colony Agent runtime is supported. Other Electron harnesses
+and platforms fail closed; the legacy Tauri launcher is unchanged.
 
-Real-process proof on this Mac now covers shell children, Colony's `buzz-dev-mcp`,
-and a complete `buzz-agent` ACP session using that real MCP child. A deterministic
-local HTTP model asks for a useful draft, then attempts a sibling-grant read.
-The draft is created, the read is denied by the OS, and the agent shuts down its
-MCP process group. No real provider, relay, browser profile, or social account is
-used in this gate.
+Each worker has a dedicated HOME/workspace and temporary directory. Host startup
+opens directories without following symlinks and changes permissions through the
+opened descriptor. The worker cannot remove its workspace root. Runtime files are
+read-only; the owner's home, Chromium profile and other workers' files are absent
+from its policy. Only the selected provider and explicit agent configuration are
+forwarded, rather than the desktop's inherited environment.
 
-The tests also cover exact host-file permissions across atomic replacement,
-policy-parameter injection, symlink and new hardlink escapes, sibling process
-environment inspection and signalling, attempted resandboxing, environment
-clearing, and allowed versus forbidden local socket/port connections. Positive
-controls run the same attacks or connections without isolation.
+The host generates a fresh launch nonce for each process. The browser grant
+filename includes that nonce and the canonical agent/community identity. The
+sandbox can read only its own launch's grant. An older descendant cannot read a
+renewed grant after restart, even if it outlived its original process group.
+The broker independently checks the current native roster, launch generation,
+owner-only audience, business, tab and control epoch at operation boundaries.
 
-Two implementation corrections came from actual failures: current macOS requires
-its Apple-maintained `dyld-support.sb` bootstrap policy, and Rust requires the
-`hw.pagesize_compat` sysctl to initialize its stack guard. Neither is a reason to
-allow arbitrary home reads or broad process inspection.
+A separate host-owned authenticated proxy is created for each worker launch.
+The OS permits only that proxy's loopback port and the exact private browser
+socket. The proxy pins the configured relay/provider destinations and denies
+other authorities. Fresh proxy credentials prevent reused ports from transferring
+access between launches. HTTP uses standard proxy settings; shared WebSocket
+transport uses CONNECT while retaining the original TLS, Host and NIP-42 identity.
+Invalid/refused gateways have no direct fallback. Dropping the native worker guard
+closes the listener and existing tunnels.
 
-Seatbelt's network-address grammar accepts `localhost` or `*`, not arbitrary
-resolved destination IPs. The API therefore permits explicit loopback ports,
-with external connections and DNS denied. Gate 2 needs a trusted per-worker
-network gateway that enforces relay/provider destinations. A proxy environment
-variable alone is insufficient: all actual WebSocket and HTTP paths must adopt
-it, and attempts to bypass it must fail. Do not weaken this to unrestricted
-network access to make an existing harness start.
+The spending checkpoint receives one host-selected loopback listening port, routed
+through the same private proxy. A port conflict stops isolated startup; it cannot
+silently start without metering. Complete provider base paths are preserved
+separately from the existing root-style meter upstream overrides. OpenRouter is
+routed through the checkpoint, and DeepSeek accepts its native or legacy key;
+checkpoint-owned credentials replace both key names.
+Normal HTTPS validation uses Apple's certificate-validation service, without
+keychain access. Node startup receives same-sandbox parent identity access, the
+specific OS fields required by uname, and metadata access to its host-opened log.
 
-Remaining adoption work: native launch wrapping, private storage and credential
-provisioning, exact packaged runtime permissions, controlled outbound networking,
-unsupported-harness/platform failure behavior, and managed restart/takeover proof.
-Signed-in browser access remains unpublished pending those gates.
+## Evidence and limits
+
+The packaged proof runs the actual Electron app, native create/start/stop commands,
+ACP harness, Colony Agent, browser MCP, file/shell tools and an isolated local relay.
+The model responses, identities, credentials and page content are synthetic. It
+proves page reading/editing, denied sibling grant/profile reads, real CLI replies,
+owner takeover, read-only enforcement, process restart and full app relaunch.
+Fresh sharing is required after either restart. Separate process tests exercise
+symlinks, network bypass, unrelated process inspection and gateway shutdown. A
+public HTTPS probe verifies certificate validation without provider credentials.
+
+Earlier Gate 1 was test-only: 11 process tests passed and changing deny-default to
+allow-default made 9 fail. Native adoption exposed and corrected additional log,
+Node bootstrap, metering, TLS and grant-generation integration failures.
+
+This is an access boundary for Colony-managed workers, not a VM, resource quota,
+or protection against arbitrary unsandboxed applications running as the Mac user.
+A deliberately detached process retains its original filesystem policy; it never
+inherits renewed browser/network credentials. Normal shutdown cleans managed
+children, but this phase does not claim adversarial process-tree termination.
+Publication/updater distribution, notarization, real provider billing and the
+Instagram content pilot remain separate proof gates. No production promotion or
+social publication is included.

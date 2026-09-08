@@ -62,7 +62,7 @@ async fn model_round(listener: &tokio::net::TcpListener, round: usize, victim: &
         let command = if round == 0 {
             "printf AGENT_DRAFT_READY > draft.txt; cat draft.txt".to_string()
         } else {
-            format!("/bin/sh -c 'cat \"$1\"' child '{}'", victim.display())
+            format!("if nc -z -w 1 127.0.0.1 {}; then echo DIRECT_NETWORK_BYPASS; fi; /bin/sh -c 'cat \"$1\"' child '{}'", listener.local_addr().unwrap().port(), victim.display())
         };
         json!({"role":"assistant","content":null,"tool_calls":[{
             "id":format!("call_{round}"),"type":"function","function":{
@@ -98,12 +98,20 @@ async fn real_agent_completes_work_but_cannot_steal_through_its_shell_tool() {
     fs::write(&victim, "SYNTHETIC_SIBLING_BROWSER_TOKEN").unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let mut policy = WorkerPolicy::new(&workspace).unwrap();
-    policy.allow_runtime(&agent).unwrap();
-    policy.allow_runtime(&mcp).unwrap();
-    policy.allow_loopback_port(address.port()).unwrap();
-    let mut command = tokio::process::Command::from(policy.command(agent.as_os_str()).unwrap());
-    command
+    // Exercise the same preparation function called by the native launcher.
+    // The browser bundle paths are fixtures here; the browser adapter itself is
+    // exercised by the packaged managed-browser gate, not this model/tool test.
+    let bundle = root.path().join("Electron.app/Contents/MacOS");
+    fs::create_dir_all(&bundle).unwrap();
+    let electron = bundle.join("Electron");
+    fs::write(&electron, "fixture runtime path").unwrap();
+    let adapter = root.path().join("adapter");
+    fs::create_dir(&adapter).unwrap();
+    let mut original = Command::new(&agent);
+    original
+        .env("BUZZ_RELAY_URL", format!("ws://{address}"))
+        .env("BUZZ_ACP_AGENT_COMMAND", &agent).env("BUZZ_ACP_MCP_COMMAND", &mcp)
+        .env("BUZZ_ACP_ELECTRON_BROWSER_CONFIG", json!({"command":electron,"adapter":adapter.join("mcp.mjs"),"grant":root.path().join("own-grant.json")}).to_string())
         .env("BUZZ_AGENT_PROVIDER", "openai")
         .env("OPENAI_COMPAT_API_KEY", "synthetic")
         .env("OPENAI_COMPAT_MODEL", "fixture")
@@ -111,6 +119,8 @@ async fn real_agent_completes_work_but_cannot_steal_through_its_shell_tool() {
         .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "5")
         .env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", "5")
         .env("BUZZ_AGENT_MAX_ROUNDS", "4");
+    let (prepared, _network) = super::launch::prepare(&original, &workspace, None).unwrap();
+    let mut command = tokio::process::Command::from(prepared);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -171,6 +181,16 @@ async fn real_agent_completes_work_but_cannot_steal_through_its_shell_tool() {
             || final_request.contains("Permission denied")
     );
     assert!(!final_request.contains("SYNTHETIC_SIBLING_BROWSER_TOKEN"));
+    // Tool-call arguments contain the marker; inspect only tool responses.
+    let tool_results: Vec<_> = requests[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .collect();
+    assert!(!serde_json::to_string(&tool_results)
+        .unwrap()
+        .contains("DIRECT_NETWORK_BYPASS"));
     assert_eq!(
         fs::read_to_string(workspace.join("draft.txt")).unwrap(),
         "AGENT_DRAFT_READY"

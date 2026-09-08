@@ -4,6 +4,7 @@ pub mod connection;
 pub mod error;
 pub mod message;
 pub mod pin;
+pub mod transport;
 
 pub use connection::{publish_event, NostrWsConnection};
 pub use error::WsClientError;

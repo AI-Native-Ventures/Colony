@@ -1,5 +1,7 @@
-//! Process boundary prototype. Not adopted by the managed launcher until its
-//! real-runtime gate passes; callers must never treat this module alone as isolation.
+//! OS process boundary for Electron-managed local workers and descendants.
+pub(crate) mod launch;
+pub(crate) mod network;
+
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -13,6 +15,8 @@ pub(super) struct WorkerPolicy {
     reads: Vec<(PathBuf, bool)>,
     sockets: Vec<PathBuf>,
     ports: Vec<u16>,
+    listen_port: Option<u16>,
+    metadata: Vec<PathBuf>,
 }
 
 impl WorkerPolicy {
@@ -27,6 +31,8 @@ impl WorkerPolicy {
             reads: vec![],
             sockets: vec![],
             ports: vec![],
+            listen_port: None,
+            metadata: vec![],
         })
     }
 
@@ -38,6 +44,12 @@ impl WorkerPolicy {
         }
         let tree = path.is_dir();
         self.reads.push((path, tree));
+        Ok(())
+    }
+
+    /// Permit fstat on a host-opened worker log without granting file contents.
+    pub(super) fn allow_log_metadata(&mut self, path: &Path) -> Result<(), String> {
+        self.metadata.push(host_leaf(path)?);
         Ok(())
     }
 
@@ -64,6 +76,15 @@ impl WorkerPolicy {
         Ok(())
     }
 
+    /// Permit the ACP spending checkpoint to bind only its assigned loopback port.
+    pub(super) fn allow_meter_listener(&mut self, port: u16) -> Result<(), String> {
+        if port == 0 {
+            return Err("A concrete metering port is required".into());
+        }
+        self.listen_port = Some(port);
+        Ok(())
+    }
+
     /// Start with an empty environment and a private cwd/HOME/temp tree.
     /// Unsupported operating systems fail closed; there is no plain-command fallback.
     pub(super) fn command(&self, executable: &OsStr) -> Result<Command, String> {
@@ -71,7 +92,7 @@ impl WorkerPolicy {
             return Err("Local worker isolation is not supported on this platform".into());
         }
         let temp = self.workspace.join("tmp");
-        std::fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+        launch::private_directory(&temp)?;
         let mut command = Command::new("/usr/bin/sandbox-exec");
         let mut policy = String::from(include_str!("isolation/base.sbpl"));
         let mut parameter = |name: String, value: &OsStr| {
@@ -87,6 +108,13 @@ impl WorkerPolicy {
             let filter = if *tree { "subpath" } else { "literal" };
             policy.push_str(&format!("\n(allow file-read* ({filter} (param \"{name}\")))\n(allow file-read-metadata (path-ancestors (param \"{name}\")))"));
         }
+        for (index, path) in self.metadata.iter().enumerate() {
+            let name = format!("LOG{index}");
+            parameter(name.clone(), path.as_os_str());
+            policy.push_str(&format!(
+                "\n(allow file-read-metadata (literal (param \"{name}\")))"
+            ));
+        }
         if !self.sockets.is_empty() {
             policy.push_str("\n(allow system-socket (socket-domain AF_UNIX))");
         }
@@ -101,6 +129,10 @@ impl WorkerPolicy {
             policy.push_str(&format!(
                 "\n(allow network-outbound (remote tcp (param \"{name}\")))"
             ));
+        }
+        if let Some(port) = self.listen_port {
+            parameter("METER".into(), OsStr::new(&format!("localhost:{port}")));
+            policy.push_str("\n(allow network-bind network-inbound (local tcp (param \"METER\")))");
         }
         command.arg("-p").arg(policy).arg(executable);
         command

@@ -4,12 +4,18 @@ import { mkdtemp, readFile, rm, rename } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Authority } from "./authority.mjs";
-import { ManagedBrowser, runtimeId } from "./managed-workers.mjs";
+import {
+  ManagedBrowser,
+  runtimeId,
+  grantFilename,
+} from "./managed-workers.mjs";
 const pubkey = "a".repeat(64);
 const relay = "wss://relay.example";
 const worker = () => ({
   pubkey,
   owner_identified: true,
+  isolated: true,
+  browser_generation: "b".repeat(32),
   name: "Sarah",
   relay_url: relay,
   backend: { type: "local" },
@@ -86,10 +92,7 @@ test("only eligible owner-scoped workers are projected and an assigned token sta
     });
     assert.deepEqual(result, { name: "Sarah", mode: "interact" });
     const grant = JSON.parse(
-      await readFile(
-        path.join(root, runtimeId(pubkey, relay) + ".json"),
-        "utf8",
-      ),
+      await readFile(path.join(root, grantFilename(worker())), "utf8"),
     );
     assert.deepEqual(
       await s.manager.request({
@@ -121,6 +124,10 @@ test("wrong relay, stopped, shared or pending-restart workers cannot be assigned
     { respond_to: "anyone" },
     { needs_restart: true },
     { owner_identified: false },
+    { isolated: false },
+    { isolated: undefined },
+    { browser_generation: undefined },
+    { browser_generation: "../../other" },
     { backend: { type: "provider" } },
     { persona_orphaned: true },
   ]) {
@@ -214,13 +221,36 @@ test("two tabs sharing one worker cannot reorder grant-file replacements", async
     release();
     await Promise.all([first, second]);
     const saved = JSON.parse(
-      await readFile(
-        path.join(root, `${runtimeId(pubkey, relay)}.json`),
-        "utf8",
-      ),
+      await readFile(path.join(root, grantFilename(worker())), "utf8"),
     );
     assert.equal(s.authority.grants.get(saved.token).tabId, "second");
     assert.equal(s.authority.grants.size, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("restarting requires a new generation file and revokes the old capability", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "managed-browser-test-"));
+  try {
+    const s = setup(root);
+    await s.manager.share({ id: "tab", pubkey, mode: "read" });
+    const oldFile = path.join(root, grantFilename(worker()));
+    const oldGrant = JSON.parse(await readFile(oldFile, "utf8"));
+    const next = { ...worker(), browser_generation: "c".repeat(32) };
+    s.setRows([next]);
+    await assert.rejects(s.manager.validate(oldGrant.token), /running|changed/);
+    await s.manager.share({ id: "tab", pubkey, mode: "read" });
+    const newFile = path.join(root, grantFilename(next));
+    assert.notEqual(oldFile, newFile);
+    const renewed = JSON.parse(await readFile(newFile, "utf8"));
+    assert.notEqual(renewed.token, oldGrant.token);
+    assert.equal(
+      JSON.parse(await readFile(oldFile, "utf8")).token,
+      oldGrant.token,
+    );
+    await s.manager.validate(renewed.token);
+    await assert.rejects(s.manager.validate(oldGrant.token), /revoked/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

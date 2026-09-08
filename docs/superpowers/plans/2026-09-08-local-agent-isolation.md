@@ -25,12 +25,12 @@ implementation is proven.
 
 ## Gate 2: adoption
 
-- [ ] Trace native launch environment and runtime file requirements; integrate
+- [x] Trace native launch environment and runtime file requirements; integrate
   only after the native boundary passes. Apply HOME/temp/config isolation before
   starting the harness, covering all descendants.
-- [ ] Supply exact browser-grant and loopback gateway permissions; prove an unassigned
+- [x] Supply exact browser-grant and loopback gateway permissions; prove an unassigned
   worker cannot reuse another worker's connection.
-- [ ] Re-run managed-worker lifecycle and packaged browser tests with a
+- [x] Re-run managed-worker lifecycle and packaged browser tests with a
   deterministic model fixture. Keep actual provider/Instagram proof separate.
 
 No production promotion or automatic credential migration is included.
@@ -76,3 +76,45 @@ cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib \
 
 Run outside an already active OS sandbox so Seatbelt can initialize. An outer
 sandbox refusal is not evidence that the product's boundary has been applied.
+
+## Gate 3: integration delivery
+
+- [x] Run the full repository gate and Electron-feature checks after final fixes.
+- [x] Rebuild the final package and repeat managed and general package smoke tests.
+- [ ] Finish review, create a develop PR, arm auto-merge, and verify its merge.
+
+The managed package test is `desktop/src-electron/managed-smoke.mjs`. It requires
+`COLONY_SMOKE_APP` and a dedicated seeded local relay (`COLONY_SMOKE_RELAY`, default
+`ws://127.0.0.1:3157`). Use only synthetic owner key 1 in that isolated relay.
+It must never be pointed at a shared production relay. It creates two temporary
+teammates and stops them in cleanup. The fixture model invokes the real tools;
+it is not evidence of a model's judgment or a live Instagram publishing cycle.
+
+The broader package check remains `desktop/src-electron/smoke.mjs`, using synthetic
+sign-in data and a relocated app. Local package proof is distinct from CI, merge,
+distribution and production adoption.
+
+### Final local validation (2026-09-08)
+
+- Full `just ci` passed: 6,846 desktop tests, 2,911 native tests (25 opt-in
+  ignores), 967 mobile tests (one existing skip), workspace tests/checks and builds.
+- Electron-feature clippy passed. All 44 Electron tests passed.
+- All 21 macOS isolation tests passed with the final packaged agent/MCP/Node
+  binaries, including the opt-in public HTTPS certificate verification probe.
+- The rebuilt debug arm64 bundle passed ad-hoc signature verification, relocated
+  app checks, synthetic sign-in import and persistence, and the real managed
+  workflow. The latter covers OpenRouter with a custom base path and DeepSeek's
+  native credential name, plus browser work, denied sibling access, takeover,
+  read-only access, process restart and app relaunch.
+- Provider path and DeepSeek regressions failed against the old behavior and
+  passed after correction. Independent review accepted those fixes.
+- The beta workflow now reruns the macOS boundary suite against bundled binaries;
+  its external HTTPS probe remains opt-in locally to avoid a public-network gate.
+- GitHub checks and merge are separate from these local results. The app remains
+  an ad-hoc signed beta, not a notarized release or production promotion.
+
+The owner-facing packaged UI proof also passed: a saved synthetic business can
+open a Web tab, select the running teammate and read-only access, share the tab,
+and take control. It caught a legacy preview flag hiding Web tabs in fresh
+Electron profiles; Electron now registers its browser by default, with a failing-
+before/passing-after regression retaining Tauri's default-off behavior.
