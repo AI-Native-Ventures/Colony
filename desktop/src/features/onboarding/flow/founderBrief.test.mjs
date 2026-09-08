@@ -145,7 +145,11 @@ test("Canvas creates a reviewable setup suggestion, not an invented owner reques
   assert.equal(draft.firstTask.mode, "suggestion");
   assert.match(
     draft.firstTask.content,
-    /three improvements.*reason.*next step.*review/,
+    /five Instagram captions and five matching visual briefs/,
+  );
+  assert.match(
+    draft.firstTask.content,
+    /business context.*ready for my review/,
   );
   assert.doesNotMatch(draft.firstTask.content, /Get to know|I am on it/);
 });

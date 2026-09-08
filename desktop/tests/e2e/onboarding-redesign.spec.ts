@@ -127,7 +127,7 @@ test("recovery reload restores the same synthetic code without putting it in loc
   );
 });
 
-test("an unreadable or missing website allows manual context and no payment form", async ({
+test("a missing website allows manual context and no payment form", async ({
   page,
 }) => {
   await fresh(page);

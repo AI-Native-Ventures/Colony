@@ -196,9 +196,11 @@ Owner: root, with independent review. Files:
   canonical task state and actual output in the same thread; never synthesize
   an agent response or mark work complete when the send succeeds.
 - [x] Capture actual desktop/narrow and light/dark suggestion, funding, failure
-  and real-output states. Native run 21 proves output and persistence; the revised
-  package must additionally prove live completion before reload. Run interaction
-  tests for scope changes, independent drafts and retained existing navigation.
+  and real-output states. Native runs 26 and 27 prove live completion in both
+  panes before reload and recovery of the same completed Task without another
+  model turn. Run 27 additionally proves the untouched five-pair default.
+  Interaction tests cover scope changes, independent drafts and retained
+  existing navigation; see the handoff and starter fidelity proof reports.
 
 ## Task 4: Joined native fixture and delivery
 
@@ -234,6 +236,12 @@ Owners: native recovery worker (agent/task half), signup diagnosis worker
   screenshots, open a signed follow-up PR to develop, enable auto-merge under
   the current rules, verify every required check and actual merge, and rebuild
   the relevant beta. Keep PR #655's package/source evidence separate.
+
+PR #660 completed the foundation delivery gate on 8 September 2026: exact-head
+CI and Mesh passed, reviewed screenshots are published, merge commit is
+`8cbb592eba747da945d101c05a6853644f2597ae`, and its normal beta was independently
+verified. The checkbox above remains open for the approved starter-fidelity and
+readable-reference follow-up, whose proof is recorded separately.
 
 ## Acceptance gate
 

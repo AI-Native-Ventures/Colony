@@ -5,8 +5,14 @@ import { expect } from "@playwright/test";
 import { waitForAnimations } from "../../tests/helpers/animations.ts";
 import { approveFixtureTeam } from "./approved-team.mjs";
 import { readPendingAttempt, readRenderedCompany } from "./diagnostics.mjs";
-import { WORKER_OUTPUT, SCOUT_REVIEW } from "./provider.mjs";
+import {
+  FIRST_JOB_BRIEF,
+  INSTAGRAM_DRAFTS,
+  WORKER_OUTPUT,
+  SCOUT_REVIEW,
+} from "./provider.mjs";
 import { checkFixtureUnstaffed } from "./unstaffed.mjs";
+import { readFixtureInstruction } from "./instruction.mjs";
 
 /** Caller owns the real package and services; only model responses and ledger funds are fixtures. */
 export async function completeFixtureWork({
@@ -54,8 +60,25 @@ export async function completeFixtureWork({
       }, welcomeUrl);
     }
   };
-  const brief =
-    "Review Horizon Labs and suggest three practical branding improvements. Include a reason and next step for each. Keep the proposal ready for my review.";
+  const brief = FIRST_JOB_BRIEF;
+  const cards = page
+    .getByTestId("first-job-suggestion")
+    .filter({ visible: true });
+  assert.equal(
+    account.suggestion.brief,
+    brief,
+    "The actual owner-signed setup root contains the intended default first job",
+  );
+  await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
+  await expect(cards.last().getByRole("textbox")).toHaveValue(brief);
+  const defaultBrief = {
+    rootBrief: account.suggestion.brief,
+    paneBriefs: await cards
+      .getByRole("textbox")
+      .evaluateAll((inputs) => inputs.map((input) => input.value)),
+    edited: false,
+  };
+  onEvidence({ defaultBrief });
   let unstaffed;
   const approved = await approveFixtureTeam({
     page,
@@ -99,14 +122,12 @@ export async function completeFixtureWork({
     workerPubkey: approved.worker.pubkey,
     channelId: account.channelId,
     rootId: account.rootEventId,
+    brief,
     readTask: approved.readTask,
   });
   // Reload also proves that the original owner-authored root survives setup/funding.
   await reloadWelcome();
   onEvidence({ ...(await approved.readApprovalEvidence()), unstaffed });
-  const cards = page
-    .getByTestId("first-job-suggestion")
-    .filter({ visible: true });
   await expect(cards.first()).toBeVisible();
   await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
   await expect(cards.last().getByRole("textbox")).toHaveValue(brief);
@@ -260,9 +281,63 @@ export async function completeFixtureWork({
       { timeout: 30_000 },
     ),
   ]);
+  const instruction = await readFixtureInstruction({
+    relay,
+    invoke,
+    account,
+    scout: approved.scout,
+    worker: actualAgents.find(
+      (agent) => agent.pubkey === approved.worker.pubkey,
+    ),
+    brief,
+  });
+  const instructionRow = page
+    .getByTestId("message-thread-replies")
+    .getByTestId("message-row")
+    .filter({ hasText: "Coordinate this job in this thread." })
+    .first();
+  await expect(instructionRow).toContainText(/Ask\s+@?Sarah\s+to do the work/);
+  await expect(instructionRow).not.toContainText(/nostr:npub/);
+  await instructionRow.scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: path.join(proofDirectory, "joined-friendly-instruction.png"),
+  });
+  onEvidence({ instruction });
   await expect(
     page.getByText(WORKER_OUTPUT, { exact: false }).first(),
   ).toBeVisible();
+  const workerRow = page
+    .getByTestId("message-thread-replies")
+    .getByTestId("message-row")
+    .filter({ hasText: WORKER_OUTPUT })
+    .first();
+  const expandOutput = workerRow.getByRole("button", {
+    name: "Read full message",
+    exact: true,
+  });
+  if (await expandOutput.isVisible()) await expandOutput.click();
+  assert.equal(INSTAGRAM_DRAFTS.length, 5);
+  assert.equal(new Set(INSTAGRAM_DRAFTS.map((draft) => draft.caption)).size, 5);
+  assert.equal(
+    new Set(INSTAGRAM_DRAFTS.map((draft) => draft.visualBrief)).size,
+    5,
+  );
+  for (const draft of INSTAGRAM_DRAFTS) {
+    await expect(workerRow).toContainText(draft.caption);
+    await expect(workerRow).toContainText(draft.visualBrief);
+  }
+  await expect(workerRow).toContainText(
+    "no images have been created and no posts have been published",
+  );
+  const deliveredDrafts = {
+    captions: INSTAGRAM_DRAFTS.length,
+    matchingVisualBriefs: INSTAGRAM_DRAFTS.length,
+    days: INSTAGRAM_DRAFTS.map((draft) => draft.day),
+    renderedFieldsVerified: 10,
+    generatedImages: 0,
+    publishedPosts: 0,
+  };
   const presentation = await page
     .getByText(WORKER_OUTPUT, { exact: false })
     .first()
@@ -289,6 +364,7 @@ export async function completeFixtureWork({
       paneStatuses: ["Completed", "Completed"],
     },
     presentation,
+    deliveredDrafts,
   });
   onProgress("live-completed-font-and-rail-verified");
   await expect(
@@ -386,6 +462,9 @@ export async function completeFixtureWork({
   onProgress("worker-output-reviewed-canonical-task-completed");
   return {
     unstaffed,
+    defaultBrief,
+    instruction,
+    deliveredDrafts,
     taskId: task.id,
     status: task.status,
     instructionCount,

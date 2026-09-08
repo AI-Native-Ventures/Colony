@@ -5,10 +5,14 @@ repair and corrected workspace visuals merged in [PR #655](https://github.com/AI
 The available normal beta and its packaged checks are recorded in
 [the redesign verification report](../reports/2026-09-08-colony-redesign-proof.md).
 The initial PR screenshots were rejected; the corrected real-app screenshots
-replace that failed visual gate. The explicit first-job handoff is a follow-up,
-tracked in [its proof ledger](../reports/2026-09-08-first-job-handoff-proof.md).
-Its joined native fixture proves persisted account-to-completed-work behaviour;
-live completion refresh and final delivery remain separate gates. Hosted signup,
+replace that failed visual gate. The explicit first-job handoff merged in
+[PR #660](https://github.com/AI-Native-Ventures/Colony/pull/660), tracked in
+[its proof ledger](../reports/2026-09-08-first-job-handoff-proof.md).
+Its joined native fixtures prove account-to-completed-work behaviour, live
+completion in both panes and completed-state recovery after reload.
+The [starter fidelity report](../reports/2026-09-08-first-job-starter-fidelity.md)
+records the untouched five-caption/five-visual-brief default and rendered output.
+PR merge and normal-beta availability remain separate delivery gates. Hosted signup,
 real payment settlement and autonomous model quality are not claimed.
 
 The user also clarified that this must preserve Colony's channels-and-threads

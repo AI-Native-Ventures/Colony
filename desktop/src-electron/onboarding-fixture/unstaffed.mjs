@@ -34,7 +34,7 @@ export async function checkFixtureUnstaffed({
     .getByTestId("first-job-suggestion")
     .filter({ visible: true });
   await expect(cards.first()).toBeVisible();
-  await cards.first().getByRole("textbox").fill(brief);
+  await expect(cards.first().getByRole("textbox")).toHaveValue(brief);
   await expect(cards.last().getByRole("textbox")).toHaveValue(brief);
   const assertNoWork = async () => {
     assert.equal((await readPendingAttempt(page, account)).exists, false);

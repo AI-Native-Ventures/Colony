@@ -175,6 +175,39 @@ export function createFirstJobWorkValidator(deps: {
   };
 }
 
+/** Snapshot the selected worker's readable name immediately before native signing. */
+export function createFirstJobMessagePreparer(deps: {
+  assertCurrent(scope: FirstJobScope): Promise<void>;
+  listAgents(): Promise<Pick<ManagedAgent, "pubkey" | "relayUrl" | "name">[]>;
+  signMessage: typeof signRelayEvent;
+}): FirstJobDispatchDependencies["prepareMessage"] {
+  return async ({ scope, content, team, work }) => {
+    await deps.assertCurrent(scope);
+    const agents = await deps.listAgents();
+    await deps.assertCurrent(scope);
+    const worker = agents.find(
+      (agent) =>
+        agent.pubkey === team.workerPubkey &&
+        canonicalRelayUrl(agent.relayUrl) === canonicalRelayUrl(scope.relayUrl),
+    );
+    const message = await deps.signMessage({
+      kind: 9,
+      content: firstJobInstruction(content, worker?.name),
+      createdAt: Math.max(work.createdAt, Math.floor(Date.now() / 1000)),
+      tags: [
+        ["h", scope.channelId],
+        ["e", scope.threadRootId, "", "reply"],
+        ["p", team.scoutPubkey],
+        ["mention", team.workerPubkey],
+        ["client", "colony:first-job-start:v1", scope.requestId],
+        ...work.tags,
+      ],
+    });
+    await deps.assertCurrent(scope);
+    return message;
+  };
+}
+
 /** Existing native signing and relay-authoritative Task APIs, captured to one job. */
 export const firstJobNativeActions: Pick<
   FirstJobDispatchDependencies,
@@ -221,23 +254,11 @@ export const firstJobNativeActions: Pick<
     loadTask: (taskId) => companyRepository.getTask(taskId),
     listAgents: listManagedAgents,
   }),
-  async prepareMessage({ scope, content, team, work }) {
-    return current(scope, () =>
-      signRelayEvent({
-        kind: 9,
-        content: firstJobInstruction(content, team),
-        createdAt: Math.max(work.createdAt, Math.floor(Date.now() / 1000)),
-        tags: [
-          ["h", scope.channelId],
-          ["e", scope.threadRootId, "", "reply"],
-          ["p", team.scoutPubkey],
-          ["mention", team.workerPubkey],
-          ["client", "colony:first-job-start:v1", scope.requestId],
-          ...work.tags,
-        ],
-      }),
-    );
-  },
+  prepareMessage: createFirstJobMessagePreparer({
+    assertCurrent: assertFirstJobScope,
+    listAgents: listManagedAgents,
+    signMessage: signRelayEvent,
+  }),
   async publish(scope, event) {
     await current(scope, () =>
       relayClient.publishEvent(

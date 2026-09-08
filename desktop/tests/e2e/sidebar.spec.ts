@@ -7,9 +7,17 @@ const SIDEBAR_WIDTH_STORAGE_KEY = "buzz-sidebar-width";
 const COMMUNITY_ONBOARDING_STORAGE_KEY =
   "buzz-community-onboarding-transaction.v1";
 const DEFAULT_SIDEBAR_WIDTH = 240;
+const CHANNEL_ACTIONS_LOADING_TEST =
+  "channel context menu explains when owner actions are loading";
+const CHANNEL_ACTIONS_READ_DELAY_MS = 60_000;
 
-test.beforeEach(async ({ page }) => {
-  await installMockBridge(page);
+test.beforeEach(async ({ page }, testInfo) => {
+  await installMockBridge(
+    page,
+    testInfo.title === CHANNEL_ACTIONS_LOADING_TEST
+      ? { channelMembersReadDelayMs: CHANNEL_ACTIONS_READ_DELAY_MS }
+      : undefined,
+  );
 });
 
 async function sidebarWidth(page: Page) {
@@ -385,16 +393,28 @@ test("channel context menu only shows owner actions to the owner", async ({
   ).toHaveCount(0);
 });
 
-test("channel context menu explains when owner actions are loading", async ({
-  page,
-}) => {
-  await installMockBridge(page, { channelMembersReadDelayMs: 500 });
+test(CHANNEL_ACTIONS_LOADING_TEST, async ({ page }) => {
+  // The read delay exceeds this test's 30s budget, so an early membership
+  // prefetch cannot finish before we observe the loading state. Release it
+  // with virtual time after that assertion; this adds no real-time wait.
+  await page.clock.install();
   await page.goto("/");
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as Window & {
+            __BUZZ_E2E__?: { mock?: { channelMembersReadDelayMs?: number } };
+          }
+        ).__BUZZ_E2E__?.mock?.channelMembersReadDelayMs,
+    ),
+  ).toBe(CHANNEL_ACTIONS_READ_DELAY_MS);
 
   await page.getByTestId("channel-general").click({ button: "right" });
   await expect(
     page.getByRole("menuitem", { name: "Loading channel actions..." }),
   ).toBeVisible();
+  await page.clock.fastForward(CHANNEL_ACTIONS_READ_DELAY_MS);
   await expect(
     page.getByRole("menuitem", { name: "Archive channel" }),
   ).toBeVisible();

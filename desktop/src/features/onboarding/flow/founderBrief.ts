@@ -4,6 +4,7 @@ import {
   createOnboardingV2Draft,
 } from "../onboardingV2";
 import type { OnboardingAnswers } from "./steps";
+import { firstJobStarters } from "../firstJobStarters";
 
 /** Carry confirmed answers into an editable setup suggestion; no work starts here. */
 export function draftFromAnswers(
@@ -45,6 +46,5 @@ export function draftFromAnswers(
 
 /** A concrete, reviewable starting suggestion, not an invented owner instruction. */
 export function firstTaskFor(answers: OnboardingAnswers): string {
-  const company = answers.company?.trim() || "your business";
-  return `Review ${company}’s online presence and suggest three improvements, each with a reason and a next step, for review.`;
+  return firstJobStarters(answers.company ?? "")[0].brief;
 }

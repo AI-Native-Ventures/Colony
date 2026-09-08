@@ -1,17 +1,19 @@
 # Colony workspace visual direction
 
-Status: the visual direction is approved. The first implementation submitted in
-PR #655 failed the owner's visual review: it retained the old shell with colour
-changes instead of matching the approved composition. That visual gate is
-superseded, and auto-merge was disabled. Structural corrections are implemented
-in source. The corrected palette/selection build passed 29 relevant browser
-checks and coordinating-agent comparison with the approved composition. The
-final port 4199 artifact passed 12 combined focused checks, including readable
-disclosure contrast, with fresh screenshots. CI, package, merge and availability
-remain separate delivery gates.
-See [the verification report](../reports/2026-09-08-colony-redesign-proof.md) for
-current and historical evidence. Approval of the preview is not acceptance of
-the real application. The approved onboarding remains a separate design.
+Status: the corrected approved workspace composition merged in
+[PR #655](https://github.com/AI-Native-Ventures/Colony/pull/655). Its original
+screenshots failed the owner's visual review and are superseded by the corrected
+real-app screenshots in
+[the verification report](../reports/2026-09-08-colony-redesign-proof.md).
+The owner's subsequent regular-font and far-left-community-rail corrections are
+merged in
+[PR #660](https://github.com/AI-Native-Ventures/Colony/pull/660) at
+`8cbb592eba747da945d101c05a6853644f2597ae`, with a verified normal beta. The
+[first-job proof ledger](../reports/2026-09-08-first-job-handoff-proof.md) and
+[starter fidelity report](../reports/2026-09-08-first-job-starter-fidelity.md)
+record the later rendered and native checks. Approval of a preview is not
+acceptance of the real application. The approved onboarding remains a separate
+design.
 
 ## Scope of this comparison
 
@@ -24,7 +26,9 @@ Compare the same sample conversation across palette and gradient choices, so a
 different layout or feature set does not obscure the styling decision. A channel
 shows conversation roots; opening a thread shows the same root and its replies,
 in a pane to the right while the channel remains visible. On desktop the layout
-is sidebar, channel, thread. Closing the thread gives that space back to the
+is communities rail, sidebar, channel, thread. The existing communities rail
+remains visible from the first business, including its Add action and active
+community marker; switching, unread state and reordering remain available. Closing the thread gives that space back to the
 channel. A separate full-page thread was an incorrect interpretation in the
 earlier preview and is withdrawn. This exploration does not introduce a new
 task store, owner dashboard or Home/Work/Team navigation.
@@ -49,8 +53,10 @@ task store, owner dashboard or Home/Work/Team navigation.
   and secondary metadata visually subordinate without compromising readability.
 - Test realistic long agent updates, not only short sample messages. Use normal
   body weight, comfortable line height and a readable measure, with a concise
-  opening and optional expansion of longer details. Use the bundled Inter Tight
-  font, normal body weight and named rem tokens that respect user text zoom;
+  opening and optional expansion of longer details. Use the existing regular
+  Inter stack for workspace reading, per the owner's later correction; keep
+  onboarding's separate brand typography. Use normal body weight and named rem
+  tokens that respect user text zoom;
   do not solve density by making text tiny. The earlier 14px/15px comparison
   belonged to the preview, not a fixed-pixel production text requirement.
   Reserve large typography for page context, not every agent update.
