@@ -285,12 +285,12 @@ test.describe("channel workspace", () => {
     await expect
       .poll(() =>
         threadBody.evaluate(async (body) => {
-          if (body.scrollTop <= 0) {
-            body.scrollTop = Math.max(
-              1,
-              Math.floor((body.scrollHeight - body.clientHeight) / 2),
-            );
-          }
+          // Opening a live thread may already scroll to its bottom. Always
+          // choose a reading anchor with room below it in every presentation.
+          body.scrollTop = Math.max(
+            1,
+            Math.floor((body.scrollHeight - body.clientHeight) / 2),
+          );
           await new Promise<void>((resolve) => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           });
@@ -308,8 +308,13 @@ test.describe("channel workspace", () => {
       if (!body || !input) {
         throw new Error("Expected a live thread before workspace");
       }
-      if (body.scrollTop <= 0) {
-        throw new Error("Expected a scrolled live thread before workspace");
+      if (
+        body.scrollTop <= 0 ||
+        body.scrollTop >= body.scrollHeight - body.clientHeight
+      ) {
+        throw new Error(
+          "Expected a reading anchor away from the scroll bounds",
+        );
       }
       const bodyRect = body.getBoundingClientRect();
       const candidate = Array.from(
@@ -496,6 +501,7 @@ test.describe("channel workspace", () => {
           scrollTop: body?.scrollTop ?? 0,
         };
       });
+    await waitForAnimations(page);
     await expect.poll(readPreservedThreadState).toMatchObject({
       anchor: true,
       body: true,
@@ -516,6 +522,7 @@ test.describe("channel workspace", () => {
       "inert",
     );
     await expect(threadInput).toHaveText(draft);
+    await waitForAnimations(page);
     await expect.poll(readPreservedThreadState).toMatchObject({
       anchor: true,
       body: true,
@@ -533,6 +540,7 @@ test.describe("channel workspace", () => {
       "inert",
     );
     await expect(threadInput).toHaveText(draft);
+    await waitForAnimations(page);
     await expect.poll(readPreservedThreadState).toMatchObject({
       anchor: true,
       body: true,
@@ -557,6 +565,7 @@ test.describe("channel workspace", () => {
       workspaceUrl,
     );
     await expect(threadInput).toHaveText(draft);
+    await waitForAnimations(page);
     await expect.poll(readPreservedThreadState).toMatchObject({
       anchor: true,
       body: true,

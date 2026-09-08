@@ -254,6 +254,14 @@
   min-height: 2.5rem;
 }
 
+/* The drag invitation follows the channel's frame rather than the old shared
+ * content surface. Its absolute inset remains inside the pane border. */
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="channel-drop-zone"]
+  > [data-testid="drop-zone-overlay"] {
+  border-radius: inherit;
+}
+
 /* Keep window controls and history in the sidebar's own header. Collapsed and
  * mobile layouts retain their compact full-width navigation row. Fixed pixels
  * here deliberately track native window controls rather than text zoom. */
@@ -319,4 +327,29 @@
 :root[data-buzz-sidebar][data-workspace-gradient] [data-testid="app-sidebar"] {
   --sidebar-active: var(--buzz-workspace-raised);
   --sidebar-active-foreground: var(--buzz-workspace-foreground);
+}
+
+/* Short windows keep the workspace switcher and give channel navigation room
+ * for both unread controls. Full branding returns as soon as height permits. */
+@media (max-height: 560px) {
+  :root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-wordmark,
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    .colony-sidebar-workspace
+    > p {
+    display: none;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-identity {
+    gap: 0;
+  }
+}
+
+@media (min-width: 768px) and (max-height: 560px) {
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-sidebar-layer"]:has(
+      [data-native-window-controls="false"][data-sidebar-open="true"]
+    )
+    .colony-sidebar-identity {
+    padding-top: 56px;
+  }
 }

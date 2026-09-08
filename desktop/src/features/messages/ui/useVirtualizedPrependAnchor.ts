@@ -58,16 +58,24 @@ export function useVirtualizedPrependAnchor(
     const scroller = hostRef.current?.firstElementChild;
     if (!scroller || hasBottomIntent()) return;
     const viewport = scroller.getBoundingClientRect();
+    let clippedAnchor: ReadingAnchor | null = null;
     for (const row of scroller.querySelectorAll<HTMLElement>(
       "[data-message-id]",
     )) {
       const rect = row.getBoundingClientRect();
       if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) continue;
       const messageId = row.dataset.messageId;
-      if (messageId)
-        anchorRef.current = { messageId, top: rect.top - viewport.top };
-      return;
+      if (!messageId) continue;
+      const anchor = { messageId, top: rect.top - viewport.top };
+      // The clipped row may lose its sender header when older rows arrive.
+      // Holding its hidden top would then move all readable rows upward.
+      if (anchor.top >= 0) {
+        anchorRef.current = anchor;
+        return;
+      }
+      clippedAnchor ??= anchor;
     }
+    anchorRef.current = clippedAnchor;
   }, [hasBottomIntent, hostRef, scheduleRestore]);
 
   React.useLayoutEffect(() => {

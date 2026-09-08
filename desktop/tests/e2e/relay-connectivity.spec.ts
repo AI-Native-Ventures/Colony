@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 
 const RELAY_UNREACHABLE = "relay unreachable: connection refused";
@@ -12,16 +13,6 @@ const MOCK_AVATAR_DATA_URL =
 const MOCK_PUBKEY = "deadbeef".repeat(8);
 const MOCK_RELAY_URL = "ws://localhost:3000";
 const SELF_PROFILE_CACHE_KEY = `buzz-self-profile.v1:${MOCK_RELAY_URL}:${MOCK_PUBKEY}`;
-
-async function settle(page: import("@playwright/test").Page) {
-  await page.evaluate(() =>
-    // Tolerate cancelled animations: a SkeletonReveal animation cancelled
-    // mid-flight (skeleton → live content swap) rejects `.finished` with an
-    // AbortError. allSettled lets the animations that DO finish settle instead
-    // of aborting the whole wait on the first cancel.
-    Promise.allSettled(document.getAnimations().map((a) => a.finished)),
-  );
-}
 
 type ConnectionState =
   | "idle"
@@ -106,7 +97,7 @@ test.describe("relay connectivity", () => {
     await expect(relayCard).toContainText("Can't reach the relay");
     await expect(relayCard).toContainText("Click to connect");
     await expect(page.getByTestId("sidebar-reconnect")).toBeVisible();
-    await settle(page);
+    await waitForAnimations(page);
 
     // Clip to sidebar width (256px) so the card and channel list are both visible.
   });
@@ -127,7 +118,7 @@ test.describe("relay connectivity", () => {
     await expect(relayCard).toContainText("Can't reach the relay");
     await expect(relayCard).toContainText("Click to connect");
     await expect(page.getByTestId("sidebar-reconnect")).toBeVisible();
-    await settle(page);
+    await waitForAnimations(page);
 
     // Clip to the sidebar, where degraded relay state is now surfaced.
   });
@@ -151,16 +142,7 @@ test.describe("relay connectivity", () => {
     ).toBeVisible();
 
     // Await Radix sheet animations before measuring the settled state.
-    const sheet = page.getByTestId("channel-management-sheet");
-    await sheet.evaluate((el) =>
-      Promise.all(
-        el
-          .closest("[data-state]")
-          ?.getAnimations()
-          .map((a) => a.finished) ?? [],
-      ),
-    );
-    await settle(page);
+    await waitForAnimations(page);
 
     // Capture the whole sheet so the error renders in its Canvas-section context.
   });
@@ -191,7 +173,7 @@ test.describe("relay connectivity", () => {
     // The profile card should show the cached display name.
     const profileCard = page.getByTestId("sidebar-profile-card");
     await expect(profileCard).toContainText("Tyler Durden");
-    await settle(page);
+    await waitForAnimations(page);
   });
 
   test("05 — no-cache npub fallback when offline", async ({ page }) => {
@@ -202,7 +184,7 @@ test.describe("relay connectivity", () => {
     const profileCard = page.getByTestId("sidebar-profile-card");
     // Default mock identity display name is "npub1mock...".
     await expect(profileCard).toContainText("npub1mock");
-    await settle(page);
+    await waitForAnimations(page);
   });
 
   test("06 — sidebar card shows connected after external relay recovery", async ({

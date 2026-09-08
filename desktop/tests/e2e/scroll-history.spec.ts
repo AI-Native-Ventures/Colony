@@ -1338,10 +1338,15 @@ test("fast middle-page scroll settles with continuous mounted coverage", async (
   // Real trackpad input retires bottom intent. A synthetic scrollTop write
   // does not express reader intent and can be corrected by later measurements.
   await timeline.hover();
+  const passStart = await getTimelineMetrics(page);
+  const maxOffset = passStart.scrollHeight - passStart.clientHeight;
+  let previousTarget = passStart.scrollTop;
   for (const fraction of [0.72, 0.28, 0.64, 0.36, 0.58, 0.44, 0.52]) {
-    const metrics = await getTimelineMetrics(page);
-    const target = (metrics.scrollHeight - metrics.clientHeight) * fraction;
-    await page.mouse.wheel(0, target - metrics.scrollTop);
+    const target = maxOffset * fraction;
+    // Wheel delivery is asynchronous; derive coherent deltas from the planned
+    // pass instead of repeatedly subtracting a stale pre-wheel scrollTop.
+    await page.mouse.wheel(0, target - previousTarget);
+    previousTarget = target;
   }
   await page.waitForTimeout(250);
   const middle = await getTimelineMetrics(page);

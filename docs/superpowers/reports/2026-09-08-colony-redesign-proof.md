@@ -12,9 +12,10 @@ structure, reading layout and palette were corrected.
 The corrected React build now follows the approved composition, with the actual
 account/business forms, spaced sidebar, separate channel/thread frames, coordinated
 palette and readable message layout. The coordinating agent compared the rendered
-screens with the approved references. Browser fixtures remain synthetic. The latest beta smoke
-attempt failed on a completion-state fixture. No successful final package,
-merge, release, hosted signup or live business operation is claimed here.
+screens with the approved references. Browser fixtures remain synthetic. The `3e7d6104bf` beta has passed its
+packaged checks and uploaded an artifact; the later CI corrections still need
+their own package run. No final-revision package, merge, release, hosted signup
+or live business operation is claimed here.
 
 ## Current implementation
 
@@ -86,7 +87,7 @@ visual or package acceptance.
 | Final source browser gate | 12 combined onboarding/identity/conversation cases and 4 layout/appearance cases passed on the same final artifact, including long-message text contrast of at least 4.5:1 |
 | Full desktop unit gate | 6,871 passed; no failures |
 | Native desktop unit gate | 2,922 passed; 25 existing environment/performance cases ignored |
-| Latest beta workflow smoke | Failed on its completion-state fixture after browser import was deferred until real onboarding completion. Corrected fixture and successful workflow/package rerun pending |
+| Beta before the CI follow-up | `3e7d6104bf` passed packaged relocation, browser/session, signup/relaunch and isolation checks and uploaded its artifact; the final revision must run them again |
 | Final repository/PR checks, merge and available beta | Pending; earlier local greens below do not satisfy these gates for the revised source |
 
 Current shell evidence is kept outside shared runner output:
@@ -106,6 +107,57 @@ All relative evidence paths in that list are under
 `/private/tmp/colony-redesign-proof/`. The shell worker's local port 4193 and
 headless browsers were stopped after verification. Local evidence paths are not
 published release artifacts.
+
+## CI follow-up after the visual correction
+
+CI run `34227688401` on `3e7d6104bf` passed the desktop core/native,
+compiled-flag, Rust and web gates, but exposed additional browser failures. Its
+red result is not superseded by the local checks until the next revision's
+GitHub matrix passes.
+
+Two production corrections followed:
+
+- A partially clipped row could lose its sender header on prepend while its
+  hidden top stayed fixed, moving the first readable row. The retained anchor
+  now prefers a row whose top is in view and falls back to a clipped row only
+  when necessary. The unchanged stability gate measured maximum prepend drift
+  of 0.36px and late-reflow drift of 0px, with no missing samples or replaced
+  anchor node. The full 18-case scroll suite passed.
+- At a 360px window height, the full brand header left too little room for the
+  two unread controls, which overlapped. The short layout keeps the workspace
+  switcher and reserves navigation space; normal windows retain the full brand
+  composition. Non-native window controls receive separate clearance. The
+  drop invitation also inherits its actual channel frame radius.
+
+Other failures were test contracts that still described the old layout or did
+not establish their intended state. Tests now measure the preview's available
+width, the outer framed thread, the saved/requested versus clamped width, and
+native chrome independently from the main reading pane. Ultrawide resizing
+starts from an explicit narrow saved width and must still exceed 1200px. Hidden
+font-sizing copies are excluded using the control's accessible name. Connection
+screens use the existing bounded animation helper, and the long-name fixture
+actually overflows the new font's metrics.
+
+History fixtures issue real wheel input. The relay parity fixture previously
+jumped over several virtualized screens between samples and stopped when the
+intro was merely mounted offscreen. It now samples overlapping viewports and
+requires physical top before the exhaustion exit. Three real-relay repeats each
+reached all 100 unique seeded gap rows. No pager change was required. The focus
+workspace test now establishes an actual midpoint instead of accidentally asking
+the browser to preserve a position beyond its new maximum; its original 2px
+anchor tolerance, same DOM/input and retained draft assertions remain intact.
+
+The configured hosted signup route was independently reachable: GET returned
+405 (the route requires POST) and its OPTIONS preflight returned 200 with the
+required method/header/origin allowances. These read-only requests do not prove
+account creation.
+
+The combined final-source browser gate passed all 29 checks, covering every
+identified smoke failure and the approved onboarding/identity/appearance states.
+All five window-control checks also passed: existing macOS default/min/max
+zoom and real Windows switcher/unread-control clicks at 560px and 360px heights.
+The final `just ci` run passed with 6,871 desktop tests, 2,922 native tests and
+967 mobile tests. New GitHub CI and the final-revision package remain pending.
 
 ## Earlier checks retained as historical evidence
 
@@ -186,7 +238,7 @@ export. These checks do not replace the final installable-beta gate.
    gates on that revision. Record any failure rather than carrying forward an
    earlier green result. PR checks, merge-queue checks and actual merge are
    separate states.
-3. Correct and rerun the beta completion fixture. Independently verify the
+3. Rerun the corrected beta completion fixture on the final revision. Verify the
    packaged relay default, then run the real renderer/native signup against an
    ephemeral localhost account fixture and relaunch it to check recovery
    continuity. Optional screenshots mask recovery material and cleanup is

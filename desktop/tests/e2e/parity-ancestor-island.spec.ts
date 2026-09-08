@@ -113,23 +113,25 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
       return found;
     }, gapPattern.source);
 
-  // A real wheel-up gesture per pass: the older-history sentinel arms on a
-  // genuine leave→enter transition (IntersectionObserver), so a raw scrollTop=0
-  // write can fail to re-fire. A wheel event is what a real user issues.
-  const wheelToTop = async () => {
-    for (let step = 0; step < 12; step += 1) {
-      const atTop = await timeline.evaluate(
-        (element) => (element as HTMLDivElement).scrollTop <= 1,
-      );
-      if (atTop) break;
-      await page.mouse.wheel(0, -6000);
-      await page.waitForTimeout(40);
-    }
-  };
-
   const seen = new Set<string>();
   const collect = async () => {
     for (const content of await renderedGapContents()) seen.add(content);
+  };
+
+  // Walk overlapping viewports and sample every step. A multi-screen jump can
+  // skip virtualized rows even when the relay delivered their entire page.
+  const wheelToTop = async () => {
+    for (let step = 0; step < 12; step += 1) {
+      await collect();
+      const { atTop, distance } = await timeline.evaluate((element) => ({
+        atTop: element.scrollTop <= 1,
+        distance: element.clientHeight * 0.75,
+      }));
+      if (atTop) break;
+      await page.mouse.wheel(0, -distance);
+      await page.waitForTimeout(40);
+      await collect();
+    }
   };
 
   // How long paging is allowed to go quiet before this is called a stall.
@@ -169,11 +171,16 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
     await collect();
     // Prefer the app's own answer to "is there anything older" over counting
     // silent passes. `message-channel-intro` renders only once the timeline has
-    // reached the start of the channel with no prepend in flight, so it ends the
+    // reached the start of the channel with no prepend in flight. Require the
+    // physical top too: virtualized overscan can mount the intro off-screen. It ends the
     // loop on a state rather than on patience. The stall streak below stays as a
     // backstop for a relay that never answers, but it is no longer what decides
     // a healthy run — timing deciding pass/fail is what made this spec flake.
-    if (await page.getByTestId("message-channel-intro").isVisible()) break;
+    if (
+      (await page.getByTestId("message-channel-intro").isVisible()) &&
+      (await timeline.evaluate((element) => element.scrollTop <= 1))
+    )
+      break;
     if (seen.size > before) {
       stallStreak = 0;
     } else {
@@ -181,6 +188,11 @@ test("live relay: an ancestor island does not strand the history frontier", asyn
       if (stallStreak > STALL_LIMIT) break;
     }
   }
+
+  await testInfo.attach("ancestor-island-coverage", {
+    body: JSON.stringify({ nonce, reached: seen.size, expected: GAP_COUNT }),
+    contentType: "application/json",
+  });
 
   // Parity: every gap row the relay holds must be reachable. RED on main — the
   // pager anchors on the injected island (old root) and pages backward from it,

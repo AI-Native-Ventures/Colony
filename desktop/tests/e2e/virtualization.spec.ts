@@ -872,10 +872,19 @@ test("live tail arrivals stay buffered while reading and release on jump", async
 
   const timeline = page.getByTestId("message-timeline");
   await expect(timeline.locator("[data-message-id]").first()).toBeVisible();
-  await timeline.evaluate((element) => {
-    element.scrollTop = Math.max(500, element.scrollHeight / 2);
-    element.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  await timeline.hover();
+  const distance = await timeline.evaluate(
+    (element) => element.clientHeight * 2,
+  );
+  await page.mouse.wheel(0, -distance);
+  await expect
+    .poll(() =>
+      timeline.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeGreaterThan(100);
   await expect(page.getByTestId("message-scroll-to-latest")).toBeVisible();
   const frozenHeight = await timeline.evaluate(
     (element) => element.scrollHeight,
