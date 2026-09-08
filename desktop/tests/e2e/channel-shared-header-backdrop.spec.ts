@@ -38,12 +38,16 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
-test.describe("channel shared header backdrop", () => {
+test.describe("non-Colony channel shared header backdrop", () => {
   test.use({ viewport: { width: 1280, height: 720 } });
 
   test("spans channel and split auxiliary columns with one backdrop", async ({
     page,
   }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("buzz-theme", "github-light");
+      localStorage.setItem("buzz-follow-system", "false");
+    });
     await installMockBridge(page);
     await page.goto("/");
     await page.getByTestId(`channel-${CHANNEL_NAME}`).click();

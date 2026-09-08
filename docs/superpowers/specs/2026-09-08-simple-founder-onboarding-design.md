@@ -1,10 +1,15 @@
 # Simple founder onboarding
 
-Status: the approved journey and Colony gradients/ants are implemented in the
-desktop source alongside the beta signup configuration repair. Actual rendered
-checks and the local repository gate pass; see [the verification report](../reports/2026-09-08-colony-redesign-proof.md).
-The earlier clickable preview remains a simulation. Merge and installable-beta
-proof are separate delivery stages.
+Status: the approved account/recovery/business journey and signup configuration
+repair are implemented in desktop source. The latest scoped account browser
+checks (19) and source unit checks (451) pass; their scope is recorded in
+[the verification report](../reports/2026-09-08-colony-redesign-proof.md).
+The first PR's real-app visual acceptance claim was rejected and is superseded.
+Corrected-source browser checks and fresh final screenshots replace that failed
+visual gate; packaged verification remains separate. The latest beta
+smoke attempt failed on a completion-state fixture; a corrected fixture and
+successful package rerun are required. No merge, available beta or live hosted
+signup success is claimed. The earlier clickable preview remains a simulation.
 
 The user also clarified that this must preserve Colony's channels-and-threads
 execution environment. The illustrative Work sidebar/dashboard in the first
@@ -90,7 +95,10 @@ Before the account request is sent, store the pending recovery material in the
 existing native encrypted secret store, bound to the current identity and signup
 attempt. Keep it across uncertain network outcomes and app restarts. Never put
 it in localStorage, general logs, analytics, or a normal onboarding draft. Clear
-the pending secret after successful backup acknowledgement. A fresh launch must
+the registered pending secret after successful backup acknowledgement. A
+definitively rejected prepared attempt may be discarded only through the native
+identity/attempt-bound transition so the user can correct the rejected details.
+Uncertain, locked, partial or incomplete ownership outcomes retain the checkpoint. A fresh launch must
 recover the same pending checkpoint; it must not invent a new code for an account
 whose recovery hash was already registered.
 

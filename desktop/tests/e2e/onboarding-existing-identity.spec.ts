@@ -58,13 +58,15 @@ test("creating a community starts the founder walk at the company screen", async
   await expect(page.getByTestId("workspace-setup-gate")).toBeVisible();
   await page.getByTestId("community-choice-create").click();
 
-  await expect(page.getByText("Tell us about your business")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Your business", exact: true }),
+  ).toBeVisible();
   // Existing identities answer only the business form; account recovery and
   // runtime/funding choices are not part of this run.
   await expect(page.getByTestId("onboarding-account")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
-    "Your business · 1 of 1",
+    "1 · Business",
   );
   // The request is recorded, so a relaunch halfway through the walk resumes
   // it instead of dropping the person back on the choice screen.
@@ -86,7 +88,9 @@ test("leaving the founder walk returns to the community choice", async ({
   await page.goto("/");
 
   await page.getByTestId("community-choice-create").click();
-  await expect(page.getByText("Tell us about your business")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Your business", exact: true }),
+  ).toBeVisible();
 
   await page
     .getByRole("button", { name: "Back to Colony", exact: true })

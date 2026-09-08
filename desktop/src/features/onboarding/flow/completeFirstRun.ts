@@ -27,6 +27,8 @@ import {
  */
 export type CompleteFirstRunDeps = {
   queryClient: unknown;
+  /** Stop subsequent handoff phases after this owner leaves or changes identity. */
+  assertCurrent?: () => void;
   relayUrl: string;
   pubkey: string;
   /** Scout's opening brief; null skips delivery entirely. */
@@ -81,11 +83,13 @@ export async function completeFirstRun(
   deps: CompleteFirstRunDeps,
   io: CompleteFirstRunIo,
 ): Promise<CompleteFirstRunResult> {
+  deps.assertCurrent?.();
   const result = await io.initializeStarterChannels(deps.queryClient, {
     focus: true,
     pubkey: deps.pubkey,
     communityScope: deps.relayUrl,
   });
+  deps.assertCurrent?.();
   if (!result.ok && !result.focusChannelId) {
     throw new Error(result.reason ?? "Failed to set up starter channels");
   }
@@ -107,6 +111,8 @@ export async function completeFirstRun(
       console.warn("First-run profile write failed; continuing.", error);
     }
   }
+
+  deps.assertCurrent?.();
 
   // Land the founder in Welcome BEFORE the brief is delivered. Delivery is a
   // network write that can fail; landing is not. On 2026-08-27 a first run hit
@@ -132,6 +138,7 @@ export async function completeFirstRun(
       marker,
       markerScope: "channel",
     });
+    deps.assertCurrent?.();
     if (exists) {
       firstTaskEventId = "already-delivered";
     } else {
@@ -144,6 +151,7 @@ export async function completeFirstRun(
     }
   }
 
+  deps.assertCurrent?.();
   io.markComplete(deps.pubkey, deps.relayUrl);
   return { focusChannelId, firstTaskEventId };
 }

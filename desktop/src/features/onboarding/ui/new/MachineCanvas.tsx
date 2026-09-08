@@ -57,15 +57,12 @@ export function MachineCanvas({
       data-testid={testId}
       style={{ background: theme.base, ...style }}
     >
-      <div className="onb-grain" />
-      {className === "onb-founder-canvas" && (
-        <img
-          src="/landing/colony-wordmark.svg"
-          alt="Colony"
-          className="onb-simple-wordmark"
-        />
+      {className !== "onb-founder-canvas" && (
+        <>
+          <div className="onb-grain" />
+          <AntScatter hue={theme.hue} />
+        </>
       )}
-      <AntScatter hue={theme.hue} />
       {/* Both numbers are padded. The marker is a mono chapter mark, and
           "01 / 2" reads as a typo beside the flow's own "01 / 10". */}
       {showStep ? (

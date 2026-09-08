@@ -72,12 +72,12 @@ export function deriveWorkspaceAppearance(accent: string): {
   const tint = (h: number, s: number, l: number) => hslToHex(h, s * chroma, l);
   return {
     light: {
-      chromeStart: tint(hue, 75, 82),
-      chromeMiddle: tint(companion, 80, 88),
-      chromeEnd: tint(hue + 14, 65, 91),
-      content: tint(hue, 44, 97),
-      raised: tint(hue, 32, 99),
-      muted: tint(hue, 32, 93),
+      chromeStart: tint(hue, 65, 86),
+      chromeMiddle: tint(companion, 75, 86),
+      chromeEnd: tint(hue + 14, 55, 92),
+      content: tint(hue, 44, 95.5),
+      raised: tint(hue, 32, 98),
+      muted: tint(hue, 32, 92),
       border: tint(hue, 24, 83),
       foreground: tint(hue, 18, 15),
       mutedForeground: tint(hue, 12, 32),
@@ -115,7 +115,7 @@ export function workspaceGradientCss(
   if (pattern === "halo") {
     return `radial-gradient(ellipse at 35% 30%, ${middle} 0%, ${start} 38%, ${end} 80%)`;
   }
-  return `radial-gradient(ellipse at 0% 0%, ${start} 0%, transparent 65%), radial-gradient(ellipse at 100% 20%, ${middle} 0%, transparent 70%), linear-gradient(160deg, ${end}, ${start})`;
+  return `radial-gradient(ellipse at 0% 12%, ${start} 0%, transparent 64%), radial-gradient(ellipse at 67% 105%, ${middle} 0%, transparent 68%), linear-gradient(130deg, ${end}, ${middle})`;
 }
 
 /** Apply semantic tokens without changing a user's selected base theme. */

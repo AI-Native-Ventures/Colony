@@ -184,9 +184,37 @@ try {
     );
     console.log("Relocated app discovers its bundled Colony Agent: PASS");
   }
-  await page
-    .getByRole("dialog", { name: "Bring your signed-in accounts" })
-    .waitFor();
+  const importInvitation = page.getByRole("dialog", {
+    name: "Bring your signed-in accounts",
+  });
+  assert.equal(
+    await importInvitation.count(),
+    0,
+    "optional browser import must not interrupt an unfinished business setup",
+  );
+  // This smoke intentionally uses an unreachable relay, so it cannot finish a
+  // hosted business signup. Mark only its isolated synthetic business complete
+  // to exercise the deferred import invitation. signup-smoke.mjs separately
+  // proves the real renderer/native account and recovery path.
+  await page.evaluate(async () => {
+    const identity = await window.colonyDesktop.request("invoke", {
+      command: "get_identity",
+    });
+    const businessId = localStorage.getItem("buzz-active-community-id");
+    const businesses = JSON.parse(
+      localStorage.getItem("buzz-communities") ?? "[]",
+    );
+    const business = businesses.find((entry) => entry.id === businessId);
+    if (!business?.relayUrl || !identity.pubkey) {
+      throw new Error("The synthetic business and native identity must exist");
+    }
+    localStorage.setItem(
+      `buzz-community-onboarding-complete.v1:${encodeURIComponent(business.relayUrl)}:${identity.pubkey}`,
+      "true",
+    );
+    window.dispatchEvent(new Event("colony:onboarding-complete"));
+  });
+  await importInvitation.waitFor();
   await waitForAnimations(page);
   await page.screenshot({ path: path.join(data, "actual-app.png") });
   await page

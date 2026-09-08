@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
@@ -98,7 +99,7 @@ test("Discovery mirrors the SalesTeams discovery-to-leads journey", async ({
   await applySiteShotAccent(page);
   await page.goto("/");
 
-  await page.getByTestId("open-discovery-view").click();
+  await openSidebarDestination(page, "open-discovery-view");
   await expect(page).toHaveURL(/#\/discovery/);
   await expect(page.getByTestId("discovery-top-tab-leads")).toHaveAttribute(
     "data-state",
@@ -346,7 +347,7 @@ test("Discovery defaults to the Leads tab with an empty state and Discover more"
   await installMockBridge(page);
   await applySiteShotAccent(page);
   await page.goto("/");
-  await page.getByTestId("open-discovery-view").click();
+  await openSidebarDestination(page, "open-discovery-view");
 
   await expect(page.getByTestId("discovery-top-tabs")).toBeVisible();
   await expect(page.getByTestId("discovery-top-tab-leads")).toHaveAttribute(

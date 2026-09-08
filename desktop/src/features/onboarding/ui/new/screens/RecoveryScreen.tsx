@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/shared/ui/button";
+import { Download, KeyRound } from "lucide-react";
+import { FounderLayout } from "../FounderLayout";
 
 /** Native save and explicit copy acknowledgement are the only ways forward. */
 export function RecoveryScreen({
@@ -69,13 +71,20 @@ export function RecoveryScreen({
     }
   }
   return (
-    <section className="onb-simple" data-testid="onboarding-recovery">
-      <header className="onb-simple-heading">
-        <p className="onb-eyebrow">One important thing</p>
-        <h1>Keep your way back in</h1>
-        <p>Keep this code safe. You need it if you forget your password.</p>
-      </header>
-      <div className="onb-simple-card">
+    <FounderLayout
+      step="recovery"
+      onSignIn={onSignIn}
+      navigationDisabled={busy}
+    >
+      <div className="onb-simple-card onb-recovery-card">
+        <KeyRound className="onb-recovery-key" aria-hidden="true" />
+        <div className="onb-simple-form-heading">
+          <h2>Save your recovery code</h2>
+          <p>
+            If you forget your password, you'll need this code to get back in.
+            Colony cannot recover it for you.
+          </p>
+        </div>
         {loading ? (
           <p role="status">Opening your recovery code…</p>
         ) : !code.trim() ? (
@@ -123,6 +132,7 @@ export function RecoveryScreen({
               disabled={busy}
               onClick={() => void save()}
             >
+              <Download aria-hidden="true" />
               {busy ? "Saving…" : "Save and continue"}
             </Button>
             <button
@@ -156,6 +166,6 @@ export function RecoveryScreen({
           </>
         )}
       </div>
-    </section>
+    </FounderLayout>
   );
 }

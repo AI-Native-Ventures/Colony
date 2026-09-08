@@ -1,14 +1,25 @@
 # Colony workspace visual direction
 
-Status: visual direction approved and implemented on 8 September; local rendered
-proof is recorded in [the verification report](../reports/2026-09-08-colony-redesign-proof.md).
-Merge and installable-beta proof are separate delivery stages. The user clarified that they want to assess the overall look
-of sidebars, channels, threads and backgrounds, separately from simplifying the
-information architecture. The approved onboarding remains a separate design.
+Status: the visual direction is approved. The first implementation submitted in
+PR #655 failed the owner's visual review: it retained the old shell with colour
+changes instead of matching the approved composition. That visual gate is
+superseded, and auto-merge was disabled. Structural corrections are implemented
+in source. The corrected palette/selection build passed 29 relevant browser
+checks and coordinating-agent comparison with the approved composition. The
+final port 4199 artifact passed 12 combined focused checks, including readable
+disclosure contrast, with fresh screenshots. CI, package, merge and availability
+remain separate delivery gates.
+See [the verification report](../reports/2026-09-08-colony-redesign-proof.md) for
+current and historical evidence. Approval of the preview is not acceptance of
+the real application. The approved onboarding remains a separate design.
 
 ## Scope of this comparison
 
-Keep the existing navigation names and channels/threads model recognizable.
+Keep the existing navigation destinations and channels/threads model recognizable.
+The implemented primary menu is Inbox, Tasks, Agents and Billing, with secondary
+destinations under the existing persistent More control. No destination is
+removed. The sidebar carries the Colony wordmark, the existing workspace
+switcher and an explicit Settings action.
 Compare the same sample conversation across palette and gradient choices, so a
 different layout or feature set does not obscure the styling decision. A channel
 shows conversation roots; opening a thread shows the same root and its replies,
@@ -38,8 +49,10 @@ task store, owner dashboard or Home/Work/Team navigation.
   and secondary metadata visually subordinate without compromising readability.
 - Test realistic long agent updates, not only short sample messages. Use normal
   body weight, comfortable line height and a readable measure, with a concise
-  opening and optional expansion of longer details. Keep body text around 14px
-  on desktop, with a 15px comparison; do not solve density by making text tiny.
+  opening and optional expansion of longer details. Use the bundled Inter Tight
+  font, normal body weight and named rem tokens that respect user text zoom;
+  do not solve density by making text tiny. The earlier 14px/15px comparison
+  belonged to the preview, not a fixed-pixel production text requirement.
   Reserve large typography for page context, not every agent update.
 - Keep ordinary messages as a flowing conversation. Use bounded cards for
   deliverables, structured briefs and decisions that have meaningful actions:
@@ -78,30 +91,42 @@ navigation. Inline work remains in the thread's messages.
 The native default thread layout is already `split`, with an optional existing
 focus preference. Reuse `ChannelPane`, `WorkspaceFocusThreadPane` and
 `FocusThreadDrawer`; do not introduce a new navigation route for thread opening.
-Existing auxiliary layout rules use 380px default width, 300px minimum and a
-600px available-content threshold for a single pane. Preserve native resizing
-and saved preferences during implementation; a prototype does not need to
-reimplement the resizing mechanism.
+The implementation reuses the existing width state and resize controls. In Colony
+themes an unsaved thread width follows 52% of the measured content width, subject
+to the existing clamps. A saved explicit width still wins; reset removes that
+explicit value and returns to the responsive default. Each reading pane reserves
+at least 300px, and the separate frames require a 12px gutter, so the Colony
+single-pane boundary is 612px of available content rather than the old 600px.
+The gutter applies only while a split thread is present: existing workspace-focus
+and profile/agent panel widths retain their original gap-free layout. The drawer
+maximum also reserves that gutter. The pre-existing 380px default
+remains the fallback for non-Colony themes or unavailable initial measurement.
+The sidebar starts at 240px and remains resizable from 185px to 420px; existing
+saved widths are retained within those bounds. Narrow screens retain the native
+single-pane/focus return path. These are production layout changes, not new
+thread entities or separate draft stores.
 
-Appearance is already a Settings section. Its Colony/Buzz theme path currently
-hides the accent picker, while `ThemeProvider` supports a persisted selected
-accent and derived primary/sidebar/gradient tokens. Correct that mismatch when
-implementing this direction. Derive channel/thread tints from the existing
-selection rather than adding a separate preference for each surface. Current
-`ContentSurface` and thread shells use `bg-background`, including a fixed neutral
-dark override; update the shared surfaces, headers and composer fades together.
+Appearance remains the existing Settings section. The implementation exposes the
+existing accent picker for Colony themes and adds Soft mesh, Diagonal wash and
+Halo through the same community preference record. One selection derives the
+frame, opaque reading surfaces, borders and composer fades; no separate channel
+or thread preference is introduced. The final palette correction makes the outer
+wash quieter and the reading tints more visible. The selected app-sidebar row
+uses a quiet raised fill and readable foreground while preserving selected,
+unread and optional prominent-selection semantics. Non-Colony surfaces retain
+their original styling.
 
 The read-only source audit on 8 September found `AgentPersona.roleId` and
 `roleTitle` already persisted and published, with a `buildPersonaRoleByPubkey`
-lookup available for reuse. The normal agent definition editor and common
-message/DM presentation do not consistently expose that title. The existing
+lookup available for reuse. The implementation now exposes the existing title
+in the definition editor, agent message headers and one-to-one DM rows. The existing
 "Edit role" dialog edits rank and manager; keep those concepts separate.
 
 Emoji avatar colours already persist inside `avatarUrl`. Reuse this colour when
 available. A universal accent that survives changing to a photo would require an
 additional identity property; choose a stable public-key-derived fallback rather
-than a name-derived one. The preview demonstrates the intended result without
-claiming a new property is implemented.
+than a name-derived one. The implementation uses that stable identity-derived fallback; it does not add
+a universal persisted colour property.
 
 An ordinary channel message already has a Reply action even with zero replies.
 The thread panel can display its root with an empty reply list. Only the reply
@@ -115,9 +140,12 @@ Inspect a channel, its linked thread, the sidebar selection, reply composer and
 work previews at desktop and narrow widths, in light and dark. Verify long-text
 expansion, zero-reply and populated threads, consistent role labels, identity
 colour stability across palettes, and Appearance controls. Keep the comparison
-local and clearly label sample content. Approval of the visual direction would
-precede changes to shared theme/layout/message components and real-app visual
-verification; the prototype is not evidence that those components were changed.
+local and clearly label sample content. Compare the actual rendered application
+against the approved composition, not only its colours or computed styles. The
+first PR failed this comparison; passing interaction tests did not substitute
+for it. Rebuild after the final source changes before recording visual acceptance.
+Keep source checks, mock-rendered proof, packaged native proof, CI and merge as
+separate gates.
 
 ## Preview verification on 8 September
 

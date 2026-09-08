@@ -70,12 +70,15 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
     mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
   const rowHoverSurface =
     mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-  // The selected row is the accent, not a wash. It used to be a 7% black
-  // tint that read as a faint grey pill on a violet sidebar, and no accent
-  // could reach it. Violet is the default, so that is what a default install
-  // paints here; Neutral still gets the wash, which its own case covers.
-  const activeSurface = "rgb(137, 90, 246)";
-  const activeForeground = "rgb(255, 255, 255)";
+  // Selection is the approved quiet raised surface with readable foreground.
+  const activeSurface = await readThemeColor(
+    page,
+    "hsl(var(--buzz-workspace-raised))",
+  );
+  const activeForeground = await readThemeColor(
+    page,
+    "hsl(var(--buzz-workspace-foreground))",
+  );
   const chromeColor = await readThemeColor(
     page,
     "var(--buzz-chrome-foreground)",
@@ -94,15 +97,15 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
   await expect(search).toHaveCSS("background-color", searchSurface);
   await expect(search.locator("svg").first()).toHaveCSS("color", mutedColor);
   await expect(search.locator("span").first()).toHaveCSS("color", mutedColor);
-  await expect(pinnedHeader).toHaveCSS("padding-bottom", "8px");
+  await expect(pinnedHeader).toHaveCSS("padding-bottom", "12px");
   await expect(pinnedHeader).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(pinnedHeader).toHaveCSS("margin-left", "3px");
-  await expect(pinnedHeader).toHaveCSS("margin-right", "3px");
+  await expect(pinnedHeader).toHaveCSS("margin-left", "8px");
+  await expect(pinnedHeader).toHaveCSS("margin-right", "8px");
   await expect(pinnedHeader).toHaveCSS("padding-right", "8px");
   await expect(sidebarScroller).toHaveCSS("padding-left", "0px");
   await expect(sidebarScroller).toHaveCSS("padding-right", "0px");
-  await expect(scrollContent).toHaveCSS("padding-left", "3px");
-  await expect(scrollContent).toHaveCSS("padding-right", "3px");
+  await expect(scrollContent).toHaveCSS("padding-left", "8px");
+  await expect(scrollContent).toHaveCSS("padding-right", "8px");
   const pinnedSpacerColor = await pinnedHeader.evaluate(
     (element) => getComputedStyle(element, "::before").backgroundColor,
   );
@@ -160,12 +163,12 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
   ) {
     throw new Error("Sidebar search or primary navigation geometry is missing");
   }
-  expect(primaryMenuBox.y - (searchBox.y + searchBox.height)).toBe(8);
+  expect(primaryMenuBox.y - (searchBox.y + searchBox.height)).toBe(12);
   expect(
     pinnedHeaderBox.y +
       pinnedHeaderBox.height -
       (searchBox.y + searchBox.height),
-  ).toBe(8);
+  ).toBe(12);
   expect(primaryMenuBox.y - (pinnedHeaderBox.y + pinnedHeaderBox.height)).toBe(
     0,
   );
@@ -207,7 +210,7 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
     "background-color",
     activeSurface,
   );
-  // Label and icon ride the accent rather than keeping their resting tint.
+  // Label and icon share the active foreground.
   await expect(page.getByTestId("channel-general")).toHaveCSS(
     "color",
     activeForeground,
@@ -299,8 +302,11 @@ async function expectBuzzContentShadow(page: Page, mode: "light" | "dark") {
 
   expect(effects.appStroke).toBe("none");
   if (mode === "light") {
-    expect(effects.contentShadow).toContain("4px");
-    expect(effects.contentShadow).toContain("rgba(0, 0, 0, 0.07)");
+    expect(effects.contentShadow).toBe("none");
+    await expect(page.getByTestId("channel-drop-zone")).toHaveCSS(
+      "border-top-width",
+      "1px",
+    );
     expect(effects.shadowViewportOverflow).toBe("visible");
   } else {
     expect(effects.contentShadow).not.toContain("4px");
@@ -447,6 +453,10 @@ test("buzz dark sidebar gradient", async ({ page }) => {
   await expectIconlessSectionTitleAligned(page, "stream-list");
   await expectIconlessSectionTitleAligned(page, "dm-list");
   await expect(page.locator("[data-buzz-content-surface]")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(page.getByTestId("channel-drop-zone")).toHaveCSS(
     "background-color",
     await readThemeColor(page, "hsl(var(--buzz-workspace-dark-content))"),
   );
@@ -833,15 +843,13 @@ test("prominent channel and direct-message rows share one flat active state", as
   );
 });
 
-for (const { activeSurface, hoverSurface, mode, theme } of [
+for (const { hoverSurface, mode, theme } of [
   {
-    activeSurface: "rgb(137, 90, 246)",
     hoverSurface: "rgba(0, 0, 0, 0.04)",
     mode: "light" as const,
     theme: "buzz",
   },
   {
-    activeSurface: "rgb(137, 90, 246)",
     hoverSurface: "rgba(255, 255, 255, 0.04)",
     mode: "dark" as const,
     theme: "buzz-dark",
@@ -865,6 +873,10 @@ for (const { activeSurface, hoverSurface, mode, theme } of [
       new RegExp(`(^|\\s)${mode === "dark" ? "dark" : "light"}($|\\s)`),
     );
     await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
+    const activeSurface = await readThemeColor(
+      page,
+      "hsl(var(--buzz-workspace-raised))",
+    );
     await expect(activeRow).toHaveCSS("background-color", activeSurface);
     await expect(activeRow).toHaveCSS("box-shadow", "none");
     await expect(activeRow).toHaveCSS("font-weight", "400");
@@ -940,13 +952,12 @@ for (const { mode, theme } of [
   });
 }
 
-test("settings content uses the same inset surface as the main app", async ({
+test("settings retains native chrome and the Colony content frame", async ({
   page,
 }) => {
   await seedTheme(page, "buzz");
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  const searchBox = await page.getByTestId("open-search").boundingBox();
   await page.getByTestId("open-settings").click();
   await page.getByTestId("profile-popover-settings").click();
 
@@ -975,23 +986,24 @@ test("settings content uses the same inset surface as the main app", async ({
 
   const viewBox = await settingsView.boundingBox();
   const surfaceBox = await contentSurface.boundingBox();
-  expect(searchBox).not.toBeNull();
   expect(backToAppBox).not.toBeNull();
   expect(viewBox).not.toBeNull();
   expect(surfaceBox).not.toBeNull();
-  if (!searchBox || !backToAppBox || !viewBox || !surfaceBox) {
+  if (!backToAppBox || !viewBox || !surfaceBox) {
     throw new Error("Settings layout is missing");
   }
 
-  expect(Math.abs(backToAppBox.y - searchBox.y)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(backToAppBox.y - surfaceBox.y)).toBeLessThanOrEqual(0.5);
 
-  // Match the normal app shell: a fixed 40px top chrome strip, then a 1px
-  // top/left inset and 8px right/bottom inset around the rounded content card.
-  expect(surfaceBox.y - viewBox.y).toBe(41);
-  expect(surfaceBox.x - viewBox.x).toBe(1);
-  expect(viewBox.x + viewBox.width - (surfaceBox.x + surfaceBox.width)).toBe(8);
+  // Settings keeps native control clearance above its padded frame. Its
+  // Back action aligns with the frame, not with the workspace identity/search.
+  expect(surfaceBox.y - viewBox.y).toBe(52);
+  expect(surfaceBox.x - viewBox.x).toBe(0);
+  expect(viewBox.x + viewBox.width - (surfaceBox.x + surfaceBox.width)).toBe(
+    12,
+  );
   expect(viewBox.y + viewBox.height - (surfaceBox.y + surfaceBox.height)).toBe(
-    8,
+    12,
   );
 
   const topChromeBox = await settingsTopChrome.boundingBox();

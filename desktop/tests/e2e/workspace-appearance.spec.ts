@@ -57,6 +57,15 @@ async function openPopulatedThread(page: Page) {
 async function expectNativeSplit(page: Page, rootId: string) {
   const channel = page.getByTestId("channel-drop-zone");
   const thread = page.getByTestId("message-thread-panel");
+  const frame = page.locator(
+    '.colony-thread-surface[data-thread-mode="split"]',
+  );
+  await expect(
+    page.getByRole("img", { name: "Colony", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Your workspace", { exact: true })).toBeVisible();
+  await expect(frame).toHaveCSS("border-top-width", "1px");
+  await expect(channel).toHaveCSS("border-top-width", "1px");
   await expect(channel).toBeVisible();
   await expect(channel).not.toHaveAttribute("inert", "");
   await expect(thread).toBeVisible();
@@ -76,9 +85,73 @@ async function expectNativeSplit(page: Page, rootId: string) {
   expect(channelBox.width).toBeGreaterThanOrEqual(300);
   expect(threadBox.width).toBeGreaterThanOrEqual(300);
   expect(threadBox.x).toBeGreaterThanOrEqual(
-    channelBox.x + channelBox.width - 1,
+    channelBox.x + channelBox.width + 8,
+  );
+  const chromeBox = await page.getByTestId("app-top-chrome").boundingBox();
+  expect(channelBox.y).toBeLessThan(
+    (chromeBox?.y ?? 0) + (chromeBox?.height ?? 0),
   );
 }
+
+test.describe("Colony pane geometry", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.addInitScript(() => {
+      localStorage.setItem("buzz-theme", "buzz");
+      localStorage.setItem("buzz-follow-system", "false");
+      localStorage.setItem("buzz.channels.threadViewMode", "split");
+      sessionStorage.setItem("buzz.desktop.thread-panel-width", "800");
+    });
+    await installMockBridge(page);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+  });
+
+  test("workspace and thread fit inside their container without clipping", async ({
+    page,
+  }) => {
+    await openPopulatedThread(page);
+    await page.getByTestId("channel-workspace-toggle").click();
+    const workspace = page.getByTestId("channel-workspace-pane");
+    const thread = page.getByTestId("workspace-focus-thread-pane");
+    await expect(workspace).toBeVisible();
+    await expect(thread).toBeVisible();
+    await expect(page.getByTestId("channel-drop-zone")).toBeHidden();
+    await expect
+      .poll(() =>
+        workspace.evaluate((pane) => {
+          const outer = pane.parentElement?.getBoundingClientRect();
+          return outer ? pane.getBoundingClientRect().right - outer.right : 999;
+        }),
+      )
+      .toBeLessThanOrEqual(1);
+    const threadBox = await thread.boundingBox();
+    const workspaceBox = await workspace.boundingBox();
+    expect(threadBox).not.toBeNull();
+    expect(workspaceBox).not.toBeNull();
+    expect(
+      Math.abs(
+        (workspaceBox?.x ?? 0) -
+          ((threadBox?.x ?? 0) + (threadBox?.width ?? 0)),
+      ),
+    ).toBeLessThanOrEqual(1);
+  });
+
+  test("a wide profile panel preserves the channel minimum width", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 960, height: 960 });
+    await page.getByTestId("channel-general").click();
+    await page.getByTestId("message-author").first().click();
+    await expect(page.getByTestId("user-profile-panel")).toBeVisible();
+    await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
+    await expect
+      .poll(async () => {
+        const box = await page.getByTestId("channel-drop-zone").boundingBox();
+        return box?.width ?? 0;
+      })
+      .toBeGreaterThanOrEqual(300);
+  });
+});
 
 for (const mode of ["light", "dark"] as const) {
   test(`${mode}: saved background and accent update both native conversation panes`, async ({
@@ -104,6 +177,45 @@ for (const mode of ["light", "dark"] as const) {
     await installMockBridge(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const rootId = await openPopulatedThread(page);
+    await expectNativeSplit(page, rootId);
+    // New workspaces split available reading space evenly. A user resize wins
+    // until they explicitly reset it, including through an Appearance change.
+    const resizeHandle = page.getByTestId("right-auxiliary-pane-resize-handle");
+    const initialFrame = await page
+      .locator('.colony-thread-surface[data-thread-mode="split"]')
+      .boundingBox();
+    expect(initialFrame?.width).toBeGreaterThan(500);
+    const handleBox = await resizeHandle.boundingBox();
+    if (!handleBox) throw new Error("Thread resize handle has no geometry");
+    await page.mouse.move(handleBox.x + handleBox.width - 2, handleBox.y + 180);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x - 35, handleBox.y + 180);
+    await page.mouse.up();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          Number(sessionStorage.getItem("buzz.desktop.thread-panel-width")),
+        ),
+      )
+      .toBeGreaterThan(initialFrame?.width ?? 0);
+    await resizeHandle.dblclick({ position: { x: 10, y: 180 } });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          sessionStorage.getItem("buzz.desktop.thread-panel-width"),
+        ),
+      )
+      .toBeNull();
+
+    await page.setViewportSize({ width: 860, height: 960 });
+    await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+    const narrowChannel = page.getByTestId("channel-drop-zone");
+    if (await narrowChannel.isVisible()) {
+      await expect
+        .poll(async () => (await narrowChannel.boundingBox())?.width ?? 0)
+        .toBeGreaterThanOrEqual(300);
+    }
+    await page.setViewportSize({ width: 1440, height: 960 });
     await expectNativeSplit(page, rootId);
 
     const channel = page.getByTestId("channel-drop-zone");

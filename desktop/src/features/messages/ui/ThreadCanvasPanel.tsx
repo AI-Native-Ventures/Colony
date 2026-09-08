@@ -140,6 +140,7 @@ export function ThreadCanvasPanel({
     <div
       className="overflow-hidden rounded-2xl border border-border/70 bg-muted/20"
       data-testid="thread-canvas-panel"
+      data-empty-collapsed={(!hasCanvasContent && !expanded) || undefined}
     >
       <button
         aria-expanded={expanded}

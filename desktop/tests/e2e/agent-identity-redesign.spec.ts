@@ -3,6 +3,11 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
 import { openSettings } from "../helpers/settings";
 import {
+  POST_IMAGE,
+  POST_IMAGE_URL,
+  POST_PREVIEW,
+} from "./redesign-post-fixture";
+import {
   emitMessage,
   emitSignedEvent,
   fixtureUuid,
@@ -16,6 +21,7 @@ import {
 } from "./blocks-test-helpers";
 
 const AGENT = TEST_IDENTITIES.charlie.pubkey;
+const SCOUT = TEST_IDENTITIES.bob.pubkey;
 const PERSONA = "redesign-social-manager";
 const ROLE = "Social media manager";
 const MESSAGE = `mock-agents-managed-${AGENT.slice(0, 8)}`;
@@ -32,7 +38,10 @@ async function setup(page: import("@playwright/test").Page) {
     localStorage.setItem("buzz.channels.threadViewMode", "split");
   });
   await installMockBridge(page, {
-    blockEvents: [REPORT_MANIFEST],
+    blockEvents: [REPORT_MANIFEST, ...POST_PREVIEW.events],
+    searchProfiles: [
+      { pubkey: TEST_IDENTITIES.tyler.pubkey, displayName: "Basheer Phiri" },
+    ],
     relaySelf: OWNER_PUBKEY,
     bakedBuildEnv: [
       { key: "BUZZ_AGENT_PROVIDER", value: "anthropic", masked: false },
@@ -45,6 +54,13 @@ async function setup(page: import("@playwright/test").Page) {
     ],
     managedAgents: [
       {
+        pubkey: SCOUT,
+        name: "Scout",
+        personaId: "redesign-scout",
+        status: "stopped",
+        channelNames: ["agents"],
+      },
+      {
         pubkey: AGENT,
         name: "Sarah",
         personaId: PERSONA,
@@ -53,6 +69,13 @@ async function setup(page: import("@playwright/test").Page) {
       },
     ],
     personas: [
+      {
+        id: "redesign-scout",
+        displayName: "Scout",
+        roleId: "chief-of-staff",
+        roleTitle: "Chief of staff",
+        systemPrompt: "Coordinate the work for review.",
+      },
       {
         id: PERSONA,
         displayName: "Sarah",
@@ -113,13 +136,16 @@ test("agent job identity appears in conversations and DMs and keeps its colour a
 test("long agent messages and existing inline work stay readable beside their replies", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.setViewportSize({ width: 1440, height: 1120 });
+  await page.route(POST_IMAGE_URL, (route) =>
+    route.fulfill({ contentType: "image/png", body: POST_IMAGE }),
+  );
   await setup(page);
   await page.getByTestId("channel-general").click();
   await waitForLiveChannel(page, "general");
   const root = await emitMessage(page, {
     channelName: "general",
-    pubkey: AGENT,
+    pubkey: SCOUT,
     content: [
       "**Your content plan is ready for review.**",
       "The first week introduces the people behind the business and explains the problems you solve. The second week uses practical examples to answer the questions customers ask before getting in touch. Each post has one clear message, a suggested image direction and a caption in your brand's voice.",
@@ -129,40 +155,42 @@ test("long agent messages and existing inline work stay readable beside their re
   });
   const report = signBlockInstance({
     channelId: GENERAL_CHANNEL_ID,
-    handle: "report",
+    handle: "brand-post-preview",
     instanceId: fixtureUuid(81),
-    manifestId: REPORT_MANIFEST.id,
-    content: "Two weeks of content — 10 sample drafts ready for review.",
+    manifestId: POST_PREVIEW.events[0].id,
+    parentEventId: root.id,
+    createdAt: root.created_at + 2,
+    content: "Here is a sample post direction. You can review it right here.",
     data: {
-      title: "Two weeks of content",
-      summary: "Sample plan for review · Instagram",
-      headline_value: "10 drafts",
-      series: [
-        { label: "Week 1", value: 5 },
-        { label: "Week 2", value: 5 },
-      ],
-      rows: [
-        { label: "Ready for review", value: 8 },
-        { label: "Needs your input", value: 2 },
-      ],
-      sources: ["Illustrative content plan"],
+      title: "Monday · Instagram",
+      description:
+        "Your logo, website and social posts should feel like the same business. Horizon Labs brings them together, so every first impression feels clear and consistent.\n\nTell us where your brand needs a little more attention.",
+      url: POST_IMAGE_URL,
+      alt: "Horizon Labs sample post: A brand people remember.",
+      status: "draft",
     },
   });
   await emitSignedEvent(page, "general", report);
   await emitMessage(page, {
     channelName: "general",
     parentEventId: root.id,
+    pubkey: OWNER_PUBKEY,
     content:
       "The practical examples feel right. Please make the introductory post warmer and include the founder's photograph before we review the final designs.",
-    createdAt: root.created_at + 1,
+    createdAt: root.created_at + 3,
+  });
+  await emitMessage(page, {
+    channelName: "general",
+    createdAt: root.created_at + 4,
+    pubkey: OWNER_PUBKEY,
+    content: "For the next batch, please use South African spelling.",
   });
   await settleTimelineAtLatest(page);
   const channel = page.getByTestId("channel-drop-zone");
   const row = channel.locator(`[data-message-id="${root.id}"]`);
-  await expect(channel.locator('[data-block-handle="report"]')).toHaveAttribute(
-    "data-block-trust",
-    "core",
-  );
+  await expect(
+    row.getByRole("button", { name: "Read full message", exact: true }),
+  ).toBeVisible();
   await channel
     .locator(
       `[data-testid="message-thread-summary"][data-thread-head-id="${root.id}"]`,
@@ -170,11 +198,19 @@ test("long agent messages and existing inline work stay readable beside their re
     .click();
   const thread = page.getByTestId("message-thread-panel");
   await expect(thread).toBeVisible();
+  await expect(channel.getByTestId("chat-title")).toHaveCSS(
+    "font-size",
+    "20px",
+  );
+  await expect(thread.locator(".colony-replies-label")).toBeVisible();
+  const post = thread.locator('[data-block-handle="brand-post-preview"]');
+  await expect(post).toHaveAttribute("data-block-trust", "workspace-custom");
+  await expect(post.getByRole("img")).toBeVisible();
   await expect(thread).toContainText(
     "Please make the introductory post warmer",
   );
   await expect(thread.getByTestId("message-agent-role").first()).toHaveText(
-    `${ROLE} · Agent`,
+    "Chief of staff · Agent",
   );
   await expect(
     thread.getByTestId("message-avatar-fallback").first(),
@@ -200,14 +236,84 @@ test("long agent messages and existing inline work stay readable beside their re
     ).toBeLessThanOrEqual(1);
   }
   await row.scrollIntoViewIfNeeded();
+  await thread.getByTestId("message-thread-body").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await page.mouse.move(0, 0);
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/redesign/long-message-inline-work-split.png",
   });
   await waitForAnimations(page);
-  await channel.locator('[data-block-handle="report"]').screenshot({
-    path: "test-results/redesign/inline-work-report.png",
+  await post.screenshot({
+    path: "test-results/redesign/inline-work-post.png",
   });
+
+  const channelDisclosure = row.getByRole("button", {
+    name: "Read full message",
+    exact: true,
+  });
+  const threadHead = thread.getByTestId("message-thread-head");
+  const threadDisclosure = threadHead.getByRole("button", {
+    name: "Read full message",
+    exact: true,
+  });
+  const disclosureContrast = await channelDisclosure.evaluate((element) => {
+    const surface = element.closest('[data-testid="channel-drop-zone"]');
+    if (!surface) throw new Error("Missing reading surface");
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Missing colour probe");
+    const luminance = (colour: string) => {
+      context.fillStyle = colour;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b] = Array.from(context.getImageData(0, 0, 1, 1).data)
+        .slice(0, 3)
+        .map((byte) => {
+          const value = byte / 255;
+          return value <= 0.04045
+            ? value / 12.92
+            : ((value + 0.055) / 1.055) ** 2.4;
+        });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const values = [
+      luminance(getComputedStyle(element).color),
+      luminance(getComputedStyle(surface).backgroundColor),
+    ].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  });
+  expect(disclosureContrast).toBeGreaterThanOrEqual(4.5);
+  await channelDisclosure.click();
+  await expect(
+    row.getByText("I have kept the publishing schedule", { exact: false }),
+  ).toBeVisible();
+  await expect(threadDisclosure).toHaveAttribute("aria-expanded", "false");
+  const channelDraft = channel.getByTestId("message-input");
+  const threadDraft = thread.getByTestId("message-input");
+  await channelDraft.fill("A separate channel draft");
+  await threadDraft.fill("A separate thread draft");
+  await thread
+    .getByRole("button", { name: "Close panel", exact: true })
+    .click();
+  await expect(thread).toHaveCount(0);
+  await expect(channelDraft).toContainText("A separate channel draft");
+  await expect(
+    row.getByRole("button", { name: "Show less", exact: true }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await channel
+    .locator(
+      `[data-testid="message-thread-summary"][data-thread-head-id="${root.id}"]`,
+    )
+    .click();
+  await expect(threadDraft).toContainText("A separate thread draft");
+  await expect(threadDisclosure).toHaveAttribute("aria-expanded", "false");
+  await threadDisclosure.click();
+  await expect(
+    threadHead.getByRole("button", { name: "Show less", exact: true }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(channelDraft).toContainText("A separate channel draft");
 });
 
 test("definition editor keeps the stable job ID when its human title changes", async ({

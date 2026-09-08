@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
@@ -458,7 +459,7 @@ test("capture: git built in", async ({ page }) => {
   await installMockBridge(page);
   await applySiteShotAccent(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("open-projects-view").click();
+  await openSidebarDestination(page, "open-projects-view");
   await waitForAnimations(page);
 
   // Stops above the commit feed: its top row is a push to a repo the mock

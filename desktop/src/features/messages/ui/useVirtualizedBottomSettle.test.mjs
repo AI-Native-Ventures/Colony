@@ -153,7 +153,9 @@ async function mountHarness() {
 
 test("bottom intent follows arbitrarily late virtual geometry changes", async () => {
   const { content, refs, root, scroller, writes } = await mountHarness();
+  assert.equal(refs.api.current.hasBottomIntent(), false);
   refs.api.current.settle();
+  assert.equal(refs.api.current.hasBottomIntent(), true);
   assert.deepEqual(writes, [{ index: 4, options: { align: "end" } }]);
 
   const geometryObserver = resizeObservers.find((observer) =>
@@ -174,6 +176,7 @@ test("bottom intent follows arbitrarily late virtual geometry changes", async ()
   geometryObserver.callback();
   flushAnimationFrames();
   assert.equal(writes.length, 4);
+  assert.equal(refs.api.current.hasBottomIntent(), true);
   await act(async () => root.unmount());
 });
 
@@ -195,6 +198,7 @@ for (const eventType of ["pointerdown", "touchmove", "wheel", "keydown"]) {
             : undefined,
       type: eventType,
     });
+    assert.equal(refs.api.current.hasBottomIntent(), false);
 
     resizeObservers
       .find((observer) => observer.targets?.includes(content))

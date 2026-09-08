@@ -124,9 +124,12 @@ test("late website read cannot overwrite edited business description", async () 
     fireEvent.click(screen.getByRole("button", { name: "Read website" })),
   );
   await act(async () =>
-    fireEvent.change(screen.getByLabelText("What does your business do?"), {
-      target: { value: "My corrected description." },
-    }),
+    fireEvent.change(
+      screen.getByLabelText(/What does your business do\?|Business summary/),
+      {
+        target: { value: "My corrected description." },
+      },
+    ),
   );
   await act(async () =>
     resolve({
@@ -136,7 +139,8 @@ test("late website read cannot overwrite edited business description", async () 
     }),
   );
   assert.equal(
-    screen.getByLabelText("What does your business do?").value,
+    screen.getByLabelText(/What does your business do\?|Business summary/)
+      .value,
     "My corrected description.",
   );
   assert.match(screen.getByRole("status").textContent, /kept your wording/);

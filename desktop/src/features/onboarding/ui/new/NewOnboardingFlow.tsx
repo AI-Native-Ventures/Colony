@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -91,7 +92,10 @@ export type OnboardingProvisioning = {
 type Props = {
   services: OnboardingServices;
   provisioning: OnboardingProvisioning | null;
-  onComplete: (answers: OnboardingAnswers) => Promise<void>;
+  onComplete: (
+    answers: OnboardingAnswers,
+    isCurrentRun: () => boolean,
+  ) => Promise<void>;
   onRequestSignIn?: () => void;
   existingIdentity?: boolean;
   onLeaveRun?: () => void;
@@ -131,6 +135,18 @@ export function NewOnboardingFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const running = useRef(false);
+  const activeRun = useRef<symbol | null>(null);
+  const mounted = useRef(false);
+  const scopeRef = useRef({ answersKey, currentPubkey });
+  useLayoutEffect(() => {
+    scopeRef.current = { answersKey, currentPubkey };
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      activeRun.current = null;
+      running.current = false;
+    };
+  }, [answersKey, currentPubkey]);
   const persist = useCallback(
     (next: OnboardingAnswers) => {
       saveAnswers(answerStorage, next, answersKey);
@@ -221,6 +237,13 @@ export function NewOnboardingFlow({
   async function finishBusiness(website: string | null) {
     if (running.current) return;
     running.current = true;
+    const run = Symbol("onboarding-submit");
+    activeRun.current = run;
+    const isCurrentRun = () =>
+      mounted.current &&
+      activeRun.current === run &&
+      scopeRef.current.answersKey === answersKey &&
+      scopeRef.current.currentPubkey === currentPubkey;
     setBusy(true);
     setError(null);
     try {
@@ -237,26 +260,35 @@ export function NewOnboardingFlow({
           next.company?.trim() ?? "",
           next.communitySlug ?? next.provisioningCandidate ?? null,
           (candidate) => {
+            // Refuse a create that has not started yet after the owner leaves.
+            // Candidates already persisted before a request remain resumable.
+            if (!isCurrentRun()) throw new Error("This setup run has ended");
             next = { ...next, provisioningCandidate: candidate };
             persist(next);
           },
         );
+        if (!isCurrentRun()) return;
         if (!result.ok) throw new Error(result.message);
         next = { ...next, communitySlug: result.slug };
         persist(next);
         provisioning.onProvisioned(result, next.company ?? "");
       }
-      await onComplete(next);
+      if (!isCurrentRun()) return;
+      await onComplete(next, isCurrentRun);
       clearAnswers(answerStorage, answersKey);
     } catch (cause) {
+      if (!isCurrentRun()) return;
       setError(
         cause instanceof Error
           ? cause.message
           : "We could not finish opening your business. Try again.",
       );
     } finally {
-      running.current = false;
-      setBusy(false);
+      if (isCurrentRun()) {
+        activeRun.current = null;
+        running.current = false;
+        setBusy(false);
+      }
     }
   }
   const step = resumeStep(answers);
@@ -270,7 +302,13 @@ export function NewOnboardingFlow({
       step={step}
       track="colony"
       {...position}
-      overlay={canvasOverlay}
+      overlay={
+        canvasOverlay ? (
+          <fieldset disabled={busy} className="contents">
+            {canvasOverlay}
+          </fieldset>
+        ) : undefined
+      }
     >
       {step === "account" ? (
         <AccountSetup
@@ -294,6 +332,8 @@ export function NewOnboardingFlow({
         />
       ) : (
         <CompanyScreen
+          onSignIn={onRequestSignIn}
+          businessOnly={existingIdentity}
           values={{
             company: answers.company ?? "",
             website: answers.website ?? "",

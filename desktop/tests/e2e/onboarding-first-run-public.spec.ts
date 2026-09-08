@@ -19,7 +19,7 @@ test("public first run: account and business forms reach the existing Welcome ch
   });
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Welcome to Colony" }),
+    page.getByRole("heading", { name: "Create your account" }),
   ).toBeVisible();
   await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
   await waitForAnimations(page);
@@ -34,14 +34,14 @@ test("public first run: account and business forms reach the existing Welcome ch
   });
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(
-    page.getByRole("heading", { name: "Tell us about your business" }),
+    page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible();
   await describeFounderBusiness(page);
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-business-1440.png",
   });
-  await page.getByRole("button", { name: "Open my business" }).click();
+  await page.getByRole("button", { name: "Open my Colony" }).click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   await expect(page).toHaveURL(/channels/);

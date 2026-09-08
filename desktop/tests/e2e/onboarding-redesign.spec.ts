@@ -16,7 +16,7 @@ async function expectOpaqueFounderSurface(
   const card = page.locator(".onb-simple-card");
   await expect(card).toHaveCSS(
     "background-color",
-    dark ? "rgb(34, 33, 41)" : "rgb(255, 253, 251)",
+    dark ? "rgb(41, 39, 43)" : "rgb(255, 255, 255)",
   );
   await expect(card).toHaveCSS("opacity", "1");
   const ancestorOpacity = await card.evaluate((element) => {
@@ -30,13 +30,11 @@ async function expectOpaqueFounderSurface(
     return opacity;
   });
   expect(ancestorOpacity.every((opacity) => opacity === "1")).toBe(true);
-  const fields = card.locator(
-    'input:not([type="checkbox"]), textarea, .onb-recovery-code',
-  );
+  const fields = card.locator('input:not([type="checkbox"]), textarea');
   for (const field of await fields.all()) {
     await expect(field).toHaveCSS(
       "background-color",
-      dark ? "rgb(45, 43, 53)" : "rgb(255, 255, 255)",
+      dark ? "rgb(41, 39, 43)" : "rgb(255, 255, 255)",
     );
     await expect(field).toHaveCSS("opacity", "1");
     if (await field.getAttribute("placeholder")) {
@@ -44,7 +42,7 @@ async function expectOpaqueFounderSurface(
         (element) => getComputedStyle(element, "::placeholder").color,
       );
       expect(placeholder).toBe(
-        dark ? "rgb(186, 178, 203)" : "rgb(102, 97, 111)",
+        dark ? "rgb(180, 174, 166)" : "rgb(100, 98, 96)",
       );
     }
   }
@@ -58,8 +56,8 @@ async function expectOpaqueFounderSurface(
   const layers = await page
     .locator(".onb-founder-canvas")
     .evaluate((canvas) => {
-      const stage = canvas.querySelector(".onb-stage");
-      const ants = canvas.querySelector(".onb-scatter");
+      const stage = canvas.querySelector(".onb-simple-card");
+      const ants = canvas.querySelector(".onb-founder-ants");
       if (!stage || !ants) return null;
       return {
         stage: Number(getComputedStyle(stage).zIndex),
@@ -137,7 +135,7 @@ test("an unreadable or missing website allows manual context and no payment form
   await page.getByRole("button", { name: "Save and continue" }).click();
   await describeFounderBusiness(page);
   await expect(
-    page.getByRole("button", { name: "Open my business" }),
+    page.getByRole("button", { name: "Open my Colony" }),
   ).toBeEnabled();
   await expect(page.getByText("Do you have a website?")).toHaveCount(0);
   await expect(page.getByText("Is your company up and running?")).toHaveCount(
@@ -154,11 +152,11 @@ test("website findings remain editable on the business form", async ({
   await page.getByLabel("Business name").fill("Horizon Labs");
   await page.getByLabel("Website", { exact: false }).fill("horizon.example");
   await page.getByRole("button", { name: "Read website", exact: true }).click();
-  const summary = page.getByLabel("What does your business do?");
+  const summary = page.getByLabel("Business summary");
   await expect(summary).not.toHaveValue("");
   await summary.fill("Our own corrected business description.");
   await expect(
-    page.getByRole("button", { name: "Open my business" }),
+    page.getByRole("button", { name: "Open my Colony" }),
   ).toBeEnabled();
   await expect(summary).toHaveValue("Our own corrected business description.");
 });
@@ -169,7 +167,7 @@ test("account and business retain readable opaque forms and brand at narrow widt
   await page.setViewportSize({ width: 360, height: 780 });
   await fresh(page);
   await expect(
-    page.getByRole("heading", { name: "Welcome to Colony" }),
+    page.getByRole("heading", { name: "Create your account" }),
   ).toBeVisible();
   await waitForAnimations(page);
   await expectOpaqueFounderSurface(page, "Create account");
@@ -189,7 +187,7 @@ test("account and business retain readable opaque forms and brand at narrow widt
   await page.getByRole("button", { name: "Save and continue" }).click();
   await describeFounderBusiness(page);
   await waitForAnimations(page);
-  await expectOpaqueFounderSurface(page, "Open my business");
+  await expectOpaqueFounderSurface(page, "Open my Colony");
   await page.screenshot({
     path: "test-results/simple-founder-business-360.png",
   });
@@ -206,7 +204,7 @@ test("account and business retain readable opaque forms and brand at narrow widt
     document.documentElement.classList.remove("light");
     document.documentElement.classList.add("dark");
   });
-  await expectOpaqueFounderSurface(page, "Open my business", true);
+  await expectOpaqueFounderSurface(page, "Open my Colony", true);
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-business-dark-360.png",

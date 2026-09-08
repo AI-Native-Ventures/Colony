@@ -152,4 +152,34 @@ test("scenario B: a second fresh identity on a machine that already has a commun
     "zanele@rosebankauto.co.za",
     "Nkosi Logistics",
   );
+
+  // Finishing must activate Alice's newly claimed business without replacing
+  // Tyler's saved one. Merely adding Alice's community leaves the prior
+  // business active and stalls the handoff while waiting for the new relay.
+  const completed = await page.evaluate(() => {
+    const communities: Array<{
+      id: string;
+      name: string;
+      pubkey: string;
+      relayUrl: string;
+    }> = JSON.parse(window.localStorage.getItem("buzz-communities") ?? "[]");
+    return {
+      communities,
+      activeId: window.localStorage.getItem("buzz-active-community-id"),
+    };
+  });
+  expect(completed.communities).toContainEqual(
+    expect.objectContaining({
+      id: "first-account-community",
+      name: "First account business",
+      pubkey: TEST_IDENTITIES.tyler.pubkey,
+      relayUrl: "wss://default.example.com",
+    }),
+  );
+  const newBusinesses = completed.communities.filter(
+    ({ pubkey }) => pubkey === newIdentity.pubkey,
+  );
+  expect(newBusinesses).toHaveLength(1);
+  expect(newBusinesses[0]).toMatchObject({ name: "Nkosi Logistics" });
+  expect(completed.activeId).toBe(newBusinesses[0].id);
 });

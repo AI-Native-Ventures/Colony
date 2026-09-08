@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
+import { ArrowRight } from "lucide-react";
+import { FounderLayout } from "../FounderLayout";
 import type { OnboardingServices } from "../../../contracts";
 import { isWebsite, normaliseWebsite } from "../../../flow/validation";
 
@@ -33,6 +35,8 @@ export function CompanyScreen({
   onChange,
   onSubmit,
   onBack,
+  onSignIn,
+  businessOnly = false,
   isSubmitting = false,
   error,
   scrape,
@@ -41,6 +45,8 @@ export function CompanyScreen({
   onChange: (patch: Partial<CompanyValues>) => void;
   onSubmit: (normalisedWebsite: string | null) => void;
   onBack?: () => void;
+  onSignIn?: () => void;
+  businessOnly?: boolean;
   isSubmitting?: boolean;
   error?: string | null;
   scrape: OnboardingServices["scrape"];
@@ -86,15 +92,14 @@ export function CompanyScreen({
     }
   }
   return (
-    <section className="onb-simple" data-testid="onboarding-business">
-      <header className="onb-simple-heading">
-        <p className="onb-eyebrow">A little context goes a long way</p>
-        <h1>Tell us about your business</h1>
-        <p>
-          Your teammates use this to understand what you do. You can update it
-          later.
-        </p>
-      </header>
+    <FounderLayout
+      step="company"
+      onSignIn={onSignIn}
+      navigationDisabled={isSubmitting}
+      business={values.company}
+      description={values.description}
+      businessOnly={businessOnly}
+    >
       <form
         className="onb-simple-card"
         onSubmit={(event) => {
@@ -105,62 +110,78 @@ export function CompanyScreen({
             );
         }}
       >
-        <label htmlFor="onb-company-name">Business name</label>
-        <Input
-          id="onb-company-name"
-          required
-          value={values.company}
-          placeholder="Horizon Labs"
-          disabled={isSubmitting}
-          onChange={(e) => onChange({ company: e.target.value })}
-        />
-        <label htmlFor="onb-company-website">
-          Website <span className="onb-simple-note">optional</span>
-        </label>
-        <Input
-          id="onb-company-website"
-          value={values.website}
-          placeholder="yourbusiness.com"
-          disabled={isSubmitting}
-          onChange={(e) => {
-            requestId.current += 1;
-            editRevision.current += 1;
-            setReading(false);
-            setWebsiteRead(null);
-            setScanNote(null);
-            onChange({ website: e.target.value });
-          }}
-        />
-        {values.website.trim() && (
-          <Button
-            className="onb-simple-button"
-            variant="outline"
-            type="button"
-            disabled={!isWebsite(values.website) || reading || isSubmitting}
-            onClick={() => void readWebsite()}
-          >
-            {reading
-              ? "Reading your website…"
-              : websiteRead
-                ? "Read website again"
-                : "Read website"}
-          </Button>
-        )}
-        <label htmlFor="onb-company-description">
-          What does your business do?
-        </label>
-        <textarea
-          id="onb-company-description"
-          rows={4}
-          required
-          value={values.description}
-          placeholder="We build websites and manage social media for small businesses."
-          disabled={isSubmitting}
-          onChange={(e) => {
-            editRevision.current += 1;
-            onChange({ description: e.target.value });
-          }}
-        />
+        <div className="onb-simple-form-heading">
+          <h2>Your business</h2>
+          <p>Only the essentials. You can add more as you go.</p>
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-company-name">Business name</label>
+          <Input
+            id="onb-company-name"
+            required
+            value={values.company}
+            placeholder="Your business name"
+            disabled={isSubmitting}
+            onChange={(e) => onChange({ company: e.target.value })}
+          />
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-company-website">
+            Website <span className="onb-simple-note">optional</span>
+          </label>
+          <Input
+            id="onb-company-website"
+            value={values.website}
+            placeholder="yourbusiness.com"
+            disabled={isSubmitting}
+            onChange={(e) => {
+              requestId.current += 1;
+              editRevision.current += 1;
+              setReading(false);
+              setWebsiteRead(null);
+              setScanNote(null);
+              onChange({ website: e.target.value });
+            }}
+          />
+          {values.website.trim() && (
+            <button
+              className="onb-simple-link onb-read-website"
+              type="button"
+              disabled={!isWebsite(values.website) || reading || isSubmitting}
+              onClick={() => void readWebsite()}
+            >
+              {reading
+                ? "Reading your website…"
+                : websiteRead
+                  ? "Read website again"
+                  : "Read website"}
+            </button>
+          )}
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-company-description">
+            {values.website.trim()
+              ? "Business summary"
+              : "What does your business do?"}
+          </label>
+          <textarea
+            id="onb-company-description"
+            rows={3}
+            required
+            value={values.description}
+            placeholder="We help…"
+            disabled={isSubmitting}
+            onChange={(e) => {
+              editRevision.current += 1;
+              onChange({ description: e.target.value });
+            }}
+          />
+          <p className="onb-simple-note">
+            {values.website.trim()
+              ? "Review this summary before Scout uses it. You can edit every detail."
+              : "One sentence gives Scout a useful starting point."}
+          </p>
+        </div>
         {scanNote && (
           <p className="onb-simple-note" role="status">
             {scanNote}
@@ -176,8 +197,12 @@ export function CompanyScreen({
           type="submit"
           disabled={!companyReady(values) || isSubmitting}
         >
-          {isSubmitting ? "Opening your business…" : "Open my business"}
+          {isSubmitting ? "Opening your Colony…" : "Open my Colony"}
+          {!isSubmitting && <ArrowRight aria-hidden="true" />}
         </Button>
+        <p className="onb-simple-note">
+          Your teammate will use this context for the first job.
+        </p>
         {onBack && (
           <button
             className="onb-simple-link"
@@ -189,6 +214,6 @@ export function CompanyScreen({
           </button>
         )}
       </form>
-    </section>
+    </FounderLayout>
   );
 }

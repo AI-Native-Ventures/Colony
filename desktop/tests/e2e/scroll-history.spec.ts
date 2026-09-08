@@ -1335,17 +1335,20 @@ test("fast middle-page scroll settles with continuous mounted coverage", async (
     )
     .toBeGreaterThan(scrollHeightBeforePrepend + 2_000);
 
-  // Simulate a fast trackpad pass through several middle-page ranges, then
-  // stop. The final evaluate emits the last scroll event; all coverage samples
-  // after it are passive observations.
-  await timeline.evaluate((element) => {
-    const maxOffset = element.scrollHeight - element.clientHeight;
-    for (const fraction of [0.72, 0.28, 0.64, 0.36, 0.58, 0.44, 0.52]) {
-      element.scrollTop = maxOffset * fraction;
-      element.dispatchEvent(new Event("scroll", { bubbles: true }));
-    }
-  });
+  // Real trackpad input retires bottom intent. A synthetic scrollTop write
+  // does not express reader intent and can be corrected by later measurements.
+  await timeline.hover();
+  for (const fraction of [0.72, 0.28, 0.64, 0.36, 0.58, 0.44, 0.52]) {
+    const metrics = await getTimelineMetrics(page);
+    const target = (metrics.scrollHeight - metrics.clientHeight) * fraction;
+    await page.mouse.wheel(0, target - metrics.scrollTop);
+  }
   await page.waitForTimeout(250);
+  const middle = await getTimelineMetrics(page);
+  expect(middle.scrollTop).toBeGreaterThan(middle.clientHeight);
+  expect(
+    middle.scrollHeight - middle.scrollTop - middle.clientHeight,
+  ).toBeGreaterThan(middle.clientHeight);
 
   const viewportCoverage = () =>
     timeline.evaluate((element) => {
@@ -2124,6 +2127,56 @@ test("older-history prepend keeps the reading row fixed (no jump to oldest)", as
   await expect(page.getByTestId("message-scroll-to-latest")).toContainText(
     "Jump to latest",
   );
+
+  // Later expand/collapse above the retained row preserves its reading position.
+  const settled = await getMessagePosition(page, anchorBeforeLanding?.id ?? "");
+  expect(settled).not.toBeNull();
+  for (const expanded of [true, false]) {
+    const heightBefore = (await getTimelineMetrics(page)).scrollHeight;
+    const changed = await timeline.evaluate(
+      (element, { anchorId, expanded }) => {
+        const rows = Array.from(
+          element.querySelectorAll<HTMLElement>("[data-message-id]"),
+        );
+        const anchorIndex = rows.findIndex(
+          (row) => row.dataset.messageId === anchorId,
+        );
+        const preceding = rows[anchorIndex - 1];
+        if (!preceding) return false;
+        preceding.style.minHeight = expanded ? "280px" : "";
+        return true;
+      },
+      { anchorId: settled?.id, expanded },
+    );
+    expect(changed).toBe(true);
+    await expect
+      .poll(async () => {
+        const height = (await getTimelineMetrics(page)).scrollHeight;
+        return expanded ? height - heightBefore : heightBefore - height;
+      })
+      .toBeGreaterThan(150);
+    await expect
+      .poll(async () => {
+        const row = await getMessagePosition(page, settled?.id ?? "");
+        return row
+          ? Math.abs(row.top - (settled?.top ?? 0))
+          : Number.POSITIVE_INFINITY;
+      })
+      .toBeLessThanOrEqual(2);
+  }
+
+  // Deliberate navigation releases the retained row instead of snapping back.
+  await timeline.hover();
+  await page.mouse.wheel(0, 400);
+  await page.waitForTimeout(150);
+  await expect
+    .poll(async () => {
+      const row = await getMessagePosition(page, settled?.id ?? "");
+      return row
+        ? Math.abs(row.top - (settled?.top ?? 0))
+        : Number.POSITIVE_INFINITY;
+    })
+    .toBeGreaterThan(100);
 });
 
 // Regression: relay-backed thread summaries must remain stable while retained

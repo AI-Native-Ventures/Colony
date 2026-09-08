@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge } from "../helpers/bridge";
 
 const WATERCOOLER_CHANNEL_ID = "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11";
@@ -54,7 +55,7 @@ test.describe("list virtualization", () => {
   }) => {
     await installMockBridge(page);
     await page.goto("/");
-    await page.getByTestId("open-pulse-view").click();
+    await openSidebarDestination(page, "open-pulse-view");
 
     // The seeded feed overflows the viewport (30 notes), so the windowed list
     // renders a subset and the composer stays pinned. Wait for virtual rows.

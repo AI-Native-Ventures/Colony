@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { WorkspaceAnts } from "./WorkspaceAnts";
 
 export function GradientLayer() {
   return (
@@ -17,7 +16,6 @@ export function GradientLayer() {
         className="buzz-theme-gradient-layer-dark absolute inset-0 opacity-0"
         data-buzz-gradient="dark"
       />
-      <WorkspaceAnts />
     </div>
   );
 }

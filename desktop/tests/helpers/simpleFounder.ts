@@ -3,7 +3,7 @@ import { expect, type Page } from "@playwright/test";
 /** Walk the public account form without introducing any legacy setup questions. */
 export async function createFounderAccount(page: Page, email: string) {
   await expect(
-    page.getByRole("heading", { name: "Welcome to Colony", exact: true }),
+    page.getByRole("heading", { name: "Create your account", exact: true }),
   ).toBeVisible();
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill("colonyprototype");
@@ -11,7 +11,7 @@ export async function createFounderAccount(page: Page, email: string) {
     .getByRole("button", { name: "Create account", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Keep your way back in" }),
+    page.getByRole("heading", { name: "Save your recovery code" }),
   ).toBeVisible();
   await expect(page.getByTestId("onboarding-recovery-code")).not.toBeEmpty();
 }
@@ -22,7 +22,7 @@ export async function saveFounderRecovery(page: Page) {
     .getByRole("button", { name: "Save and continue", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Tell us about your business" }),
+    page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible();
 }
 
@@ -37,13 +37,13 @@ export async function fillFounderBusiness(
     .getByLabel("What does your business do?", { exact: true })
     .fill(description);
   await expect(
-    page.getByRole("button", { name: "Open my business", exact: true }),
+    page.getByRole("button", { name: "Open my Colony", exact: true }),
   ).toBeEnabled();
 }
 
 export async function openFounderBusiness(page: Page) {
   await page
-    .getByRole("button", { name: "Open my business", exact: true })
+    .getByRole("button", { name: "Open my Colony", exact: true })
     .click();
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();

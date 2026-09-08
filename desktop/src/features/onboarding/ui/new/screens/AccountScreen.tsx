@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
+import { ArrowRight } from "lucide-react";
+import { FounderLayout } from "../FounderLayout";
 import type { AuthFailure } from "../../../authService";
 import type { FounderGender } from "../../../onboardingV2";
 import {
@@ -77,15 +79,11 @@ export function AccountScreen({
     return () => clearInterval(timer);
   }, [failure]);
   return (
-    <section className="onb-simple" data-testid="onboarding-account">
-      <header className="onb-simple-heading">
-        <p className="onb-eyebrow">Your business, with a helping hand</p>
-        <h1>Welcome to Colony</h1>
-        <p>
-          Bring your business and your AI teammates into one place. Start with
-          your account.
-        </p>
-      </header>
+    <FounderLayout
+      step="account"
+      onSignIn={onSignInRequest}
+      navigationDisabled={isSubmitting}
+    >
       <form
         className="onb-simple-card"
         onSubmit={(event) => {
@@ -93,30 +91,38 @@ export function AccountScreen({
           if (accountReady(values) && !isSubmitting && !remaining) onSubmit();
         }}
       >
-        <label htmlFor="onb-account-email">Email</label>
-        <Input
-          id="onb-account-email"
-          type="email"
-          autoComplete="email"
-          value={values.email}
-          placeholder="you@yourbusiness.com"
-          required
-          onChange={(e) => onChange({ email: e.target.value })}
-        />
-        <label htmlFor="onb-account-password">Password</label>
-        <Input
-          id="onb-account-password"
-          type="password"
-          autoComplete="new-password"
-          value={values.password}
-          required
-          minLength={PASSWORD_MIN}
-          onChange={(e) => onChange({ password: e.target.value })}
-          aria-describedby="onb-password-help"
-        />
-        <p id="onb-password-help" className="onb-simple-note">
-          Use at least {PASSWORD_MIN} characters.
-        </p>
+        <div className="onb-simple-form-heading">
+          <h2>Create your account</h2>
+          <p>Start with your account. Then tell us about your business.</p>
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-account-email">Email</label>
+          <Input
+            id="onb-account-email"
+            type="email"
+            autoComplete="email"
+            value={values.email}
+            placeholder="you@yourbusiness.com"
+            required
+            onChange={(e) => onChange({ email: e.target.value })}
+          />
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-account-password">Password</label>
+          <Input
+            id="onb-account-password"
+            type="password"
+            autoComplete="new-password"
+            value={values.password}
+            required
+            minLength={PASSWORD_MIN}
+            onChange={(e) => onChange({ password: e.target.value })}
+            aria-describedby="onb-password-help"
+          />
+          <p id="onb-password-help" className="onb-simple-note">
+            At least {PASSWORD_MIN} characters
+          </p>
+        </div>
         {failure && (
           <p className="onb-simple-error" role="alert">
             {accountFailureMessage(failure)}
@@ -129,28 +135,24 @@ export function AccountScreen({
           disabled={!accountReady(values) || isSubmitting || remaining > 0}
         >
           {isSubmitting ? "Creating your account…" : "Create account"}
+          {!isSubmitting && <ArrowRight aria-hidden="true" />}
         </Button>
-        {onSignInRequest && (
-          <p className="onb-simple-signin">
-            Already have an account?{" "}
-            <button
-              type="button"
-              onClick={onSignInRequest}
-              disabled={isSubmitting}
-            >
-              Sign in
-            </button>
-          </p>
-        )}
         {onUsePrivateKey && (
           <details className="onb-simple-options">
             <summary>More options</summary>
-            <button type="button" onClick={onUsePrivateKey}>
+            <button
+              type="button"
+              onClick={onUsePrivateKey}
+              disabled={isSubmitting}
+            >
               Import an existing identity
             </button>
           </details>
         )}
+        <p className="onb-simple-note">
+          Agent work uses credits. You can explore before adding any.
+        </p>
       </form>
-    </section>
+    </FounderLayout>
   );
 }

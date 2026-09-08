@@ -17,8 +17,8 @@ import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
  *
  * 1. at 1280x720 the primary button's bottom clears the viewport bottom by at
  *    least 24px, and nothing needs scrolling;
- * 2. at 800x500 the centered form keeps a readable width and sits below
- *    its heading without horizontal overflow;
+ * 2. at 800x500 the story and form keep readable widths side by side
+ *    without horizontal overflow;
  * 3. when the content is taller than the window the stage scrolls, a bottom
  *    fade says so, and the primary button is reachable.
  */
@@ -142,8 +142,8 @@ async function assertFitsLaptopWindow(
   ).toBeLessThanOrEqual(1);
 }
 
-/** Points 2 and 3: one column, a scroll cue, and a reachable action at 800x500. */
-async function assertStacksAndScrollsAtMinimumWindow(
+/** Points 2 and 3: readable columns, a scroll cue, and a reachable action. */
+async function assertColumnsAndScrollsAtMinimumWindow(
   page: Page,
   screenName: string,
   action: string,
@@ -152,14 +152,14 @@ async function assertStacksAndScrollsAtMinimumWindow(
   const layout = await readLayout(page);
 
   expect(
-    layout.headline.width,
-    `${screenName} screen at 800 wide must retain a readable centered form`,
-  ).toBeGreaterThanOrEqual(28 * layout.rootFontSize);
+    layout.panel.width,
+    `${screenName} screen at 800 wide must retain a readable form column`,
+  ).toBeGreaterThanOrEqual(19 * layout.rootFontSize);
   expect(layout.documentWidth).toBe(layout.viewport.width);
   expect(
-    layout.panel.y,
-    `${screenName} screen at 800 wide: the panel is beside the headline, not below it`,
-  ).toBeGreaterThanOrEqual(layout.headline.y + layout.headline.height);
+    layout.panel.x,
+    `${screenName} screen at 800 wide keeps the approved story and form beside each other`,
+  ).toBeGreaterThanOrEqual(layout.headline.x + layout.headline.width);
 
   if (layout.scrollHeight > layout.clientHeight + 1) {
     await expect(
@@ -190,11 +190,11 @@ test("the account screen fits the window it is given", async ({ page }) => {
   await seedFreshFirstRun(page);
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Welcome to Colony", exact: true }),
+    page.getByRole("heading", { name: "Create your account", exact: true }),
   ).toBeVisible();
 
   await assertFitsLaptopWindow(page, "account", "Create account");
-  await assertStacksAndScrollsAtMinimumWindow(
+  await assertColumnsAndScrollsAtMinimumWindow(
     page,
     "account",
     "Create account",
@@ -211,13 +211,13 @@ test("the company screen fits the window it is given", async ({ page }) => {
   });
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Tell us about your business" }),
+    page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible();
 
-  await assertFitsLaptopWindow(page, "company", "Open my business");
-  await assertStacksAndScrollsAtMinimumWindow(
+  await assertFitsLaptopWindow(page, "company", "Open my Colony");
+  await assertColumnsAndScrollsAtMinimumWindow(
     page,
     "company",
-    "Open my business",
+    "Open my Colony",
   );
 });

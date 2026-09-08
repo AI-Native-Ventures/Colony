@@ -241,6 +241,7 @@ export function FocusThreadDrawer({
           mode === "split" &&
             "group/right-pane before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:z-50 before:w-px before:bg-border/80 before:content-['']",
         )}
+        data-thread-mode={mode}
         aria-label={
           focusMode
             ? "Thread"
@@ -273,7 +274,7 @@ export function FocusThreadDrawer({
               ? { width: focusWidthPx }
               : mode === "split"
                 ? {
-                    maxWidth: `calc(100% - ${AUXILIARY_PANEL_MIN_WIDTH_PX}px - var(--buzz-workspace-pane-width, 0px))`,
+                    maxWidth: `calc(100% - ${AUXILIARY_PANEL_MIN_WIDTH_PX}px - var(--colony-pane-gap, 0px) - var(--buzz-workspace-pane-width, 0px))`,
                     width: normalWidthPx,
                   }
                 : undefined

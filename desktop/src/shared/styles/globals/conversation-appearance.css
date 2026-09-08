@@ -1,0 +1,209 @@
+/* The approved Colony reading rhythm. The conversation model, message actions
+ * and nested-thread geometry are shared with the other appearances. */
+:root[data-buzz-sidebar] {
+  --colony-conversation-gap: 1.5rem;
+  --colony-reading-line-height: 1.65;
+  --colony-reading-gutter: 1rem;
+}
+
+:root[data-buzz-sidebar] .colony-conversation-root {
+  padding-bottom: var(--colony-conversation-gap);
+}
+
+:root[data-buzz-sidebar]
+  .colony-conversation-root[data-followed-by-continuation] {
+  padding-bottom: 0;
+}
+
+:root[data-buzz-sidebar] .colony-message-row {
+  border-radius: 0.625rem;
+}
+
+:root[data-buzz-sidebar] .colony-message-header {
+  gap: 0.125rem 0.625rem;
+  margin-bottom: 0.375rem;
+}
+
+:root[data-buzz-sidebar] .colony-message-header [data-testid="message-author"] {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+:root[data-buzz-sidebar]
+  .colony-message-header
+  [data-testid="message-agent-role"] {
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+:root[data-buzz-sidebar] .colony-message-prose .message-markdown,
+:root[data-buzz-sidebar] .colony-message-content > div > .message-markdown {
+  line-height: var(--colony-reading-line-height);
+}
+
+:root[data-buzz-sidebar] [data-colony-thread-header] h2 + p {
+  margin-top: 0.375rem;
+}
+
+:root[data-buzz-sidebar] .colony-message-content .message-markdown > p {
+  line-height: var(--colony-reading-line-height);
+  margin-bottom: 0.75rem;
+}
+
+:root[data-buzz-sidebar]
+  .colony-message-content
+  .message-markdown
+  > p:last-child {
+  margin-bottom: 0;
+}
+
+:root[data-buzz-sidebar] .colony-conversation-root[data-open-thread-root] {
+  border-radius: 0.625rem;
+  background: hsl(var(--muted));
+  box-shadow: inset 0.1875rem 0 0 hsl(var(--primary));
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  margin-bottom: var(--colony-conversation-gap);
+}
+
+:root[data-buzz-sidebar]
+  .colony-conversation-root[data-open-thread-root]
+  .colony-message-row {
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-buzz-sidebar] .colony-thread-reading {
+  padding-top: 1.25rem;
+}
+
+:root[data-buzz-sidebar] [data-colony-thread-header] {
+  margin-bottom: 0;
+  flex-shrink: 0;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+:root[data-buzz-sidebar] [data-colony-thread-header] > div {
+  padding: 1rem 1.125rem;
+}
+
+:root[data-buzz-sidebar] [data-colony-thread-header] > div > div {
+  height: auto;
+  min-height: 3.5rem;
+}
+
+:root[data-buzz-sidebar] [data-colony-thread-header] h2 {
+  font-size: 1.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+:root[data-buzz-sidebar] [data-empty-collapsed] {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+:root[data-buzz-sidebar] [data-empty-collapsed] > button {
+  width: auto;
+  margin-left: auto;
+  padding-block: 0;
+}
+
+:root[data-buzz-sidebar] [data-empty-collapsed] > button > span {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+:root[data-buzz-sidebar]
+  [data-empty-collapsed]
+  [data-testid="thread-canvas-empty-hint"] {
+  display: none;
+}
+
+:root[data-buzz-sidebar] .colony-message-row [data-block-primitive="card"] {
+  padding: 1rem;
+  border-radius: 0.625rem;
+  background: hsl(var(--card));
+}
+
+:root[data-buzz-sidebar]
+  .colony-message-row
+  [data-block-primitive="section"]
+  p {
+  line-height: var(--colony-reading-line-height);
+}
+
+:root[data-buzz-sidebar] .colony-thread-message:not([data-continuation]) {
+  padding-top: var(--colony-conversation-gap);
+}
+
+:root[data-buzz-sidebar] [data-testid="message-thread-head"],
+:root[data-buzz-sidebar] [data-testid="message-thread-replies"],
+:root[data-buzz-sidebar] [data-testid="message-thread-head-divider"] {
+  padding-inline: var(--colony-reading-gutter);
+}
+
+:root[data-buzz-sidebar] [data-testid="message-thread-head-divider"] {
+  padding-top: 1.5rem;
+  padding-bottom: 0;
+}
+
+:root[data-buzz-sidebar] [data-testid="message-thread-summary"] {
+  margin-top: 0.625rem;
+  color: color-mix(in srgb, hsl(var(--primary)), hsl(var(--foreground)));
+}
+
+.colony-message-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+  padding: 0.25rem 0;
+  color: color-mix(in srgb, hsl(var(--primary)), hsl(var(--foreground)));
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.colony-message-expand:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.1875rem;
+}
+
+.colony-message-expand:focus-visible {
+  outline: 0.125rem solid hsl(var(--ring));
+  outline-offset: 0.25rem;
+  border-radius: 0.125rem;
+}
+
+:root[data-buzz-sidebar] [data-testid="profile-huddle-control"] {
+  background-color: hsl(var(--buzz-workspace-content));
+}
+
+/* A card already owns its frame. Avoid a second box around existing work. */
+:root[data-buzz-sidebar]
+  [data-block-handle]:has(> [data-block-primitive="card"]) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+:root[data-buzz-sidebar] .colony-thread-divider {
+  display: block;
+}
+
+:root[data-buzz-sidebar] .colony-replies-label {
+  display: block;
+  width: fit-content;
+  margin: -0.5rem auto 0;
+  padding-inline: 0.75rem;
+  position: relative;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1rem;
+}

@@ -81,12 +81,35 @@ test.describe("the sidebar a fresh founder lands on", () => {
     await expect(page.getByTestId("open-discovery-view")).toBeVisible();
   });
 
-  test("everyone else sees today's flat sidebar", async ({ page }) => {
-    // No fresh marker: an imported identity, or anyone whose first run
-    // happened somewhere else.
+  test("an existing Colony workspace also gets the compact menu", async ({
+    page,
+  }) => {
+    // Existing identities retain all routes through the same More control.
     await installMockBridge(page);
     await page.goto("/");
 
+    await expect(page.getByTestId("sidebar-primary-menu")).toBeVisible();
+    await expect(page.getByTestId("sidebar-more-nav-label")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    for (const testId of GROUPED) {
+      await expect(page.getByTestId(testId)).toHaveCount(0);
+    }
+    await page.getByTestId("sidebar-more-nav-label").click();
+    for (const testId of [...GROUPED, ...ALWAYS_OPEN]) {
+      await expect(page.getByTestId(testId)).toBeVisible();
+    }
+  });
+  test("non-Colony themes retain the existing flat navigation", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("buzz-theme", "github-light");
+      localStorage.setItem("buzz-follow-system", "false");
+    });
+    await installMockBridge(page);
+    await page.goto("/");
     await expect(page.getByTestId("sidebar-primary-menu")).toBeVisible();
     await expect(page.getByTestId("sidebar-more-nav")).toHaveCount(0);
     for (const testId of [...GROUPED, ...ALWAYS_OPEN]) {

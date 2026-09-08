@@ -135,6 +135,8 @@ export function ThreadPanelHeaderContent({
             >
               {threadRootSummary}
             </p>
+          ) : !showWorkspaceContext ? (
+            <p className="text-xs text-muted-foreground">#{channelName}</p>
           ) : null}
         </div>
       </AuxiliaryPanelHeaderGroup>

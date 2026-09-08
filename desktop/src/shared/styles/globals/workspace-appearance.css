@@ -109,12 +109,214 @@
 :root[data-buzz-sidebar] .colony-workspace-ants {
   display: block;
   color: hsl(var(--buzz-workspace-foreground));
-  opacity: 0.14;
+  opacity: 0.35;
 }
 
 /* Narrow windows reserve the small header for navigation and window controls. */
-@media (max-width: 600px) {
+@media (max-width: 600px), (max-height: 720px) {
   :root[data-buzz-sidebar] .colony-workspace-ants {
     display: none;
   }
+}
+
+/* The approved workspace is a sidebar beside separately framed reading panes.
+ * Only Colony themes opt into this shell; other themes keep their own chrome. */
+:root[data-buzz-sidebar][data-workspace-gradient] body {
+  font-family:
+    "Inter Tight Variable", "Inter Tight", "Inter Variable", sans-serif;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.125rem 1.125rem 0.75rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-wordmark {
+  width: 6rem;
+  height: auto;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient].dark
+  .colony-sidebar-wordmark {
+  filter: invert(1);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .colony-sidebar-workspace
+  [data-testid="sidebar-workspace-switcher"] {
+  padding-inline: 0.5rem;
+  font-size: var(--text-sm);
+  min-height: 2rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-pinned-header"] {
+  padding-top: 0;
+  padding-bottom: 0.75rem;
+  margin-inline: 0.5rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-primary-menu"] {
+  padding-bottom: 1rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid hsl(var(--buzz-workspace-border) / 0.65);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-more-nav-list"] {
+  padding-left: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-scroll-content"] {
+  padding-inline: 0.5rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-sidebar="menu-button"] {
+  border-radius: 0.5rem;
+  min-height: 2.125rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-sidebar="footer"] {
+  padding: 0.75rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+  margin: 0.75rem 0.75rem 0.75rem 0;
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.875rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-buzz-content-surface]:has([data-colony-channel-layout]) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]:has(
+    .colony-thread-surface[data-thread-mode="split"]
+  ) {
+  --colony-pane-gap: 12px;
+  gap: var(--colony-pane-gap);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]
+  > [data-testid="channel-shared-header-backdrop"] {
+  display: none;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]
+  > [data-testid="channel-drop-zone"],
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .colony-thread-surface[data-thread-mode="split"] {
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.875rem;
+  box-shadow: 0 3px 12px hsl(var(--buzz-workspace-foreground) / 0.025);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .colony-thread-surface[data-thread-mode="split"]::before {
+  display: none;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="channel-drop-zone"]
+  [data-testid="chat-header"] {
+  padding: 1rem 1.125rem 0.875rem;
+  border-bottom: 1px solid hsl(var(--buzz-workspace-border) / 0.7);
+  background-color: hsl(var(--buzz-workspace-content));
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-channel-description {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="message-composer"] {
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.75rem;
+  padding: 0.875rem 1rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="message-input-scroll"] {
+  min-height: 2.5rem;
+}
+
+/* Keep window controls and history in the sidebar's own header. Collapsed and
+ * mobile layouts retain their compact full-width navigation row. Fixed pixels
+ * here deliberately track native window controls rather than text zoom. */
+@media (min-width: 768px) {
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-top-chrome"][data-sidebar-open="true"] {
+    position: absolute;
+    inset: 0 auto auto 0;
+    z-index: 110;
+    width: var(--sidebar-width);
+    justify-content: flex-end;
+    padding-left: 0;
+    background: transparent;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-top-chrome"][data-sidebar-open="true"][data-native-window-controls="false"] {
+    top: 12px;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-sidebar-layer"]:has(
+      [data-native-window-controls="true"][data-sidebar-open="true"]
+    )
+    .colony-sidebar-identity {
+    padding-top: 48px;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-sidebar-layer"]:has([data-sidebar-open="false"])
+    [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+    margin-left: 0.75rem;
+  }
+}
+
+@media (max-width: 767px) {
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+    margin: 0 0.5rem 0.5rem;
+  }
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-settings {
+  display: block;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-testid="chat-title"] {
+  font-size: 1.25rem;
+  line-height: 1.5rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]:has(
+    .colony-thread-surface[data-thread-mode="standalone"]
+  ) {
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.875rem;
+  background-color: hsl(var(--buzz-workspace-content));
+}
+
+/* The selected workspace row is a quiet raised surface. Keep the existing
+ * data-active/unread semantics and the user's optional prominent treatment. */
+:root[data-buzz-sidebar][data-workspace-gradient] [data-testid="app-sidebar"] {
+  --sidebar-active: var(--buzz-workspace-raised);
+  --sidebar-active-foreground: var(--buzz-workspace-foreground);
 }

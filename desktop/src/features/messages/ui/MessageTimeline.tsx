@@ -459,7 +459,7 @@ const MessageTimelineBase = React.forwardRef<
       }
       onVirtualizerAtBottomStateChange(atBottom, reason);
       if (transition.cancelBottomIntent) {
-        timelineVirtualizerApi?.cancelBottomIntent();
+        timelineVirtualizerApi?.cancelBottomIntent("scroll");
       }
       if (transition.commit !== null) {
         queueSemanticBottom(transition.commit);

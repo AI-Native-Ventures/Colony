@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 import type { OnboardingStep, OnboardingTrack } from "../../flow/steps";
-import { AntScatter } from "./AntScatter";
 import { canvasFor } from "./canvasTheme";
 import "./onboarding-canvas.css";
 import "./onboarding-screens.css";
@@ -70,14 +69,7 @@ export function useHasContentBelow(
   return hasContentBelow;
 }
 
-export function OnboardingCanvas({
-  step,
-  track,
-  index,
-  total,
-  overlay,
-  children,
-}: Props) {
+export function OnboardingCanvas({ step, track, overlay, children }: Props) {
   const theme = canvasFor(step, track);
   const stageRef = useRef<HTMLDivElement>(null);
   const hasContentBelow = useHasContentBelow(stageRef, step);
@@ -101,19 +93,6 @@ export function OnboardingCanvas({
         } as CSSProperties
       }
     >
-      <div className="onb-grain" />
-      <img
-        src="/landing/colony-wordmark.svg"
-        alt="Colony"
-        className="onb-simple-wordmark"
-      />
-      <AntScatter hue={theme.hue} />
-      <p className="onb-step" data-testid="onboarding-step-counter">
-        {step === "account" || step === "recovery"
-          ? "Your account"
-          : "Your business"}{" "}
-        · {index + 1} of {total}
-      </p>
       {overlay}
       <div className="onb-stage" ref={stageRef}>
         {children}

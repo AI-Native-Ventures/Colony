@@ -6,6 +6,7 @@ import {
   Compass,
   FolderGit2,
   Inbox,
+  ListTodo,
   Receipt,
   Zap,
 } from "lucide-react";
@@ -29,6 +30,7 @@ import {
 } from "@/shared/ui/sidebar";
 import { SidebarMenuLabel } from "@/shared/ui/sidebar-menu-label";
 import type { SidebarSelectedView } from "../types";
+import { isMoreNavView } from "../sidebarMoreNav";
 import { SidebarMoreNavGroup } from "./SidebarMoreNavGroup";
 
 export type AppSidebarPinnedHeaderProps = {
@@ -53,13 +55,14 @@ type AppSidebarPrimaryMenuProps = {
   homeBadgeFeedIds: readonly string[];
   /**
    * When set, Pulse, Projects, Content, Workflows and Discovery move under a
-   * "More" group instead of standing in the open list. Null is today's
-   * sidebar, which is what everyone but a fresh founder gets.
+   * "More" group instead of standing in the open list. Colony themes use
+   * this compact menu; other themes preserve their existing preference.
    */
   moreNav: { isOpen: boolean; onToggle: () => void } | null;
   onSelectAgents: () => void;
   onSelectDiscovery: () => void;
   onSelectHome: () => void;
+  onSelectWork: () => void;
   onSelectProjects: () => void;
   onSelectContent: () => void;
   onSelectPulse: () => void;
@@ -184,6 +187,7 @@ export function AppSidebarPrimaryMenu({
   onSelectAgents,
   onSelectDiscovery,
   onSelectHome,
+  onSelectWork,
   onSelectProjects,
   onSelectContent,
   onSelectPulse,
@@ -283,6 +287,18 @@ export function AppSidebarPrimaryMenu({
           onSelectHome={onSelectHome}
           selectedView={selectedView}
         />
+        <SidebarMenuItem data-testid="work-section">
+          <SidebarMenuButton
+            data-testid="open-work-view"
+            isActive={selectedView === "work"}
+            onClick={onSelectWork}
+            tooltip="Tasks"
+            type="button"
+          >
+            <ListTodo className="h-4 w-4" />
+            <SidebarMenuLabel>Tasks</SidebarMenuLabel>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         {moreNav ? null : pulseItem}
         {moreNav ? null : projectsItem}
         <SidebarMenuItem>
@@ -325,6 +341,7 @@ export function AppSidebarPrimaryMenu({
       {moreNav ? (
         <SidebarMoreNavGroup
           isOpen={moreNav.isOpen}
+          isActive={isMoreNavView(selectedView)}
           onToggle={moreNav.onToggle}
         >
           {pulseItem}

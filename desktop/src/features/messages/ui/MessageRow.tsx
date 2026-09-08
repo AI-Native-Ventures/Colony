@@ -45,7 +45,7 @@ import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
 import { useMessageMentionNames } from "@/features/messages/lib/useMessageMentionNames";
-import { Markdown } from "@/shared/ui/markdown";
+import { MessageProse } from "./MessageProse";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
 import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
@@ -169,7 +169,8 @@ export const MessageRow = React.memo(
   }) {
     // Keep the transient send state with its timestamp rather than collapsing
     // it into a grouped message row with no header.
-    const isDisplayedAsContinuation = isContinuation && !message.pending;
+    const isDisplayedAsContinuation =
+      isContinuation && !message.pending && !isOpenThreadRoot;
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
@@ -407,7 +408,8 @@ export const MessageRow = React.memo(
             ? parseVideoReviewTimecode(message.body)
             : null;
           const markdown = (
-            <Markdown
+            <MessageProse
+              scopeKey={`${channelId}:${message.id}:${layoutVariant}`}
               channelNames={channelNames}
               className={cn(
                 "max-w-full text-sm",
@@ -638,7 +640,7 @@ export const MessageRow = React.memo(
       ) : null;
 
     const headerNode = isDisplayedAsContinuation ? null : (
-      <MessageHeaderRow>
+      <MessageHeaderRow className="colony-message-header">
         {message.pubkey ? (
           <UserProfilePopover
             pubkey={message.pubkey}
@@ -874,7 +876,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message relative z-10 rounded-2xl transition-colors",
+            "colony-message-row group/message relative z-10 rounded-2xl transition-colors",
             playEntrance && "motion-enter-conversation",
             "py-1",
             hoverBackground
@@ -893,13 +895,15 @@ export const MessageRow = React.memo(
               : "",
           )}
           data-message-id={message.id}
+          data-continuation={isDisplayedAsContinuation || undefined}
+          data-open-thread-root={isOpenThreadRoot || undefined}
           data-testid="message-row"
           onAnimationEnd={handleEntranceAnimationEnd}
         >
           {isThreadReplyLayout ? (
             <>
               {avatarGutterNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="colony-message-content flex min-w-0 flex-1 flex-col gap-0.5">
                 {headerNode}
                 <div className={bodyContainerClass}>{messageBodyNode}</div>
               </div>
@@ -907,7 +911,7 @@ export const MessageRow = React.memo(
           ) : (
             <>
               {avatarGutterNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="colony-message-content flex min-w-0 flex-1 flex-col gap-0.5">
                 {headerNode}
                 <div className={bodyContainerClass}>{messageBodyNode}</div>
               </div>

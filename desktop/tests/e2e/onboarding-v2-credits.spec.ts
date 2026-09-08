@@ -91,7 +91,7 @@ test("a created community needs one business form with a way out", async ({
     timeout: 15_000,
   });
   await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
-    "Your business · 1 of 1",
+    "1 · Business",
   );
   await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
   await fillSecondBusiness(page);
@@ -111,7 +111,7 @@ test("the way out drops the founder into the community that was just created", a
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Tell us about your business" }),
+    page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible({ timeout: 15_000 });
   await page.getByTestId("community-onboarding-exit").click();
 

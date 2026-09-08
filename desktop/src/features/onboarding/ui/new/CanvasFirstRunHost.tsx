@@ -70,7 +70,7 @@ export function CanvasFirstRunHost({
   onLeaveRun,
 }: Props) {
   const queryClient = useQueryClient();
-  const { addCommunity } = useCommunities();
+  const { addCommunity, switchCommunity } = useCommunities();
   // Payments, scrape and invites stay fakes here exactly as they were inside
   // AppReady; NewOnboardingFlow swaps in the wired services itself outside
   // the e2e build.
@@ -113,15 +113,18 @@ export function CanvasFirstRunHost({
       expectedRelayUrlRef.current = outcome.relayUrl;
       // The typed company name is the label; the claimed address never
       // surfaces in the interface.
-      addCommunity({
+      const communityId = addCommunity({
         id: outcome.communityId ?? crypto.randomUUID(),
         name: companyName,
         relayUrl: outcome.relayUrl,
         pubkey: currentPubkey,
         addedAt: new Date().toISOString(),
       });
+      // A previous identity's business may still be active. Use the resolved
+      // ID (including a deduplicated community) to trigger the normal apply.
+      switchCommunity(communityId);
     },
-    [addCommunity, currentPubkey],
+    [addCommunity, currentPubkey, switchCommunity],
   );
 
   const provisioning = useMemo(
@@ -129,7 +132,7 @@ export function CanvasFirstRunHost({
     [hadCommunityAtMount, provision, onProvisioned],
   );
 
-  const waitForApply = useCallback(async () => {
+  const waitForApply = useCallback(async (assertCurrent: () => void) => {
     const startedAt = Date.now();
     while (
       !expectedWorkspaceApplied(
@@ -138,6 +141,7 @@ export function CanvasFirstRunHost({
         appliedRef.current,
       )
     ) {
+      assertCurrent();
       if (Date.now() - startedAt > APPLY_DEADLINE_MS) {
         throw new Error(
           "Your workspace is taking longer than expected to open. Try again.",
@@ -145,6 +149,7 @@ export function CanvasFirstRunHost({
       }
       await new Promise((resolve) => setTimeout(resolve, APPLY_POLL_MS));
     }
+    assertCurrent();
     const relayUrl = expectedRelayUrlRef.current;
     if (!relayUrl)
       throw new Error("Your business has not finished opening. Try again.");
@@ -152,13 +157,19 @@ export function CanvasFirstRunHost({
   }, []);
 
   const onComplete = useCallback(
-    async (answers: OnboardingAnswers) => {
-      const relayUrl = await waitForApply();
+    async (answers: OnboardingAnswers, isCurrentRun: () => boolean) => {
+      const assertCurrent = () => {
+        if (!isCurrentRun()) throw new Error("This setup run has ended");
+      };
+      assertCurrent();
+      const relayUrl = await waitForApply(assertCurrent);
       await ensureBuiltInFounderConfig();
+      assertCurrent();
       await completeFirstRun(
         {
           queryClient,
           relayUrl,
+          assertCurrent,
           pubkey: currentPubkey,
           // Built here rather than stashed on a transaction: this path never
           // creates one, and the brief used to vanish because of it.
@@ -168,6 +179,7 @@ export function CanvasFirstRunHost({
         },
         DEFAULT_COMPLETE_FIRST_RUN_IO,
       );
+      assertCurrent();
       onFinished();
     },
     [currentPubkey, onFinished, queryClient, waitForApply],
