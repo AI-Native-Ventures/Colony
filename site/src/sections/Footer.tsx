@@ -17,7 +17,7 @@ export function Footer() {
           <nav className="colony-footer__explore" aria-label="Explore Colony">
             <h3>Explore</h3>
             <a href="#how-it-works">How it works</a>
-            <a href="#inside-colony">Inside Colony</a>
+            <a href="#inside-colony">See an example</a>
             <a href="#early-access">Apply for early access</a>
           </nav>
 

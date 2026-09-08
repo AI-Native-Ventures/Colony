@@ -111,11 +111,12 @@ with people and AI teammates. It uses the owner experience described in the posi
 its September 5/7 product recommendations. The latest owner direction supersedes the older
 agency-first marketing choice.
 
-`BusinessTour` illustrates the proposed Inbox / Work / Clients / Team navigation with a fictional
-training business. These simplified screens are explicitly planned, not screenshots or live work.
-Selecting a workshop length in Inbox updates the linked example in Work and Clients; the meeting
-summary opens to an actual readable sample. `BusinessGuide` explains setup, assignment and review.
-The previous service-output demo is no longer imported or shipped in the JavaScript bundle.
+`WorkConversation` illustrates a single job discussion with a business owner, an AI teammate and a
+colleague. Supplied sample quotes, a clarifying question and a reply sit alongside a readable sample
+comparison. It explains the conversation/work relationship without inventing application navigation
+or simulating execution. A native disclosure opens the sample quote details. All messages and prices
+are labelled as illustrative. `BusinessGuide` explains setup, assignment and review. The previous
+dashboard mockup and service-output demo are no longer shipped in the JavaScript bundle.
 
 Applications use a static email handoff to `basheer@ainative.ventures`, confirmed by the owner.
 The browser validates the fields, prepares an encoded email and lets the applicant inspect it before
@@ -125,7 +126,7 @@ Changing an answer clears the older draft. Name, email, business stage and desir
 Whitespace-only work is rejected. A selectable draft and copy button provide an email-app fallback.
 
 Run `pnpm -C site check`, `pnpm -C site typecheck` and `pnpm -C site build`. Browser checks cover all
-four tour views, the linked example answer, the readable draft, keyboard navigation, form validation
+the sample quote disclosure, readable comparison, keyboard navigation, form validation
 and draft editing, responsive layout and console errors. The page never claims full support for every
 business process; early-access availability and the illustration's limits are stated in plain language.
 
