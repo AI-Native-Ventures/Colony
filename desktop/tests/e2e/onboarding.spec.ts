@@ -698,10 +698,10 @@ test("first launch offers simple account entry without technical key choices", a
   await page.goto("/");
 
   await expect(
-    page.getByRole("button", { name: "Start with Colony" }),
+    page.getByRole("button", { name: "Create account", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Sign in to an existing account" }),
+    page.getByRole("button", { name: "Sign in", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Create a new identity key" }),
@@ -1159,13 +1159,11 @@ test("first-community shows the scenario cards for localhost", async ({
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
 
   // Back out of community selection and the machine flow reopens on its
-  // landing screen. It used to reopen on an agent-config screen that asked
-  // which brain the agents think with; the canvas flow asks that on its own
-  // screen, so the machine flow ends at the key backup and has nothing else
-  // to reopen onto.
+  // account form. Runtime/model choices must not reappear when navigating
+  // back from community setup.
   await page.getByTestId("welcome-setup-back").click();
   await expect(
-    page.getByRole("button", { name: "Start with Colony" }),
+    page.getByRole("button", { name: "Create account", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", {

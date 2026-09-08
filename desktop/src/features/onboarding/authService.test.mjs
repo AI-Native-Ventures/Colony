@@ -7,7 +7,7 @@ function deps(overrides = {}) {
   return {
     post: async () => ({
       status: 201,
-      body: { pubkey: "a".repeat(64), accountId: "id" },
+      body: { pubkey: "b".repeat(64), accountId: "id" },
     }),
     // A stand-in cipher: deterministic and distinct per input, but it must not
     // echo its input verbatim or the never-send-the-password assertion below
@@ -15,7 +15,18 @@ function deps(overrides = {}) {
     createBackup: async (secret) => `ncryptsec1${btoa(secret)}`,
     importIdentity: async () => {},
     getPubkey: async () => "b".repeat(64),
-    generateCode: () => "ABCDE-FGHJK-MNPQR-STVWX",
+    prepareSignup: async (email) => ({
+      pubkey: "b".repeat(64),
+      email,
+      attemptId: "attempt-1",
+      recoveryCode: "ABCDE-FGHJK-MNPQR-STVWX",
+      phase: "prepared",
+    }),
+    loadPendingSignup: async () => null,
+    markRegistered: async () => {},
+    clearPendingSignup: async () => {},
+    discardPendingSignup: async () => {},
+    saveRecoveryCode: async () => null,
     ...overrides,
   };
 }
@@ -28,7 +39,7 @@ test("signUp returns the pubkey and the recovery code", async () => {
         sent = body;
         return {
           status: 201,
-          body: { pubkey: "a".repeat(64), accountId: "id" },
+          body: { pubkey: "b".repeat(64), accountId: "id" },
         };
       },
     }),
@@ -41,7 +52,7 @@ test("signUp returns the pubkey and the recovery code", async () => {
   assert.equal(sent.pubkey, "b".repeat(64), "the local identity is escrowed");
   assert.equal(
     result.pubkey,
-    "a".repeat(64),
+    "b".repeat(64),
     "the relay's answer is authoritative",
   );
 });
@@ -54,7 +65,7 @@ test("signUp sends two different blobs and never sends the password", async () =
         sent = body;
         return {
           status: 201,
-          body: { pubkey: "a".repeat(64), accountId: "id" },
+          body: { pubkey: "b".repeat(64), accountId: "id" },
         };
       },
     }),
@@ -145,7 +156,7 @@ test("a network failure maps to unreachable", async () => {
   );
 });
 
-test("a 500 maps to unreachable rather than leaking a status", async () => {
+test("a server failure is distinct from connectivity", async () => {
   const auth = createAuthService(
     deps({
       post: async () => ({
@@ -156,7 +167,7 @@ test("a 500 maps to unreachable rather than leaking a status", async () => {
   );
   await assert.rejects(
     () => auth.signUp("founder@example.com", "correct horse battery"),
-    (error) => error.kind === "unreachable",
+    (error) => error.kind === "server",
   );
 });
 
@@ -167,7 +178,7 @@ test("signIn imports the returned blob with the password", async () => {
       post: async () => ({
         status: 200,
         body: {
-          pubkey: "a".repeat(64),
+          pubkey: "b".repeat(64),
           passwordBlob: "ncryptsec1abc",
           kdfVersion: 1,
         },
@@ -208,7 +219,7 @@ test("an unsupported kdf version is surfaced, not ignored", async () => {
       post: async () => ({
         status: 200,
         body: {
-          pubkey: "a".repeat(64),
+          pubkey: "b".repeat(64),
           passwordBlob: "ncryptsec1abc",
           kdfVersion: 99,
         },
@@ -238,7 +249,7 @@ test("recover returns the pubkey and a reset token", async () => {
         return {
           status: 200,
           body: {
-            pubkey: "a".repeat(64),
+            pubkey: "b".repeat(64),
             recoveryBlob: "ncryptsec1xyz",
             resetToken: "tok123",
           },
@@ -250,7 +261,7 @@ test("recover returns the pubkey and a reset token", async () => {
     " Founder@Example.COM ",
     "abcde-fghjk-mnpqr-stvwx",
   );
-  assert.deepEqual(result, { pubkey: "a".repeat(64), resetToken: "tok123" });
+  assert.deepEqual(result, { pubkey: "b".repeat(64), resetToken: "tok123" });
   assert.equal(sent.email, "founder@example.com");
   assert.match(sent.recoveryCodeHash, /^[0-9a-f]{64}$/);
 });
@@ -281,7 +292,7 @@ test("recover imports the returned blob with the typed code", async () => {
       post: async () => ({
         status: 200,
         body: {
-          pubkey: "a".repeat(64),
+          pubkey: "b".repeat(64),
           recoveryBlob: "ncryptsec1xyz",
           resetToken: "tok123",
         },
@@ -299,7 +310,7 @@ test("recover imports the returned blob with the typed code", async () => {
     blob: "ncryptsec1xyz",
     password: "ABCDE-FGHJK-MNPQR-STVWX",
   });
-  assert.deepEqual(result, { pubkey: "a".repeat(64), resetToken: "tok123" });
+  assert.deepEqual(result, { pubkey: "b".repeat(64), resetToken: "tok123" });
 });
 
 test("a recover response with no blob to open maps to unreachable", async () => {
@@ -311,7 +322,7 @@ test("a recover response with no blob to open maps to unreachable", async () => 
     deps({
       post: async () => ({
         status: 200,
-        body: { pubkey: "a".repeat(64), resetToken: "tok123" },
+        body: { pubkey: "b".repeat(64), resetToken: "tok123" },
       }),
       importIdentity: async () => {
         imports += 1;
@@ -323,4 +334,198 @@ test("a recover response with no blob to open maps to unreachable", async () => 
     (error) => error.kind === "unreachable",
   );
   assert.equal(imports, 0, "nothing is imported when there is no blob to open");
+});
+
+test("pending recovery storage must succeed before signup POST", async () => {
+  let requests = 0;
+  const auth = createAuthService(
+    deps({
+      prepareSignup: async () => {
+        throw new Error("secure store unavailable");
+      },
+      post: async () => {
+        requests += 1;
+        return { status: 201, body: { pubkey: "b".repeat(64) } };
+      },
+    }),
+  );
+  await assert.rejects(
+    () => auth.signUp("founder@example.com", "correct horse battery"),
+    (error) => error.kind === "local-storage",
+  );
+  assert.equal(requests, 0);
+});
+
+test("an uncertain signup reuses and proves the same registered recovery code", async () => {
+  const pending = {
+    pubkey: "b".repeat(64),
+    email: "founder@example.com",
+    attemptId: "stable",
+    recoveryCode: "ABCDE-FGHJK-MNPQR-STVWX",
+    phase: "prepared",
+  };
+  let first = true;
+  const hashes = [];
+  const io = deps({
+    prepareSignup: async () => pending,
+    markRegistered: async () => {
+      pending.phase = "registered";
+      return pending;
+    },
+    post: async (path, body) => {
+      if (body.recoveryCodeHash) hashes.push(body.recoveryCodeHash);
+      if (first) {
+        first = false;
+        throw new TypeError("response lost");
+      }
+      if (path.endsWith("signup"))
+        return { status: 409, body: { error: "email_taken" } };
+      if (path.endsWith("signin"))
+        return {
+          status: 200,
+          body: {
+            pubkey: pending.pubkey,
+            passwordBlob: "ncryptsec1synthetic-password",
+          },
+        };
+      return {
+        status: 200,
+        body: {
+          pubkey: pending.pubkey,
+          recoveryBlob: "ncryptsec1synthetic",
+          resetToken: "unused",
+        },
+      };
+    },
+  });
+  await assert.rejects(() =>
+    createAuthService(io).signUp(pending.email, "correct horse battery"),
+  );
+  const result = await createAuthService(io).signUp(
+    pending.email,
+    "correct horse battery",
+  );
+  assert.equal(result.attemptId, "stable");
+  assert.equal(pending.phase, "registered");
+  assert.equal(new Set(hashes).size, 1);
+});
+test("a crypto/native identity failure is not reported as a connection failure", async () => {
+  let requests = 0;
+  await assert.rejects(
+    () =>
+      createAuthService(
+        deps({
+          createBackup: async () => {
+            throw new Error("native failure");
+          },
+          post: async () => {
+            requests += 1;
+          },
+        }),
+      ).signUp("owner@example.com", "correct horse battery"),
+    (error) => error.kind === "local-identity",
+  );
+  assert.equal(requests, 0);
+});
+
+test("an uncertain signup cannot accept a different password on its retry", async () => {
+  let registered = false;
+  const auth = createAuthService(
+    deps({
+      markRegistered: async () => {
+        registered = true;
+      },
+      post: async (path) => {
+        if (path.endsWith("signup"))
+          return { status: 409, body: { error: "email_taken" } };
+        if (path.endsWith("recover"))
+          return {
+            status: 200,
+            body: {
+              pubkey: "b".repeat(64),
+              recoveryBlob: "ncryptsec1synthetic",
+            },
+          };
+        return { status: 401, body: { error: "invalid_credentials" } };
+      },
+    }),
+  );
+  await assert.rejects(
+    () => auth.signUp("founder@example.com", "different password on retry"),
+    (error) => error.kind === "invalid-credentials",
+  );
+  assert.equal(registered, false);
+});
+
+test("a definitively rejected signup releases its prepared email for correction", async () => {
+  let pending = null;
+  const discarded = [];
+  const auth = createAuthService(
+    deps({
+      prepareSignup: async (email) => {
+        if (pending && pending.email !== email)
+          throw new Error("pending email differs");
+        pending ??= {
+          pubkey: "b".repeat(64),
+          email,
+          attemptId: `attempt-${email}`,
+          recoveryCode: "ABCDE-FGHJK-MNPQR-STVWX",
+          phase: "prepared",
+        };
+        return pending;
+      },
+      discardPendingSignup: async (attemptId) => {
+        assert.equal(attemptId, pending.attemptId);
+        assert.equal(pending.phase, "prepared");
+        discarded.push(attemptId);
+        pending = null;
+      },
+      post: async (path, body) => {
+        if (path.endsWith("recover"))
+          return { status: 401, body: { error: "invalid_recovery_code" } };
+        if (body.email === "taken@example.com")
+          return { status: 409, body: { error: "email_taken" } };
+        return { status: 201, body: { pubkey: "b".repeat(64) } };
+      },
+    }),
+  );
+  await assert.rejects(
+    () => auth.signUp("taken@example.com", "correct horse battery"),
+    (error) => error.kind === "email-taken",
+  );
+  assert.deepEqual(discarded, ["attempt-taken@example.com"]);
+  const result = await auth.signUp(
+    "correct@example.com",
+    "correct horse battery",
+  );
+  assert.equal(result.attemptId, "attempt-correct@example.com");
+});
+
+test("uncertain conflict reconciliation never discards the prepared recovery code", async () => {
+  for (const response of [
+    { status: 500, body: { error: "internal" } },
+    { status: 429, body: { error: "rate_limited", retryAfterSecs: 30 } },
+    {
+      status: 200,
+      body: { pubkey: "c".repeat(64), recoveryBlob: "ncryptsec1synthetic" },
+    },
+    { status: 200, body: { pubkey: "b".repeat(64) } },
+  ]) {
+    let discarded = false;
+    const auth = createAuthService(
+      deps({
+        discardPendingSignup: async () => {
+          discarded = true;
+        },
+        post: async (path) =>
+          path.endsWith("signup")
+            ? { status: 409, body: { error: "email_taken" } }
+            : response,
+      }),
+    );
+    await assert.rejects(() =>
+      auth.signUp("founder@example.com", "correct horse battery"),
+    );
+    assert.equal(discarded, false);
+  }
 });

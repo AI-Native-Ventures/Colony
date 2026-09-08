@@ -1,0 +1,355 @@
+/* Colony's shared workspace wash. Other themes retain their own surfaces. */
+:root[data-buzz-sidebar][data-workspace-gradient] {
+  --buzz-workspace-content: var(--buzz-workspace-light-content);
+  --buzz-workspace-raised: var(--buzz-workspace-light-raised);
+  --buzz-workspace-muted: var(--buzz-workspace-light-muted);
+  --buzz-workspace-border: var(--buzz-workspace-light-border);
+  --buzz-workspace-foreground: var(--buzz-workspace-light-foreground);
+  --buzz-workspace-muted-foreground: var(
+    --buzz-workspace-light-muted-foreground
+  );
+  --buzz-workspace-gradient: var(--buzz-workspace-gradient-light);
+  --buzz-workspace-reading: var(--buzz-workspace-reading-light);
+  --buzz-muted-foreground: hsl(var(--buzz-workspace-light-muted-foreground));
+  --buzz-chrome-foreground: hsl(var(--buzz-workspace-light-muted-foreground));
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient].dark {
+  --buzz-workspace-content: var(--buzz-workspace-dark-content);
+  --buzz-workspace-raised: var(--buzz-workspace-dark-raised);
+  --buzz-workspace-muted: var(--buzz-workspace-dark-muted);
+  --buzz-workspace-border: var(--buzz-workspace-dark-border);
+  --buzz-workspace-foreground: var(--buzz-workspace-dark-foreground);
+  --buzz-workspace-muted-foreground: var(
+    --buzz-workspace-dark-muted-foreground
+  );
+  --buzz-workspace-gradient: var(--buzz-workspace-gradient-dark);
+  --buzz-workspace-reading: var(--buzz-workspace-reading-dark);
+  --buzz-muted-foreground: hsl(var(--buzz-workspace-dark-muted-foreground));
+  --buzz-chrome-foreground: hsl(var(--buzz-workspace-dark-muted-foreground));
+}
+
+/* Descendant headers, panes and composer fades already consume --background.
+ * Keep that semantic token continuous instead of styling each message shell. */
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+  --background: var(--buzz-workspace-content);
+  --foreground: var(--buzz-workspace-foreground);
+  --card: var(--buzz-workspace-raised);
+  --card-foreground: var(--buzz-workspace-foreground);
+  --muted: var(--buzz-workspace-muted);
+  --muted-foreground: var(--buzz-workspace-muted-foreground);
+  --accent: var(--buzz-workspace-muted);
+  --accent-foreground: var(--buzz-workspace-foreground);
+  --border: var(--buzz-workspace-border);
+  --input: var(--buzz-workspace-border);
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="channel-drop-zone"],
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-thread-surface {
+  background-color: hsl(var(--background));
+  background-image: var(--buzz-workspace-reading);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="message-composer"] {
+  background-color: hsl(var(--buzz-workspace-raised));
+  box-shadow: 0 2px 8px hsl(var(--buzz-workspace-foreground) / 0.035);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-settings-subcopy] {
+  color: hsl(var(--muted-foreground));
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]:not([data-glass-background])
+  .buzz-theme-gradient-underlay {
+  background-image: var(--buzz-workspace-gradient);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .buzz-theme-gradient-layer-light,
+:root[data-buzz-sidebar][data-workspace-gradient]:not(.dark)
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-image: var(--buzz-workspace-gradient-light);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .buzz-theme-gradient-layer-dark,
+:root[data-buzz-sidebar][data-workspace-gradient].dark
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-image: var(--buzz-workspace-gradient-dark);
+}
+
+/* Keep the existing native glass alpha; only the shape of its colour changes. */
+:root[data-buzz-sidebar][data-workspace-gradient][data-glass-background]
+  .buzz-theme-gradient-layer-light,
+:root[data-buzz-sidebar][data-workspace-gradient][data-glass-background]:not(
+    .dark
+  )
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-image: var(--buzz-workspace-glass-light);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient][data-glass-background]
+  .buzz-theme-gradient-layer-dark,
+:root[data-buzz-sidebar][data-workspace-gradient][data-glass-background].dark
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-image: var(--buzz-workspace-glass-dark);
+}
+
+.colony-workspace-ants {
+  display: none;
+}
+
+:root[data-buzz-sidebar] .colony-workspace-ants {
+  display: block;
+  color: hsl(var(--buzz-workspace-foreground));
+  opacity: 0.35;
+}
+
+/* Narrow windows reserve the small header for navigation and window controls. */
+@media (max-width: 600px), (max-height: 720px) {
+  :root[data-buzz-sidebar] .colony-workspace-ants {
+    display: none;
+  }
+}
+
+/* The approved workspace is a sidebar beside separately framed reading panes.
+ * Only Colony themes opt into this shell; other themes keep their own chrome. */
+:root[data-buzz-sidebar][data-workspace-gradient] body {
+  font-family:
+    "Inter Tight Variable", "Inter Tight", "Inter Variable", sans-serif;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.125rem 1.125rem 0.75rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-wordmark {
+  width: 6rem;
+  height: auto;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient].dark
+  .colony-sidebar-wordmark {
+  filter: invert(1);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .colony-sidebar-workspace
+  [data-testid="sidebar-workspace-switcher"] {
+  padding-inline: 0.5rem;
+  font-size: var(--text-sm);
+  min-height: 2rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-pinned-header"] {
+  padding-top: 0;
+  padding-bottom: 0.75rem;
+  margin-inline: 0.5rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-primary-menu"] {
+  padding-bottom: 1rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid hsl(var(--buzz-workspace-border) / 0.65);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-more-nav-list"] {
+  padding-left: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="sidebar-scroll-content"] {
+  padding-inline: 0.5rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-sidebar="menu-button"] {
+  border-radius: 0.5rem;
+  min-height: 2.125rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-sidebar="footer"] {
+  padding: 0.75rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+  margin: 0.75rem 0.75rem 0.75rem 0;
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.875rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-buzz-content-surface]:has([data-colony-channel-layout]) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]:has(
+    .colony-thread-surface[data-thread-mode="split"]
+  ) {
+  --colony-pane-gap: 12px;
+  gap: var(--colony-pane-gap);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]
+  > [data-testid="channel-shared-header-backdrop"] {
+  display: none;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]
+  > [data-testid="channel-drop-zone"],
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .colony-thread-surface[data-thread-mode="split"] {
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.875rem;
+  box-shadow: 0 3px 12px hsl(var(--buzz-workspace-foreground) / 0.025);
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  .colony-thread-surface[data-thread-mode="split"]::before {
+  display: none;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="channel-drop-zone"]
+  [data-testid="chat-header"] {
+  padding: 1rem 1.125rem 0.875rem;
+  border-bottom: 1px solid hsl(var(--buzz-workspace-border) / 0.7);
+  background-color: hsl(var(--buzz-workspace-content));
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-channel-description {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="message-composer"] {
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.75rem;
+  padding: 0.875rem 1rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="message-input-scroll"] {
+  min-height: 2.5rem;
+}
+
+/* The drag invitation follows the channel's frame rather than the old shared
+ * content surface. Its absolute inset remains inside the pane border. */
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-testid="channel-drop-zone"]
+  > [data-testid="drop-zone-overlay"] {
+  border-radius: inherit;
+}
+
+/* Keep window controls and history in the sidebar's own header. Collapsed and
+ * mobile layouts retain their compact full-width navigation row. Fixed pixels
+ * here deliberately track native window controls rather than text zoom. */
+@media (min-width: 768px) {
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-top-chrome"][data-sidebar-open="true"] {
+    position: absolute;
+    inset: 0 auto auto 0;
+    z-index: 110;
+    width: var(--sidebar-width);
+    justify-content: flex-end;
+    padding-left: 0;
+    background: transparent;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-top-chrome"][data-sidebar-open="true"][data-native-window-controls="false"] {
+    top: 12px;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-sidebar-layer"]:has(
+      [data-native-window-controls="true"][data-sidebar-open="true"]
+    )
+    .colony-sidebar-identity {
+    padding-top: 48px;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-sidebar-layer"]:has([data-sidebar-open="false"])
+    [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+    margin-left: 0.75rem;
+  }
+}
+
+@media (max-width: 767px) {
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-buzz-content-surface]:not([data-buzz-content-unframed]) {
+    margin: 0 0.5rem 0.5rem;
+  }
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-settings {
+  display: block;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient] [data-testid="chat-title"] {
+  font-size: 1.25rem;
+  line-height: 1.5rem;
+}
+
+:root[data-buzz-sidebar][data-workspace-gradient]
+  [data-colony-channel-layout]:has(
+    .colony-thread-surface[data-thread-mode="standalone"]
+  ) {
+  border: 1px solid hsl(var(--buzz-workspace-border));
+  border-radius: 0.875rem;
+  background-color: hsl(var(--buzz-workspace-content));
+}
+
+/* The selected workspace row is a quiet raised surface. Keep the existing
+ * data-active/unread semantics and the user's optional prominent treatment. */
+:root[data-buzz-sidebar][data-workspace-gradient] [data-testid="app-sidebar"] {
+  --sidebar-active: var(--buzz-workspace-raised);
+  --sidebar-active-foreground: var(--buzz-workspace-foreground);
+}
+
+/* Short windows keep the workspace switcher and give channel navigation room
+ * for both unread controls. Full branding returns as soon as height permits. */
+@media (max-height: 560px) {
+  :root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-wordmark,
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    .colony-sidebar-workspace
+    > p {
+    display: none;
+  }
+
+  :root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-identity {
+    gap: 0;
+  }
+}
+
+@media (min-width: 768px) and (max-height: 560px) {
+  :root[data-buzz-sidebar][data-workspace-gradient]
+    [data-testid="app-sidebar-layer"]:has(
+      [data-native-window-controls="false"][data-sidebar-open="true"]
+    )
+    .colony-sidebar-identity {
+    padding-top: 56px;
+  }
+}

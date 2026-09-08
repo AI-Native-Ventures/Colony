@@ -550,6 +550,7 @@ export const ChannelPane = React.memo(function ChannelPane({
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden"
         ref={layoutRef}
+        data-colony-channel-layout={isHuddleTranscript ? undefined : "true"}
         style={isHuddleTranscript ? HUDDLE_TRANSCRIPT_ROOT_STYLE : undefined}
       >
         {!isSinglePanelView && !isHuddleTranscript ? (

@@ -13,7 +13,8 @@ import {
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
 import type { TimelineMessage } from "@/features/messages/types";
-import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { AgentRoleSubtitle } from "@/features/agents/ui/AgentRoleSubtitle";
+import { useIsKnownAgentPubkey } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { isBlockMessage } from "@/features/blocks/blockTags";
 import { BlockMessageBoundary } from "@/features/blocks/ui/BlockMessageBoundary";
@@ -37,7 +38,6 @@ import {
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
@@ -45,7 +45,7 @@ import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
 import { useMessageMentionNames } from "@/features/messages/lib/useMessageMentionNames";
-import { Markdown } from "@/shared/ui/markdown";
+import { MessageProse } from "./MessageProse";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
 import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
@@ -169,7 +169,8 @@ export const MessageRow = React.memo(
   }) {
     // Keep the transient send state with its timestamp rather than collapsing
     // it into a grouped message row with no header.
-    const isDisplayedAsContinuation = isContinuation && !message.pending;
+    const isDisplayedAsContinuation =
+      isContinuation && !message.pending && !isOpenThreadRoot;
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
@@ -247,21 +248,7 @@ export const MessageRow = React.memo(
       message.tags,
       profiles,
     );
-    // "Is this pubkey an agent" = the community-scoped baseline every surface
-    // shares (managed ∪ relay) plus the pubkey's own profile `isAgent` flag from this surface's lookup. Both are per-pubkey
-    // O(1) checks — no per-row rescan of `profiles` (that duplicated parent
-    // work in every mounted row and re-ran on each profile-lookup change).
-    const knownAgentPubkeys = useKnownAgentPubkeys();
-    const isKnownAgentPubkey = React.useCallback(
-      (pubkey: string) => {
-        const normalized = normalizePubkey(pubkey);
-        return (
-          knownAgentPubkeys.has(normalized) ||
-          profiles?.[normalized]?.isAgent === true
-        );
-      },
-      [knownAgentPubkeys, profiles],
-    );
+    const isKnownAgentPubkey = useIsKnownAgentPubkey(profiles);
     const profilePopoverRole =
       message.role === "bot" ||
       (message.pubkey && isKnownAgentPubkey(message.pubkey))
@@ -421,7 +408,8 @@ export const MessageRow = React.memo(
             ? parseVideoReviewTimecode(message.body)
             : null;
           const markdown = (
-            <Markdown
+            <MessageProse
+              scopeKey={`${channelId}:${message.id}:${layoutVariant}`}
               channelNames={channelNames}
               className={cn(
                 "max-w-full text-sm",
@@ -486,6 +474,9 @@ export const MessageRow = React.memo(
           avatarUrl={message.avatarUrl ?? null}
           className="shrink-0"
           displayName={message.author}
+          identitySeed={
+            profilePopoverRole === "bot" ? message.pubkey : undefined
+          }
           testId="message-avatar"
         />
         {showRespondToIndicator &&
@@ -649,7 +640,7 @@ export const MessageRow = React.memo(
       ) : null;
 
     const headerNode = isDisplayedAsContinuation ? null : (
-      <MessageHeaderRow>
+      <MessageHeaderRow className="colony-message-header">
         {message.pubkey ? (
           <UserProfilePopover
             pubkey={message.pubkey}
@@ -668,12 +659,9 @@ export const MessageRow = React.memo(
         )}
         {agentOwnerNode}
         {inlineMetadataNode}
-        {message.personaDisplayName &&
-        message.personaDisplayName !== message.author ? (
-          <span className="text-xs text-muted-foreground">
-            {message.personaDisplayName}
-          </span>
-        ) : null}
+        {profilePopoverRole === "bot" && (
+          <AgentRoleSubtitle pubkey={message.pubkey} />
+        )}
       </MessageHeaderRow>
     );
     const bodyContainerClass = isDisplayedAsContinuation
@@ -888,7 +876,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message relative z-10 rounded-2xl transition-colors",
+            "colony-message-row group/message relative z-10 rounded-2xl transition-colors",
             playEntrance && "motion-enter-conversation",
             "py-1",
             hoverBackground
@@ -907,13 +895,15 @@ export const MessageRow = React.memo(
               : "",
           )}
           data-message-id={message.id}
+          data-continuation={isDisplayedAsContinuation || undefined}
+          data-open-thread-root={isOpenThreadRoot || undefined}
           data-testid="message-row"
           onAnimationEnd={handleEntranceAnimationEnd}
         >
           {isThreadReplyLayout ? (
             <>
               {avatarGutterNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="colony-message-content flex min-w-0 flex-1 flex-col gap-0.5">
                 {headerNode}
                 <div className={bodyContainerClass}>{messageBodyNode}</div>
               </div>
@@ -921,7 +911,7 @@ export const MessageRow = React.memo(
           ) : (
             <>
               {avatarGutterNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="colony-message-content flex min-w-0 flex-1 flex-col gap-0.5">
                 {headerNode}
                 <div className={bodyContainerClass}>{messageBodyNode}</div>
               </div>

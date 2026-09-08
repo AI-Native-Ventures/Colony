@@ -1,18 +1,10 @@
 // desktop/src/features/sidebar/sidebarMoreNav.ts
 /**
- * Which navigation a founder sees on day one, and how the rest gets in.
+ * Persisted expansion state for the compact sidebar menu.
  *
- * The sidebar names nine destinations plus the channel list. For someone who
- * has one channel and one agent, seven of those nine are rooms with nothing in
- * them, and a first run that ends in a wall of empty destinations reads as a
- * product that has already been used by someone else. So a fresh founder gets
- * the five that have something behind them on day one, and the other five sit
- * under a "More" group they can open.
- *
- * Nobody else is affected: an imported identity, a second community, or any
- * account that did not sign up on this machine sees today's sidebar in full.
- * The group is a starting position, not a permission: opening it once keeps it
- * open, per identity, so the choice survives restarts and is never re-imposed.
+ * Colony themes group secondary destinations for every workspace. Other themes
+ * retain the fresh-founder rule below. The same per-identity preference survives
+ * theme/community switches; grouping changes presentation, never permission.
  */
 import { getStorageItem, setStorageItem } from "@/shared/lib/safeStorage";
 
@@ -25,7 +17,7 @@ export const PRIMARY_NAV_VIEWS = [
   "channel",
 ] as const;
 
-/** The five that a fresh founder finds under "More". */
+/** Secondary destinations available under "More". */
 export const MORE_NAV_VIEWS = [
   "pulse",
   "projects",
@@ -80,7 +72,7 @@ export function rememberMoreNavOpened(pubkey: string | null | undefined): void {
 }
 
 /**
- * Should this identity's sidebar carry a "More" group at all?
+ * Should a non-Colony theme use the compact fresh-founder menu?
  *
  * Only a founder who signed up on this machine. Everyone else gets today's
  * flat list. A founder who has already opened the group still has it, still

@@ -1,26 +1,25 @@
-// desktop/src/features/onboarding/ui/new/NewOnboardingFlow.tsx
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-
-import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import {
   getStorageItem,
   removeStorageItem,
   setStorageItem,
 } from "@/shared/lib/safeStorage";
 import type { AuthFailure } from "../../authService";
-import { applyBrainChoice } from "../../applyBrainChoice";
-import { applyFreshSignupDefaults } from "../../freshSignupDefaults";
+import type {
+  OnboardingServices,
+  PendingSignup,
+  SignUpResult,
+} from "../../contracts";
 import { createWiredAuthService } from "../../lib/wiredAuthService";
 import { createWiredScrapeService } from "../../lib/wiredScrapeService";
 import { createWiredPaymentsService } from "../../lib/wiredPaymentsService";
-import type { OnboardingServices, ScrapeResult } from "../../contracts";
-import type { ProvisionOutcome } from "../../flow/provisionWorkspace";
 import {
   clearAnswers,
   loadAnswers,
@@ -28,126 +27,61 @@ import {
   type AnswerStorage,
 } from "../../flow/persistence";
 import {
-  backStep,
-  creditsNeeded,
-  nextStep,
   resumeStep,
   stepPosition,
   type OnboardingAnswers,
-  type OnboardingStep,
 } from "../../flow/steps";
-import { trackForBrain, type TrackResult } from "../../flow/track";
-import {
-  scanAgentSubscriptions,
-  type SubscriptionScan,
-} from "@/shared/api/tauriSubscriptions";
-import { defaultBrainId } from "./screens/brainLanes";
-import { invitesEnabled } from "../../invitesFlag";
+import type { ProvisionOutcome } from "../../flow/provisionWorkspace";
+import { AccountSetup } from "./AccountSetup";
 import { OnboardingCanvas } from "./OnboardingCanvas";
-import {
-  AccountScreen,
-  accountReady,
-  type AccountValues,
-} from "./screens/AccountScreen";
-import { BrainScreen } from "./screens/BrainScreen";
-import { BuildingScreen } from "./screens/BuildingScreen";
-import { CompanyScreen, type CompanyValues } from "./screens/CompanyScreen";
-import { CreditsScreen } from "./screens/CreditsScreen";
-import { InviteScreen } from "./screens/InviteScreen";
 import { RecoveryScreen } from "./screens/RecoveryScreen";
+import { CompanyScreen } from "./screens/CompanyScreen";
 
-/**
- * Answers persist through the throw-safe storage accessors, so a denied-storage
- * origin degrades to an unpersisted flow instead of crashing first run.
- */
-const answerStorage: AnswerStorage = {
-  get: (key) => getStorageItem(key),
-  set: (key, value) => void setStorageItem(key, value),
+export const answerStorage: AnswerStorage = {
+  get: getStorageItem,
+  set: setStorageItem,
   remove: (key) => void removeStorageItem(key),
 };
 
-/** Read once per flow mount: CSS cannot reach a JS interval, so every screen
- *  with a timer receives this as a prop instead of consulting media queries. */
-function readReducedMotion(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
-
-const E2E_AUTH_FAILURE_KEY = "colony.e2e.authFailure";
-
-/**
- * E2E only: one spec pins an auth failure so the account screen's failure
- * states stay testable without pointing the flow at a live server. The mode
- * check is what keeps this unreachable outside the e2e build.
- */
-function readE2eAuthFailure(
-  env: Record<string, string | undefined>,
-): AuthFailure | null {
-  if (env.MODE !== "e2e") return null;
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(E2E_AUTH_FAILURE_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      typeof (parsed as { kind?: unknown }).kind === "string"
-    ) {
-      return parsed as AuthFailure;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Which auth service the flow runs on: the real one everywhere except the
- * e2e build, which keeps fakes so its specs stay hermetic.
- */
+/** Production always uses the real native/account services; fakes are E2E only. */
 export function resolveAuthServices(
   env: Record<string, string | undefined>,
   passed: OnboardingServices,
 ): OnboardingServices {
-  // Anything that is not the e2e build gets the real services.
-  //
-  // This used to also require VITE_NEW_ONBOARDING === "1", from when the flow
-  // was opt-in. Making the flow the default silently stopped that flag being
-  // set, so the condition stopped matching and a production build quietly fell
-  // back to `contracts.fake.ts`: an account that was never created, and a
-  // hand-written paragraph about a Johannesburg workshop presented as what
-  // Colony found on the user's own website. Nothing failed, which is what made
-  // it dangerous. That flag is gone entirely now, and the e2e mode is the only
-  // build that keeps fakes.
-  const useReal = env.MODE !== "e2e";
-  const base = useReal
-    ? {
-        ...passed,
-        auth: createWiredAuthService(),
-        scrape: createWiredScrapeService(),
-        payments: createWiredPaymentsService(),
-      }
-    : passed;
-  const forced = readE2eAuthFailure(env);
-  if (forced === null) return base;
-  return {
-    ...base,
-    auth: {
-      ...base.auth,
-      signUp: async () => {
-        throw forced;
-      },
-    },
-  };
+  const base =
+    env.MODE === "e2e"
+      ? passed
+      : {
+          ...passed,
+          auth: createWiredAuthService(),
+          scrape: createWiredScrapeService(),
+          payments: createWiredPaymentsService(),
+        };
+  if (env.MODE !== "e2e") return base;
+  try {
+    const raw = getStorageItem("colony.e2e.authFailure");
+    const failure: AuthFailure | null = raw ? JSON.parse(raw) : null;
+    if (failure && typeof failure.kind === "string")
+      return {
+        ...base,
+        auth: {
+          ...base.auth,
+          signUp: async () => {
+            throw failure;
+          },
+        },
+      };
+  } catch {
+    /* Missing E2E override leaves the ordinary fixture active. */
+  }
+  return base;
 }
 
 export type OnboardingProvisioning = {
   provision: (
     companyName: string,
     storedSlug: string | null,
+    rememberCandidate: (slug: string | null) => void,
   ) => Promise<ProvisionOutcome>;
   onProvisioned: (
     outcome: Extract<ProvisionOutcome, { ok: true }>,
@@ -157,46 +91,16 @@ export type OnboardingProvisioning = {
 
 type Props = {
   services: OnboardingServices;
-  /**
-   * How the company screen claims a workspace. Null when a community is
-   * already applied (internal auto-connect builds): the screen then records
-   * the name and provisions nothing.
-   */
   provisioning: OnboardingProvisioning | null;
-  /**
-   * Completes the run against the applied community. Rejecting keeps the
-   * flow on screen with a retry, so a failed handoff never strands anyone in
-   * an empty app.
-   */
-  onComplete: (answers: OnboardingAnswers) => Promise<void>;
-  /**
-   * Explicit user exit toward email sign-in (the machine flow's
-   * account-signin page). Offered only where the caller can honour it; the
-   * host is left unfinished because onboarding simply did not happen here.
-   */
+  onComplete: (
+    answers: OnboardingAnswers,
+    isCurrentRun: () => boolean,
+  ) => Promise<void>;
   onRequestSignIn?: () => void;
-  /**
-   * The person walking this already has an identity on this machine: they
-   * signed in, or imported a key, and then asked to create a community. The
-   * account and recovery screens are behind them, so the walk starts on the
-   * company screen and never offers those two as somewhere to go back to.
-   */
   existingIdentity?: boolean;
-  /**
-   * Leaves an existing-identity run from its first screen, back to whatever
-   * offered it. Only meaningful alongside `existingIdentity`.
-   */
   onLeaveRun?: () => void;
-  /**
-   * Where this run's answers are stored. First run owns the default key; a
-   * run for a second community passes one of its own so the two cannot resume
-   * onto each other's answers.
-   */
   answersKey?: string;
-  /**
-   * Chrome pinned to the canvas for every screen of this run (the
-   * second-community walk's way out).
-   */
+  currentPubkey?: string;
   canvasOverlay?: ReactNode;
 };
 
@@ -208,537 +112,255 @@ export function NewOnboardingFlow({
   existingIdentity = false,
   onLeaveRun,
   answersKey,
+  currentPubkey,
   canvasOverlay,
 }: Props) {
-  // Build-time flags never change mid-session, so both are read once.
-  const canInvite = invitesEnabled(import.meta.env);
-  // Resolved once per mount: the flow must not see a new services identity
-  // mid-run (in-flight steps read it), for the same reason App memoises the
-  // fakes it passes in.
   const [effectiveServices] = useState(() =>
     resolveAuthServices(import.meta.env, services),
   );
-  const [reducedMotion] = useState(readReducedMotion);
-
-  const [boot] = useState(() => {
+  const [answers, setAnswers] = useState<OnboardingAnswers>(() => {
     const loaded = loadAnswers(answerStorage, answersKey);
-    if (!existingIdentity) {
-      return { answers: loaded, step: resumeStep(loaded) };
-    }
-    // The two account screens are already answered by the fact that this
-    // identity exists. Recording that, rather than special-casing the
-    // resume, keeps one definition of "where does this run pick up".
-    const seeded: OnboardingAnswers = {
-      ...loaded,
-      account: loaded.account ?? { email: "" },
-      recoveryAcknowledged: true,
-    };
-    return { answers: seeded, step: resumeStep(seeded) };
-  });
-  const [answers, setAnswers] = useState<OnboardingAnswers>(boot.answers);
-  const [step, setStep] = useState<OnboardingStep>(boot.step);
-
-  const [accountValues, setAccountValues] = useState<AccountValues>({
-    name: "",
-    email: "",
-    password: "",
-    city: "",
-    country: "",
-    gender: null,
-    selfDescribedGender: "",
-    avatarUrl: "",
-  });
-  const [isSigningUp, setIsSigningUp] = useState(false);
-  const [accountFailure, setAccountFailure] = useState<AuthFailure | null>(
-    null,
-  );
-  const [acknowledged, setAcknowledged] = useState(false);
-  const [recoveryCode, setRecoveryCode] = useState("");
-  const [pubkey, setPubkey] = useState("");
-  const [companyValues, setCompanyValues] = useState<CompanyValues>({
-    company: "",
-    stage: null,
-    hasWebsite: null,
-    website: "",
-  });
-  const [companyState, setCompanyState] = useState<{
-    status: "idle" | "provisioning" | "error";
-    message?: string;
-  }>({ status: "idle" });
-  const [finishState, setFinishState] = useState<{
-    status: "idle" | "running" | "error";
-    message?: string;
-  }>({ status: "idle" });
-
-  const [trackResult, setTrackResult] = useState<TrackResult | null>(null);
-  const [selectedBrain, setSelectedBrain] = useState<string | null>(null);
-  const [subscriptionScan, setSubscriptionScan] =
-    useState<SubscriptionScan | null>(null);
-  const [openRouterKey, setOpenRouterKey] = useState("");
-  // A pick of their own is never overwritten by a scan that lands after it.
-  const brainPickedByFounder = useRef(false);
-
-  /**
-   * What the founder already pays for, read from disk once per run.
-   *
-   * Filesystem only: a PATH probe per harness plus one config read, so it is
-   * safe this early, before anyone has agreed to anything. A failed scan is
-   * not an error state: the brain screen falls back to the runtime catalog
-   * and still offers all three lanes.
-   */
-  useEffect(() => {
-    let cancelled = false;
-    void scanAgentSubscriptions()
-      .then((scan) => {
-        // A host that does not know the command may resolve with nothing
-        // rather than rejecting, and a scan without harnesses is not a scan.
-        if (cancelled || !Array.isArray(scan?.harnesses)) return;
-        setSubscriptionScan(scan);
-        if (!brainPickedByFounder.current) {
-          setSelectedBrain(defaultBrainId(scan));
+    return existingIdentity
+      ? {
+          ...loaded,
+          account: loaded.account ?? { email: "" },
+          recoveryAcknowledged: true,
         }
-      })
-      .catch((error: unknown) => {
-        console.warn("Could not scan for agent subscriptions.", error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleBrainSelect = useCallback((id: string) => {
-    brainPickedByFounder.current = true;
-    setSelectedBrain(id);
-  }, []);
-
-  /**
-   * The brain screen is on every path now: it offers three ways of paying for
-   * the thinking, so it is a real choice even on a computer with nothing
-   * installed. What moves instead is the credits screen, which only the
-   * founder who chose Colony's own agent has anything to buy on.
-   */
-  const visibility = {
-    invitesEnabled: canInvite,
-    creditsNeeded: creditsNeeded(answers),
-  };
-
-  const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [websiteRead, setWebsiteRead] = useState(false);
-  const [invites, setInvites] = useState<string[]>([]);
-  const [isSendingInvites, setIsSendingInvites] = useState(false);
-
-  const onCompleteRef = useRef(onComplete);
-  useEffect(() => {
-    onCompleteRef.current = onComplete;
-  }, [onComplete]);
-
-  /** Flow complete: hand the answers to the host, which sets the workspace
-   *  up against the applied community, then drop the stored answers so a
-   *  relaunch starts clean. Idempotent, because completion can be reached
-   *  from several paths at once; a rejected handoff releases the latch so
-   *  the user can try again rather than being stranded. */
-  const finishedRef = useRef(false);
+      : loaded;
+  });
   const answersRef = useRef(answers);
-  answersRef.current = answers;
-  const finish = useCallback(() => {
-    if (finishedRef.current) return;
-    finishedRef.current = true;
-    setFinishState({ status: "running" });
-    void onCompleteRef
-      .current(answersRef.current)
-      .then(() => {
-        // Cleared only on success: a failed handoff must stay resumable.
-        clearAnswers(answerStorage, answersKey);
-      })
-      .catch((error: unknown) => {
-        finishedRef.current = false;
-        setFinishState({
-          status: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Something went wrong opening your workspace. Try again.",
-        });
-      });
-  }, [answersKey]);
-
-  const goTo = useCallback(
-    (target: OnboardingStep | "done") => {
-      // An invite link has nowhere to land while the download button is off
-      // the marketing site, so an invite target completes the flow instead.
-      if (target === "done" || (target === "invite" && !canInvite)) {
-        finish();
-        return;
-      }
-      setStep(target);
+  const [pending, setPending] = useState<PendingSignup | null>(null);
+  const [loadingRecovery, setLoadingRecovery] = useState(!existingIdentity);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const running = useRef(false);
+  const activeRun = useRef<symbol | null>(null);
+  const mounted = useRef(false);
+  const scopeRef = useRef({ answersKey, currentPubkey });
+  useLayoutEffect(() => {
+    scopeRef.current = { answersKey, currentPubkey };
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      activeRun.current = null;
+      running.current = false;
+    };
+  }, [answersKey, currentPubkey]);
+  const persist = useCallback(
+    (next: OnboardingAnswers) => {
+      saveAnswers(answerStorage, next, answersKey);
+      answersRef.current = next;
+      setAnswers(next);
     },
-    [canInvite, finish],
+    [answersKey],
   );
 
-  // Covers a resume whose last completed screen was credits: the previous
-  // build may have had invites on, this one does not.
-  useEffect(() => {
-    if (!canInvite && step === "invite") finish();
-  }, [canInvite, step, finish]);
-
-  useEffect(() => {
-    saveAnswers(answerStorage, answers, answersKey);
-  }, [answers, answersKey]);
-
-  // The machine flow's config screen used to seed a brand-new account's agent
-  // defaults when it mounted. That screen asked the brain question a second
-  // time and is gone; the seeding was never the duplicated part, so it runs
-  // here instead, at the top of the flow rather than at the brain screen. A
-  // founder who abandons before picking still lands on a workspace whose
-  // agents can start, and a founder who does pick overwrites it below.
-  useEffect(() => {
-    void applyFreshSignupDefaults().catch((error: unknown) => {
-      console.warn("Could not seed fresh-signup agent defaults.", error);
-    });
-  }, []);
-
-  const goBack = () => {
-    const target = backStep(step, visibility);
-    if (!target) return;
-    // Back off the company screen leads to the account screen, which does not
-    // exist on this path: the identity was made before the run started. What
-    // is behind the run instead is the choice that started it, so back leaves
-    // the walk rather than dead-ending on a button that does nothing.
-    if (existingIdentity && (target === "account" || target === "recovery")) {
-      onLeaveRun?.();
-      return;
-    }
-    goTo(target);
-  };
-
-  /**
-   * The screen's back control, or nothing when the screen behind it was never
-   * shown. A control that does nothing when pressed is worse than no control.
-   */
-  const backHandler = (from: OnboardingStep) =>
-    backStep(from, visibility) ? goBack : undefined;
-
-  /**
-   * What the probe found, recorded without moving anywhere.
-   *
-   * The probe used to own a screen of its own and end it, so resolving and
-   * navigating were the same act. It is one line of the building screen now,
-   * which keeps running afterwards: the read may still be in flight and the
-   * draft is still to be edited.
-   *
-   * Preselect the hosted agent, which is ready on every computer, rather than
-   * whatever detection happened to find first. The track follows the
-   * preselection for the same reason it follows an explicit pick.
-   */
-  const handleProbeResolved = useCallback((result: TrackResult) => {
-    setTrackResult(result);
-    // Recorded as colony until the founder says otherwise: it is what keeps a
-    // resume from re-running the building screen, and credits stay counted in
-    // until a choice takes them out. Detection is not a choice.
-    setAnswers((current) => ({ ...current, track: current.track ?? "colony" }));
-  }, []);
-
-  const handleAccountSubmit = async () => {
-    if (!accountReady(accountValues) || isSigningUp) return;
-    setIsSigningUp(true);
-    setAccountFailure(null);
+  const restoreRecovery = useCallback(async () => {
+    if (existingIdentity) return;
+    setLoadingRecovery(true);
+    setRecoveryError(null);
     try {
-      const email = accountValues.email.trim();
-      const result = await effectiveServices.auth.signUp(
-        email,
-        accountValues.password,
-      );
-      setRecoveryCode(result.recoveryCode);
-      setPubkey(result.pubkey);
-      const updated: OnboardingAnswers = {
-        ...answers,
-        account: { email },
-        founder: {
-          fullName: accountValues.name.trim(),
-          city: accountValues.city.trim(),
-          country: accountValues.country.trim(),
-          gender: accountValues.gender,
-          selfDescribedGender: accountValues.selfDescribedGender.trim(),
-          avatarUrl: accountValues.avatarUrl.trim(),
-        },
-      };
-      setAnswers(updated);
-      goTo(nextStep("account", updated));
-    } catch (thrown) {
-      // authService throws the typed union; anything else still lands on the
-      // generic retry state rather than vanishing. Either way the user stays
-      // here with every field intact and the button re-enabled.
-      setAccountFailure(
-        typeof thrown === "object" && thrown !== null && "kind" in thrown
-          ? (thrown as AuthFailure)
-          : { kind: "unreachable" },
-      );
-    } finally {
-      setIsSigningUp(false);
-    }
-  };
-
-  const handleRecoveryContinue = () => {
-    const updated = { ...answers, recoveryAcknowledged: true };
-    setAnswers(updated);
-    goTo(nextStep("recovery", updated));
-  };
-
-  const handleCompanySubmit = async (normalisedWebsite: string | null) => {
-    const name = companyValues.company.trim();
-    if (!name || companyState.status === "provisioning") return;
-    // Stage and the website answer are recorded alongside the name: they are
-    // three questions on one screen, so they land together or not at all.
-    const said = {
-      stage: companyValues.stage,
-      hasWebsite: companyValues.hasWebsite,
-      website: normalisedWebsite,
-    };
-    if (!provisioning) {
-      // A community is already applied: nothing to claim, just record it.
-      const updated: OnboardingAnswers = { ...answers, company: name, ...said };
-      setAnswers(updated);
-      goTo(nextStep("company", updated));
-      return;
-    }
-    setCompanyState({ status: "provisioning" });
-    const outcome = await provisioning.provision(name, answers.communitySlug);
-    if (!outcome.ok) {
-      setCompanyState({ status: "error", message: outcome.message });
-      return;
-    }
-    provisioning.onProvisioned(outcome, name);
-    setCompanyState({ status: "idle" });
-    const updated: OnboardingAnswers = {
-      ...answers,
-      company: name,
-      ...said,
-      // Recorded so a reload resumes onto the address already claimed
-      // instead of claiming a second one.
-      communitySlug: outcome.slug,
-    };
-    setAnswers(updated);
-    goTo(nextStep("company", updated));
-  };
-
-  const handleBrainContinue = () => {
-    const chosen = selectedBrain ?? defaultBrainId(subscriptionScan);
-    // The pick decides the track, not what probing found: someone who keeps
-    // the hosted agent is on the colony track even with a CLI signed in.
-    const track = trackForBrain(chosen, trackResult?.installed ?? []);
-    const updated: OnboardingAnswers = { ...answers, brain: chosen, track };
-    setAnswers(updated);
-    setTrackResult((current) => (current ? { ...current, track } : current));
-    // Write the choice into the agent config the workspace actually starts
-    // agents from. Recording it in `answers` alone left founders who picked
-    // Claude Code with defaults still set to another runtime and no model, and
-    // a Chief of Staff that never answered. Best effort: a failed config write
-    // must not trap someone on this screen, and Agent defaults can fix it.
-    void applyBrainChoice(chosen, undefined, openRouterKey).catch(
-      (error: unknown) => {
-        console.warn(
-          "Could not apply the selected brain to agent defaults.",
-          error,
-        );
-      },
-    );
-    goTo(nextStep("brain", updated));
-  };
-
-  const handleReadingDone = useCallback((result: ScrapeResult) => {
-    if (result.ok) setDescriptionDraft(result.description);
-    // Only a reading that came back with something costs anything to refund
-    // against, and the credits screen may only promise the refund when it
-    // did. A resume that lands straight on credits leaves this false, which
-    // is the safe direction: the screen says nothing rather than promising
-    // money back against a spend it cannot see.
-    setWebsiteRead(result.ok);
-  }, []);
-
-  const handleBuildingContinue = () => {
-    const updated: OnboardingAnswers = {
-      ...answers,
-      description: descriptionDraft.trim(),
-    };
-    setAnswers(updated);
-    goTo(nextStep("building", updated));
-  };
-
-  const handlePaid = () => {
-    const updated: OnboardingAnswers = { ...answers, paid: true };
-    setAnswers(updated);
-    goTo(nextStep("credits", updated));
-  };
-
-  const handleCreditsSkip = () => {
-    goTo(nextStep("credits", answers));
-  };
-
-  const handleInvitesSend = async () => {
-    if (!invites.length || isSendingInvites) return;
-    setIsSendingInvites(true);
-    try {
-      await effectiveServices.invites.invite(invites);
-      finish();
-    } finally {
-      setIsSendingInvites(false);
-    }
-  };
-
-  const { globalConfig } = useGlobalAgentConfig();
-  const canvasTrack = trackResult?.track ?? answers.track ?? "colony";
-
-  const body = (() => {
-    switch (step) {
-      case "account":
-        return (
-          <AccountScreen
-            values={accountValues}
-            onChange={(patch) => {
-              setAccountValues((current) => ({ ...current, ...patch }));
-              // A fresh attempt is a new question; drop the stale answer.
-              setAccountFailure(null);
-            }}
-            onSubmit={handleAccountSubmit}
-            isSubmitting={isSigningUp}
-            failure={accountFailure}
-            onSignInRequest={onRequestSignIn}
-          />
-        );
-      case "recovery":
-        return (
-          <RecoveryScreen
-            code={recoveryCode}
-            acknowledged={acknowledged}
-            onAcknowledge={setAcknowledged}
-            onContinue={handleRecoveryContinue}
-          />
-        );
-      case "company":
-        return (
-          <CompanyScreen
-            values={companyValues}
-            onChange={(patch) => {
-              setCompanyValues((current) => ({ ...current, ...patch }));
-              // Editing an answer is a fresh attempt; drop the stale one.
-              setCompanyState({ status: "idle" });
-            }}
-            onSubmit={(normalisedWebsite) =>
-              void handleCompanySubmit(normalisedWebsite)
-            }
-            onBack={goBack}
-            isSubmitting={companyState.status === "provisioning"}
-            error={
-              companyState.status === "error"
-                ? (companyState.message ?? null)
-                : null
-            }
-          />
-        );
-      case "building":
-        return (
-          <BuildingScreen
-            hasWebsite={answers.hasWebsite === true}
-            website={answers.website ?? ""}
-            globalConfig={globalConfig}
-            services={effectiveServices}
-            reducedMotion={reducedMotion}
-            value={descriptionDraft}
-            onChange={setDescriptionDraft}
-            onProbeResolved={handleProbeResolved}
-            onReadDone={handleReadingDone}
-            onContinue={handleBuildingContinue}
-          />
-        );
-      case "brain":
-        if (trackResult === null) {
-          // A resumed session has no probe result yet: run the building screen
-          // again rather than guess what was installed. It re-probes, and
-          // `resumeStep` sends a resume here in the first place only once the
-          // draft exists, so nothing it produced is thrown away.
-          return (
-            <BuildingScreen
-              hasWebsite={answers.hasWebsite === true}
-              website={answers.website ?? ""}
-              globalConfig={globalConfig}
-              services={effectiveServices}
-              reducedMotion={reducedMotion}
-              value={descriptionDraft}
-              onChange={setDescriptionDraft}
-              onProbeResolved={handleProbeResolved}
-              onReadDone={handleReadingDone}
-              onContinue={handleBuildingContinue}
-            />
-          );
+      const restored = await effectiveServices.auth.pendingSignup();
+      setPending(restored);
+      // Migrate an unscoped older draft only when native identity-bound
+      // account evidence matches. Never carry one person's company to another.
+      let next = answersRef.current;
+      if (!next.account && restored && answersKey) {
+        const legacy = loadAnswers(answerStorage);
+        if (
+          legacy.account?.email.trim().toLowerCase() === restored.email &&
+          (!legacy.identityPubkey || legacy.identityPubkey === restored.pubkey)
+        )
+          next = legacy;
+      }
+      if (!next.account && !restored && answersKey) {
+        const legacy = loadAnswers(answerStorage);
+        if (
+          legacy.account &&
+          !legacy.recoveryAcknowledged &&
+          (!legacy.identityPubkey || legacy.identityPubkey === currentPubkey)
+        ) {
+          // Preserve the old checkpoint, but never invent its lost code or
+          // proceed to provisioning. The recovery screen offers sign-in.
+          next = { ...legacy, identityPubkey: currentPubkey ?? null };
+          persist(next);
         }
-        return (
-          <BrainScreen
-            brains={trackResult.brains}
-            onContinue={handleBrainContinue}
-            onOpenRouterKeyChange={setOpenRouterKey}
-            onSelect={handleBrainSelect}
-            openRouterKey={openRouterKey}
-            scan={subscriptionScan}
-            selected={selectedBrain ?? defaultBrainId(subscriptionScan)}
-          />
-        );
-      case "credits":
-        return (
-          <CreditsScreen
-            track={canvasTrack}
-            email={answers.account?.email ?? ""}
-            pubkey={pubkey}
-            websiteRead={websiteRead}
-            payments={effectiveServices.payments}
-            onPaid={handlePaid}
-            onSkip={handleCreditsSkip}
-            onBack={backHandler("credits")}
-            finishing={finishState.status === "running"}
-            finishError={
-              finishState.status === "error"
-                ? (finishState.message ?? null)
-                : null
-            }
-            onRetryFinish={finish}
-          />
-        );
-      case "invite":
-        return canInvite ? (
-          <InviteScreen
-            invites={invites}
-            onChange={setInvites}
-            onSend={handleInvitesSend}
-            onSkip={() => goTo(nextStep("invite", answers))}
-            onBack={goBack}
-            finishing={finishState.status === "running"}
-            finishError={
-              finishState.status === "error"
-                ? (finishState.message ?? null)
-                : null
-            }
-            onRetryFinish={finish}
-          />
-        ) : null;
-      default:
-        return null;
+      }
+      if (restored?.phase === "registered") {
+        next = {
+          ...next,
+          account: { email: restored.email },
+          signupAttemptId: restored.attemptId,
+          identityPubkey: restored.pubkey,
+        };
+        persist(next);
+        if (next.recoveryAcknowledged)
+          await effectiveServices.auth.acknowledgeRecovery(restored.attemptId);
+      }
+    } catch {
+      setRecoveryError(
+        "We could not open your saved recovery code. Try again.",
+      );
+    } finally {
+      setLoadingRecovery(false);
     }
-  })();
+  }, [effectiveServices, existingIdentity, answersKey, currentPubkey, persist]);
+  useEffect(() => {
+    void restoreRecovery();
+  }, [restoreRecovery]);
 
-  const position = stepPosition(step, visibility);
-  // An existing-identity run never shows the account or recovery screens, and
-  // a counter that includes them would open on "03 / 06" and promise two
-  // screens that are not coming.
-  const skippedSteps = existingIdentity ? 2 : 0;
-
+  async function accountCreated(result: SignUpResult, email: string) {
+    persist({
+      ...answersRef.current,
+      account: { email },
+      signupAttemptId: result.attemptId,
+      identityPubkey: currentPubkey ?? result.pubkey,
+    });
+    setPending({ ...result, email, phase: "registered" });
+  }
+  async function acknowledgeRecovery() {
+    if (
+      !pending ||
+      pending.phase !== "registered" ||
+      !pending.recoveryCode.trim()
+    )
+      throw new Error("Recovery code unavailable");
+    const updated = { ...answersRef.current, recoveryAcknowledged: true };
+    // Persist the successful backup acknowledgement before clearing its
+    // secret. A crash between them leaves safe, repeatable cleanup.
+    saveAnswers(answerStorage, updated, answersKey);
+    await effectiveServices.auth.acknowledgeRecovery(pending.attemptId);
+    persist(updated);
+    setPending(null);
+  }
+  async function finishBusiness(website: string | null) {
+    if (running.current) return;
+    running.current = true;
+    const run = Symbol("onboarding-submit");
+    activeRun.current = run;
+    const isCurrentRun = () =>
+      mounted.current &&
+      activeRun.current === run &&
+      scopeRef.current.answersKey === answersKey &&
+      scopeRef.current.currentPubkey === currentPubkey;
+    setBusy(true);
+    setError(null);
+    try {
+      let next = {
+        ...answersRef.current,
+        website,
+        hasWebsite: !!website,
+        firstTaskMarker:
+          answersRef.current.firstTaskMarker ?? crypto.randomUUID(),
+      };
+      persist(next);
+      if (provisioning) {
+        const result = await provisioning.provision(
+          next.company?.trim() ?? "",
+          next.communitySlug ?? next.provisioningCandidate ?? null,
+          (candidate) => {
+            // Refuse a create that has not started yet after the owner leaves.
+            // Candidates already persisted before a request remain resumable.
+            if (!isCurrentRun()) throw new Error("This setup run has ended");
+            next = { ...next, provisioningCandidate: candidate };
+            persist(next);
+          },
+        );
+        if (!isCurrentRun()) return;
+        if (!result.ok) throw new Error(result.message);
+        next = { ...next, communitySlug: result.slug };
+        persist(next);
+        provisioning.onProvisioned(result, next.company ?? "");
+      }
+      if (!isCurrentRun()) return;
+      await onComplete(next, isCurrentRun);
+      clearAnswers(answerStorage, answersKey);
+    } catch (cause) {
+      if (!isCurrentRun()) return;
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "We could not finish opening your business. Try again.",
+      );
+    } finally {
+      if (isCurrentRun()) {
+        activeRun.current = null;
+        running.current = false;
+        setBusy(false);
+      }
+    }
+  }
+  const step = resumeStep(answers);
+  const basePosition = stepPosition(step, {
+    invitesEnabled: false,
+    creditsNeeded: false,
+  });
+  const position = existingIdentity ? { index: 0, total: 1 } : basePosition;
   return (
     <OnboardingCanvas
       step={step}
-      track={canvasTrack}
-      index={Math.max(0, position.index - skippedSteps)}
-      total={position.total - skippedSteps}
-      overlay={canvasOverlay}
+      track="colony"
+      {...position}
+      overlay={
+        canvasOverlay ? (
+          <fieldset disabled={busy} className="contents">
+            {canvasOverlay}
+          </fieldset>
+        ) : undefined
+      }
     >
-      {body}
+      {step === "account" ? (
+        <AccountSetup
+          auth={effectiveServices.auth}
+          onCreated={accountCreated}
+          onSignIn={onRequestSignIn}
+        />
+      ) : step === "recovery" ? (
+        <RecoveryScreen
+          code={pending?.phase === "registered" ? pending.recoveryCode : ""}
+          loading={loadingRecovery}
+          loadError={recoveryError}
+          onRetry={recoveryError ? () => void restoreRecovery() : undefined}
+          onSignIn={onRequestSignIn}
+          onSave={() =>
+            pending
+              ? effectiveServices.auth.saveRecovery(pending.attemptId)
+              : Promise.reject(new Error("Recovery unavailable"))
+          }
+          onContinue={acknowledgeRecovery}
+        />
+      ) : (
+        <CompanyScreen
+          onSignIn={onRequestSignIn}
+          businessOnly={existingIdentity}
+          values={{
+            company: answers.company ?? "",
+            website: answers.website ?? "",
+            description: answers.description ?? "",
+          }}
+          onChange={(patch) => {
+            const next = { ...answersRef.current, ...patch };
+            try {
+              persist(next);
+              setError(null);
+            } catch (cause) {
+              answersRef.current = next;
+              setAnswers(next);
+              setError(
+                cause instanceof Error
+                  ? cause.message
+                  : "We could not save your progress.",
+              );
+            }
+          }}
+          onSubmit={(website) => void finishBusiness(website)}
+          onBack={existingIdentity && !canvasOverlay ? onLeaveRun : undefined}
+          isSubmitting={busy}
+          error={error}
+          scrape={effectiveServices.scrape}
+        />
+      )}
     </OnboardingCanvas>
   );
 }

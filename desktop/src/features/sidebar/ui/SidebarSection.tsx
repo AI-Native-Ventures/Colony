@@ -15,6 +15,7 @@ import {
   ContextMenuTrigger,
 } from "@/shared/ui/context-menu";
 
+import { agentRoleLabel } from "@/features/agents/agentIdentityPresentation";
 import { ChannelContextMenuItems } from "@/features/sidebar/ui/ChannelContextMenu";
 import type { ActiveChannelTurnSummary } from "@/features/agents/activeAgentTurnsStore";
 import { formatElapsed } from "@/features/agents/ui/agentSessionUtils";
@@ -155,6 +156,8 @@ function ChannelWorkingBadge({
 }
 
 export type SidebarDmParticipant = {
+  isAgent?: boolean;
+  roleTitle?: string;
   avatarUrl: string | null;
   label: string;
   pubkey: string;
@@ -201,6 +204,9 @@ function DmChannelIcon({
           geometry={DM_AVATAR_STATUS_GEOMETRY}
           iconClassName="h-3.5 w-3.5"
           label={primaryParticipant.label}
+          identitySeed={
+            primaryParticipant.isAgent ? primaryParticipant.pubkey : undefined
+          }
           size={DM_AVATAR_SIZE}
           status={presenceStatus}
           statusTestId={`channel-presence-${channelName}`}
@@ -273,6 +279,12 @@ export function ChannelMenuButton({
   onSelectChannel: (channelId: string) => void;
 }) {
   const resolvedLabel = label ?? channel.name;
+  const agentParticipant =
+    channel.channelType === "dm" &&
+    dmParticipants?.length === 1 &&
+    dmParticipants[0].isAgent
+      ? dmParticipants[0]
+      : undefined;
   const ephemeralDisplay = getEphemeralChannelDisplay(channel);
   const {
     hasSidebarUnreadProjections,
@@ -303,6 +315,7 @@ export function ChannelMenuButton({
     <SidebarMenuButton
       className={cn(
         "data-[active=true]:font-normal",
+        agentParticipant && "h-auto min-h-11 py-1.5",
         isActive
           ? "group-hover/menu-item:bg-sidebar-active group-hover/menu-item:text-sidebar-active-foreground"
           : "group-hover/menu-item:bg-sidebar-accent group-hover/menu-item:text-sidebar-foreground",
@@ -328,7 +341,15 @@ export function ChannelMenuButton({
         className={cn("min-w-0 flex-1 truncate", inactiveContentOpacity)}
         data-sidebar-row-label
       >
-        {resolvedLabel}
+        <span className="block truncate">{resolvedLabel}</span>
+        {agentParticipant ? (
+          <span
+            className="block truncate text-xs font-normal leading-4 opacity-75"
+            data-testid="dm-agent-role"
+          >
+            {agentRoleLabel(agentParticipant.roleTitle)}
+          </span>
+        ) : null}
       </span>
       {ephemeralDisplay ? (
         <EphemeralChannelBadge

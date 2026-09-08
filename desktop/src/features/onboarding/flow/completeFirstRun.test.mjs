@@ -238,3 +238,32 @@ test("a photo with no name still reaches the profile", async () => {
   );
   assert.deepEqual(written, [{ avatarUrl: "https://cdn.test/aisha.png" }]);
 });
+
+test("leaving during channel setup stops the old run before profile and task writes", async () => {
+  let current = true;
+  const { io, calls } = makeIo({
+    initializeStarterChannels: async () => {
+      calls.push("channels");
+      current = false;
+      return { ok: true, focusChannelId: "chan-1" };
+    },
+  });
+  await assert.rejects(
+    completeFirstRun(
+      {
+        queryClient: {},
+        relayUrl: "wss://acme.test",
+        pubkey: "pk1",
+        draft,
+        profileDisplayName: "Owner",
+        profileAvatarUrl: null,
+        assertCurrent: () => {
+          if (!current) throw new Error("Run ended");
+        },
+      },
+      io,
+    ),
+    /Run ended/,
+  );
+  assert.deepEqual(calls, ["channels"]);
+});

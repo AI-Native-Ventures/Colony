@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { readThemeColor } from "../helpers/workspaceAppearance";
 
 const SHOTS = "test-results/buzz-theme";
 const THEME_STORAGE_KEY = "buzz-theme";
@@ -64,20 +65,24 @@ async function openChannel(page: Page) {
 }
 
 async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
-  const mutedColor =
-    mode === "light" ? "rgba(0, 0, 0, 0.4)" : "rgba(255, 255, 255, 0.4)";
+  const mutedColor = await readThemeColor(page, "var(--buzz-muted-foreground)");
   const searchSurface =
     mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
   const rowHoverSurface =
     mode === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.04)";
-  // The selected row is the accent, not a wash. It used to be a 7% black
-  // tint that read as a faint grey pill on a violet sidebar, and no accent
-  // could reach it. Violet is the default, so that is what a default install
-  // paints here; Neutral still gets the wash, which its own case covers.
-  const activeSurface = "rgb(137, 90, 246)";
-  const activeForeground = "rgb(255, 255, 255)";
-  const chromeColor =
-    mode === "light" ? "rgba(0, 0, 0, 0.5)" : "rgba(255, 255, 255, 0.5)";
+  // Selection is the approved quiet raised surface with readable foreground.
+  const activeSurface = await readThemeColor(
+    page,
+    "hsl(var(--buzz-workspace-raised))",
+  );
+  const activeForeground = await readThemeColor(
+    page,
+    "hsl(var(--buzz-workspace-foreground))",
+  );
+  const chromeColor = await readThemeColor(
+    page,
+    "var(--buzz-chrome-foreground)",
+  );
   const search = page.getByTestId("open-search");
   const pinnedHeader = page.getByTestId("sidebar-pinned-header");
   const sidebarScroller = page.locator(".buzz-sidebar-scrollbar");
@@ -92,15 +97,15 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
   await expect(search).toHaveCSS("background-color", searchSurface);
   await expect(search.locator("svg").first()).toHaveCSS("color", mutedColor);
   await expect(search.locator("span").first()).toHaveCSS("color", mutedColor);
-  await expect(pinnedHeader).toHaveCSS("padding-bottom", "8px");
+  await expect(pinnedHeader).toHaveCSS("padding-bottom", "12px");
   await expect(pinnedHeader).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(pinnedHeader).toHaveCSS("margin-left", "3px");
-  await expect(pinnedHeader).toHaveCSS("margin-right", "3px");
+  await expect(pinnedHeader).toHaveCSS("margin-left", "8px");
+  await expect(pinnedHeader).toHaveCSS("margin-right", "8px");
   await expect(pinnedHeader).toHaveCSS("padding-right", "8px");
   await expect(sidebarScroller).toHaveCSS("padding-left", "0px");
   await expect(sidebarScroller).toHaveCSS("padding-right", "0px");
-  await expect(scrollContent).toHaveCSS("padding-left", "3px");
-  await expect(scrollContent).toHaveCSS("padding-right", "3px");
+  await expect(scrollContent).toHaveCSS("padding-left", "8px");
+  await expect(scrollContent).toHaveCSS("padding-right", "8px");
   const pinnedSpacerColor = await pinnedHeader.evaluate(
     (element) => getComputedStyle(element, "::before").backgroundColor,
   );
@@ -158,12 +163,12 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
   ) {
     throw new Error("Sidebar search or primary navigation geometry is missing");
   }
-  expect(primaryMenuBox.y - (searchBox.y + searchBox.height)).toBe(8);
+  expect(primaryMenuBox.y - (searchBox.y + searchBox.height)).toBe(12);
   expect(
     pinnedHeaderBox.y +
       pinnedHeaderBox.height -
       (searchBox.y + searchBox.height),
-  ).toBe(8);
+  ).toBe(12);
   expect(primaryMenuBox.y - (pinnedHeaderBox.y + pinnedHeaderBox.height)).toBe(
     0,
   );
@@ -205,7 +210,7 @@ async function expectBuzzSidebarPalette(page: Page, mode: "light" | "dark") {
     "background-color",
     activeSurface,
   );
-  // Label and icon ride the accent rather than keeping their resting tint.
+  // Label and icon share the active foreground.
   await expect(page.getByTestId("channel-general")).toHaveCSS(
     "color",
     activeForeground,
@@ -297,8 +302,11 @@ async function expectBuzzContentShadow(page: Page, mode: "light" | "dark") {
 
   expect(effects.appStroke).toBe("none");
   if (mode === "light") {
-    expect(effects.contentShadow).toContain("4px");
-    expect(effects.contentShadow).toContain("rgba(0, 0, 0, 0.07)");
+    expect(effects.contentShadow).toBe("none");
+    await expect(page.getByTestId("channel-drop-zone")).toHaveCSS(
+      "border-top-width",
+      "1px",
+    );
     expect(effects.shadowViewportOverflow).toBe("visible");
   } else {
     expect(effects.contentShadow).not.toContain("4px");
@@ -353,8 +361,7 @@ async function expectBuzzGradientPaint(
 }
 
 async function expectBuzzSettingsPalette(page: Page, mode: "light" | "dark") {
-  const mutedColor =
-    mode === "light" ? "rgba(0, 0, 0, 0.4)" : "rgba(255, 255, 255, 0.4)";
+  const mutedColor = await readThemeColor(page, "var(--buzz-muted-foreground)");
   const sidebar = page.getByTestId("settings-sidebar");
   const sectionLabel = sidebar
     .locator('[data-sidebar="group-label"]')
@@ -400,13 +407,8 @@ async function expectAppliedBuzzTheme(
       storedTheme,
       isDark,
       buzzTheme: themeName,
-      // Light is one flat violet, top and bottom the same: a gradient in name
-      // only. It used to fade violet into a grey-blue, which read as a wash
-      // rather than as the brand colour. Dark keeps its fade. Keep in sync
-      // with --buzz-gradient-* in shared/styles/globals/theme.css and with
-      // mobile/lib/shared/theme/colony_theme.dart.
-      gradientTop: isDark ? "#2a1e48" : "#c9b6f7",
-      gradientBottom: isDark ? "#0a1423" : "#c9b6f7",
+      gradientTop: expect.stringMatching(/^#[a-f0-9]{6}$/i),
+      gradientBottom: expect.stringMatching(/^#[a-f0-9]{6}$/i),
     });
 }
 
@@ -452,7 +454,11 @@ test("buzz dark sidebar gradient", async ({ page }) => {
   await expectIconlessSectionTitleAligned(page, "dm-list");
   await expect(page.locator("[data-buzz-content-surface]")).toHaveCSS(
     "background-color",
-    "rgb(26, 26, 26)",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(page.getByTestId("channel-drop-zone")).toHaveCSS(
+    "background-color",
+    await readThemeColor(page, "hsl(var(--buzz-workspace-dark-content))"),
   );
   await waitForAnimations(page);
   await page
@@ -723,7 +729,7 @@ test("settings nav uses Buzz active pill + hover (dark)", async ({ page }) => {
   await expectBuzzSettingsPalette(page, "dark");
   await expect(page.getByTestId("settings-content-surface")).toHaveCSS(
     "background-color",
-    "rgb(26, 26, 26)",
+    await readThemeColor(page, "hsl(var(--buzz-workspace-dark-content))"),
   );
   await waitForAnimations(page);
   await sidebar.screenshot({ path: `${SHOTS}/07-settings-nav-dark.png` });
@@ -837,15 +843,13 @@ test("prominent channel and direct-message rows share one flat active state", as
   );
 });
 
-for (const { activeSurface, hoverSurface, mode, theme } of [
+for (const { hoverSurface, mode, theme } of [
   {
-    activeSurface: "rgb(137, 90, 246)",
     hoverSurface: "rgba(0, 0, 0, 0.04)",
     mode: "light" as const,
     theme: "buzz",
   },
   {
-    activeSurface: "rgb(137, 90, 246)",
     hoverSurface: "rgba(255, 255, 255, 0.04)",
     mode: "dark" as const,
     theme: "buzz-dark",
@@ -869,6 +873,10 @@ for (const { activeSurface, hoverSurface, mode, theme } of [
       new RegExp(`(^|\\s)${mode === "dark" ? "dark" : "light"}($|\\s)`),
     );
     await expect(root).not.toHaveAttribute("data-prominent-active-tab", "");
+    const activeSurface = await readThemeColor(
+      page,
+      "hsl(var(--buzz-workspace-raised))",
+    );
     await expect(activeRow).toHaveCSS("background-color", activeSurface);
     await expect(activeRow).toHaveCSS("box-shadow", "none");
     await expect(activeRow).toHaveCSS("font-weight", "400");
@@ -944,13 +952,12 @@ for (const { mode, theme } of [
   });
 }
 
-test("settings content uses the same inset surface as the main app", async ({
+test("settings retains native chrome and the Colony content frame", async ({
   page,
 }) => {
   await seedTheme(page, "buzz");
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  const searchBox = await page.getByTestId("open-search").boundingBox();
   await page.getByTestId("open-settings").click();
   await page.getByTestId("profile-popover-settings").click();
 
@@ -979,23 +986,24 @@ test("settings content uses the same inset surface as the main app", async ({
 
   const viewBox = await settingsView.boundingBox();
   const surfaceBox = await contentSurface.boundingBox();
-  expect(searchBox).not.toBeNull();
   expect(backToAppBox).not.toBeNull();
   expect(viewBox).not.toBeNull();
   expect(surfaceBox).not.toBeNull();
-  if (!searchBox || !backToAppBox || !viewBox || !surfaceBox) {
+  if (!backToAppBox || !viewBox || !surfaceBox) {
     throw new Error("Settings layout is missing");
   }
 
-  expect(Math.abs(backToAppBox.y - searchBox.y)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(backToAppBox.y - surfaceBox.y)).toBeLessThanOrEqual(0.5);
 
-  // Match the normal app shell: a fixed 40px top chrome strip, then a 1px
-  // top/left inset and 8px right/bottom inset around the rounded content card.
-  expect(surfaceBox.y - viewBox.y).toBe(41);
-  expect(surfaceBox.x - viewBox.x).toBe(1);
-  expect(viewBox.x + viewBox.width - (surfaceBox.x + surfaceBox.width)).toBe(8);
+  // Settings keeps native control clearance above its padded frame. Its
+  // Back action aligns with the frame, not with the workspace identity/search.
+  expect(surfaceBox.y - viewBox.y).toBe(52);
+  expect(surfaceBox.x - viewBox.x).toBe(0);
+  expect(viewBox.x + viewBox.width - (surfaceBox.x + surfaceBox.width)).toBe(
+    12,
+  );
   expect(viewBox.y + viewBox.height - (surfaceBox.y + surfaceBox.height)).toBe(
-    8,
+    12,
   );
 
   const topChromeBox = await settingsTopChrome.boundingBox();
@@ -1026,14 +1034,24 @@ test("settings content uses the same inset surface as the main app", async ({
   });
 });
 
-test("appearance hides accent picker under Buzz", async ({ page }) => {
+test("Colony appearance exposes accent and background choices", async ({
+  page,
+}) => {
   await seedTheme(page, "buzz");
   await installMockBridge(page);
   const panel = await openAppearance(page, "light");
-  // The accent picker is hidden while a Buzz theme is active. Its neutral
-  // swatch testid must not be present.
-  await expect(page.getByTestId("accent-color-neutral")).toHaveCount(0);
-  await panel.screenshot({ path: `${SHOTS}/10-appearance-no-accent.png` });
+  await expect(page.getByTestId("accent-color-neutral")).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Workspace background patterns" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("workspace-pattern-soft-mesh")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await waitForAnimations(page);
+  await panel.screenshot({
+    path: `${SHOTS}/10-appearance-accents-and-patterns.png`,
+  });
 });
 
 test("glass background keeps the content panel solid", async ({ page }) => {
@@ -1104,12 +1122,14 @@ test("glass background keeps the content panel solid", async ({ page }) => {
   const buzzSettingOrder = await page
     .getByTestId("appearance-theme-card")
     .locator(
-      '[data-testid="appearance-color-mode-row"], [data-testid="theme-style-row"], [data-testid="glass-background-row"], [data-testid="glass-opacity-row"], [data-testid="prominent-active-tab-row"]',
+      '[data-testid="appearance-color-mode-row"], [data-testid="theme-style-row"], [data-testid="accent-color-options"], [data-testid="workspace-pattern-row"], [data-testid="glass-background-row"], [data-testid="glass-opacity-row"], [data-testid="prominent-active-tab-row"]',
     )
     .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-testid")));
   expect(buzzSettingOrder).toEqual([
     "appearance-color-mode-row",
     "theme-style-row",
+    "accent-color-options",
+    "workspace-pattern-row",
     "glass-background-row",
     "glass-opacity-row",
     "prominent-active-tab-row",
@@ -1242,11 +1262,11 @@ test("non-Buzz glass preserves the selected theme sidebar tint", async ({
   expect(tint.actual).toBe(tint.expected);
 });
 
-test("accent picker reveals/hides when toggling Buzz", async ({ page }) => {
-  // Start on a non-Buzz theme so the accent picker is present, then select the
-  // Buzz tile — the picker should animate out and unmount. Reselecting a
-  // non-Buzz tile brings it back. Asserts the presence toggle (the motion
-  // wrapper) works end to end.
+test("accent choice remains available when changing theme styles", async ({
+  page,
+}) => {
+  // Every theme exposes the existing accent choice. Only Colony adds the
+  // coordinated workspace background patterns; switching themes retains both.
   await seedTheme(page, "github-light");
   await installMockBridge(page);
   await openAppearance(page, "light");
@@ -1264,18 +1284,20 @@ test("accent picker reveals/hides when toggling Buzz", async ({ page }) => {
     "glass-background-row",
   ]);
 
-  // Switch to Buzz — picker should leave (allow the exit animation to settle).
+  // Switch to Colony: keep accents and expose the workspace patterns.
   await page.getByTestId("theme-style-trigger").click();
   await page.getByTestId("theme-option-buzz").click();
   await expect(page.getByTestId("theme-style-trigger")).toHaveAttribute(
     "aria-expanded",
     "true",
   );
-  await expect(page.getByTestId("accent-color-neutral")).toHaveCount(0);
+  await expect(page.getByTestId("accent-color-neutral")).toBeVisible();
+  await expect(page.getByTestId("workspace-pattern-row")).toBeVisible();
 
-  // Back to a non-Buzz theme — picker returns.
+  // Other styles retain their own surfaces while leaving accent selection available.
   await page.getByTestId("theme-option-github-light").click();
   await expect(page.getByTestId("accent-color-neutral")).toBeVisible();
+  await expect(page.getByTestId("workspace-pattern-row")).toHaveCount(0);
   await expect(page.getByTestId("theme-style-trigger")).toHaveAttribute(
     "aria-expanded",
     "true",

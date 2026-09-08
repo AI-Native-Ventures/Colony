@@ -1,53 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import { companyBlockedReason, companyReady } from "./CompanyScreen.tsx";
-
-const answered = {
-  company: "Rosebank Auto Care",
-  stage: "building",
-  hasWebsite: false,
+const business = {
+  company: "Horizon Labs",
   website: "",
+  description: "Branding and websites for small businesses.",
 };
-
-test("company_gate_wants_all_three_answers", () => {
-  assert.equal(companyReady(answered), true);
-  assert.equal(companyReady({ ...answered, company: "  " }), false);
-  assert.equal(companyReady({ ...answered, stage: null }), false);
-  assert.equal(companyReady({ ...answered, hasWebsite: null }), false);
-});
-
-test("company_gate_wants_a_real_address_when_there_is_a_website", () => {
-  const withSite = { ...answered, hasWebsite: true };
-  assert.equal(companyReady({ ...withSite, website: "" }), false);
-  assert.equal(companyReady({ ...withSite, website: "asdf" }), false);
+test("business needs a name and useful context, no revenue or website decision", () => {
+  assert.equal(companyReady(business), true);
+  assert.equal(companyReady({ ...business, company: " " }), false);
+  assert.equal(companyReady({ ...business, description: " " }), false);
   assert.equal(
-    companyReady({ ...withSite, website: "rosebankautocare.co.za" }),
+    companyReady({ ...business, stage: null, hasWebsite: null }),
     true,
   );
 });
-
-test("company_gate_ignores_a_stale_address_once_the_answer_is_no", () => {
-  // Someone who types an address and then answers "No" is not blocked by
-  // what they typed before changing their mind.
-  assert.equal(
-    companyReady({ ...answered, hasWebsite: false, website: "asdf" }),
-    true,
+test("an optional website is validated when supplied", () => {
+  assert.equal(companyReady({ ...business, website: "horizon.example" }), true);
+  assert.equal(companyReady({ ...business, website: "invalid" }), false);
+  assert.match(
+    companyBlockedReason({ ...business, website: "invalid" }),
+    /website address/,
   );
-});
-
-test("a_disabled_action_always_names_what_is_missing", () => {
-  assert.equal(companyBlockedReason(answered), null);
-  assert.equal(
-    companyBlockedReason({ ...answered, company: "" }),
-    "Enter your company name to continue.",
-  );
-  assert.equal(
-    companyBlockedReason({ ...answered, stage: null }),
-    "Answer both questions to continue.",
-  );
-  assert.equal(
-    companyBlockedReason({ ...answered, hasWebsite: true, website: "asdf" }),
-    "Check the web address above to continue.",
-  );
+  assert.equal(companyBlockedReason(business), null);
 });

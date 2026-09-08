@@ -3,6 +3,10 @@ import { expect, test } from "@playwright/test";
 import { nsecEncode } from "nostr-tools/nip19";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
+import {
+  createFounderAccount,
+  saveFounderRecovery,
+} from "../helpers/simpleFounder";
 
 async function invokedCommands(page: import("@playwright/test").Page) {
   return page.evaluate(
@@ -20,29 +24,27 @@ async function openFreshMachineEntry(page: import("@playwright/test").Page) {
   await page.goto("/");
 }
 
-test("fresh account entry defers backup and reaches community onboarding", async ({
+test("account entry defers portable key export and saves recovery before business setup", async ({
   page,
 }) => {
   await openFreshMachineEntry(page);
 
   await expect(
-    page.getByRole("button", { name: "Start with Colony" }),
+    page.getByRole("button", { name: "Create account", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Sign in to an existing account" }),
+    page.getByRole("button", { name: "Sign in", exact: true }),
   ).toBeVisible();
   await expect(page.getByTestId("onboarding-page-backup")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Create a new identity key" }),
   ).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Start with Colony" }).click();
-
-  // A brand-new identity lands in the canvas first run, which claims the
-  // workspace as one of its own steps.
-  await expect(
-    page.getByRole("heading", { name: "Let's get your colony started." }),
-  ).toBeVisible();
+  // Opening account entry must not extract or create a key backup.
+  const entryCommands = await invokedCommands(page);
+  expect(entryCommands).not.toContain("get_nsec");
+  expect(entryCommands).not.toContain("create_ncryptsec_backup");
+  await createFounderAccount(page, "founder@backup-example.test");
   await expect(page.getByTestId("machine-onboarding-gate")).toHaveCount(0);
   const reminderEntries = await page.evaluate(() =>
     Object.entries(window.localStorage).filter(([key]) =>
@@ -56,7 +58,11 @@ test("fresh account entry defers backup and reaches community onboarding", async
   expect(commands).toContain("get_identity");
   expect(commands).not.toContain("persist_current_identity");
   expect(commands).not.toContain("get_nsec");
-  expect(commands).not.toContain("create_ncryptsec_backup");
+  // Signup itself may encrypt the identity for account recovery; it must not
+  // open a separate portable-key export ceremony.
+  expect(commands).not.toContain("save_ncryptsec_copy");
+  await saveFounderRecovery(page);
+  await expect(page.getByTestId("onboarding-page-backup")).toHaveCount(0);
 });
 
 test("existing-account recovery returns to community onboarding without setup screens", async ({
@@ -64,9 +70,7 @@ test("existing-account recovery returns to community onboarding without setup sc
 }) => {
   await openFreshMachineEntry(page);
 
-  await page
-    .getByRole("button", { name: "Sign in to an existing account" })
-    .click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   // The sign-in door now opens the email sign-in page first; key import sits
   // behind its private-key detour.
   await expect(

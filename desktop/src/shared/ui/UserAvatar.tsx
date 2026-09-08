@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { parseAnimatedAvatarUrl } from "@/shared/lib/animatedAvatar";
 import { cn } from "@/shared/lib/cn";
+import { identityColourClass } from "@/shared/lib/identityColour";
 import { getInitials } from "@/shared/lib/initials";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui/avatar";
@@ -19,6 +20,7 @@ type UserAvatarProps = {
   displayName: string;
   size?: UserAvatarSize;
   accent?: boolean;
+  identitySeed?: string;
   className?: string;
   fallbackDelayMs?: number;
   testId?: string;
@@ -29,6 +31,7 @@ export function UserAvatar({
   displayName,
   size = "md",
   accent = false,
+  identitySeed,
   className,
   fallbackDelayMs = 200,
   testId,
@@ -64,9 +67,11 @@ export function UserAvatar({
       <AvatarFallback
         className={cn(
           "font-semibold",
-          accent
-            ? "bg-primary text-primary-foreground"
-            : "bg-secondary text-secondary-foreground",
+          identitySeed
+            ? identityColourClass(identitySeed)
+            : accent
+              ? "bg-primary text-primary-foreground"
+              : "bg-secondary text-secondary-foreground",
         )}
         data-testid={testId ? `${testId}-fallback` : undefined}
         delayMs={fallbackDelayMs}

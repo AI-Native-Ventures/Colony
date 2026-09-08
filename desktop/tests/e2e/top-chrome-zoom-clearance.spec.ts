@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 type TauriConfig = {
   app: {
@@ -170,3 +170,91 @@ test.describe("top chrome macOS traffic-light clearance under text zoom", () => 
     await expectTopChromeFixedHeight(page);
   });
 });
+
+for (const height of [560, 360]) {
+  test(`short Windows window keeps workspace and unread controls reachable at ${height}px`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+      localStorage.setItem("buzz-theme", "buzz");
+      localStorage.setItem("buzz-follow-system", "false");
+    });
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await installMockBridge(page);
+    await page.goto("/");
+    for (const channelName of ["random", "alice-tyler"]) {
+      await page.getByTestId(`channel-${channelName}`).click();
+      await page.waitForFunction(
+        (name) =>
+          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: name,
+          }) === true,
+        channelName,
+      );
+    }
+    await page.getByTestId("channel-general").click();
+    await page.setViewportSize({ width: 1100, height });
+
+    const switcher = page.getByTestId("sidebar-workspace-switcher");
+    const chrome = page.getByTestId("app-top-chrome");
+    await expect(chrome).toHaveAttribute(
+      "data-native-window-controls",
+      "false",
+    );
+    await expect(switcher).toBeVisible();
+    expect(
+      await switcher.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2,
+        );
+        return !!hit && (element === hit || element.contains(hit));
+      }),
+    ).toBe(true);
+    await switcher.click();
+    await expect(switcher).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Escape");
+    await expect(switcher).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    const scroller = page
+      .getByTestId("app-sidebar")
+      .locator('[data-sidebar="content"]');
+    await scroller.evaluate((element) => {
+      const random = element.querySelector('[data-testid="channel-random"]');
+      if (!random) throw new Error("Unread fixture channel is missing");
+      element.scrollTop +=
+        random.getBoundingClientRect().bottom -
+        element.getBoundingClientRect().top +
+        1;
+    });
+    await expect(page.getByTestId("channel-random")).not.toBeInViewport();
+    await page.evaluate((pubkey) => {
+      for (const channelName of ["random", "alice-tyler"]) {
+        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+          channelName,
+          content: "Unread message outside the short sidebar viewport",
+          kind: 40002,
+          pubkey,
+        });
+      }
+    }, TEST_IDENTITIES.alice.pubkey);
+    const above = page.getByTestId("sidebar-more-unread-above");
+    const below = page.getByTestId("sidebar-more-unread-below");
+    await expect(above).toBeVisible();
+    if (height === 360) await expect(below).toBeVisible();
+    if (await below.isVisible()) {
+      const aboveBox = await above.boundingBox();
+      const belowBox = await below.boundingBox();
+      expect(aboveBox).not.toBeNull();
+      expect(belowBox).not.toBeNull();
+      expect((aboveBox?.y ?? 0) + (aboveBox?.height ?? 0)).toBeLessThanOrEqual(
+        belowBox?.y ?? 0,
+      );
+    }
+    await above.click();
+    await expect(page.getByTestId("channel-random")).toBeInViewport();
+  });
+}

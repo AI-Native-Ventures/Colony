@@ -983,72 +983,165 @@ test.describe("community rail", () => {
     await expect(page.getByTestId("community-rail-add")).toBeVisible();
   });
 
-  test("clears the macOS traffic lights", async ({ page }) => {
-    // Spoof macOS so the rail applies its traffic-light top inset.
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
+  for (const { theme, classicScrollbars } of [
+    { theme: "buzz", classicScrollbars: false },
+    { theme: "github-light", classicScrollbars: false },
+    { theme: "buzz", classicScrollbars: true },
+  ]) {
+    test(`clears the macOS traffic lights in ${theme}${classicScrollbars ? " with classic scrollbars" : ""}`, async ({
+      page,
+    }) => {
+      // Spoof macOS so the rail applies its traffic-light top inset.
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
+      });
+      await page.addInitScript((value) => {
+        window.localStorage.setItem("buzz-theme", value);
+      }, theme);
+      await installMockBridge(page, undefined, { skipCommunitySeed: true });
+      await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
+      await page.goto("/");
+      if (classicScrollbars) {
+        // Exercise the reserved track seen on Linux even on a Mac that uses
+        // overlay scrollbars. Standard scrollbar colours otherwise supersede
+        // the custom WebKit track and leave this fixture in overlay mode.
+        await page.addStyleTag({
+          content: `
+            [data-sidebar="content"] {
+              scrollbar-color: auto !important;
+              scrollbar-width: auto !important;
+              overflow-y: scroll !important;
+            }
+            [data-sidebar="content"]::-webkit-scrollbar {
+              width: 15px !important;
+            }
+          `,
+        });
+      }
+
+      // The first community button must start below the traffic-light band
+      // (native controls sit around y<=31 with trafficLightPosition y:24).
+      const firstButton = page.getByTestId(
+        `community-rail-button-${COMMUNITY_A.id}`,
+      );
+      await expect(firstButton).toBeVisible();
+      const buttonBox = await firstButton.boundingBox();
+      const railBox = await page.getByTestId("community-rail").boundingBox();
+      const searchBox = await page.getByTestId("open-search").boundingBox();
+      const appSurfaceBox = await page
+        .locator(".buzz-huddle-app-surface")
+        .boundingBox();
+      const contentBox = await page
+        .locator("[data-buzz-content-surface]")
+        .first()
+        .boundingBox();
+      expect(buttonBox).not.toBeNull();
+      expect(railBox).not.toBeNull();
+      expect(searchBox).not.toBeNull();
+      expect(appSurfaceBox).not.toBeNull();
+      expect(contentBox).not.toBeNull();
+      expect(buttonBox?.y ?? 0).toBeGreaterThanOrEqual(32);
+      const chromeBox = await page.getByTestId("app-top-chrome").boundingBox();
+      expect(chromeBox).not.toBeNull();
+      // Rail buttons always clear native chrome, even when Colony's conversation
+      // starts beside it instead of below an in-flow global header.
+      expect(
+        Math.abs(
+          (buttonBox?.y ?? 0) -
+            ((chromeBox?.y ?? 0) + (chromeBox?.height ?? 0)) -
+            7,
+        ),
+      ).toBeLessThan(0.5);
+      if (theme === "buzz") {
+        expect(contentBox?.y ?? 0).toBeLessThan(
+          (chromeBox?.y ?? 0) + (chromeBox?.height ?? 0),
+        );
+      } else {
+        expect(
+          Math.abs((buttonBox?.y ?? 0) - (contentBox?.y ?? 0) - 6),
+        ).toBeLessThan(0.5);
+      }
+      expect(
+        Math.abs((railBox?.y ?? 0) - (appSurfaceBox?.y ?? 0)),
+      ).toBeLessThan(0.5);
+      expect(
+        Math.abs(
+          (railBox?.y ?? 0) +
+            (railBox?.height ?? 0) -
+            ((appSurfaceBox?.y ?? 0) + (appSurfaceBox?.height ?? 0)),
+        ),
+      ).toBeLessThan(0.5);
+
+      const leftInset = (buttonBox?.x ?? 0) - (railBox?.x ?? 0);
+      const rightInset =
+        (railBox?.x ?? 0) +
+        (railBox?.width ?? 0) -
+        ((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0));
+      expect(Math.abs(leftInset - 10)).toBeLessThan(0.5);
+      expect(Math.abs(leftInset - rightInset)).toBeLessThan(0.5);
+      const visibleRightGap =
+        (searchBox?.x ?? 0) - ((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0));
+      if (theme === "buzz") {
+        // Search belongs to the inset navigation group in the new sidebar.
+        const inbox = page
+          .getByTestId("app-sidebar")
+          .getByRole("button", { name: "Inbox", exact: true });
+        const inboxBox = await inbox.boundingBox();
+        const reservedScrollbarWidth = await inbox.evaluate((element) => {
+          const scroller = element.closest<HTMLElement>(
+            '[data-sidebar="content"]',
+          );
+          if (!scroller)
+            throw new Error("Expected Inbox in the sidebar scroller.");
+          const style = getComputedStyle(scroller);
+          return (
+            scroller.offsetWidth -
+            scroller.clientWidth -
+            Number.parseFloat(style.borderLeftWidth) -
+            Number.parseFloat(style.borderRightWidth)
+          );
+        });
+        if (classicScrollbars) expect(reservedScrollbarWidth).toBe(15);
+        expect(inboxBox).not.toBeNull();
+        expect(Math.abs((searchBox?.x ?? 0) - (inboxBox?.x ?? 0))).toBeLessThan(
+          0.5,
+        );
+        // Search sits outside the scroller; both controls have the same inset,
+        // but only the navigation row reserves the classic scrollbar track.
+        expect(
+          Math.abs(
+            (searchBox?.width ?? 0) -
+              (inboxBox?.width ?? 0) -
+              reservedScrollbarWidth,
+          ),
+        ).toBeLessThan(0.5);
+        expect(visibleRightGap).toBeGreaterThan(leftInset);
+      } else {
+        expect(Math.abs(leftInset - visibleRightGap)).toBeLessThan(0.5);
+      }
+
+      // With the rail visible, the top-chrome controls (sidebar toggle, back/
+      // forward) sit just past the traffic lights near the rail edge — not
+      // shifted far right by a redundant traffic-light offset.
+      const toggle = page
+        .locator('[data-testid="app-top-chrome"] button')
+        .first();
+      const toggleBox = await toggle.boundingBox();
+      expect(toggleBox).not.toBeNull();
+      if (theme === "buzz") {
+        // Navigation stays inside the sidebar header and to the right of the
+        // native traffic lights rather than retaining the legacy left position.
+        const sidebarBox = await page.getByTestId("app-sidebar").boundingBox();
+        expect(sidebarBox).not.toBeNull();
+        expect(toggleBox?.x ?? 0).toBeGreaterThanOrEqual(80);
+        expect(
+          (toggleBox?.x ?? 0) + (toggleBox?.width ?? 0),
+        ).toBeLessThanOrEqual((sidebarBox?.x ?? 0) + (sidebarBox?.width ?? 0));
+      } else {
+        expect(toggleBox?.x ?? 0).toBeLessThan(120);
+      }
     });
-    await installMockBridge(page, undefined, { skipCommunitySeed: true });
-    await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
-    await page.goto("/");
-
-    // The first community button must start below the traffic-light band
-    // (native controls sit around y<=31 with trafficLightPosition y:24).
-    const firstButton = page.getByTestId(
-      `community-rail-button-${COMMUNITY_A.id}`,
-    );
-    await expect(firstButton).toBeVisible();
-    const buttonBox = await firstButton.boundingBox();
-    const railBox = await page.getByTestId("community-rail").boundingBox();
-    const searchBox = await page.getByTestId("open-search").boundingBox();
-    const appSurfaceBox = await page
-      .locator(".buzz-huddle-app-surface")
-      .boundingBox();
-    const contentBox = await page
-      .locator("[data-buzz-content-surface]")
-      .first()
-      .boundingBox();
-    expect(buttonBox).not.toBeNull();
-    expect(railBox).not.toBeNull();
-    expect(searchBox).not.toBeNull();
-    expect(appSurfaceBox).not.toBeNull();
-    expect(contentBox).not.toBeNull();
-    expect(buttonBox?.y ?? 0).toBeGreaterThanOrEqual(32);
-    expect(
-      Math.abs((buttonBox?.y ?? 0) - (contentBox?.y ?? 0) - 6),
-    ).toBeLessThan(0.5);
-    expect(Math.abs((railBox?.y ?? 0) - (appSurfaceBox?.y ?? 0))).toBeLessThan(
-      0.5,
-    );
-    expect(
-      Math.abs(
-        (railBox?.y ?? 0) +
-          (railBox?.height ?? 0) -
-          ((appSurfaceBox?.y ?? 0) + (appSurfaceBox?.height ?? 0)),
-      ),
-    ).toBeLessThan(0.5);
-
-    const leftInset = (buttonBox?.x ?? 0) - (railBox?.x ?? 0);
-    const rightInset =
-      (railBox?.x ?? 0) +
-      (railBox?.width ?? 0) -
-      ((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0));
-    expect(Math.abs(leftInset - 10)).toBeLessThan(0.5);
-    expect(Math.abs(leftInset - rightInset)).toBeLessThan(0.5);
-    const visibleRightGap =
-      (searchBox?.x ?? 0) - ((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0));
-    expect(Math.abs(leftInset - visibleRightGap)).toBeLessThan(0.5);
-
-    // With the rail visible, the top-chrome controls (sidebar toggle, back/
-    // forward) sit just past the traffic lights near the rail edge — not
-    // shifted far right by a redundant traffic-light offset.
-    const toggle = page
-      .locator('[data-testid="app-top-chrome"] button')
-      .first();
-    const toggleBox = await toggle.boundingBox();
-    expect(toggleBox).not.toBeNull();
-    expect(toggleBox?.x ?? 0).toBeLessThan(120);
-  });
+  }
 
   test("drag-to-reorder updates the stored community order and survives reload", async ({
     page,

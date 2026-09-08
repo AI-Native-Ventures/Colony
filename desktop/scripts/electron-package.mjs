@@ -14,12 +14,17 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
+import {
+  electronBetaBuildEnv,
+  ELECTRON_BETA_RELAY,
+} from "./electron-package-config.mjs";
 
 const exec = promisify(execFile);
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const repo = path.dirname(desktop);
 const profile = process.argv.includes("--debug") ? "debug" : "release";
 const cargoProfile = profile === "debug" ? "dev" : "release";
+const buildEnv = electronBetaBuildEnv(process.env);
 const helpers = [
   "buzz-acp",
   "buzz-agent",
@@ -45,6 +50,7 @@ const run = async (command, args, cwd = repo) => {
   console.log(`[electron-package] ${command} ${args.join(" ")}`);
   const { stdout, stderr } = await exec(command, args, {
     cwd,
+    env: buildEnv,
     maxBuffer: 64 * 1024 * 1024,
   });
   if (stdout.trim()) console.log(stdout.trim());
@@ -211,6 +217,7 @@ try {
         version: metadata.version,
         profile,
         arch: process.arch,
+        relay: ELECTRON_BETA_RELAY,
         signing: "ad-hoc; not notarized",
         app,
         zip,

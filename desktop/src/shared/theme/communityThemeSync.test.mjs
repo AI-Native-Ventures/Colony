@@ -26,6 +26,7 @@ const preference = {
   theme: "houston",
   accent: "#ec4899",
   followSystem: false,
+  gradientPattern: "halo",
 };
 
 function installFakeTimer() {

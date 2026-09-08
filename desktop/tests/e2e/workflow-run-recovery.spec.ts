@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge } from "../helpers/bridge";
 
 const FAILED_ID = "mock-recovery-failed";
@@ -7,7 +8,7 @@ const CANCELLED_ID = "mock-recovery-cancelled";
 
 async function openRecoveryWorkflow(page: import("@playwright/test").Page) {
   await page.goto("/");
-  await page.getByTestId("open-workflows-view").click();
+  await openSidebarDestination(page, "open-workflows-view");
   await expect(page).toHaveURL(/#\/workflows$/);
   await expect(page.getByTestId("workflows-view")).toContainText(
     "Recovery test workflow",

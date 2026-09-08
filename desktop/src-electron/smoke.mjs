@@ -1,6 +1,7 @@
 import { waitForAnimations } from "../tests/helpers/animations.ts";
 import { verifyReload } from "./reload-smoke.mjs";
 import { verifyImport } from "./import-smoke.mjs";
+import { ELECTRON_BETA_RELAY } from "../scripts/electron-package-config.mjs";
 // Real Electron + Rust smoke gate. No mock native bridge or personal browser data.
 import { _electron as electron } from "@playwright/test";
 import assert from "node:assert/strict";
@@ -149,6 +150,20 @@ try {
   assert.equal(result.unknown, true);
   console.log("Real renderer/Rust:", JSON.stringify(result));
   if (packagedApp) {
+    // This reads the compiled default, unaffected by this test's local relay
+    // override. Previously the entire smoke passed with an app that sent
+    // real signup requests to the customer's own localhost:3000.
+    const relayConfig = await page.evaluate(async () => ({
+      relay: await window.colonyDesktop.request("invoke", {
+        command: "get_build_default_relay_url",
+      }),
+      autoConnect: await window.colonyDesktop.request("invoke", {
+        command: "auto_connect_default_relay_enabled",
+      }),
+    }));
+    assert.equal(relayConfig.relay, ELECTRON_BETA_RELAY.websocket);
+    assert.equal(relayConfig.autoConnect, false);
+    console.log("Packaged signup targets the hosted account service: PASS");
     const packagedState = await application.evaluate(({ app }) => ({
       packaged: app.isPackaged,
       appPath: app.getAppPath(),
@@ -169,9 +184,37 @@ try {
     );
     console.log("Relocated app discovers its bundled Colony Agent: PASS");
   }
-  await page
-    .getByRole("dialog", { name: "Bring your signed-in accounts" })
-    .waitFor();
+  const importInvitation = page.getByRole("dialog", {
+    name: "Bring your signed-in accounts",
+  });
+  assert.equal(
+    await importInvitation.count(),
+    0,
+    "optional browser import must not interrupt an unfinished business setup",
+  );
+  // This smoke intentionally uses an unreachable relay, so it cannot finish a
+  // hosted business signup. Mark only its isolated synthetic business complete
+  // to exercise the deferred import invitation. signup-smoke.mjs separately
+  // proves the real renderer/native account and recovery path.
+  await page.evaluate(async () => {
+    const identity = await window.colonyDesktop.request("invoke", {
+      command: "get_identity",
+    });
+    const businessId = localStorage.getItem("buzz-active-community-id");
+    const businesses = JSON.parse(
+      localStorage.getItem("buzz-communities") ?? "[]",
+    );
+    const business = businesses.find((entry) => entry.id === businessId);
+    if (!business?.relayUrl || !identity.pubkey) {
+      throw new Error("The synthetic business and native identity must exist");
+    }
+    localStorage.setItem(
+      `buzz-community-onboarding-complete.v1:${encodeURIComponent(business.relayUrl)}:${identity.pubkey}`,
+      "true",
+    );
+    window.dispatchEvent(new Event("colony:onboarding-complete"));
+  });
+  await importInvitation.waitFor();
   await waitForAnimations(page);
   await page.screenshot({ path: path.join(data, "actual-app.png") });
   await page

@@ -7,10 +7,10 @@ import {
   useState,
 } from "react";
 import type { OnboardingStep, OnboardingTrack } from "../../flow/steps";
-import { AntScatter } from "./AntScatter";
 import { canvasFor } from "./canvasTheme";
 import "./onboarding-canvas.css";
 import "./onboarding-screens.css";
+import "./onboarding-founder.css";
 
 type Props = {
   step: OnboardingStep;
@@ -40,7 +40,7 @@ type Props = {
  * true: a window resize, a validation note appearing, a list of detected tools
  * arriving. Re-armed per step, since each screen is a different element.
  */
-function useHasContentBelow(
+export function useHasContentBelow(
   stageRef: RefObject<HTMLDivElement | null>,
   step: OnboardingStep,
 ): boolean {
@@ -69,22 +69,16 @@ function useHasContentBelow(
   return hasContentBelow;
 }
 
-export function OnboardingCanvas({
-  step,
-  track,
-  index,
-  total,
-  overlay,
-  children,
-}: Props) {
+export function OnboardingCanvas({ step, track, overlay, children }: Props) {
   const theme = canvasFor(step, track);
   const stageRef = useRef<HTMLDivElement>(null);
   const hasContentBelow = useHasContentBelow(stageRef, step);
 
   return (
     <div
-      className={`onb-canvas ${theme.ink === "light" ? "dark" : ""}`}
+      className={`onb-canvas onb-founder-canvas ${theme.ink === "light" ? "dark" : ""}`}
       data-ink={theme.ink}
+      data-onboarding-step={step}
       style={
         {
           background: theme.base,
@@ -99,11 +93,6 @@ export function OnboardingCanvas({
         } as CSSProperties
       }
     >
-      <div className="onb-grain" />
-      <AntScatter hue={theme.hue} />
-      <p className="onb-step" data-testid="onboarding-step-counter">
-        {String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}
-      </p>
       {overlay}
       <div className="onb-stage" ref={stageRef}>
         {children}

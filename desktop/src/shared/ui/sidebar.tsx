@@ -28,11 +28,11 @@ import {
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const SIDEBAR_WIDTH_STORAGE_KEY = "buzz-sidebar-width";
-const SIDEBAR_WIDTH_DEFAULT = 300;
+const SIDEBAR_WIDTH_DEFAULT = 240;
 const SIDEBAR_WIDTH_DEFAULT_HAPTIC_THRESHOLD = 2;
 const SIDEBAR_WIDTH_DEFAULT_SNAP_DISTANCE = 8;
 const SIDEBAR_WIDTH_DEFAULT_MAGNET_DISTANCE = 28;
-const SIDEBAR_WIDTH_MIN = 220;
+const SIDEBAR_WIDTH_MIN = 185;
 const SIDEBAR_WIDTH_MAX = 420;
 const SIDEBAR_WIDTH_MOBILE = "288px";
 const SIDEBAR_WIDTH_ICON = "48px";
@@ -94,7 +94,7 @@ function magnetizeSidebarWidth(width: number) {
     return clampSidebarWidth(width);
   }
 
-  // Ease out of the detent so 300px feels sticky without blocking resize.
+  // Ease out of the detent so the default width feels sticky without blocking resize.
   const progress =
     (distance - SIDEBAR_WIDTH_DEFAULT_SNAP_DISTANCE) /
     (SIDEBAR_WIDTH_DEFAULT_MAGNET_DISTANCE -

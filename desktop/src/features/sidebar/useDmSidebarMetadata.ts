@@ -1,5 +1,10 @@
 import * as React from "react";
 
+import {
+  useAgentRoleTitles,
+  useKnownAgentPubkeys,
+} from "@/features/agents/useKnownAgentPubkeys";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useAgentNameProfiles } from "@/features/agents/useAgentNameProfiles";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
@@ -21,6 +26,8 @@ export function useDmSidebarMetadata({
   profileDisplayName?: string | null;
   enabled?: boolean;
 }) {
+  const knownAgentPubkeys = useKnownAgentPubkeys();
+  const agentRoleTitles = useAgentRoleTitles();
   const selfDmLabels = React.useMemo(
     () =>
       new Set(
@@ -133,11 +140,25 @@ export function useDmSidebarMetadata({
                 pubkey: participant.pubkey,
               }),
               pubkey: participant.pubkey,
+              isAgent:
+                knownAgentPubkeys.has(normalizePubkey(participant.pubkey)) ||
+                dmProfiles?.[normalizePubkey(participant.pubkey)]?.isAgent ===
+                  true,
+              roleTitle: agentRoleTitles.get(
+                normalizePubkey(participant.pubkey),
+              ),
             })),
           ];
         }),
       ) satisfies Record<string, SidebarDmParticipant[]>,
-    [currentPubkey, directMessages, dmProfiles, selfDmLabels],
+    [
+      currentPubkey,
+      directMessages,
+      dmProfiles,
+      selfDmLabels,
+      knownAgentPubkeys,
+      agentRoleTitles,
+    ],
   );
 
   return {

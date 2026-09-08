@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import { App } from "@/app/App";
 import { NostrBindConsentDialog } from "@/features/profile/ui/NostrBindConsentDialog";
 import "@fontsource-variable/inter/wght.css";
+import "@fontsource-variable/inter-tight/wght.css";
 import "@/shared/styles/globals.css";
 // Imported at the entry so the mark's sizing rules land in the always-loaded
 // CSS bundle. Left only to ColonyLogoAnimation's own import, Vite emits this

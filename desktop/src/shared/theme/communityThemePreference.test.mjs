@@ -12,6 +12,7 @@ import {
   parseCommunityThemePreference,
   readCommunityThemeOutbox,
   readCommunityThemePreference,
+  sameCommunityThemePreference,
   writeCommunityThemeOutbox,
   writeCommunityThemePreference,
 } from "./communityThemePreference.ts";
@@ -32,7 +33,10 @@ test("parses only the versioned stable appearance contract", () => {
     accent: "#3b82f6",
     followSystem: false,
   };
-  assert.deepEqual(parseCommunityThemePreference(valid), valid);
+  assert.deepEqual(parseCommunityThemePreference(valid), {
+    ...valid,
+    gradientPattern: "soft-mesh",
+  });
   assert.equal(parseCommunityThemePreference({ ...valid, version: 2 }), null);
   assert.equal(
     parseCommunityThemePreference({ ...valid, theme: "future-theme" }),
@@ -46,6 +50,43 @@ test("parses only the versioned stable appearance contract", () => {
     parseCommunityThemePreference({ ...valid, followSystem: "false" }),
     null,
   );
+});
+
+test("old appearance records gain a pattern without losing the chosen accent", () => {
+  const old = {
+    version: 1,
+    theme: "buzz-dark",
+    accent: "neutral",
+    followSystem: false,
+  };
+  assert.deepEqual(parseCommunityThemePreference(old), {
+    ...old,
+    gradientPattern: "soft-mesh",
+  });
+});
+
+test("pattern edits survive reload, stay community scoped and count as edits", () => {
+  globalThis.window = { localStorage: localStorageStub() };
+  const halo = { ...DEFAULT_COMMUNITY_THEME, gradientPattern: "halo" };
+  const diagonal = {
+    ...DEFAULT_COMMUNITY_THEME,
+    gradientPattern: "diagonal-wash",
+  };
+  writeCommunityThemePreference("alice", "wss://a.example", halo);
+  writeCommunityThemePreference("alice", "wss://b.example", diagonal);
+  assert.deepEqual(
+    readCommunityThemePreference("alice", "wss://a.example"),
+    halo,
+  );
+  assert.deepEqual(
+    readCommunityThemePreference("alice", "wss://b.example"),
+    diagonal,
+  );
+  assert.equal(sameCommunityThemePreference(halo, diagonal), false);
+  assert.equal(communityThemePersistenceAction(null, halo), "persist");
+  writeCommunityThemeOutbox("alice", "wss://a.example", halo);
+  clearCommunityThemeOutbox("alice", "wss://a.example", diagonal);
+  assert.deepEqual(readCommunityThemeOutbox("alice", "wss://a.example"), halo);
 });
 
 test("local preferences are isolated by pubkey and normalized relay", () => {

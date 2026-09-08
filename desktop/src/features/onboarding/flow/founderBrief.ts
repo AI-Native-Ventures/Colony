@@ -45,6 +45,7 @@ export function draftFromAnswers(
     },
     firstTask: {
       ...base.firstTask,
+      deliveryMarker: answers.firstTaskMarker ?? base.firstTask.deliveryMarker,
       // The brief itself is the first task now. The flow no longer asks for
       // one, and an empty content field would skip delivery entirely.
       content: firstTaskFor(answers),

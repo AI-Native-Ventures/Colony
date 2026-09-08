@@ -1,83 +1,171 @@
 import { useState } from "react";
 import { Button } from "@/shared/ui/button";
-import { Checkbox } from "@/shared/ui/checkbox";
+import { Download, KeyRound } from "lucide-react";
+import { FounderLayout } from "../FounderLayout";
 
-type Props = {
-  code: string;
-  acknowledged: boolean;
-  onAcknowledge: (value: boolean) => void;
-  onContinue: () => void;
-};
-
+/** Native save and explicit copy acknowledgement are the only ways forward. */
 export function RecoveryScreen({
   code,
-  acknowledged,
-  onAcknowledge,
+  onSave,
   onContinue,
-}: Props) {
+  onSignIn,
+  loading = false,
+  loadError,
+  onRetry,
+}: {
+  code: string;
+  onSave: () => Promise<string | null>;
+  onContinue: () => Promise<void>;
+  onSignIn?: () => void;
+  loading?: boolean;
+  loadError?: string | null;
+  onRetry?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  const copy = async () => {
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function save() {
+    if (!code.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await onSave();
+      if (saved === null) {
+        setError(
+          "Your code was not saved. Choose a location, or copy it instead.",
+        );
+        return;
+      }
+      await onContinue();
+    } catch {
+      setError(
+        "We could not finish saving your recovery code. Try again. You can also copy it below.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function copy() {
+    if (!code.trim() || busy) return;
+    setError(null);
     try {
       await navigator.clipboard.writeText(code);
+      setCopied(true);
     } catch {
-      // Clipboard access can be denied. Selecting the text still works, so
-      // the label change is the only feedback that matters here.
+      setCopied(false);
+      setAcknowledged(false);
+      setError("We could not copy the code. Use Save and continue instead.");
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2200);
-  };
-
-  const save = () => {
-    const blob = new Blob(
-      [`Colony recovery code\n\n${code}\n\nKeep this somewhere safe.\n`],
-      { type: "text/plain" },
-    );
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "colony-recovery-code.txt";
-    anchor.click();
-    URL.revokeObjectURL(url);
-    setSaved(true);
-  };
-
+  }
+  async function confirmCopy() {
+    if (!copied || !acknowledged || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onContinue();
+    } catch {
+      setError("We could not record that your code is safe. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
-    <div className="onb-screen">
-      <div className="onb-col-head">
-        <h1 className="onb-headline">
-          Your way back <em>in</em>.
-        </h1>
-        <p className="onb-sub">
-          If you ever forget your password, this is the only way back into your
-          workspace. We cannot recover it for you.
-        </p>
-      </div>
-      <div className="onb-panel">
-        <p className="onb-code">{code}</p>
-        <div className="onb-row">
-          <Button variant="outline" onClick={copy}>
-            {copied ? "Copied" : "Copy"}
-          </Button>
-          <Button variant="outline" onClick={save}>
-            {saved ? "Saved" : "Save as file"}
-          </Button>
+    <FounderLayout
+      step="recovery"
+      onSignIn={onSignIn}
+      navigationDisabled={busy}
+    >
+      <div className="onb-simple-card onb-recovery-card">
+        <KeyRound className="onb-recovery-key" aria-hidden="true" />
+        <div className="onb-simple-form-heading">
+          <h2>Save your recovery code</h2>
+          <p>
+            If you forget your password, you'll need this code to get back in.
+            Colony cannot recover it for you.
+          </p>
         </div>
-        <label className="onb-check" htmlFor="onb-recovery-acknowledged">
-          <Checkbox
-            id="onb-recovery-acknowledged"
-            checked={acknowledged}
-            onCheckedChange={(value) => onAcknowledge(value === true)}
-          />
-          <span className="onb-label">I have saved my code</span>
-        </label>
+        {loading ? (
+          <p role="status">Opening your recovery code…</p>
+        ) : !code.trim() ? (
+          <>
+            <p className="onb-simple-error" role="alert">
+              {loadError ??
+                "The original recovery code is no longer available on this device. Sign in to your account to continue. We cannot create a replacement code here."}
+            </p>
+            {onRetry && (
+              <Button
+                className="onb-simple-button onb-simple-primary"
+                onClick={onRetry}
+              >
+                Try again
+              </Button>
+            )}
+            {onSignIn && (
+              <button
+                className="onb-simple-link"
+                type="button"
+                onClick={onSignIn}
+              >
+                Sign in to your account
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <p
+              className="onb-recovery-code"
+              data-testid="onboarding-recovery-code"
+            >
+              {code}
+            </p>
+            <p className="onb-simple-note">
+              Save it somewhere private, outside Colony.
+            </p>
+            {error && (
+              <p className="onb-simple-error" role="alert">
+                {error}
+              </p>
+            )}
+            <Button
+              className="onb-simple-button onb-simple-primary"
+              disabled={busy}
+              onClick={() => void save()}
+            >
+              <Download aria-hidden="true" />
+              {busy ? "Saving…" : "Save and continue"}
+            </Button>
+            <button
+              className="onb-simple-link"
+              disabled={busy}
+              type="button"
+              onClick={() => void copy()}
+            >
+              {copied ? "Copy again" : "Copy instead"}
+            </button>
+            {copied && (
+              <>
+                <label className="onb-simple-check">
+                  <input
+                    type="checkbox"
+                    checked={acknowledged}
+                    onChange={(event) => setAcknowledged(event.target.checked)}
+                  />
+                  I have stored my copied code somewhere safe
+                </label>
+                <Button
+                  className="onb-simple-button"
+                  variant="outline"
+                  disabled={!acknowledged || busy}
+                  onClick={() => void confirmCopy()}
+                >
+                  Continue with saved copy
+                </Button>
+              </>
+            )}
+          </>
+        )}
       </div>
-      <div className="onb-actions">
-        <Button size="lg" disabled={!acknowledged} onClick={onContinue}>
-          Continue
-        </Button>
-      </div>
-    </div>
+    </FounderLayout>
   );
 }

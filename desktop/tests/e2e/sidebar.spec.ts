@@ -6,7 +6,7 @@ import { openSettings } from "../helpers/settings";
 const SIDEBAR_WIDTH_STORAGE_KEY = "buzz-sidebar-width";
 const COMMUNITY_ONBOARDING_STORAGE_KEY =
   "buzz-community-onboarding-transaction.v1";
-const DEFAULT_SIDEBAR_WIDTH = 300;
+const DEFAULT_SIDEBAR_WIDTH = 240;
 
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
@@ -553,12 +553,14 @@ test("resizes, persists, and snaps to the default sidebar width", async ({
 
   await dragSidebarRail(page, 64);
 
-  await expect.poll(() => sidebarWidth(page)).toBe(364);
-  await expect.poll(() => storedSidebarWidth(page)).toBe("364");
+  await expect.poll(() => sidebarWidth(page)).toBe(DEFAULT_SIDEBAR_WIDTH + 64);
+  await expect
+    .poll(() => storedSidebarWidth(page))
+    .toBe(String(DEFAULT_SIDEBAR_WIDTH + 64));
 
   await page.reload();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
-  await expect.poll(() => sidebarWidth(page)).toBe(364);
+  await expect.poll(() => sidebarWidth(page)).toBe(DEFAULT_SIDEBAR_WIDTH + 64);
 
   await dragSidebarRail(page, -60);
 

@@ -16,6 +16,13 @@ Beta.app** and zip under `desktop/electron-dist`. Use `--debug` for a faster
 local validation build. It requires the repository's activated Hermit toolchain
 at build time; the resulting app starts without a terminal or checkout.
 
+The branded package bakes the same hosted account service as Colony stable and
+canary (`relay.colony.ainative.ventures`), independently of local relay overrides
+in the build shell. It keeps automatic root-community connection off so signup
+can provision the founder's business first. Use `electron:dev` for a custom local
+relay. The manifest records these defaults, and the relocated-app gate verifies
+the compiled endpoint before exercising its local fixtures.
+
 The package stages only the built frontend, Electron runtime modules, CSP and
 version metadata. Native executables live together outside the application
 archive. Packaged runtime discovery prefers these bundled helpers instead of
@@ -32,6 +39,7 @@ After packaging, run the full relocated-app gate:
 
 ```sh
 COLONY_SMOKE_APP="/absolute/path/to/Colony Electron Beta.app" node desktop/src-electron/smoke.mjs
+COLONY_SMOKE_APP="/absolute/path/to/Colony Electron Beta.app" node desktop/src-electron/signup-smoke.mjs
 ```
 
 This copies the bundle outside the checkout, preserves macOS framework symlinks,
@@ -40,6 +48,16 @@ catalog resolves the bundled Colony Agent, then exercises the same browser,
 synthetic import, takeover and restart checks described below. A debug package
 passed this gate on Apple Silicon; release-profile and notarized-package proof
 remain separate.
+
+The signup gate drives the real Account screen through Recovery and relaunches
+the same temporary profile to prove the original recovery code survives without
+a second signup request. It uses an ephemeral localhost account server and
+verifies renderer password derivation and both native encrypted backups; no
+hosted account is created. Cleanup removes only this run's synthetic profile and
+keyring entry. Set `COLONY_SMOKE_PROOF_DIR` to save account and recovery screenshots
+(the recovery code is masked).
+Account requests to any other destination are blocked. The beta workflow requires
+both this flow and the compiled hosted-endpoint check before uploading an artifact.
 
 ## Run
 

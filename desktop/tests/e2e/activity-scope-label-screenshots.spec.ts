@@ -6,8 +6,10 @@ import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 const SHOTS = "test-results/activity-scope-label";
 
 const AGENT_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
+// Deliberately exceed the responsive panel header even with the narrower
+// Inter Tight face; the test must exercise truncation, not one font's metrics.
 const LONG_AGENT_NAME =
-  "Observer Agent With An Exceptionally Long Display Name";
+  "Observer Agent Responsible For Customer Research, Brand Design, Content Production And Cross-Channel Quality Review";
 const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301"; // #agents
 
 // Open the activity pane via profile → "View activity" (same ingress the
