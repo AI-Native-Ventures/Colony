@@ -1,4 +1,3 @@
-import { npubEncode } from "nostr-tools/nip19";
 import type { FirstJobScope, FirstJobTeam } from "./firstJobStart";
 
 /** Bind every editable byte and actor identity without putting metadata in the task title. */
@@ -37,10 +36,19 @@ export async function firstJobDispatchBinding(
   ).join("");
 }
 
-/** Ordinary thread instruction; only Scout is pinged, the worker is a reference. */
+/** Ordinary thread instruction; notification and identity stay in the signed tags. */
 export function firstJobInstruction(
   content: string,
-  team: FirstJobTeam,
+  workerName: string | undefined,
 ): string {
-  return `${content}\n\nCoordinate this job in this thread. Ask nostr:${npubEncode(team.workerPubkey)} to do the work, review the result, and bring it back here for my review.`;
+  const name = workerName?.trim() ?? "";
+  // Match ordinary display names without letting metadata add Markdown, another
+  // apparent mention, or a second instruction line to an owner-signed message.
+  const reference =
+    name.length > 0 &&
+    name.length <= 100 &&
+    /^[\p{L}\p{M}\p{N} .’'-]+$/u.test(name)
+      ? `@${name}`
+      : "the approved worker";
+  return `${content}\n\nCoordinate this job in this thread. Ask ${reference} to do the work, review the result, and bring it back here for my review.`;
 }

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createFirstJobWorkValidator } from "./firstJobNativeActions.ts";
+import {
+  createFirstJobMessagePreparer,
+  createFirstJobWorkValidator,
+} from "./firstJobNativeActions.ts";
 
 const scope = {
   ownerPubkey: "a".repeat(64),
@@ -123,5 +126,100 @@ for (const step of ["loadTask", "listAgents"]) {
       return value;
     };
     await assert.rejects(f.validate(), /scope changed/);
+  });
+}
+
+function messageFixture() {
+  let active = true;
+  const signed = [];
+  const deps = {
+    assertCurrent: async () => {
+      if (!active) throw new Error("scope changed");
+    },
+    listAgents: async () => [
+      {
+        pubkey: team.workerPubkey,
+        relayUrl: "wss://other.test",
+        name: "Other business",
+      },
+      {
+        pubkey: team.workerPubkey,
+        relayUrl: scope.relayUrl,
+        name: "Sarah Jones",
+      },
+    ],
+    signMessage: async (input) => {
+      signed.push(input);
+      return { ...input, id: "f".repeat(64), pubkey: scope.ownerPubkey };
+    },
+  };
+  return {
+    deps,
+    signed,
+    stale: () => {
+      active = false;
+    },
+    prepare: () =>
+      createFirstJobMessagePreparer(deps)({
+        scope,
+        team,
+        work,
+        content: "Review this brief.",
+      }),
+  };
+}
+
+test("instruction preparation snapshots the selected same-business worker name without notifying it", async () => {
+  const f = messageFixture();
+  const message = await f.prepare();
+  assert.match(message.content, /Ask @Sarah Jones to do the work/);
+  assert.doesNotMatch(message.content, /Other business|nostr:|npub1/);
+  assert.deepEqual(
+    message.tags.filter((tag) => tag[0] === "p"),
+    [["p", team.scoutPubkey]],
+  );
+  assert.deepEqual(
+    message.tags.filter((tag) => tag[0] === "mention"),
+    [["mention", team.workerPubkey]],
+  );
+  assert.deepEqual(
+    message.tags.filter((tag) => ["task", "team"].includes(tag[0])),
+    work.tags,
+  );
+  assert.deepEqual(
+    message.tags.find((tag) => tag[0] === "e"),
+    ["e", scope.threadRootId, "", "reply"],
+  );
+});
+
+test("missing same-business name remains readable and keeps exact worker identity only in the reference tag", async () => {
+  const f = messageFixture();
+  f.deps.listAgents = async () => [
+    {
+      pubkey: team.workerPubkey,
+      relayUrl: "wss://other.test",
+      name: "Other business",
+    },
+  ];
+  const message = await f.prepare();
+  assert.match(message.content, /Ask the approved worker to do the work/);
+  assert.doesNotMatch(message.content, /Other business|nostr:|npub1/);
+  assert.deepEqual(
+    message.tags.filter((tag) => tag[0] === "mention"),
+    [["mention", team.workerPubkey]],
+  );
+});
+
+for (const step of ["listAgents", "signMessage"]) {
+  test(`scope change during name preparation ${step} cannot return a publishable old-scope instruction`, async () => {
+    const f = messageFixture();
+    const original = f.deps[step];
+    f.deps[step] = async (...args) => {
+      const value = await original(...args);
+      f.stale();
+      return value;
+    };
+    await assert.rejects(f.prepare(), /scope changed/);
+    assert.equal(f.signed.length, step === "listAgents" ? 0 : 1);
   });
 }

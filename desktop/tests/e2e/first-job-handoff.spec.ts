@@ -590,6 +590,26 @@ test("an approved fixture pair starts only on explicit Start and the task status
   expect(instructions[0]?.tags.filter((tag) => tag[0] === "p")).toEqual([
     ["p", SCOUT],
   ]);
+  expect(instructions[0]?.tags.filter((tag) => tag[0] === "mention")).toEqual([
+    ["mention", WORKER],
+  ]);
+  await openThread(page, root);
+  const instruction = page
+    .getByTestId("message-thread-panel")
+    .locator(`[data-message-id="${instructions[0]?.id}"]`);
+  await expect(instruction).toContainText("Ask Sarah to do the work");
+  await expect(instruction).not.toContainText("nostr:");
+  await expect(instruction.locator("[data-mention]")).toHaveText("Sarah");
+  await instruction.scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.getByTestId("message-thread-panel").screenshot({
+    path: "test-results/first-job/06-friendly-worker-reference.png",
+  });
+  // Continue the receipt-recovery check through the original channel card.
+  await page.evaluate((channel) => {
+    window.location.hash = `/channels/${channel}`;
+  }, CHANNEL);
+  await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
   // Lose only the locally saved acknowledgement after the actual signed event
   // was accepted. Recovery must query that same event before a zero-credit gate.
   const dispatchKey = firstJobStorageKey(

@@ -19,8 +19,9 @@ the far-left community rail was visible.
 
 The workspace retains the approved spacing, gradients and panes while restoring
 production's reading font and community navigation from the first business.
-External CI, merge and a normal beta remain separate delivery gates; the package
-below is the explicitly named debug fixture, not the distributable beta.
+A verified normal beta is available at the source checkpoint recorded below.
+PR #660 also passed remote CI and merged; the exact checkpoint is recorded below. The native joined proof
+uses its explicitly named debug fixture, separately from the distributable beta.
 
 ## Resulting behaviour
 
@@ -294,8 +295,8 @@ post-reload loading. The next unchanged-package run uses the same explicit
 30-second bound for both live and post-reload cards, records elapsed UI status
 observations, and still requires the same Task with no additional work.
 
-One presentation limitation remains: the generated instruction includes a raw
-Nostr worker identity. The existing Markdown renderer does not support a working
+At this source checkpoint, one presentation limitation remained: the generated
+instruction included a raw Nostr worker identity. The existing Markdown renderer does not support a working
 Nostr profile link, so a masked link would create a misleading dead anchor. This
 change preserves the correct agent reference instead of adding new link handling
 or hiding routing information in Markdown tricks.
@@ -340,13 +341,47 @@ screenshots cover the missing-worker block, real worker/review output and both
 completed cards after reload. The proof helper's later passive diagnostics add
 two focused privacy/bounds/cleanup tests to the source checked by the full gate.
 
-## Remaining delivery gates
+## Normal beta and delivery checkpoint
 
-Local implementation, independent review, rendered acceptance and the joined
-native fixture are complete at this source checkpoint. The PR must publish the
-reviewed screenshots, pass actual GitHub checks and merge into develop. A normal
-beta with the fixture feature disabled must then pass its packaged checks and
-produce a downloadable artifact. Delivery status belongs to the PR/run evidence.
+[PR #660](https://github.com/AI-Native-Ventures/Colony/pull/660) merged the
+reviewed font, rail and joined-handoff implementation on 8 September 2026 at
+19:59:16 UTC as `8cbb592eba747da945d101c05a6853644f2597ae`. Its
+[immutable screenshot comment](https://github.com/AI-Native-Ventures/Colony/pull/660#issuecomment-5590176194)
+contains seven distinct rendered/native/narrow states.
+
+[Normal beta run 34265314138](https://github.com/AI-Native-Ventures/Colony/actions/runs/34265314138)
+passed on `2b87592eb76db97e2ee0bef5c59124abbc00bef0` and produced the
+[Mac ARM64 artifact](https://github.com/AI-Native-Ventures/Colony/actions/runs/34265314138/artifacts/10072363336).
+The downloaded artifact digest and all seven packaged native sizes/hashes were
+independently checked. Its ASAR SHA-256 is
+`fef7cc09119d894a8ab22f3b94db197c598abd70524584917be0e25fa35c373f`;
+`onboardingFixture` is false and the hosted relay is compiled into the normal
+release. The artifact expires on 15 September 2026 at 19:10 UTC.
+
+The runner passed real packaged Account → Recovery → relaunch against a local
+synthetic account endpoint, native helper relocation, first-use and repeat
+browser import UI, synthetic authenticated-session import/restart, scoped worker
+browser actions and 20 isolation checks. The public-TLS-through-gateway case
+was explicitly outside that isolation run. This is ad-hoc signed, not notarized;
+it does not prove hosted account creation, personal-cookie import, an updater
+publication or a production promotion. Verification is retained at
+`/private/tmp/colony-pr660-normal-beta-proof/verification.json` and
+`/private/tmp/colony-pr660-normal-beta-proof/package-byte-proof.json`.
+
+The later `2d7b432bc29bbe1e8451df5bf290e8b30360b84e` changes only three E2E
+fixture/spec files. They preserve production bytes while correcting stale mock
+workspace identity after application and scoping channel-section drag handles
+now that the communities rail is visible. All five failing cases passed on an
+isolated production-equivalent control. Exact-head CI
+[34268687001](https://github.com/AI-Native-Ventures/Colony/actions/runs/34268687001)
+and Mesh
+[34268687038](https://github.com/AI-Native-Ventures/Colony/actions/runs/34268687038)
+both completed successfully, including all six smoke shards, both desktop
+integration shards, backend relay integration, Relay Suites and their aggregate
+checks. Live GitHub metadata independently confirms the merge above. The merge
+tree is identical to the tested `2d7b432` head.
+The [starter fidelity follow-up](2026-09-08-first-job-starter-fidelity.md) records
+subsequent default-prompt changes and their own package proof.
 
 Hosted signup, real checkout settlement, autonomous model quality, production
 promotion, notarization and updater publication are not claimed by these gates.

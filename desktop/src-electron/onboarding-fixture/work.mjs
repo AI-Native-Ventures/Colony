@@ -12,6 +12,7 @@ import {
   SCOUT_REVIEW,
 } from "./provider.mjs";
 import { checkFixtureUnstaffed } from "./unstaffed.mjs";
+import { readFixtureInstruction } from "./instruction.mjs";
 
 /** Caller owns the real package and services; only model responses and ledger funds are fixtures. */
 export async function completeFixtureWork({
@@ -280,6 +281,29 @@ export async function completeFixtureWork({
       { timeout: 30_000 },
     ),
   ]);
+  const instruction = await readFixtureInstruction({
+    relay,
+    invoke,
+    account,
+    scout: approved.scout,
+    worker: actualAgents.find(
+      (agent) => agent.pubkey === approved.worker.pubkey,
+    ),
+    brief,
+  });
+  const instructionRow = page
+    .getByTestId("message-thread-replies")
+    .getByTestId("message-row")
+    .filter({ hasText: "Coordinate this job in this thread." })
+    .first();
+  await expect(instructionRow).toContainText(/Ask\s+@?Sarah\s+to do the work/);
+  await expect(instructionRow).not.toContainText(/nostr:npub/);
+  await instructionRow.scrollIntoViewIfNeeded();
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: path.join(proofDirectory, "joined-friendly-instruction.png"),
+  });
+  onEvidence({ instruction });
   await expect(
     page.getByText(WORKER_OUTPUT, { exact: false }).first(),
   ).toBeVisible();
@@ -439,6 +463,7 @@ export async function completeFixtureWork({
   return {
     unstaffed,
     defaultBrief,
+    instruction,
     deliveredDrafts,
     taskId: task.id,
     status: task.status,
