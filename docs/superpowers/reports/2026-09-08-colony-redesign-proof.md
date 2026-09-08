@@ -250,6 +250,32 @@ then independently re-reviewed. Native recovery checks cover identity/attempt
 binding, registered-state protection, durable reuse and exclusive owner-only
 export. These checks do not replace the final installable-beta gate.
 
+## Cascading-history fixture follow-up
+
+Run `34233945798` on `5e3995f147` passed the classic-scrollbar correction,
+both relay integration shards and all remaining required jobs except Desktop
+(smoke shard 6). The cascading-history case measured a 5,555px bottom re-pin
+before its first actual wheel input, with no prepend growth. Its fixed 120ms
+monitor was already expiring while CDP was still delivering the input.
+
+The unchanged fixture reproduced the same timeout with a 250ms input delay.
+The corrected fixture uses real wheel input for setup, stops outside the fetch
+threshold until its observers are installed, and begins its measurement window
+on actual wheel arrival. The original 15-page coverage, 5px tolerances, viewport
+gap and exit-travel assertions remain unchanged. On the same frozen application
+artifact, the corrected delayed case passed three repeats and the complete
+virtualization suite passed all 11 cases. TypeScript and scoped Biome passed.
+This change affects only the fixture and this report; fresh CI is still required.
+
+The corrected beta run `34231867550` completed successfully on production
+revision `4170c75a17`. Its ad-hoc-signed ARM64 artifact is `10059348283`, with
+SHA-256 `f8cc2ccb17aaf4e8c3ef867537cf47c68e556e520f6b562d8378f1250ad5b5c3`.
+Native signup/relaunch, relocation, browser sessions and 20 isolation checks
+passed. Later test/report-only corrections have identical application inputs.
+The approved explicit first-job Start/funding/retry handoff and joined native
+provisioning-to-worker-output proof remain a separate follow-up; this beta does
+not contain that unfinished work. The overall redesign goal remains active.
+
 ## Required final gates
 
 1. Rebuild the final source, compare equivalent realistic conversations against
