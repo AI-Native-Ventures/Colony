@@ -9,11 +9,19 @@ const questions = [
   ],
   [
     "How do I get started?",
-    "The planned early-access setup will guide you through describing your business and choosing a teammate with the tools needed for your first job. Then tell it what you need, add the relevant details or files, and check what it produces.",
+    "When you get access, create your account, save the code that helps you recover access and describe your business. Colony opens a Welcome conversation with a suggested first job. Edit the brief, which is the set of instructions for the job, then choose Start this job. You can explore the app before starting any work.",
+  ],
+  [
+    "What are channels and threads?",
+    "A channel is a shared conversation for your team. A thread keeps the replies about one job or topic together. Open a thread to follow that discussion without losing the rest of the channel. Your people and AI teammates can take part in the same conversation.",
   ],
   [
     "How will I know what needs my attention?",
-    "The planned daily view brings together jobs in progress, finished work and questions waiting for your answer. Open a job to check the result, answer a question or ask for changes.",
+    "Inbox brings together updates and requests. Tasks shows jobs on a board or in a list. Open a job’s thread to read the discussion, check progress and review the work. You can answer questions and ask for changes there.",
+  ],
+  [
+    "What do I need before an AI job can start?",
+    "You need an available AI teammate with the right tools, the information for the job and credits to pay for AI work. Colony checks your team and credits when you choose Start this job. If something is missing, it tells you. Creating an account or adding credits does not start a job automatically.",
   ],
   [
     "Do I need a business or a team already?",
@@ -21,7 +29,7 @@ const questions = [
   ],
   [
     "Can I use Colony today?",
-    "Colony is being built and tested, and early access is limited. The guided setup and daily view described here are planned for early access. Applying does not give you access straight away. Available jobs, tools and costs will be explained before you join.",
+    "Colony is being built and tested, and early access is limited. Apply to tell us about your business and what you need help with. Applying does not give you access straight away. We’ll explain the available teammates, tools and costs before you join.",
   ],
 ];
 

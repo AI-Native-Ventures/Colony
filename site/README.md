@@ -111,12 +111,16 @@ with people and AI teammates. It uses the owner experience described in the posi
 its September 5/7 product recommendations. The latest owner direction supersedes the older
 agency-first marketing choice.
 
-`WorkConversation` illustrates a single job discussion with a business owner, an AI teammate and a
-colleague. Supplied sample quotes, a clarifying question and a reply sit alongside a readable sample
-comparison. It explains the conversation/work relationship without inventing application navigation
-or simulating execution. A native disclosure opens the sample quote details. All messages and prices
-are labelled as illustrative. `BusinessGuide` explains setup, assignment and review. The previous
-dashboard mockup and service-output demo are no longer shipped in the JavaScript bundle.
+`WorkspacePreview` follows the sidebar, shared channel and right-thread layout in the app source at
+develop `8cbb592eba`. Its business, messages and prices are explicitly sample content. Visitors can
+open or close the example thread and expand the supplied quotes; the comparison stays inside the
+thread. Disabled composers and illustrative navigation do not dispatch work or simulate execution.
+On small screens, one reading pane and a Back control replace the split view. `BusinessGuide` and
+the FAQ explain account and business setup, shared conversations, job replies, Inbox and Tasks.
+The earlier invented dashboard and editorial conversation components are no longer shipped.
+
+The preview bundles regular Inter from `src/assets/fonts/inter-latin-wght-normal.woff2`; its licence
+is distributed at `/fonts/Inter-LICENSE.txt`. This marketing release does not promote develop app code.
 
 Applications use a static email handoff to `basheer@ainative.ventures`, confirmed by the owner.
 The browser validates the fields, prepares an encoded email and lets the applicant inspect it before
@@ -125,8 +129,8 @@ its contents, and preparing or copying the draft is never presented as a success
 Changing an answer clears the older draft. Name, email, business stage and desired work are required.
 Whitespace-only work is rejected. A selectable draft and copy button provide an email-app fallback.
 
-Run `pnpm -C site check`, `pnpm -C site typecheck` and `pnpm -C site build`. Browser checks cover all
-the sample quote disclosure, readable comparison, keyboard navigation, form validation
+Run `pnpm -C site check`, `pnpm -C site typecheck` and `pnpm -C site build`. Browser checks cover
+thread open/close and focus, both sample quote disclosures, the readable comparison, form validation
 and draft editing, responsive layout and console errors. The page never claims full support for every
 business process; early-access availability and the illustration's limits are stated in plain language.
 
