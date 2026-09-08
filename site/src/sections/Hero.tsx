@@ -1,7 +1,15 @@
 import { AntParade } from "@/brand/BrandField";
-import { BusinessTour } from "./BusinessTour";
+import { WorkConversation } from "./WorkConversation";
 
-export function Hero() {
+export function Hero({
+  motionPaused,
+  showMotionToggle,
+  toggleMotion,
+}: {
+  motionPaused: boolean;
+  showMotionToggle: boolean;
+  toggleMotion: () => void;
+}) {
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div className="hero-copy">
@@ -36,8 +44,24 @@ export function Hero() {
         <p className="availability">
           Colony is being built. Apply to help shape it and try it early.
         </p>
+        {showMotionToggle && (
+          <button
+            className="motion-toggle"
+            type="button"
+            onClick={toggleMotion}
+          >
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              {motionPaused ? (
+                <path d="M3 1 11 6 3 11Z" />
+              ) : (
+                <path d="M2 1H5V11H2ZM7 1H10V11H7Z" />
+              )}
+            </svg>
+            {motionPaused ? "Play motion" : "Pause motion"}
+          </button>
+        )}
       </div>
-      <BusinessTour />
+      <WorkConversation />
     </section>
   );
 }
