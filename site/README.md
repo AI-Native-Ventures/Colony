@@ -129,7 +129,12 @@ four tour views, the linked example answer, the readable draft, keyboard navigat
 and draft editing, responsive layout and console errors. The page never claims full support for every
 business process; early-access availability and the illustration's limits are stated in plain language.
 
-The approved visual direction retains layered multicolour gradients and the exact existing ant mark.
-Decorative ants are hidden from assistive technology, do not intercept clicks and finish their intro
-animation after four seconds. Reduced-motion preferences disable it. The sharing image is
-`/og-business.png`, rendered from `og-source.svg` using existing Sharp tooling. No new dependency.
+The approved visual direction uses a curated light multicolour background blend chosen once per
+page load, with no colour changes during interaction. When session storage is available, a reload
+chooses a different blend from the previous one; blocked storage falls back to random selection.
+The exact existing SVG ants walk and wander continuously while visible. A pause control stops their
+motion, reduced-motion preferences keep them still, and animation pauses when the field is off-screen
+or the browser tab is hidden. Fine mouse pointers produce a small, bounded response on desktop;
+pointer movement uses a separate transform wrapper from the CSS wander and walking animation.
+Decorative ants are hidden from assistive technology and do not intercept clicks. The sharing image
+is `/og-business.png`, rendered from `og-source.svg` using existing Sharp tooling. No new dependency.

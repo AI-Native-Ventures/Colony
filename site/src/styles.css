@@ -87,11 +87,31 @@ p {
       #fff5 65%,
       transparent 100%
     ),
-    radial-gradient(ellipse 50% 43% at 0 1%, #c8b2fa 3%, transparent 75%),
-    radial-gradient(ellipse 45% 50% at 100% 12%, #f3bbd9, transparent 75%),
-    radial-gradient(ellipse 55% 48% at 9% 52%, #a7d4f3, transparent 76%),
-    radial-gradient(ellipse 50% 48% at 88% 52%, #f4d4a7, transparent 73%),
-    radial-gradient(ellipse 60% 35% at 51% 85%, #b6e5d5, transparent 80%);
+    radial-gradient(
+      ellipse 50% 43% at 0 1%,
+      var(--scene-1, #c8b2fa) 3%,
+      transparent 75%
+    ),
+    radial-gradient(
+      ellipse 45% 50% at 100% 12%,
+      var(--scene-2, #f3bbd9),
+      transparent 75%
+    ),
+    radial-gradient(
+      ellipse 55% 48% at 9% 52%,
+      var(--scene-3, #a7d4f3),
+      transparent 76%
+    ),
+    radial-gradient(
+      ellipse 50% 48% at 88% 52%,
+      var(--scene-4, #f4d4a7),
+      transparent 73%
+    ),
+    radial-gradient(
+      ellipse 60% 35% at 51% 85%,
+      var(--scene-5, #b6e5d5),
+      transparent 80%
+    );
   background-size: 100% 1280px;
   background-repeat: no-repeat;
 }
@@ -279,9 +299,6 @@ p {
   position: absolute;
   color: #794dac;
   opacity: 0.48;
-  transform: rotate(var(--ant-angle));
-  animation: colony-drift 4s ease-in-out 1;
-  animation-delay: var(--ant-delay);
 }
 .field-ant-1,
 .field-ant-4 {
@@ -297,32 +314,6 @@ p {
 .field-ant > svg {
   width: 100%;
   height: auto;
-}
-@keyframes colony-drift {
-  50% {
-    transform: translate(9px, -7px) rotate(var(--ant-angle));
-  }
-}
-.site-footer {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-  justify-content: space-between;
-  padding-block: 30px;
-}
-.site-footer > span,
-.site-footer > a:last-child {
-  color: #7b6e86;
-  font-size: 13px;
-}
-.site-footer > a:last-child {
-  text-decoration: none;
-}
-.site-footer .brand {
-  font-size: 25px;
-}
-.site-footer .brand svg {
-  width: 31px;
 }
 @media (min-width: 1600px) {
   .hero {
@@ -460,18 +451,6 @@ p {
   }
   .opening-canvas {
     background-size: 100% 1500px;
-  }
-  .site-footer {
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 15px;
-  }
-  .site-footer > span {
-    order: 3;
-    width: 100%;
-  }
-  .site-footer > a:last-child {
-    font-size: 13px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
