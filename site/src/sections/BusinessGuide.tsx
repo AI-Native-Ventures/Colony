@@ -18,51 +18,49 @@ export function BusinessGuide() {
             Then give your team a job.
           </h2>
           <p>
-            You explain what you need in a conversation. The team works on it
-            and brings back questions and results.
+            Set up your account, describe your business and choose your first
+            job. Keep the instructions, questions and results together.
           </p>
         </div>
         <div className="guide-sequence">
           <article>
             <div className="guide-explanation">
               <span className="step-number">01</span>
-              <h3>Tell Colony about your business.</h3>
+              <h3>Set up your business in Colony.</h3>
               <p>
-                Explain what you do, who you help and what matters to you. Add
-                the documents and information your team should use.
+                Create your account and save the code that helps you recover
+                access. Then name your business and explain what it does. You
+                can describe a business idea if you are just starting out.
               </p>
             </div>
             <div className="guide-message">
               <span>You tell Colony</span>
               <blockquote>
-                “We train small teams. Here are our services, prices and notes
-                from our latest client meeting.”
+                “We help small teams learn new skills through practical training
+                sessions.”
               </blockquote>
-              <div className="guide-files">
-                <span>Services and prices.pdf</span>
-                <span>Meeting notes.docx</span>
-              </div>
             </div>
           </article>
           <article>
             <div className="guide-explanation">
               <span className="step-number">02</span>
-              <h3>Say what needs to be done.</h3>
+              <h3>Choose when to start your first job.</h3>
               <p>
-                Tell your AI team the result you want and when you need it. It
-                can ask for missing information as the work goes along.
+                Colony opens a Welcome conversation with a suggested job. Edit
+                the instructions to say what you need, then choose “Start this
+                job.” You can also explore the app first.
               </p>
             </div>
             <div className="guide-message">
-              <span>You give the job</span>
+              <span>You write the instructions</span>
               <blockquote>
-                “Prepare a training proposal for Oak Studio by Thursday. Use the
-                meeting notes and our prices. Show me a draft first.”
+                “Use these meeting notes to list the training topics the client
+                asked for. Point out any details we still need.”
               </blockquote>
               <div className="guide-assignment">
                 <AntMark />
                 <span>
-                  One clear job, with a deadline and a result to check.
+                  You review the instructions before starting the job.
                 </span>
               </div>
             </div>
@@ -72,16 +70,16 @@ export function BusinessGuide() {
               <span className="step-number">03</span>
               <h3>Check the result. Say what comes next.</h3>
               <p>
-                Open the work your team brings back. Ask for changes, answer
-                questions and decide whether it is ready. The conversation stays
-                with the job.
+                Follow the job in its thread, where the replies stay together.
+                Answer questions, read the work and ask for changes. You decide
+                how to use the result.
               </p>
             </div>
             <div className="guide-message">
               <span>You review the work</span>
               <blockquote>
-                “Make the first session shorter and add more practice time. Show
-                me the revised proposal.”
+                “Add teamwork to the list. We also need to ask how many people
+                will attend.”
               </blockquote>
               <div className="guide-assignment">
                 <AntMark />
@@ -91,8 +89,9 @@ export function BusinessGuide() {
           </article>
         </div>
         <p className="guide-availability">
-          This is the experience we’re building. The jobs available in early
-          access will depend on the teammates and tools ready for you.
+          Early access is limited. AI work needs credits and an available
+          teammate with the right tools. We’ll explain what is available before
+          you join.
         </p>
       </section>
       <section className="business-control" aria-labelledby="control-title">
@@ -106,8 +105,9 @@ export function BusinessGuide() {
               Your team handles the work.
             </h2>
             <p>
-              Give your AI team lead a job. It organises the other AI teammates,
-              checks their work and brings questions and results back to you.
+              Give your team clear instructions and keep the discussion in one
+              place. An AI lead can coordinate a job with other AI teammates.
+              You review the work and decide what comes next.
             </p>
           </div>
           <div className="control-responsibilities">
@@ -129,7 +129,8 @@ export function BusinessGuide() {
                 <h3>AI teammates carry out the jobs.</h3>
                 <p>
                   They research, write and use the tools available for their
-                  work. Their lead checks the results and asks for corrections.
+                  work. The jobs they can take on depend on those tools and how
+                  your team is set up.
                 </p>
               </div>
             </article>
@@ -175,12 +176,12 @@ export function BusinessGuide() {
             <span className="fit-label">Already in business</span>
             <h3>Bring your team and ongoing work together.</h3>
             <p>
-              Keep customer information with the jobs it belongs to. See who is
-              responsible, what is waiting and what is ready for you.
+              Share updates, keep job details with their conversation and check
+              the work before acting on it.
             </p>
             <blockquote>
-              “Here are this week’s priorities. What is waiting on me, and which
-              jobs are at risk of being late?”
+              “Here are the notes from our client meeting. List the decisions
+              and the work we need to do next.”
             </blockquote>
           </article>
         </div>
