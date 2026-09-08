@@ -38,7 +38,7 @@ export function App() {
           </a>
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
-            <a href="#inside-colony">Inside Colony</a>
+            <a href="#inside-colony">See an example</a>
             <a className="nav-apply" href="#early-access">
               Apply for early access <span aria-hidden="true">↗</span>
             </a>
