@@ -5,10 +5,10 @@
   padding: clamp(72px, 9vw, 136px) 24px;
   color: #fff;
   background:
-    radial-gradient(ellipse at 4% 9%, #612eaa 0%, transparent 49%),
-    radial-gradient(ellipse at 96% 85%, #176c72 0%, transparent 57%),
-    radial-gradient(ellipse at 75% 0%, #273f98 0%, transparent 62%),
-    linear-gradient(135deg, #241544, #191c40 62%, #123f4b);
+    radial-gradient(ellipse at 0% 12%, #16705c 0%, transparent 59%),
+    radial-gradient(ellipse at 88% 95%, #176f78 0%, transparent 60%),
+    radial-gradient(ellipse at 94% 0%, #1e558e 0%, transparent 65%),
+    linear-gradient(130deg, #073d34, #103e59 60%, #0c4051);
   scroll-margin-top: 28px;
 }
 
@@ -49,7 +49,7 @@
 
 .early-access__ant--second {
   width: 62px;
-  color: #cfc0ff;
+  color: #c0e9ff;
   transform: translateY(-8px) rotate(5deg);
 }
 
@@ -68,7 +68,7 @@
 }
 
 .early-access__intro > .early-access__eyebrow {
-  color: #ded6ff;
+  color: #c8efe5;
 }
 
 .early-access__intro h2 {
@@ -90,7 +90,7 @@
 
 .early-access__intro > p.early-access__explanation {
   font-size: 15px;
-  color: #dddcee;
+  color: #d5eae9;
 }
 
 .early-access__delivery {
@@ -98,7 +98,7 @@
   margin-top: 34px;
   padding-top: 28px;
   border-top: 1px solid #ffffff40;
-  color: #eeedf8;
+  color: #e7f3f0;
   font-size: 15px;
   line-height: 1.65;
 }
@@ -124,14 +124,14 @@
   border: 1px solid #fff;
   border-radius: 28px;
   padding: clamp(24px, 3vw, 40px);
-  color: #1d1728;
+  color: #152b2a;
   background: #fff;
-  box-shadow: 0 24px 72px #100c2826;
+  box-shadow: 0 24px 72px #082b352b;
 }
 
 .early-access__required {
   margin: 0 0 26px;
-  color: #625b70;
+  color: #526563;
   font-size: 14px;
   line-height: 1.6;
 }
@@ -150,7 +150,7 @@
 
 .early-access label span {
   font-weight: 400;
-  color: #625b70;
+  color: #526563;
 }
 
 .early-access input,
@@ -159,11 +159,11 @@
   box-sizing: border-box;
   width: 100%;
   min-height: 52px;
-  border: 1px solid #8e859e;
+  border: 1px solid #7b8c88;
   border-radius: 12px;
   padding: 13px 14px;
-  background: #fcfbfe;
-  color: #1d1728;
+  background: #fbfefd;
+  color: #152b2a;
   font: inherit;
   font-size: 16px;
   line-height: 1.5;
@@ -179,13 +179,13 @@
 
 .early-access :is(input, select, textarea, button, a):focus-visible,
 .early-access__draft:focus-visible {
-  outline: 3px solid #6841ba;
+  outline: 3px solid #087c78;
   outline-offset: 4px;
 }
 
 .early-access__hint {
   margin: 8px 0 0;
-  color: #625b70;
+  color: #526563;
   font-size: 14px;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -215,11 +215,11 @@
 
 .early-access__primary {
   color: #fff;
-  background: #231630;
+  background: #102f35;
 }
 
 .early-access__primary:hover {
-  background: #4b2c75;
+  background: #144f4c;
 }
 
 .early-access form > .early-access__primary {
@@ -227,14 +227,14 @@
 }
 
 .early-access__secondary {
-  border-color: #8e859e;
-  color: #231630;
+  border-color: #7b8c88;
+  color: #102f35;
   background: #fff;
 }
 
 .early-access__secondary:hover {
-  border-color: #6841ba;
-  background: #f2edfc;
+  border-color: #087c78;
+  background: #edf7f3;
 }
 
 .early-access__form-note {
@@ -244,13 +244,13 @@
 
 .early-access__draft {
   margin-top: 32px;
-  border-top: 1px solid #dcd6e5;
+  border-top: 1px solid #d2e1dc;
   padding-top: 28px;
   scroll-margin-block: 32px;
 }
 
 .early-access__draft > .early-access__eyebrow {
-  color: #6841ba;
+  color: #087366;
 }
 
 .early-access__draft h3 {
