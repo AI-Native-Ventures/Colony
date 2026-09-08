@@ -1,23 +1,27 @@
 const questions = [
   [
     "What is Colony?",
-    "Colony is an app for working with your team and AI assistants. You can talk about the work, share files, keep track of tasks and give assistants jobs to do. You check their work and tell them what needs changing.",
+    "Colony is an app for giving your team jobs, following progress and reviewing results. Your team can include people and AI teammates. Open a job to read its conversation, check the work and say what needs changing.",
   ],
   [
-    "What is an AI assistant?",
-    "It is software you can give instructions to in a conversation. It uses tools to do work, such as researching information, writing or making a website. What it can do depends on the tools it has. You give it the information it needs and check the result.",
+    "What is an AI teammate?",
+    "An AI teammate is software you give instructions to in a conversation. It uses tools to research information, write and do other tasks. What it can do depends on its job and the tools connected to it. You give it the information it needs and check its work.",
   ],
   [
-    "Is Colony only for websites and social media?",
-    "No. Colony is a general place to work, designed for different kinds of business. Websites and social media are the first examples we’re building and testing. You can set up assistants for other jobs, and we’ll add more examples over time.",
+    "How do I get started?",
+    "The planned early-access setup will guide you through describing your business and choosing a teammate with the tools needed for your first job. Then tell it what you need, add the relevant details or files, and check what it produces.",
+  ],
+  [
+    "How will I know what needs my attention?",
+    "The planned daily view brings together jobs in progress, finished work and questions waiting for your answer. Open a job to check the result, answer a question or ask for changes.",
   ],
   [
     "Do I need a business or a team already?",
-    "No. You can start with an idea and work on your own, or bring an existing business and invite your team. Tell us what you want to do when you apply.",
+    "No. You can apply if you are exploring an idea, starting a business or already running one. You can work on your own or with other people. Tell us about your business and the first job you would like help with.",
   ],
   [
     "Can I use Colony today?",
-    "Colony is not open to everyone yet. We’re building and testing it. Apply for early access and tell us about your business. Before you join, we’ll explain which features are available and what they cost.",
+    "Colony is being built and tested, and early access is limited. The guided setup and daily view described here are planned for early access. Applying does not give you access straight away. Available jobs, tools and costs will be explained before you join.",
   ],
 ];
 

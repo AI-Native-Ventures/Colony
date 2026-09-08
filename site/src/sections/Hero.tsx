@@ -1,5 +1,5 @@
 import { AntParade } from "@/brand/BrandField";
-import { ExampleJob } from "./ExampleJob";
+import { BusinessTour } from "./BusinessTour";
 
 export function Hero() {
   return (
@@ -12,30 +12,32 @@ export function Hero() {
         <h1 id="hero-title">
           Run your business in Colony.
           <br />
-          <span className="hero-tagline">Your team and work, in one app.</span>
+          <span className="hero-tagline">
+            Give your team a job. Check the result.
+          </span>
         </h1>
         <p className="hero-description">
-          Colony is an app where you and your team can talk, share files and
-          keep track of work. Give AI assistants a job, check what they produce
-          and ask for changes.
+          Colony is an app for managing your business with people and AI
+          teammates. Assign jobs, see who is doing what, and check the results
+          before deciding what happens next.
         </p>
         <p className="hero-audience">
-          Start a business or bring the one you already run. Set up Colony
-          around the work your business needs to do.
+          AI teammates are software you can talk to. They use tools to research,
+          write and carry out tasks for your business.
         </p>
         <div className="hero-actions">
           <a className="button button-dark" href="#early-access">
             Apply for early access <span aria-hidden="true">↗</span>
           </a>
-          <a className="button button-glass" href="#example">
-            See how it works <span aria-hidden="true">↓</span>
+          <a className="button button-glass" href="#how-it-works">
+            How you use it <span aria-hidden="true">↓</span>
           </a>
         </div>
         <p className="availability">
-          We’re building and testing Colony. Apply to try it early.
+          Colony is being built. Apply to help shape it and try it early.
         </p>
       </div>
-      <ExampleJob />
+      <BusinessTour />
     </section>
   );
 }
