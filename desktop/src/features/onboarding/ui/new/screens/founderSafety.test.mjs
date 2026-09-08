@@ -145,3 +145,106 @@ test("late website read cannot overwrite edited business description", async () 
   );
   assert.match(screen.getByRole("status").textContent, /kept your wording/);
 });
+
+async function mountBusinessReader(describeBusiness) {
+  const React = await import("react");
+  const ui = await import("@testing-library/react");
+  const { CompanyScreen } = await import("./CompanyScreen.tsx");
+  const submitted = [];
+  function Business() {
+    const [values, setValues] = React.useState({
+      company: "Horizon Labs",
+      website: "horizon.example/",
+      description: "",
+    });
+    return React.createElement(CompanyScreen, {
+      values,
+      onChange: (patch) => setValues((current) => ({ ...current, ...patch })),
+      onSubmit: (website) => submitted.push({ ...values, website }),
+      scrape: { describeBusiness },
+    });
+  }
+  return { ...ui, ...ui.render(React.createElement(Business)), submitted };
+}
+
+for (const outcome of ["unreachable", "timeout", "throw"]) {
+  test(`website ${outcome} shows manual fallback and submits retained business context`, async () => {
+    const calls = [];
+    const screen = await mountBusinessReader(async (url) => {
+      calls.push(url);
+      if (outcome === "throw") throw new Error("Synthetic scan failure");
+      return { ok: false, reason: outcome };
+    });
+    await screen.act(async () =>
+      screen.fireEvent.click(
+        screen.getByRole("button", { name: "Read website", exact: true }),
+      ),
+    );
+    assert.deepEqual(calls, ["https://horizon.example"]);
+    assert.match(
+      screen.getByRole("status").textContent,
+      /could not read that website.*Describe your business below/,
+    );
+    assert.equal(screen.getByLabelText("Business name").value, "Horizon Labs");
+    assert.equal(screen.getByLabelText(/Website/).value, "horizon.example/");
+    assert.equal(screen.getByLabelText("Business summary").value, "");
+    const submit = screen.getByRole("button", { name: "Open my Colony" });
+    assert.equal(submit.disabled, true);
+    assert.equal(screen.submitted.length, 0);
+    await screen.act(async () =>
+      screen.fireEvent.change(screen.getByLabelText("Business summary"), {
+        target: { value: "We design brands for small businesses." },
+      }),
+    );
+    assert.equal(submit.disabled, false);
+    await screen.act(async () => screen.fireEvent.click(submit));
+    assert.deepEqual(screen.submitted, [
+      {
+        company: "Horizon Labs",
+        website: "https://horizon.example",
+        description: "We design brands for small businesses.",
+      },
+    ]);
+    assert.equal(screen.queryByRole("button", { name: "Add credits" }), null);
+  });
+}
+
+test("manual business context can continue while a website read is still pending", async () => {
+  const calls = [];
+  let resolve;
+  const response = new Promise((done) => {
+    resolve = done;
+  });
+  const screen = await mountBusinessReader(async (url) => {
+    calls.push(url);
+    return response;
+  });
+  await screen.act(async () =>
+    screen.fireEvent.click(
+      screen.getByRole("button", { name: "Read website", exact: true }),
+    ),
+  );
+  assert.deepEqual(calls, ["https://horizon.example"]);
+  assert.ok(screen.getByRole("button", { name: "Reading your website…" }));
+  await screen.act(async () =>
+    screen.fireEvent.change(screen.getByLabelText("Business summary"), {
+      target: { value: "My business description while the site is pending." },
+    }),
+  );
+  const submit = screen.getByRole("button", { name: "Open my Colony" });
+  assert.equal(submit.disabled, false);
+  await screen.act(async () => screen.fireEvent.click(submit));
+  assert.deepEqual(screen.submitted, [
+    {
+      company: "Horizon Labs",
+      website: "https://horizon.example",
+      description: "My business description while the site is pending.",
+    },
+  ]);
+  await screen.act(async () => resolve({ ok: false, reason: "timeout" }));
+  assert.equal(screen.submitted.length, 1);
+  assert.equal(
+    screen.getByLabelText("Business summary").value,
+    "My business description while the site is pending.",
+  );
+});
