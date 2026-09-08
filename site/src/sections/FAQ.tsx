@@ -1,23 +1,23 @@
 const questions = [
   [
-    "Do I need to have an agency already?",
-    "No. You can apply if you’re planning to start one or already work with clients. You don’t need a business name or website to apply.",
+    "What is Colony?",
+    "Colony is an app for working with your team and AI assistants. You can talk about the work, share files, keep track of tasks and give assistants jobs to do. You check their work and tell them what needs changing.",
   ],
   [
     "What is an AI assistant?",
-    "It is software you can give instructions to in a conversation. In Colony, assistants use tools to make websites, pictures and writing. They are not people. You still need to give them the right information and check their work.",
+    "It is software you can give instructions to in a conversation. It uses tools to do work, such as researching information, writing or making a website. What it can do depends on the tools it has. You give it the information it needs and check the result.",
+  ],
+  [
+    "Is Colony only for websites and social media?",
+    "No. Colony is a general place to work, designed for different kinds of business. Websites and social media are the first examples we’re building and testing. You can set up assistants for other jobs, and we’ll add more examples over time.",
+  ],
+  [
+    "Do I need a business or a team already?",
+    "No. You can start with an idea and work on your own, or bring an existing business and invite your team. Tell us what you want to do when you apply.",
   ],
   [
     "Can I use Colony today?",
-    "Colony is not open to everyone yet. We’re building and testing it. Apply for early access and tell us what you want help with. Before you join, we’ll explain which features are available and what they cost.",
-  ],
-  [
-    "Will Colony find paying clients for me?",
-    "Tell Colony what kind of business you want to work with. It helps you find businesses you could contact. Finding a business does not mean it will buy your services. You decide who to contact and what to offer.",
-  ],
-  [
-    "Can I use it for another kind of business?",
-    "Colony is designed so you can adapt its AI assistants for other kinds of work. We’re starting with website and social media agencies. We plan to add ready-to-use teams for more types of business.",
+    "Colony is not open to everyone yet. We’re building and testing it. Apply for early access and tell us about your business. Before you join, we’ll explain which features are available and what they cost.",
   ],
 ];
 

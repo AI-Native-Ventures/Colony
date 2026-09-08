@@ -10,8 +10,7 @@ const application: EarlyAccessApplication = {
   name: "Mpho & Ana + Partners",
   email: "mpho+colony@example.com",
   stage: "starting",
-  service: "both",
-  note: "A café's website? Prices #1: R200 & R300.\n写真 and 🐜 posts = yes!",
+  work: "A café's website? Prices #1: R200 & R300.\n写真 and 🐜 posts = yes!",
 };
 
 test("the email link preserves special characters and every application answer", () => {
@@ -25,9 +24,9 @@ test("the email link preserves special characters and every application answer",
   assert.equal(link.hash, "");
   assert.match(draft.body, /Name: Mpho & Ana \+ Partners/);
   assert.match(draft.body, /Email: mpho\+colony@example.com/);
-  assert.match(draft.body, /My agency: I'm starting an agency/);
-  assert.match(draft.body, /I'm interested in: Websites and social media/);
-  assert.ok(draft.body.endsWith(application.note));
+  assert.match(draft.body, /My business: I'm starting a business/);
+  assert.match(draft.body, /What I'd like to do in Colony:/);
+  assert.ok(draft.body.endsWith(application.work));
 });
 
 test("visitor text cannot change the recipient or add email headers", () => {
@@ -35,7 +34,7 @@ test("visitor text cannot change the recipient or add email headers", () => {
   const maliciousApplication = {
     ...application,
     name: `Visitor${attemptedHeader}`,
-    note: "&subject=Changed&body=Overwritten#hidden",
+    work: "&subject=Changed&body=Overwritten#hidden",
     recipient: "someone@example.net",
     subject: "Changed",
   };
@@ -50,24 +49,30 @@ test("visitor text cannot change the recipient or add email headers", () => {
     "Colony early access application",
   );
   assert.ok(link.searchParams.get("body")?.includes(attemptedHeader));
-  assert.ok(link.searchParams.get("body")?.endsWith(maliciousApplication.note));
+  assert.ok(link.searchParams.get("body")?.endsWith(maliciousApplication.work));
   assert.equal(link.hash, "");
 });
 
-test("the copy fallback includes the fixed destination and optional notes can be empty", () => {
+test("the copy fallback includes the fixed destination and trims business details", () => {
   const draft = buildApplicationEmail({
     ...application,
     name: "  Ana  ",
+    email: "  ana@example.com  ",
     stage: "existing",
-    service: "websites",
-    note: "  ",
+    work: "  Help with my bakery's work.  ",
   });
 
   assert.ok(draft.clipboardText.startsWith("To: basheer@ainative.ventures\n"));
   assert.ok(draft.clipboardText.includes(`Subject: ${draft.subject}\n\n`));
   assert.ok(draft.clipboardText.endsWith(draft.body));
   assert.match(draft.body, /Name: Ana\r\n/);
-  assert.match(draft.body, /My agency: I already run an agency/);
-  assert.match(draft.body, /I'm interested in: Websites$/);
-  assert.doesNotMatch(draft.body, /What I'd like help with/);
+  assert.match(draft.body, /Email: ana@example.com\r\n/);
+  assert.match(draft.body, /My business: I already run a business/);
+  assert.ok(draft.body.endsWith("Help with my bakery's work."));
+
+  const exploringDraft = buildApplicationEmail({
+    ...application,
+    stage: "exploring",
+  });
+  assert.match(exploringDraft.body, /My business: I'm exploring an idea/);
 });

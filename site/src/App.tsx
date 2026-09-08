@@ -20,7 +20,7 @@ export function App() {
           </a>
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
-            <a href="#what-you-can-do">What you can do</a>
+            <a href="#what-you-can-do">Example jobs</a>
             <a className="nav-apply" href="#early-access">
               Apply for early access <span aria-hidden="true">↗</span>
             </a>

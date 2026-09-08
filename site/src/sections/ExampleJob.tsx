@@ -10,7 +10,7 @@ export function ExampleJob() {
     <div className="example-shell" id="example">
       <div className="example-caption">
         <span>
-          <span className="tiny-dot" /> A client job, from request to result
+          <span className="tiny-dot" /> One example: a bakery uses Colony
         </span>
         <span>Interactive illustration</span>
       </div>
@@ -20,7 +20,7 @@ export function ExampleJob() {
             <span className="client-icon">G</span>
             <div>
               <strong>Green Street Bakery</strong>
-              <span>A fictional client</span>
+              <span>A fictional business</span>
             </div>
           </div>
           <span className="job-label">Website + social media</span>
@@ -32,18 +32,18 @@ export function ExampleJob() {
               <h2>You tell Colony what to do</h2>
             </div>
             <p className="scenario">
-              Imagine a bakery hires you to make its website and Instagram
-              posts.
+              Imagine you run a bakery. You ask Colony for a website and an
+              Instagram post.
             </p>
             <div className="message from-you">
               <span className="message-author">You</span>
               <p>
                 Make a website for Green Street Bakery and an Instagram post
-                about their chocolate cake.
+                about our chocolate cake.
               </p>
               <p>
-                They’re open Tuesday to Saturday, 8 am to 4 pm. Use these photos
-                and their menu.
+                We’re open Tuesday to Saturday, 8 am to 4 pm. Use these photos
+                and our menu.
               </p>
               <div className="attachments">
                 <span>▧ Bakery photos</span>
@@ -65,8 +65,8 @@ export function ExampleJob() {
             <div className={`change-request ${revised ? "is-revised" : ""}`}>
               <span className="message-author">Then ask for a change</span>
               <p>
-                “They close at 2 pm on Saturdays. Make the words for the
-                Instagram post shorter, too.”
+                “We close at 2 pm on Saturdays. Make the words for the Instagram
+                post shorter, too.”
               </p>
               <button
                 className="example-change"
@@ -87,7 +87,7 @@ export function ExampleJob() {
             <div className="deliverables">
               <article className="website-result">
                 <div className="result-label">
-                  <span aria-hidden="true">▣</span> A website for your client
+                  <span aria-hidden="true">▣</span> Your bakery’s website
                 </div>
                 <div className="bakery-page">
                   <div className="bakery-nav">

@@ -13,43 +13,43 @@ export function ClientWork() {
         <div className="section-heading">
           <p className="eyebrow">How you use Colony</p>
           <h2 id="steps-title">
-            How to ask Colony
+            Bring in your work.
             <br />
-            for work.
+            Build a team to help you do it.
           </h2>
         </div>
         <div className="steps-grid">
           <article>
             <span className="step-number">01</span>
-            <h3>Give it the details.</h3>
+            <h3>Keep the work together.</h3>
             <p>
-              Tell Colony about the business. Add the pictures, prices, opening
-              hours and other information it should use.
+              Create a space for your business. Keep conversations, files and
+              tasks together. Invite the people you work with.
             </p>
             <div className="step-example">
-              “Here’s my client’s menu and a few photos.”
+              “Here’s the plan for our new product.”
             </div>
           </article>
           <article>
             <span className="step-number">02</span>
-            <h3>Ask for the work.</h3>
+            <h3>Give AI assistants jobs.</h3>
             <p>
-              Send a message saying what to make. The AI assistants use your
-              instructions to build the website or create the post.
+              Describe what needs doing. Share the information the assistant
+              should use. It uses its tools to do the work.
             </p>
             <div className="step-example">
-              “Make a page for their new cake menu.”
+              “Research these businesses and summarise what they offer.”
             </div>
           </article>
           <article>
             <span className="step-number">03</span>
-            <h3>Check it. Ask for changes.</h3>
+            <h3>Check the work. Guide the team.</h3>
             <p>
-              Look at the result. Tell Colony what to change, in your own words.
-              Review the work before you use it for your client.
+              Follow the tasks, open the results and answer questions. Ask for
+              changes when something needs to be different.
             </p>
             <div className="step-example">
-              “Use this photo instead and make the text shorter.”
+              “Add the prices and make the summary shorter.”
             </div>
           </article>
         </div>
@@ -61,11 +61,11 @@ export function ClientWork() {
       >
         <div className="section-wrap">
           <div className="section-heading">
-            <p className="eyebrow">The work you can offer</p>
+            <p className="eyebrow">Our first examples</p>
             <h2 id="work-title">
-              New websites. Fresh posts.
+              Website and social media work.
               <br />
-              Help with the next update, too.
+              Two examples to get you started.
             </h2>
           </div>
           <div className="work-grid">
@@ -73,15 +73,15 @@ export function ClientWork() {
               <div className="work-icon">
                 <AntMark />
               </div>
-              <p className="work-type">Website assistant</p>
+              <p className="work-type">Example 1 · Website assistant</p>
               <h3>
                 Build and look after
-                <br />
-                client websites.
+                <br />a business website.
               </h3>
               <p>
-                Ask for a new website, then return when your client needs to
-                change a page, add pictures or update prices.
+                Give the assistant your business details and ask for a website.
+                Come back when you need to change a page, add pictures or update
+                prices.
               </p>
               <ul>
                 <li>Make a new business website</li>
@@ -89,22 +89,22 @@ export function ClientWork() {
                 <li>Add pages for new products or services</li>
               </ul>
               <div className="request-chip">
-                “Add my client’s new catering service to the website.”
+                “Add our new catering service to the website.”
               </div>
             </article>
             <article className="work-card social-work">
               <div className="work-icon">
                 <AntMark />
               </div>
-              <p className="work-type">Social media assistant</p>
+              <p className="work-type">Example 2 · Social media assistant</p>
               <h3>
                 Create pictures and
                 <br />
                 words for social media.
               </h3>
               <p>
-                Tell Colony what your client wants to promote. Ask for pictures
-                and words for posts, then review and change them.
+                Tell the assistant what your business wants to promote. Ask for
+                pictures and words for posts, then review and change them.
               </p>
               <ul>
                 <li>Design images for posts</li>
@@ -112,13 +112,14 @@ export function ClientWork() {
                 <li>Make posts for offers and events</li>
               </ul>
               <div className="request-chip">
-                “Make three posts about my client’s weekend special.”
+                “Make three posts about our weekend special.”
               </div>
             </article>
           </div>
           <p className="work-availability">
-            These are the jobs we’re building and testing first. Early access
-            will include a limited set of tools.
+            We’re using these jobs to test Colony and build the first examples
+            you can start with. We’ll add more examples for other kinds of work
+            over time. Early-access features will be confirmed before you join.
           </p>
         </div>
       </section>
@@ -127,17 +128,20 @@ export function ClientWork() {
         aria-labelledby="discovery-title"
       >
         <div className="discovery-copy">
-          <p className="eyebrow">Need clients to work with?</p>
+          <p className="eyebrow">A shared place to work</p>
           <h2 id="discovery-title">
-            Find businesses
+            Your people. Your AI assistants.
             <br />
-            you could help.
+            Working together.
           </h2>
           <p>
-            Tell Colony the kind of business you want to work with. Colony helps
-            you find businesses you could research and contact.
+            Talk with people and AI assistants in the same conversations. Keep
+            the tasks, documents and results with the work they belong to.
           </p>
-          <p>You choose who to approach and what service to offer.</p>
+          <p>
+            Start on your own or invite your team. You decide what to work on
+            and check what gets done.
+          </p>
           <a className="text-link" href="#early-access">
             Apply for early access <span aria-hidden="true">↗</span>
           </a>
@@ -145,53 +149,53 @@ export function ClientWork() {
         <div className="discovery-example">
           <div className="discovery-request">
             <AntMark />
-            <p>“Find bakeries I could offer a website to.”</p>
+            <p>“Let’s plan next week’s work.”</p>
           </div>
           <div className="prospect-list">
             <span className="prospect-label">
-              Illustrative results · fictional businesses
+              An example business workspace
             </span>
             {[
-              ["G", "Green Street Bakery", "Bakery"],
-              ["S", "Sunrise Bakes", "Bakery"],
-              ["T", "The Daily Loaf", "Bakery"],
-            ].map(([letter, name, type]) => (
+              ["P", "Product launch", "Conversations and tasks"],
+              ["R", "Business research", "Information and findings"],
+              ["W", "Website update", "Work to review"],
+            ].map(([letter, name, detail]) => (
               <div className="prospect" key={name}>
                 <span>{letter}</span>
                 <div>
                   <strong>{name}</strong>
-                  <small>{type} · Business to research</small>
+                  <small>{detail}</small>
                 </div>
                 <span aria-hidden="true">↗</span>
               </div>
             ))}
           </div>
-          <p>Finding a business does not mean it will buy your services.</p>
+          <p>Keep the conversation and the work it leads to in one place.</p>
         </div>
       </section>
       <section className="audience-section">
         <div className="section-wrap audience-inner">
           <AntParade />
           <h2>
-            Your first client.
+            Your business has its own work to do.
             <br />
-            Or the clients you already have.
+            Make Colony fit that work.
           </h2>
           <div className="audience-grid">
             <div>
-              <h3>Want to start an agency?</h3>
+              <h3>Starting a business?</h3>
               <p>
-                An agency does work for other businesses. You can offer website
-                or social media services, then use Colony to help create the
-                work you sell.
+                Bring your idea and the work you need to get started. Set up a
+                place to plan, keep information and work with AI assistants,
+                even before you have a team.
               </p>
             </div>
             <div>
-              <h3>Already run an agency?</h3>
+              <h3>Already running one?</h3>
               <p>
-                Use Colony to help with your clients’ websites, updates and
-                social media posts. You give the instructions and check what
-                gets delivered.
+                Bring your team and the jobs you do every day. Set up assistants
+                for the work you want help with. Websites and social media are
+                examples, not the only kinds of work Colony is designed for.
               </p>
             </div>
           </div>

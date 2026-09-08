@@ -10,19 +10,18 @@ export function Hero() {
           <span>Meet Colony</span>
         </div>
         <h1 id="hero-title">
-          Create websites and social media posts.
+          Run your business in Colony.
           <br />
-          <span className="hero-tagline">Tell Colony what you need.</span>
+          <span className="hero-tagline">Your team and work, in one app.</span>
         </h1>
         <p className="hero-description">
-          Colony is an app where you chat with AI assistants to get work done.
-          Give them your client’s details. They create the website, pictures or
-          writing. You check it and ask for changes.
+          Colony is an app where you and your team can talk, share files and
+          keep track of work. Give AI assistants a job, check what they produce
+          and ask for changes.
         </p>
         <p className="hero-audience">
-          For people who make websites or manage social media for other
-          businesses. Start with your first client, or use it for clients you
-          already have.
+          Start a business or bring the one you already run. Set up Colony
+          around the work your business needs to do.
         </p>
         <div className="hero-actions">
           <a className="button button-dark" href="#early-access">
