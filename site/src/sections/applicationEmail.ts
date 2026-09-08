@@ -7,33 +7,27 @@ const APPLICATION_SUBJECT = "Colony early access application";
 export interface EarlyAccessApplication {
   name: string;
   email: string;
-  stage: "starting" | "existing";
-  service: "websites" | "social" | "both";
-  note: string;
+  stage: "starting" | "existing" | "exploring";
+  work: string;
 }
 
 const stages: Record<EarlyAccessApplication["stage"], string> = {
-  starting: "I'm starting an agency",
-  existing: "I already run an agency",
-};
-
-const services: Record<EarlyAccessApplication["service"], string> = {
-  websites: "Websites",
-  social: "Social media",
-  both: "Websites and social media",
+  starting: "I'm starting a business",
+  existing: "I already run a business",
+  exploring: "I'm exploring an idea",
 };
 
 /** Prepare an email without sending it or placing visitor data in headers. */
 export function buildApplicationEmail(application: EarlyAccessApplication) {
-  const note = application.note.trim();
   const body = [
     "I'd like to apply for early access to Colony.",
     "",
     `Name: ${application.name.trim()}`,
     `Email: ${application.email.trim()}`,
-    `My agency: ${stages[application.stage]}`,
-    `I'm interested in: ${services[application.service]}`,
-    ...(note ? ["", "What I'd like help with:", note] : []),
+    `My business: ${stages[application.stage]}`,
+    "",
+    "What I'd like to do in Colony:",
+    application.work.trim(),
   ].join("\r\n");
 
   return {

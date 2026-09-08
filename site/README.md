@@ -11,8 +11,8 @@ pnpm -C site build
 ```
 
 This runs `tsc && vite build` and writes output to `site/dist`. Confirm `site/dist/index.html`
-exists before deploying, along with `site/dist/favicon.svg` and `site/dist/og-work.png`. Both are
-referenced by root-absolute path (`/favicon.svg`, `/og-work.png`) from `site/index.html`, so a
+exists before deploying, along with `site/dist/favicon.svg` and `site/dist/og-business.png`. Both are
+referenced by root-absolute path (`/favicon.svg`, `/og-business.png`) from `site/index.html`, so a
 missing file 404s in production even though the build itself succeeds.
 
 `site/dist` is gitignored. Nothing under it is committed; every deploy rebuilds from source.
@@ -104,9 +104,11 @@ contains the Colony headline ("Run your company with AI agents"), and both `/fav
 confirmed it matches the local build: hero, scatter field, feature sections, download CTA,
 and footer all present, with no console errors.
 
-## Agency landing page and early access
+## Business workspace landing page and early access
 
-The page addresses people starting or running website and social media agencies.
+The page addresses people starting or running any kind of business. Colony is described as a shared
+app for conversations, files, tasks and AI assistants. Website and social media work are starter
+examples, not the definition of the audience.
 Examples are clearly labelled illustrations, not live AI output or customer evidence.
 The current early-access offer does not promise immediate signup or the complete planned feature set.
 
@@ -115,7 +117,9 @@ The browser validates the fields, prepares an encoded email, and lets the applic
 opening their own email app. The applicant must send it. No server stores the form, no analytics receives
 its contents, and preparing or copying the draft is never presented as a successful submission.
 A selectable draft and copy button provide a fallback when no mail app is configured.
-Changing an answer clears an older draft. Business name and website are not required.
+Changing an answer clears an older draft. Name, email, business stage and a freeform description of
+the desired work are required. Whitespace-only work is rejected. Applicants can be starting a business,
+running one or exploring an idea; a business name and website are not required.
 
 `pnpm -C site check` runs Biome and the email encoding tests, so the deploy workflow also runs those
 tests. Use `pnpm -C site typecheck` and `pnpm -C site build` before opening a PR.
@@ -128,7 +132,7 @@ The original generated PNG is preserved outside the distributed site.
 
 ## Clear-copy and multicolour brand rebuild
 
-The current page leads with the work a visitor can create: websites and social media posts.
+The current page leads with running a business in Colony, with people and AI assistants working together.
 A fictional bakery example shows the client instructions, both outputs and a reversible example
 change. This is a local illustration, not a live AI request or proof of completed product work.
 The instructions come first on phones, followed by the website and Instagram post.
@@ -138,5 +142,5 @@ conversation panels. It replaces the earlier page composition and random single-
 Decorative ants are hidden from assistive technology, do not intercept clicks, and finish their
 intro animation after four seconds. Reduced-motion preferences disable that motion.
 
-The social sharing image is `/og-work.png`, rendered from `og-source.svg` using Sharp.
+The social sharing image is `/og-business.png`, rendered from `og-source.svg` using Sharp.
 The existing ant path and masked eye remain unchanged. No additional runtime dependency was added.
