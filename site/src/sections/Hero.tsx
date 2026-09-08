@@ -1,5 +1,5 @@
 import { AntParade } from "@/brand/BrandField";
-import { BusinessTour } from "./BusinessTour";
+import { WorkConversation } from "./WorkConversation";
 
 export function Hero({
   motionPaused,
@@ -61,7 +61,7 @@ export function Hero({
           </button>
         )}
       </div>
-      <BusinessTour />
+      <WorkConversation />
     </section>
   );
 }
