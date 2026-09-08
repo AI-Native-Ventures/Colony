@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { QueryClient } from "@tanstack/react-query";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
@@ -33,7 +34,7 @@ type FixtureWindow = Window & {
     channelName: string;
     kind?: number;
   }) => boolean;
-  __BUZZ_E2E_QUERY_CLIENT__?: { invalidateQueries: () => Promise<void> };
+  __BUZZ_E2E_QUERY_CLIENT__?: QueryClient;
   __BUZZ_E2E_SET_COLONY_CREDITS__?: (input: {
     availableNanousd?: string;
     error?: string | null;
@@ -200,7 +201,7 @@ async function setup(
       "We build websites and manage social media for small service businesses.",
     website: "",
     brief:
-      "Review Horizon Labs’ online presence and suggest three improvements, each with a reason and a next step, for review.",
+      'Draft five Instagram captions and five matching visual briefs for "Horizon Labs". Use the business context shared in this thread. Keep them ready for my review; do not create images or publish posts.',
   };
   const root = sign({
     kind: 9,
@@ -248,6 +249,180 @@ async function commandCount(page: Page, command: string) {
     command,
   );
 }
+
+test("starting examples share the editable brief, respect Discovery access and never start work", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  const { root, payload, errors } = await setup(page);
+  await openThread(page, root);
+  const cards = page.getByTestId("first-job-suggestion");
+  await expect(cards).toHaveCount(2);
+  const left = cards.nth(0),
+    right = cards.nth(1);
+  for (const card of [left, right]) {
+    await expect(card.getByLabel("The brief", { exact: true })).toHaveValue(
+      payload.brief,
+    );
+    await expect(card.getByTestId("first-job-outputs")).toContainText(
+      "5 Instagram caption drafts",
+    );
+    await expect(card.getByTestId("first-job-outputs")).toContainText(
+      "5 matching visual briefs",
+    );
+    await expect(
+      card.getByRole("button", { name: "Find potential clients" }),
+    ).toHaveCount(0);
+  }
+  const accessKey = [
+    "first-job-discovery",
+    OWNER.pubkey,
+    RELAY,
+    "e2e-default-community",
+  ];
+  // Fixture only: resolve the existing account/business-scoped access query.
+  // It does not prove a live Discovery entitlement or create a campaign.
+  await page.waitForFunction((key) => {
+    const query = (
+      window as FixtureWindow
+    ).__BUZZ_E2E_QUERY_CLIENT__?.getQueryState(key);
+    return query?.fetchStatus === "idle";
+  }, accessKey);
+  await page.evaluate((key) => {
+    const client = (window as FixtureWindow).__BUZZ_E2E_QUERY_CLIENT__;
+    client?.setQueryData([...key.slice(0, 3), "another-business"], true);
+    client?.setQueryData(key, false);
+  }, accessKey);
+  await expect(
+    left.getByRole("button", { name: "Find potential clients" }),
+  ).toHaveCount(0);
+  await page.evaluate((key) => {
+    (window as FixtureWindow).__BUZZ_E2E_QUERY_CLIENT__?.setQueryData(
+      key,
+      true,
+    );
+  }, accessKey);
+  await expect(
+    right.getByRole("button", { name: "Find potential clients" }),
+  ).toBeVisible();
+  await page.evaluate(async (key) => {
+    await (window as FixtureWindow).__BUZZ_E2E_QUERY_CLIENT__
+      ?.fetchQuery({
+        queryKey: key,
+        staleTime: 0,
+        retry: false,
+        queryFn: async () => {
+          throw new Error("Fixture access refresh failed");
+        },
+      })
+      .catch(() => undefined);
+  }, accessKey);
+  await expect(
+    right.getByRole("button", { name: "Find potential clients" }),
+  ).toHaveCount(0);
+  await expect(
+    left.getByRole("button", { name: "Draft Instagram captions" }),
+  ).toBeVisible();
+  await page.evaluate(async (key) => {
+    await (window as FixtureWindow).__BUZZ_E2E_QUERY_CLIENT__?.fetchQuery({
+      queryKey: key,
+      staleTime: 0,
+      retry: false,
+      queryFn: async () => true,
+    });
+  }, accessKey);
+  await right.getByRole("button", { name: "Find potential clients" }).click();
+  for (const card of [left, right]) {
+    await expect(
+      card.getByRole("button", { name: "Find potential clients" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(card.getByLabel("The brief", { exact: true })).toHaveValue(
+      /^Find ten potential clients/,
+    );
+    await expect(card.getByTestId("first-job-outputs")).toContainText(
+      "10 potential clients",
+    );
+  }
+  await left.getByRole("button", { name: "Draft Instagram captions" }).click();
+  await expect(right.getByLabel("The brief", { exact: true })).toHaveValue(
+    payload.brief,
+  );
+  await page.mouse.move(0, 0);
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/first-job/06-starter-examples.png",
+  });
+  const custom = "Write one caption about our new monthly branding offer.";
+  await right.getByLabel("The brief", { exact: true }).fill(custom);
+  await expect(left.getByLabel("The brief", { exact: true })).toHaveValue(
+    custom,
+  );
+  await expect(cards.getByTestId("first-job-outputs")).toHaveCount(0);
+  expect(await commandCount(page, "attach_thread_task")).toBe(0);
+  expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as FixtureWindow).__BUZZ_E2E_PUBLISHED_EVENTS__?.some((event) =>
+          event.tags.some(
+            (tag) =>
+              tag[0] === "client" && tag[1] === "colony:first-job-start:v1",
+          ),
+        ) ?? false,
+    ),
+  ).toBe(false);
+  // Rehydrate the same accepted root after a full renderer reload. Only the
+  // mock relay channel/event are re-injected; the saved brief is the app's own storage.
+  await page.reload();
+  await page.waitForFunction(() =>
+    Boolean((window as FixtureWindow).__BUZZ_E2E_INVOKE_MOCK_COMMAND__),
+  );
+  await page.evaluate(async (channelId) => {
+    const fixture = window as FixtureWindow;
+    await fixture.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("update_channel", {
+      input: { channelId, name: "Welcome", visibility: "private" },
+    });
+    await fixture.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("join_channel", {
+      channelId,
+    });
+    await fixture.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries();
+    window.location.hash = `/channels/${channelId}`;
+  }, CHANNEL);
+  await page.waitForFunction(() =>
+    (window as FixtureWindow).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+      channelName: "Welcome",
+      kind: 9,
+    }),
+  );
+  await page.evaluate((event) => {
+    (window as FixtureWindow).__BUZZ_E2E_EMIT_MOCK_EVENT__?.({
+      channelName: "Welcome",
+      event,
+    });
+  }, root);
+  await expect(cards).toHaveCount(1);
+  await expect(left.getByLabel("The brief", { exact: true })).toHaveValue(
+    custom,
+  );
+  // The restored mock channel has finished mounting before its root is opened.
+  // Use the real row action instead of racing a second raw hash assignment.
+  const restoredRoot = page.locator(`[data-message-id="${root.id}"]`);
+  await restoredRoot.hover();
+  await restoredRoot
+    .getByRole("button", { name: "Reply", exact: true })
+    .click();
+  await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+  await expect(cards).toHaveCount(2);
+  for (const card of [left, right]) {
+    await expect(card.getByLabel("The brief", { exact: true })).toHaveValue(
+      custom,
+    );
+    await expect(card.getByTestId("first-job-outputs")).toHaveCount(0);
+  }
+  expect(await commandCount(page, "attach_thread_task")).toBe(0);
+  expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
+  expect(errors).toEqual([]);
+});
 
 test("Welcome suggestion shares edits across adjacent panes and zero credits never start work", async ({
   page,
@@ -390,6 +565,9 @@ test("an approved fixture pair starts only on explicit Start and the task status
   expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
   await card.getByRole("button", { name: "Start this job" }).click();
   await expect(card).toHaveAttribute("data-phase", "sent");
+  await expect(
+    card.getByRole("group", { name: "Starting job examples" }),
+  ).toHaveCount(0);
   await expect(card.getByTestId("first-job-status")).toHaveText("In progress");
   expect(await commandCount(page, "attach_thread_task")).toBe(1);
   expect(await commandCount(page, "start_managed_agent_runtime")).toBe(2);

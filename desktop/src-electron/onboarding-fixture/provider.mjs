@@ -3,10 +3,66 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFixtureShellResult } from "./tool-result.mjs";
 
+// An independent acceptance literal: the fixture must use the actual default,
+// not replace a different suggestion and claim to have tested the first job.
+export const FIRST_JOB_BRIEF =
+  'Draft five Instagram captions and five matching visual briefs for "Horizon Labs". Use the business context shared in this thread. Keep them ready for my review; do not create images or publish posts.';
+export const INSTAGRAM_DRAFTS = Object.freeze(
+  [
+    {
+      day: "Monday",
+      title: "One recognisable business",
+      caption:
+        "Your website and social posts should feel like they belong to the same business. Horizon Labs brings your branding, website and social content together so your next customer gets a clearer picture of what you do. Which part of your brand needs attention first?",
+      visualBrief:
+        "Create a portrait layout with three aligned panels labelled Brand, Website and Social. Use the existing Horizon Labs palette and logo, with one consistent type style across all panels. Put the headline One recognisable business above the panels; keep the footer clear for the logo.",
+    },
+    {
+      day: "Tuesday",
+      title: "Make the next step clear",
+      caption:
+        "When someone lands on your website, can they quickly see what you offer and how to contact you? Start with one clear headline, a short explanation and an obvious enquiry button. Horizon Labs builds websites around those everyday customer questions. Save this as a quick homepage check.",
+      visualBrief:
+        "Show a simple homepage wireframe on a plain brand-colour background. Highlight three areas with numbered callouts: headline, service explanation and enquiry button. Use schematic text blocks rather than a fabricated client website. Add the heading Three things your homepage should make clear.",
+    },
+    {
+      day: "Wednesday",
+      title: "Consistency beyond the logo",
+      caption:
+        "A recognisable brand is more than a logo. Repeating your colours, type and tone helps your website and social posts feel connected. If your business has outgrown its current look, Horizon Labs can help bring those pieces together. Send us a message to tell us what has changed.",
+      visualBrief:
+        "Arrange a small brand toolkit: a logo placeholder, colour swatches, a type sample and a social-post frame. Apply the existing Horizon Labs visual identity throughout. Use the headline More than a logo and label the four elements clearly. Do not imply this is a completed client rebrand.",
+    },
+    {
+      day: "Thursday",
+      title: "Give each post a purpose",
+      caption:
+        "Not every post needs to sell. Explain a useful idea, answer a customer question or show how your service works. A small plan makes it easier to keep your business visible with content that belongs to your brand. Horizon Labs helps create and manage that content with you.",
+      visualBrief:
+        "Build a three-card editorial graphic labelled Explain, Answer and Show. Pair each label with a simple line icon and a short supporting phrase. Use generous spacing and the existing brand palette. Place the heading Give each post a purpose above the cards, with no invented performance metrics.",
+    },
+    {
+      day: "Friday",
+      title: "Start with your business",
+      caption:
+        "Thinking about a clearer brand, a refreshed website or more consistent social content? Tell Horizon Labs what your business does, who you serve and what you want to improve. We can start from that conversation and shape the next step together. Message us when you are ready to talk.",
+      visualBrief:
+        "Design a simple invitation graphic headed Tell us about your business. Below it, show three prompts: What you do, Who you serve and What needs to improve. Finish with Message Horizon Labs and the existing logo. Keep the design focused on an enquiry, without adding an unverified price or guarantee.",
+    },
+  ].map((draft) => Object.freeze(draft)),
+);
 export const WORKER_OUTPUT =
-  "ONBOARDING_WORKER_OUTPUT: Three proposed improvements for Horizon Labs";
+  "ONBOARDING_WORKER_OUTPUT: Five Instagram caption and visual-brief pairs for Horizon Labs";
+export const WORKER_DRAFT = [
+  WORKER_OUTPUT,
+  "Drafts for your review. These are written visual briefs; no images have been created and no posts have been published.",
+  ...INSTAGRAM_DRAFTS.map(
+    (draft, index) =>
+      `### ${index + 1}. ${draft.day} — ${draft.title}\n\n**Caption:** ${draft.caption}\n\n**Visual brief:** ${draft.visualBrief}`,
+  ),
+].join("\n\n");
 export const SCOUT_REVIEW =
-  "ONBOARDING_SCOUT_REVIEW: Reviewed the three improvements; ready for your decision.";
+  "ONBOARDING_SCOUT_REVIEW: Reviewed all five captions and five matching visual briefs. They follow the shared website, branding and social-content offer, with a different purpose for each weekday. No invented customer results, prices or guarantees. Ready for your review; no images created and no posts published.";
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 
 /** Serve the OpenAI-compatible upstream consumed by the real local credits gateway. */
@@ -53,6 +109,23 @@ export async function createOnboardingFixtureProvider() {
           : all.includes(WORKER_OUTPUT)
             ? "review"
             : "delegate";
+      if (stage === "delegate")
+        assert.ok(
+          all.includes(JSON.stringify(context.brief).slice(1, -1)),
+          "The real Chief of Staff receives the unchanged default brief",
+        );
+      if (stage === "worker")
+        assert.ok(
+          all.includes(JSON.stringify(context.brief).slice(1, -1)),
+          "The real worker receives the default five-pair brief through delegation",
+        );
+      if (stage === "review")
+        for (const draft of INSTAGRAM_DRAFTS)
+          for (const field of [draft.caption, draft.visualBrief])
+            assert.ok(
+              all.includes(JSON.stringify(field).slice(1, -1)),
+              "The Chief of Staff receives every caption and visual brief for review",
+            );
       const index = steps.get(stage) ?? 0;
       const previousTool = tools.findLast(
         (tool) => tool.actor === actor && tool.stage === stage,
@@ -88,14 +161,14 @@ export async function createOnboardingFixtureProvider() {
         assert.equal(task.sourceChannelId, context.channelId);
         const thread = `--channel ${context.channelId} --reply-to ${context.rootId} --task ${quote(task.id)} --team ${quote(task.owningTeamId)}`;
         if (stage === "delegate") {
-          return `buzz messages send ${thread} --mention ${context.workerPubkey} --content ${quote("Review Horizon Labs and draft three practical branding improvements, each with a reason and next step. Return your output in this thread and mention the Chief of Staff for review.")}`;
+          return `buzz messages send ${thread} --mention ${context.workerPubkey} --content ${quote(`${context.brief}\n\nPrepare one distinct caption and matching visual brief for each weekday. Return all five pairs in this thread and mention the Chief of Staff for review.`)}`;
         }
         if (stage === "worker") {
-          return `buzz messages send ${thread} --mention ${context.scoutPubkey} --content ${quote(`${WORKER_OUTPUT}\n\n1. Lead with the monthly branding offer. Reason: visitors can understand the service immediately. Next step: review a clearer headline.\n2. Use one consistent visual system. Reason: the website and social posts should feel related. Next step: approve a colour and typography guide.\n3. Show a clear enquiry action. Reason: prospects need an obvious next step. Next step: review a short enquiry form.`)}`;
+          return `buzz messages send ${thread} --mention ${context.scoutPubkey} --content ${quote(WORKER_DRAFT)}`;
         }
         if (index === 0)
           return `buzz messages send ${thread} --content ${quote(SCOUT_REVIEW)}`;
-        return `buzz tasks report-complete --task ${quote(task.id)} --note ${quote("Reviewed the worker's three proposed improvements in the original onboarding thread.")}`;
+        return `buzz tasks report-complete --task ${quote(task.id)} --note ${quote("Reviewed the worker's five Instagram captions and five matching visual briefs in the original onboarding thread. Drafts await owner review; no images created or posts published.")}`;
       };
       let message;
       if (completion)
@@ -184,6 +257,7 @@ export async function createOnboardingFixtureProvider() {
       for (const key of ["rootId", "workerPubkey", "scoutPubkey"])
         assert.match(value[key], /^[a-f0-9]{64}$/);
       assert.match(value.channelId, /^[a-f0-9-]{36}$/);
+      assert.equal(value.brief, FIRST_JOB_BRIEF);
       context = Object.freeze({ ...value });
     },
     async close() {

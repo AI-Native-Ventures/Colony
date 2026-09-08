@@ -3,6 +3,10 @@ import { ClipboardList, Loader2 } from "lucide-react";
 import { BlockCard } from "@/features/blocks/ui/primitives/BlockCard";
 import { FIRST_JOB_BRIEF_MAX_LENGTH } from "@/features/onboarding/firstJobStart";
 import {
+  firstJobStarters,
+  firstJobStarterForBrief,
+} from "@/features/onboarding/firstJobStarters";
+import {
   FirstJobFundingView,
   type FirstJobFundingViewProps,
 } from "@/features/onboarding/ui/FirstJobFundingView";
@@ -33,6 +37,7 @@ export type FirstJobSuggestionViewProps = {
   businessName: string;
   businessSummary?: string;
   scoutName?: string;
+  discoveryAvailable?: boolean;
   brief: string;
   briefLocked?: boolean;
   phase: FirstJobSuggestionPhase;
@@ -77,6 +82,7 @@ export function FirstJobSuggestionView({
   businessName,
   businessSummary,
   scoutName = "Scout",
+  discoveryAvailable = false,
   brief,
   briefLocked = false,
   phase,
@@ -102,6 +108,10 @@ export function FirstJobSuggestionView({
   const showFunding = canManage && !!funding && phase !== "sent";
   const fundingActive = showFunding && funding.phase !== "funded";
   const status = taskState?.label ?? phaseMessage(phase);
+  const selectedStarter = firstJobStarterForBrief(businessName, brief);
+  const starters = firstJobStarters(businessName).filter(
+    (starter) => starter.id !== "potential-clients" || discoveryAvailable,
+  );
 
   return (
     <section
@@ -143,6 +153,47 @@ export function FirstJobSuggestionView({
           <p className="break-words text-sm leading-6 text-muted-foreground [overflow-wrap:anywhere]">
             {businessSummary}
           </p>
+        ) : null}
+
+        {canManage && !locked && !fundingActive ? (
+          <div className="space-y-2 py-3">
+            <p className="text-xs font-medium text-muted-foreground">
+              Start with an example, or write your own brief
+            </p>
+            <fieldset
+              aria-label="Starting job examples"
+              className="flex min-w-0 flex-wrap gap-2"
+            >
+              {starters.map((starter) => (
+                <Button
+                  aria-pressed={selectedStarter?.id === starter.id}
+                  className="h-auto min-h-8 whitespace-normal px-3 py-1.5 text-left text-xs leading-4 aria-pressed:border-primary/40 aria-pressed:bg-primary/10"
+                  key={starter.id}
+                  onClick={() => onBriefChange(starter.brief)}
+                  size="sm"
+                  type="button"
+                  variant={
+                    selectedStarter?.id === starter.id ? "secondary" : "outline"
+                  }
+                >
+                  {starter.label}
+                </Button>
+              ))}
+            </fieldset>
+          </div>
+        ) : null}
+
+        {selectedStarter ? (
+          <div className="mb-3 space-y-1.5" data-testid="first-job-outputs">
+            <p className="text-xs font-medium text-muted-foreground">
+              What you’ll get to review
+            </p>
+            <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              {selectedStarter.outputs.map((output) => (
+                <li key={output}>{output}</li>
+              ))}
+            </ul>
+          </div>
         ) : null}
 
         <div className="space-y-1.5">

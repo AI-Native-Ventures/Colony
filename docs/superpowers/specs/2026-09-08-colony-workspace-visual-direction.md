@@ -49,8 +49,10 @@ task store, owner dashboard or Home/Work/Team navigation.
   and secondary metadata visually subordinate without compromising readability.
 - Test realistic long agent updates, not only short sample messages. Use normal
   body weight, comfortable line height and a readable measure, with a concise
-  opening and optional expansion of longer details. Use the bundled Inter Tight
-  font, normal body weight and named rem tokens that respect user text zoom;
+  opening and optional expansion of longer details. Use the existing regular
+  Inter stack for workspace reading, per the owner's later correction; keep
+  onboarding's separate brand typography. Use normal body weight and named rem
+  tokens that respect user text zoom;
   do not solve density by making text tiny. The earlier 14px/15px comparison
   belonged to the preview, not a fixed-pixel production text requirement.
   Reserve large typography for page context, not every agent update.

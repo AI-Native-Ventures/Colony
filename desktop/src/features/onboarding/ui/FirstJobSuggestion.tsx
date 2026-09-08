@@ -15,6 +15,7 @@ import {
 import type { FirstJobScope } from "../firstJobStart";
 import { useFirstJobSuggestion } from "../useFirstJobSuggestion";
 import { useFirstJobTaskUpdates } from "../useFirstJobTaskUpdates";
+import { useFirstJobDiscovery } from "../useFirstJobDiscovery";
 import {
   FirstJobSuggestionView,
   type FirstJobTaskState,
@@ -44,6 +45,11 @@ function ReadySuggestion({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { session, snapshot } = useFirstJobSuggestion(scope, payload.brief);
+  const discoveryAvailable = useFirstJobDiscovery(
+    scope,
+    communityId,
+    !snapshot.briefLocked,
+  );
   const taskQuery = useTask(
     communityId,
     snapshot.taskId,
@@ -78,6 +84,7 @@ function ReadySuggestion({
       idPrefix={`first-job-${id}`}
       businessName={payload.businessName}
       businessSummary={payload.business}
+      discoveryAvailable={discoveryAvailable}
       brief={snapshot.brief}
       briefLocked={snapshot.briefLocked}
       phase={snapshot.phase}
