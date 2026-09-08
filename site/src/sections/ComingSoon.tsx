@@ -16,10 +16,20 @@ export function ComingSoon() {
   );
   const draftPanel = useRef<HTMLElement>(null);
   const applicationText = useRef<HTMLTextAreaElement>(null);
+  const workInput = useRef<HTMLTextAreaElement>(null);
+
+  function validateWork() {
+    const field = workInput.current;
+    if (!field) return;
+    field.setCustomValidity(
+      field.value.trim() ? "" : "Tell us what you’d like to do in Colony.",
+    );
+  }
 
   function prepareApplication(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    validateWork();
     if (!form.reportValidity()) return;
 
     const answers = new FormData(form);
@@ -27,8 +37,7 @@ export function ComingSoon() {
       name: String(answers.get("name") ?? ""),
       email: String(answers.get("email") ?? ""),
       stage: answers.get("stage") as EarlyAccessApplication["stage"],
-      service: answers.get("service") as EarlyAccessApplication["service"],
-      note: String(answers.get("note") ?? ""),
+      work: String(answers.get("work") ?? ""),
     };
     setDraft(buildApplicationEmail(application));
     setCopyState("idle");
@@ -66,11 +75,10 @@ export function ComingSoon() {
             <AntMark className="early-access__ant early-access__ant--third" />
           </div>
           <p className="early-access__eyebrow">Apply for early access</p>
-          <h2 id="early-access-title">Try Colony with your own clients.</h2>
+          <h2 id="early-access-title">Bring your business to Colony.</h2>
           <p>
-            Tell us if you want to make websites, social media posts, or both.
-            You can apply before you have your first client, a business name or
-            a website.
+            Starting a business, already running one, or exploring an idea? Tell
+            us about the work you want to do in Colony.
           </p>
           <p className="early-access__explanation">
             Colony is still being built and tested. Early access is limited.
@@ -90,9 +98,7 @@ export function ComingSoon() {
 
         <div className="early-access__application">
           <form onSubmit={prepareApplication} onChange={clearDraft}>
-            <p className="early-access__required">
-              All fields are required except the last one.
-            </p>
+            <p className="early-access__required">All fields are required.</p>
             <div className="early-access__field">
               <label htmlFor="application-name">Your name</label>
               <input
@@ -128,41 +134,25 @@ export function ComingSoon() {
                 <option value="" disabled>
                   Choose one
                 </option>
-                <option value="starting">I’m starting an agency</option>
-                <option value="existing">I already run an agency</option>
+                <option value="starting">I’m starting a business</option>
+                <option value="existing">I already run a business</option>
+                <option value="exploring">I’m exploring an idea</option>
               </select>
             </div>
             <div className="early-access__field">
-              <label htmlFor="application-service">
-                What do you want help with?
-              </label>
-              <select
-                id="application-service"
-                name="service"
-                defaultValue=""
-                required
-              >
-                <option value="" disabled>
-                  Choose one
-                </option>
-                <option value="websites">Websites</option>
-                <option value="social">Social media</option>
-                <option value="both">Websites and social media</option>
-              </select>
-            </div>
-            <div className="early-access__field">
-              <label htmlFor="application-note">
-                Anything else you’d like us to know? <span>(optional)</span>
-              </label>
+              <label htmlFor="work">What would you like to do in Colony?</label>
               <textarea
-                id="application-note"
-                name="note"
+                id="work"
+                name="work"
+                ref={workInput}
                 rows={4}
                 maxLength={600}
-                aria-describedby="application-note-hint"
+                onChange={validateWork}
+                aria-describedby="application-work-hint"
+                required
               />
-              <p id="application-note-hint" className="early-access__hint">
-                Up to 600 characters.
+              <p id="application-work-hint" className="early-access__hint">
+                Tell us about your business and the work you want help with.
               </p>
             </div>
             <button className="early-access__primary" type="submit">
