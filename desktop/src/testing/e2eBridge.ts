@@ -3841,6 +3841,7 @@ const mockSockets = new Map<number, MockSocket>();
 const mockAuthResponses: Array<{ success: boolean; message: string }> = [];
 const mockChannelHistoryCloses: string[] = [];
 let mockWebsocketUnavailable = false;
+let mockAppliedRelayWsUrl: string | null = null;
 const relayWebsocketConnectAttemptStarts: number[] = [];
 let mockWebsocketSendMutexWedged = false;
 let mockClosedChannelLiveSubscription = false;
@@ -11741,6 +11742,7 @@ export function maybeInstallE2eTauriMocks() {
 
   mockClosedChannelLiveSubscription = false;
   mockWebsocketUnavailable = false;
+  mockAppliedRelayWsUrl = null;
   mockAuthResponses.length = 0;
   mockChannelHistoryCloses.length = 0;
   relayWebsocketConnectAttemptStarts.length = 0;
@@ -13100,10 +13102,11 @@ export function maybeInstallE2eTauriMocks() {
       case "apply_workspace": {
         const applyDelayMs = activeConfig?.mock?.applyCommunityDelayMs ?? 0;
         if (applyDelayMs > 0) {
-          return new Promise((resolve) =>
+          await new Promise((resolve) =>
             window.setTimeout(resolve, applyDelayMs),
           );
         }
+        mockAppliedRelayWsUrl = (payload as { relayUrl: string }).relayUrl;
         return;
       }
       case "get_profile":
@@ -13628,7 +13631,7 @@ export function maybeInstallE2eTauriMocks() {
           cloned: false,
         };
       case "get_relay_ws_url":
-        return getRelayWsUrl(activeConfig);
+        return mockAppliedRelayWsUrl ?? getRelayWsUrl(activeConfig);
       case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
       case "get_build_default_relay_url":

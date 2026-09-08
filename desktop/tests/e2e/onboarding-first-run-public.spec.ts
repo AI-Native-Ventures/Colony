@@ -22,6 +22,14 @@ test("public first run: account and business forms reach the existing Welcome ch
     page.getByRole("heading", { name: "Create your account" }),
   ).toBeVisible();
   await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
+  const originalDefaultRelay = await page.evaluate(async () => {
+    const native = (
+      window as unknown as {
+        __TAURI_INTERNALS__: { invoke(command: string): Promise<string> };
+      }
+    ).__TAURI_INTERNALS__;
+    return native.invoke("get_default_relay_url");
+  });
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-account-1440.png",
@@ -45,6 +53,28 @@ test("public first run: account and business forms reach the existing Welcome ch
   await expect(page.locator(".onb-canvas")).toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("app-top-chrome")).toBeVisible();
   await expect(page).toHaveURL(/channels/);
+  const nativeRelays = await page.evaluate(async () => {
+    const native = (
+      window as unknown as {
+        __TAURI_INTERNALS__: { invoke(command: string): Promise<string> };
+      }
+    ).__TAURI_INTERNALS__;
+    const lastApply = window.__BUZZ_E2E_COMMAND_PAYLOADS__?.findLast(
+      (entry) => entry.command === "apply_workspace",
+    );
+    return {
+      active: await native.invoke("get_relay_ws_url"),
+      default: await native.invoke("get_default_relay_url"),
+      builtIn: await native.invoke("get_build_default_relay_url"),
+      applied: (lastApply?.payload as { relayUrl?: string } | undefined)
+        ?.relayUrl,
+    };
+  });
+  expect(nativeRelays.applied).toBeTruthy();
+  expect(nativeRelays.active).toBe(nativeRelays.applied);
+  expect(nativeRelays.active).not.toBe(originalDefaultRelay);
+  expect(nativeRelays.default).toBe(originalDefaultRelay);
+  expect(nativeRelays.builtIn).toBe(originalDefaultRelay);
   await expect(
     page.getByRole("heading", { name: /Pick who|Put something/ }),
   ).toHaveCount(0);
