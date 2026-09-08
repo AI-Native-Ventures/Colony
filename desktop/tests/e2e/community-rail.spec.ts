@@ -983,8 +983,14 @@ test.describe("community rail", () => {
     await expect(page.getByTestId("community-rail-add")).toBeVisible();
   });
 
-  for (const theme of ["buzz", "github-light"]) {
-    test(`clears the macOS traffic lights in ${theme}`, async ({ page }) => {
+  for (const { theme, classicScrollbars } of [
+    { theme: "buzz", classicScrollbars: false },
+    { theme: "github-light", classicScrollbars: false },
+    { theme: "buzz", classicScrollbars: true },
+  ]) {
+    test(`clears the macOS traffic lights in ${theme}${classicScrollbars ? " with classic scrollbars" : ""}`, async ({
+      page,
+    }) => {
       // Spoof macOS so the rail applies its traffic-light top inset.
       await page.addInitScript(() => {
         Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
@@ -995,6 +1001,23 @@ test.describe("community rail", () => {
       await installMockBridge(page, undefined, { skipCommunitySeed: true });
       await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
       await page.goto("/");
+      if (classicScrollbars) {
+        // Exercise the reserved track seen on Linux even on a Mac that uses
+        // overlay scrollbars. Standard scrollbar colours otherwise supersede
+        // the custom WebKit track and leave this fixture in overlay mode.
+        await page.addStyleTag({
+          content: `
+            [data-sidebar="content"] {
+              scrollbar-color: auto !important;
+              scrollbar-width: auto !important;
+              overflow-y: scroll !important;
+            }
+            [data-sidebar="content"]::-webkit-scrollbar {
+              width: 15px !important;
+            }
+          `,
+        });
+      }
 
       // The first community button must start below the traffic-light band
       // (native controls sit around y<=31 with trafficLightPosition y:24).
@@ -1060,16 +1083,37 @@ test.describe("community rail", () => {
         (searchBox?.x ?? 0) - ((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0));
       if (theme === "buzz") {
         // Search belongs to the inset navigation group in the new sidebar.
-        const inboxBox = await page
+        const inbox = page
           .getByTestId("app-sidebar")
-          .getByRole("button", { name: "Inbox", exact: true })
-          .boundingBox();
+          .getByRole("button", { name: "Inbox", exact: true });
+        const inboxBox = await inbox.boundingBox();
+        const reservedScrollbarWidth = await inbox.evaluate((element) => {
+          const scroller = element.closest<HTMLElement>(
+            '[data-sidebar="content"]',
+          );
+          if (!scroller)
+            throw new Error("Expected Inbox in the sidebar scroller.");
+          const style = getComputedStyle(scroller);
+          return (
+            scroller.offsetWidth -
+            scroller.clientWidth -
+            Number.parseFloat(style.borderLeftWidth) -
+            Number.parseFloat(style.borderRightWidth)
+          );
+        });
+        if (classicScrollbars) expect(reservedScrollbarWidth).toBe(15);
         expect(inboxBox).not.toBeNull();
         expect(Math.abs((searchBox?.x ?? 0) - (inboxBox?.x ?? 0))).toBeLessThan(
           0.5,
         );
+        // Search sits outside the scroller; both controls have the same inset,
+        // but only the navigation row reserves the classic scrollbar track.
         expect(
-          Math.abs((searchBox?.width ?? 0) - (inboxBox?.width ?? 0)),
+          Math.abs(
+            (searchBox?.width ?? 0) -
+              (inboxBox?.width ?? 0) -
+              reservedScrollbarWidth,
+          ),
         ).toBeLessThan(0.5);
         expect(visibleRightGap).toBeGreaterThan(leftInset);
       } else {

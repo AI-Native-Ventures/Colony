@@ -159,6 +159,28 @@ zoom and real Windows switcher/unread-control clicks at 560px and 360px heights.
 The final `just ci` run passed with 6,871 desktop tests, 2,922 native tests and
 967 mobile tests. New GitHub CI and the final-revision package remain pending.
 
+### Platform scrollbar follow-up
+
+CI `34231748328` on `4170c75a17` passed both relay integration shards and
+five of six browser smoke shards. The remaining browser failure compared the
+search field outside the sidebar scroller with the Inbox row inside it without
+accounting for Linux's reserved scrollbar track. All three CI attempts differed
+by exactly 15px. Desktop native checks were still running at this checkpoint.
+
+A local fixture reproduced the same failure: overlay scrollbars gave matching
+218px controls, while a real 15px track gave a 218px search field and 203px Inbox
+row. The test now subtracts the measured track width, retaining the original
+0.5px alignment tolerance and all native-control clearance checks. A separate
+classic-scrollbar scenario asserts that its track actually occupies 15px. All
+three cases pass after the correction. This follow-up changes only the test and
+this report; it does not alter the application built by the `4170c75a17` beta.
+
+The final independent visual review found no material mismatch in the supplied
+desktop and narrow onboarding images. The screenshots do not establish every
+width or state: DM role subtitles truncate at narrow sidebar widths, ultrawide
+prose comfort remains unverified, and long-text expansion/recovery/narrow
+workspace behaviour has test coverage beyond the pictured states.
+
 ## Earlier checks retained as historical evidence
 
 These results preceded the rejected PR visual review and/or subsequent source
