@@ -160,10 +160,12 @@ test.describe("list virtualization", () => {
 
     // dnd-kit marks each section's wrapping row with role="button" +
     // aria-roledescription="sortable" and spreads the drag listeners there, so
-    // the row itself is the handle. Scoping to that attribute reads the live
-    // section order and excludes the inner disclosure button and the (hidden)
-    // assign-to-section context-menu items that reuse the same names.
-    const headers = page.locator('[aria-roledescription="sortable"]');
+    // the row itself is the handle. Scope to channel content so the community
+    // rail's sortable buttons are excluded, along with the inner disclosure
+    // buttons and hidden assign-to-section menu items with the same names.
+    const headers = page
+      .getByTestId("sidebar-channel-content")
+      .locator('[aria-roledescription="sortable"]');
     const topHeader = headers.filter({ hasText: "Priority" });
     const bottomHeader = headers.filter({ hasText: "Archive" });
     await expect(topHeader).toBeVisible();

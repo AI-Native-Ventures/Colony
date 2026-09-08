@@ -60,6 +60,8 @@ pub(super) async fn send_upload_attempt(
         progress,
         cancellation,
     } = attempt;
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let req = state
         .http_client
         .put(url)

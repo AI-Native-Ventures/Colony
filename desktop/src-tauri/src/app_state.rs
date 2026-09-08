@@ -160,6 +160,22 @@ use env::identity_from_env;
 /// Returned as a `Result` so the fail-closed invariant is testable — callers
 /// must never substitute a redirect-following client on build failure. Shares
 /// the localhost `resolve`/pool config with the app-wide `http_client`.
+#[cfg(feature = "onboarding-fixture")]
+pub fn build_media_fetch_client() -> reqwest::Result<reqwest::Client> {
+    let fixture = match buzz_ws_client::onboarding_fixture::FixtureTransport::from_env() {
+        Ok(fixture) => fixture,
+        Err(error) => fixture_setup_failed(error),
+    };
+    fixture
+        .configure_http(
+            reqwest::Client::builder()
+                .pool_idle_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(1),
+        )
+        .build()
+}
+
+#[cfg(not(feature = "onboarding-fixture"))]
 pub fn build_media_fetch_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .resolve("localhost", std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
@@ -169,7 +185,20 @@ pub fn build_media_fetch_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
+#[cfg(feature = "onboarding-fixture")]
+fn fixture_setup_failed(error: impl std::fmt::Display) -> ! {
+    // A separately built fixture process must never recover with production
+    // trust/DNS. This includes native test factories using this state.
+    eprintln!("colony-native-host: fixture client setup failed: {error}");
+    std::process::exit(1);
+}
+
 pub fn build_app_state() -> AppState {
+    #[cfg(feature = "onboarding-fixture")]
+    let fixture_client = match build_media_fetch_client() {
+        Ok(client) => client,
+        Err(error) => fixture_setup_failed(error),
+    };
     // Env var takes precedence (dev/CI). If absent, resolve_persisted_identity()
     // in setup() will replace the ephemeral placeholder with a persisted key.
     let (keys, identity_storage) = match identity_from_env() {
@@ -186,12 +215,18 @@ pub fn build_app_state() -> AppState {
     AppState {
         keys: Mutex::new(keys),
         identity_storage: AtomicU8::new(identity_storage as u8),
+        #[cfg(feature = "onboarding-fixture")]
+        http_client: fixture_client.clone(),
+        #[cfg(not(feature = "onboarding-fixture"))]
         http_client: reqwest::Client::builder()
             .resolve("localhost", std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
             .pool_idle_timeout(std::time::Duration::from_secs(10))
             .pool_max_idle_per_host(1)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new()),
+        #[cfg(feature = "onboarding-fixture")]
+        media_fetch_client: fixture_client,
+        #[cfg(not(feature = "onboarding-fixture"))]
         media_fetch_client: build_media_fetch_client().expect(
             "media_fetch_client must build with redirect::Policy::none(); a \
              redirect-following fallback would forward the minted media auth \

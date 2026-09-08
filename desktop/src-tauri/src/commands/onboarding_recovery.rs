@@ -7,6 +7,10 @@ use tauri::Manager;
 mod checkpoint;
 pub use checkpoint::PendingSignup;
 
+#[cfg(feature = "onboarding-fixture")]
+#[path = "onboarding_recovery_fixture.rs"]
+mod fixture;
+
 fn with_pending<T>(
     state: &AppState,
     action: impl FnOnce(Option<&str>, &str) -> Result<(Option<String>, T), String>,
@@ -116,14 +120,17 @@ pub async fn save_recovery_code(
     .await
     .map_err(|_| "Could not read signup recovery".to_string())??;
 
-    let Some(path) = super::export_util::pick_save_path(
+    #[cfg(feature = "onboarding-fixture")]
+    let selected = fixture::selected_path()?;
+    #[cfg(not(feature = "onboarding-fixture"))]
+    let selected = super::export_util::pick_save_path(
         &app_handle,
         "colony-recovery-code.txt",
         "Colony recovery code",
         &["txt"],
     )
-    .await?
-    else {
+    .await?;
+    let Some(path) = selected else {
         return Ok(None);
     };
 

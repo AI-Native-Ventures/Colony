@@ -26,7 +26,22 @@ pub async fn connect(url: &str) -> Result<Connection, Error> {
 }
 
 async fn connect_with_proxy(url: &str, proxy: Option<&str>) -> Result<Connection, Error> {
+    #[cfg(feature = "onboarding-fixture")]
+    let fixture = {
+        let fixture = crate::onboarding_fixture::FixtureTransport::from_env()
+            .map_err(|error| denied(&error.to_string()))?;
+        fixture
+            .destination(url)
+            .map_err(|error| denied(&error.to_string()))?;
+        fixture
+    };
     let Some(proxy) = proxy else {
+        #[cfg(feature = "onboarding-fixture")]
+        return fixture
+            .connect_websocket(url)
+            .await
+            .map_err(|error| denied(&error.to_string()));
+        #[cfg(not(feature = "onboarding-fixture"))]
         return tokio_tungstenite::connect_async(url).await;
     };
     let proxy = url::Url::parse(proxy).map_err(|_| denied("Invalid worker gateway"))?;
@@ -82,14 +97,20 @@ async fn connect_with_proxy(url: &str, proxy: Option<&str>) -> Result<Connection
     let stream = tokio::time::timeout(Duration::from_secs(10), tunnel)
         .await
         .map_err(|_| denied("Worker gateway connection timed out"))??;
-    tokio_tungstenite::client_async_tls_with_config(url, stream, None, None).await
+    #[cfg(feature = "onboarding-fixture")]
+    let connector = Some(fixture.tls_connector());
+    #[cfg(not(feature = "onboarding-fixture"))]
+    let connector = None;
+    tokio_tungstenite::client_async_tls_with_config(url, stream, None, connector).await
 }
 
 fn denied(message: &str) -> Error {
     Error::Io(io::Error::new(io::ErrorKind::PermissionDenied, message))
 }
 
-#[cfg(test)]
+// These tests prove the normal plaintext development transport. Fixture builds
+// deliberately require configured TLS; that path has separate real-TLS tests.
+#[cfg(all(test, not(feature = "onboarding-fixture")))]
 mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};

@@ -42,9 +42,12 @@ fn stable_http_error(kind: GatewayHttpErrorKind) -> String {
 }
 
 fn blocking_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let builder = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none());
+    #[cfg(feature = "onboarding-fixture")]
+    let builder = buzz_ws_client::onboarding_fixture::FixtureTransport::from_env()
+        .map_err(|error| error.to_string())?.configure_blocking_http(builder);
+    builder.build()
         .map_err(|error| format!("gateway client setup failed: {error}"))
 }
 
@@ -86,6 +89,8 @@ fn mint_lease_with_client(
         return Err("Colony Credits lease signer does not match its owner".to_string());
     }
     let url = format!("{}/api/gateway/tokens", key.relay_origin);
+    #[cfg(feature = "onboarding-fixture")]
+    buzz_ws_client::onboarding_fixture::validate_process_url(&url).map_err(|error| error.to_string())?;
     let body = serde_json::to_vec(&serde_json::json!({
         "ttl_secs": GATEWAY_TOKEN_TTL_SECS,
     }))
@@ -168,6 +173,8 @@ fn revoke_lease_with_client(
         return Err("Colony Credits lease signer does not match its owner".to_string());
     }
     let url = format!("{}/api/gateway/tokens", lease.key.relay_origin);
+    #[cfg(feature = "onboarding-fixture")]
+    buzz_ws_client::onboarding_fixture::validate_process_url(&url).map_err(|error| error.to_string())?;
     let body = serde_json::to_vec(&serde_json::json!({"token": lease.token.as_str()}))
         .map_err(|error| format!("gateway request serialization failed: {error}"))?;
     let auth = build_nip98_auth_header_for_keys(&lease.signer, &Method::DELETE, &url, &body)?;

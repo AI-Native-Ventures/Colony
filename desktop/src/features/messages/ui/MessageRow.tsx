@@ -12,7 +12,6 @@ import {
   assertCanSendMessageToChannel,
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
-import type { TimelineMessage } from "@/features/messages/types";
 import { AgentRoleSubtitle } from "@/features/agents/ui/AgentRoleSubtitle";
 import { useIsKnownAgentPubkey } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
@@ -20,7 +19,6 @@ import { isBlockMessage } from "@/features/blocks/blockTags";
 import { BlockMessageBoundary } from "@/features/blocks/ui/BlockMessageBoundary";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
-import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { useRemindLater } from "@/features/reminders/ui/RemindMeLaterProvider";
 import {
@@ -46,7 +44,12 @@ import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
 import { useMessageMentionNames } from "@/features/messages/lib/useMessageMentionNames";
 import { MessageProse } from "./MessageProse";
-import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
+import type {
+  MessageRowProps,
+  ThreadDepthGuideAction,
+} from "./MessageRowProps";
+import type { TimelineMessage } from "@/features/messages/types";
+import { parseFirstJobSuggestion } from "@/features/onboarding/firstJobSuggestion";
 import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
 import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
 import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
@@ -61,15 +64,14 @@ import { SentFromThreadLine } from "./SentFromThreadLine";
 import { WaveMessageAttachment } from "./WaveMessageAttachment";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
+const FirstJobSuggestion = React.lazy(
+  () => import("@/features/onboarding/ui/FirstJobSuggestion"),
+);
+
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
-export type ThreadDepthGuideAction = {
-  active?: boolean;
-  depth: number;
-  label: string;
-  message: TimelineMessage;
-};
+export type { ThreadDepthGuideAction } from "./MessageRowProps";
 
 export const MessageRow = React.memo(
   function MessageRow({
@@ -114,59 +116,7 @@ export const MessageRow = React.memo(
     showDepthGuides = true,
     videoReviewCommentRootId,
     videoReviewContext,
-  }: {
-    channelId?: string | null;
-    currentPubkey?: string;
-    collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
-    connectDescendants?: boolean;
-    depthGuideDepths?: ReadonlyArray<number>;
-    highlighted?: boolean;
-    highlightDescendantRail?: boolean;
-    highlightReplyConnector?: boolean;
-    highlightThreadLineDepths?: ReadonlyArray<number>;
-    hoverBackground?: boolean;
-    huddleMemberPubkeys?: readonly string[];
-    huddleMemberPubkeysPending?: boolean;
-    hideAgentAccessBadge?: boolean;
-    actionBarPlacement?: "floating" | "inside";
-    collapseDescendantsLabel?: string;
-    isFollowingThread?: boolean;
-    isContinuation?: boolean;
-    isOpenThreadRoot?: boolean;
-    isUnread?: boolean;
-    layoutVariant?: "default" | "thread-reply";
-    message: TimelineMessage;
-    onCollapseDepthGuide?: (message: TimelineMessage) => void;
-    onCollapseDepthGuideHoverChange?: (
-      message: TimelineMessage,
-      hovered: boolean,
-    ) => void;
-    onCollapseDescendants?: (message: TimelineMessage) => void;
-    onCollapseDescendantsHoverChange?: (
-      message: TimelineMessage,
-      hovered: boolean,
-    ) => void;
-    onDelete?: (message: TimelineMessage) => void;
-    onEdit?: (message: TimelineMessage) => void;
-    onFollowThread?: (message: TimelineMessage) => void;
-    onMarkUnread?: (message: TimelineMessage) => void;
-    onMarkRead?: (message: TimelineMessage) => void;
-    onToggleReaction?: (
-      message: TimelineMessage,
-      emoji: string,
-      remove: boolean,
-    ) => Promise<void>;
-    onReply?: (message: TimelineMessage) => void;
-    onSendToChannel?: (message: TimelineMessage) => Promise<void>;
-    onUnfollowThread?: (message: TimelineMessage) => void;
-    onEntranceComplete?: (messageId: string) => void;
-    playEntrance?: boolean;
-    profiles?: UserProfileLookup;
-    searchQuery?: string;
-    showDepthGuides?: boolean;
-    videoReviewCommentRootId?: string;
-    videoReviewContext?: VideoReviewContext;
-  }) {
+  }: MessageRowProps) {
     // Keep the transient send state with its timestamp rather than collapsing
     // it into a grouped message row with no header.
     const isDisplayedAsContinuation =
@@ -439,6 +389,19 @@ export const MessageRow = React.memo(
               videoReviewContext={videoReviewContext}
             />
           );
+          if (parseFirstJobSuggestion(message.tags)) {
+            return (
+              <React.Suspense fallback={markdown}>
+                <FirstJobSuggestion
+                  message={message}
+                  channelId={channelId}
+                  currentPubkey={currentPubkey}
+                >
+                  {markdown}
+                </FirstJobSuggestion>
+              </React.Suspense>
+            );
+          }
           if (!reviewRootEventId || !reviewTimecode || !openVideoReviewAt) {
             return markdown;
           }

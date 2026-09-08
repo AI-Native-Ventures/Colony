@@ -37,6 +37,8 @@ async fn fetch_gateway_account(
     url: &str,
     signer: &Keys,
 ) -> Result<GatewayAccount, String> {
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(url)?;
     let auth = build_nip98_auth_header_for_keys(signer, &Method::GET, url, &[])?;
     let response = client
         .get(url)

@@ -3,6 +3,8 @@
 pub mod connection;
 pub mod error;
 pub mod message;
+#[cfg(feature = "onboarding-fixture")]
+pub mod onboarding_fixture;
 pub mod pin;
 pub mod transport;
 

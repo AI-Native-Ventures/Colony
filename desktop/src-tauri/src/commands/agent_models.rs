@@ -543,6 +543,8 @@ async fn discover_openai_compatible_models(
     } else {
         openai_compatible_models_url_for_discovery(env, provider.as_deref())
     };
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = client
         .get(&url)
         .bearer_auth(&api_key)

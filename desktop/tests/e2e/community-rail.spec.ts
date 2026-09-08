@@ -935,15 +935,32 @@ test.describe("community rail", () => {
       .toEqual(identityBefore);
   });
 
-  test("hides the rail with a single community", async ({ page }) => {
+  test("keeps the far-left rail and add action with a single community", async ({
+    page,
+  }) => {
     await installMockBridge(page, undefined, { skipCommunitySeed: true });
     await seedCommunities(page, [COMMUNITY_A], COMMUNITY_A.id);
     await page.goto("/");
 
-    // The channel sidebar still renders; the rail is omitted (a rail of one
-    // adds nothing).
-    await expect(page.getByTestId("app-sidebar")).toBeVisible();
-    await expect(page.getByTestId("community-rail")).toHaveCount(0);
+    const rail = page.getByTestId("community-rail");
+    const sidebar = page.getByTestId("app-sidebar");
+    await expect(rail).toBeVisible();
+    await expect(sidebar).toBeVisible();
+    await expect(
+      page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`),
+    ).toHaveAttribute("aria-current", "true");
+    const railBox = await rail.boundingBox();
+    const sidebarBox = await sidebar.boundingBox();
+    expect(railBox).not.toBeNull();
+    expect(sidebarBox).not.toBeNull();
+    expect(railBox?.x).toBe(0);
+    expect(sidebarBox?.x ?? 0).toBeGreaterThanOrEqual(
+      (railBox?.x ?? 0) + (railBox?.width ?? 0),
+    );
+    await page.getByTestId("community-rail-add").click();
+    await expect(page.getByTestId("add-community-dialog")).toBeVisible();
+    await expect(page.getByTestId("add-community-create")).toBeVisible();
+    await expect(page.getByTestId("add-community-join")).toBeVisible();
   });
 
   test("hides the rail when the sidebar is collapsed and restores it", async ({

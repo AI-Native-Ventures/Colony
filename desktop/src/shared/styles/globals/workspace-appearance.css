@@ -121,11 +121,6 @@
 
 /* The approved workspace is a sidebar beside separately framed reading panes.
  * Only Colony themes opt into this shell; other themes keep their own chrome. */
-:root[data-buzz-sidebar][data-workspace-gradient] body {
-  font-family:
-    "Inter Tight Variable", "Inter Tight", "Inter Variable", sans-serif;
-}
-
 :root[data-buzz-sidebar][data-workspace-gradient] .colony-sidebar-identity {
   display: flex;
   flex-direction: column;

@@ -56,6 +56,8 @@ async fn parse_response(response: reqwest::Response) -> Result<Value, String> {
 pub async fn colony_provisioning_config(state: State<'_, AppState>) -> Result<Value, String> {
     let base = relay_api_base_url_with_override(&state);
     let url = format!("{base}/api/communities/config");
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = state
         .http_client
         .get(&url)
@@ -73,6 +75,8 @@ pub async fn colony_check_community_name(
 ) -> Result<Value, String> {
     let base = relay_api_base_url_with_override(&state);
     let url = format!("{base}/api/communities/availability");
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = state
         .http_client
         .get(&url)
@@ -91,6 +95,8 @@ pub async fn colony_create_community(
 ) -> Result<Value, String> {
     let base = relay_api_base_url_with_override(&state);
     let url = format!("{base}/api/communities");
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let body_bytes = serde_json::to_vec(&serde_json::json!({ "name": name }))
         .map_err(|e| format!("request serialization failed: {e}"))?;
     let auth = build_nip98_auth_header(&Method::POST, &url, &body_bytes, &state)?;
@@ -125,6 +131,8 @@ pub async fn colony_list_my_communities(
 ) -> Result<Value, String> {
     let base = relay_api_base_url_with_override(&state);
     let url = format!("{base}/api/communities/mine");
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let auth = build_nip98_auth_header(&Method::GET, &url, &[], &state)?;
 
     let mut request = state.http_client.get(&url).header("Authorization", auth);

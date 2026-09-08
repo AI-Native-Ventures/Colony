@@ -240,6 +240,8 @@ async fn fetch_relay_information_document(
 ) -> Result<Option<RelayInformationDocument>, String> {
     let relay_url = relay_ws_url_with_override(state);
     let http_url = relay_http_base_url(&relay_url);
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&http_url)?;
     let response = state
         .http_client
         .get(&http_url)

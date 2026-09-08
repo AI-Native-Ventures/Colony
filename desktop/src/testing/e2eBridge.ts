@@ -402,6 +402,8 @@ type E2eConfig = {
     employeeHeads?: MockEmployeeHeadSeed[];
     /** Owner-authored kind-30177 heads; the org chart's personal-agent source. */
     managedAgentHeads?: MockManagedAgentHeadSeed[];
+    /** Real fixture signatures for ownership-sensitive native adapter reads. */
+    managedAgentHeadEvents?: RelayEvent[];
     /** Native-like huddle state seeded from authoritative role-bearing membership. */
     huddle?: MockHuddleSeed;
     agentListDelayMs?: number;
@@ -1351,6 +1353,11 @@ declare global {
       pubkey?: string;
       threadHeadId?: string;
     }) => RelayEvent;
+    /** Explicit volatile balance/error fixture; never a payment or ledger mutation. */
+    __BUZZ_E2E_SET_COLONY_CREDITS__?: (input: {
+      availableNanousd?: string;
+      error?: string | null;
+    }) => void;
     __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
       command: string,
       payload?: Record<string, unknown>,
@@ -2577,6 +2584,12 @@ const mockManagedAgentHeadEvents: RelayEvent[] = [];
 
 function resetMockManagedAgentHeadEvents(config?: E2eConfig) {
   mockManagedAgentHeadEvents.length = 0;
+  for (const event of config?.mock?.managedAgentHeadEvents ?? []) {
+    mockManagedAgentHeadEvents.push({
+      ...event,
+      tags: event.tags.map((tag) => [...tag]),
+    });
+  }
   for (const seed of config?.mock?.managedAgentHeads ?? []) {
     // Authored by the mock identity, which `mock.relayMembers` reports as a
     // community owner: a head signed by anyone else is invisible to the org
@@ -3750,6 +3763,12 @@ function brokerMockCompanyAction(event: RelayEvent): boolean {
           : mockTaskRecord(config, title, {
               id: config.taskId,
               title,
+              assigneePersonaIds: mockManagedAgents
+                .filter(
+                  (agent) =>
+                    agent.pubkey === record?.agentPubkey && agent.persona_id,
+                )
+                .map((agent) => agent.persona_id as string),
               initiativeId: config.initiativeId ?? null,
               threadRoot:
                 typeof record?.threadRoot === "string"
@@ -3822,6 +3841,7 @@ const mockSockets = new Map<number, MockSocket>();
 const mockAuthResponses: Array<{ success: boolean; message: string }> = [];
 const mockChannelHistoryCloses: string[] = [];
 let mockWebsocketUnavailable = false;
+let mockAppliedRelayWsUrl: string | null = null;
 const relayWebsocketConnectAttemptStarts: number[] = [];
 let mockWebsocketSendMutexWedged = false;
 let mockClosedChannelLiveSubscription = false;
@@ -9009,6 +9029,7 @@ let mockGlobalAgentConfig: {
   model: string | null;
   preferred_runtime?: string | null;
 } | null = null;
+let mockColonyCreditsAccountError: string | null = null;
 let mockColonyCreditsAccount: {
   balance_nanousd: string;
   total_balance_nanousd?: string;
@@ -11208,23 +11229,24 @@ function sendToMockSocket(args: {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
-    if (filter.kinds?.includes(KIND_EMPLOYEE)) {
-      for (const event of filterMockEmployeeHeadEvents(filter)) {
-        sendWsText(socket.handler, ["EVENT", subId, event]);
-      }
-      sendWsText(socket.handler, ["EOSE", subId]);
-      return;
-    }
-    // Every kind, not any, for the reason the company branch above spells
-    // out: the persona-sync backfill asks for 30175/30176/30177/5 in one
-    // filter and must still reach the persona branch below.
+    // Combined employee/managed-head reads must return both kinds. Other
+    // mixed catalog filters still fall through to the persona backfill below.
     if (
       filter.kinds?.length &&
-      filter.kinds.every((kind) => kind === KIND_MANAGED_AGENT)
+      filter.kinds.every(
+        (kind) => kind === KIND_EMPLOYEE || kind === KIND_MANAGED_AGENT,
+      )
     ) {
-      for (const event of filterMockManagedAgentHeadEvents(filter)) {
+      const events = [
+        ...(filter.kinds.includes(KIND_EMPLOYEE)
+          ? filterMockEmployeeHeadEvents(filter)
+          : []),
+        ...(filter.kinds.includes(KIND_MANAGED_AGENT)
+          ? filterMockManagedAgentHeadEvents(filter)
+          : []),
+      ];
+      for (const event of events)
         sendWsText(socket.handler, ["EVENT", subId, event]);
-      }
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
@@ -11720,6 +11742,7 @@ export function maybeInstallE2eTauriMocks() {
 
   mockClosedChannelLiveSubscription = false;
   mockWebsocketUnavailable = false;
+  mockAppliedRelayWsUrl = null;
   mockAuthResponses.length = 0;
   mockChannelHistoryCloses.length = 0;
   relayWebsocketConnectAttemptStarts.length = 0;
@@ -11749,6 +11772,7 @@ export function maybeInstallE2eTauriMocks() {
           config.mock.globalAgentConfig.credential_mode ?? "byok",
       }
     : null;
+  mockColonyCreditsAccountError = null;
   mockColonyCreditsAccount = config.mock?.colonyCreditsAccount
     ? { ...config.mock.colonyCreditsAccount }
     : {
@@ -13078,10 +13102,11 @@ export function maybeInstallE2eTauriMocks() {
       case "apply_workspace": {
         const applyDelayMs = activeConfig?.mock?.applyCommunityDelayMs ?? 0;
         if (applyDelayMs > 0) {
-          return new Promise((resolve) =>
+          await new Promise((resolve) =>
             window.setTimeout(resolve, applyDelayMs),
           );
         }
+        mockAppliedRelayWsUrl = (payload as { relayUrl: string }).relayUrl;
         return;
       }
       case "get_profile":
@@ -13606,7 +13631,7 @@ export function maybeInstallE2eTauriMocks() {
           cloned: false,
         };
       case "get_relay_ws_url":
-        return getRelayWsUrl(activeConfig);
+        return mockAppliedRelayWsUrl ?? getRelayWsUrl(activeConfig);
       case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
       case "get_build_default_relay_url":
@@ -14310,6 +14335,8 @@ export function maybeInstallE2eTauriMocks() {
         );
       }
       case "get_colony_credits_account": {
+        if (mockColonyCreditsAccountError)
+          throw new Error(mockColonyCreditsAccountError);
         return mockColonyCreditsAccount;
       }
       case "reconnect_colony_credits": {
@@ -14622,6 +14649,7 @@ export function maybeInstallE2eTauriMocks() {
         }
         const request = payload as {
           title?: string;
+          agentPubkey?: string | null;
           mode?: string;
           threadRoot?: string | null;
           conversationScope?: boolean;
@@ -14635,6 +14663,7 @@ export function maybeInstallE2eTauriMocks() {
               payload: {
                 record: {
                   title: request.title ?? "Chat work",
+                  agentPubkey: request.agentPubkey ?? null,
                   mode: request.mode ?? "open",
                   threadRoot: request.threadRoot ?? null,
                   conversationScope: request.conversationScope ?? false,
@@ -15182,6 +15211,18 @@ export function maybeInstallE2eTauriMocks() {
       default:
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }
+  };
+  window.__BUZZ_E2E_SET_COLONY_CREDITS__ = (input) => {
+    if (input.availableNanousd !== undefined) {
+      mockColonyCreditsAccount = {
+        ...mockColonyCreditsAccount,
+        available_balance_nanousd: input.availableNanousd,
+        balance_nanousd: input.availableNanousd,
+        total_balance_nanousd: input.availableNanousd,
+        status: input.availableNanousd === "0" ? "depleted" : "active",
+      };
+    }
+    if (input.error !== undefined) mockColonyCreditsAccountError = input.error;
   };
   window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
     handleMockCommand(command, payload ?? null);

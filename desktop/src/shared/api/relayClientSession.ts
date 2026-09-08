@@ -60,6 +60,7 @@ import {
 } from "@/shared/api/relayClientTimings";
 import { closeWebSocket } from "@/shared/api/relayWebSocketClose";
 import { AuthOkTracker } from "@/shared/api/relayAuthPolicy";
+import type { RelaySessionAuthRequest } from "./relayClientSessionTypes";
 import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 
 export class RelayClient {
@@ -70,12 +71,7 @@ export class RelayClient {
   private reconnectWaiters = new RelayReconnectWaiters();
   private reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
   private keepAliveRequested = false;
-  private authRequest: {
-    pendingEventId: string;
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timeout: number;
-  } | null = null;
+  private authRequest: RelaySessionAuthRequest | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
   private eventBuffer: Array<{ subId: string; event: RelayEvent }> = [];
@@ -704,7 +700,16 @@ export class RelayClient {
     event: RelayEvent,
     timeoutMessage: string,
     sendErrorMessage: string,
+    expectedRelayUrl?: string,
   ) {
+    if (expectedRelayUrl !== undefined) {
+      await this.ensureConnected();
+      if (this.relayUrl !== expectedRelayUrl) {
+        throw new Error(
+          "Relay publish cancelled because the destination changed.",
+        );
+      }
+    }
     return publishRelayEvent(
       {
         currentCommunityGeneration: () => this.communityGeneration,
@@ -920,12 +925,7 @@ export class RelayClient {
     }
   }
 
-  private resetConnection(
-    error: Error,
-    options?: {
-      reconnect?: boolean;
-    },
-  ) {
+  private resetConnection(error: Error, options?: { reconnect?: boolean }) {
     this.onMessageChannel = null;
     this.stallWatchdog.stop();
     this.connectionGeneration++;

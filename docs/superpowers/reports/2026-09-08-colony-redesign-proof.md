@@ -9,13 +9,27 @@ approved design was implemented and visually accepted was incorrect. That visual
 gate and its screenshots are superseded. Auto-merge was disabled while the
 structure, reading layout and palette were corrected.
 
-The corrected React build now follows the approved composition, with the actual
-account/business forms, spaced sidebar, separate channel/thread frames, coordinated
-palette and readable message layout. The coordinating agent compared the rendered
-screens with the approved references. Browser fixtures remain synthetic. The `3e7d6104bf` beta has passed its
-packaged checks and uploaded an artifact; the later CI corrections still need
-their own package run. No final-revision package, merge, release, hosted signup
-or live business operation is claimed here.
+The corrected React build follows the approved composition, with the actual
+account/business forms, spaced sidebar, separate channel/thread frames,
+coordinated palette and readable message layout. The coordinating agent compared
+the rendered screens with the approved references. Browser fixtures remain
+synthetic. PR #655 merged on September 8 at
+`a2c8149f4a22a3ed4ae250cde380e65604583626`, after
+[CI 34237792764](https://github.com/AI-Native-Ventures/Colony/actions/runs/34237792764)
+passed every non-skipped check. The final merged tree matches the reviewed head
+`ffbda6142f9991887496f4e8e86c17184da85c6b`.
+
+The corrected ARM64 beta is available as
+[artifact 10059348283](https://github.com/AI-Native-Ventures/Colony/actions/runs/34231867550/artifacts/10059348283).
+It passed the package checks described below. Later changes to the merged head
+were test/report corrections with identical application inputs. This is an
+ad-hoc-signed beta, not a notarized release or updater publication. Hosted signup
+and live business operation are unproven. The explicit first-job handoff remains
+a [separate completion gate](2026-09-08-first-job-handoff-proof.md).
+
+The time-stamped development checkpoints below retain their original pending
+and failed states as history; this current-status paragraph supersedes their
+PR #655 merge and beta availability statements.
 
 ## Current implementation
 

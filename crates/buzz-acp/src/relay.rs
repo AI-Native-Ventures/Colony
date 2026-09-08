@@ -391,6 +391,9 @@ impl RestClient {
         body_bytes: &[u8],
     ) -> Result<reqwest::Response, RelayError> {
         let url = format!("{}{}", self.base_url, path);
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&url)
+            .map_err(|error| RelayError::Http(error.to_string()))?;
         let body_owned = body_bytes.to_vec();
         let auth_tag_header = self.auth_tag_json.clone();
         self.request_with_retry("POST", path, || {
@@ -441,6 +444,9 @@ impl RestClient {
     /// relay that advertises no usable `self` cannot have its company state
     /// trusted at all. `None` says exactly that; it is not "not yet known".
     pub async fn relay_self(&self) -> Result<Option<nostr::PublicKey>, RelayError> {
+        #[cfg(feature = "onboarding-fixture")]
+        buzz_ws_client::onboarding_fixture::validate_process_url(&self.base_url)
+            .map_err(|error| RelayError::Http(error.to_string()))?;
         let response = self
             .http
             .get(&self.base_url)
@@ -727,14 +733,18 @@ impl HarnessRelay {
             .await;
         });
 
+        let http_builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(5));
+        #[cfg(feature = "onboarding-fixture")]
+        let http_builder = buzz_ws_client::onboarding_fixture::configure_process_http(http_builder)
+            .map_err(|error| RelayError::Http(error.to_string()))?;
         Ok(Self {
             event_rx,
             ask_events: Some(ask_rx),
             observer_control_rx: Some(observer_control_rx),
             cmd_tx,
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .connect_timeout(std::time::Duration::from_secs(5))
+            http: http_builder
                 .build()
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
             relay_pin,
@@ -6711,6 +6721,40 @@ mod tests {
         assert!(
             !state.channel_dropped_since.contains_key(&channel_id),
             "channel_dropped_since must be cleared on successful drain"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "onboarding-fixture"))]
+mod onboarding_fixture_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fixture_request_guard_rejects_injected_client_before_dispatch() {
+        let trap = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = RestClient {
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_millis(50))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{}", trap.local_addr().unwrap()),
+            keys: Keys::generate(),
+            auth_tag_json: None,
+        };
+        let error = client.query(&[]).await.unwrap_err();
+        assert!(
+            error.to_string().contains("fixture"),
+            "must reject before reqwest: {error}"
+        );
+        let error = client.relay_self().await.unwrap_err();
+        assert!(
+            error.to_string().contains("fixture"),
+            "NIP-11 must reject before reqwest: {error}"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), trap.accept())
+                .await
+                .is_err()
         );
     }
 }

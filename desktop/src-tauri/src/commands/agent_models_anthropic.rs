@@ -75,6 +75,8 @@ async fn fetch_anthropic_model_page(
     after_id: Option<&str>,
     env: &BTreeMap<String, String>,
 ) -> Result<AnthropicModelListResponse, String> {
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(url)?;
     let mut request = client
         .get(url)
         .header("x-api-key", api_key)

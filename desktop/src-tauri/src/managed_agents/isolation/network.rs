@@ -1,16 +1,17 @@
 //! Host-owned per-worker egress gateway. Workers can reach only this listener;
 //! this gateway pins and validates every permitted upstream destination.
 use base64::Engine;
-use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    sync::Arc,
-    time::Duration,
-};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     task::JoinSet,
 };
+
+#[cfg(any(not(feature = "onboarding-fixture"), test))]
+use std::net::IpAddr;
+#[cfg(not(feature = "onboarding-fixture"))]
+use std::net::ToSocketAddrs;
 
 const HEADER_LIMIT: usize = 16 * 1024;
 const CONNECTION_LIMIT: usize = 32;
@@ -36,30 +37,54 @@ impl Destination {
                 "Worker services require HTTP or WebSocket URLs without credentials".into(),
             );
         }
-        let host = url.host_str().ok_or("Worker service has no host")?;
-        let port = url
-            .port_or_known_default()
-            .ok_or("Worker service has no port")?;
-        let addresses: Vec<_> = (host.trim_matches(['[', ']']), port)
-            .to_socket_addrs()
-            .map_err(|_| "Could not resolve worker service")?
-            .collect();
-        let explicit_local =
-            host == "localhost" || host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok();
-        if addresses.is_empty()
-            || (!explicit_local && addresses.iter().any(|address| private_ip(address.ip())))
+        #[cfg(feature = "onboarding-fixture")]
         {
-            return Err(
-                "Worker service domain resolved to a private or unavailable destination".into(),
-            );
+            let address = buzz_ws_client::onboarding_fixture::FixtureTransport::from_env()
+                .and_then(|fixture| fixture.destination(value))
+                .map_err(|error| error.to_string())?;
+            Ok(Self {
+                authority: authority(&url)?,
+                addresses: vec![address],
+            })
         }
-        Ok(Self {
-            authority: authority(&url)?,
-            addresses,
-        })
+        #[cfg(not(feature = "onboarding-fixture"))]
+        {
+            let host = url.host_str().ok_or("Worker service has no host")?;
+            let port = url
+                .port_or_known_default()
+                .ok_or("Worker service has no port")?;
+            let addresses: Vec<_> = (host.trim_matches(['[', ']']), port)
+                .to_socket_addrs()
+                .map_err(|_| "Could not resolve worker service")?
+                .collect();
+            let explicit_local =
+                host == "localhost" || host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok();
+            if addresses.is_empty()
+                || (!explicit_local && addresses.iter().any(|address| private_ip(address.ip())))
+            {
+                return Err(
+                    "Worker service domain resolved to a private or unavailable destination".into(),
+                );
+            }
+            Ok(Self {
+                authority: authority(&url)?,
+                addresses,
+            })
+        }
+    }
+
+    /// The only plaintext fixture exception: the port just reserved by the host
+    /// for this worker's meter. Never use this for user-authored service URLs.
+    #[cfg(feature = "onboarding-fixture")]
+    pub(super) fn reserved_meter(port: u16) -> Self {
+        Self {
+            authority: format!("127.0.0.1:{port}"),
+            addresses: vec![SocketAddr::from(([127, 0, 0, 1], port))],
+        }
     }
 }
 
+#[cfg(any(not(feature = "onboarding-fixture"), test))]
 fn private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {

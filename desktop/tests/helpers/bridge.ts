@@ -273,6 +273,8 @@ type MockBridgeOptions = {
       title: string;
       initiativeId?: string | null;
       status?: string;
+      threadRoot?: string | null;
+      sourceChannelId?: string;
     }>;
     /** Refuse the kind 30180 read, so the Initiatives tab fails on its own. */
     refuseInitiativeRead?: boolean;
@@ -399,6 +401,8 @@ type MockBridgeOptions = {
   employeeHeads?: MockEmployeeHeadSeed[];
   /** Owner-authored kind-30177 heads; the org chart's personal-agent source. */
   managedAgentHeads?: MockManagedAgentHeadSeed[];
+  /** Real fixture signatures for ownership-sensitive native adapter reads. */
+  managedAgentHeadEvents?: RelayEvent[];
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];

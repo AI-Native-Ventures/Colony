@@ -26,6 +26,8 @@ const PERSONA = "redesign-social-manager";
 const ROLE = "Social media manager";
 const MESSAGE = `mock-agents-managed-${AGENT.slice(0, 8)}`;
 const REPORT_MANIFEST = signManifest(readCoreManifest("report"));
+const PRODUCTION_READING_FONT =
+  '"Inter Variable", Inter, "Avenir Next", "Segoe UI", sans-serif';
 
 async function setup(page: import("@playwright/test").Page) {
   page.on("pageerror", (error) =>
@@ -215,20 +217,37 @@ test("long agent messages and existing inline work stay readable beside their re
   await expect(
     thread.getByTestId("message-avatar-fallback").first(),
   ).toBeVisible();
-  const body = row
-    .locator("p")
-    .filter({ hasText: "The first week introduces" });
-  const typography = await body.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      font: Number.parseFloat(style.fontSize),
-      line: Number.parseFloat(style.lineHeight),
-    };
-  });
-  expect(typography.font).toBeGreaterThanOrEqual(13);
-  expect(typography.font).toBeLessThanOrEqual(16);
-  expect(typography.line).toBeGreaterThanOrEqual(typography.font * 1.4);
+  // Both reading panes inherit production's regular Inter, including long
+  // prose, existing inline Blocks and the editable reply composers.
+  for (const message of [row, thread.getByTestId("message-thread-head")]) {
+    const body = message
+      .locator("p")
+      .filter({ hasText: "The first week introduces" });
+    await expect(body).toHaveCSS("font-family", PRODUCTION_READING_FONT);
+    await expect(body).toHaveCSS("font-weight", "400");
+    const typography = await body.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        font: Number.parseFloat(style.fontSize),
+        line: Number.parseFloat(style.lineHeight),
+      };
+    });
+    expect(typography.font).toBeGreaterThanOrEqual(13);
+    expect(typography.font).toBeLessThanOrEqual(16);
+    expect(typography.line).toBeGreaterThanOrEqual(typography.font * 1.4);
+  }
+  await expect(post.getByText("Caption draft", { exact: true })).toHaveCSS(
+    "font-family",
+    PRODUCTION_READING_FONT,
+  );
+  await expect(
+    post.getByText("Your logo, website and social posts", { exact: false }),
+  ).toHaveCSS("font-family", PRODUCTION_READING_FONT);
   for (const pane of [channel, thread]) {
+    await expect(pane.getByTestId("message-input")).toHaveCSS(
+      "font-family",
+      PRODUCTION_READING_FONT,
+    );
     expect(
       await pane.evaluate(
         (element) => element.scrollWidth - element.clientWidth,

@@ -193,6 +193,9 @@ pub(super) fn prepare(
     // after spawn; a local collision is a startup failure, never an unmetered fallback.
     let reservation = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let meter_port = reservation.local_addr().map_err(|e| e.to_string())?.port();
+    #[cfg(feature = "onboarding-fixture")]
+    destinations.push(Destination::reserved_meter(meter_port));
+    #[cfg(not(feature = "onboarding-fixture"))]
     destinations.push(Destination::resolve(&format!(
         "http://127.0.0.1:{meter_port}"
     ))?);
@@ -242,6 +245,13 @@ pub(super) fn prepare(
         .env("NO_PROXY", "")
         .env("no_proxy", "")
         .env("BUZZ_ACP_METER_PORT", meter_port.to_string());
+    #[cfg(feature = "onboarding-fixture")]
+    command.env(
+        buzz_ws_client::onboarding_fixture::CONFIG_ENV,
+        buzz_ws_client::onboarding_fixture::FixtureTransport::from_env()
+            .map_err(|error| error.to_string())?
+            .config_json(),
+    );
     drop(reservation);
     Ok((command, network))
 }
