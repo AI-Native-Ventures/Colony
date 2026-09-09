@@ -34,6 +34,10 @@ if [ "$#" -eq 0 ]; then
   exit 1
 fi
 
+# Chrome is preinstalled and unrelated to these OS dependencies. Its repository
+# must not block Ubuntu packages; every remaining update/install error is fatal.
+python3 "$HERE/ci-isolate-chrome-source.py"
+
 apt_opts=(
   -o Acquire::Retries=3
   -o Acquire::http::Timeout=30

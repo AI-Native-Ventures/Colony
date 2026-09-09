@@ -18,6 +18,9 @@ IDLE_LIMIT="${CI_PLAYWRIGHT_DEPS_IDLE_LIMIT:-120}"
 RETRY_DELAY="${CI_PLAYWRIGHT_DEPS_RETRY_DELAY:-15}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Playwright downloads its pinned browser separately; this only installs OS libs.
+python3 "$HERE/ci-isolate-chrome-source.py"
+
 for attempt in $(seq 1 "$ATTEMPTS"); do
   if "$HERE/ci-run-until-idle.sh" "$IDLE_LIMIT" \
     pnpm exec playwright install-deps "$BROWSER"; then

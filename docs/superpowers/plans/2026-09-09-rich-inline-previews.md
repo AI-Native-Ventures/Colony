@@ -149,3 +149,9 @@ node --import ./test-loader.mjs --experimental-strip-types --experimental-test-m
 - Develop advanced to `a414fa900c` (stable Electron ad-hoc release); merged into this branch as `9c86cfce86`. Desktop feature version advances to `0.16.10`; relay version is `0.11.9`.
 - CI run `34383742160` reached green Rust Lint, Web and Security. Linux desktop jobs stopped in dependency installation because the runner Chrome APT repository served a package index with a mismatched hash. No integrity checks were weakened.
 - Electron run `34383742113` caught a missing `relayOrigin` binding in Markdown; repairing the implementation before the next remote matrix. Browser and packaged feature proof have not yet run successfully.
+
+## GitHub findings — complete media and recovery snapshot
+
+- Snapshot `70ffb7a1b3` includes strict SVG uploads, canonical audio, correct single-image sizing, bounded catalogs, safe reply-selection recovery, native-picker file previews and empty/sparse workbook/PDF cleanup fixes.
+- CI run `34385407594`: Rust Lint, Unit Tests, both server cross-compiles, Web and Security passed. Some desktop jobs reached frontend tests; others again failed on the exact Google Chrome repository hash mismatch. Browser and packaged acceptance remain pending.
+- A shared preflight now isolates only the unrelated Chrome APT source on ephemeral GitHub-hosted Ubuntu runners. It preserves Ubuntu/security sources and all package integrity/update/install failures. Ten fast fixture tests pass, including observed failure before wrapper integration; no local APT command or build was executed. The required changed-paths job runs this contract and selects affected desktop checks when these helpers change.

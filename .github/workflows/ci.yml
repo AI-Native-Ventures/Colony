@@ -94,6 +94,10 @@ jobs:
             # shards ran on README-only diffs. Excluding a subtree needs a
             # separate rule (see `desktop-rust`), not a negation here.
             desktop:
+              - 'scripts/ci-apt-install.sh'
+              - 'scripts/ci-playwright-deps.sh'
+              - 'scripts/ci-isolate-chrome-source.py'
+              - 'scripts/test-ci-apt-sources.py'
               - 'scripts/check-file-sizes-core.mjs'
               - 'scripts/check-file-sizes-core.test.mjs'
               - 'scripts/native-inventory-core.mjs'
@@ -107,6 +111,9 @@ jobs:
               - 'scripts/ci-pnpm-store-path.sh'
               - 'scripts/ci-prepare-sherpa-onnx.sh'
             desktop-rust:
+              - 'scripts/ci-apt-install.sh'
+              - 'scripts/ci-isolate-chrome-source.py'
+              - 'scripts/test-ci-apt-sources.py'
               - 'desktop/src-tauri/**'
               - '.github/workflows/ci.yml'
               - 'scripts/ci-pnpm-store-path.sh'
@@ -133,6 +140,10 @@ jobs:
               - '.github/workflows/mobile-release-candidate.yml'
               - '.github/workflows/ci.yml'
             blocks:
+              - 'scripts/ci-apt-install.sh'
+              - 'scripts/ci-playwright-deps.sh'
+              - 'scripts/ci-isolate-chrome-source.py'
+              - 'scripts/test-ci-apt-sources.py'
               - 'crates/buzz-core/src/block.rs'
               - 'crates/buzz-core/src/kind.rs'
               - 'crates/buzz-relay/src/blocks.rs'
@@ -153,6 +164,10 @@ jobs:
               - 'scripts/ci-pnpm-store-path.sh'
               - 'scripts/ci-prepare-sherpa-onnx.sh'
             desktop-integration:
+              - 'scripts/ci-apt-install.sh'
+              - 'scripts/ci-playwright-deps.sh'
+              - 'scripts/ci-isolate-chrome-source.py'
+              - 'scripts/test-ci-apt-sources.py'
               - 'desktop/**'
               - 'crates/**'
               - 'migrations/**'
@@ -194,6 +209,8 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs scripts/native-inventory-core.test.mjs
+      - name: Hosted runner APT source isolation contract
+        run: python3 scripts/test-ci-apt-sources.py
       - name: Paths filter contract
         # A negated pattern makes its whole paths-filter rule match every file
         # in the repo, so CI silently stops skipping anything. Runs here

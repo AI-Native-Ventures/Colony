@@ -633,14 +633,19 @@ test("forum posts emit a FileCard for generic attachments, not a broken image", 
   // Submit the (attachment-only) forum post.
   await page.getByTestId("send-message").click();
 
-  // The post renders through the shared Markdown component as a FileCard —
-  // a button carrying the filename that downloads via the native
-  // `download_file` command — NOT an inline image and NOT a bare link.
+  // The post renders through the shared Markdown component as a document card
+  // with an explicit original-download control. Clicking the preview body is
+  // not a download action.
   const card = page.getByTestId("file-card");
   await expect(card).toBeVisible();
   await expect(card).toContainText("quarterly-report.pdf");
 
-  await card.click();
+  await card
+    .getByRole("button", {
+      name: "Download original quarterly-report.pdf",
+      exact: true,
+    })
+    .click();
   await expect
     .poll(() =>
       page.evaluate(
@@ -650,6 +655,21 @@ test("forum posts emit a FileCard for generic attachments, not a broken image", 
       ),
     )
     .toContain("download_file");
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []).filter(
+          (entry) => entry.command === "download_file",
+        ),
+      ),
+    )
+    .toContainEqual({
+      command: "download_file",
+      payload: {
+        url: `https://mock.relay/media/${"a".repeat(64)}.pdf`,
+        filename: "quarterly-report.pdf",
+      },
+    });
 });
 
 test("a queued attachment can be removed without a mouse", async ({ page }) => {

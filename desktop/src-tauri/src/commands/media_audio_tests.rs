@@ -32,8 +32,9 @@ fn detection_uses_real_bytes_and_cancellation_prevents_conversion() {
     let cancel = CancellationToken::new();
     cancel.cancel();
     assert_eq!(
-        prepare_audio_bytes(FIXTURE.to_vec(), "wav", Some(&cancel)).as_deref(),
-        Err("upload cancelled")
+        prepare_audio_bytes(FIXTURE.to_vec(), "wav", Some(&cancel))
+            .expect_err("a cancelled upload must fail"),
+        "upload cancelled"
     );
 }
 
