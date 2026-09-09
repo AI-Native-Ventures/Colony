@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { npubEncode } from "nostr-tools/nip19";
 
 import { waitForAnimations } from "../helpers/animations";
 
@@ -3652,7 +3653,9 @@ test("clicking author name opens user profile panel", async ({ page }) => {
   // Click now opens the full profile panel instead of the popover
   const panel = page.getByTestId("user-profile-panel");
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText("deadbeef");
+  // The panel's public key row renders through the shared <PubKey> widget,
+  // which displays the canonical npub form — assert the npub prefix.
+  await expect(panel).toContainText(npubEncode(MOCK_VIEWER_PUBKEY).slice(0, 8));
 });
 
 test("a named owner's author keeps the real name and opens the same profile", async ({
@@ -3676,7 +3679,9 @@ test("a named owner's author keeps the real name and opens the same profile", as
   const panel = page.getByTestId("user-profile-panel");
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("Aisha Bello");
-  await expect(panel).toContainText("deadbeef");
+  // Same as the case above: the public key row renders through <PubKey>, so
+  // assert the canonical npub prefix rather than the hex.
+  await expect(panel).toContainText(npubEncode(MOCK_VIEWER_PUBKEY).slice(0, 8));
 });
 
 test("hovering avatar opens popover, clicking opens profile panel", async ({
