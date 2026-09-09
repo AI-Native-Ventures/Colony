@@ -1,33 +1,80 @@
 # Activate Colony Credits for a bounded pilot
 
-Prepared 2026-09-09. This is an activation plan, not evidence of activation.
-No account, key, purchase, ledger grant or deployment was created while preparing it.
+Updated 2026-09-09 after secret-only activation. The live gateway is enabled and
+healthy on the existing relay artifact. A completed, charged agent task remains
+unproven. No credit purchase was made. The owner approved a $1 promotional
+ledger grant, which was applied and verified below.
 
 ## Current blocker and acceptance gate
 
-The owner confirmed that no Vercel AI Gateway account has been set up yet.
-The September 9 deployment inspection found no `VERCEL_AI_GATEWAY_KEY` on
-Fly app `colony-relay`; the public account route returned an empty HTTP 404.
+The owner initially believed a new Gateway account was needed. Browser inspection
+on September 9 found the existing `basheers-projects-d36c90c8` team has $5 in
+AI Gateway credit, a verified payment method and auto-reload off. The owner
+authorized a dedicated Colony pilot key on this team. A new subscription or
+credit purchase is not needed for the initial pilot. The dedicated key is stored
+in Fly, and the Vercel dashboard confirms a $1 cumulative budget with no automatic
+reset. Expiration remains Never. The key was adopted by the live relay at 09:01
+UTC. No inference request was made as part of activation verification.
+
+Before staging on September 9, Fly app `colony-relay` had no
+`VERCEL_AI_GATEWAY_KEY`, and the public account route returned an empty HTTP 404.
 The relay deliberately omits all Credits gateway routes without that key.
-Recheck deployment metadata before acting; this is a dated observation.
+At 08:48 UTC, Fly confirmed the new secret was stored for the next deployment.
+The value was transferred directly between the owner-authorized browser forms;
+no exported key file, source-code change or desktop credential was used.
+At 09:01 UTC, secret-only deployment succeeded; the key and all three admission
+settings are Deployed and their nonsecret runtime values were verified.
+
+A read-only production transaction at 08:41 UTC on September 9 found one funded
+account with $5 available, no Discovery or gateway reservations, and no admission
+overrides. Enabled mappings were `deepseek/deepseek-v4-flash` and
+`deepseek/deepseek-v4-pro`. This does not yet establish that the funded account is
+the current desktop owner. The public [Flash catalogue](https://vercel.com/ai-gateway/models/deepseek-v4-flash)
+confirms its slug and tool support; authenticated model access remains unproven.
+
+Activation evidence at 09:01 UTC:
+
+- Fly release 37, machine `879093a065e4d8` started; the existing relay 0.11.7
+  revision `21bb91c2601d227e4bfa836f434707930788611b` was preserved.
+- Image digest remained
+  `sha256:6a1cb1610da8729feaaf3148e51ff126c569e1e25f19e83c8dbd9905e21f166d`.
+- Readiness returned HTTP 200 ready. The account and model routes returned
+  HTTP 401 requiring authentication, replacing the previously absent routes.
+- Runtime admission defaults are one in-flight request per account, a $0.50
+  rolling hourly admission cap and the existing $0.05 typical-call guard.
+- At 09:04 UTC the running Electron beta's Welcome card showed "Add credits
+  before starting this job." This verifies that its missing-gateway error has
+  cleared; it does not prove model execution or identify the existing funded
+  account as the current owner.
+- At 09:05 UTC, a read-only lookup of the beta's exact active channel mapped it
+  to `colony-4.colony.ainative.ventures`. Its owner public key matches the beta's
+  displayed abbreviated identity and has no Credits account row ($0 available).
+  The existing $5 account belongs to another identity.
+- After the owner approved the $1 promotional grant, the installed operator
+  command confirmed a $0 starting balance, inserted ledger entry 2 with reference
+  `promo:colony-4:2026-09-09:gateway-pilot-1`, and returned a $1 balance. The same
+  reference must be reused for any retry; no new cash was received or purchased.
 
 Done means an installed beta can load the actual business's Credits balance and
 served models, start an isolated teammate, return one approved draft, and show a
 matching provider charge and Colony ledger debit. A green CI run, saved key or
 healthy relay alone does not pass this gate.
 
-## Owner decisions before activation
+## Authorization and remaining decisions
 
-Approve these concrete choices together, then execute the steps below:
+The owner approved using the existing Vercel team and key for Colony, and signed
+into Fly for the server connection. Activation stayed within that scope. A new
+purchase or expanded pilot remains a separate decision. The owner subsequently
+approved the $1 promotional grant to the new `colony-4` account:
 
 | Decision | Recommended initial pilot |
 | --- | --- |
-| Account | Company-controlled Vercel account/team, with the owner controlling billing and recovery; no plan upgrade or extra paid seats without approval |
-| New cash purchase | $0 initially: use eligible Vercel free credits if the chosen model is available; adding the required payment method still needs the owner's action |
-| Gateway budget | Dedicated `colony-credits-pilot` key, $1 cumulative budget, no reset, seven-day expiry; alerts at 50%, 75% and 100% |
-| Colony grant | One $1 promotional ledger seed for the verified pilot owner's public key, with a unique idempotency reference |
+| Account | Owner approved `basheers-projects-d36c90c8` for the pilot; dedicated Colony key, shared team credit balance; no new plan or paid seats |
+| New cash purchase | $0: use the existing team credit and verified payment method; no new purchase or subscription is authorized |
+| Gateway budget | Verified: dedicated `colony-credits-pilot` key, $1 cumulative budget, no reset. Expiration is Never; alerts were not configured. |
+| Colony grant | Approved and applied: $1 promotional credit to the new `colony-4` owner, ledger entry 2, idempotency reference `promo:colony-4:2026-09-09:gateway-pilot-1` |
 | Work | One business, one active teammate at a time, short draft-only work; no schedules or external publishing |
-| Production scope | Explicitly approve enabling the shared Fly relay; see the access boundary below |
+| Production scope | Activated the existing shared Fly relay after inventory showed one funded account, no reservations and no admission overrides; see the access boundary below |
 
 Vercel currently provides $5 monthly free credit for eligible models, starting
 with the first request. Free credit requires a valid team payment method.
@@ -41,10 +88,9 @@ rates. [Pricing](https://vercel.com/docs/ai-gateway/pricing),
 [payment-method prerequisite](https://vercel.com/docs/ai-gateway/getting-started).
 
 The $1 key budget is a **soft cap**: an admitted request can complete above it.
-Do not promise an exact $1 maximum invoice. Expiry and a non-resetting budget
-avoid an unattended recurring pilot; alerts do not themselves stop requests.
-Record the owner's acceptance of request-completion overshoot, including any
-concurrent calls already admitted.
+Do not promise an exact $1 maximum invoice. The non-resetting budget limits new
+requests after exhaustion; it does not buy or refill credits. Team auto-reload
+remains off. The current key does not expire automatically.
 [Vercel budget behavior](https://vercel.com/docs/ai-gateway/observability-and-spend/budgets).
 
 ## 1. Create the company connection
@@ -116,7 +162,12 @@ overrides, which can replace these defaults. These guards are not an exact
 maximum request-cost guarantee; Vercel's dedicated key budget gates new shared
 requests independently. The native worker sandbox remains enabled.
 
-## 4. Deploy the reviewed relay artifact
+## 4. Activate the existing artifact, or deploy a reviewed change
+
+This activation used `flyctl secrets deploy --app colony-relay` after confirming
+the running revision already contained the gateway and required routes. It did
+not build or deploy PR #664. The existing image and source revision were preserved.
+The following artifact workflow applies when a subsequent code change is needed.
 
 Use GitHub CI only. Identify the exact reviewed source SHA, successful required
 checks, published relay version tag and image digest. Desktop releases do not
@@ -174,7 +225,9 @@ owner identity, rather than relying on the relay's base hostname:
    served catalogue. These metadata reads must not create inference charges.
 2. After the approved grant, save a served model using Colony Credits, without
    asking for an OpenAI key. Reload the app and confirm the choice persists.
-3. Start the isolated teammate and approve one short draft-only job. Record the
+3. Start Scout manually for one short draft-only task. The delegated first-job
+   suggestion requires an approved worker as well as Scout and is a separate
+   acceptance gate; a successful solo task does not prove that workflow. Record the
    actual number of upstream calls; one job can contain several model calls.
 4. Match the completed output, provider usage/reference, and Colony ledger debit.
    Check available balance and outstanding settlement reservations. The gateway
@@ -208,5 +261,7 @@ outstanding requests before closing the pilot.
 - [Fly configuration](../../deploy/fly/fly.toml)
 
 Record account setup, key staging, purchase approval, relay deployment, installed
-beta proof and reconciliation as separate completed gates. This document completes
-only the preparation gate.
+beta proof and reconciliation as separate completed gates. The current record proves
+secret storage, runtime adoption, healthy gateway routes and the approved
+promotional ledger balance; it does not prove successful inference, the first-job
+workflow or reconciliation.

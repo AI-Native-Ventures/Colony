@@ -98,7 +98,19 @@ async fn newly_provisioned_community_has_a_work_profile_before_response() {
     assert!(profile.summary.is_empty(), "do not invent business context");
     assert_eq!(head.pubkey, state.relay_keypair.public_key());
 
-    let collision = create_community_for_owner(&state, tenant.host(), &owner_hex, &owner_hex).await;
+    let retry = create_community_for_owner(&state, tenant.host(), &owner_hex, &owner_hex)
+        .await
+        .expect("same-owner retry returns the existing community");
+    assert_eq!(retry.community_id, response.community_id);
+    assert_eq!(
+        profile_head(&state, &tenant).await.map(|event| event.id),
+        Some(head.id),
+        "same-owner retry must preserve the original profile"
+    );
+
+    let other_owner = Keys::generate().public_key().to_hex();
+    let collision =
+        create_community_for_owner(&state, tenant.host(), &other_owner, &other_owner).await;
     assert!(matches!(collision, Err(message) if message == "community already exists"));
     assert_eq!(
         profile_head(&state, &tenant).await.map(|event| event.id),
