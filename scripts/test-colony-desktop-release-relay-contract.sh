@@ -74,6 +74,19 @@ expect_build_env() {
 expect_build_env "Build desktop app"
 expect_build_env "Build Windows NSIS installer (unsigned)"
 
+# A credential-only dispatch must never reach any asset/manifest publisher,
+# even if a dependency succeeds or a future release job uses always().
+for publisher in publish-macos publish-windows publish-manifest; do
+  guard="$(awk -v job="  ${publisher}:" '
+    $0 == job { found = 1; next }
+    found && /^  [a-zA-Z0-9_-]+:/ { exit }
+    found && /^    steps:/ { exit }
+    found { print }
+  ' "${WORKFLOW}")"
+  grep -Fq -- '!inputs.preflight_only' <<<"${guard}" ||
+    fail "${publisher} can run during a credential-only dispatch"
+done
+
 # Prove the guard rejects shell-style re-enablement as well as YAML env keys.
 negative_fixture="$(step_block "Build desktop app")"$'\n          export BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY=1'
 if (validate_build_block "negative fixture" "${negative_fixture}") >/dev/null 2>&1; then

@@ -4,7 +4,8 @@ name: Colony desktop release
 # Windows retains the established Tauri NSIS lane until Electron isolation is
 # proven there. Both preserve the existing signed updater manifest contract.
 # No public upload happens until the required signing inputs are present.
-# Dispatch only from the immutable v<version> tag; never a branch or a beta.
+# Publish only from the immutable v<version> tag; credential-only dispatches
+# may use a review branch and cannot run any publisher job.
 
 on:
   push:
@@ -22,6 +23,10 @@ on:
           - windows
           - both
         default: macos
+      preflight_only:
+        description: "Check credential availability only; do not build, sign, tag or publish"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -89,7 +94,7 @@ jobs:
   publish-macos:
     name: Publish signed Electron macOS (Apple Silicon)
     needs: [preflight]
-    if: github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'macos' || inputs.platform == 'both')))
+    if: "!inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'macos' || inputs.platform == 'both')))"
     runs-on: macos-15
     timeout-minutes: 150
     steps:
@@ -262,7 +267,7 @@ jobs:
   publish-windows:
     name: Publish Windows (NSIS, unsigned)
     needs: [preflight]
-    if: github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'windows' || inputs.platform == 'both')))
+    if: "!inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.platform == 'windows' || inputs.platform == 'both')))"
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -512,7 +517,7 @@ jobs:
     # fails, still publishes a manifest for the platform that succeeded —
     # never publishing is how a good build reaches nobody.
     if: |
-      always() && github.repository == 'AI-Native-Ventures/Colony' &&
+      always() && !inputs.preflight_only && github.repository == 'AI-Native-Ventures/Colony' &&
       (needs.publish-macos.result == 'success' || needs.publish-windows.result == 'success')
     runs-on: ubuntu-latest
     steps:

@@ -70,6 +70,12 @@ Gatekeeper assessment, real packaged smoke checks, embedded updater/relay
 checks and signed archive generation must pass before publication. Missing
 Apple credentials block the release before any platform uploads assets.
 
+Credential availability can be checked before promotion by dispatching
+`colony-desktop-release.yml` on the review branch with `preflight_only: true`,
+`platform: macos` and the proposed version. This mode reports missing
+configuration names only; every build and publication job is disabled. It does
+not validate the certificate contents or establish signing/notarization proof.
+
 `Electron production candidate` proves the same bundle/executable and compiled
 native feature on hosted macOS with a private profile. Its ad-hoc artifact is
 explicitly a CI candidate, never a production download. It does not prove
