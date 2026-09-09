@@ -2,7 +2,11 @@
 // Requires the separately compiled onboarding fixture; never a production override.
 import { _electron as electron } from "@playwright/test";
 import { createFixtureCertificates } from "./onboarding-fixture/certificates.mjs";
-import { readLegacyStorage } from "./onboarding-fixture/legacy-storage.mjs";
+import {
+  openLegacyStorage,
+  readLegacyStorage,
+} from "./onboarding-fixture/legacy-storage.mjs";
+import { persistLegacyFixture } from "./onboarding-fixture/legacy-persistence.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -103,11 +107,18 @@ async function readState(page) {
   }));
 }
 try {
-  const source = await legacy("legacy-seed");
+  phase = "legacy-persistence";
+  const source = await persistLegacyFixture({
+    writer: await openLegacyStorage({
+      manifest,
+      directory: data,
+      env: fixtureEnv,
+      mode: "legacy-seed",
+    }),
+    read: () => legacy("legacy-read"),
+  });
   assert.equal(source.length, 6);
   const expectedHash = sourceHash(source);
-  phase = "legacy-persistence";
-  assert.equal(sourceHash(await legacy("legacy-read")), expectedHash);
   phase = "electron-import";
   app = await launch();
   let page = await app.firstWindow();
