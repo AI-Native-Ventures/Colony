@@ -20,13 +20,18 @@ import { startBroker } from "./browser/broker.mjs";
 import { shellCommand } from "./shell-commands.mjs";
 import { ManagedBrowser, normalizeRelay } from "./browser/managed-workers.mjs";
 import { runtimePaths } from "./runtime-paths.mjs";
+import { DesktopDeepLinks } from "./deep-links.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
+const packageMetadata = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
 const paths = runtimePaths({
   packaged: app.isPackaged,
   appPath: desktop,
   resourcesPath: process.resourcesPath,
   env: process.env,
+  channel: packageMetadata.colonyReleaseChannel,
 });
 const { devUrl } = paths;
 app.setName(paths.name);
@@ -37,6 +42,15 @@ app.setPath(
 );
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
+const deepLinks = new DesktopDeepLinks();
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deepLinks.enqueue(url);
+});
+app.on("second-instance", (_event, argv) => {
+  for (const value of argv) deepLinks.enqueue(value);
+});
+for (const value of process.argv) deepLinks.enqueue(value);
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "colony",
@@ -90,10 +104,13 @@ async function boot() {
   });
   const runtime = await mkdtemp(path.join(os.tmpdir(), "colony-browser-"));
   resources.add(() => rm(runtime, { recursive: true, force: true }));
-  const profileId = createHash("sha256")
-    .update(app.getPath("userData"))
-    .digest("hex")
-    .slice(0, 16);
+  const profileId =
+    paths.stable && !process.env.COLONY_ELECTRON_USER_DATA
+      ? "stable"
+      : createHash("sha256")
+          .update(app.getPath("userData"))
+          .digest("hex")
+          .slice(0, 16);
   const host = new NativeHost(paths.nativeHost, {
     env: {
       ...process.env,
@@ -107,7 +124,10 @@ async function boot() {
       COLONY_ELECTRON_PROFILE_ID: profileId,
       // Old installed Tauri versions look for a known host basename and its
       // full instance ID in the environment before reaping foreign workers.
-      COLONY_ELECTRON_INSTANCE_ID: `xyz.block.buzz.app.dev-electron.${profileId}`,
+      COLONY_ELECTRON_INSTANCE_ID:
+        profileId === "stable"
+          ? "xyz.block.buzz.app"
+          : `xyz.block.buzz.app.dev-electron.${profileId}`,
     },
   });
   const rendererHost = new RendererHost(host);
@@ -312,6 +332,13 @@ async function boot() {
   );
   window.showInactive();
   await host.ready;
+  deepLinks.ready((url) => {
+    void host
+      .request("invoke", { command: "electron_open_deep_link", args: { url } })
+      .catch(() => {
+        console.error("Colony could not open the requested app link");
+      });
+  });
 }
 if (primaryInstance)
   void boot().catch(async (error) => {

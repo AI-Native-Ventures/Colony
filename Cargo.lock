@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-relay"
-version = "0.11.7"
+version = "0.11.8"
 dependencies = [
  "aes-gcm",
  "anyhow",

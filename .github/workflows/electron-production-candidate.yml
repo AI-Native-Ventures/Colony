@@ -1,0 +1,68 @@
+name: Electron production candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - desktop/src-electron/**
+      - desktop/src-tauri/**
+      - desktop/scripts/electron-*
+      - desktop/src/shared/api/electron*
+      - .github/workflows/electron-production-candidate.yml
+      - .github/workflows/colony-desktop-release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-production-candidate-${{ github.ref }}
+  cancel-in-progress: ${{ github.base_ref != 'main' }}
+
+jobs:
+  candidate:
+    name: Electron production package proof
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+          shared-key: electron-production-candidate
+      - name: Install dependencies
+        run: just desktop-install-ci
+      - name: Build private candidate with production bundle and updater contract
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
+        run: pnpm --dir desktop electron:package --production-candidate
+      - name: Prove relocated app, signup and isolated workers
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version desktop/package.json)
+          MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-candidate/manifest.json"
+          jq -e '.channel == "candidate" and .signing == "ad-hoc; not notarized" and .onboardingFixture == false' "$MANIFEST"
+          export COLONY_SMOKE_APP="$(jq -r .app "$MANIFEST")"
+          export COLONY_SMOKE_EXECUTABLE=buzz-desktop
+          node desktop/src-electron/smoke.mjs
+          node desktop/src-electron/signup-smoke.mjs
+          COLONY_ISOLATION_AGENT="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-agent" \
+          COLONY_ISOLATION_MCP="$COLONY_SMOKE_APP/Contents/Resources/native/buzz-dev-mcp" \
+          COLONY_ISOLATION_ELECTRON="$COLONY_SMOKE_APP/Contents/MacOS/buzz-desktop" \
+          cargo test --release --manifest-path desktop/src-tauri/Cargo.toml \
+            --features electron-stable --lib managed_agents::isolation -- \
+            --include-ignored --skip isolated_http_client_verifies_public_tls_through_gateway
+      - name: Preserve private candidate proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: colony-electron-private-production-candidate
+          path: |
+            desktop/electron-dist/**/*.zip
+            desktop/electron-dist/**/manifest.json
+          if-no-files-found: error
+          retention-days: 7

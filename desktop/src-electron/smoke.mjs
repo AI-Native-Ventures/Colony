@@ -44,7 +44,7 @@ const launch = () =>
       ? {
           executablePath: path.join(
             relocatedApp,
-            "Contents/MacOS/Colony Electron Beta",
+            `Contents/MacOS/${process.env.COLONY_SMOKE_EXECUTABLE ?? "Colony Electron Beta"}`,
           ),
         }
       : {}),

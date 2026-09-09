@@ -8,6 +8,9 @@ fn dev_keyring_service(configured: Option<String>) -> String {
 
 pub(crate) fn keyring_service() -> &'static str {
     if crate::electron_host::enabled() {
+        if crate::electron_host::stable_profile() {
+            return "buzz-desktop";
+        }
         return crate::electron_host::data_identifier();
     }
     if cfg!(debug_assertions) {

@@ -71,7 +71,7 @@ try {
     electron.launch({
       executablePath: path.join(
         packagedApp,
-        "Contents/MacOS/Colony Electron Beta",
+        `Contents/MacOS/${process.env.COLONY_SMOKE_EXECUTABLE ?? "Colony Electron Beta"}`,
       ),
       args: [],
       cwd: data,

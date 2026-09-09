@@ -52,7 +52,6 @@ mod util;
 mod web;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
-
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use colony_provisioning::*;
 use commands::*;
@@ -139,7 +138,6 @@ pub fn run() {
                     if webview.label() != "main" || electron_host::enabled() {
                         return;
                     }
-
                     // macOS applies the restored geometry asynchronously. Wait
                     // for several identical outer bounds and for React to
                     // commit the startup surface before revealing it.
@@ -567,6 +565,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            electron_host::updater::electron_check_for_update,
+            electron_host::deep_links::electron_open_deep_link,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             colony_check_community_name,

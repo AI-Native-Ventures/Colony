@@ -56,7 +56,7 @@ validate_build_block() {
 
   input_unset_line="$(grep -nFx -- '          unset BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY' <<<"${block}" | cut -d: -f1)"
   generated_unset_line="$(grep -nFx -- '          unset BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY' <<<"${block}" | cut -d: -f1)"
-  build_line="$(grep -nE -- '^[[:space:]]+(just desktop-release-build|cd desktop && pnpm tauri build)' <<<"${block}" | head -1 | cut -d: -f1)"
+  build_line="$(grep -nE -- '^[[:space:]]+(just desktop-release-build|cd desktop && pnpm tauri build|pnpm --dir desktop electron:package --production)' <<<"${block}" | head -1 | cut -d: -f1)"
   [[ -n "${build_line}" ]] || fail "${name} has no recognized desktop build command"
   if (( input_unset_line >= build_line || generated_unset_line >= build_line )); then
     fail "${name} clears an auto-connect flag only after the desktop build starts"
