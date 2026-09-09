@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { createHash } from "node:crypto";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const AGENT = TEST_IDENTITIES.charlie.pubkey;
@@ -10,10 +12,53 @@ const models = [
   "model-two[low]",
 ].map((id) => ({ id, name: id }));
 
+async function captureOpenReplySettings(
+  page: Page,
+  composer: Locator,
+  path: string,
+) {
+  const settings = page.getByRole("dialog", {
+    name: "Next teammate reply settings",
+  });
+  await expect(settings).toBeVisible();
+  await expect(composer).toBeVisible();
+  await waitForAnimations(page);
+  const [composerBox, settingsBox] = await Promise.all([
+    composer.boundingBox(),
+    settings.boundingBox(),
+  ]);
+  const viewport = page.viewportSize();
+  if (!composerBox || !settingsBox || !viewport) {
+    throw new Error("Reply settings and composer must be laid out.");
+  }
+  // The settings are portaled, so a composer locator screenshot excludes them.
+  // Capture both surfaces with a small margin to retain the draft context.
+  const x = Math.max(0, Math.min(composerBox.x, settingsBox.x) - 12);
+  const y = Math.max(0, Math.min(composerBox.y, settingsBox.y) - 12);
+  const right = Math.min(
+    viewport.width,
+    Math.max(
+      composerBox.x + composerBox.width,
+      settingsBox.x + settingsBox.width,
+    ) + 12,
+  );
+  const bottom = Math.min(
+    viewport.height,
+    Math.max(
+      composerBox.y + composerBox.height,
+      settingsBox.y + settingsBox.height,
+    ) + 12,
+  );
+  return page.screenshot({
+    path,
+    clip: { x, y, width: right - x, height: bottom - y },
+  });
+}
+
 for (const surface of ["channel", "thread"] as const) {
   test(`${surface} reply model and reasoning travel on one selected teammate message`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await installMockBridge(page, {
       managedAgents: [
         {
@@ -61,7 +106,21 @@ for (const surface of ["channel", "thread"] as const) {
     await page
       .getByLabel("Reply reasoning", { exact: true })
       .selectOption("low");
+    await expect(page.getByLabel("Reply model", { exact: true })).toHaveValue(
+      "model-two",
+    );
+    await expect(
+      page.getByLabel("Reply reasoning", { exact: true }),
+    ).toHaveValue("low");
+    const controlsShot = await captureOpenReplySettings(
+      page,
+      composer,
+      testInfo.outputPath(`${surface}-reply-settings-open.png`),
+    );
     await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Next teammate reply settings" }),
+    ).toHaveCount(0);
     await input.press("Enter");
     await expect
       .poll(() =>
@@ -87,6 +146,19 @@ for (const surface of ["channel", "thread"] as const) {
     await expect(
       composer.getByTestId("reply-model-controls"),
     ).not.toContainText("model-two");
+    const requestedMessage = page.getByTestId("message-row").filter({
+      has: page.getByTestId("reply-model-request"),
+    });
+    await expect(requestedMessage).toHaveCount(1);
+    await expect(requestedMessage).toContainText("please reply");
+    await requestedMessage.scrollIntoViewIfNeeded();
+    await waitForAnimations(page);
+    const requestedShot = await requestedMessage.screenshot({
+      path: testInfo.outputPath(`${surface}-reply-settings-requested.png`),
+    });
+    expect(createHash("sha256").update(requestedShot).digest("hex")).not.toBe(
+      createHash("sha256").update(controlsShot).digest("hex"),
+    );
   });
 }
 
