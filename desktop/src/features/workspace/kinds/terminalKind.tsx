@@ -29,10 +29,7 @@ type TerminalInstance = import("@xterm/xterm").Terminal;
 const terminalMap = new Map<string, TerminalInstance>();
 
 function isE2eMode(): boolean {
-  return (
-    (import.meta.env.DEV || import.meta.env.MODE === "e2e") &&
-    !!(globalThis as { __BUZZ_E2E__?: unknown }).__BUZZ_E2E__
-  );
+  return import.meta.env.MODE === "e2e";
 }
 
 if (isE2eMode()) {
@@ -161,7 +158,6 @@ export function TerminalBody({
     let resizeObserver: ResizeObserver | null = null;
     let rootObserver: MutationObserver | null = null;
     let unsubscribeOutput: (() => void) | null = null;
-    let unsubscribeKeyEvent: (() => void) | null = null;
     let unsubscribeResults: (() => void) | null = null;
 
     let lastCols: number | null = null;
@@ -171,7 +167,6 @@ export function TerminalBody({
     const cleanup = () => {
       disposed = true;
       unsubscribeOutput?.();
-      unsubscribeKeyEvent?.();
       unsubscribeResults?.();
       resizeObserver?.disconnect();
       rootObserver?.disconnect();
@@ -289,52 +284,48 @@ export function TerminalBody({
         attributeFilter: ["style", "class"],
       });
 
-      unsubscribeKeyEvent = terminal.attachCustomKeyEventHandler(
-        (event: KeyboardEvent) => {
-          const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
-          const selection = terminal
-            ? terminal.getSelection().length > 0
-            : false;
-          const platform = isMac ? "mac" : "other";
-          const action = resolveTerminalKey(
-            {
-              metaKey: event.metaKey ?? false,
-              ctrlKey: event.ctrlKey ?? false,
-              key: event.key ?? "",
-              shiftKey: event.shiftKey ?? false,
-            },
-            { hasSelection: selection, platform },
-          );
-          if (action === "copy") {
-            if (selection && terminal) {
-              const text = terminal.getSelection();
-              if (text.length > 0) {
-                navigator.clipboard.writeText(text).catch(() => {});
-              }
+      terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
+        const selection = terminal ? terminal.getSelection().length > 0 : false;
+        const platform = isMac ? "mac" : "other";
+        const action = resolveTerminalKey(
+          {
+            metaKey: event.metaKey ?? false,
+            ctrlKey: event.ctrlKey ?? false,
+            key: event.key ?? "",
+            shiftKey: event.shiftKey ?? false,
+          },
+          { hasSelection: selection, platform },
+        );
+        if (action === "copy") {
+          if (selection && terminal) {
+            const text = terminal.getSelection();
+            if (text.length > 0) {
+              navigator.clipboard.writeText(text).catch(() => {});
             }
-            return false; // Custom handled; don't send to PTY
           }
-          if (action === "paste") {
-            navigator.clipboard
-              .readText()
-              .then((text) => {
-                if (terminal) terminal.paste(text);
-              })
-              .catch(() => {});
-            return false;
-          }
-          if (action === "search") {
-            setSearchOpen(true);
-            setTimeout(() => searchInputRef.current?.focus(), 0);
-            return false;
-          }
-          if (action === "clear") {
-            if (terminal) terminal.clear();
-            return false;
-          }
-          return true; // Pass through to terminal / PTY
-        },
-      );
+          return false; // Custom handled; don't send to PTY
+        }
+        if (action === "paste") {
+          navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (terminal) terminal.paste(text);
+            })
+            .catch(() => {});
+          return false;
+        }
+        if (action === "search") {
+          setSearchOpen(true);
+          setTimeout(() => searchInputRef.current?.focus(), 0);
+          return false;
+        }
+        if (action === "clear") {
+          if (terminal) terminal.clear();
+          return false;
+        }
+        return true; // Pass through to terminal / PTY
+      });
 
       unsubscribeResults = searchAddon?.onDidChangeResults(
         (_event: { resultIndex: number; resultCount: number }) => {
