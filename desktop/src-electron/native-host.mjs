@@ -4,6 +4,18 @@ import { spawn } from "node:child_process";
 const PREFIX = "@colony-native:";
 const MAX_FRAME = 16 * 1024 * 1024;
 
+/** Updates may transfer a full application; ordinary native calls stay bounded. */
+export function nativeRequestTimeout(type, command, fallback) {
+  if (type !== "invoke") return fallback;
+  if (command === "electron_download_update")
+    return Math.max(fallback, 16 * 60_000);
+  if (command === "electron_install_update")
+    return Math.max(fallback, 5 * 60_000);
+  if (command === "electron_check_for_update")
+    return Math.max(fallback, 130_000);
+  return fallback;
+}
+
 /** Private stdio client. Native payloads are never echoed to logs. */
 export class NativeHost extends EventEmitter {
   pending = new Map();
@@ -136,10 +148,13 @@ export class NativeHost extends EventEmitter {
     if (Buffer.byteLength(frame) > MAX_FRAME)
       throw new Error("Native request exceeds frame limit");
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error("Native command timed out; its result is unknown"));
-      }, this.timeout);
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(id);
+          reject(new Error("Native command timed out; its result is unknown"));
+        },
+        nativeRequestTimeout(type, params.command, this.timeout),
+      );
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(frame, (error) => {
         if (error) this.fail("Native request pipe closed");

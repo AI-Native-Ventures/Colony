@@ -52,7 +52,6 @@ mod util;
 mod web;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
-
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use colony_provisioning::*;
 use commands::*;
@@ -139,7 +138,6 @@ pub fn run() {
                     if webview.label() != "main" || electron_host::enabled() {
                         return;
                     }
-
                     // macOS applies the restored geometry asynchronously. Wait
                     // for several identical outer bounds and for React to
                     // commit the startup surface before revealing it.
@@ -485,12 +483,9 @@ pub fn run() {
                 });
             }
 
-            // Defer launch-time agent restoration until `apply_workspace` has
-            // installed the active workspace relay and identity. Starting here
-            // would race React initialization and send agents whose saved record
-            // has no relay override to the localhost fallback. Preserve the
-            // boot-time repos and identity recovery safety gates by only marking
-            // restoration pending when both allow it.
+            // Restore after `apply_workspace` installs the relay and identity, so
+            // agents without relay overrides cannot race initialization into localhost.
+            // Preserve the boot-time repository and identity-recovery gates.
             if restore_agents && !recovery_mode {
                 state
                     .managed_agent_restore_pending
@@ -567,6 +562,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            electron_host::updater::electron_check_for_update,
+            electron_host::updater::electron_download_update,
+            electron_host::updater::electron_install_update,
+            electron_host::deep_links::electron_open_deep_link,
+            electron_host::migration::electron_export_frontend_state,
+            electron_host::migration::electron_read_frontend_migration,
+            electron_host::migration::electron_finish_frontend_migration,
+            electron_host::migration::electron_frontend_migration_fixture,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             colony_check_community_name,

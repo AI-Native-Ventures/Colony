@@ -10,6 +10,7 @@ export class RendererHost extends EventEmitter {
   rendererChannels = new Map();
   subscriptions = new Set();
   inflight = new Set();
+  updates = new Set();
   barrier = Promise.resolve();
   failure = null;
 
@@ -80,7 +81,33 @@ export class RendererHost extends EventEmitter {
     } else if (type !== "emit") {
       throw new Error("Unsupported native renderer request");
     }
-    const pending = this.host.request(type, payload, id);
+    // An explicit close is itself tracked in flight; reset must not close it twice.
+    if (type === "invoke" && payload.command === "plugin:resources|close")
+      this.updates.delete(payload.args?.rid);
+    const pending = this.host
+      .request(type, payload, id)
+      .then(async (result) => {
+        if (
+          type === "invoke" &&
+          payload.command === "electron_check_for_update" &&
+          Number.isSafeInteger(result?.rid)
+        ) {
+          if (generation === this.generation) this.updates.add(result.rid);
+          else {
+            try {
+              await this.host.request("invoke", {
+                command: "plugin:resources|close",
+                args: { rid: result.rid },
+              });
+            } catch {
+              throw new Error(
+                "Late update resource retirement failed; restart the desktop",
+              );
+            }
+          }
+        }
+        return result;
+      });
     this.inflight.add(pending);
     try {
       const result = await pending;
@@ -100,12 +127,24 @@ export class RendererHost extends EventEmitter {
     this.generation++;
     const subscriptions = [...this.subscriptions];
     const pending = [...this.inflight];
+    const updates = [...this.updates];
+    this.updates.clear();
     this.subscriptions.clear();
     this.channels.clear();
     this.rendererChannels.clear();
     const previous = this.barrier;
     this.barrier = (async () => {
       await previous;
+      // Native update resources own their network futures. Retire before waiting
+      // so a renderer crash aborts downloads instead of blocking the next view.
+      await Promise.all(
+        updates.map((rid) =>
+          this.host.request("invoke", {
+            command: "plugin:resources|close",
+            args: { rid },
+          }),
+        ),
+      );
       // A pending listen must finish before unlisten; pending creates must
       // finish before their cleanup, or they could outlive the reset fence.
       const settled = await Promise.allSettled(pending);

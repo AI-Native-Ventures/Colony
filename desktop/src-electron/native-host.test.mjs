@@ -2,7 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { NativeHost } from "./native-host.mjs";
+import { NativeHost, nativeRequestTimeout } from "./native-host.mjs";
+
+test("only the bounded native updater commands receive transfer time", () => {
+  assert.equal(
+    nativeRequestTimeout("invoke", "electron_download_update", 60_000),
+    16 * 60_000,
+  );
+  assert.equal(nativeRequestTimeout("invoke", "sign_out", 60_000), 60_000);
+  assert.equal(
+    nativeRequestTimeout("emit", "electron_download_update", 60_000),
+    60_000,
+  );
+});
 function fixture(t) {
   const child = new EventEmitter();
   const requests = [];

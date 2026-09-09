@@ -12,6 +12,8 @@ import {
   cp,
   readFile,
   realpath,
+  mkdir,
+  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,7 +46,7 @@ const launch = () =>
       ? {
           executablePath: path.join(
             relocatedApp,
-            "Contents/MacOS/Colony Electron Beta",
+            `Contents/MacOS/${process.env.COLONY_SMOKE_EXECUTABLE ?? "Colony Electron Beta"}`,
           ),
         }
       : {}),
@@ -296,6 +298,32 @@ try {
   console.log(
     "Imported persistent session survives real Electron restart: PASS",
   );
+} catch (error) {
+  const page = application
+    ? await application.firstWindow().catch(() => null)
+    : null;
+  const state = page
+    ? await page
+        .evaluate(() => ({
+          pathname: location.pathname,
+          rootMounted: !!document.querySelector("#root")?.children.length,
+          status: document.querySelector("#status")?.textContent ?? null,
+          migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
+        }))
+        .catch(() => ({ status: "The renderer was unavailable" }))
+    : { status: "No app window was available" };
+  console.error("Package startup state:", JSON.stringify(state));
+  if (process.env.COLONY_SMOKE_PROOF_DIR) {
+    await mkdir(process.env.COLONY_SMOKE_PROOF_DIR, { recursive: true });
+    await writeFile(
+      path.join(
+        process.env.COLONY_SMOKE_PROOF_DIR,
+        "package-startup-state.json",
+      ),
+      JSON.stringify(state, null, 2),
+    );
+  }
+  throw error;
 } finally {
   await application?.close();
   if (packagedApp) await rm(relocatedApp, { recursive: true, force: true });

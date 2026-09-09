@@ -16,9 +16,8 @@ and two release lines make "higher version" stop meaning "newer".
    (`v<v>`, `relay-v<v>`) with the release-tagger App. One merge can
    release several components.
 4. The tag push fires the publisher:
-   - `v<v>` runs `colony-desktop-release.yml`: builds the dmg on the
-     self-hosted Mac runner (labels `self-hosted, macOS, colony-builder`)
-     and publishes
+   - `v<v>` runs `colony-desktop-release.yml`: builds the signed and
+     notarized Electron macOS app on GitHub-hosted `macos-15`, then publishes
      `Colony_<v>_aarch64.dmg` plus the fixed-name `Colony_aarch64.dmg` to
      `AI-Native-Ventures/colony-releases`. The site's download button
      follows `/releases/latest`, so publishing is the whole deploy. The same
@@ -32,11 +31,59 @@ Credentials: the org GitHub App `colony-release-tagger` (contents: write,
 installed on `Colony` and `colony-releases`) supplies both the tag
 attribution and the cross-repo publish token, via the
 `BUZZ_RELEASE_TAGGER_CLIENT_ID` repo variable and
-`BUZZ_RELEASE_TAGGER_PRIVATE_KEY` repo secret. The runner is a launchd
-service on the build Mac (`~/actions-runner-colony`, check with
-`./svc.sh status`). If a release must go out while either is broken, push
-the tag by hand at the release commit; the publisher fires exactly as the
-App would, and `workflow_dispatch` at the tag ref re-runs a publisher.
+`BUZZ_RELEASE_TAGGER_PRIVATE_KEY` repo secret. Production publishing uses
+GitHub-hosted runners; no build runs on the user's shared Mac. A failed
+publisher can be dispatched again at the same immutable release tag after
+the failure is resolved.
+
+### Stable Electron macOS release
+
+The macOS production app is `Colony.app`, bundle ID `xyz.block.buzz.app`.
+Its outer executable remains `Contents/MacOS/buzz-desktop` so older Tauri
+installations can replace the bundle and relaunch the new Electron app.
+The compatibility host and all six agent helpers ship inside the bundle;
+no checkout, CLI installation or external runtime is required.
+
+Stable Electron reuses the existing native account storage, historical
+`buzz-desktop` Keychain service, and `~/.buzz` agent workspace. Chromium
+sessions live in its own `colony-electron` profile. Beta and candidate
+profiles stay private; they do not automatically copy identities or cookies
+into production. An explicit `COLONY_ELECTRON_USER_DATA` override also uses
+a private native namespace, including during packaged release QA.
+
+The production publisher requires these repository credentials:
+
+| GitHub configuration | Required value |
+| --- | --- |
+| Secret `COLONY_APPLE_CERTIFICATE_P12` | Base64 Developer ID Application certificate with its private key, exported as password-protected PKCS#12 |
+| Secret `COLONY_APPLE_CERTIFICATE_PASSWORD` | Password for that PKCS#12 export |
+| Secret `COLONY_APPLE_API_KEY` | App Store Connect API private key contents, in `.p8` format, authorized for notarization |
+| Variable `COLONY_APPLE_API_KEY_ID` | ID of that API key |
+| Variable `COLONY_APPLE_API_ISSUER` | Issuer UUID for that API key |
+| Variable `COLONY_APPLE_SIGNING_IDENTITY` | Full `Developer ID Application: Company (TEAMID)` identity |
+| Variable `COLONY_APPLE_TEAM_ID` | Matching ten-character Apple team ID |
+
+The existing updater and publisher credentials remain required. A temporary
+runner Keychain is created and removed within the job. Production has no
+ad-hoc fallback: Developer ID verification, notarization, ticket stapling,
+Gatekeeper assessment, real packaged smoke checks, embedded updater/relay
+checks and signed archive generation must pass before publication. Missing
+Apple credentials block the release before any platform uploads assets.
+
+Credential availability can be checked before promotion by dispatching
+`colony-desktop-release.yml` on the review branch with `preflight_only: true`,
+`platform: macos` and the proposed version. This mode reports missing
+configuration names only; every build and publication job is disabled. It does
+not validate the certificate contents or establish signing/notarization proof.
+
+`Electron production candidate` proves the same bundle/executable and compiled
+native feature on hosted macOS with a private profile. Its ad-hoc artifact is
+explicitly a CI candidate, never a production download. It does not prove
+Apple signing or a live upgrade of an existing installation. Those remain
+separate production gates after credentials are available.
+
+Windows continues to publish the established unsigned Tauri NSIS installer.
+Electron's macOS worker isolation must not be presented as Windows parity.
 
 ### Auto-update
 
@@ -60,8 +107,8 @@ Three things make a build updatable, and missing any one silently produces a
 release nobody can update to:
 
 - `vars.BUZZ_UPDATER_PUBLIC_KEY` and the endpoint, which
-  `desktop/scripts/build-release-config.mjs` writes into a config overlay.
-  `build.rs` only compiles the updater plugin in when both are present, so a
+  the Tauri config generator or Electron package script writes into a config
+  overlay. `build.rs` only compiles the updater plugin in when both are present, so a
   build without them ships with no updater at all.
 - `secrets.TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) during the build, which
   signs the archive. The workflow fails if the `.sig` is missing or empty.

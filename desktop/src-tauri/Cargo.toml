@@ -8,7 +8,7 @@ members = ["crates/buzz-terminal"]
 [package]
 name = "buzz-desktop"
 default-run = "buzz-desktop"
-version = "0.16.7"
+version = "0.16.8"
 description = "Buzz desktop app"
 authors = ["you"]
 edition = "2021"
@@ -30,6 +30,8 @@ required-features = ["electron-host"]
 [features]
 default = ["system-keyring"]
 electron-host = []
+# Stable Electron uses the existing installation's storage and updater contract.
+electron-stable = ["electron-host", "tauri/custom-protocol"]
 # Local native proof only; normal Electron packaging never enables this.
 onboarding-fixture = ["dep:buzz-ws-client", "buzz-ws-client/onboarding-fixture", "buzz_cli_pkg/onboarding-fixture", "buzz_browser_pkg/onboarding-fixture"]
 mesh-llm = ["dep:iroh", "dep:mesh-llm-sdk", "dep:mesh-llm-host-runtime", "dep:mesh-llm-client", "dep:mesh-llm-node", "dep:mesh-llm-system", "dep:mesh-llm-events"]
