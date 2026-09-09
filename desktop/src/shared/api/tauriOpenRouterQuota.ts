@@ -20,6 +20,12 @@ export type OpenRouterQuota = {
   usd_to_threshold: number | null;
 };
 
+/** A valid OAuth connection may not expose lifetime purchases. */
+export type OpenRouterQuotaCheck =
+  | { status: "verified"; quota: OpenRouterQuota }
+  | { status: "unpaid" }
+  | { status: "unknown" };
+
 /**
  * Read the account's free-tier standing.
  *
@@ -29,8 +35,8 @@ export type OpenRouterQuota = {
  */
 export async function fetchOpenRouterQuota(
   apiKey: string,
-): Promise<OpenRouterQuota> {
-  return invokeTauri<OpenRouterQuota>("openrouter_quota", { apiKey });
+): Promise<OpenRouterQuotaCheck> {
+  return invokeTauri<OpenRouterQuotaCheck>("openrouter_quota", { apiKey });
 }
 
 /**

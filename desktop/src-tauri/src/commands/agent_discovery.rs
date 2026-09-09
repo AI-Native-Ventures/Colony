@@ -12,6 +12,8 @@ use crate::{
 };
 
 mod post_install_verification;
+mod vendor_cli_install;
+pub(crate) use vendor_cli_install::install_vendor_cli;
 
 fn active_installs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     use std::collections::HashSet;
@@ -273,27 +275,7 @@ fn install_acp_runtime_blocking(
     // Clear the resolve cache so newly-installed binaries are found.
     crate::managed_agents::clear_resolve_cache();
 
-    // Prevent concurrent installs for the same runtime.
-    {
-        let mut set = active_installs()
-            .lock()
-            .map_err(|_| "install lock poisoned".to_string())?;
-        if !set.insert(runtime_id.to_string()) {
-            return Err(format!(
-                "an install is already in progress for {runtime_id}"
-            ));
-        }
-    }
-
-    struct Guard(String);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            if let Ok(mut set) = active_installs().lock() {
-                set.remove(&self.0);
-            }
-        }
-    }
-    let _guard = Guard(runtime_id.to_string());
+    let _guard = vendor_cli_install::InstallGuard::acquire(runtime_id)?;
 
     let runtime = crate::managed_agents::known_acp_runtime_exact(runtime_id)
         .ok_or_else(|| format!("unknown runtime: {runtime_id}"))?;

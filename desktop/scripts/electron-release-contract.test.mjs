@@ -26,7 +26,26 @@ test("production preserves installed identity and rejects fixture/debug builds",
   }
 });
 
-test("production refuses ad-hoc signing and mismatched Apple team", () => {
+test("ad-hoc distribution is explicit and retains the stable runtime identity", () => {
+  const production = electronPackageVariant(["--production", "--ad-hoc"]);
+  assert.equal(production.developerId, false);
+  assert.equal(production.production, true);
+  assert.equal(production.channel, "stable");
+  assert.equal(production.hostFeatures, "electron-stable");
+  assert.equal(production.bundleId, "xyz.block.buzz.app");
+  assert.equal(production.executableName, "buzz-desktop");
+  assert.equal(production.outputSuffix, "-stable");
+  assert.equal(electronPackageVariant(["--production"]).developerId, true);
+  for (const args of [
+    ["--ad-hoc"],
+    ["--production-candidate", "--ad-hoc"],
+    ["--production", "--ad-hoc", "--debug"],
+    ["--production", "--ad-hoc", "--onboarding-fixture"],
+  ])
+    assert.throws(() => electronPackageVariant(args));
+});
+
+test("Developer ID mode refuses missing credentials and mismatched Apple team", () => {
   assert.throws(
     () => productionSigning({}),
     /Production signing is unavailable/,

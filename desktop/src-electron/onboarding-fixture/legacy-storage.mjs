@@ -2,11 +2,12 @@
 // from packaged Electron source; production native hosts reject these modes.
 import assert from "node:assert/strict";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { NativeHost } from "../native-host.mjs";
 
-/** Read a real persistent WebKit store from the legacy Tauri executable layout. */
-export async function readLegacyStorage({ manifest, directory, env, mode }) {
+/** Open the hosted legacy-layout WebKit process without prematurely closing its writer. */
+export async function openLegacyStorage({ manifest, directory, env, mode }) {
   assert.equal(env.GITHUB_ACTIONS, "true");
   assert.equal(process.platform, "darwin");
   assert.equal(manifest.onboardingFixture, true);
@@ -17,7 +18,10 @@ export async function readLegacyStorage({ manifest, directory, env, mode }) {
   await copyFile(
     path.join(manifest.app, "Contents/Resources/native/buzz-desktop"),
     executable,
-  );
+    constants.COPYFILE_EXCL,
+  ).catch((error) => {
+    if (error.code !== "EEXIST") throw error;
+  });
   // The fixed fixture identifier matches its immutable embedded Info.plist.
   // Never use the stable application's identifier for this persistent store.
   await writeFile(
@@ -31,7 +35,10 @@ export async function readLegacyStorage({ manifest, directory, env, mode }) {
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 `,
-  );
+    { flag: "wx" },
+  ).catch((error) => {
+    if (error.code !== "EEXIST") throw error;
+  });
   const host = new NativeHost(executable, {
     env: { ...env, COLONY_MIGRATION_PROOF: mode },
   });
@@ -39,15 +46,26 @@ export async function readLegacyStorage({ manifest, directory, env, mode }) {
   host.child.once("exit", (code, signal) => {
     exit = { code, signal };
   });
+  return {
+    read: () =>
+      host.request("invoke", {
+        command: "electron_read_frontend_migration",
+        args: {},
+      }),
+    close: async () => {
+      await host.close();
+      // A forced kill is not proof that WebKit had a chance to flush its store.
+      assert.deepEqual(exit, { code: 0, signal: null });
+    },
+  };
+}
+
+/** Independently read and gracefully close one legacy-layout process. */
+export async function readLegacyStorage(options) {
+  const host = await openLegacyStorage(options);
   try {
-    await host.ready;
-    return await host.request("invoke", {
-      command: "electron_read_frontend_migration",
-      args: {},
-    });
+    return await host.read();
   } finally {
     await host.close();
-    // A forced kill is not proof that WebKit had a chance to flush its store.
-    assert.deepEqual(exit, { code: 0, signal: null });
   }
 }

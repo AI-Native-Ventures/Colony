@@ -1,6 +1,7 @@
 //! OS process boundary for Electron-managed local workers and descendants.
 pub(crate) mod launch;
 pub(crate) mod network;
+pub(crate) mod subscriptions;
 
 use std::{
     ffi::OsStr,

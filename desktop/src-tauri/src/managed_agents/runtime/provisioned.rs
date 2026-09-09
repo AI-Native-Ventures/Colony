@@ -54,7 +54,7 @@ pub(crate) fn spawn_agent_child_with_lease(
     owner_hex: Option<&str>,
     lease: Option<&GatewayLease>,
 ) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
-    super::spawn_agent_child_inner(app, record, relay_url, lazy, owner_hex, lease)
+    super::spawn_agent_child_inner(app, record, relay_url, lazy, owner_hex, lease, None)
 }
 
 /// Apply Colony Credits to the existing local-meter seam without retaining a

@@ -1,7 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
-import { seedActiveIdentity } from "../helpers/onboarding";
+import {
+  seedActiveIdentity,
+  continueFounderBusiness,
+} from "../helpers/onboarding";
 import {
   fillFounderBusiness,
   openFounderBusiness,
@@ -23,10 +26,18 @@ const ZERO_BALANCE = {
  * the walk.
  */
 async function seedCreatedCommunity(page: Page, transactionId: string) {
-  const identity = { ...TEST_IDENTITIES.tyler, username: "" };
+  const identity = TEST_IDENTITIES.tyler;
   await seedActiveIdentity(page, identity);
   await page.addInitScript(
     ({ pubkey, storageKey, id }) => {
+      const seededKey = `e2e-created-business-seeded:${id}`;
+      if (window.localStorage.getItem(seededKey)) return;
+      window.localStorage.setItem(seededKey, "true");
+      // The account is already set up; only this business remains unfinished.
+      window.localStorage.setItem(
+        `buzz-onboarding-complete.v1:${pubkey}`,
+        "true",
+      );
       window.localStorage.setItem(
         `buzz-machine-onboarding-complete.v2:${pubkey}`,
         "true",
@@ -44,6 +55,7 @@ async function seedCreatedCommunity(page: Page, transactionId: string) {
           // The returning-founder journey: the door in Settings that creates a
           // community, not a first run and not a join.
           source: "create-community",
+          ownerPubkey: pubkey,
           stage: "profile",
           updatedAt: timestamp,
         }),
@@ -68,7 +80,7 @@ async function fillSecondBusiness(page: Page) {
   await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
 }
 
-test("a created community confirms business and its saved agent connection with a way out", async ({
+test("a created community connects its detected subscription and chooses a model", async ({
   page,
 }) => {
   await seedCreatedCommunity(page, "additional-community-canvas");
@@ -97,11 +109,27 @@ test("a created community confirms business and its saved agent connection with 
   await expect(steps).toContainText("2 · Power");
   await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
   await fillSecondBusiness(page);
-  await openFounderBusiness(page);
+  await continueFounderBusiness(page);
+  const openColony = page.getByRole("button", {
+    name: "Open my Colony",
+    exact: true,
+  });
+  // Finding a local account does not establish this business's connection.
+  await expect(openColony).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Connect Claude", exact: true })
+    .click();
+  const model = page.getByRole("combobox", { name: "Subscription model" });
+  await expect(model).toBeVisible();
+  await expect(openColony).toBeDisabled();
+  await model.selectOption("claude-test-model");
+  await expect(openColony).toBeEnabled();
+  await openColony.click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
+  await expect(page.getByTestId("app-top-chrome")).toBeVisible();
 });
 
-test("the way out drops the founder into the community that was just created", async ({
+test("leaving an unfinished business preserves its answers and resumes on reload", async ({
   page,
 }) => {
   await seedCreatedCommunity(page, "additional-community-exit");
@@ -115,10 +143,10 @@ test("the way out drops the founder into the community that was just created", a
   await expect(
     page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible({ timeout: 15_000 });
+  await fillSecondBusiness(page);
   await page.getByTestId("community-onboarding-exit").click();
 
-  // The walk is over and cannot come back: the transaction is gone, so a
-  // relaunch lands in the workspace rather than back on screen one.
+  // The active overlay closes, while its owner/community draft remains resumable.
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
     timeout: 15_000,
   });
@@ -131,6 +159,20 @@ test("the way out drops the founder into the community that was just created", a
       TRANSACTION_STORAGE_KEY,
     ),
   ).toBeNull();
+  expect(
+    await page.evaluate(
+      () =>
+        Object.keys(localStorage).filter((key) =>
+          key.startsWith("colony.business-onboarding.v1:"),
+        ).length,
+    ),
+  ).toBe(1);
+  await page.reload();
+  await expect(page.getByTestId("onboarding-business")).toBeVisible();
+  await expect(page.getByLabel("Business name", { exact: true })).toHaveValue(
+    "Second Company",
+  );
+  await expect(page.getByTestId("onboarding-account")).toHaveCount(0);
 });
 
 test("a zero balance never stands between a second company and its workspace", async ({

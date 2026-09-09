@@ -219,6 +219,48 @@ test("skipping the photo leaves an existing avatar alone", async () => {
   assert.deepEqual(written, [{ displayName: "Aisha Bello" }]);
 });
 
+test("new-community name carry forwards conditional seeding after the channel handoff", async () => {
+  const written = [];
+  const { io, calls } = makeIo({
+    updateProfile: async (input, context) => {
+      assert.deepEqual(calls, ["channels"]);
+      written.push({
+        input,
+        scope: {
+          pubkey: context.pubkey,
+          relayUrl: context.relayUrl,
+          seedName: context.profileDisplayNameIfMissing,
+        },
+      });
+      // Native may return the newer target name instead of the carried one.
+      return { displayName: "Owner at Horizon" };
+    },
+  });
+  await completeFirstRun(
+    {
+      queryClient: {},
+      relayUrl: "wss://horizon.test",
+      pubkey: "owner",
+      draft: null,
+      profileDisplayName: "Owner at Colony",
+      profileDisplayNameIfMissing: true,
+      profileAvatarUrl: null,
+    },
+    io,
+  );
+  assert.deepEqual(written, [
+    {
+      input: { displayName: "Owner at Colony" },
+      scope: {
+        pubkey: "owner",
+        relayUrl: "wss://horizon.test",
+        seedName: true,
+      },
+    },
+  ]);
+  assert.ok(calls.includes("complete:owner:wss://horizon.test"));
+});
+
 test("a photo with no name still reaches the profile", async () => {
   const written = [];
   const { io } = makeIo({

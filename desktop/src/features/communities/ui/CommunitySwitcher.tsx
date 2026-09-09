@@ -37,6 +37,7 @@ import {
 } from "@/shared/api/useRelayConnection";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 import { useActiveCommunityIcon } from "@/features/communities/useCommunityIcons";
+import { FinishBusinessSetup } from "./FinishBusinessSetup";
 import { EditCommunityDialog } from "./EditCommunityDialog";
 
 const CONNECTION_STATE_LABEL: Record<ConnectionState, string> = {
@@ -360,6 +361,11 @@ export function CommunitySwitcher({
                 <hr className="-mx-1 my-1 h-px border-0 bg-muted" />
               </>
             ) : null}
+            <FinishBusinessSetup
+              community={activeCommunity}
+              plain
+              onOpen={() => setDropdownOpen(false)}
+            />
             <button
               className="flex min-h-9 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm outline-hidden transition-colors hover:bg-muted/50 focus:bg-muted/50 focus:outline-none focus-visible:bg-muted/50 focus-visible:outline-none"
               onClick={() => {
@@ -449,6 +455,10 @@ export function CommunitySwitcher({
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
+        <FinishBusinessSetup
+          community={activeCommunity}
+          onOpen={() => setDropdownOpen(false)}
+        />
         <DropdownMenuItem onSelect={onAddCommunity}>
           <Plus className="h-4 w-4" />
           <span>Add a community</span>

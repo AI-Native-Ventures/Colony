@@ -70,6 +70,7 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
     const profile = await updateProfile(input, {
       pubkey: context.pubkey,
       relayUrl: context.relayUrl,
+      displayNameIfMissing: context.profileDisplayNameIfMissing,
     });
     context.assertCurrent?.();
     if (profile.pubkey.toLowerCase() !== context.pubkey.toLowerCase()) {

@@ -1,3 +1,8 @@
+import { createProfileHandlers, type RawProfile } from "./e2eBridgeProfiles";
+import {
+  createMockOpenRouter,
+  type MockOpenRouterConfig,
+} from "./e2eBridgeOpenRouter";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { mockWindows } from "@tauri-apps/api/mocks";
 import { decode, npubEncode, nsecEncode } from "nostr-tools/nip19";
@@ -6,6 +11,8 @@ import { parse as yamlParse } from "yaml";
 import type { SubscriptionScan } from "@/shared/api/tauriSubscriptions";
 import {
   createMockSubscriptionScanner,
+  createMockSubscriptionConnections,
+  type MockSubscriptionConnectionsConfig,
   type MockSubscriptionScanResult,
 } from "./e2eBridgeSubscriptions";
 import {
@@ -243,7 +250,7 @@ type MockWorkflowRunSeed = {
 
 type E2eConfig = {
   mode?: "mock" | "relay";
-  mock?: {
+  mock?: MockSubscriptionConnectionsConfig & {
     /** Tauri window label exposed to the app. Defaults to the main window. */
     windowLabel?: string;
     ttsSettings?: {
@@ -337,6 +344,8 @@ type E2eConfig = {
     };
     colonyCreateError?: string;
     /** Native subscription metadata, distinct from runtime launch support. */
+    openRouterConnection?: MockOpenRouterConfig["openRouterConnection"];
+    openRouterQuotaSequence?: MockOpenRouterConfig["openRouterQuotaSequence"];
     subscriptionScan?: SubscriptionScan;
     /** Success/error responses per scan; the last response repeats on retry. */
     subscriptionScanSequence?: MockSubscriptionScanResult[];
@@ -789,22 +798,6 @@ type RawRelayMember = {
   role: "owner" | "admin" | "member";
   added_by: string | null;
   created_at: string;
-};
-
-type RawProfile = {
-  pubkey: string;
-  display_name: string | null;
-  /** Kind-0 `name` field, kept separate from `display_name` so mention
-   * resolution can match either alias. */
-  name?: string | null;
-  avatar_url: string | null;
-  about: string | null;
-  nip05_handle: string | null;
-  owner_pubkey: string | null;
-  is_agent?: boolean;
-  /** Mirrors the Rust `has_profile_event` flag: true when a real kind:0 event
-   * backed this profile, false for the synthesized empty fallback. */
-  has_profile_event: boolean;
 };
 
 type RawUserProfileSummary = {
@@ -1922,10 +1915,6 @@ function getMockIdentity() {
     pubkey: MOCK_IDENTITY_PUBKEY,
     displayName: DEFAULT_MOCK_IDENTITY.display_name,
   };
-}
-
-function cloneProfile(profile: RawProfile): RawProfile {
-  return { ...profile };
 }
 
 function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
@@ -7179,179 +7168,18 @@ async function handleGetChannels(config: E2eConfig | undefined) {
   };
 }
 
-async function handleGetProfile(config: E2eConfig | undefined) {
-  const identity = getIdentity(config);
-  if (!identity) {
-    const profileReadDelayMs = config?.mock?.profileReadDelayMs ?? 0;
-    if (profileReadDelayMs > 0) {
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, profileReadDelayMs);
-      });
-    }
-
-    const profileReadError = config?.mock?.profileReadError;
-    if (profileReadError) {
-      throw new Error(profileReadError);
-    }
-
-    return cloneProfile(ensureMockProfile(config));
-  }
-
-  // Pure Nostr: query kind:0 (profile metadata) for our pubkey.
-  const events = await relayQuery(config, [
-    { kinds: [0], authors: [identity.pubkey], limit: 1 },
-  ]);
-  if (events.length === 0) {
-    return {
-      pubkey: identity.pubkey,
-      display_name: null,
-      about: null,
-      avatar_url: null,
-      nip05_handle: null,
-      owner_pubkey: null,
-      has_profile_event: false,
-    };
-  }
-  const content = JSON.parse(events[0].content ?? "{}");
-  return {
-    pubkey: identity.pubkey,
-    display_name: content.display_name ?? content.name ?? null,
-    about: content.about ?? null,
-    avatar_url: content.picture ?? null,
-    nip05_handle: content.nip05 ?? null,
-    owner_pubkey: null,
-    has_profile_event: true,
-  };
-}
-
-async function handleUpdateProfile(
-  args: {
-    displayName?: string;
-    avatarUrl?: string;
-    about?: string;
-    nip05Handle?: string;
-  },
-  config: E2eConfig | undefined,
-) {
-  const identity = getIdentity(config);
-  if (!identity) {
-    const profileUpdateError = config?.mock?.profileUpdateError;
-    const profileUpdateErrors = config?.mock?.profileUpdateErrors;
-    const nextProfileUpdateError = profileUpdateErrors?.shift();
-    if (nextProfileUpdateError) {
-      throw new Error(nextProfileUpdateError);
-    }
-
-    if (profileUpdateError) {
-      if (config?.mock) {
-        config.mock.profileUpdateError = undefined;
-      }
-      throw new Error(profileUpdateError);
-    }
-
-    const profile = ensureMockProfile(config);
-    const hasDisplayNameUpdate = typeof args.displayName === "string";
-    const hasAvatarUrlUpdate = typeof args.avatarUrl === "string";
-    const hasAboutUpdate = typeof args.about === "string";
-    const hasNip05HandleUpdate = typeof args.nip05Handle === "string";
-    const nextDisplayName = args.displayName?.trim() ?? "";
-    const nextAvatarUrl = args.avatarUrl?.trim() ?? "";
-    const nextAbout = args.about?.trim() ?? "";
-    const nextNip05Handle = args.nip05Handle?.trim() ?? "";
-
-    if (hasDisplayNameUpdate && nextDisplayName !== profile.display_name) {
-      profile.display_name = nextDisplayName || null;
-      applyMockDisplayName(profile.pubkey, profile.display_name);
-    }
-    if (hasAvatarUrlUpdate && nextAvatarUrl !== profile.avatar_url) {
-      profile.avatar_url = nextAvatarUrl || null;
-    }
-    if (hasAboutUpdate && nextAbout !== profile.about) {
-      profile.about = nextAbout || null;
-    }
-    if (hasNip05HandleUpdate && nextNip05Handle !== profile.nip05_handle) {
-      profile.nip05_handle = nextNip05Handle || null;
-    }
-
-    return cloneProfile(profile);
-  }
-
-  // Read-merge-write: fetch current profile, merge, sign kind:0.
-  const currentEvents = await relayQuery(config, [
-    { kinds: [0], authors: [identity.pubkey], limit: 1 },
-  ]);
-  const currentContent = currentEvents[0]
-    ? JSON.parse(currentEvents[0].content ?? "{}")
-    : {};
-  const profileContent = JSON.stringify({
-    display_name: args.displayName ?? currentContent.display_name ?? undefined,
-    name: currentContent.display_name ?? undefined,
-    picture: args.avatarUrl ?? currentContent.picture ?? undefined,
-    about: args.about ?? currentContent.about ?? undefined,
-    nip05: args.nip05Handle ?? currentContent.nip05 ?? undefined,
+const { handleGetProfile, handleUpdateProfile, handleGetUserProfile } =
+  createProfileHandlers<E2eConfig>({
+    getIdentity,
+    ensureMockProfile,
+    getMockMemberPubkey,
+    getMockProfileByPubkey,
+    applyMockDisplayName,
+    queryProfile: (config, pubkey) =>
+      relayQuery(config, [{ kinds: [0], authors: [pubkey], limit: 1 }]),
+    publishProfile: (config, content) =>
+      submitSignedEvent(config, { kind: 0, content, tags: [] }),
   });
-  await submitSignedEvent(config, {
-    kind: 0,
-    content: profileContent,
-    tags: [],
-  });
-
-  // Return the updated profile in RawProfile shape
-  const updated = JSON.parse(profileContent);
-  return {
-    pubkey: identity.pubkey,
-    display_name: updated.display_name ?? null,
-    about: updated.about ?? null,
-    avatar_url: updated.picture ?? null,
-    nip05_handle: updated.nip05 ?? null,
-    owner_pubkey: null,
-    has_profile_event: true,
-  };
-}
-
-async function handleGetUserProfile(
-  args: {
-    pubkey?: string;
-  },
-  config: E2eConfig | undefined,
-) {
-  const identity = getIdentity(config);
-  if (!identity) {
-    const pubkey = (args.pubkey ?? getMockMemberPubkey(config)).toLowerCase();
-    const profile = getMockProfileByPubkey(pubkey);
-    if (!profile) {
-      throw new Error(`User ${pubkey} not found.`);
-    }
-
-    return cloneProfile(profile);
-  }
-
-  const targetPubkey = args.pubkey ?? identity.pubkey;
-  const events = await relayQuery(config, [
-    { kinds: [0], authors: [targetPubkey], limit: 1 },
-  ]);
-  if (events.length === 0) {
-    return {
-      pubkey: targetPubkey,
-      display_name: null,
-      about: null,
-      avatar_url: null,
-      nip05_handle: null,
-      owner_pubkey: null,
-      has_profile_event: false,
-    };
-  }
-  const content = JSON.parse(events[0].content ?? "{}");
-  return {
-    pubkey: targetPubkey,
-    display_name: content.display_name ?? content.name ?? null,
-    about: content.about ?? null,
-    avatar_url: content.picture ?? null,
-    nip05_handle: content.nip05 ?? null,
-    owner_pubkey: null,
-    has_profile_event: true,
-  };
-}
 
 async function handleGetUsersBatch(
   args: {
@@ -12256,6 +12084,10 @@ export function maybeInstallE2eTauriMocks() {
     };
   }> = [];
   const scanSubscriptions = createMockSubscriptionScanner(config.mock);
+  const openRouter = createMockOpenRouter(config.mock);
+  const subscriptionConnections = createMockSubscriptionConnections(
+    config.mock,
+  );
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -12783,21 +12615,39 @@ export function maybeInstallE2eTauriMocks() {
           available: true,
         };
       case "colony_create_community": {
-        const colonyName = (payload as { name?: string })?.name ?? "community";
-        if (activeConfig?.mock?.colonyCreateError) {
-          throw new Error(activeConfig.mock.colonyCreateError);
-        }
-        return {
-          community: activeConfig?.mock?.colonyCreatedCommunity ?? {
-            id: `colony-${colonyName}`,
-            name: colonyName,
-            slug: colonyName,
-            normalized_host: `${colonyName}.colony.ainative.ventures`,
-          },
+        const request = payload as {
+          name?: string;
+          expectedOwnerPubkey?: string;
+          expectedRelayUrl?: string;
         };
+        const colonyName = request?.name ?? "community";
+        if (
+          request.expectedOwnerPubkey &&
+          request.expectedOwnerPubkey !==
+            (identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey)
+        )
+          throw new Error("The account changed before creating the community.");
+        if (activeConfig?.mock?.colonyCreateError)
+          throw new Error(activeConfig.mock.colonyCreateError);
+        const community = activeConfig?.mock?.colonyCreatedCommunity ?? {
+          id: `colony-${colonyName}`,
+          name: colonyName,
+          slug: colonyName,
+          normalized_host: `${colonyName}.colony.ainative.ventures`,
+        };
+        if (activeConfig) {
+          activeConfig.mock ??= {};
+          const mine = activeConfig.mock.colonyCommunities ?? [];
+          if (!mine.some((entry) => entry.slug === community.slug))
+            activeConfig.mock.colonyCommunities = [...mine, community];
+        }
+        return { community };
       }
       case "colony_list_my_communities":
-        return { communities: activeConfig?.mock?.colonyCommunities ?? [] };
+        return {
+          owner_pubkey: identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
+          communities: activeConfig?.mock?.colonyCommunities ?? [],
+        };
       // Money crosses this boundary as decimal strings, exactly as the real
       // command emits it, so the screen's bigint parsing is exercised rather
       // than bypassed by a friendlier fixture.
@@ -13686,13 +13536,21 @@ export function maybeInstallE2eTauriMocks() {
         return true;
       }
       case "get_relay_http_url":
-        return getRelayHttpUrl(activeConfig);
+        return mockAppliedRelayWsUrl
+          ? mockAppliedRelayWsUrl.replace(/^ws/, "http")
+          : getRelayHttpUrl(activeConfig);
       case "relay_requires_membership":
         return activeConfig?.mock?.relayRequiresMembership ?? false;
       case "discover_acp_providers":
         return handleDiscoverAcpRuntimes(activeConfig);
       case "scan_agent_subscriptions":
         return scanSubscriptions();
+      case "get_subscription_connections":
+        return subscriptionConnections.read(payload);
+      case "connect_subscription":
+        return subscriptionConnections.connect(payload);
+      case "install_subscription_runtime":
+        return subscriptionConnections.install(payload);
       case "save_custom_harness":
         return handleSaveCustomHarness(
           payload as Parameters<typeof handleSaveCustomHarness>[0],
@@ -14354,6 +14212,10 @@ export function maybeInstallE2eTauriMocks() {
         if (!runtimeId) return null;
         return config.mock?.runtimeFileConfigs?.[runtimeId] ?? null;
       }
+      case "connect_openrouter":
+        return openRouter.connect();
+      case "openrouter_quota":
+        return openRouter.quota();
       case "get_global_agent_config": {
         // Return the mutable persisted mock value, seeded from the test config.
         return (

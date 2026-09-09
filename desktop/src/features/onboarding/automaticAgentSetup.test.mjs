@@ -414,3 +414,89 @@ test("legacy fallback retains its captured native save scope after an account sw
   assert.equal(device.writes, 0);
   assert.deepEqual(device.config, EMPTY_CONFIG);
 });
+
+test("scoped subscription validation requires this business connection and keeps its selected lane", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const scope = {
+    ownerPubkey: "a".repeat(64),
+    relayUrl: "wss://original.colony.example",
+  };
+  const config = {
+    ...EMPTY_CONFIG,
+    preferred_runtime: "codex",
+    model: "synthetic-model",
+  };
+  const { io, device } = fakeDevice({ config, runtimes: [runtime("codex")] });
+  let observedScope;
+  await assert.rejects(
+    ensureBuiltInFounderConfig(
+      {
+        ...io,
+        inspectSubscriptions: async (captured) => {
+          observedScope = captured;
+          return [
+            {
+              runtimeId: "codex",
+              installed: true,
+              launchError: null,
+              detected: { authentication: "subscription" },
+              connected: {
+                authentication: "signed_out",
+                models: [],
+                windows: [],
+                measurementStatus: "unavailable",
+              },
+            },
+          ];
+        },
+      },
+      { mode: "validate-only", scope },
+    ),
+    /Connect your subscription/,
+  );
+  assert.deepEqual(observedScope, scope);
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.config, config);
+});
+
+test("a dedicated subscription can run when the unrelated host CLI is signed out", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const scope = {
+    ownerPubkey: "a".repeat(64),
+    relayUrl: "wss://original.colony.example",
+  };
+  const config = {
+    ...EMPTY_CONFIG,
+    preferred_runtime: "claude",
+    model: "synthetic-model",
+  };
+  const { io, device } = fakeDevice({
+    config,
+    runtimes: [runtime("claude", "available", "logged_out")],
+  });
+  await ensureBuiltInFounderConfig(
+    {
+      ...io,
+      inspectSubscriptions: async () => [
+        {
+          runtimeId: "claude",
+          installed: true,
+          launchError: null,
+          connected: {
+            authentication: "subscription",
+            models: [{ id: "synthetic-model" }],
+            windows: [],
+            measurementStatus: "unavailable",
+          },
+        },
+      ],
+    },
+    { mode: "validate-only", scope },
+  );
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.config, config);
+});

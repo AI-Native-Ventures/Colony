@@ -25,7 +25,10 @@ export function electronBetaBuildEnv(env) {
 export function electronPackageVariant(args) {
   const fixture = args.includes("--onboarding-fixture");
   const production = args.includes("--production");
+  const adHoc = args.includes("--ad-hoc");
   const candidate = args.includes("--production-candidate");
+  if (adHoc && !production)
+    throw new Error("Explicit ad-hoc distribution requires --production");
   const stable = production || candidate;
   if (
     stable &&
@@ -42,6 +45,7 @@ export function electronPackageVariant(args) {
   return {
     fixture,
     production,
+    developerId: production && !adHoc,
     candidate,
     stable,
     channel: production ? "stable" : candidate ? "candidate" : "beta",

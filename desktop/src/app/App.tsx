@@ -42,6 +42,8 @@ import {
   isTransactionStillConnecting,
   shouldForceFirstCommunityJourney,
 } from "@/features/onboarding/communityOnboarding";
+import { transactionBelongsToOwner } from "@/features/onboarding/businessOnboardingStorage";
+import { useBusinessOnboardingResume } from "@/features/onboarding/useBusinessOnboardingResume";
 import { CommunityOnboardingFlow } from "@/features/onboarding/ui/CommunityOnboardingFlow";
 import {
   MachineOnboardingFlow,
@@ -336,6 +338,15 @@ function CommunityApp({
     reconnectCommunity,
   } = useCommunities();
   const communityOnboarding = useCommunityOnboarding();
+  const candidateTransaction = communityOnboarding.transaction;
+  const transaction =
+    transactionBelongsToOwner(candidateTransaction, currentPubkey) &&
+    (candidateTransaction?.source !== "create-community" ||
+      candidateTransaction.stage === "connecting" ||
+      candidateTransaction.stage === "claiming" ||
+      candidateTransaction.relayUrl === activeCommunity?.relayUrl)
+      ? candidateTransaction
+      : null;
   const connectingTransactionRef = useRef<string | null>(null);
   // Tracks the ID of the profile-check request that has been launched for the
   // current connecting transaction. Prevents the effect from launching a
@@ -343,8 +354,8 @@ function CommunityApp({
   const profileCheckTransactionRef = useRef<string | null>(null);
   // Always reflects the live transaction object so async callbacks can perform
   // an atomic check of both ID and stage before mutating state.
-  const transactionRef = useRef(communityOnboarding.transaction);
-  transactionRef.current = communityOnboarding.transaction;
+  const transactionRef = useRef(transaction);
+  transactionRef.current = transaction;
   const [isCommunityChangeOpen, setIsCommunityChangeOpen] = useState(false);
   const [resumeFirstCommunityPage, setResumeFirstCommunityPage] =
     useState<FirstCommunityPage | null>(null);
@@ -377,8 +388,18 @@ function CommunityApp({
     isFindingCommunityAfterLeave,
   );
 
+  useBusinessOnboardingResume(
+    currentPubkey,
+    activeCommunity?.relayUrl,
+    community.isReady && community.appliedKey === communityKey,
+  );
+
   const transitionCommunity = useCallback(
-    async (targetCommunityId: string) => {
+    async (
+      targetCommunityId: string,
+      isCurrent: () => boolean = () => true,
+    ) => {
+      if (!isCurrent()) return;
       const activeCommunityId = activeCommunity?.id;
       if (targetCommunityId === activeCommunityId) return;
       if (activeCommunityId) {
@@ -390,6 +411,7 @@ function CommunityApp({
             : { kind: "home" },
         );
         await router.navigate({ to: "/", replace: true });
+        if (!isCurrent()) return;
         markPendingCommunityRestore(targetCommunityId);
         const destination = loadCommunityDestination(targetCommunityId);
         if (destination?.kind === "channel") {
@@ -405,12 +427,12 @@ function CommunityApp({
   );
 
   const handleCommunityOnboardingConnect = useCallback(async () => {
-    const transaction = communityOnboarding.transaction;
     if (transaction?.stage !== "connecting") return;
     if (connectingTransactionRef.current === transaction.id) return;
     connectingTransactionRef.current = transaction.id;
+    const isCurrent = () => transactionRef.current?.id === transaction.id;
     if (transaction.communityId) {
-      await transitionCommunity(transaction.communityId);
+      await transitionCommunity(transaction.communityId, isCurrent);
       return;
     }
     const previousCommunityId = activeCommunity?.id;
@@ -426,27 +448,35 @@ function CommunityApp({
       pubkey: currentPubkey ?? undefined,
       addedAt: new Date().toISOString(),
     });
-    communityOnboarding.update({
-      communityId: id,
-      previousCommunityId,
-      addedCommunity: !relayAlreadyExists,
-      error: undefined,
-    });
-    await transitionCommunity(id);
-    reconnectCommunity();
+    communityOnboarding.update(
+      {
+        communityId: id,
+        previousCommunityId,
+        addedCommunity: !relayAlreadyExists,
+        error: undefined,
+      },
+      transaction.id,
+    );
+    if (!isCurrent()) return;
+    await transitionCommunity(id, isCurrent);
+    if (isCurrent()) reconnectCommunity();
   }, [
     activeCommunity?.id,
     addCommunity,
     communities,
     communityOnboarding,
+    transaction,
     currentPubkey,
     reconnectCommunity,
     transitionCommunity,
   ]);
 
   const handleCommunityOnboardingCancel = useCallback(async () => {
-    const transaction = communityOnboarding.transaction;
-    communityOnboarding.clear();
+    if (transaction?.source === "create-community") {
+      communityOnboarding.suspend(transaction.id);
+      return;
+    }
+    communityOnboarding.clear(transaction?.id);
 
     if (!transaction?.communityId) return;
     if (!transaction.addedCommunity) {
@@ -470,13 +500,13 @@ function CommunityApp({
     clearCommunities,
     communities.length,
     communityOnboarding,
+    transaction,
     removeCommunity,
     transitionCommunity,
   ]);
 
   const bootSplashPhase = useBootSplashHold();
 
-  const transaction = communityOnboarding.transaction;
   useEffect(() => {
     if (transaction?.stage !== "connecting") {
       connectingTransactionRef.current = null;
@@ -517,7 +547,7 @@ function CommunityApp({
 
       if (result.action === "skip") {
         markCommunityOnboardingComplete(result.profile.pubkey, relayUrl);
-        communityOnboarding.clear();
+        communityOnboarding.clear(transactionId);
       } else {
         communityOnboarding.update(
           { stage: "profile", error: undefined },
@@ -527,6 +557,7 @@ function CommunityApp({
     });
   }, [
     communityOnboarding,
+    transaction,
     forceFirstCommunityJourney,
     targetIsReady,
     transaction?.stage,
@@ -717,6 +748,7 @@ function CommunityApp({
           }
         >
           <CommunityOnboardingFlow
+            currentPubkey={currentPubkey}
             onCancel={handleCommunityOnboardingCancel}
             onConnect={handleCommunityOnboardingConnect}
           />

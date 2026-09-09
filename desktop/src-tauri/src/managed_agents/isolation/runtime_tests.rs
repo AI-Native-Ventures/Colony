@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::{fs, process::Stdio, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-async fn response(
+pub(super) async fn response(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     id: u64,
 ) -> Value {

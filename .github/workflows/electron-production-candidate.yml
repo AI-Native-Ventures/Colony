@@ -25,6 +25,10 @@ jobs:
     name: Electron production package proof
     runs-on: macos-15
     timeout-minutes: 150
+    env:
+      COLONY_MACOS_SIGNING: ad-hoc
+      UPDATER_ENDPOINT: https://github.com/AI-Native-Ventures/colony-releases/releases/download/colony-desktop-latest/latest.json
+      COLONY_PRODUCTION_RELAY_WS_URL: wss://relay.colony.ainative.ventures
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -40,16 +44,17 @@ jobs:
           cache-workspace-crates: true
       - name: Install dependencies
         run: just desktop-install-ci
-      - name: Build private candidate with production bundle and updater contract
+      - name: Build stable ad-hoc package with production updater contract
         env:
           BUZZ_UPDATER_PUBLIC_KEY: ${{ vars.BUZZ_UPDATER_PUBLIC_KEY }}
-        run: pnpm --dir desktop electron:package --production-candidate
+        run: pnpm --dir desktop electron:package --production --ad-hoc
       - name: Prove relocated app, signup and isolated workers
         run: |
           set -euo pipefail
-          VERSION=$(jq -r .version desktop/package.json)
-          MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-candidate/manifest.json"
-          jq -e '.channel == "candidate" and .signing == "ad-hoc; not notarized" and .onboardingFixture == false' "$MANIFEST"
+          export VERSION=$(jq -r .version desktop/package.json)
+          bash desktop/scripts/electron-verify-distribution.sh
+          MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-stable/manifest.json"
+          jq -e '.channel == "stable" and .signing == "ad-hoc; not notarized" and .onboardingFixture == false' "$MANIFEST"
           export COLONY_SMOKE_APP="$(jq -r .app "$MANIFEST")"
           export COLONY_SMOKE_EXECUTABLE=buzz-desktop
           export COLONY_SMOKE_PROOF_DIR="$RUNNER_TEMP/colony-candidate-proof"
@@ -69,10 +74,10 @@ jobs:
           path: ${{ runner.temp }}/colony-candidate-proof
           if-no-files-found: ignore
           retention-days: 7
-      - name: Preserve private candidate proof
+      - name: Preserve unpublished stable package proof
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: colony-electron-private-production-candidate
+          name: colony-electron-unpublished-stable-package
           path: |
             desktop/electron-dist/**/*.zip
             desktop/electron-dist/**/manifest.json

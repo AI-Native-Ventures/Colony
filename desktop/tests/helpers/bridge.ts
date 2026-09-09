@@ -1,7 +1,11 @@
+import type { MockOpenRouterConfig } from "../../src/testing/e2eBridgeOpenRouter";
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
 import type { SubscriptionScan } from "../../src/shared/api/tauriSubscriptions";
-import type { MockSubscriptionScanResult } from "../../src/testing/e2eBridgeSubscriptions";
+import type {
+  MockSubscriptionConnectionsConfig,
+  MockSubscriptionScanResult,
+} from "../../src/testing/e2eBridgeSubscriptions";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -189,7 +193,7 @@ export type MockAgentMemoryListing = {
   fetchedAt: number;
 };
 
-type MockBridgeOptions = {
+type MockBridgeOptions = MockSubscriptionConnectionsConfig & {
   /** Tauri window label exposed to the app. Defaults to the main window. */
   windowLabel?: string;
   ttsSettings?: {
@@ -313,6 +317,8 @@ type MockBridgeOptions = {
     version: string;
   } | null;
   /** Native subscription metadata, distinct from runtime launch support. */
+  openRouterConnection?: MockOpenRouterConfig["openRouterConnection"];
+  openRouterQuotaSequence?: MockOpenRouterConfig["openRouterQuotaSequence"];
   subscriptionScan?: SubscriptionScan;
   /** Success/error responses per scan; the last response repeats on retry. */
   subscriptionScanSequence?: MockSubscriptionScanResult[];

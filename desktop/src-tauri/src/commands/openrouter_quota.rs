@@ -5,22 +5,15 @@
 //! agent turn, so 50/day is roughly three to ten turns — a new user hits it
 //! inside their first session, and today that surfaces as a bare `429`.
 //!
-//! This command answers the two questions the UI needs: which side of the
-//! threshold is this account on, and has it just crossed. That turns an offer
-//! shown blindly into one shown only to people it applies to, and lets the app
-//! confirm success against the user's real balance instead of asking them.
+//! Purchase evidence can verify that threshold when the provider permits it.
+//! The ordinary OAuth key is not a management key: OpenRouter currently limits
+//! GET /credits (lifetime totals) to management keys. A 403 falls back to the
+//! ordinary GET /key metadata. An unpaid account is below the threshold;
+//! "has paid before" alone cannot prove purchases of at least $10.
 //!
-//! # What is measured, and what is not
-//!
-//! `GET /api/v1/credits` returns lifetime `total_credits` and `total_usage`.
-//! The threshold is on **lifetime purchases**, not on the balance, so a user who
-//! bought $10 and spent it keeps the higher cap. Comparing the balance would
-//! wrongly demote them.
-//!
-//! The 20-requests-per-minute cap is **not** affected by credit and is not
-//! modelled here, because there is no state to track: it always applies. UI
-//! that sells the $10 as "no more limits" earns a refund conversation the first
-//! time an agent stalls mid-turn.
+//! Missing, denied or invalid evidence is never treated as a zero balance.
+//! We do not request broad management credentials for this setup flow.
+//! The unchanged 20 requests/minute limit is returned with verified totals.
 //!
 //! # The threshold belongs to OpenRouter
 //!
@@ -97,55 +90,222 @@ struct CreditsEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct CreditsData {
-    #[serde(default)]
     total_credits: f64,
-    #[serde(default)]
     total_usage: f64,
 }
 
 const CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
+const KEY_URL: &str = "https://openrouter.ai/api/v1/key";
 
-/// Read the account's free-tier standing.
-///
-/// Errors are returned rather than swallowed: a caller that cannot tell "below
-/// the threshold" from "could not check" would show the upgrade offer to
-/// someone who has already paid, which is the one outcome worth avoiding here.
+/// Evidence exposed by the provider, never inferred from a key spending limit.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OpenRouterQuotaCheck {
+    /// Purchase totals were returned by the account endpoint.
+    Verified {
+        /// Exact threshold standing from lifetime purchases.
+        quota: OpenRouterQuota,
+    },
+    /// The provider confirms this account has never purchased credits.
+    Unpaid,
+    /// A valid connection does not expose enough history to prove the threshold.
+    Unknown,
+}
+
+#[derive(Deserialize)]
+struct KeyEnvelope {
+    data: KeyData,
+}
+
+#[derive(Deserialize)]
+struct KeyData {
+    is_free_tier: Option<bool>,
+}
+
+/// Read available account evidence using fixed provider endpoints.
+/// Normal OAuth inference keys may be refused by the management-only credits
+/// endpoint. That is missing purchase evidence, not a revoked login or proof
+/// that the user must pay $10 again.
 #[tauri::command]
-pub async fn openrouter_quota(api_key: String) -> Result<OpenRouterQuota, String> {
+pub async fn openrouter_quota(api_key: String) -> Result<OpenRouterQuotaCheck, String> {
     if api_key.trim().is_empty() {
         return Err("no OpenRouter key configured".into());
     }
-    let response = reqwest::Client::new()
-        .get(CREDITS_URL)
-        .bearer_auth(api_key.trim())
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|_| "Could not check your OpenRouter account.".to_string())?;
+    read_quota(&client, CREDITS_URL, KEY_URL, api_key.trim()).await
+}
+
+async fn read_quota(
+    client: &reqwest::Client,
+    credits_url: &str,
+    key_url: &str,
+    api_key: &str,
+) -> Result<OpenRouterQuotaCheck, String> {
+    let response = client
+        .get(credits_url)
+        .bearer_auth(api_key)
+        .header("Cache-Control", "no-store")
         .send()
         .await
-        .map_err(|error| format!("could not reach OpenRouter: {error}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(match status.as_u16() {
-            401 | 403 => "OpenRouter rejected the key — reconnect your account".to_string(),
-            429 => "OpenRouter is rate limiting this key; try again shortly".to_string(),
-            other => format!("OpenRouter returned {other} reading credits"),
+        .map_err(|_| "Could not reach OpenRouter. Try again.".to_string())?;
+    if response.status().is_success() {
+        let envelope: CreditsEnvelope = response
+            .json()
+            .await
+            .map_err(|_| "OpenRouter did not return readable purchase totals.".to_string())?;
+        let data = envelope.data;
+        if !data.total_credits.is_finite()
+            || data.total_credits < 0.0
+            || !data.total_usage.is_finite()
+            || data.total_usage < 0.0
+        {
+            return Err("OpenRouter did not return valid purchase totals.".into());
+        }
+        return Ok(OpenRouterQuotaCheck::Verified {
+            quota: OpenRouterQuota::from_totals(data.total_credits, data.total_usage),
         });
     }
-
-    let envelope: CreditsEnvelope = response
+    if response.status() != reqwest::StatusCode::FORBIDDEN {
+        return Err(quota_error(response.status()));
+    }
+    // This endpoint works with the inference key produced by official PKCE.
+    let key = client
+        .get(key_url)
+        .bearer_auth(api_key)
+        .header("Cache-Control", "no-store")
+        .send()
+        .await
+        .map_err(|_| "Could not check your OpenRouter connection. Try again.".to_string())?;
+    if !key.status().is_success() {
+        return Err(quota_error(key.status()));
+    }
+    let envelope: KeyEnvelope = key
         .json()
         .await
-        .map_err(|error| format!("could not read OpenRouter's credits response: {error}"))?;
+        .map_err(|_| "OpenRouter did not return readable account information.".to_string())?;
+    // false means some credits were purchased, not necessarily at least $10.
+    Ok(if envelope.data.is_free_tier == Some(true) {
+        OpenRouterQuotaCheck::Unpaid
+    } else {
+        OpenRouterQuotaCheck::Unknown
+    })
+}
 
-    Ok(OpenRouterQuota::from_totals(
-        envelope.data.total_credits,
-        envelope.data.total_usage,
-    ))
+fn quota_error(status: reqwest::StatusCode) -> String {
+    match status.as_u16() {
+        401 => "Your OpenRouter connection expired or was revoked. Reconnect OpenRouter.".into(),
+        429 => "OpenRouter is busy. Wait a moment and check again.".into(),
+        _ => "OpenRouter could not confirm your account limits. Try again.".into(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    async fn account_fixture(
+        credits: (&str, &str),
+        key: Option<(&str, &str)>,
+    ) -> Result<OpenRouterQuotaCheck, String> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let responses = std::iter::once(credits)
+            .chain(key)
+            .map(|(status, body)| (status.to_owned(), body.to_owned()))
+            .collect::<Vec<_>>();
+        let server = std::thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let result = read_quota(
+            &client,
+            &format!("http://{address}/credits"),
+            &format!("http://{address}/key"),
+            "synthetic-test-key",
+        )
+        .await;
+        server.join().unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn management_only_history_does_not_mean_reconnect_or_pay_again() {
+        let result = account_fixture(
+            ("403 Forbidden", "{}"),
+            Some((
+                "200 OK",
+                r#"{"data":{"is_free_tier":false,"limit_remaining":200}}"#,
+            )),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, OpenRouterQuotaCheck::Unknown);
+    }
+
+    #[tokio::test]
+    async fn never_purchased_account_can_offer_the_upgrade() {
+        let result = account_fixture(
+            ("403 Forbidden", "{}"),
+            Some(("200 OK", r#"{"data":{"is_free_tier":true}}"#)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, OpenRouterQuotaCheck::Unpaid);
+    }
+
+    #[tokio::test]
+    async fn missing_purchase_fields_are_not_synthesized_as_zero() {
+        assert!(account_fixture(("200 OK", r#"{"data":{}}"#), None)
+            .await
+            .is_err());
+        assert!(account_fixture(
+            (
+                "200 OK",
+                r#"{"data":{"total_credits":-10,"total_usage":0}}"#
+            ),
+            None
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn spent_balance_still_verifies_lifetime_eligibility_over_http() {
+        let result = account_fixture(
+            (
+                "200 OK",
+                r#"{"data":{"total_credits":10,"total_usage":10}}"#,
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, OpenRouterQuotaCheck::Verified { quota } if quota.threshold_met));
+    }
+
+    #[tokio::test]
+    async fn rejected_key_is_an_auth_error_not_unpaid() {
+        let result =
+            account_fixture(("403 Forbidden", "{}"), Some(("401 Unauthorized", "{}"))).await;
+        assert!(result.unwrap_err().contains("Reconnect"));
+    }
 
     /// A brand-new account: the low cap, and the exact shortfall to quote.
     #[test]

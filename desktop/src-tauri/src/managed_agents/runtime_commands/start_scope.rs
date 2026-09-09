@@ -147,4 +147,40 @@ mod tests {
         assert!(result.is_err());
         assert!(reaped);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn obsolete_config_reaps_only_its_unregistered_child() {
+        use crate::managed_agents::{global_config::publication, GlobalAgentConfig};
+        use std::os::unix::process::CommandExt;
+        let old = GlobalAgentConfig {
+            model: Some("earlier-choice".into()),
+            ..Default::default()
+        };
+        let new = GlobalAgentConfig {
+            model: Some("later-choice".into()),
+            ..Default::default()
+        };
+        let spawn = || {
+            std::process::Command::new("/bin/sleep")
+                .arg("60")
+                .process_group(0)
+                .spawn()
+                .unwrap()
+        };
+        let mut earlier_child = spawn();
+        let mut later_child = spawn();
+        let refusal = publication::lock_expected(&old, || Ok(new)).map(|_| ());
+        let result = check_spawned(refusal, &mut earlier_child);
+        let earlier_reaped = earlier_child.try_wait().unwrap().is_some();
+        let later_alive = later_child.try_wait().unwrap().is_none();
+        // Always retire synthetic children, even if the regression assertions fail.
+        let _ = earlier_child.kill();
+        let _ = earlier_child.wait();
+        let _ = later_child.kill();
+        let _ = later_child.wait();
+        assert!(result.is_err());
+        assert!(earlier_reaped);
+        assert!(later_alive);
+    }
 }
