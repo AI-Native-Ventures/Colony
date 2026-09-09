@@ -13,6 +13,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
+import type { FirstJobTeamProposal } from "../firstJobTeamApproval";
 
 /** Setup interaction states are separate from authoritative task execution. */
 export type FirstJobSuggestionPhase =
@@ -51,6 +52,11 @@ export type FirstJobSuggestionViewProps = {
   onAddCredits: () => void;
   onExplore: () => void;
   onReviewTeam?: () => void;
+  teamProposal?: FirstJobTeamProposal;
+  teamLoading?: boolean;
+  teamRequired?: boolean;
+  onCheckTeam?: () => void;
+  onReviewBusiness?: () => void;
 };
 
 const CARD = { type: "card" } as const;
@@ -96,6 +102,11 @@ export function FirstJobSuggestionView({
   onAddCredits,
   onExplore,
   onReviewTeam,
+  teamProposal,
+  teamLoading = false,
+  teamRequired = false,
+  onCheckTeam,
+  onReviewBusiness,
 }: FirstJobSuggestionViewProps) {
   const busy = phase === "checking" || phase === "sending";
   const locked =
@@ -196,6 +207,61 @@ export function FirstJobSuggestionView({
           </div>
         ) : null}
 
+        {canManage && phase !== "sent" && teamRequired ? (
+          <div
+            className="mb-3 space-y-2 rounded-lg border border-border/60 bg-background/40 p-3"
+            data-testid="first-job-team-proposal"
+          >
+            <p className="text-xs font-medium text-muted-foreground">
+              Your team for this job
+            </p>
+            {teamProposal ? (
+              <>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div>
+                    <p className="text-sm font-semibold">
+                      {teamProposal.scout.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Chief of Staff · Coordinates and reviews
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">
+                      {teamProposal.worker.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {teamProposal.worker.role} · Does the work
+                    </p>
+                  </div>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {teamProposal.action
+                    ? `Approving adds ${teamProposal.worker.name} to this business, using the connection you chose during setup.`
+                    : "These teammates are already on your team."}{" "}
+                  You review the result here.
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground" role="status">
+                {teamLoading
+                  ? "Checking your team…"
+                  : "Your team could not be confirmed."}
+              </p>
+            )}
+            {!teamProposal && !teamLoading && onCheckTeam ? (
+              <Button
+                onClick={onCheckTeam}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Check team
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="space-y-1.5">
           {canManage ? (
             <label
@@ -274,12 +340,21 @@ export function FirstJobSuggestionView({
             ) : phase === "blocked" ||
               phase === "error" ||
               phase === "uncertain" ? (
-              <Button disabled={!validBrief} onClick={onRetry} type="button">
+              <Button
+                disabled={
+                  !validBrief ||
+                  (teamRequired && !teamProposal && phase !== "uncertain")
+                }
+                onClick={onRetry}
+                type="button"
+              >
                 {phase === "uncertain" ? "Check request" : "Try again"}
               </Button>
             ) : (
               <Button
-                disabled={busy || !validBrief}
+                disabled={
+                  busy || !validBrief || (teamRequired && !teamProposal)
+                }
                 onClick={onStart}
                 type="button"
               >
@@ -287,12 +362,23 @@ export function FirstJobSuggestionView({
                   ? phase === "checking"
                     ? "Checking…"
                     : "Sending…"
-                  : "Start this job"}
+                  : teamRequired
+                    ? "Approve team and start"
+                    : "Start this job"}
               </Button>
             )}
             {phase === "blocked" && onReviewTeam ? (
               <Button onClick={onReviewTeam} type="button" variant="outline">
                 Review team
+              </Button>
+            ) : null}
+            {onReviewBusiness ? (
+              <Button
+                onClick={onReviewBusiness}
+                type="button"
+                variant="outline"
+              >
+                Business details
               </Button>
             ) : null}
             <Button

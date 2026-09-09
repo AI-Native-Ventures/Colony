@@ -59,6 +59,7 @@ async function setup(
     funded?: boolean;
     dark?: boolean;
     businessReady?: boolean;
+    freshProfile?: boolean;
   } = {},
 ) {
   const errors: string[] = [];
@@ -126,6 +127,9 @@ async function setup(
       currency: "USD",
       status: options.funded ? "active" : "depleted",
     },
+    communityProfileHead: options.freshProfile
+      ? { tradingName: "Localhost", summary: "" }
+      : undefined,
     companyWorkContext:
       options.businessReady === false
         ? undefined
@@ -153,7 +157,15 @@ async function setup(
             status: "stopped",
           },
         ]
-      : [],
+      : [
+          {
+            pubkey: SCOUT,
+            name: "Scout",
+            personaId: "builtin:fizz",
+            channelIds: [CHANNEL],
+            status: "stopped",
+          },
+        ],
     activePersonaIds: ["builtin:fizz"],
     personas: [
       {
@@ -167,7 +179,14 @@ async function setup(
     ],
     managedAgentHeadEvents: options.staffed
       ? [head(SCOUT, "executive"), head(WORKER, "worker")]
-      : [],
+      : [
+          sign({
+            kind: 30177,
+            created_at: 1780000000,
+            tags: [["d", SCOUT]],
+            content: JSON.stringify({ name: "Scout" }),
+          }),
+        ],
   });
   await page.goto("/");
   await page.waitForFunction(() =>
@@ -218,7 +237,7 @@ async function setup(
   const card = page.getByTestId("first-job-suggestion");
   await expect(card).toHaveCount(1);
   await expect(
-    card.getByRole("button", { name: "Start this job" }),
+    card.getByRole("button", { name: "Approve team and start" }),
   ).toBeVisible();
   return { root, payload, errors };
 }
@@ -447,7 +466,7 @@ test("Welcome suggestion shares edits across adjacent panes and zero credits nev
     .evaluateAll((elements) => elements.map((element) => element.id));
   expect(new Set(labels).size).toBe(2);
   expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
-  await right.getByRole("button", { name: "Start this job" }).click();
+  await right.getByRole("button", { name: "Approve team and start" }).click();
   await expect(left).toHaveAttribute("data-phase", "needs-credits");
   await expect(right).toHaveAttribute("data-phase", "needs-credits");
   expect(await commandCount(page, "attach_thread_task")).toBe(0);
@@ -459,13 +478,13 @@ test("Welcome suggestion shares edits across adjacent panes and zero credits nev
   expect(errors).toEqual([]);
 });
 
-test("unknown credits remain an error and a funded business without an approved worker remains blocked", async ({
+test("unknown credits remain an error; funding permits the separately approved first worker", async ({
   page,
 }) => {
   const { errors } = await setup(page);
   const card = page.getByTestId("first-job-suggestion");
   await setCredits(page, { error: "Fixture balance unavailable" });
-  await card.getByRole("button", { name: "Start this job" }).click();
+  await card.getByRole("button", { name: "Approve team and start" }).click();
   await expect(card).toHaveAttribute("data-phase", "error");
   await expect(card.getByRole("alert")).toContainText(
     "Fixture balance unavailable",
@@ -475,12 +494,12 @@ test("unknown credits remain an error and a funded business without an approved 
   ).toHaveCount(0);
   await setCredits(page, { error: null, availableNanousd: "5000000000" });
   await card.getByRole("button", { name: "Try again" }).click();
-  await expect(card).toHaveAttribute("data-phase", "blocked");
-  await expect(card.getByRole("button", { name: "Review team" })).toBeVisible();
-  expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
+  await expect(card).toHaveAttribute("data-phase", "sent");
+  expect(await commandCount(page, "execute_agent_proposal")).toBe(1);
+  expect(await commandCount(page, "start_managed_agent_runtime")).toBe(2);
   await waitForAnimations(page);
   await page.screenshot({
-    path: "test-results/first-job/02-worker-unavailable.png",
+    path: "test-results/first-job/02-worker-approved.png",
   });
   expect(errors).toEqual([]);
 });
@@ -494,7 +513,7 @@ test("a funded account without an approved company setup stays editable and crea
     businessReady: false,
   });
   const card = page.getByTestId("first-job-suggestion");
-  await card.getByRole("button", { name: "Start this job" }).click();
+  await card.getByRole("button", { name: "Approve team and start" }).click();
   await expect(card).toHaveAttribute("data-phase", "blocked");
   await expect(card.getByRole("alert")).toContainText(
     "could not find this business’s setup",
@@ -512,7 +531,7 @@ test("checkout return preserves the same brief and requires a separate Start", a
   const card = page.getByTestId("first-job-suggestion");
   const brief = "Review the offer before making any public changes.";
   await card.getByLabel("The brief", { exact: true }).fill(brief);
-  await card.getByRole("button", { name: "Start this job" }).click();
+  await card.getByRole("button", { name: "Approve team and start" }).click();
   await card.getByRole("button", { name: "Add credits", exact: true }).click();
   await card
     .getByLabel("Receipt email", { exact: true })
@@ -546,7 +565,7 @@ test("checkout return preserves the same brief and requires a separate Start", a
     "$5.00",
   );
   await expect(
-    right.getByRole("button", { name: "Start this job" }),
+    right.getByRole("button", { name: "Approve team and start" }),
   ).toBeVisible();
   expect(await commandCount(page, "attach_thread_task")).toBe(0);
   expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
@@ -563,7 +582,7 @@ test("an approved fixture pair starts only on explicit Start and the task status
   const { root, errors } = await setup(page, { staffed: true, funded: true });
   const card = page.getByTestId("first-job-suggestion");
   expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
-  await card.getByRole("button", { name: "Start this job" }).click();
+  await card.getByRole("button", { name: "Approve team and start" }).click();
   await expect(card).toHaveAttribute("data-phase", "sent");
   await expect(
     card.getByRole("group", { name: "Starting job examples" }),
@@ -672,7 +691,7 @@ for (const dark of [false, true]) {
       .getByTestId("message-thread-panel")
       .getByTestId("first-job-suggestion");
     await expect(
-      card.getByRole("button", { name: "Start this job" }),
+      card.getByRole("button", { name: "Approve team and start" }),
     ).toBeVisible();
     expect(
       await card.evaluate(
@@ -722,11 +741,11 @@ for (const dark of [false, true]) {
     // the reading area. Prove ordinary scrolling reaches the action without
     // requiring the entire message to fit onscreen at once.
     await body.hover({ position: { x: 10, y: 100 } });
-    await page.mouse.wheel(0, 300);
+    await page.mouse.wheel(0, 600);
     await expect
       .poll(() => body.evaluate((element) => element.scrollTop))
       .toBeGreaterThan(0);
-    const start = card.getByRole("button", { name: "Start this job" });
+    const start = card.getByRole("button", { name: "Approve team and start" });
     await expect(start).toBeInViewport({ ratio: 1 });
     await start.click({ trial: true });
     await page.mouse.move(0, 0);
@@ -737,3 +756,66 @@ for (const dark of [false, true]) {
     expect(errors).toEqual([]);
   });
 }
+
+test("fresh Scout-only setup saves business details and creates the displayed worker only after approval", async ({
+  page,
+}) => {
+  const { root, errors } = await setup(page, {
+    funded: true,
+    freshProfile: true,
+  });
+  const card = page.getByTestId("first-job-suggestion");
+  await expect(card.getByTestId("first-job-team-proposal")).toContainText(
+    "Sarah",
+  );
+  await expect(card.getByTestId("first-job-team-proposal")).toContainText(
+    "Content & Campaign Specialist",
+  );
+  expect(await commandCount(page, "execute_agent_proposal")).toBe(0);
+  expect(await commandCount(page, "start_managed_agent_runtime")).toBe(0);
+  await waitForAnimations(page);
+  await card.screenshot({
+    path: "test-results/first-job/07-team-before-approval.png",
+  });
+  await openThread(page, root);
+  const right = page
+    .getByTestId("message-thread-panel")
+    .getByTestId("first-job-suggestion");
+  await right.getByRole("button", { name: "Approve team and start" }).click();
+  await expect(right).toHaveAttribute("data-phase", "sent");
+  expect(await commandCount(page, "execute_agent_proposal")).toBe(1);
+  expect(await commandCount(page, "start_managed_agent_runtime")).toBe(2);
+  expect(await commandCount(page, "attach_thread_task")).toBe(1);
+  const events = await page.evaluate(
+    () => (window as FixtureWindow).__BUZZ_E2E_PUBLISHED_EVENTS__ ?? [],
+  );
+  const approvals = events.filter((event) =>
+    event.tags.some(
+      (tag) =>
+        tag[0] === "client" && tag[1] === "colony:first-job-team-approval:v1",
+    ),
+  );
+  expect(approvals).toHaveLength(1);
+  expect(approvals[0]?.pubkey).toBe(OWNER.pubkey);
+  const agreed = JSON.parse(
+    approvals[0]?.tags.find((tag) => tag[0] === "first-job-team")?.[1] ?? "{}",
+  ).proposal;
+  expect(agreed.action.definition).not.toHaveProperty("runtime");
+  expect(agreed.action.definition).not.toHaveProperty("model");
+  expect(agreed.action.definition).not.toHaveProperty("provider");
+  expect(agreed.action.preparation.leaderPubkey).toBe(SCOUT);
+  const profiles = events.filter(
+    (event) =>
+      event.kind === 40013 &&
+      event.tags.some((tag) => tag[0] === "a" && tag[1]?.startsWith("30179:")),
+  );
+  expect(profiles).toHaveLength(1);
+  expect(
+    JSON.parse(profiles[0]?.content ?? "{}").payload.record.summary,
+  ).toContain("websites and manage social media");
+  await waitForAnimations(page);
+  await page.getByTestId("message-thread-panel").screenshot({
+    path: "test-results/first-job/07-approved-first-worker.png",
+  });
+  expect(errors).toEqual([]);
+});

@@ -2,6 +2,7 @@ import type { CreditPackList } from "./contracts";
 import type { FirstJobCheckoutAttempt } from "./firstJobCredits";
 import { FirstJobTaskRefused } from "./firstJobDispatch";
 import type { FirstJobRuntime } from "./firstJobRuntime";
+import type { FirstJobTeamProposal } from "./firstJobTeamApproval";
 import { FIRST_JOB_BRIEF_MAX_LENGTH } from "./firstJobStart";
 import type { FirstJobSuggestionPhase } from "./ui/FirstJobSuggestionView";
 import type { FirstJobFundingPhase } from "./ui/FirstJobFundingView";
@@ -12,6 +13,7 @@ export type FirstJobSessionSnapshot = {
   briefLocked: boolean;
   phase: FirstJobSuggestionPhase;
   error: string | null;
+  businessRepair: boolean;
   taskId: string | null;
   funding: {
     catalogue: CreditPackList | null;
@@ -48,6 +50,7 @@ export function createFirstJobSession(
     briefLocked: false,
     phase: "suggested",
     error: null,
+    businessRepair: false,
     taskId: null,
     funding: null,
   };
@@ -56,6 +59,7 @@ export function createFirstJobSession(
   let action: Promise<void> | null = null;
   let savedCheckout: FirstJobCheckoutAttempt | null = null;
   let storageUnavailable = false;
+  let dispatchPending = false;
   const busy = () => action !== null;
   function update(patch: Partial<FirstJobSessionSnapshot>) {
     state = { ...state, ...patch };
@@ -70,12 +74,14 @@ export function createFirstJobSession(
     try {
       const draft = runtime.draftStore.read(runtime.scope);
       const attempt = runtime.attemptStore.read(runtime.scope);
+      const preparation = runtime.preparationStore?.read(runtime.scope);
       const checkout = runtime.checkoutStore.read(runtime.scope);
       savedCheckout = checkout;
       storageUnavailable = false;
+      dispatchPending = !!attempt?.message;
       const next: Partial<FirstJobSessionSnapshot> = {
-        brief: attempt?.content ?? draft ?? state.brief,
-        briefLocked: !!attempt,
+        brief: attempt?.content ?? preparation?.content ?? draft ?? state.brief,
+        briefLocked: !!attempt || !!preparation,
         taskId: attempt?.work?.taskId ?? state.taskId,
       };
       if (attempt?.acknowledged) next.phase = "sent";
@@ -89,6 +95,11 @@ export function createFirstJobSession(
           next.error = attempt.message
             ? null
             : "Your earlier request is saved. Try again to resume it.";
+      } else if (preparation) {
+        next.phase = busy() ? "checking" : "error";
+        if (!busy())
+          next.error =
+            "Your approved team setup is saved. Try again to finish the same job.";
       }
       if (checkout && state.funding?.phase !== "funded") {
         next.funding = {
@@ -121,9 +132,9 @@ export function createFirstJobSession(
     action = pending;
     return pending;
   }
-  async function start() {
+  async function start(proposal?: FirstJobTeamProposal) {
     return run(async () => {
-      update({ phase: "checking", error: null });
+      update({ phase: "checking", error: null, businessRepair: false });
       try {
         const existing = await runtime.checkExistingRequest();
         if (existing) {
@@ -136,7 +147,7 @@ export function createFirstJobSession(
           });
           return;
         }
-        const result = await runtime.start(state.brief);
+        const result = await runtime.start(state.brief, proposal);
         refresh();
         if (result.kind === "sent")
           update({
@@ -159,10 +170,14 @@ export function createFirstJobSession(
               ? "sent"
               : error instanceof FirstJobTaskRefused
                 ? "error"
-                : state.briefLocked
+                : !storageUnavailable && dispatchPending
                   ? "uncertain"
                   : "error",
           error: messageOf(error),
+          businessRepair:
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "first-job-business-repair",
         });
       }
     });
@@ -274,6 +289,7 @@ export function createFirstJobSession(
           runtime.draftStore,
           runtime.attemptStore,
           runtime.checkoutStore,
+          ...(runtime.preparationStore ? [runtime.preparationStore] : []),
         ].map((store) => store.subscribe(runtime.scope, refresh));
         refresh();
       }

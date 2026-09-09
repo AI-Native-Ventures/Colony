@@ -5,6 +5,11 @@ import { ArrowRight } from "lucide-react";
 import { FounderLayout } from "../FounderLayout";
 import type { OnboardingServices } from "../../../contracts";
 import { isWebsite, normaliseWebsite } from "../../../flow/validation";
+import {
+  BUSINESS_NAME_MAX_LENGTH,
+  BUSINESS_SUMMARY_MAX_LENGTH,
+  businessTextLength,
+} from "../../../businessContextLimits";
 
 export type CompanyStage = "live" | "building";
 export type CompanyValues = {
@@ -18,7 +23,9 @@ export function companyReady(values: CompanyValues): boolean {
   return (
     !!values.company.trim() &&
     (!values.website.trim() || isWebsite(values.website)) &&
-    !!values.description.trim()
+    !!values.description.trim() &&
+    businessTextLength(values.company.trim()) <= BUSINESS_NAME_MAX_LENGTH &&
+    businessTextLength(values.description.trim()) <= BUSINESS_SUMMARY_MAX_LENGTH
   );
 }
 export function companyBlockedReason(values: CompanyValues): string | null {
@@ -27,6 +34,12 @@ export function companyBlockedReason(values: CompanyValues): string | null {
     return "Check the website address, or leave it blank.";
   if (!values.description.trim())
     return "Add a short description, or read your website.";
+  if (businessTextLength(values.company.trim()) > BUSINESS_NAME_MAX_LENGTH)
+    return "Use a business name of 200 characters or fewer.";
+  if (
+    businessTextLength(values.description.trim()) > BUSINESS_SUMMARY_MAX_LENGTH
+  )
+    return "Shorten your business summary to 4,000 characters or fewer.";
   return null;
 }
 
@@ -119,6 +132,7 @@ export function CompanyScreen({
           <Input
             id="onb-company-name"
             required
+            maxLength={BUSINESS_NAME_MAX_LENGTH}
             value={values.company}
             placeholder="Your business name"
             disabled={isSubmitting}
@@ -168,6 +182,7 @@ export function CompanyScreen({
             id="onb-company-description"
             rows={3}
             required
+            maxLength={BUSINESS_SUMMARY_MAX_LENGTH}
             value={values.description}
             placeholder="We help…"
             disabled={isSubmitting}
@@ -181,6 +196,13 @@ export function CompanyScreen({
               ? "Review this summary before Scout uses it. You can edit every detail."
               : "One sentence gives Scout a useful starting point."}
           </p>
+          {businessTextLength(values.description.trim()) >
+            BUSINESS_SUMMARY_MAX_LENGTH && (
+            <p className="onb-simple-error" role="alert">
+              Shorten your business summary to 4,000 characters or fewer before
+              continuing.
+            </p>
+          )}
         </div>
         {scanNote && (
           <p className="onb-simple-note" role="status">
