@@ -11,87 +11,97 @@ export function BusinessGuide() {
         aria-labelledby="guide-title"
       >
         <div className="section-heading">
-          <p className="eyebrow">How you use Colony</p>
-          <h2 id="guide-title">
-            Start with your business.
-            <br />
-            Then give your team a job.
-          </h2>
-          <p>
-            Set up your account, describe your business and choose your first
-            job. Keep the instructions, questions and results together.
-          </p>
+          <p className="eyebrow">How it works</p>
+          <h2 id="guide-title">Up and running in about ten minutes.</h2>
+          <p>Four steps. No coding, nothing to set up.</p>
         </div>
         <div className="guide-sequence">
           <article>
             <div className="guide-explanation">
               <span className="step-number">01</span>
-              <h3>Set up your business in Colony.</h3>
+              <h3>Tell Colony what your business does.</h3>
               <p>
-                Create your account and save the code that helps you recover
-                access. Then name your business and explain what it does. You
-                can describe a business idea if you are just starting out.
+                Type a few sentences, like “I run a plumbing company in Cape
+                Town.” Or paste your website address and Colony reads it.
               </p>
             </div>
             <div className="guide-message">
               <span>You tell Colony</span>
               <blockquote>
-                “We help small teams learn new skills through practical training
-                sessions.”
+                “I run a plumbing company in Cape Town. We do emergency
+                call-outs and bathroom fittings.”
               </blockquote>
             </div>
           </article>
           <article>
             <div className="guide-explanation">
               <span className="step-number">02</span>
-              <h3>Choose when to start your first job.</h3>
+              <h3>Meet your team.</h3>
               <p>
-                Colony opens a Welcome conversation with a suggested job. Edit
-                the instructions to say what you need, then choose “Start this
-                job.” You can also explore the app first.
+                Colony suggests the AI employees a business like yours needs.
+                For a plumber: one to find new customers, one to write quotes
+                and emails, one to manage the others. You choose which to keep.
               </p>
             </div>
             <div className="guide-message">
-              <span>You write the instructions</span>
+              <span>Colony suggests</span>
               <blockquote>
-                “Use these meeting notes to list the training topics the client
-                asked for. Point out any details we still need.”
+                “Three employees for your plumbing company: one to find new
+                customers, one to write quotes and emails, one to manage the
+                others. Keep all three?”
               </blockquote>
               <div className="guide-assignment">
                 <AntMark />
-                <span>
-                  You review the instructions before starting the job.
-                </span>
+                <span>You choose which employees to keep.</span>
               </div>
             </div>
           </article>
           <article>
             <div className="guide-explanation">
               <span className="step-number">03</span>
-              <h3>Check the result. Say what comes next.</h3>
-              <p>
-                Follow the job in its thread, where the replies stay together.
-                Answer questions, read the work and ask for changes. You decide
-                how to use the result.
-              </p>
+              <h3>Give them work.</h3>
+              <p>Type a job the way you would text a staff member.</p>
             </div>
             <div className="guide-message">
-              <span>You review the work</span>
+              <span>You write the job</span>
               <blockquote>
-                “Add teamwork to the list. We also need to ask how many people
-                will attend.”
+                “Find 20 offices in Sandton that might need a plumber, and write
+                a short email to each one.”
               </blockquote>
               <div className="guide-assignment">
                 <AntMark />
-                <span>Your feedback becomes the next instruction.</span>
+                <span>
+                  You can change the instructions before the job starts.
+                </span>
+              </div>
+            </div>
+          </article>
+          <article>
+            <div className="guide-explanation">
+              <span className="step-number">04</span>
+              <h3>Check and approve.</h3>
+              <p>
+                The finished work comes back in the chat. Anything going out in
+                your name, like an email or a post, shows an Approve button
+                first. Nothing is sent until you click it.
+              </p>
+            </div>
+            <div className="guide-message">
+              <span>Your employee reports</span>
+              <blockquote>
+                “Done: 20 offices found, with a contact name for each. 20 emails
+                drafted. Send them?”
+              </blockquote>
+              <div className="guide-assignment">
+                <AntMark />
+                <span>Nothing is sent until you click Approve.</span>
               </div>
             </div>
           </article>
         </div>
         <p className="guide-availability">
-          Early access is limited. AI work needs credits and an available
-          employee with the right tools. We’ll explain what is available before
-          you join.
+          Early access is limited. We’ll explain what is available and what it
+          costs before you join.
         </p>
       </section>
       <section className="business-control" aria-labelledby="control-title">

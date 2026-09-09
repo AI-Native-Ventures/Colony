@@ -70,6 +70,10 @@
   background: #e5f2e9;
   color: #416d4f;
 }
+.guide-sequence > article:nth-child(4) .step-number {
+  background: #fdf5e6;
+  color: #8a6d2f;
+}
 .guide-explanation h3 {
   font-size: 23px;
   letter-spacing: -0.025em;
@@ -96,6 +100,10 @@
 .guide-sequence > article:nth-child(3) .guide-message {
   background: linear-gradient(130deg, #eaf5ee, #f2f5e9);
   border-color: #e1ede5;
+}
+.guide-sequence > article:nth-child(4) .guide-message {
+  background: linear-gradient(130deg, #fdf5e6, #fdfaf5);
+  border-color: #f0e6c8;
 }
 .guide-message > span {
   display: block;
