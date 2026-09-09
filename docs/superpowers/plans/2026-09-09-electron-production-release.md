@@ -41,6 +41,9 @@ existing Electron values win, and the completion marker is written only after
 verified destination writes. Failures keep the recovery page visible and retryable.
 Native identity, provider credentials and agent files continue through the existing
 native namespace rather than being recopied by this frontend migration.
+Migration also requires the nested native process to resolve the expected macOS
+bundle identifier. An absent or unrelated process bundle fails closed instead of
+marking an unrelated empty WebKit store as a successful migration.
 
 Candidate and explicit QA profiles use an incognito hidden WebKit store, even
 though their outer application bundle may have the stable bundle identifier. The

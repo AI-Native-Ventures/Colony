@@ -5,7 +5,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 const manifest = JSON.parse(
@@ -95,6 +102,27 @@ try {
   console.log(
     "PASS: real private WebKit export, two businesses, owner marker, draft and theme imported before React; relaunch preserves Electron edits. Source immutability is covered by pure migration tests; signed default-store upgrade remains a separate gate.",
   );
+} catch (error) {
+  const page = app ? await app.firstWindow().catch(() => null) : null;
+  const state = page
+    ? await page
+        .evaluate(() => ({
+          pathname: location.pathname,
+          rootMounted: !!document.querySelector("#root")?.children.length,
+          status: document.querySelector("#status")?.textContent ?? null,
+          migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
+        }))
+        .catch(() => ({ status: "The renderer was unavailable" }))
+    : { status: "No app window was available" };
+  console.error("Migration fixture startup state:", JSON.stringify(state));
+  if (process.env.COLONY_MIGRATION_PROOF_DIR) {
+    await mkdir(process.env.COLONY_MIGRATION_PROOF_DIR, { recursive: true });
+    await writeFile(
+      path.join(process.env.COLONY_MIGRATION_PROOF_DIR, "startup-state.json"),
+      JSON.stringify(state, null, 2),
+    );
+  }
+  throw error;
 } finally {
   try {
     await app?.close();

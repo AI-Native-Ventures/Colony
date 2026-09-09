@@ -22,6 +22,37 @@ fn valid_export_origin(label: &str, url: &url::Url) -> bool {
     label == "main" && url.as_str() == "tauri://localhost/electron-migration.html"
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn source_bundle_matches(identifier: Option<&str>, fixture: bool) -> bool {
+    identifier
+        == Some(if fixture {
+            "ventures.ainative.colony.onboarding-fixture"
+        } else {
+            "xyz.block.buzz.app"
+        })
+}
+
+fn verify_source_bundle() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // The nested native child must resolve the original bundle association;
+        // matching Tauri's configured data directory alone does not prove this.
+        let identifier = objc2_foundation::NSBundle::mainBundle()
+            .bundleIdentifier()
+            .map(|value| value.to_string());
+        if source_bundle_matches(identifier.as_deref(), cfg!(feature = "onboarding-fixture")) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Colony could not identify its original app storage (native bundle: {}). Your original data is unchanged.",
+                identifier.as_deref().unwrap_or("unbundled")
+            ))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("App state migration is available only on macOS".into())
+}
+
 fn validate_entries(entries: &[(String, String)]) -> Result<(), String> {
     let allowed = |key: &str| {
         [
@@ -82,6 +113,7 @@ pub(crate) async fn electron_read_frontend_migration() -> Result<Entries, String
     if !enabled() {
         return Err("App state migration is unavailable in this build".into());
     }
+    verify_source_bundle()?;
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
             let notified = READY.notified();
@@ -142,6 +174,17 @@ pub(crate) fn electron_frontend_migration_fixture() -> Option<Entries> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn migration_requires_the_expected_process_bundle_not_only_the_data_identifier() {
+        assert!(source_bundle_matches(Some("xyz.block.buzz.app"), false));
+        assert!(source_bundle_matches(
+            Some("ventures.ainative.colony.onboarding-fixture"),
+            true
+        ));
+        assert!(!source_bundle_matches(None, false));
+        assert!(!source_bundle_matches(Some("xyz.block.buzz.app"), true));
+        assert!(!source_bundle_matches(Some("unrelated.app"), false));
+    }
     #[test]
     fn only_the_original_main_app_origin_can_export() {
         for (label, raw, allowed) in [

@@ -36,6 +36,8 @@ jobs:
             .
             desktop/src-tauri
           shared-key: electron-beta-release
+          cache-on-failure: true
+          cache-workspace-crates: true
       - name: Install dependencies
         run: just desktop-install-ci
       - name: Build private candidate with production bundle and updater contract
@@ -83,6 +85,8 @@ jobs:
             .
             desktop/src-tauri
           shared-key: electron-beta-release
+          cache-on-failure: true
+          cache-workspace-crates: true
       - name: Install dependencies
         run: just desktop-install-ci
       - name: Build isolated WebKit migration fixture
@@ -92,12 +96,15 @@ jobs:
           set -euo pipefail
           VERSION=$(jq -r .version desktop/package.json)
           export COLONY_MIGRATION_MANIFEST="desktop/electron-dist/${VERSION}-release-arm64-onboarding-fixture/manifest.json"
+          export COLONY_MIGRATION_PROOF_DIR="$RUNNER_TEMP/colony-migration-proof"
           node desktop/src-electron/frontend-migration-smoke.mjs
       - name: Preserve fixture metadata
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: colony-electron-frontend-migration-proof
-          path: desktop/electron-dist/**/manifest.json
+          path: |
+            desktop/electron-dist/**/manifest.json
+            ${{ runner.temp }}/colony-migration-proof
           if-no-files-found: warn
           retention-days: 7

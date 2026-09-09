@@ -346,8 +346,12 @@ async function boot() {
       if (restored !== true)
         throw new Error("Saved app state could not be restored");
       window.webContents.session.flushStorageData();
-    } catch {
+    } catch (error) {
       // Keep the recovery page available; never mount an apparently empty account.
+      console.error(
+        "Colony app state migration failed:",
+        error instanceof Error ? error.message : "App state transfer failed",
+      );
       window.showInactive();
       return;
     }

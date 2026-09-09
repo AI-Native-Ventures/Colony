@@ -43,7 +43,12 @@ window.__COLONY_FRONTEND_MIGRATION__ = (async () => {
   }
   throw new Error("This app state transfer is not available in this window.");
 })();
-window.__COLONY_FRONTEND_MIGRATION__.catch(() => {
+window.__COLONY_FRONTEND_MIGRATION__.catch((error) => {
+  // Only this bundled page and native migration commands produce these errors.
+  // Keeping the bounded reason lets hosted proof report startup failure safely.
+  window.__COLONY_FRONTEND_MIGRATION_ERROR__ = String(
+    error instanceof Error ? error.message : error,
+  ).slice(0, 500);
   document.getElementById("status").textContent =
     "Colony could not restore your saved app state. Your original data is unchanged. Free some storage if needed, then retry.";
   if (window.colonyDesktop) {

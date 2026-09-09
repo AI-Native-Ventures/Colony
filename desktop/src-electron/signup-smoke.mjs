@@ -101,6 +101,13 @@ try {
     await route.continue();
   });
   await page.waitForFunction(() => !!window.colonyDesktop);
+  // The migration page has the same preload. Wait until app startup completes
+  // before reloading, otherwise this fixture interrupts the state transfer.
+  await page.waitForFunction(
+    () => !!document.querySelector("#root")?.children.length,
+    {},
+    { timeout: 30_000 },
+  );
   assert.equal(
     await page.evaluate(() =>
       window.colonyDesktop.request("invoke", {
@@ -214,6 +221,22 @@ try {
   console.log(
     "Packaged Account -> Recovery -> relaunch, real renderer KDF and native backups: PASS (local HTTP fixture only)",
   );
+} catch (error) {
+  const page = application
+    ? await application.firstWindow().catch(() => null)
+    : null;
+  if (page) {
+    const state = await page
+      .evaluate(() => ({
+        pathname: location.pathname,
+        rootMounted: !!document.querySelector("#root")?.children.length,
+        migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
+      }))
+      .catch(() => ({ status: "The renderer was unavailable" }));
+    // No form content, storage values or recovery codes enter diagnostics.
+    console.error("Signup fixture startup state:", JSON.stringify(state));
+  }
+  throw error;
 } finally {
   try {
     await application?.close();
