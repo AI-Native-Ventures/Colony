@@ -119,9 +119,11 @@ test.describe("terminal workspace tab", () => {
     await page.getByTestId("workspace-create-scratchpad").click();
     await page.getByRole("tab", { name: "Terminal" }).click();
     await expect(page.getByTestId("workspace-terminal-body")).toBeVisible();
-    await expect(
-      page.getByTestId("workspace-terminal-body").locator(".xterm-rows"),
-    ).toContainText("mock-output:h");
+    await expect
+      .poll(async () =>
+        terminalText(page.getByTestId("workspace-terminal-body")),
+      )
+      .toContain("mock-output:h");
 
     const rootBefore = await page.evaluate(
       () => getComputedStyle(document.documentElement).fontSize,
