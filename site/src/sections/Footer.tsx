@@ -7,7 +7,7 @@ export function Footer() {
       <div className="colony-footer__inner">
         <div className="colony-footer__top">
           <div className="colony-footer__about">
-            <h2>Run your business in Colony.</h2>
+            <h2>Run your business with a team of AI employees.</h2>
             <p>
               An app for assigning jobs, following progress and reviewing
               results with people and AI employees.
@@ -17,7 +17,7 @@ export function Footer() {
           <nav className="colony-footer__explore" aria-label="Explore Colony">
             <h3>Explore</h3>
             <a href="#how-it-works">How it works</a>
-            <a href="#inside-colony">See an example</a>
+            <a href="#team">What they can do</a>
             <a href="#early-access">Apply for early access</a>
           </nav>
 
@@ -39,7 +39,12 @@ export function Footer() {
         </a>
 
         <div className="colony-footer__bottom">
-          <p>Built by AI Native Ventures</p>
+          <p>
+            Built by AI Native Ventures · Built on Buzz ·{" "}
+            <a href="https://github.com/AI-Native-Ventures/Colony">
+              Developers: documentation and source code
+            </a>
+          </p>
           <a href="#main">
             Back to top <span aria-hidden="true">↑</span>
           </a>
