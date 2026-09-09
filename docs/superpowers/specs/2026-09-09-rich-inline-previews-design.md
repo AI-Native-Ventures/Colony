@@ -1,6 +1,6 @@
 # Colony rich previews — first release
 
-**Status:** Revised product scope following the user's simplification on 2026-09-09. This replaces the earlier editing-heavy proposal for the first release. Application implementation has not started in this task.
+**Status:** Revised product scope following the user's simplification on 2026-09-09. This replaces the earlier editing-heavy proposal for the first release. Implementation is in draft PR #671; local targeted checks have passed. Full GitHub CI, production merge and live proof remain pending.
 
 ## Product contract
 

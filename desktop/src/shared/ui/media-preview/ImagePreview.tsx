@@ -45,12 +45,18 @@ export function ImagePreview({
     () => new Set(),
   );
   const [direction, setDirection] = React.useState(0);
+  const [intrinsicSize, setIntrinsicSize] = React.useState<{
+    src: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const reducedMotion = useReducedMotion();
   const expandButton = React.useRef<HTMLButtonElement>(null);
   const pointer = React.useRef<{ x: number; y: number } | null>(null);
   const activeIndex = clampMediaIndex(index, items.length);
   const item = items[activeIndex];
   if (!item) return null;
+  const dimensions = intrinsicSize?.src === item.src ? intrinsicSize : item;
   const label = title ?? item.filename ?? item.alt ?? "Image";
   const filename =
     item.filename ??
@@ -125,7 +131,9 @@ export function ImagePreview({
     <div
       className={cn(
         "relative w-full overflow-hidden bg-muted/20",
-        expanded ? "h-[min(72vh,55rem)]" : "max-h-[min(65vh,36rem)]",
+        expanded
+          ? "h-[min(72vh,55rem)]"
+          : items.length > 1 && "max-h-[min(65vh,36rem)]",
       )}
       style={{
         ...(expanded
@@ -133,8 +141,8 @@ export function ImagePreview({
           : {
               aspectRatio: mediaStageRatio(
                 items.length,
-                item.width,
-                item.height,
+                dimensions.width,
+                dimensions.height,
               ),
             }),
         touchAction: "pan-y",
@@ -179,6 +187,20 @@ export function ImagePreview({
           }
           key={item.src}
           loading="lazy"
+          onLoad={(event) => {
+            if (items.length !== 1) return;
+            const { naturalWidth: width, naturalHeight: height } =
+              event.currentTarget;
+            if (width > 0 && height > 0) {
+              setIntrinsicSize((current) =>
+                current?.src === item.src &&
+                current.width === width &&
+                current.height === height
+                  ? current
+                  : { src: item.src, width, height },
+              );
+            }
+          }}
           onError={() =>
             setFailed((current) => new Set([...current, item.src]))
           }

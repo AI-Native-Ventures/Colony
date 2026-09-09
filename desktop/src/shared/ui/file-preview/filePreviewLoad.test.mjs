@@ -187,3 +187,27 @@ test("local preview rejects oversized declared and encoded values before base64 
   );
   assert.equal(decode.mock.callCount(), 0);
 });
+
+test("already loaded native-picker bytes preview without reinterpreting the chosen path as a message", async () => {
+  setNativeBridge(
+    createMockNativeBridge(() => {
+      throw new Error("Already loaded file must not be read again");
+    }),
+  );
+  const bytes = await loadFilePreview(
+    { workspaceBytesBase64: btoa("chosen,value\nA,01") },
+    signal(),
+  );
+  assert.equal(new TextDecoder().decode(bytes), "chosen,value\nA,01");
+  await assert.rejects(
+    loadFilePreview(
+      {
+        workspaceBytesBase64: "A".repeat(
+          Math.ceil((MAX_FILE_PREVIEW_BYTES + 1) / 3) * 4,
+        ),
+      },
+      signal(),
+    ),
+    /8 MB/,
+  );
+});

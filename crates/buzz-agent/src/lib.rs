@@ -527,6 +527,7 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
                 "_meta": { "colony": {
                     "closeSessionMethod": "_colony/session/close",
                     "modelCatalogDiscovery": true,
+                    "modelSelectionScope": "configuredProvider",
                 } },
                 "models": {
                     "currentModelId": app.cfg.model,

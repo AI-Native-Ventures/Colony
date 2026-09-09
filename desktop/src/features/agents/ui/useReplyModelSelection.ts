@@ -5,8 +5,10 @@ import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { getAgentModels } from "@/shared/api/tauri";
 import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
 import {
+  acknowledgeReplyModelSelection,
   replyModelOptions,
   replyModelTag,
+  restoreReplyModelSelection,
   type ReplyModelSelection,
 } from "../lib/replyModelSelection";
 
@@ -31,11 +33,21 @@ export function useReplyModelSelection(input: {
   );
   const scopeKey = `${relayUrl}:${input.scope ?? ""}:${target?.pubkey ?? ""}`;
   const previousScope = React.useRef(scopeKey);
+  const conversation = `${relayUrl}:${input.scope ?? ""}`;
+  const currentConversation = React.useRef(conversation);
   // Clear only a local unsent choice when the actual conversation/recipient changes.
   if (previousScope.current !== scopeKey) {
     previousScope.current = scopeKey;
-    setSelection(null);
+    // Restoring mentions after a failed send can happen one render after the
+    // captured selection. Keep it when it belongs to the restored recipient.
+    if (
+      currentConversation.current !== conversation ||
+      selection?.targetPubkey !== target?.pubkey
+    ) {
+      setSelection(null);
+    }
   }
+  currentConversation.current = conversation;
   const discovery = useQuery({
     queryKey: ["reply-models", relayUrl, input.scope, target?.pubkey],
     queryFn: () => getAgentModels(target?.pubkey ?? "", true),
@@ -60,13 +72,27 @@ export function useReplyModelSelection(input: {
       return null;
     }
   }, [selection, input.recipientPubkeys, discovery.data]);
-  const afterSend = React.useCallback((tag: string[]) => {
-    setSelection((current) =>
-      current?.targetPubkey === tag[2] && current.modelId === tag[3]
-        ? null
-        : current,
-    );
-  }, []);
+  const afterSend = React.useCallback(
+    (tag: string[]) => {
+      setSelection((current) =>
+        acknowledgeReplyModelSelection(
+          current,
+          { selection, conversation },
+          currentConversation.current,
+          tag,
+        ),
+      );
+    },
+    [selection, conversation],
+  );
+  const restore = React.useCallback(
+    (tag: string[]) => {
+      if (currentConversation.current === conversation) {
+        setSelection((current) => restoreReplyModelSelection(current, tag));
+      }
+    },
+    [conversation],
+  );
   return {
     visible: input.enabled && targets.length > 0,
     targets,
@@ -89,6 +115,11 @@ export function useReplyModelSelection(input: {
       ),
     capture,
     afterSend,
+    restore,
+    sendCallbacks: {
+      onReplyModelSent: afterSend,
+      onReplyModelRestored: restore,
+    },
   };
 }
 export type ReplyModelSelectionControl = ReturnType<

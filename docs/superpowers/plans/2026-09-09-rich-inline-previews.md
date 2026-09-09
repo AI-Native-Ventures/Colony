@@ -135,3 +135,17 @@ node --import ./test-loader.mjs --experimental-strip-types --experimental-test-m
 - [ ] Wait for the develop merge/queue gate. Inspect the exact production promotion diff and release conventions, then open or update the develop-to-main promotion PR.
 - [ ] Require all non-skipped promotion checks to pass before merging. Do not disable rules or bypass a red gate.
 - [ ] Verify main contains the feature, inspect the resulting deployment/package workflow state, and report merge, deployment, published package and real runtime evidence separately. Mark the goal complete only once the requested production merge and required evidence are obtained.
+
+## Integration checkpoint — first GitHub run
+
+- Worktree: `/private/tmp/colony-rich-inline-20260909`, branch `codex/rich-inline-previews`, base `5cfa527139`.
+- Commit `bf03c3e9ce` pushed; draft PR https://github.com/AI-Native-Ventures/Colony/pull/671 starts full remote CI.
+- Shared viewers, real gallery files, theme integration, media1.1 manifest/trust update and scoped model runtime are implemented. Source verification found SVG/audio uploads were still blocked by the old media pipeline. Follow-up work adds strict shared validators and canonical audio sanitation; no blanket MIME denial removal.
+- Targeted Node regression checks and changed-file formatting passed. No heavy local tests, builds or Cargo compilation have run.
+- Remote browser/native proof, develop integration, production promotion and publication remain pending.
+
+## GitHub findings — first remote matrix
+
+- Develop advanced to `a414fa900c` (stable Electron ad-hoc release); merged into this branch as `9c86cfce86`. Desktop feature version advances to `0.16.10`; relay version is `0.11.9`.
+- CI run `34383742160` reached green Rust Lint, Web and Security. Linux desktop jobs stopped in dependency installation because the runner Chrome APT repository served a package index with a mismatched hash. No integrity checks were weakened.
+- Electron run `34383742113` caught a missing `relayOrigin` binding in Markdown; repairing the implementation before the next remote matrix. Browser and packaged feature proof have not yet run successfully.

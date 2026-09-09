@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// The binary path is resolved before this point, so a shell and `PATH` are not
 /// needed. Windows keeps only the OS variables required for process/DLL lookup.
-fn ffmpeg_command(path: &std::path::Path) -> std::process::Command {
+pub(super) fn ffmpeg_command(path: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new(path);
     // File-based media jobs and version probes must not inherit the desktop's
     // private transport; interactive ffmpeg input is never used here.
@@ -135,7 +135,7 @@ const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 /// enough progress/diagnostic output to fill the OS pipe buffer (~64 KiB),
 /// the child blocks on write() and never exits — causing a false timeout.
 /// `-loglevel error` suppresses progress spam, keeping stderr small.
-fn run_ffmpeg_with_cancellation(
+pub(super) fn run_ffmpeg_with_cancellation(
     cmd: &mut std::process::Command,
     timeout: std::time::Duration,
     cancellation: Option<&CancellationToken>,

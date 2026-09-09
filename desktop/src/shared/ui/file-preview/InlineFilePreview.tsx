@@ -33,6 +33,8 @@ export { supportsInlineFilePreview } from "./filePreviewModel";
 export type InlineFilePreviewProps = {
   href?: string;
   localPath?: string;
+  /** Already loaded bytes from an explicitly opened workspace file. */
+  workspaceBytesBase64?: string;
   filename: string;
   mime?: string;
   size?: number;
@@ -53,6 +55,7 @@ export function InlineFilePreview(props: InlineFilePreviewProps) {
 function FilePreviewInstance({
   href,
   localPath,
+  workspaceBytesBase64,
   filename,
   mime = "",
   size,
@@ -111,7 +114,7 @@ function FilePreviewInstance({
     void (async () => {
       if (size !== undefined) assertFilePreviewSize(size);
       const data = await loadFilePreview(
-        { href, localPath },
+        { href, localPath, workspaceBytesBase64 },
         controller.signal,
       );
       const parsed =
@@ -138,11 +141,20 @@ function FilePreviewInstance({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [visible, kind, href, localPath, filename, size, retry]);
+  }, [
+    visible,
+    kind,
+    href,
+    localPath,
+    workspaceBytesBase64,
+    filename,
+    size,
+    retry,
+  ]);
 
   const download = () => {
     void downloadFilePreviewOriginal(
-      { href, localPath },
+      { href, localPath, workspaceBytesBase64 },
       filename,
       mime,
       bytes,

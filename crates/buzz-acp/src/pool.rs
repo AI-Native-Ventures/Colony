@@ -237,6 +237,13 @@ impl SessionState {
     /// threads keep their sessions and the channel's core/canvas renders stay
     /// warm.
     pub fn invalidate_channel(&mut self, channel_id: &Uuid) -> bool {
+        if let Some(saved) = self
+            .scoped_reply_session
+            .as_mut()
+            .filter(|saved| saved.key.0 == *channel_id)
+        {
+            saved.preserve_original = false;
+        }
         self.turn_counts.retain(|(cid, _), _| cid != channel_id);
         self.core_sections.remove(channel_id);
         self.canvas_sections.remove(channel_id);
@@ -251,6 +258,9 @@ impl SessionState {
 
     /// Invalidate all sessions and turn counters (e.g. after agent exit).
     pub fn invalidate_all(&mut self) {
+        if let Some(saved) = self.scoped_reply_session.as_mut() {
+            saved.preserve_original = false;
+        }
         self.sessions.clear();
         self.turn_counts.clear();
         self.heartbeat_session = None;
@@ -486,6 +496,9 @@ fn apply_completed_before_control_signal(
         control_signal,
         ControlSignal::Rotate | ControlSignal::SwitchModel(_)
     ) {
+        if let Some(saved) = state.scoped_reply_session.as_mut() {
+            saved.preserve_original = false;
+        }
         state.invalidate(source, thread_root);
     }
 }
@@ -1252,7 +1265,11 @@ fn apply_onboarding_resolution(
     cid: Uuid,
     resolution: OnboardingResolution,
 ) -> bool {
-    let has_session = state.has_channel_session(&cid);
+    let has_session = state.has_channel_session(&cid)
+        || state
+            .scoped_reply_session
+            .as_ref()
+            .is_some_and(|saved| saved.key.0 == cid && saved.preserve_original);
     let should_invalidate = matches!(
         resolution,
         OnboardingResolution::Settled(status)
@@ -2890,6 +2907,9 @@ pub async fn run_prompt_task(
                     if let ControlSignal::SwitchModel(ref model_id) = control_signal {
                         agent.desired_model = Some(model_id.clone());
                         agent.model_overridden = true;
+                    }
+                    if matches!(control_signal, ControlSignal::Rotate | ControlSignal::SwitchModel(_)) {
+                        if let Some(saved) = agent.state.scoped_reply_session.as_mut() { saved.preserve_original = false; }
                     }
                     // Control signal received. Guard against Race 1: the turn may
                     // have completed naturally just as cancel fired.
@@ -7846,6 +7866,48 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
         assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
         assert_eq!(s.heartbeat_turn_count, 7);
+    }
+
+    #[test]
+    fn explicit_rotation_does_not_restore_the_borrowed_ordinary_session() {
+        for signal in [
+            ControlSignal::Rotate,
+            ControlSignal::SwitchModel("new-model".into()),
+        ] {
+            let (mut state, channel, _) = make_state();
+            crate::reply_model::begin(&mut state, (channel, None)).unwrap();
+            apply_completed_before_control_signal(
+                &mut state,
+                &PromptSource::Channel(channel),
+                None,
+                &signal,
+            );
+            assert!(
+                !state
+                    .scoped_reply_session
+                    .as_ref()
+                    .unwrap()
+                    .preserve_original
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_resolution_invalidates_even_a_temporarily_borrowed_session() {
+        let (mut state, channel, _) = make_state();
+        crate::reply_model::begin(&mut state, (channel, None)).unwrap();
+        assert!(apply_onboarding_resolution(
+            &mut state,
+            channel,
+            OnboardingResolution::Settled(true),
+        ));
+        assert!(
+            !state
+                .scoped_reply_session
+                .as_ref()
+                .unwrap()
+                .preserve_original
+        );
     }
 
     #[test]

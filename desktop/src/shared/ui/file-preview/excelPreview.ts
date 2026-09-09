@@ -33,10 +33,22 @@ export function parseExcelPreview(bytes: Uint8Array): PreviewWorkbook {
   const sheets: PreviewSheet[] = names.map((name) => {
     const sheet = book.Sheets[name];
     if (!sheet) throw new Error("A worksheet could not be read.");
-    const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
-    const full = XLSX.utils.decode_range(
-      sheet["!fullref"] || sheet["!ref"] || "A1",
-    );
+    const sourceRange = sheet["!fullref"] || sheet["!ref"];
+    const full = sourceRange ? XLSX.utils.decode_range(sourceRange) : null;
+    // SheetJS replaces a range wholly beyond sheetRows with A1. Do not turn
+    // that placeholder (or a genuinely empty sheet) into invented source data.
+    if (!full || full.s.r >= MAX_PREVIEW_ROWS) {
+      return {
+        name,
+        rows: [],
+        firstRow: full?.s.r ?? 0,
+        firstColumn: full?.s.c ?? 0,
+        totalRows: full ? full.e.r - full.s.r + 1 : 0,
+        totalColumns: full ? full.e.c - full.s.c + 1 : 0,
+        truncated: Boolean(full),
+      };
+    }
+    const range = XLSX.utils.decode_range(sheet["!ref"] || sourceRange || "A1");
     const lastRow = Math.min(range.e.r, range.s.r + MAX_PREVIEW_ROWS - 1);
     const lastColumn = Math.min(range.e.c, range.s.c + MAX_PREVIEW_COLUMNS - 1);
     let truncated = lastRow < full.e.r || lastColumn < full.e.c;

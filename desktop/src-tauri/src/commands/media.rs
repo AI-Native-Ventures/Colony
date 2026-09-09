@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app_state::AppState;
 use crate::relay::{parse_json_response, relay_api_base_url_with_override, relay_error_message};
 
+use super::media_audio::{audio_input_format, canonical_audio_filename, prepare_audio_bytes};
 use super::media_transcode::{
     has_heic_extension, is_heic_file, is_video_file, transcode_and_extract_poster,
     transcode_and_extract_poster_with_cancellation, transcode_heic_path_to_jpeg_bytes,
@@ -115,7 +116,7 @@ fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
 
 /// MIME types blocked from upload — mirrors the server's generic-file deny-list.
 ///
-/// Active-content XSS carriers (JS, SVG) and native executables. Other types,
+/// Active-content XSS carriers and executables. Declarative SVG passes the shared validator first. Other types,
 /// including HTML, are accepted as downloads; un-sniffable files fall back to
 /// `application/octet-stream`. XHTML remains blocked in lockstep with the relay.
 const BLOCKED_MIME: &[&str] = &[
@@ -299,6 +300,13 @@ pub(crate) fn sanitize_image_for_upload(body: Vec<u8>, mime: &str) -> Result<Vec
 }
 
 pub(crate) fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
+    if buzz_core_pkg::media_svg::is_svg_candidate(body) {
+        buzz_core_pkg::media_svg::validate_svg(body).map_err(|error| error.to_string())?;
+        return Ok("image/svg+xml".to_string());
+    }
+    if buzz_core_pkg::media_audio::validate_canonical_wav(body).is_ok() {
+        return Ok("audio/wav".to_string());
+    }
     let mime = infer::get(body)
         .map(|t| t.mime_type().to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());
@@ -510,18 +518,45 @@ pub async fn upload_media(
     }
 
     use std::io::Read;
-    let mut body = Vec::new();
-    file.read_to_end(&mut body)
-        .map_err(|e| format!("failed to read file: {e}"))?;
+    let mut header = [0u8; 4096];
+    let count = file.read(&mut header).map_err(|error| error.to_string())?;
+    let audio = audio_input_format(
+        &header[..count],
+        path.file_name().and_then(|name| name.to_str()),
+    );
+    let mut body = header[..count].to_vec();
+    if audio.is_some() {
+        let cap = buzz_core_pkg::media_audio::MAX_CANONICAL_AUDIO_BYTES;
+        (&mut file)
+            .take((cap + 1 - count) as u64)
+            .read_to_end(&mut body)
+            .map_err(|_| "Could not read audio source.".to_string())?;
+    } else {
+        file.read_to_end(&mut body)
+            .map_err(|error| format!("failed to read file: {error}"))?;
+    }
     drop(file);
 
     if is_temp {
         let _ = std::fs::remove_file(&fd_path);
     }
 
+    let body = if let Some(format) = audio {
+        tokio::task::spawn_blocking(move || prepare_audio_bytes(body, format, None))
+            .await
+            .map_err(|_| "Audio conversion failed.".to_string())??
+    } else {
+        body
+    };
     let mime = detect_and_validate_mime(&body)?;
     let body = sanitize_image_for_upload(body, &mime)?;
-    do_upload(body, &mime, &state, None, None).await
+    let mut descriptor = do_upload(body, &mime, &state, None, None).await?;
+    if audio.is_some() {
+        descriptor.filename = Some(canonical_audio_filename(
+            path.file_name().and_then(|name| name.to_str()),
+        ));
+    }
+    Ok(descriptor)
 }
 
 /// Read a picked path through the TOCTOU-safe pipeline (fd pin → sniff →
@@ -546,6 +581,10 @@ async fn process_picked_path(
     // extension still tells us the webview can't render them. Computed before
     // the closure since `path` isn't moved in.
     let heic_by_ext = has_heic_extension(&path);
+    let audio_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
 
     // All sync I/O (sniff, transcode, read) runs off the async runtime to
     // avoid blocking Tokio worker threads during long ffmpeg transcodes.
@@ -557,7 +596,17 @@ async fn process_picked_path(
             let mut header = [0u8; 4096];
             let n = file.read(&mut header).map_err(|e| e.to_string())?;
 
-            if is_video_file(&header[..n]) {
+            if let Some(format) = audio_input_format(&header[..n], audio_name.as_deref()) {
+                if images_only {
+                    return Err("Please choose an image file.".to_string());
+                }
+                let cap = buzz_core_pkg::media_audio::MAX_CANONICAL_AUDIO_BYTES;
+                let mut bytes = header[..n].to_vec();
+                file.take((cap + 1 - n) as u64)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "Could not read audio source.".to_string())?;
+                prepare_audio_bytes(bytes, format, None).map(|wav| (wav, None))
+            } else if is_video_file(&header[..n]) {
                 if images_only {
                     return Err("Please choose an image file.".to_string());
                 }
@@ -610,10 +659,15 @@ async fn process_picked_path(
         }
     }
 
-    descriptor.filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(sanitize_filename);
+    descriptor.filename = if mime == "audio/wav" {
+        Some(canonical_audio_filename(
+            path.file_name().and_then(|name| name.to_str()),
+        ))
+    } else {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(sanitize_filename)
+    };
 
     Ok(descriptor)
 }
@@ -725,7 +779,16 @@ pub(super) async fn upload_media_bytes_inner(
         .as_deref()
         .is_some_and(|name| has_heic_extension(std::path::Path::new(name)));
 
-    let (body, poster_bytes) = if is_video_file(&data) {
+    let audio_format = audio_input_format(&data, filename.as_deref());
+    let (body, poster_bytes) = if let Some(format) = audio_format {
+        let cancellation = cancellation.cloned();
+        let wav = tokio::task::spawn_blocking(move || {
+            prepare_audio_bytes(data, format, cancellation.as_ref())
+        })
+        .await
+        .map_err(|_| "Audio conversion failed.".to_string())??;
+        (wav, None)
+    } else if is_video_file(&data) {
         emit_media_upload_phase(&app, progress_id.as_deref(), "processing-video");
         // Video: write to temp → transcode + extract poster → read results.
         // All blocking I/O runs off the async runtime via spawn_blocking.
@@ -790,7 +853,11 @@ pub(super) async fn upload_media_bytes_inner(
         }
     }
 
-    descriptor.filename = filename.as_deref().map(sanitize_filename);
+    descriptor.filename = if audio_format.is_some() {
+        Some(canonical_audio_filename(filename.as_deref()))
+    } else {
+        filename.as_deref().map(sanitize_filename)
+    };
 
     Ok(descriptor)
 }

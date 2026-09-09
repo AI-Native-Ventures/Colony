@@ -9,6 +9,9 @@ use tokio::sync::OnceCell;
 
 use crate::{config::Config, AgentError, ModelEntry};
 
+const MAX_CATALOG_BYTES: usize = 1024 * 1024;
+const MAX_CATALOG_MODELS: usize = 1000;
+
 enum DiscoveryError {
     Unsupported,
     Failed(AgentError),
@@ -63,7 +66,7 @@ async fn discover(cfg: &Config) -> Result<Vec<ModelEntry>, DiscoveryError> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| fail("Could not initialize model catalog connection"))?;
-    let response = client
+    let mut response = client
         .get(url)
         .bearer_auth(&cfg.api_key)
         .header("Cache-Control", "no-store")
@@ -90,10 +93,28 @@ async fn discover(cfg: &Config) -> Result<Vec<ModelEntry>, DiscoveryError> {
             status.as_u16()
         ))));
     }
-    let parsed = response
-        .json::<ModelList>()
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_CATALOG_BYTES as u64)
+    {
+        return Err(fail("Model catalog exceeds the 1 MiB response limit"));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
+        .map_err(|_| fail("Model catalog response could not be read"))?
+    {
+        if chunk.len() > MAX_CATALOG_BYTES.saturating_sub(bytes.len()) {
+            return Err(fail("Model catalog exceeds the 1 MiB response limit"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let parsed = serde_json::from_slice::<ModelList>(&bytes)
         .map_err(|_| fail("Model catalog returned an invalid response"))?;
+    if parsed.data.len() > MAX_CATALOG_MODELS {
+        return Err(fail("Model catalog exceeds the 1000 model entry limit"));
+    }
     let mut seen = HashSet::new();
     let models: Vec<_> = parsed
         .data

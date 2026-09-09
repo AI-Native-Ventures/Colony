@@ -1069,6 +1069,7 @@ dependencies = [
  "jsonschema",
  "nostr",
  "percent-encoding",
+ "quick-xml 0.38.4",
  "rand 0.10.1",
  "semver",
  "serde",

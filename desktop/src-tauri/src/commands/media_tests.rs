@@ -214,3 +214,18 @@ fn test_sanitize_filename() {
     // Control chars removed.
     assert_eq!(sanitize_filename("a\nb\tc.txt"), "abc.txt");
 }
+
+#[test]
+fn safe_svg_upload_and_native_download_preserve_original_bytes() {
+    let svg = include_bytes!("../../../public/rich-previews/launch-01.svg");
+    assert_eq!(
+        detect_and_validate_mime(svg).as_deref(),
+        Ok("image/svg+xml")
+    );
+    assert_eq!(
+        sanitize_image_for_upload(svg.to_vec(), "image/svg+xml").unwrap(),
+        svg
+    );
+    let active = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+    assert!(detect_and_validate_mime(active).is_err());
+}

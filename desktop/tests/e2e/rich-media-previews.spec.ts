@@ -1,7 +1,28 @@
+import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+
+// Match the real relay's SVG headers while exercising Chromium's image loader.
+// The real Rust upload/GET/Range round trip is covered by e2e_media_extended.
+async function installInertSvgFixtures(page: Page) {
+  await page.route("**/rich-previews/launch-0*.svg", async (route) => {
+    const name = new URL(route.request().url()).pathname.split("/").pop() || "";
+    if (!/^launch-0[123]\.svg$/.test(name)) return route.continue();
+    await route.fulfill({
+      path: fileURLToPath(
+        new URL(`../../public/rich-previews/${name}`, import.meta.url),
+      ),
+      contentType: "image/svg+xml",
+      headers: {
+        "content-disposition": "attachment",
+        "content-security-policy": "default-src 'none'",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  });
+}
 
 async function seedAppearance(page: Page, theme: "buzz" | "buzz-dark") {
   await page.addInitScript((value) => {
@@ -29,10 +50,27 @@ for (const theme of ["buzz", "buzz-dark"] as const) {
     await page.setViewportSize({ width: 1280, height: 1000 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await seedAppearance(page, theme);
+    await installInertSvgFixtures(page);
     await installMockBridge(page);
     await page.goto("/");
     const gallery = await openGallery(page);
     await gallery.getByRole("tab", { name: "Images", exact: true }).click();
+    const singleImage = gallery
+      .getByRole("region", { name: "Image preview", exact: true })
+      .locator("img");
+    await expect(singleImage).toHaveJSProperty("naturalWidth", 1080);
+    await expect(singleImage.locator("..")).toHaveCSS("max-height", "none");
+    await expect
+      .poll(() =>
+        singleImage.evaluate((element) => {
+          const image = element as HTMLImageElement;
+          const box = image.getBoundingClientRect();
+          return Math.abs(
+            box.height - (box.width * image.naturalHeight) / image.naturalWidth,
+          );
+        }),
+      )
+      .toBeLessThanOrEqual(1);
     const carousel = gallery.getByRole("region", { name: "Image carousel" });
     await expect(carousel).toBeVisible();
     await expect(carousel.locator("img")).toHaveCount(1);
@@ -154,6 +192,7 @@ test("message carousel fits a narrow native thread and supports touch without lo
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await seedAppearance(page, "buzz-dark");
+  await installInertSvgFixtures(page);
   await installMockBridge(page);
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -187,6 +226,12 @@ test("message carousel fits a narrow native thread and supports touch without lo
             `![Launch image ${index}](${base}/rich-previews/launch-0${index}.svg)`,
         )
         .join("\n"),
+    });
+    // No imeta dimensions: the image decoder must supply the portrait ratio.
+    emit({
+      channelName: "general",
+      parentEventId: root.id,
+      content: `![Portrait artwork](${base}/rich-previews/launch-02.svg)`,
     });
     return root.id;
   });
@@ -232,6 +277,21 @@ test("message carousel fits a narrow native thread and supports touch without lo
     clientY: 200,
   });
   await expect(carousel.getByTestId("media-preview-count")).toHaveText("2 / 3");
+  const singleImage = thread
+    .getByRole("region", { name: "Image preview", exact: true })
+    .locator("img");
+  await singleImage.scrollIntoViewIfNeeded();
+  await expect(singleImage).toHaveJSProperty("naturalWidth", 900);
+  await expect(singleImage.locator("..")).toHaveCSS("max-height", "none");
+  await expect
+    .poll(() =>
+      singleImage.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return Math.abs(box.height - (box.width * 1200) / 900);
+      }),
+    )
+    .toBeLessThanOrEqual(1);
+  expect((await singleImage.boundingBox())?.width).toBeGreaterThan(220);
   await waitForAnimations(page);
   await thread.screenshot({
     path: testInfo.outputPath("media-narrow-thread-dark.png"),
@@ -243,6 +303,7 @@ test("gallery controls change with the selected accent and colour mode", async (
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await seedAppearance(page, "buzz");
+  await installInertSvgFixtures(page);
   await installMockBridge(page);
   await page.goto("/");
   const gallery = await openGallery(page);

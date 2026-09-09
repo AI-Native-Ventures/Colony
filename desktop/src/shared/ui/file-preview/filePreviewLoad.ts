@@ -7,8 +7,25 @@ import {
 } from "./filePreviewModel";
 
 /** Attachment sources are explicit: untrusted URLs never become filesystem paths. */
-export type FilePreviewSource = { href?: string; localPath?: string };
+export type FilePreviewSource = {
+  href?: string;
+  localPath?: string;
+  /** Bytes already read through the workspace's native file-picker path. */
+  workspaceBytesBase64?: string;
+};
 type LocalFile = { bytes_base64: string; size: number };
+
+function decodeWorkspaceBytes(
+  encoded: string,
+  preview: boolean,
+): Uint8Array<ArrayBuffer> {
+  if (preview) {
+    const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+    assertFilePreviewSize(Math.floor(encoded.length / 4) * 3 - padding);
+  }
+  const binary = atob(encoded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
 
 async function readLocal(
   path: string,
@@ -25,17 +42,8 @@ async function readLocal(
   if (signal?.aborted) throw new Error("Preview cancelled");
   if (preview) {
     assertFilePreviewSize(file.size);
-    const padding = file.bytes_base64.endsWith("==")
-      ? 2
-      : file.bytes_base64.endsWith("=")
-        ? 1
-        : 0;
-    assertFilePreviewSize(
-      Math.floor(file.bytes_base64.length / 4) * 3 - padding,
-    );
   }
-  const binary = atob(file.bytes_base64);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return decodeWorkspaceBytes(file.bytes_base64, preview);
 }
 
 /** Read a same-origin shipped example progressively, without cookies or redirects. */
@@ -84,7 +92,9 @@ export async function loadFilePreview(
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (signal.aborted) throw new Error("Preview cancelled");
   let bytes: Uint8Array<ArrayBuffer>;
-  if (source.localPath && !source.href)
+  if (source.workspaceBytesBase64 !== undefined)
+    bytes = decodeWorkspaceBytes(source.workspaceBytesBase64, true);
+  else if (source.localPath && !source.href)
     bytes = await readLocal(source.localPath, true, signal);
   else {
     const policy = classifyFilePreviewUrl(source.href || "");
@@ -127,6 +137,14 @@ export async function downloadFilePreviewOriginal(
   mime: string,
   loaded?: Uint8Array<ArrayBuffer>,
 ): Promise<void> {
+  if (source.workspaceBytesBase64 !== undefined) {
+    downloadBytes(
+      loaded || decodeWorkspaceBytes(source.workspaceBytesBase64, false),
+      filename,
+      mime,
+    );
+    return;
+  }
   if (source.localPath && !source.href) {
     downloadBytes(
       loaded || (await readLocal(source.localPath, false)),

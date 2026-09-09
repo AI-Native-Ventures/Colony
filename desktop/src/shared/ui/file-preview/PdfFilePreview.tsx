@@ -9,6 +9,7 @@ import {
 } from "./pdf/pdfWorkspaceViewerModel";
 import type {
   PdfDocument,
+  PdfLoadingTask,
   PdfPage,
   PdfRenderTask,
 } from "./pdf/pdfWorkspaceViewerTypes";
@@ -39,6 +40,7 @@ export default function PdfFilePreview({
   const [width, setWidth] = React.useState(320);
   const container = React.useRef<HTMLElement>(null);
   const canvas = React.useRef<HTMLCanvasElement>(null);
+  const activeTask = React.useRef<PdfLoadingTask | null>(null);
 
   React.useEffect(() => {
     const element = container.current;
@@ -55,6 +57,7 @@ export default function PdfFilePreview({
     setDocument(null);
     setError(false);
     const task = runtime.loadDocument(bytes.slice());
+    activeTask.current = task;
     const timer = setTimeout(() => {
       if (!cancelled) {
         setError(true);
@@ -79,9 +82,18 @@ export default function PdfFilePreview({
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      if (activeTask.current === task) activeTask.current = null;
       void task.destroy().catch(() => {});
     };
   }, [bytes]);
+
+  React.useEffect(() => {
+    if (!error) return;
+    // A timed-out or malformed page must release its worker even while the
+    // fallback card remains in the conversation.
+    setDocument(null);
+    void activeTask.current?.destroy().catch(() => {});
+  }, [error]);
 
   React.useEffect(() => {
     if (!document || error) return;

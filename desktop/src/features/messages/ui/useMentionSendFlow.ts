@@ -69,6 +69,7 @@ export function useMentionSendFlow({
   setSpoileredAttachmentUrls,
   onSuccessfulExplicitAgentAudience,
   onReplyModelSent,
+  onReplyModelRestored,
   resolvePostSendContent,
   threadRootId = null,
 }: UseMentionSendFlowOptions) {
@@ -472,6 +473,10 @@ export function useMentionSendFlow({
           setPendingImeta(draft.savedImeta);
           restoreQueuedAttachments(draft.queuedAttachments);
           mentions.restoreDraftMentionRefs(draft.savedMentionRefs);
+          const replyTag = outgoingTags?.find(
+            (tag) => tag[0] === "agent-reply",
+          );
+          if (replyTag) onReplyModelRestored?.(replyTag);
           setSpoileredAttachmentUrls?.(
             new Set(draft.savedSpoileredAttachmentUrls),
           );
@@ -614,6 +619,7 @@ export function useMentionSendFlow({
       onSendRef,
       onSuccessfulExplicitAgentAudience,
       onReplyModelSent,
+      onReplyModelRestored,
       resolvePostSendContent,
       richText.setContent,
       setContent,

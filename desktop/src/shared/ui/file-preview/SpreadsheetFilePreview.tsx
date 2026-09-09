@@ -131,14 +131,16 @@ export function SpreadsheetFilePreview({
         </table>
         {!rows.length && (
           <p className="p-4 text-sm text-muted-foreground">
-            This sheet is empty.
+            {sheet.truncated
+              ? "This sheet's values are beyond the preview row limit. Download the original to view them."
+              : "This sheet is empty."}
           </p>
         )}
       </section>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
         <span>
           Rows {rows.length ? sheet.firstRow + start + 1 : 0}–
-          {sheet.firstRow + start + rows.length}
+          {rows.length ? sheet.firstRow + start + rows.length : 0}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -164,7 +166,7 @@ export function SpreadsheetFilePreview({
       {(workbook.truncated || workbook.formulaValues) && (
         <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
           {workbook.truncated
-            ? `Partial preview: at most 20 sheets, 1,000 rows per sheet, 40 columns and 2,000 characters per cell. ${workbook.totalSheets} source sheets. `
+            ? `Partial preview: at most 20 sheets, the first 1,000 source rows per sheet, 40 columns and 2,000 characters per cell. ${workbook.totalSheets} source sheets. `
             : ""}
           {workbook.formulaValues
             ? "Formulas show saved results; this preview does not recalculate."

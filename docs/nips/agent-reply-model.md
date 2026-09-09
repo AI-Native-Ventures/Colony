@@ -19,6 +19,14 @@ thread, provider, billing route or worker changes. A runtime may advertise
 `_meta.colony.closeSessionMethod = "_colony/session/close"` on `session/new` to
 release the idle temporary session afterward.
 
+Provider-qualified IDs must remain on the teammate's configured provider.
+An adapter with a fixed provider/gateway route may advertise
+`_meta.colony.modelSelectionScope = "configuredProvider"`; the bundled runtime
+does so because its model choice cannot alter its launch credentials or route.
+Provider catalogs are bounded to 1 MiB and 1000 raw entries, reject redirects,
+and never cache failures. Rotation or onboarding invalidation during the scoped
+reply discards the saved ordinary session so stale context cannot be restored.
+
 The message UI describes these tags as *requested*. The `reply_model_applied`
 observer frame records the acknowledged canonical choice for the actual turn;
 telemetry never authorizes a request. Runtime/provider execution and an end-user

@@ -24,7 +24,7 @@ export function isBundledPreviewDownload(url: string): boolean {
   return /^\/rich-previews\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(url);
 }
 
-/** Reserve one stable frame; image content always fits inside it without crop. */
+/** Singles retain their complete intrinsic ratio; carousels reserve a stable frame. */
 export function mediaStageRatio(
   count: number,
   width?: number,
@@ -39,7 +39,7 @@ export function mediaStageRatio(
     width > 0 &&
     height > 0
   ) {
-    return Math.max(0.6, Math.min(3, width / height));
+    return width / height;
   }
   return 4 / 3;
 }

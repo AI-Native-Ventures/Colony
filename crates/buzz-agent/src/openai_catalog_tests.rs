@@ -189,3 +189,82 @@ async fn scoped_session_can_choose_another_served_model_and_reasoning() {
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     server.abort();
 }
+
+async fn raw_fixture(response: String) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut buffer = [0; 1024];
+        while !head.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0);
+            head.extend_from_slice(&buffer[..count]);
+        }
+        assert!(head.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
+        let _ = socket.write_all(response.as_bytes()).await;
+    });
+    (base, server)
+}
+
+#[tokio::test]
+async fn declared_and_chunked_oversize_responses_are_rejected_without_caching() {
+    let body = "x".repeat(MAX_CATALOG_BYTES + 1);
+    let responses = [
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()),
+        format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:X}\r\n{}\r\n0\r\n\r\n", body.len(), body),
+    ];
+    for response in responses {
+        let (base, server) = raw_fixture(response).await;
+        let cache = OnceCell::new();
+        let error = resolve(&cfg(base), &cache).await.unwrap_err();
+        assert!(
+            error.to_string().contains("1 MiB response limit"),
+            "{error}"
+        );
+        assert!(cache.get().is_none());
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn model_count_is_bounded_before_filtering_and_deduplication() {
+    for count in [MAX_CATALOG_MODELS, MAX_CATALOG_MODELS + 1] {
+        let (base, _, server) = fixture(vec![(
+            StatusCode::OK,
+            json!({"data": vec![json!({"id":"gpt-5.5"}); count]}),
+        )])
+        .await;
+        let cache = OnceCell::new();
+        let result = resolve(&cfg(base), &cache).await;
+        if count == MAX_CATALOG_MODELS {
+            assert_eq!(result.unwrap().len(), 1);
+            assert!(cache.get().is_some());
+        } else {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("1000 model entry limit"));
+            assert!(cache.get().is_none());
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn malformed_json_is_rejected_without_caching() {
+    let body = "{not-json";
+    let (base, server) = raw_fixture(format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    ))
+    .await;
+    let cache = OnceCell::new();
+    let error = resolve(&cfg(base), &cache).await.unwrap_err();
+    assert!(error.to_string().contains("invalid response"));
+    assert!(cache.get().is_none());
+    server.abort();
+}

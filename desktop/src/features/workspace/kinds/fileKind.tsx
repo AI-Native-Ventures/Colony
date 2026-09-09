@@ -72,7 +72,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken intentionally retriggers the file request after Retry.
   React.useEffect(() => {
-    if (!source || inlinePreview) {
+    if (!source || (inlinePreview && source.kind === "url")) {
       setFile(null);
       setError(null);
       return;
@@ -120,7 +120,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
     );
   }
 
-  if (source && inlinePreview) {
+  if (inlinePreview && (source.kind === "url" || file)) {
     return (
       <div className="h-full overflow-auto p-3">
         <React.Suspense
@@ -134,7 +134,7 @@ export function FileBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
             filename={sourceName}
             mime={sourceMime}
             {...(source.kind === "path"
-              ? { localPath: source.path }
+              ? { workspaceBytesBase64: file?.bytesBase64 }
               : { href: source.url })}
           />
         </React.Suspense>

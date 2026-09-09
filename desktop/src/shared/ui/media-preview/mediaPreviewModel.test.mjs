@@ -25,7 +25,8 @@ test("mixed-aspect carousel reserves one stable stage while singles use their di
   assert.equal(mediaStageRatio(3, 1080, 1080), mediaStageRatio(3, 900, 1200));
   assert.equal(mediaStageRatio(1, 900, 1200), 0.75);
   assert.equal(mediaStageRatio(1, 1440, 900), 1.6);
-  assert.equal(mediaStageRatio(1, 1, 10000), 0.6);
+  assert.equal(mediaStageRatio(1, 1, 10000), 0.0001);
+  assert.equal(mediaStageRatio(1, 12000, 1000), 12);
   assert.equal(mediaStageRatio(1, Number.NaN, 100), 4 / 3);
 });
 test("audio time is stable while metadata is unknown or invalid", () => {

@@ -54,6 +54,10 @@ pub mod invite;
 pub mod job;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+/// Canonical audio container validation shared by desktop and relay.
+pub mod media_audio;
+/// Bounded declarative SVG validation shared by native and relay media paths.
+pub mod media_svg;
 /// Ranking OpenRouter models into an ordered fallback chain.
 pub mod model_ranking;
 /// Channel workspace tab action parsing and ownership protocol kinds.

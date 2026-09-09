@@ -46,6 +46,7 @@ export type UseMentionSendFlowOptions = {
     React.SetStateAction<Set<string>>
   >;
   onReplyModelSent?: (tag: string[]) => void;
+  onReplyModelRestored?: (tag: string[]) => void;
   onSuccessfulExplicitAgentAudience?: (audience: {
     channelId: string;
     expectedGeneration: number;

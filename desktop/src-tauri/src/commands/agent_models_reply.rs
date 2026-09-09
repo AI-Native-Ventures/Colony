@@ -32,5 +32,25 @@ pub(super) async fn discover(
         provider.as_deref(),
         env,
     );
-    super::run_agent_models_command(resolved_acp, agent_command, agent_args, model, env).await
+    let runtime = known_acp_runtime(&agent_command);
+    let effective_provider = super::effective_discovery_provider(
+        provider.as_deref(),
+        runtime.and_then(|runtime| runtime.provider_env_var),
+        &env,
+    );
+    // Bundled model names stay behind one configured provider/gateway. Other
+    // adapters may encode the provider in the model ID (OpenCode, OMP).
+    let fixed_route = runtime.is_some_and(|runtime| runtime.id == "buzz-agent");
+    let mut response =
+        super::run_agent_models_command(resolved_acp, agent_command, agent_args, model, env)
+            .await?;
+    response.models.retain(|model| {
+        buzz_core_pkg::agent_reply::model_stays_on_provider(
+            &model.id,
+            effective_provider.as_deref(),
+            fixed_route,
+        )
+    });
+    response.supports_switching &= !response.models.is_empty();
+    Ok(response)
 }

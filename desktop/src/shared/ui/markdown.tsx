@@ -1263,6 +1263,7 @@ function createMarkdownComponents(
     const {
       channels,
       imetaByUrl,
+      relayOrigin,
       onOpenEntityLink,
       onOpenMessageLink,
       onImportSnapshotFromUrl,

@@ -280,7 +280,8 @@ selection for exactly one addressed managed teammate. They use the native
 reasoning lists never come from a frontend provider table. Only exact advertised
 pairs enter the signed kind-9 `agent-reply` tag. The send flow rechecks recipient
 binding after invitations/uploads. Removing a recipient cannot move the choice
-to a different teammate. A successful send clears the local choice.
+to a different teammate. A successful send clears the local choice; restoring
+a failed send also restores its captured pair without replacing a newer choice.
 
 Reply discovery is distinct from default configuration discovery: the runtime's
 session catalog constrains available choices. Colony Credits uses an existing,
@@ -288,10 +289,14 @@ unexpired native lease to read the hosted catalog without minting or refreshing
 one, then projects the hosted model catalog through the same Rust reasoning helper
 as bundled runtime discovery. Absent/expired connection and catalog failures remain visible
 errors; unknown capability does not become unsupported. No secrets cross IPC.
+Catalog reads reject redirects and responses beyond 1 MiB or 1000 raw entries.
+Qualified adapter model IDs must remain on the configured provider; runtimes
+with a fixed route advertise `modelSelectionScope = "configuredProvider"`.
 
 ACP validates owner and target, queues a scoped request alone, applies it only
 after a successful runtime acknowledgement, and preserves the original session.
 It cleans up temporary sessions when the runtime advertises that capability.
+Explicit rotation and onboarding invalidation discard saved stale sessions.
 The persisted message label says requested; only the actual acknowledgement
 emits `reply_model_applied`. Nothing mutates agent-wide settings or switches the
 provider, billing route, worker, or a reply already running. Tests:

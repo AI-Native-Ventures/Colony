@@ -3,7 +3,7 @@
 use buzz_core::agent_reply::{parse_agent_reply, AgentReplyModel};
 use nostr::PublicKey;
 
-use crate::acp::{resolve_model_switch_candidate, AcpClient, AcpError, ModelSwitchMethod};
+use crate::acp::{resolve_model_switch_method, AcpClient, AcpError, ModelSwitchMethod};
 use crate::queue::FlushBatch;
 
 /// Preserves the ordinary conversation while a one-reply session is borrowed.
@@ -14,6 +14,7 @@ pub(crate) struct ScopedReplySession {
     original_delivery: Option<crate::pool::ChannelDeliveryState>,
     pub close_id: Option<String>,
     pub supports_close: bool,
+    pub preserve_original: bool,
 }
 
 const MAX_UNCLOSED_REPLY_SESSIONS: usize = 8;
@@ -32,6 +33,7 @@ pub(crate) fn begin(
         key,
         close_id: None,
         supports_close: false,
+        preserve_original: true,
     });
     Ok(())
 }
@@ -64,7 +66,7 @@ pub(crate) async fn finish(agent: &mut crate::pool::OwnedAgent, process_exited: 
 
 fn restore(state: &mut crate::pool::SessionState, saved: ScopedReplySession, process_exited: bool) {
     state.invalidate_session(&saved.key.0, saved.key.1.as_deref());
-    if !process_exited {
+    if !process_exited && saved.preserve_original {
         if let Some(id) = saved.original_id {
             state.sessions.insert(saved.key.clone(), id);
         }
@@ -109,13 +111,8 @@ pub(crate) async fn apply(
     provider: Option<&str>,
     request: &AgentReplyModel,
 ) -> Result<(), AcpError> {
-    let (method, applied) = resolve_model_switch_candidate(raw, &request.model_id, provider)
-        .ok_or_else(|| AcpError::AgentError {
-            code: -32602,
-            message:
-                "The requested model and reasoning setting are not available for this teammate."
-                    .into(),
-        })?;
+    let applied = &request.model_id;
+    let method = requested_method(raw, provider, applied)?;
     let deadline = std::time::Duration::from_secs(5);
     tokio::time::timeout(deadline, async {
         match method {
@@ -143,6 +140,27 @@ pub(crate) async fn apply(
         }),
     );
     Ok(())
+}
+
+fn requested_method(
+    raw: &serde_json::Value,
+    provider: Option<&str>,
+    model_id: &str,
+) -> Result<ModelSwitchMethod, AcpError> {
+    // Signed reply requests contain canonical IDs. Unlike saved agent defaults,
+    // they must never gain a provider prefix or resolve through an alias.
+    let method =
+        resolve_model_switch_method(raw, model_id).ok_or_else(|| AcpError::AgentError {
+            code: -32602,
+            message:
+                "The requested model and reasoning setting are not available for this teammate."
+                    .into(),
+        })?;
+    let fixed_route = raw["_meta"]["colony"]["modelSelectionScope"] == "configuredProvider";
+    if !buzz_core::agent_reply::model_stays_on_provider(model_id, provider, fixed_route) {
+        return Err(AcpError::AgentError { code: -32602, message: "This model would change the teammate's provider. Choose a model on its existing connection.".into() });
+    }
+    Ok(method)
 }
 
 #[cfg(test)]
@@ -198,6 +216,20 @@ mod tests {
             requested_model(Some(&input), target.public_key(), Some(owner.public_key())).is_err()
         );
     }
+
+    #[test]
+    fn request_must_be_an_exact_catalog_id_on_the_existing_provider() {
+        let raw = serde_json::json!({"models": {"availableModels": [
+            {"modelId": "openai/model[high]"}, {"modelId": "anthropic/model"}
+        ]}});
+        assert!(requested_method(&raw, Some("openai"), "model[high]").is_err());
+        assert!(requested_method(&raw, Some("openai"), "openai/model[high]").is_ok());
+        assert!(requested_method(&raw, Some("openai"), "anthropic/model").is_err());
+        let mut gateway = raw;
+        gateway["_meta"] =
+            serde_json::json!({"colony": {"modelSelectionScope": "configuredProvider"}});
+        assert!(requested_method(&gateway, Some("openai"), "anthropic/model").is_ok());
+    }
     #[test]
     fn ordinary_session_delivery_and_counters_survive_scoped_reply() {
         let key = (uuid::Uuid::new_v4(), Some("thread".into()));
@@ -244,5 +276,18 @@ mod tests {
             Some("ordinary-session")
         );
         assert!(state.scoped_reply_session.is_none());
+    }
+    #[test]
+    fn channel_invalidation_during_scoped_reply_does_not_restore_stale_context() {
+        let key = (uuid::Uuid::new_v4(), Some("thread".into()));
+        let mut state = crate::pool::SessionState::default();
+        state
+            .sessions
+            .insert(key.clone(), "stale-ordinary-session".into());
+        begin(&mut state, key.clone()).unwrap();
+        state.invalidate_channel(&key.0);
+        let saved = state.scoped_reply_session.take().unwrap();
+        restore(&mut state, saved, false);
+        assert!(!state.sessions.contains_key(&key));
     }
 }

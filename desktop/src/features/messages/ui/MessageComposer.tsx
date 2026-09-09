@@ -347,7 +347,7 @@ function MessageComposerImpl({
         : undefined,
     resolvePostSendContent: persistentMentionHydration.resolvePostSendContent,
     threadRootId: audienceThreadRootId ?? typingRootEventId,
-    onReplyModelSent: replyModel.afterSend,
+    ...replyModel.sendCallbacks,
   });
   React.useEffect(() => {
     onDeferredEditPendingChange?.(isDeferredEditPending);

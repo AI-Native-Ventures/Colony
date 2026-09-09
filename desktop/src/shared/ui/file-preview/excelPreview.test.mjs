@@ -63,3 +63,32 @@ test("archive preflight rejects entry floods and incomplete archives", () => {
     /incomplete/,
   );
 });
+
+test("empty Excel sheets have no invented A1 value", () => {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, {}, "Empty");
+  const result = parseExcelPreview(
+    new Uint8Array(XLSX.write(book, { type: "array", bookType: "xlsx" })),
+  );
+  assert.deepEqual(result.sheets[0].rows, []);
+  assert.equal(result.sheets[0].totalRows, 0);
+  assert.equal(result.sheets[0].totalColumns, 0);
+  assert.equal(result.truncated, false);
+});
+
+test("Excel values after the row budget are marked unavailable instead of misrepresented as A1", () => {
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    book,
+    { C2001: { t: "s", v: "Late source value" }, "!ref": "C2001:C2001" },
+    "Late",
+  );
+  const result = parseExcelPreview(
+    new Uint8Array(XLSX.write(book, { type: "array", bookType: "xlsx" })),
+  );
+  assert.deepEqual(result.sheets[0].rows, []);
+  assert.equal(result.sheets[0].firstRow, 2000);
+  assert.equal(result.sheets[0].firstColumn, 2);
+  assert.equal(result.sheets[0].totalRows, 1);
+  assert.equal(result.sheets[0].truncated, true);
+});

@@ -74,6 +74,19 @@ pub fn has_agent_reply(event: &Event) -> bool {
         .any(|tag| tag.as_slice().first().is_some_and(|v| v == AGENT_REPLY_TAG))
 }
 
+/// Qualified adapter IDs may select a provider as well as a model. Only a
+/// runtime that declares a fixed configured route may use arbitrary prefixes
+/// (for example, an OpenRouter model name behind the same gateway).
+pub fn model_stays_on_provider(model_id: &str, provider: Option<&str>, fixed_route: bool) -> bool {
+    if fixed_route {
+        return true;
+    }
+    match model_id.split_once('/') {
+        None => true,
+        Some((prefix, _)) => provider.is_some_and(|provider| prefix == provider),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +120,25 @@ mod tests {
             changed[1][3] = invalid.into();
             assert!(parse_agent_reply_tags(9, &changed).is_err());
         }
+    }
+    #[test]
+    fn qualified_model_ids_cannot_change_the_configured_provider() {
+        assert!(model_stays_on_provider(
+            "openai/model[high]",
+            Some("openai"),
+            false
+        ));
+        assert!(!model_stays_on_provider(
+            "anthropic/model",
+            Some("openai"),
+            false
+        ));
+        assert!(!model_stays_on_provider("anthropic/model", None, false));
+        assert!(model_stays_on_provider(
+            "anthropic/model",
+            Some("openrouter"),
+            true
+        ));
+        assert!(model_stays_on_provider("unqualified-model", None, false));
     }
 }
