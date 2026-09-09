@@ -18,12 +18,17 @@ use super::{
     update_persona,
 };
 
+pub(crate) mod preparation;
+use preparation::AgentProposalPreparation;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentProposalSafeAction {
     request_id: String,
     definition: AgentProposalDefinition,
     run_on: AgentProposalRunOn,
+    #[serde(default)]
+    preparation: Option<AgentProposalPreparation>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -188,6 +193,9 @@ fn inspect_creation_recovery(
             if !definition_matches_action(definition, &action.definition, &action.request_id) {
                 return Err("saved definition no longer matches this proposal".to_string());
             }
+            if let Some(preparation) = &action.preparation {
+                preparation.check_saved(definition, record, action)?;
+            }
             let operational = match &record.backend {
                 // Local runtimes are keyed by (pubkey, active relay), while the
                 // legacy scalar PID is not community-scoped. Re-entering the
@@ -227,12 +235,23 @@ fn load_creation_recovery(
     state: &AppState,
     action: &AgentProposalSafeAction,
 ) -> Result<CreationRecovery, String> {
+    let _identity = action
+        .preparation
+        .as_ref()
+        .map(|p| p.lock(state))
+        .transpose()?;
     let _guard = state
         .managed_agents_store_lock
         .lock()
         .map_err(|error| error.to_string())?;
     let definitions = load_personas(app)?;
     let records = load_managed_agents(app)?;
+    if let Some(preparation) = &action.preparation {
+        preparation.check_leader(&records)?;
+        if let Some(definition) = definitions.iter().find(|d| d.id == action.request_id) {
+            preparation.check_definition(definition)?;
+        }
+    }
     inspect_creation_recovery(&definitions, &records, action)
 }
 
@@ -364,6 +383,9 @@ fn validate_action(action: &AgentProposalSafeAction) -> Result<(), String> {
         return Err("an update cannot target the deterministic create ID".to_string());
     }
     normalized_behavior(&action.definition.behavior)?;
+    if let Some(preparation) = &action.preparation {
+        preparation.validate(action)?;
+    }
     Ok(())
 }
 
@@ -394,6 +416,21 @@ pub async fn execute_agent_proposal(
     }
     if let Err(error) = validate_action(&action) {
         return Ok(safe_failure(error));
+    }
+    if let Some(preparation) = &action.preparation {
+        if backend_config.is_some() {
+            return Ok(safe_failure(
+                "A first-job worker uses your saved agent defaults.",
+            ));
+        }
+        if normalized_relay_scope(&preparation.community_relay_url)
+            != normalized_relay_scope(community_relay_url)
+        {
+            return Ok(safe_failure(
+                "The approved worker belongs to another business.",
+            ));
+        }
+        return preparation::execute(&action, preparation, &app, &state).await;
     }
 
     if let Some(target_id) = action.definition.id.clone() {
@@ -574,6 +611,7 @@ mod tests {
                 behavior: None,
             },
             run_on: AgentProposalRunOn::Local,
+            preparation: None,
         }
     }
 

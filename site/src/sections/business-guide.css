@@ -70,6 +70,10 @@
   background: #e5f2e9;
   color: #416d4f;
 }
+.guide-sequence > article:nth-child(4) .step-number {
+  background: #fdf5e6;
+  color: #8a6d2f;
+}
 .guide-explanation h3 {
   font-size: 23px;
   letter-spacing: -0.025em;
@@ -96,6 +100,10 @@
 .guide-sequence > article:nth-child(3) .guide-message {
   background: linear-gradient(130deg, #eaf5ee, #f2f5e9);
   border-color: #e1ede5;
+}
+.guide-sequence > article:nth-child(4) .guide-message {
+  background: linear-gradient(130deg, #fdf5e6, #fdfaf5);
+  border-color: #f0e6c8;
 }
 .guide-message > span {
   display: block;
@@ -211,6 +219,11 @@
   color: #71a07e;
   font-size: 22px;
 }
+.control-responsibilities article:nth-child(4) .control-number {
+  background: #fdf5e6;
+  color: #8a6d2f;
+  font-size: 22px;
+}
 .control-responsibilities h3 {
   font-size: 18px;
   letter-spacing: -0.02em;
@@ -228,8 +241,8 @@
 }
 .business-fit-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 70px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
   max-width: 1060px;
   margin: auto;
 }
@@ -314,6 +327,80 @@
   line-height: 1.65;
   margin: 15px 25px 0 0;
 }
+/* team */
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+.team-grid article h3 {
+  font-size: 20px;
+  letter-spacing: -0.02em;
+  font-weight: 550;
+  line-height: 1.25;
+  margin: 0 0 10px;
+}
+.team-grid article p {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--muted);
+  margin: 0;
+}
+@media (max-width: 760px) {
+  .team-grid {
+    grid-template-columns: 1fr;
+  }
+}
+/* approval card */
+.approval-card {
+  border-radius: 18px;
+  padding: 24px 27px;
+  background: linear-gradient(130deg, #f2eafa, #f9f3fa);
+  border: 1px solid #ece3f5;
+  max-width: 480px;
+}
+.approval-tag {
+  font-size: 11px;
+  color: #705682;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.approval-question {
+  font-size: 16px;
+  font-weight: 600;
+  color: #21192f;
+  margin: 12px 0 8px;
+  line-height: 1.35;
+}
+.approval-fine {
+  font-size: 13px;
+  color: #6b5a7a;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+.approval-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.approval-pill {
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #fff;
+  border: 1px solid #ece3f5;
+  color: #5d5870;
+}
+.approval-yes {
+  background: #272031;
+  color: #fff;
+  border-color: #272031;
+}
+
 @media (max-width: 1000px) {
   .guide-sequence > article {
     gap: 35px;

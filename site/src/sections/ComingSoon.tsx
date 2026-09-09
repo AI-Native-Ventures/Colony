@@ -75,7 +75,7 @@ export function ComingSoon() {
             <AntMark className="early-access__ant early-access__ant--third" />
           </div>
           <p className="early-access__eyebrow">Apply for early access</p>
-          <h2 id="early-access-title">Bring your business to Colony.</h2>
+          <h2 id="early-access-title">Give your business a team.</h2>
           <p>
             Starting a business or already running one? Tell us about the first
             job you’d like help with. You can apply while you’re still exploring

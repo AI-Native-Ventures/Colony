@@ -174,3 +174,11 @@ node --import ./test-loader.mjs --experimental-strip-types --experimental-test-m
 - Smoke shards 4–6 still require a new pass: replace obsolete masonry/image-button assertions with the approved carousel geometry while retaining thumbnail, image-click, context-menu and spoiler behavior; correct the video's decoded-frame mock; center a tall document's Reply control before its normal click; wait for the intended narrow single-thread layout.
 - Blocks Live Gate produced an explicit failed owner receipt after agent-proposal execution. Investigation compares its signed evidence and broker/native fixture with the executed green baseline `2131f5d6`, run `34364648424`; the gate remains required and unchanged.
 - Current edits remain bounded follow-up corrections. No heavy local CI/builds have run, and neither develop integration nor production promotion has occurred.
+
+### Concurrent develop integration and release version
+
+- Develop advanced to `126de8b399` with first-job preparation, serialized legacy WebKit proof, hosted Chrome APT handling and the reviewed site changes. Main advanced independently to `265dc63d57` for the site hotfix. Integrate that source before the next full hosted gate.
+- Separate release PR #676 reserves desktop `0.16.10`. This feature advances to desktop `0.16.11` and keeps relay `0.11.9`; production must never reuse an already published tag or regress a concurrently prepared version. Recheck current develop/main before integration and promotion.
+- Resolve the duplicate APT fix in favor of develop's single strict hosted-only preparer, retaining its 10 hermetic tests, unconditional source contract, package authentication and failure propagation. Remove the superseded private helper and test.
+- Keep the serialized legacy writer lifecycle and diagnostics, including a bounded pre-exit commit settle interval. Preserve byte/hash validation, independent post-exit reading and no reseeding.
+- Scoped model forwarding and catalog fixtures coexist with first-job preparation/profile/history fixtures; the preparation path continues to use saved defaults.

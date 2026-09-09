@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.16.10
+## v0.16.11
 
 - feat(desktop): view Excel, CSV and PDF files inline, browse images and SVG carousels, play audio, and preview videos with useful posters. Share the same theme-aware viewers across conversations and the Blocks catalog, with original downloads and scoped next-reply model/reasoning requests.
 

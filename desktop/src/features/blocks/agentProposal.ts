@@ -26,6 +26,17 @@ export type AgentProposalData =
       respondTo?: "owner-only" | "anyone";
     };
 
+/** Explicit owner-reviewed first-job staffing; ordinary agent proposals omit this. */
+export type FirstJobWorkerPreparation = {
+  mode: "first-job-worker";
+  ownerPubkey: string;
+  communityRelayUrl: string;
+  channelId: string;
+  leaderPubkey: string;
+  roleId: string;
+  roleTitle: string;
+};
+
 export type AgentProposalSafeAction = {
   requestId: string;
   definition: {
@@ -43,6 +54,7 @@ export type AgentProposalSafeAction = {
     };
   };
   runOn: { type: "local" } | { type: "provider"; id: string };
+  preparation?: FirstJobWorkerPreparation;
 };
 
 export type AgentProposalReceiptResult =
@@ -263,10 +275,11 @@ export function parseAgentProposalSafeAction(
   value: unknown,
   proposal: AgentProposalData,
   expectedDefinitionId?: string,
+  expectedPreparation?: FirstJobWorkerPreparation,
 ): AgentProposalSafeAction | null {
   if (
     !isObject(value) ||
-    !hasOnlyKeys(value, ["requestId", "definition", "runOn"]) ||
+    !hasOnlyKeys(value, ["requestId", "definition", "runOn", "preparation"]) ||
     value.requestId !== proposal.requestId ||
     !isObject(value.definition) ||
     !hasOnlyKeys(value.definition, [
@@ -288,6 +301,7 @@ export function parseAgentProposalSafeAction(
   ) {
     return null;
   }
+
   const behavior = parseBehavior(value.definition.behavior);
   if (behavior === null) return null;
 
@@ -309,6 +323,43 @@ export function parseAgentProposalSafeAction(
     (value.runOn.type === "provider" && !isText(value.runOn.id))
   ) {
     return null;
+  }
+
+  // A generic agent-authored Block cannot smuggle staffing or channel access
+  // into its approval. Only the first-job caller supplies the exact context
+  // displayed to the owner; all preparation bytes must match it.
+  const preparation = value.preparation;
+  if (preparation !== undefined || expectedPreparation !== undefined) {
+    if (
+      !expectedPreparation ||
+      !isObject(preparation) ||
+      !hasOnlyKeys(preparation, [
+        "mode",
+        "ownerPubkey",
+        "communityRelayUrl",
+        "channelId",
+        "leaderPubkey",
+        "roleId",
+        "roleTitle",
+      ]) ||
+      Object.keys(preparation).length !== 7 ||
+      Object.entries(expectedPreparation).some(
+        ([key, expected]) => preparation[key] !== expected,
+      ) ||
+      preparation.mode !== "first-job-worker" ||
+      !PUBKEY_RE.test(expectedPreparation.ownerPubkey) ||
+      !PUBKEY_RE.test(expectedPreparation.leaderPubkey) ||
+      expectedPreparation.channelId !== proposal.channelId ||
+      proposal.mode !== "create" ||
+      value.runOn.type !== "local" ||
+      value.definition.runtime !== undefined ||
+      value.definition.provider !== undefined ||
+      value.definition.model !== undefined ||
+      behavior?.respondTo !== "owner-only" ||
+      (behavior.respondToAllowlist?.length ?? 0) !== 0 ||
+      behavior.parallelism !== 1
+    )
+      return null;
   }
 
   return {
@@ -335,6 +386,7 @@ export function parseAgentProposalSafeAction(
       value.runOn.type === "local"
         ? { type: "local" }
         : { type: "provider", id: value.runOn.id as string },
+    ...(expectedPreparation ? { preparation: { ...expectedPreparation } } : {}),
   };
 }
 

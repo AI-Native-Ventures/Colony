@@ -1,4 +1,5 @@
 import { relayClient } from "@/shared/api/relayClient";
+import { ensureFirstJobBusinessContext } from "../firstJobBusinessContext";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { assertFirstJobScope } from "../firstJobScope";
 import { markExplicitFirstJobSetup } from "../firstJobSetup";
@@ -48,6 +49,7 @@ export const DEFAULT_COMPLETE_FIRST_RUN_IO: CompleteFirstRunIo = {
     markExplicitFirstJobSetup(scope);
   },
   deliverSuggestion: suggestionDelivery.deliver,
+  ensureBusinessContext: ensureFirstJobBusinessContext,
   navigateToThread: (channelId, eventId) => {
     const params = new URLSearchParams({
       thread: eventId,

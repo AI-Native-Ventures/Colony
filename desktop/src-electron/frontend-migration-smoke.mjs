@@ -7,6 +7,7 @@ import {
   readLegacyStorage,
 } from "./onboarding-fixture/legacy-storage.mjs";
 import { persistLegacyFixture } from "./onboarding-fixture/legacy-persistence.mjs";
+import { createLegacyDiagnostics } from "./onboarding-fixture/legacy-diagnostics.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -61,8 +62,16 @@ const fixtureEnv = {
   BUZZ_RELAY_URL: "wss://alpha.example.invalid",
   BUZZ_RELAY_HTTP: "https://alpha.example.invalid",
 };
+const diagnostics = createLegacyDiagnostics({ manifest, env: fixtureEnv });
+diagnostics.snapshot("before-seed");
 const legacy = (mode) =>
-  readLegacyStorage({ manifest, directory: data, env: fixtureEnv, mode });
+  readLegacyStorage({
+    manifest,
+    directory: data,
+    env: fixtureEnv,
+    mode,
+    diagnostics,
+  });
 const sourceHash = (entries) =>
   createHash("sha256")
     .update(JSON.stringify([...entries].sort(([a], [b]) => a.localeCompare(b))))
@@ -114,6 +123,7 @@ try {
       directory: data,
       env: fixtureEnv,
       mode: "legacy-seed",
+      diagnostics,
     }),
     read: () => legacy("legacy-read"),
   });
@@ -214,6 +224,12 @@ try {
   try {
     await app?.close();
   } finally {
+    diagnostics.snapshot("before-cleanup");
+    await diagnostics.save(process.env.COLONY_MIGRATION_PROOF_DIR).catch(() => {
+      console.error(
+        "Legacy fixture diagnostics could not be saved; cleanup will continue.",
+      );
+    });
     await Promise.all([
       rm(data, { recursive: true, force: true }),
       rm(path.join(os.homedir(), "Library/Application Support", namespace), {

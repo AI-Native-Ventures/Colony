@@ -1,5 +1,6 @@
 import type { FirstJobSuggestion } from "../firstJobSuggestion";
 import type { FirstJobSetupScope } from "../firstJobSetup";
+import type { FirstJobScope } from "../firstJobStart";
 // desktop/src/features/onboarding/flow/completeFirstRun.ts
 import type { FounderBriefSummary } from "../founderBriefSummary";
 import { founderBriefSummaryFrom } from "../founderBriefSummary";
@@ -90,6 +91,11 @@ export type CompleteFirstRunIo = {
     payload: FirstJobSuggestion,
     marker: string,
   ) => Promise<{ eventId: string }>;
+  /** Retain reviewed context canonically after its signed root is acknowledged. */
+  ensureBusinessContext?: (
+    scope: FirstJobScope,
+    payload: FirstJobSuggestion,
+  ) => Promise<void>;
   /** Focus the actual acknowledged setup root in the existing Welcome thread. */
   navigateToThread?: (channelId: string, eventId: string) => void;
 };
@@ -105,11 +111,13 @@ export async function completeFirstRun(
 ): Promise<CompleteFirstRunResult> {
   deps.assertCurrent?.();
   const suggestionMode = deps.draft?.firstTask.mode === "suggestion";
+  const ensureBusinessContext = io.ensureBusinessContext;
   if (suggestionMode) {
     if (
       !io.markExplicitHandoff ||
       !io.deliverSuggestion ||
-      !io.navigateToThread
+      !io.navigateToThread ||
+      !ensureBusinessContext
     ) {
       throw new Error(
         "The explicit first-job handoff is unavailable. Update Colony and retry.",
@@ -198,6 +206,21 @@ export async function completeFirstRun(
         "The suggestion's thread could not be verified. Retry setup.",
       );
     io.navigateToThread(focusChannelId, sent.eventId);
+    if (!ensureBusinessContext)
+      throw new Error(
+        "Business setup is unavailable. Update Colony and retry.",
+      );
+    await ensureBusinessContext(
+      {
+        ownerPubkey: deps.pubkey,
+        relayUrl: deps.relayUrl,
+        channelId: focusChannelId,
+        threadRootId: sent.eventId,
+        requestId: payload.requestId,
+      },
+      payload,
+    );
+    deps.assertCurrent?.();
     io.markComplete(deps.pubkey, deps.relayUrl);
     return { focusChannelId, firstTaskEventId: sent.eventId };
   }
