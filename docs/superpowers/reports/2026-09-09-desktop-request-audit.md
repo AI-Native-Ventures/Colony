@@ -48,8 +48,20 @@ It covers the concrete desktop requests, not the earlier business-agent roadmap.
 - PR #669's native fresh-worker preparation followed by a worker reply and Scout
   review in the original thread. Browser mocks and the older manually staffed
   native fixture do not establish this.
-- Installed-user upgrade and public updater verification for the production
-  package; the release agent owns these independently.
+- Installed-user upgrade. Version 0.16.9 is publicly available for Mac and
+  Windows; the release agent verified both downloads against their checksums,
+  cryptographic update signatures and the shared updater feed. Publication does
+  not establish an actual installed-user upgrade.
+
+## Live service readiness
+
+On 2026-09-09, the live relay and the checked community host both returned seven
+Credits packs in ZAR, with successful health and readiness responses. Deployed
+payment-provider and PayFast secret names were present. The public pack response
+and backend implementation indicate an initialized PayFast checkout provider;
+the Vercel AI usage gateway is a separate service. No secret values, checkout or
+customer payment data were accessed. Merchant validity, sandbox/live mode,
+payment settlement, webhook processing and reflected balance remain unproven.
 
 Apple Developer signing and notarization are explicitly out of scope at the
 owner's request. Release hashes and updater integrity remain required.

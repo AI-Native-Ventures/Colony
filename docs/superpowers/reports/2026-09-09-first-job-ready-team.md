@@ -32,12 +32,22 @@ same Unicode character limit as the relay.
 
 ## Verification boundary
 
-Source changes and regression fixtures are implemented. GitHub CI, packaged
-first-job preparation and authenticated worker reply/Scout review remain pending.
+Source changes and regression fixtures are implemented. All applicable source CI
+checks passed on `fa38d46a6dcddb84b390651b1d5951e172c91b59` in
+[run 34384926669](https://github.com/AI-Native-Ventures/Colony/actions/runs/34384926669).
+The stable package job also passed startup, signup/relaunch and 23 native
+isolation checks, but its separate legacy persistence fixture failed before
+Electron launched. An instrumented diagnostic run passed with the same native
+binary hash; that retry alone does not establish a fix. The follow-up remains
+draft until the revised fixture and all checks pass on its final source.
+
+Packaged fresh-worker preparation and authenticated worker reply/Scout review
+remain unproven.
 The browser fixture signs real event envelopes but mocks native staffing, relay
 responses and payments; it does not establish successful model work or payment
 settlement. No local CI, tests, builds or hooks were run for this change.
 
 PR #666 separately merged new-community onboarding and the three Power options.
-The release agent independently owns the #668 production cutoff. This follow-up
-must not enter that release before its own checks and review pass.
+The release agent independently completed the #668/#670 production cutoff as
+version 0.16.9. This follow-up is excluded from that release and must pass its
+own checks and review before promotion.
