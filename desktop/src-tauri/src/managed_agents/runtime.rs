@@ -364,21 +364,9 @@ pub(crate) fn build_respond_to_env(
     build_respond_to_env_with_policy(record, owner_hex, super::owner_only())
 }
 
-/// Spawn an agent process without holding any locks on records or runtimes.
-/// Returns the child process and log path on success. The caller is responsible
-/// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
-///
-/// `owner_hex`: the workspace owner's pubkey, used as a fallback for legacy
-/// records that have no NIP-OA `auth_tag`. See `build_respond_to_env`.
-pub fn spawn_agent_child(
-    app: &AppHandle,
-    record: &ManagedAgentRecord,
-    relay_url: &str,
-    lazy: bool,
-    owner_hex: Option<&str>,
-) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
-    spawn_agent_child_with_lease(app, record, relay_url, lazy, owner_hex, None)
-}
+mod config_fence;
+pub use config_fence::spawn_agent_child;
+pub(crate) use config_fence::spawn_agent_child_with_config;
 
 fn spawn_agent_child_inner(
     app: &AppHandle,
@@ -387,6 +375,7 @@ fn spawn_agent_child_inner(
     lazy: bool,
     owner_hex: Option<&str>,
     lease_override: Option<&crate::provisioned_credits::GatewayLease>,
+    config_fence: Option<&super::config_start::ConfigStartFence>,
 ) -> Result<crate::managed_agents::ManagedAgentProcess, String> {
     if let Some(error) = spawn_key_refusal(record) {
         return Err(error);
@@ -401,6 +390,9 @@ fn spawn_agent_child_inner(
     let teams = super::load_teams(app).unwrap_or_default();
     // Load global config once; unknown credential modes fail closed here.
     let global = crate::managed_agents::load_global_agent_config(app)?;
+    if config_fence.is_some_and(|fence| fence.global != global) {
+        return Err("Power settings changed before this teammate could start. Review the saved connection and retry.".into());
+    }
 
     // Resolve model/provider/prompt ONCE, here, at the shared spawn boundary —
     // the single source both the env writes below and the spawn-config snapshot
@@ -927,12 +919,14 @@ fn spawn_agent_child_inner(
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let child = command.spawn().map_err(|error| {
-        format!(
-            "failed to spawn `{}` for agent {}: {error}",
-            resolved_acp_command.display(),
-            record.name
-        )
+    let child = config_fence::spawn(app, config_fence, || {
+        command.spawn().map_err(|error| {
+            format!(
+                "failed to spawn `{}` for agent {}: {error}",
+                resolved_acp_command.display(),
+                record.name
+            )
+        })
     })?;
 
     // Stamp the adapter availability for runtimes with a version gate (codex

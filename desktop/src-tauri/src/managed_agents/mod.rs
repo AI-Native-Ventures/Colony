@@ -33,6 +33,7 @@ pub(crate) mod subscriptions;
 /// Re-exported for `commands::agent_subscriptions`, which needs a PATH probe
 /// without taking a dependency on the whole private discovery module.
 pub(crate) use discovery::find_command;
+mod config_start;
 pub(crate) mod owner_scope;
 pub(crate) mod reconcile;
 mod relay_mesh;

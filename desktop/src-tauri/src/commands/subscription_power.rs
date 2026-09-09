@@ -108,7 +108,8 @@ impl Drop for ConnectionGuard {
     }
 }
 
-fn profile_present(profile: &std::path::Path) -> Result<bool, String> {
+/// Verify the scoped profile tree before a vendor metadata probe can access it.
+pub(crate) fn profile_present(profile: &std::path::Path) -> Result<bool, String> {
     // Check every host-owned level before a vendor can follow it. Worker roots
     // cannot read or write this tree, including while a provider refreshes auth.
     for path in profile.ancestors().take(3) {

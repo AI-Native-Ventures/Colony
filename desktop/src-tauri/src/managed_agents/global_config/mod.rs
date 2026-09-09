@@ -33,6 +33,8 @@ use crate::managed_agents::env_vars::{
 use crate::managed_agents::storage::{atomic_write_json_restricted, managed_agents_base_dir};
 use crate::managed_agents::types::{AgentDefinition, ManagedAgentRecord};
 
+pub(crate) mod publication;
+
 /// Which credential source the desktop should use when launching managed
 /// agents. Missing values deserialize as [`CredentialMode::Byok`] so older
 /// global-agent-config files keep their existing behavior. Explicit unknown
@@ -243,6 +245,14 @@ pub fn load_global_agent_config(app: &AppHandle) -> Result<GlobalAgentConfig, St
 /// before writing (empty = "inherit" semantics).
 /// Written `0o600` — same protection as `managed-agents.json`.
 pub fn save_global_agent_config(app: &AppHandle, config: &GlobalAgentConfig) -> Result<(), String> {
+    save_global_agent_config_canonical(app, config).map(|_| ())
+}
+
+/// Publish and return this write's canonical value without rereading a later writer's choice.
+pub(crate) fn save_global_agent_config_canonical(
+    app: &AppHandle,
+    config: &GlobalAgentConfig,
+) -> Result<GlobalAgentConfig, String> {
     let mut config = config.clone();
     strip_empty_env_vars(&mut config);
     normalize_global_config_fields(&mut config);
@@ -250,7 +260,9 @@ pub fn save_global_agent_config(app: &AppHandle, config: &GlobalAgentConfig) -> 
     let path = global_config_path(app)?;
     let payload = serde_json::to_vec_pretty(&config)
         .map_err(|e| format!("failed to serialize global agent config: {e}"))?;
-    atomic_write_json_restricted(&path, &payload)
+    let _publication = publication::lock()?;
+    atomic_write_json_restricted(&path, &payload)?;
+    Ok(config)
 }
 
 /// Resolve the effective model and provider for an agent.
