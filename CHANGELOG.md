@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.16.10
+
+- Retain reviewed business details when setting up a community.
+- Show Scout and the proposed worker before starting the first job. Keep the approved team and brief through retries, using the selected agent defaults and preserving manually configured teams.
+- Add a hosted migration regression check using synthetic legacy data, with the old app closed before Electron imports it.
+
 ## v0.16.9
 
 - Release the main macOS app through the stable Electron lane with explicit ad-hoc signing, without Apple Developer signing or notarization. Keep existing updater-signature verification and publish Mac checksums.
