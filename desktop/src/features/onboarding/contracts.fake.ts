@@ -8,6 +8,8 @@ export type FakeOptions = {
   scrapeOutcome?: "ok" | ScrapeFailureReason;
   paymentOutcome?: "paid" | "abandoned";
   delayMs?: number;
+  /** E2E callers resolve the identity the native mock actually owns. */
+  getPubkey?: () => Promise<string>;
 };
 
 let pendingSignup: PendingSignup | null = null;
@@ -39,6 +41,7 @@ export function createFakeServices(
     scrapeOutcome = "ok",
     paymentOutcome = "paid",
     delayMs = 0,
+    getPubkey,
   } = options;
   const wait = () =>
     delayMs ? new Promise((resolve) => setTimeout(resolve, delayMs)) : null;
@@ -49,14 +52,21 @@ export function createFakeServices(
   return {
     auth: {
       pendingSignup: async () => {
-        if (pendingSignup || typeof localStorage === "undefined")
+        const currentPubkey = getPubkey ? await getPubkey() : null;
+        if (
+          pendingSignup &&
+          (!currentPubkey || pendingSignup.pubkey === currentPubkey)
+        )
           return pendingSignup;
+        if (typeof localStorage === "undefined") return null;
         // Synthetic reload fixture: reconstruct from public markers only.
         // The fixed fake code is never persisted and is not an account secret.
         for (const key of Object.keys(localStorage).filter((key) =>
           key.startsWith("colony.onboarding.answers.identity:"),
         )) {
           try {
+            const pubkey = key.split(".identity:")[1];
+            if (currentPubkey && pubkey !== currentPubkey) continue;
             const draft = JSON.parse(localStorage.getItem(key) ?? "null");
             if (
               draft?.signupAttemptId === "e2e-signup-attempt" &&
@@ -64,7 +74,7 @@ export function createFakeServices(
               !draft.recoveryAcknowledged
             ) {
               pendingSignup = {
-                pubkey: key.split(".identity:")[1],
+                pubkey,
                 email: draft.account.email,
                 attemptId: draft.signupAttemptId,
                 recoveryCode: "TRAIL-9F2K-4QD8-MZ71",
@@ -87,13 +97,19 @@ export function createFakeServices(
         if (outcome === "fail") throw new Error("Synthetic save failure");
         return "synthetic-recovery-code.txt";
       },
-      acknowledgeRecovery: async () => {
-        pendingSignup = null;
+      acknowledgeRecovery: async (attemptId) => {
+        const currentPubkey = getPubkey ? await getPubkey() : null;
+        if (
+          pendingSignup?.attemptId === attemptId &&
+          (!currentPubkey || pendingSignup.pubkey === currentPubkey)
+        )
+          pendingSignup = null;
       },
       signUp: async (email) => {
+        const pubkey = getPubkey ? await getPubkey() : `fake-${email}`;
         await wait();
         pendingSignup = {
-          pubkey: `fake-${email}`,
+          pubkey,
           email,
           recoveryCode: "TRAIL-9F2K-4QD8-MZ71",
           attemptId: "e2e-signup-attempt",
@@ -102,12 +118,14 @@ export function createFakeServices(
         return pendingSignup;
       },
       signIn: async (email) => {
+        const pubkey = getPubkey ? await getPubkey() : `fake-${email}`;
         await wait();
-        return { pubkey: `fake-${email}` };
+        return { pubkey };
       },
       recover: async (email) => {
+        const pubkey = getPubkey ? await getPubkey() : `fake-${email}`;
         await wait();
-        return { pubkey: `fake-${email}`, resetToken: "fake-reset-token" };
+        return { pubkey, resetToken: "fake-reset-token" };
       },
     },
     payments: {

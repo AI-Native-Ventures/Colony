@@ -9,7 +9,7 @@ import {
 } from "@/features/communities/hostedCommunityApi";
 import { useCommunities } from "@/features/communities/useCommunities";
 
-import { createFakeServices } from "../../contracts.fake";
+import { createIdentityBoundFakeServices } from "../../lib/wiredAuthService";
 import { completeFirstRun } from "../../flow/completeFirstRun";
 import { DEFAULT_COMPLETE_FIRST_RUN_IO } from "../../flow/completeFirstRunIo";
 import { draftFromAnswers } from "../../flow/founderBrief";
@@ -74,7 +74,7 @@ export function CanvasFirstRunHost({
   // Payments, scrape and invites stay fakes here exactly as they were inside
   // AppReady; NewOnboardingFlow swaps in the wired services itself outside
   // the e2e build.
-  const services = useMemo(() => createFakeServices(), []);
+  const services = useMemo(() => createIdentityBoundFakeServices(), []);
 
   // Snapshot live values for callbacks without re-identifying the flow: a new
   // services or callback identity mid-run restarts in-flight steps.

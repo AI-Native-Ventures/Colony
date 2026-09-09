@@ -497,14 +497,17 @@
     color: var(--onb-founder-text);
   }
   @media (min-width: 47.5rem) and (max-height: 45rem) {
+    .onb-simple[data-founder-step="account"] .onb-founder-intro,
     .onb-simple[data-founder-step="company"] .onb-founder-intro {
       padding-top: 1.25rem;
       padding-bottom: 1.25rem;
     }
+    .onb-simple[data-founder-step="account"] .onb-simple-card,
     .onb-simple[data-founder-step="company"] .onb-simple-card {
       gap: 0.875rem;
       padding: 1.375rem;
     }
+    .onb-simple[data-founder-step="account"] .onb-founder-ant:nth-child(1),
     .onb-simple[data-founder-step="company"] .onb-founder-ant:nth-child(1) {
       top: 0.3%;
     }

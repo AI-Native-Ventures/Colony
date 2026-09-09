@@ -716,6 +716,11 @@ test("search shortcut opens search without disturbing the collapsed sidebar", as
 test("search results use your resolved profile label instead of You", async ({
   page,
 }) => {
+  await installMockBridge(page, {
+    searchProfiles: [
+      { pubkey: "deadbeef".repeat(8), displayName: "Aisha Bello" },
+    ],
+  });
   await page.goto("/");
 
   await focusSidebarSearchWithShortcut(page);
@@ -724,8 +729,21 @@ test("search results use your resolved profile label instead of You", async ({
   const results = page.getByTestId("search-results");
 
   await expect(results).toContainText("Welcome to #general");
-  await expect(results).toContainText("npub1mock...");
+  await expect(results.getByText("Aisha Bello", { exact: true })).toBeVisible();
   await expect(results).not.toContainText("You");
+});
+
+test("search results identify your messages when your name is missing", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await focusSidebarSearchWithShortcut(page);
+  await page.getByTestId("search-dialog-input").fill("welcome");
+  const results = page.getByTestId("search-results");
+
+  await expect(results).toContainText("Welcome to #general");
+  await expect(results.getByText("You", { exact: true })).toBeVisible();
+  await expect(results).not.toContainText("npub1mock...");
 });
 
 test("opens accessible unjoined channels from search in read-only mode", async ({

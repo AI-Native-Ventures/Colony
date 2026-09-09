@@ -110,7 +110,7 @@ export function PowerScreen({
   const credits = useQuery({
     queryKey: ["onboarding-credits-account", scopeKey],
     queryFn: getColonyCreditsAccount,
-    enabled: lane === "colony" && scope.isSuccess,
+    enabled: lane === "colony" && scope.isSuccess && !scope.isFetching,
     retry: false,
     staleTime: 0,
   });
@@ -133,6 +133,7 @@ export function PowerScreen({
     resolveAgentReadiness(runtimes.data ?? [], draft, "preferred").ready;
   const canContinue =
     scope.isSuccess &&
+    !scope.isFetching &&
     !!scope.data &&
     !!draft &&
     !!runtime &&
@@ -193,8 +194,15 @@ export function PowerScreen({
           </p>
         )}
         {draft && lane && (
-          <fieldset disabled={busy || !scope.isSuccess} className="space-y-5">
-            <div className="onb-power-lanes" aria-label="Ways to power agents">
+          <fieldset
+            disabled={busy || !scope.isSuccess || scope.isFetching}
+            className="space-y-5"
+          >
+            <div
+              className="onb-power-lanes"
+              role="group"
+              aria-label="Ways to power agents"
+            >
               <button
                 type="button"
                 aria-pressed={lane === "subscription"}
@@ -312,6 +320,7 @@ export function PowerScreen({
               </p>
             ) : (
               scope.isSuccess &&
+              !scope.isFetching &&
               runtime &&
               (lane === "openrouter" ? (
                 <FreeOpenRouterFields

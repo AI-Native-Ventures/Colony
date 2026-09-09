@@ -167,7 +167,7 @@ export function AccountScreen({
           </details>
         )}
         <p className="onb-simple-note">
-          Agent work uses credits. You can explore before adding any.
+          You’ll choose how to power your team after setting up your business.
         </p>
       </form>
     </FounderLayout>

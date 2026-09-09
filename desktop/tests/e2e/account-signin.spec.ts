@@ -73,7 +73,7 @@ test("a taken email points at the sign-in door", async ({ page }, testInfo) => {
 
   const account = page.getByTestId("onboarding-account");
   await expect(account).toBeVisible();
-  await expect(page.getByLabel("Your name", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Your name", { exact: true }).fill("Aisha Owner");
   await page.getByLabel("Email").fill("aisha@rosebankauto.co.za");
   await page.getByLabel("Password").fill("correct horse battery");
   await page

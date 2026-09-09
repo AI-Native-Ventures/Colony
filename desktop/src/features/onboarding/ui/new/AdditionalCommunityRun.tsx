@@ -2,7 +2,7 @@
 import { useCallback, useMemo, useRef } from "react";
 
 import { removeStorageItem } from "@/shared/lib/safeStorage";
-import { createFakeServices } from "../../contracts.fake";
+import { createIdentityBoundFakeServices } from "../../lib/wiredAuthService";
 import { draftFromAnswers } from "../../flow/founderBrief";
 import { ONBOARDING_ANSWERS_KEY } from "../../flow/persistence";
 import type { OnboardingAnswers } from "../../flow/steps";
@@ -77,7 +77,7 @@ export function AdditionalCommunityRun({
 }: Props) {
   // Payments, scrape and invites stay fakes here exactly as in first run;
   // NewOnboardingFlow swaps in the wired services outside the e2e build.
-  const services = useMemo(() => createFakeServices(), []);
+  const services = useMemo(() => createIdentityBoundFakeServices(), []);
   const answersKey = additionalCommunityAnswersKey(transactionId);
 
   const leave = useCallback(() => {
