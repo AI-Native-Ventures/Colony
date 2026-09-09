@@ -198,11 +198,8 @@ export function PowerScreen({
             disabled={busy || !scope.isSuccess || scope.isFetching}
             className="space-y-5"
           >
-            <div
-              className="onb-power-lanes"
-              role="group"
-              aria-label="Ways to power agents"
-            >
+            <fieldset className="onb-power-lanes">
+              <legend className="sr-only">Ways to power agents</legend>
               <button
                 type="button"
                 aria-pressed={lane === "subscription"}
@@ -227,7 +224,7 @@ export function PowerScreen({
                 <strong>OpenRouter free models</strong>
                 <span>Connect OpenRouter. Usage limits apply.</span>
               </button>
-            </div>
+            </fieldset>
             {powerLaneForConfig(saved.data ?? draft) === "existing" && (
               <Button
                 variant="outline"

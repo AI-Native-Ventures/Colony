@@ -163,7 +163,7 @@ export function CanvasFirstRunHost({
       };
       assertCurrent();
       const relayUrl = await waitForApply(assertCurrent);
-      await ensureBuiltInFounderConfig();
+      await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
       assertCurrent();
       await completeFirstRun(
         {

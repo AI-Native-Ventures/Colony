@@ -19,6 +19,7 @@ import { discoverAcpRuntimes, installAcpRuntime } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
   setGlobalAgentConfig,
+  type GlobalAgentConfigScope,
 } from "@/shared/api/tauriGlobalAgentConfig";
 import type {
   AcpRuntimeCatalogEntry,
@@ -56,7 +57,10 @@ export type AutomaticAgentPlan =
 export type AutomaticAgentSetupIo = {
   listRuntimes: () => Promise<AcpRuntimeCatalogEntry[]>;
   loadConfig: () => Promise<GlobalAgentConfig>;
-  saveConfig: (config: GlobalAgentConfig) => Promise<unknown>;
+  saveConfig: (
+    config: GlobalAgentConfig,
+    scope?: GlobalAgentConfigScope,
+  ) => Promise<unknown>;
   installRuntime: (runtimeId: string) => Promise<unknown>;
   loadProvisioning: typeof fetchColonyProvisioningConfig;
 };
@@ -188,12 +192,15 @@ export async function ensureAutomaticAgentConfig(
 }
 
 /**
- * Founder setup uses the built-in teammate by default, without selecting a
- * personal CLI subscription discovered on the device. Existing working choices
- * remain intact. All writes and the resulting catalog readiness are awaited.
+ * Explicit power choices are only validated. Legacy setup may fill an empty
+ * configuration; its caller supplies the native account/business save fence.
  */
 export async function ensureBuiltInFounderConfig(
   overrides: Partial<AutomaticAgentSetupIo> = {},
+  options: {
+    mode?: "configure" | "validate-only";
+    scope?: GlobalAgentConfigScope;
+  } = {},
 ): Promise<void> {
   const io = { ...WIRED_IO, ...overrides };
   const [runtimes, current] = await Promise.all([
@@ -208,6 +215,10 @@ export async function ensureBuiltInFounderConfig(
       `${currentRuntime.label} was found, but cannot run teammates in this version of Colony. Choose how to power your agents to continue.`,
     );
   if (resolveAgentReadiness(runtimes, current, "preferred").ready) return;
+  if (options.mode === "validate-only")
+    throw new Error(
+      "Your saved agent connection is not ready. Return to Power your agents or Agent defaults, check your connection and model, then try again.",
+    );
   if (!(await relayHostsAgents(io)))
     throw new Error(
       "Your business is open, but Colony could not finish setting up your teammate. Try again.",
@@ -220,7 +231,7 @@ export async function ensureBuiltInFounderConfig(
       "The built-in teammate is unavailable in this version of Colony. Update the app and try again.",
     );
   await io.installRuntime(runtime.id);
-  await io.saveConfig(defaultColonyAgentConfig(current));
+  await io.saveConfig(defaultColonyAgentConfig(current), options.scope);
   const [available, saved] = await Promise.all([
     io.listRuntimes(),
     io.loadConfig(),

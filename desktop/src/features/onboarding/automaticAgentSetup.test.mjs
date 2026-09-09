@@ -312,3 +312,105 @@ test("founder setup preserves unsupported saved subscriptions and asks for an ex
   assert.deepEqual(device.installed, []);
   assert.equal(device.config.preferred_runtime, "claude");
 });
+
+test("explicit Power completion never replaces an unready saved lane with Credits", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  for (const config of [
+    { ...EMPTY_CONFIG, preferred_runtime: "codex" },
+    {
+      ...EMPTY_CONFIG,
+      preferred_runtime: "buzz-agent",
+      provider: "openrouter",
+      model: "openrouter/free",
+    },
+    {
+      ...EMPTY_CONFIG,
+      credential_mode: "colony_credits",
+      preferred_runtime: "buzz-agent",
+      provider: "openai-compat",
+    },
+  ]) {
+    const { io, device } = fakeDevice({ config });
+    let provisioningReads = 0;
+    await assert.rejects(
+      ensureBuiltInFounderConfig(
+        {
+          ...io,
+          loadProvisioning: async () => {
+            provisioningReads += 1;
+            return HOSTED_RELAY;
+          },
+        },
+        { mode: "validate-only" },
+      ),
+      /Your saved agent connection is not ready/,
+    );
+    assert.equal(provisioningReads, 0);
+    assert.equal(device.writes, 0);
+    assert.deepEqual(device.installed, []);
+    assert.deepEqual(device.config, config);
+  }
+});
+
+test("explicit Power validation preserves a ready saved OpenRouter choice", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const config = {
+    ...EMPTY_CONFIG,
+    preferred_runtime: "buzz-agent",
+    provider: "openrouter",
+    model: "openrouter/free",
+    env_vars: { OPENROUTER_API_KEY: "synthetic-owner-key" },
+  };
+  const { io, device } = fakeDevice({ config });
+  await ensureBuiltInFounderConfig(io, { mode: "validate-only" });
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.installed, []);
+  assert.deepEqual(device.config, config);
+});
+
+test("legacy fallback retains its captured native save scope after an account switch", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const scope = {
+    ownerPubkey: "a".repeat(64),
+    relayUrl: "wss://original.colony.example",
+  };
+  let activeScope = scope;
+  let savedScope;
+  const { io, device } = fakeDevice();
+  await assert.rejects(
+    ensureBuiltInFounderConfig(
+      {
+        ...io,
+        installRuntime: async () => {
+          activeScope = {
+            ownerPubkey: "b".repeat(64),
+            relayUrl: "wss://other.colony.example",
+          };
+        },
+        saveConfig: async (config, expectedScope) => {
+          savedScope = expectedScope;
+          // Mirrors the existing native save fence: unscoped legacy writes
+          // are allowed, but a scoped write cannot cross an account switch.
+          if (
+            expectedScope &&
+            (expectedScope.ownerPubkey !== activeScope.ownerPubkey ||
+              expectedScope.relayUrl !== activeScope.relayUrl)
+          )
+            throw new Error("The account or business changed");
+          return io.saveConfig(config);
+        },
+      },
+      { scope },
+    ),
+    /The account or business changed/,
+  );
+  assert.deepEqual(savedScope, scope);
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.config, EMPTY_CONFIG);
+});
