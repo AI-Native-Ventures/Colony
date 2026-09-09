@@ -3,6 +3,7 @@ import { AntMark } from "@/brand/AntMark";
 import { BrandField } from "@/brand/BrandField";
 import { getBrandScene } from "@/brand/brandScene";
 import { BusinessGuide } from "@/sections/BusinessGuide";
+import { FounderStory } from "@/sections/FounderStory";
 import { TrustStrip } from "@/sections/TrustStrip";
 import { ComingSoon } from "@/sections/ComingSoon";
 import { FAQ } from "@/sections/FAQ";
@@ -54,6 +55,7 @@ export function App() {
           <div className="page-content">
             <TrustStrip />
             <BusinessGuide />
+            <FounderStory />
             <FAQ />
             <ComingSoon />
           </div>

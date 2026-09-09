@@ -241,8 +241,8 @@
 }
 .business-fit-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 70px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
   max-width: 1060px;
   margin: auto;
 }
