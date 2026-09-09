@@ -4,6 +4,7 @@ import {
   type NativeBridge,
   type NativeEvent,
   type NativeNotificationAction,
+  type NativeTerminalApi,
 } from "./nativeBridge";
 import { checkElectronUpdate } from "./electronUpdater";
 
@@ -20,6 +21,8 @@ export interface ElectronDesktop {
     payload?: Record<string, unknown>,
   ): Promise<T>;
   subscribe(callback: (message: ElectronPush) => void): () => void;
+  /** preload `colonyDesktop.terminal`; absent in older shells. */
+  terminal?: NativeTerminalApi;
 }
 
 declare global {
@@ -63,8 +66,12 @@ class ElectronNativeBridge implements NativeBridge {
 
   private api: ElectronDesktop;
 
+  /** Delegated straight to preload: PTY bytes never pass through `invoke`. */
+  readonly terminal?: NativeTerminalApi;
+
   constructor(api: ElectronDesktop) {
     this.api = api;
+    this.terminal = api.terminal;
     api.subscribe((message) => {
       if (
         message.type === "channel" &&

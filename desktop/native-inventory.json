@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 504,
-    "rust_lines": 184604,
+    "rust_lines": 184669,
     "tauri_coupled": 200,
     "portable": 304,
     "portable_lines": 104491,
@@ -518,10 +518,10 @@
     ]
   },
   "commands": {
-    "registered": 370,
-    "defined": 370,
+    "registered": 371,
+    "defined": 371,
     "by_reach": {
-      "frontend": 359,
+      "frontend": 360,
       "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
@@ -644,10 +644,10 @@
     "src-tauri/src/commands/media_download.rs": 6,
     "src-tauri/src/managed_agents/runtime_commands.rs": 6,
     "src-tauri/src/commands/mesh_llm.rs": 6,
+    "src-tauri/src/commands/terminal.rs": 6,
     "src-tauri/src/commands/project_git_workflow.rs": 5,
     "src-tauri/src/commands/channel_templates.rs": 5,
     "src-tauri/src/commands/agent_config.rs": 5,
-    "src-tauri/src/commands/terminal.rs": 5,
     "src-tauri/src/commands/initiative.rs": 4,
     "src-tauri/src/commands/workspace.rs": 4,
     "src-tauri/src/commands/task_transition.rs": 4,
@@ -4263,9 +4263,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:162",
-        "src/features/workspace/lib/terminalSessions.ts:300",
-        "src/features/workspace/lib/terminalSessions.ts:320"
+        "src/features/workspace/lib/rustTerminalBackend.ts:53"
       ]
     },
     "workspace_terminal_close_all": {
@@ -4274,7 +4272,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:341"
+        "src/features/workspace/lib/rustTerminalBackend.ts:56"
       ]
     },
     "workspace_terminal_resize": {
@@ -4283,7 +4281,17 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:283"
+        "src/features/workspace/lib/rustTerminalBackend.ts:41"
+      ]
+    },
+    "workspace_terminal_resolve_cwd": {
+      "defining_file": "src-tauri/src/commands/terminal.rs",
+      "module": "terminal",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/features/workspace/lib/electronTerminalBackend.ts:4",
+        "src/features/workspace/lib/electronTerminalBackend.ts:29"
       ]
     },
     "workspace_terminal_start": {
@@ -4292,7 +4300,8 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:213"
+        "src/features/workspace/lib/electronTerminalBackend.ts:5",
+        "src/features/workspace/lib/rustTerminalBackend.ts:29"
       ]
     },
     "workspace_terminal_write": {
@@ -4301,7 +4310,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/workspace/lib/terminalSessions.ts:261"
+        "src/features/workspace/lib/rustTerminalBackend.ts:32"
       ]
     },
     "workspace_web_back": {

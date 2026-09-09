@@ -21,6 +21,16 @@ pub struct TerminalStartRequest {
     pub pixel_height: Option<u16>,
 }
 
+/// Request payload for resolving a terminal's working directory.
+/// The Electron shell owns the PTY; only the checkout path is needed.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalCwdRequest {
+    pub repos_dir: Option<String>,
+    pub project_dtag: Option<String>,
+    pub clone_url: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalResizeRequest {
@@ -129,6 +139,19 @@ pub fn workspace_terminal_close(
     state.close(&session_id)
 }
 
+/// Resolve a terminal's working directory without spawning anything.
+/// The Electron shell owns the PTY and only needs the checkout path;
+/// falls back to the home directory exactly like `workspace_terminal_start`.
+#[tauri::command]
+pub fn workspace_terminal_resolve_cwd(request: TerminalCwdRequest) -> Result<String, String> {
+    let path = resolve_terminal_cwd(
+        request.repos_dir.as_deref(),
+        request.project_dtag.as_deref(),
+        request.clone_url.as_deref(),
+    )?;
+    Ok(path.display().to_string())
+}
+
 /// Close all terminal sessions before a community boundary or app exit.
 #[tauri::command]
 pub fn workspace_terminal_close_all(state: State<'_, TerminalManager>) -> Result<(), String> {
@@ -172,5 +195,48 @@ mod tests {
         )
         .expect("home fallback");
         assert_eq!(resolved, dirs::home_dir().expect("home"));
+    }
+
+    #[test]
+    fn workspace_terminal_resolve_cwd_returns_home_for_empty_request() {
+        let result = workspace_terminal_resolve_cwd(TerminalCwdRequest {
+            repos_dir: None,
+            project_dtag: None,
+            clone_url: None,
+        })
+        .expect("home fallback for empty request");
+        assert_eq!(
+            result,
+            dirs::home_dir()
+                .expect("home")
+                .to_string_lossy()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn workspace_terminal_resolve_cwd_returns_checkout_for_temp_fixture() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let checkout = root.path().join("owner--terminal-fixture");
+        fs::create_dir_all(checkout.join(".git")).expect("checkout");
+        fs::write(
+            checkout.join(".git/config"),
+            "[remote \"origin\"]\n\turl = https://example.test/owner/terminal-fixture.git\n",
+        )
+        .expect("origin config");
+        let result = workspace_terminal_resolve_cwd(TerminalCwdRequest {
+            repos_dir: Some(root.path().to_string_lossy().to_string()),
+            project_dtag: Some("terminal-fixture".to_string()),
+            clone_url: Some("https://example.test/owner/terminal-fixture.git".to_string()),
+        })
+        .expect("checkout resolution");
+        assert_eq!(
+            result,
+            checkout
+                .canonicalize()
+                .expect("canonical checkout")
+                .to_string_lossy()
+                .to_string()
+        );
     }
 }

@@ -10,6 +10,9 @@ allowBuilds:
   edgedriver: false
   esbuild: true
   geckodriver: false
+  # node-pty ships darwin-arm64/darwin-x64 prebuilds, so its install script is a
+  # no-op here; pnpm still errors on the ignored build unless it is allowed.
+  node-pty: true
 overrides:
   # Force a single copy of the dismissable-layer. Radix packages otherwise
   # resolve different versions (react-menu pulled 1.1.11, react-dialog 1.1.15),

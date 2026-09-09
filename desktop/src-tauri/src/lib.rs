@@ -83,10 +83,8 @@ use mesh_llm_stubs::*;
 #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
 use shutdown::{hard_exit_after_mesh_shutdown, relaunch_after_mesh_shutdown};
 use shutdown::{is_restart_request, shut_down_app};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::Listener;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
@@ -610,6 +608,7 @@ pub fn run() {
             workspace_terminal_resize,
             workspace_terminal_close,
             workspace_terminal_close_all,
+            workspace_terminal_resolve_cwd,
             workspace_web_start,
             workspace_web_navigate,
             workspace_web_back,

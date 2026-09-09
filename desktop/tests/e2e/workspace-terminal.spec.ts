@@ -42,10 +42,32 @@ async function dispatchPrimaryShortcut(
   );
 }
 
+/**
+ * Output no longer round-trips through a DOM attribute: it is written
+ * straight into xterm, so the rendered rows are the only evidence.
+ */
+async function terminalText(terminal: Locator): Promise<string> {
+  try {
+    const hookText = await terminal
+      .page()
+      .evaluate(
+        () =>
+          (
+            window as Window & { __BUZZ_E2E_TERMINAL_TEXT__?: () => string }
+          ).__BUZZ_E2E_TERMINAL_TEXT__?.() ?? "",
+      );
+    if (hookText) return hookText.replace(/\u00a0/g, " ");
+  } catch {
+    // Hook absent or throws; fall back to DOM rows.
+  }
+  const text = await terminal.locator(".xterm-rows").innerText();
+  return text.replace(/\u00a0/g, " ");
+}
+
 async function expectMockInputOutput(terminal: Locator): Promise<void> {
   await expect
     .poll(async () => {
-      const output = (await terminal.getAttribute("data-output")) ?? "";
+      const output = await terminalText(terminal);
       return ["h", "e", "l", "l", "o"].every((character) =>
         output.includes(`mock-output:${character}`),
       );
@@ -69,9 +91,7 @@ test.describe("terminal workspace tab", () => {
     await expect
       .poll(async () => (await terminal.getAttribute("data-status")) ?? "")
       .toBe("running");
-    await expect
-      .poll(async () => (await terminal.getAttribute("data-output")) ?? "")
-      .toContain("$ ");
+    await expect.poll(async () => await terminalText(terminal)).toContain("$");
 
     await terminal.click();
     await page.keyboard.type("hello");
@@ -100,16 +120,10 @@ test.describe("terminal workspace tab", () => {
     await page.getByRole("tab", { name: "Terminal" }).click();
     await expect(page.getByTestId("workspace-terminal-body")).toBeVisible();
     await expect
-      .poll(
-        async () =>
-          (await page
-            .getByTestId("workspace-terminal-body")
-            .getAttribute("data-output")) ?? "",
+      .poll(async () =>
+        terminalText(page.getByTestId("workspace-terminal-body")),
       )
       .toContain("mock-output:h");
-    await expect(
-      page.getByTestId("workspace-terminal-body").locator(".xterm-rows"),
-    ).toContainText("mock-output:h");
 
     const rootBefore = await page.evaluate(
       () => getComputedStyle(document.documentElement).fontSize,
