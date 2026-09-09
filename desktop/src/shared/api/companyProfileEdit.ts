@@ -26,11 +26,16 @@ export async function signCommunityProfileUpdate(input: {
   expectedHeadEventId: string;
   relayPubkey: string;
   requestId: string;
+  /** Optional paired fence for first-job/onboarding writes; Settings remains unscoped. */
+  expectedOwnerPubkey?: string;
+  expectedRelayUrl?: string;
 }): Promise<string> {
   return invokeTauri<string>("sign_community_profile_update", {
     profile: JSON.stringify(input.profile),
     expectedHeadEventId: input.expectedHeadEventId,
     relayPubkey: input.relayPubkey,
     requestId: input.requestId,
+    expectedOwnerPubkey: input.expectedOwnerPubkey,
+    expectedRelayUrl: input.expectedRelayUrl,
   });
 }

@@ -5,9 +5,16 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { NativeHost } from "../native-host.mjs";
+import { summarizeLegacyEntries } from "./legacy-diagnostics.mjs";
 
 /** Open the hosted legacy-layout WebKit process without prematurely closing its writer. */
-export async function openLegacyStorage({ manifest, directory, env, mode }) {
+export async function openLegacyStorage({
+  manifest,
+  directory,
+  env,
+  mode,
+  diagnostics,
+}) {
   assert.equal(env.GITHUB_ACTIONS, "true");
   assert.equal(process.platform, "darwin");
   assert.equal(manifest.onboardingFixture, true);
@@ -39,6 +46,7 @@ export async function openLegacyStorage({ manifest, directory, env, mode }) {
   ).catch((error) => {
     if (error.code !== "EEXIST") throw error;
   });
+  const executableIdentity = await diagnostics?.executable(executable);
   const host = new NativeHost(executable, {
     env: { ...env, COLONY_MIGRATION_PROOF: mode },
   });
@@ -46,16 +54,48 @@ export async function openLegacyStorage({ manifest, directory, env, mode }) {
   host.child.once("exit", (code, signal) => {
     exit = { code, signal };
   });
+  const processFields = { mode, pid: host.child.pid };
+  diagnostics?.record("host-open", { ...processFields, executableIdentity });
   return {
-    read: () =>
-      host.request("invoke", {
-        command: "electron_read_frontend_migration",
-        args: {},
-      }),
+    read: async () => {
+      const started = performance.now();
+      try {
+        const entries = await host.request("invoke", {
+          command: "electron_read_frontend_migration",
+          args: {},
+        });
+        diagnostics?.record("host-read", {
+          ...processFields,
+          durationMs: Math.round(performance.now() - started),
+          ...summarizeLegacyEntries(entries),
+        });
+        diagnostics?.snapshot(`${mode}-read`);
+        return entries;
+      } catch (error) {
+        diagnostics?.record("host-read-failed", {
+          ...processFields,
+          durationMs: Math.round(performance.now() - started),
+        });
+        throw error;
+      }
+    },
     close: async () => {
-      await host.close();
-      // A forced kill is not proof that WebKit had a chance to flush its store.
-      assert.deepEqual(exit, { code: 0, signal: null });
+      const started = performance.now();
+      let closed = false;
+      try {
+        await host.close();
+        // A forced kill is not proof that WebKit had a chance to flush its store.
+        assert.deepEqual(exit, { code: 0, signal: null });
+        closed = true;
+      } finally {
+        diagnostics?.record("host-close", {
+          ...processFields,
+          durationMs: Math.round(performance.now() - started),
+          closed,
+          exit: exit ?? null,
+        });
+        diagnostics?.snapshot(`${mode}-close`);
+      }
     },
   };
 }
