@@ -130,6 +130,7 @@ export const T1: React.FC<T1Props> = (props) => {
           style={{
             color: "white",
             fontSize: 104,
+            fontFamily: "Inter",
             textAlign: "center",
             lineHeight: 1.1,
             fontWeight: 800,
@@ -182,7 +183,7 @@ export const T1: React.FC<T1Props> = (props) => {
         <div
           style={{
             height: 1464,
-            padding: 48,
+            padding: "40px 48px 48px 48px",
             display: "flex",
             flexDirection: "column",
             justifyContent: "flex-end",
@@ -514,6 +515,7 @@ export const T1: React.FC<T1Props> = (props) => {
           style={{
             color: "white",
             fontSize: 96,
+            fontFamily: "Inter",
             fontWeight: 800,
             lineHeight: 1.1,
             marginBottom: 24,
@@ -526,6 +528,7 @@ export const T1: React.FC<T1Props> = (props) => {
           style={{
             color: "rgba(255,255,255,0.8)",
             fontSize: 44,
+            fontFamily: "Inter",
             fontWeight: 600,
           }}
         >
