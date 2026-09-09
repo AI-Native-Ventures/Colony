@@ -14,6 +14,8 @@ import path from "node:path";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import { NativeHost } from "./native-host.mjs";
+import { TerminalService } from "./terminal.mjs";
+import { registerTerminalIpc } from "./terminal-ipc.mjs";
 import { RendererHost } from "./renderer-host.mjs";
 import { BrowserViews } from "./browser/views.mjs";
 import { startBroker } from "./browser/broker.mjs";
@@ -155,6 +157,19 @@ async function boot() {
     send({ type: "browser", payload }),
   );
   resources.add(() => views.closeAll());
+  const terminalService = new TerminalService();
+  const terminalIpc = registerTerminalIpc({
+    ipcMain,
+    webContents: window.webContents,
+    service: terminalService,
+  });
+  resources.add(async () => {
+    await Promise.race([
+      terminalService.closeAll(),
+      new Promise((resolve) => setTimeout(resolve, 6000)),
+    ]);
+  });
+  resources.add(() => terminalIpc.dispose());
   const createImports = () => {
     const generation = rendererHost.generation;
     return new SignInImport({
