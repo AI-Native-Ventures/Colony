@@ -178,6 +178,10 @@ pub struct MeterConfig {
     pub anthropic_upstream: String,
     /// Base URL for OpenAI-dialect requests.
     pub openai_upstream: String,
+    /// Complete OpenAI provider base, including any API path. When set, the
+    /// checkpoint removes its own `/v1` prefix before appending the operation.
+    /// `openai_upstream` retains its existing root-URL semantics otherwise.
+    pub openai_base_url: Option<String>,
     /// Vendor slug recorded for Anthropic-dialect calls, when the operator
     /// states it. Absent means derive it from the upstream host.
     pub anthropic_provider: Option<String>,
@@ -195,6 +199,7 @@ impl fmt::Debug for MeterConfig {
             .debug_struct("MeterConfig")
             .field("anthropic_upstream", &self.anthropic_upstream)
             .field("openai_upstream", &self.openai_upstream)
+            .field("openai_base_url", &self.openai_base_url)
             .field("anthropic_provider", &self.anthropic_provider)
             .field("openai_provider", &self.openai_provider)
             .field(
@@ -214,6 +219,7 @@ impl Default for MeterConfig {
         Self {
             anthropic_upstream: "https://api.anthropic.com".to_string(),
             openai_upstream: "https://api.openai.com".to_string(),
+            openai_base_url: None,
             anthropic_provider: None,
             openai_provider: None,
             anthropic_api_key: None,
@@ -226,7 +232,10 @@ impl MeterConfig {
     fn upstream(&self, provider: Provider) -> &str {
         match provider {
             Provider::Anthropic => &self.anthropic_upstream,
-            Provider::OpenAi => &self.openai_upstream,
+            Provider::OpenAi => self
+                .openai_base_url
+                .as_deref()
+                .unwrap_or(&self.openai_upstream),
         }
     }
 
@@ -289,6 +298,10 @@ pub enum MeterError {
     /// The upstream HTTP client could not be built.
     #[error("could not build the upstream HTTP client: {0}")]
     Client(#[source] reqwest::Error),
+    /// Explicit fixture transport could not be configured safely.
+    #[cfg(feature = "onboarding-fixture")]
+    #[error("could not configure fixture transport: {0}")]
+    Fixture(#[from] buzz_ws_client::onboarding_fixture::FixtureError),
 }
 
 /// Control surface for a running checkpoint.
@@ -353,15 +366,27 @@ struct MeterState {
 pub async fn start_meter(
     config: MeterConfig,
 ) -> Result<(u16, mpsc::Receiver<MeteredCall>, MeterHandle), MeterError> {
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+    start_meter_on(config, 0).await
+}
+
+/// Start the checkpoint on a host-assigned loopback port (zero chooses a free port).
+/// Binding failure is returned to the caller; no alternate port is attempted.
+///
+/// # Errors
+/// Fails if the listener cannot bind or the upstream client cannot be built.
+pub async fn start_meter_on(
+    config: MeterConfig,
+    port: u16,
+) -> Result<(u16, mpsc::Receiver<MeteredCall>, MeterHandle), MeterError> {
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
         .await
         .map_err(MeterError::Bind)?;
     let port = listener.local_addr().map_err(MeterError::Bind)?.port();
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(MeterError::Client)?;
+    let builder = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10));
+    #[cfg(feature = "onboarding-fixture")]
+    let builder = buzz_ws_client::onboarding_fixture::configure_process_http(builder)?;
+    let client = builder.build().map_err(MeterError::Client)?;
 
     let (calls_tx, calls_rx) = mpsc::channel(CALL_CHANNEL_CAPACITY);
     let keys: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
@@ -539,6 +564,11 @@ async fn forward(
         outbound_headers.insert(credential_name, credential_value);
     }
 
+    let upstream_rest = if provider == Provider::OpenAi && state.config.openai_base_url.is_some() {
+        upstream_rest.strip_prefix("v1/").unwrap_or(upstream_rest)
+    } else {
+        upstream_rest
+    };
     let mut url = format!(
         "{}/{}",
         state.config.upstream(provider).trim_end_matches('/'),
@@ -549,6 +579,10 @@ async fn forward(
         url.push_str(query);
     }
 
+    #[cfg(feature = "onboarding-fixture")]
+    if buzz_ws_client::onboarding_fixture::validate_process_url(&url).is_err() {
+        return local_error(StatusCode::BAD_GATEWAY, UPSTREAM_FAILED_BODY);
+    }
     let sent = state
         .client
         .request(method, &url)
@@ -886,6 +920,26 @@ impl Drop for Tee {
 #[cfg(test)]
 mod slug_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn assigned_meter_port_never_falls_back_when_busy() {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        assert!(matches!(
+            start_meter_on(MeterConfig::default(), port).await,
+            Err(MeterError::Bind(_))
+        ));
+        drop(occupied);
+        let (bound, _calls, handle) = start_meter_on(MeterConfig::default(), port).await.unwrap();
+        assert_eq!(bound, port);
+        let response = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/openai/v1/models"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        handle.shutdown();
+    }
 
     #[test]
     fn gateway_denial_statuses_have_stable_machine_header_values() {

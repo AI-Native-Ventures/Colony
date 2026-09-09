@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 
@@ -14,7 +15,7 @@ test.beforeEach(async ({ page }) => {
 
 async function navigateToWorkflows(page: import("@playwright/test").Page) {
   await page.goto("/");
-  await page.getByTestId("open-workflows-view").click();
+  await openSidebarDestination(page, "open-workflows-view");
   await expect(page).toHaveURL(/#\/workflows$/);
   await expect(page.getByTestId("workflows-view")).toBeVisible();
 }

@@ -7,7 +7,44 @@ include!("src/managed_agents/reserved_env_keys.rs");
 
 use base64::Engine as _;
 
+fn embed_electron_bundle_identity() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos")
+        || std::env::var("PROFILE").as_deref() != Ok("release")
+        || std::env::var_os("CARGO_FEATURE_ELECTRON_HOST").is_none()
+    {
+        return Ok(());
+    }
+    let file = if std::env::var_os("CARGO_FEATURE_ONBOARDING_FIXTURE").is_some() {
+        "src/electron_host/Info.fixture.plist"
+    } else if std::env::var_os("CARGO_FEATURE_ELECTRON_STABLE").is_some() {
+        "src/electron_host/Info.stable.plist"
+    } else {
+        return Ok(());
+    };
+    println!("cargo:rerun-if-changed={file}");
+    let path = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR")?)
+        .join(file)
+        .canonicalize()?;
+    // Standard macOS command-line tool metadata. The helper lives below
+    // Resources, so NSBundle cannot infer its identity from its directory.
+    // Target only this binary; ordinary Tauri apps and test executables retain
+    // their existing metadata. Separate linker arguments preserve path quoting.
+    for argument in [
+        "-sectcreate",
+        "__TEXT",
+        "__info_plist",
+        path.to_str().ok_or("Non-UTF-8 metadata path")?,
+    ] {
+        println!("cargo:rustc-link-arg-bin=colony-native-host=-Xlinker");
+        println!("cargo:rustc-link-arg-bin=colony-native-host={argument}");
+    }
+    Ok(())
+}
+
 fn main() {
+    if let Err(error) = embed_electron_bundle_identity() {
+        panic!("Could not embed native helper identity: {error}");
+    }
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_URL");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");

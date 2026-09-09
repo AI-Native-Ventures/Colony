@@ -101,16 +101,6 @@
   overflow: visible;
 }
 
-/*
- * Buzz Dark uses a warmer neutral for the inset main/settings content canvas.
- * Override `--background` locally as well as the surface fill so descendant
- * headers and panes using `bg-background` remain visually continuous.
- */
-:root[data-buzz-sidebar].dark [data-buzz-content-surface] {
-  --background: var(--buzz-content-dark);
-  background-color: hsl(var(--background));
-}
-
 :root[data-buzz-sidebar] .buzz-huddle-app-surface {
   background-color: transparent;
   background-image: none;

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge } from "../helpers/bridge";
 
 /**
@@ -107,7 +108,7 @@ test.beforeEach(async ({ page }) => {
   }, events);
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("open-content-view").click();
+  await openSidebarDestination(page, "open-content-view");
 });
 
 test("the Brand page reads in plain words: logo, colors, words, likes, rules", async ({

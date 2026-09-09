@@ -1,4 +1,6 @@
 import * as React from "react";
+import { electronDesktop } from "@/shared/api/electronNativeBridge";
+import { ElectronWebBody } from "./ElectronWebBody";
 import {
   ArrowLeft,
   ArrowRight,
@@ -45,7 +47,12 @@ export const webKindDefinition: TabKindDefinition = {
     url: "about:blank",
   }),
   canCreateFromNewTabPage: true,
-  dispose: (tab) => disposeWebSession(tab.id),
+  dispose: (tab) => {
+    const electron = electronDesktop();
+    if (electron)
+      return electron.request<void>("browser:close", { id: tab.id });
+    return disposeWebSession(tab.id);
+  },
 };
 
 function readWebPayload(payload: unknown): WebPayload {
@@ -133,6 +140,12 @@ function useWebRuntime(tabId: string) {
 
 /** A Tauri-hosted live CDP screencast with pointer and keyboard forwarding. */
 export function WebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
+  if (electronDesktop())
+    return <ElectronWebBody channelId={channelId} tab={tab} />;
+  return <TauriWebBody channelId={channelId} tab={tab} />;
+}
+
+function TauriWebBody({ channelId, tab }: TabBodyProps): React.JSX.Element {
   const payload = React.useMemo(
     () => readWebPayload(tab.payload),
     [tab.payload],

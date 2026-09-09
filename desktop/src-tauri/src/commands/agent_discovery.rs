@@ -102,9 +102,6 @@ pub async fn save_custom_harness(
     use tauri::Manager;
 
     // ── Phase 1: full validation before touching the filesystem ─────────────
-    // validate_harness_definition_pub now covers: id format, non-empty command/label,
-    // env key well-formedness + reserved-key check + NUL/size limits, and
-    // install_instructions_url scheme.
     custom_harnesses::validate_harness_definition_pub(&definition)?;
     custom_harnesses::check_id_collision(&definition.id)?;
 
@@ -152,7 +149,10 @@ pub async fn save_custom_harness(
     let default_args =
         crate::managed_agents::normalize_agent_args(&definition.command, definition.args.clone());
 
+    let local_launch_error =
+        crate::managed_agents::isolation::launch::ensure_supported(Some(&definition.id)).err();
     Ok(AcpRuntimeCatalogEntry {
+        local_launch_error,
         id: definition.id,
         label: definition.label,
         avatar_url: String::new(),

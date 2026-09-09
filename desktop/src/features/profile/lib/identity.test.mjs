@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatOwnerLabel, profileLookupsEqual } from "./identity.ts";
+import {
+  formatOwnerLabel,
+  profileLookupsEqual,
+  resolveUserLabel,
+} from "./identity.ts";
 
 const OWNER_PUBKEY =
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -13,6 +17,35 @@ const summary = (over = {}) => ({
   ownerPubkey: null,
   isAgent: false,
   ...over,
+});
+
+test("own messages use You when setup has not published a name", () => {
+  for (const displayName of [null, "", "npub1missing", OWNER_PUBKEY]) {
+    assert.equal(
+      resolveUserLabel({
+        pubkey: OWNER_PUBKEY,
+        currentPubkey: OWNER_PUBKEY,
+        preferResolvedSelfLabel: true,
+        profiles: {
+          [OWNER_PUBKEY]: summary({ displayName, nip05Handle: null }),
+        },
+      }),
+      "You",
+    );
+  }
+});
+
+test("a real name wins for own messages and other identities remain distinct", () => {
+  assert.equal(
+    resolveUserLabel({
+      pubkey: OWNER_PUBKEY,
+      currentPubkey: OWNER_PUBKEY,
+      preferResolvedSelfLabel: true,
+      profiles: { [OWNER_PUBKEY]: summary({ displayName: "Aisha" }) },
+    }),
+    "Aisha",
+  );
+  assert.notEqual(resolveUserLabel({ pubkey: OWNER_PUBKEY }), "You");
 });
 
 test("formatOwnerLabel resolves a known owner's display name", () => {

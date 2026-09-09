@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { electronDesktop } from "@/shared/api/electronNativeBridge";
 
 import { registerTabKind } from "@/features/workspace/lib/tabKindRegistry";
 import {
@@ -40,6 +41,8 @@ let stableKindsRegistered = false;
 let webKindRegistered = false;
 
 function workspaceWebTabEnabled(): boolean {
+  // The Electron browser is a shipping surface, independent of the old Tauri preview.
+  if (electronDesktop()) return true;
   // The registry is also loaded by direct-loader tests without a browser
   // global. The desktop runtime always has window/localStorage; the safe
   // fallback keeps the preview surface default-off in non-browser contexts.

@@ -25,6 +25,7 @@ import { Textarea } from "@/shared/ui/textarea";
 import { PrivateKeyBackupRow } from "./PrivateKeyBackupRow";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
 import { SignOutSection } from "./SignOutSection";
+import { sanitizeDisplayName } from "@/features/onboarding/profileDraft";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 
 type ProfileSettingsCardProps = {
@@ -136,7 +137,7 @@ export function ProfileSettingsCard({
   const updateProfileMutation = useUpdateProfileMutation();
   const profile = profileQuery.data;
 
-  const currentDisplayName = profile?.displayName ?? "";
+  const currentDisplayName = sanitizeDisplayName(profile?.displayName);
   const currentAvatarUrl = profile?.avatarUrl ?? "";
   const currentAbout = profile?.about ?? "";
   const [displayNameDraft, setDisplayNameDraft] = React.useState("");
@@ -302,8 +303,8 @@ export function ProfileSettingsCard({
 
   const resolvedName =
     nextDisplayName ||
-    profile?.displayName ||
-    fallbackDisplayName ||
+    currentDisplayName ||
+    sanitizeDisplayName(fallbackDisplayName) ||
     "Your profile";
   const resolvedPubkey = profile?.pubkey ?? currentPubkey ?? "Unavailable";
   const nip05Handle = profile?.nip05Handle ?? "Not set";
@@ -496,6 +497,21 @@ export function ProfileSettingsCard({
         />
 
         <div className="space-y-3">
+          {profile && !currentDisplayName && !isEditingProfileMetadata ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/40 px-4 py-3">
+              <p className="text-sm">
+                Add your name so your team can recognize you in conversations.
+              </p>
+              <button
+                className="shrink-0 text-sm font-medium text-primary"
+                data-testid="profile-add-name"
+                type="button"
+                onClick={() => setIsEditingProfileMetadata(true)}
+              >
+                Add your name
+              </button>
+            </div>
+          ) : null}
           {profileQuery.error instanceof Error ? (
             <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {profileQuery.error.message}

@@ -167,6 +167,11 @@ export function ChatHeader({
           {actions ? <div className="shrink-0">{actions}</div> : null}
         </div>
       </div>
+      {trimmedDescription && mode === "channel" ? (
+        <p className="colony-channel-description hidden truncate text-xs text-muted-foreground">
+          {trimmedDescription}
+        </p>
+      ) : null}
     </header>
   );
 

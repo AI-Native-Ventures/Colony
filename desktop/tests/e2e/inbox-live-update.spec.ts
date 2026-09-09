@@ -415,30 +415,45 @@ test.describe("inbox stable-conversation regressions", () => {
       { senderPubkey: TEST_IDENTITIES.alice.pubkey, rootId: root.id },
     );
 
-    await expect(detail).toContainText("Filler reply 0");
+    await expect(
+      detail.getByTestId("home-inbox-context-message").filter({
+        hasText: /Filler reply \d+ to make the list long enough to scroll\./,
+      }),
+    ).toHaveCount(30);
 
     // Scroll to a deterministic mid-position: assign scrollTop directly so the
     // test does not depend on wheel-event routing or animation timing.
-    // First scroll to bottom (ensures scrollable content is laid out), then
-    // pull back up by half to create a non-zero, non-bottom scrollTop.
+    // Use half the scrollable range, not half the content height: with compact
+    // rows the latter can exceed the maximum scrollTop and clamp to bottom.
     await page.evaluate(() => {
       const pane = document.querySelector(
         '[data-testid="home-inbox-detail"] [aria-busy]',
       ) as HTMLElement | null;
       if (!pane) return;
-      pane.scrollTop = pane.scrollHeight; // go to bottom
-      const mid = Math.max(1, Math.floor(pane.scrollHeight / 2));
+      const maxScrollTop = pane.scrollHeight - pane.clientHeight;
+      const mid = Math.max(1, Math.floor(maxScrollTop / 2));
       pane.scrollTop = mid; // settle at mid
     });
-    // State-based wait: scroll must be non-zero before proceeding.
+    // Establish a real reading position outside the 32px bottom-follow zone.
     await page.waitForFunction(() => {
       const pane = document.querySelector(
         '[data-testid="home-inbox-detail"] [aria-busy]',
       ) as HTMLElement | null;
-      return (pane?.scrollTop ?? 0) > 0;
+      return (
+        pane !== null &&
+        pane.scrollTop > 0 &&
+        pane.scrollHeight - pane.clientHeight - pane.scrollTop > 32
+      );
     });
-    const scrollTopBefore = await getScrollTop(page);
+    const positionBefore = await detail
+      .getByTestId("home-inbox-detail-scroll")
+      .evaluate((pane) => ({
+        bottomGap: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+        scrollTop: pane.scrollTop,
+      }));
+    const scrollTopBefore = positionBefore.scrollTop;
     expect(scrollTopBefore).toBeGreaterThan(0);
+    expect(positionBefore.bottomGap).toBeGreaterThan(32);
 
     // Type a draft and confirm focus before the live update.
     const composer = detail.getByTestId("message-input");

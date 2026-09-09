@@ -338,7 +338,7 @@ export function CommunityRail({
     }),
   );
 
-  if (communities.length <= 1) {
+  if (communities.length === 0) {
     return null;
   }
 

@@ -23,12 +23,16 @@ class _FakeRelay {
   /// When set, publishing throws this instead of accepting.
   Object? publishFailure;
 
+  /// Answer the actual signed event, whose timestamp is chosen by the client.
+  void Function(NostrEvent event)? onPublish;
+
   _FakeRelay(this.keys);
 
   Future<NostrEvent> publish(NostrEvent event) async {
     final failure = publishFailure;
     if (failure != null) throw failure;
     published.add(event);
+    onPublish?.call(event);
     return event;
   }
 
@@ -115,16 +119,19 @@ void main() {
   test('an applied receipt resolves to the task the relay named', () async {
     final client = _client(relay, nsec: owner.nsec);
     final action = _plannedAttach(owner.public, relayKeys.public);
-    final signed = signCompanyAction(owner.nsec, action);
     final head = signedTaskHead(keys: relayKeys, initiativeId: 'initiative-1');
     relay.tasks.add(head);
-    relay.receipts[signed.id] = signedReceipt(
-      keys: relayKeys,
-      actionEventId: signed.id,
-      headEventId: head.id,
-      requestId: action.requestId,
-      idempotencyKey: action.idempotencyKey,
-    );
+    // Pre-signing here races the client's next Unix second and answers an
+    // event it never submitted. The fake relay responds only after publish.
+    relay.onPublish = (signed) {
+      relay.receipts[signed.id] = signedReceipt(
+        keys: relayKeys,
+        actionEventId: signed.id,
+        headEventId: head.id,
+        requestId: action.requestId,
+        idempotencyKey: action.idempotencyKey,
+      );
+    };
 
     final resolution = await resolve(client);
     expect(resolution.taskId, 'thread-task:sample');
@@ -160,17 +167,27 @@ void main() {
   test('a refusal fails the send rather than letting it go out', () async {
     final client = _client(relay, nsec: owner.nsec);
     final action = _plannedAttach(owner.public, relayKeys.public);
-    final signed = signCompanyAction(owner.nsec, action);
-    relay.receipts[signed.id] = signedReceipt(
-      keys: relayKeys,
-      actionEventId: signed.id,
-      headEventId: null,
-      outcome: 'rejected',
-      requestId: action.requestId,
-      idempotencyKey: action.idempotencyKey,
-    );
+    relay.onPublish = (signed) {
+      relay.receipts[signed.id] = signedReceipt(
+        keys: relayKeys,
+        actionEventId: signed.id,
+        headEventId: null,
+        outcome: 'rejected',
+        requestId: action.requestId,
+        idempotencyKey: action.idempotencyKey,
+      );
+    };
 
-    await expectLater(resolve(client), throwsA(isA<WorkContextError>()));
+    await expectLater(
+      resolve(client),
+      throwsA(
+        isA<WorkContextError>().having(
+          (error) => error.message,
+          'message',
+          contains('The relay refused this company change.'),
+        ),
+      ),
+    );
   });
 
   test('a relay that never answers fails the send, not the message', () async {
@@ -180,18 +197,16 @@ void main() {
 
   test('a receipt for a different action is not this send’s answer', () async {
     final client = _client(relay, nsec: owner.nsec);
-    final signed = signCompanyAction(
-      owner.nsec,
-      _plannedAttach(owner.public, relayKeys.public),
-    );
     final head = signedTaskHead(keys: relayKeys);
     relay.tasks.add(head);
     // Right action id, wrong request: another send's answer arriving first.
-    relay.receipts[signed.id] = signedReceipt(
-      keys: relayKeys,
-      actionEventId: signed.id,
-      headEventId: head.id,
-    );
+    relay.onPublish = (signed) {
+      relay.receipts[signed.id] = signedReceipt(
+        keys: relayKeys,
+        actionEventId: signed.id,
+        headEventId: head.id,
+      );
+    };
 
     await expectLater(resolve(client), throwsA(isA<WorkContextError>()));
   });

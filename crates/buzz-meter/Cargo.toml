@@ -11,7 +11,12 @@ repository.workspace   = true
 name = "buzz_meter"
 path = "src/lib.rs"
 
+[features]
+# Explicit local proof build only; never enabled in normal packages.
+onboarding-fixture = ["dep:buzz-ws-client", "buzz-ws-client/onboarding-fixture"]
+
 [dependencies]
+buzz-ws-client = { path = "../buzz-ws-client", optional = true }
 buzz-core    = { workspace = true }
 buzz-meter-core = { workspace = true }
 axum         = { workspace = true }

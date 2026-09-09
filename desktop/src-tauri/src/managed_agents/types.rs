@@ -506,6 +506,8 @@ pub struct ManagedAgentRecord {
 
 #[derive(Debug)]
 pub struct ManagedAgentProcess {
+    /// Lifetime of the isolated worker gateway; never serialized or adopted from a PID.
+    pub(crate) isolation_network: Option<std::sync::Arc<super::isolation::network::WorkerNetwork>>,
     pub child: Child,
     pub log_path: PathBuf,
     /// The effective spawn config this process was launched with (see
@@ -542,7 +544,14 @@ pub struct ManagedAgentProcess {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedAgentSummary {
+    /// True only for a tracked process launched with the OS boundary and live gateway.
+    pub isolated: bool,
+    /// Host-created launch generation; old descendants cannot read a new grant.
+    pub browser_generation: Option<String>,
     pub pubkey: String,
+    /// Whether the saved record identifies its hiring owner. Browser sharing
+    /// rejects legacy records whose display-only ownership fallback is unknown.
+    pub owner_identified: bool,
     pub name: String,
     pub persona_id: Option<String>,
     /// The record's harness/runtime id (mirror of `ManagedAgentRecord.runtime`).
@@ -682,6 +691,9 @@ pub struct AcpRuntimeCatalogEntry {
     pub label: String,
     pub avatar_url: String,
     pub availability: AcpAvailabilityStatus,
+    /// Why this host cannot launch the runtime locally; installation/auth remain separate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_launch_error: Option<String>,
     pub command: Option<String>,
     pub binary_path: Option<String>,
     pub default_args: Vec<String>,

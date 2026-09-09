@@ -4,7 +4,7 @@ export const ONBOARDING_ANSWERS_KEY = "colony.onboarding.answers";
 
 export type AnswerStorage = {
   get: (key: string) => string | null;
-  set: (key: string, value: string) => void;
+  set: (key: string, value: string) => undefined | boolean;
   remove: (key: string) => void;
 };
 
@@ -21,6 +21,11 @@ export const EMPTY_ANSWERS: OnboardingAnswers = {
   description: null,
   paid: false,
   communitySlug: null,
+  provisioningCandidate: null,
+  signupAttemptId: null,
+  identityPubkey: null,
+  firstTaskMarker: null,
+  businessConfirmed: false,
 };
 
 /**
@@ -58,6 +63,11 @@ function coerce(raw: unknown): OnboardingAnswers {
     description: value.description ?? null,
     paid: value.paid === true,
     communitySlug: value.communitySlug ?? null,
+    provisioningCandidate: value.provisioningCandidate ?? null,
+    signupAttemptId: value.signupAttemptId ?? null,
+    identityPubkey: value.identityPubkey ?? null,
+    firstTaskMarker: value.firstTaskMarker ?? null,
+    businessConfirmed: value.businessConfirmed === true,
   };
 }
 
@@ -87,7 +97,11 @@ export function saveAnswers(
   answers: OnboardingAnswers,
   key: string = ONBOARDING_ANSWERS_KEY,
 ): void {
-  storage.set(key, JSON.stringify(answers));
+  if (storage.set(key, JSON.stringify(answers)) === false) {
+    throw new Error(
+      "We could not save your setup progress on this device. Try again.",
+    );
+  }
 }
 
 export function clearAnswers(
@@ -95,4 +109,9 @@ export function clearAnswers(
   key: string = ONBOARDING_ANSWERS_KEY,
 ): void {
   storage.remove(key);
+}
+
+/** Keep each local identity's setup separate from other accounts on the device. */
+export function firstRunAnswersKey(pubkey: string): string {
+  return `${ONBOARDING_ANSWERS_KEY}.identity:${pubkey}`;
 }

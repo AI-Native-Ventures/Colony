@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-desktop"
-version = "0.16.7"
+version = "0.16.8"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1204,6 +1204,7 @@ dependencies = [
  "buzz-sdk",
  "buzz-terminal",
  "buzz-voice",
+ "buzz-ws-client",
  "bytes",
  "bzip2 0.6.1",
  "chrono",
@@ -1321,6 +1322,7 @@ dependencies = [
  "axum",
  "buzz-core",
  "buzz-meter-core",
+ "buzz-ws-client",
  "bytes",
  "chrono",
  "dashmap",
@@ -1407,8 +1409,12 @@ dependencies = [
 name = "buzz-ws-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "nostr 0.44.6",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

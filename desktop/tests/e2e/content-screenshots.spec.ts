@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 
@@ -177,7 +178,7 @@ test.beforeEach(async ({ page }) => {
   // Navigated in-app rather than deep-linked: the preview server serves the
   // built files with no SPA fallback, so goto("/content") is a 404.
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("open-content-view").click();
+  await openSidebarDestination(page, "open-content-view");
 });
 
 test("the calendar shows the week, and the day detail resizes like every other panel", async ({

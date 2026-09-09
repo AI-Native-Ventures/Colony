@@ -9,6 +9,7 @@ mod deep_link;
 mod discovery_credentials;
 mod discovery_worker;
 mod egress_guard;
+mod electron_host;
 mod event_sync;
 mod events;
 mod host;
@@ -51,7 +52,6 @@ mod util;
 mod web;
 #[cfg(target_os = "linux")]
 pub mod webkit_rendering;
-
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use colony_provisioning::*;
 use commands::*;
@@ -121,19 +121,7 @@ pub fn run() {
             eprintln!("buzz-mesh: failed to build big-stack tokio runtime, using default: {error}");
         }
     }
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // Focus the existing window when a duplicate instance launches.
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
-            // Forward any deep link URLs from the duplicate launch.
-            for arg in &argv {
-                if arg.starts_with("buzz://") {
-                    handle_deep_link_url(app, arg);
-                }
-            }
-        }))
+    let builder = electron_host::single_instance(tauri::Builder::default())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -147,10 +135,9 @@ pub fn run() {
         .plugin(
             tauri::plugin::Builder::<_, ()>::new("initial-window-reveal")
                 .on_webview_ready(|webview| {
-                    if webview.label() != "main" {
+                    if webview.label() != "main" || electron_host::enabled() {
                         return;
                     }
-
                     // macOS applies the restored geometry asynchronously. Wait
                     // for several identical outer bounds and for React to
                     // commit the startup surface before revealing it.
@@ -237,6 +224,7 @@ pub fn run() {
     #[cfg(not(buzz_updater_enabled))]
     let builder = builder;
 
+    let builder = electron_host::configure(builder);
     let app = app_menu::install(builder)
         .register_asynchronous_uri_scheme_protocol("buzz-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
@@ -256,8 +244,10 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
-                tray_menu::init(&app_handle)?;
-                macos_notifications::init(&app_handle)?;
+                if !electron_host::enabled() {
+                    tray_menu::init(&app_handle)?;
+                    macos_notifications::init(&app_handle)?;
+                }
             }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
@@ -450,7 +440,10 @@ pub fn run() {
             // the now-inert ~/.sprout; the frontend dedupes the toast.
             // Suppressed when a reset completed this boot: the nest was wiped and
             // a fresh ~/.sprout-less state is exactly what we want.
-            if !reset_outcome.completed && migration::migrate_legacy_nest() {
+            if !electron_host::enabled()
+                && !reset_outcome.completed
+                && migration::migrate_legacy_nest()
+            {
                 let _ = app_handle.emit("legacy-nest-migrated", ());
             }
 
@@ -467,15 +460,7 @@ pub fn run() {
                 migration::migrate_dev_nest();
             }
 
-            // Create/update the local CLI symlink pointing to the
-            // bundled CLI binary. Non-fatal: agents find CLI via PATH.
-            if let Ok(exe) = std::env::current_exe() {
-                if let Some(parent) = exe.parent() {
-                    if let Err(error) = managed_agents::ensure_cli_symlink(parent, is_dev_nest) {
-                        eprintln!("buzz-desktop: failed to create CLI symlink: {error}");
-                    }
-                }
-            }
+            electron_host::ensure_cli_symlink(is_dev_nest);
 
             try_regenerate_nest(&app_handle);
 
@@ -576,9 +561,18 @@ pub fn run() {
                 });
             }
 
+            electron_host::start(&app_handle)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            electron_host::updater::electron_check_for_update,
+            electron_host::updater::electron_download_update,
+            electron_host::updater::electron_install_update,
+            electron_host::deep_links::electron_open_deep_link,
+            electron_host::migration::electron_export_frontend_state,
+            electron_host::migration::electron_read_frontend_migration,
+            electron_host::migration::electron_finish_frontend_migration,
+            electron_host::migration::electron_frontend_migration_fixture,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             colony_check_community_name,
@@ -906,6 +900,12 @@ pub fn run() {
             create_ncryptsec_backup,
             verify_ncryptsec_backup,
             save_ncryptsec_copy,
+            prepare_pending_signup,
+            load_pending_signup,
+            mark_pending_signup_registered,
+            clear_pending_signup,
+            discard_pending_signup,
+            save_recovery_code,
             generate_backup_passphrase,
             read_clipboard_text,
             start_identity_recovery_pairing,
@@ -936,7 +936,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             tray_menu::update_tray_agent_activity,
         ])
-        .build(tauri::generate_context!())
+        .build(electron_host::context(tauri::generate_context!()))
         .expect("error while building tauri application");
 
     let shutdown_done = Arc::new(AtomicBool::new(false));

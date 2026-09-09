@@ -174,12 +174,10 @@ const SCREEN_HUE: Record<string, HueName> = {
   recovery: "blue",
   company: "amber",
   building: "green",
-  // The brain screen used to sit between the probe and the business screen,
-  // where violet was the hue neither neighbour wore. It sits between building
-  // and credits now, and credits is violet, so the colony variant moves to
-  // amber: two screens in a row must not look alike.
+  // Power follows company directly now that building is no longer a screen.
+  // Keep both track variants distinct from company and the optional invite.
   "brain:byo": "pink",
-  "brain:colony": "amber",
+  "brain:colony": "green",
   credits: "violet",
   invite: "blue",
 };

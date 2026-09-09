@@ -1,6 +1,16 @@
+/** Native-only pending material. Never persist this in an onboarding draft. */
+export type PendingSignup = {
+  pubkey: string;
+  email: string;
+  attemptId: string;
+  recoveryCode: string;
+  phase: "prepared" | "registered";
+};
+
 export type SignUpResult = {
   pubkey: string;
   recoveryCode: string;
+  attemptId: string;
 };
 
 /** Typed failures, so a screen never has to parse an error string. */
@@ -47,6 +57,9 @@ export type ScrapeResult =
 
 export type OnboardingServices = {
   auth: {
+    pendingSignup: () => Promise<PendingSignup | null>;
+    saveRecovery: (attemptId: string) => Promise<string | null>;
+    acknowledgeRecovery: (attemptId: string) => Promise<void>;
     signUp: (email: string, password: string) => Promise<SignUpResult>;
     signIn: (email: string, password: string) => Promise<{ pubkey: string }>;
     recover: (

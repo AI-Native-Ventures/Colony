@@ -49,6 +49,10 @@ async fn proxy_handler(AxumState(state): AxumState<ProxyState>, req: Request) ->
     let app_state = state.app_handle.state::<AppState>();
     let base_url = relay::relay_api_base_url_with_override(&app_state);
     let upstream_url = format!("{base_url}{path_and_query}");
+    #[cfg(feature = "onboarding-fixture")]
+    if crate::relay::validate_fixture_url(&upstream_url).is_err() {
+        return (StatusCode::BAD_GATEWAY, "fixture destination refused").into_response();
+    }
 
     let has_range = req.headers().contains_key("range");
 
@@ -178,6 +182,10 @@ pub async fn handle_buzz_media(
 
     let has_range = request.headers().contains_key("range");
     let upstream_url = format!("{base}{path_and_query}");
+    #[cfg(feature = "onboarding-fixture")]
+    if crate::relay::validate_fixture_url(&upstream_url).is_err() {
+        return error_response(502, "fixture destination refused");
+    }
 
     // Forward Range header if present — enables video seeking through the proxy.
     let mut upstream = state

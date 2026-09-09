@@ -15,10 +15,12 @@ import { isColonyCreditsEligible } from "@/features/agents/ui/colonyCreditsEligi
 import { provisioningFromConfig } from "@/features/communities/colonyProvisioning";
 import { fetchColonyProvisioningConfig } from "@/features/communities/hostedCommunityApi";
 import { resolveAgentReadiness } from "@/features/onboarding/ui/agentReadiness";
+import { effectiveOnboardingRuntimeId } from "./ui/onboardingRuntimeSelection";
 import { discoverAcpRuntimes, installAcpRuntime } from "@/shared/api/tauri";
 import {
   getGlobalAgentConfig,
   setGlobalAgentConfig,
+  type GlobalAgentConfigScope,
 } from "@/shared/api/tauriGlobalAgentConfig";
 import type {
   AcpRuntimeCatalogEntry,
@@ -56,7 +58,10 @@ export type AutomaticAgentPlan =
 export type AutomaticAgentSetupIo = {
   listRuntimes: () => Promise<AcpRuntimeCatalogEntry[]>;
   loadConfig: () => Promise<GlobalAgentConfig>;
-  saveConfig: (config: GlobalAgentConfig) => Promise<unknown>;
+  saveConfig: (
+    config: GlobalAgentConfig,
+    scope?: GlobalAgentConfigScope,
+  ) => Promise<unknown>;
   installRuntime: (runtimeId: string) => Promise<unknown>;
   loadProvisioning: typeof fetchColonyProvisioningConfig;
 };
@@ -185,4 +190,54 @@ export async function ensureAutomaticAgentConfig(
       ? planAutomaticAgentConfig(runtimes, current, await relayHostsAgents(io))
       : offline;
   return applyPlan(plan, io);
+}
+
+/**
+ * Explicit power choices are only validated. Legacy setup may fill an empty
+ * configuration; its caller supplies the native account/business save fence.
+ */
+export async function ensureBuiltInFounderConfig(
+  overrides: Partial<AutomaticAgentSetupIo> = {},
+  options: {
+    mode?: "configure" | "validate-only";
+    scope?: GlobalAgentConfigScope;
+  } = {},
+): Promise<void> {
+  const io = { ...WIRED_IO, ...overrides };
+  const [runtimes, current] = await Promise.all([
+    io.listRuntimes(),
+    io.loadConfig(),
+  ]);
+  const currentRuntime = runtimes.find(
+    (entry) =>
+      entry.id === effectiveOnboardingRuntimeId(current.preferred_runtime),
+  );
+  if (currentRuntime?.localLaunchError)
+    throw new Error(
+      `${currentRuntime.label} was found, but cannot run teammates in this version of Colony. Choose how to power your agents to continue.`,
+    );
+  if (resolveAgentReadiness(runtimes, current, "preferred").ready) return;
+  if (options.mode === "validate-only")
+    throw new Error(
+      "Your saved agent connection is not ready. Return to Power your agents or Agent defaults, check your connection and model, then try again.",
+    );
+  if (!(await relayHostsAgents(io)))
+    throw new Error(
+      "Your business is open, but Colony could not finish setting up your teammate. Try again.",
+    );
+  const runtime = runtimes.find(
+    (entry) => entry.id === COLONY_AGENT_RUNTIME_ID,
+  );
+  if (!runtime || runtime.requiresExternalCli)
+    throw new Error(
+      "The built-in teammate is unavailable in this version of Colony. Update the app and try again.",
+    );
+  await io.installRuntime(runtime.id);
+  await io.saveConfig(defaultColonyAgentConfig(current), options.scope);
+  const [available, saved] = await Promise.all([
+    io.listRuntimes(),
+    io.loadConfig(),
+  ]);
+  if (!resolveAgentReadiness(available, saved, "preferred").ready)
+    throw new Error("Your teammate setup is not ready yet. Try again.");
 }

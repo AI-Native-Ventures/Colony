@@ -9,15 +9,18 @@ import {
 } from "@/features/communities/hostedCommunityApi";
 import { useCommunities } from "@/features/communities/useCommunities";
 
-import { createFakeServices } from "../../contracts.fake";
+import { createIdentityBoundFakeServices } from "../../lib/wiredAuthService";
 import { completeFirstRun } from "../../flow/completeFirstRun";
 import { DEFAULT_COMPLETE_FIRST_RUN_IO } from "../../flow/completeFirstRunIo";
 import { draftFromAnswers } from "../../flow/founderBrief";
 import {
   provisionWorkspace,
+  expectedWorkspaceApplied,
   type ProvisionOutcome,
 } from "../../flow/provisionWorkspace";
 import type { OnboardingAnswers } from "../../flow/steps";
+import { firstRunAnswersKey } from "../../flow/persistence";
+import { ensureBuiltInFounderConfig } from "../../automaticAgentSetup";
 import { NewOnboardingFlow } from "./NewOnboardingFlow";
 
 /**
@@ -67,11 +70,11 @@ export function CanvasFirstRunHost({
   onLeaveRun,
 }: Props) {
   const queryClient = useQueryClient();
-  const { addCommunity } = useCommunities();
+  const { addCommunity, switchCommunity } = useCommunities();
   // Payments, scrape and invites stay fakes here exactly as they were inside
   // AppReady; NewOnboardingFlow swaps in the wired services itself outside
   // the e2e build.
-  const services = useMemo(() => createFakeServices(), []);
+  const services = useMemo(() => createIdentityBoundFakeServices(), []);
 
   // Snapshot live values for callbacks without re-identifying the flow: a new
   // services or callback identity mid-run restarts in-flight steps.
@@ -79,6 +82,7 @@ export function CanvasFirstRunHost({
   appliedRef.current = communityApplied;
   const relayUrlRef = useRef(activeRelayUrl);
   relayUrlRef.current = activeRelayUrl;
+  const expectedRelayUrlRef = useRef(activeRelayUrl);
 
   // Internal auto-connect builds already have a community when the flow
   // mounts. Read once: the value flips as soon as provisioning succeeds, and
@@ -86,28 +90,41 @@ export function CanvasFirstRunHost({
   const hadCommunityAtMount = useRef(activeRelayUrl !== null).current;
 
   const provision = useCallback(
-    (companyName: string, storedSlug: string | null) =>
-      provisionWorkspace(companyName, storedSlug, {
-        check: checkColonyCommunityName,
-        create: createColonyCommunity,
-        listMine: listColonyCommunities,
-      }),
+    (
+      companyName: string,
+      storedSlug: string | null,
+      rememberCandidate: (slug: string | null) => void,
+    ) =>
+      provisionWorkspace(
+        companyName,
+        storedSlug,
+        {
+          check: checkColonyCommunityName,
+          create: createColonyCommunity,
+          listMine: listColonyCommunities,
+        },
+        rememberCandidate,
+      ),
     [],
   );
 
   const onProvisioned = useCallback(
     (outcome: Extract<ProvisionOutcome, { ok: true }>, companyName: string) => {
+      expectedRelayUrlRef.current = outcome.relayUrl;
       // The typed company name is the label; the claimed address never
       // surfaces in the interface.
-      addCommunity({
+      const communityId = addCommunity({
         id: outcome.communityId ?? crypto.randomUUID(),
         name: companyName,
         relayUrl: outcome.relayUrl,
         pubkey: currentPubkey,
         addedAt: new Date().toISOString(),
       });
+      // A previous identity's business may still be active. Use the resolved
+      // ID (including a deduplicated community) to trigger the normal apply.
+      switchCommunity(communityId);
     },
-    [addCommunity, currentPubkey],
+    [addCommunity, currentPubkey, switchCommunity],
   );
 
   const provisioning = useMemo(
@@ -115,9 +132,16 @@ export function CanvasFirstRunHost({
     [hadCommunityAtMount, provision, onProvisioned],
   );
 
-  const waitForApply = useCallback(async () => {
+  const waitForApply = useCallback(async (assertCurrent: () => void) => {
     const startedAt = Date.now();
-    while (!appliedRef.current || relayUrlRef.current === null) {
+    while (
+      !expectedWorkspaceApplied(
+        expectedRelayUrlRef.current,
+        relayUrlRef.current,
+        appliedRef.current,
+      )
+    ) {
+      assertCurrent();
       if (Date.now() - startedAt > APPLY_DEADLINE_MS) {
         throw new Error(
           "Your workspace is taking longer than expected to open. Try again.",
@@ -125,16 +149,27 @@ export function CanvasFirstRunHost({
       }
       await new Promise((resolve) => setTimeout(resolve, APPLY_POLL_MS));
     }
-    return relayUrlRef.current;
+    assertCurrent();
+    const relayUrl = expectedRelayUrlRef.current;
+    if (!relayUrl)
+      throw new Error("Your business has not finished opening. Try again.");
+    return relayUrl;
   }, []);
 
   const onComplete = useCallback(
-    async (answers: OnboardingAnswers) => {
-      const relayUrl = await waitForApply();
+    async (answers: OnboardingAnswers, isCurrentRun: () => boolean) => {
+      const assertCurrent = () => {
+        if (!isCurrentRun()) throw new Error("This setup run has ended");
+      };
+      assertCurrent();
+      const relayUrl = await waitForApply(assertCurrent);
+      await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
+      assertCurrent();
       await completeFirstRun(
         {
           queryClient,
           relayUrl,
+          assertCurrent,
           pubkey: currentPubkey,
           // Built here rather than stashed on a transaction: this path never
           // creates one, and the brief used to vanish because of it.
@@ -144,6 +179,7 @@ export function CanvasFirstRunHost({
         },
         DEFAULT_COMPLETE_FIRST_RUN_IO,
       );
+      assertCurrent();
       onFinished();
     },
     [currentPubkey, onFinished, queryClient, waitForApply],
@@ -152,9 +188,12 @@ export function CanvasFirstRunHost({
   return (
     <NewOnboardingFlow
       key={currentPubkey}
+      currentPubkey={currentPubkey}
+      answersKey={firstRunAnswersKey(currentPubkey)}
       services={services}
       provisioning={provisioning}
       onComplete={onComplete}
+      onPreparePower={waitForApply}
       onRequestSignIn={onRequestSignIn}
       existingIdentity={existingIdentity}
       onLeaveRun={onLeaveRun}

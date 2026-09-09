@@ -126,3 +126,30 @@ test("an unanswered flow still produces a sendable draft", () => {
   assert.ok(draft.firstTask.content.trim().length > 0);
   assert.doesNotThrow(() => buildOnboardingFirstTaskMessage(draft));
 });
+
+test("a persisted brief marker survives rebuilding completion after a retry", () => {
+  const answers = { company: "Horizon", firstTaskMarker: "stable-first-brief" };
+  assert.equal(
+    draftFromAnswers(answers).firstTask.deliveryMarker,
+    "stable-first-brief",
+  );
+  assert.equal(
+    draftFromAnswers(answers).firstTask.deliveryMarker,
+    "stable-first-brief",
+  );
+});
+
+test("Canvas creates a reviewable setup suggestion, not an invented owner request", () => {
+  const draft = draftFromAnswers(answers());
+  assert.equal(draft.company.name, "Rosebank Auto Care");
+  assert.equal(draft.firstTask.mode, "suggestion");
+  assert.match(
+    draft.firstTask.content,
+    /five Instagram captions and five matching visual briefs/,
+  );
+  assert.match(
+    draft.firstTask.content,
+    /business context.*ready for my review/,
+  );
+  assert.doesNotMatch(draft.firstTask.content, /Get to know|I am on it/);
+});

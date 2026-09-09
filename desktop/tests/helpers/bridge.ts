@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
+import type { SubscriptionScan } from "../../src/shared/api/tauriSubscriptions";
+import type { MockSubscriptionScanResult } from "../../src/testing/e2eBridgeSubscriptions";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -273,6 +275,8 @@ type MockBridgeOptions = {
       title: string;
       initiativeId?: string | null;
       status?: string;
+      threadRoot?: string | null;
+      sourceChannelId?: string;
     }>;
     /** Refuse the kind 30180 read, so the Initiatives tab fails on its own. */
     refuseInitiativeRead?: boolean;
@@ -308,6 +312,10 @@ type MockBridgeOptions = {
     age_attestation_required: boolean;
     version: string;
   } | null;
+  /** Native subscription metadata, distinct from runtime launch support. */
+  subscriptionScan?: SubscriptionScan;
+  /** Success/error responses per scan; the last response repeats on retry. */
+  subscriptionScanSequence?: MockSubscriptionScanResult[];
   acpRuntimesCatalog?: Record<string, unknown>[];
   /** Catalog returned after a successful mocked install. */
   acpRuntimesCatalogAfterInstall?: Record<string, unknown>[];
@@ -399,6 +407,8 @@ type MockBridgeOptions = {
   employeeHeads?: MockEmployeeHeadSeed[];
   /** Owner-authored kind-30177 heads; the org chart's personal-agent source. */
   managedAgentHeads?: MockManagedAgentHeadSeed[];
+  /** Real fixture signatures for ownership-sensitive native adapter reads. */
+  managedAgentHeadEvents?: RelayEvent[];
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelTemplates?: ChannelTemplate[];

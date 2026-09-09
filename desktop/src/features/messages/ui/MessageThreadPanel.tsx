@@ -328,7 +328,6 @@ export function MessageThreadPanel({
   // over an empty region or a placeholder.
   const showThreadHeadDivider =
     !isHuddleTranscript &&
-    isFocusMode &&
     (threadRepliesPending || repliesRenderState === "list");
 
   const threadMessages = React.useMemo(
@@ -518,7 +517,7 @@ export function MessageThreadPanel({
 
   const threadScrollRegion = (
     <AuxiliaryPanelBody
-      className="overflow-y-auto overflow-x-hidden overscroll-contain pb-24"
+      className="colony-thread-reading overflow-y-auto overflow-x-hidden overscroll-contain pb-24"
       data-buzz-conversation-scroll
       data-testid="message-thread-body"
       mode={isHuddleTranscript ? "panel" : undefined}
@@ -602,10 +601,15 @@ export function MessageThreadPanel({
 
         {showThreadHeadDivider ? (
           <div
-            className={cn(THREAD_PANEL_MESSAGE_GUTTER_CLASS, "pb-3 pt-2")}
+            className={cn(
+              THREAD_PANEL_MESSAGE_GUTTER_CLASS,
+              "pb-3 pt-2",
+              !isFocusMode && "hidden colony-thread-divider",
+            )}
             data-testid="message-thread-head-divider"
           >
             <Separator className="bg-border/60" />
+            <span className="colony-replies-label hidden">Replies</span>
           </div>
         ) : null}
 
@@ -687,11 +691,12 @@ export function MessageThreadPanel({
                   return (
                     <div
                       className={cn(
-                        "flex flex-col gap-0",
+                        "colony-thread-message flex flex-col gap-0",
                         entry.summary &&
                           "group/message rounded-2xl px-0 py-0.5 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
                       )}
                       key={entry.message.renderKey ?? entry.message.id}
+                      data-continuation={isContinuation || undefined}
                     >
                       {showUnreadDivider ? <UnreadDivider /> : null}
                       <ThreadReplyRow
@@ -960,7 +965,9 @@ export function MessageThreadPanel({
         footer={threadFooter}
         header={
           isHuddleTranscript ? undefined : (
-            <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
+            <AuxiliaryPanelHeader data-colony-thread-header>
+              {threadHeaderContent}
+            </AuxiliaryPanelHeader>
           )
         }
         isSinglePanelView={isSinglePanelView}

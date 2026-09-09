@@ -5,8 +5,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, State};
 
 use super::agent_model_process::run_agent_models_command;
-// The map-only lookup is reached solely from the base-URL helpers that exist for
-// their unit tests; discovery itself always goes through the process-env variant.
+// Production discovery uses the process-env variant; tests use map-only helpers.
 #[cfg(test)]
 use super::agent_models_env::env_value;
 use super::agent_models_env::{
@@ -21,17 +20,14 @@ use crate::{
         find_managed_agent_mut, known_acp_runtime, load_global_agent_config, load_managed_agents,
         load_personas, managed_agent_avatar_url, missing_command_message, normalize_agent_args,
         resolve_command, save_managed_agents, sync_managed_agent_processes, try_regenerate_nest,
-        AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest, UpdateManagedAgentResponse,
-        DEFAULT_ACP_COMMAND,
+        AgentModelInfo, AgentModelsResponse, CredentialMode, UpdateManagedAgentRequest,
+        UpdateManagedAgentResponse, DEFAULT_ACP_COMMAND,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
 };
 
-/// Query available models from an agent via `buzz-acp models --json`.
-///
-/// Spawns a short-lived subprocess (no relay connection needed). The subprocess
-/// starts the agent, queries its model catalog, and exits. ~2-5s total.
+/// Query the effective provider catalog, or the private gateway catalog for Credits.
 #[tauri::command]
 pub async fn get_agent_models(
     pubkey: String,
@@ -65,16 +61,11 @@ pub async fn get_agent_models(
         let resolved = resolve_command(&record.acp_command)
             .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
 
-        // Resolve the effective harness from the linked persona (mirrors spawn),
-        // so model discovery runs against the persona's current harness, not the
-        // frozen record snapshot. An explicit per-agent override wins.
+        // Resolve current persona/default inheritance exactly as spawn does.
         let personas = load_personas(&app).unwrap_or_default();
         let global = load_global_agent_config(&app).unwrap_or_default();
 
-        // Single pure helper — descriptor + authoritative model/provider
-        // resolver, packaged so the linked-agent regression test binds the
-        // exact values this command consumes. Returns Err on dangling harness
-        // id, propagating it to the caller.
+        // The shared resolver rejects dangling harness references.
         let discovery = agent_model_discovery_config(record, &personas, &global)
             .map_err(|e| model_discovery_error(&pubkey, &e))?;
 
@@ -94,6 +85,9 @@ pub async fn get_agent_models(
         command: _,
     } = discovery;
 
+    if load_global_agent_config(&app)?.credential_mode == CredentialMode::ColonyCredits {
+        return discover_credits_models(&app, &state, persisted_model).await;
+    }
     let merged_env = discovery_env_with_baked_floor(merged_env);
     // Resolve against the baked/process env when the record saved no provider,
     // so a build-provided provider still gets live discovery.
@@ -153,17 +147,17 @@ pub async fn get_agent_models(
     .await
 }
 
-/// Error copy for a failed harness resolution during model discovery.
-///
-/// Routes through `user_facing_harness_error` so a dangling harness id renders
-/// as a sentence, never as the raw `DANGLING_HARNESS_ID:` sentinel — the same
-/// contract spawn and summary rows honor.
+/// Use the same readable dangling-harness error as spawn and summary rows.
 fn model_discovery_error(pubkey: &str, error: &str) -> String {
     format!(
         "cannot discover models for {pubkey}: {}",
         crate::managed_agents::user_facing_harness_error(error)
     )
 }
+
+#[path = "agent_models_credits.rs"]
+mod credits;
+use credits::discover_credits_models;
 
 #[path = "agent_models_discovery_config.rs"]
 mod discovery_config;
@@ -176,6 +170,9 @@ use discovery_config::{
 pub struct DiscoverAgentModelsInput {
     #[serde(default)]
     pub acp_command: Option<String>,
+    /// Selected payment route; Credits discovery stays inside the native host.
+    #[serde(default)]
+    pub credential_mode: CredentialMode,
     pub agent_command: String,
     #[serde(default)]
     pub agent_args: Vec<String>,
@@ -189,18 +186,17 @@ pub struct DiscoverAgentModelsInput {
     pub definition_env: BTreeMap<String, String>,
 }
 
-/// Query available models from an unsaved agent configuration.
-///
-/// This powers the new-agent dialog before a persona/agent record exists. It
-/// mirrors the saved-agent discovery command, but derives runtime/provider/env
-/// from the current form state instead of loading a persisted record.
+/// Query an unsaved configuration; Credits reads the host-owned gateway catalog.
 #[tauri::command]
 pub async fn discover_agent_models(
     input: DiscoverAgentModelsInput,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AgentModelsResponse, String> {
+    if input.credential_mode == CredentialMode::ColonyCredits {
+        return discover_credits_models(&app, &state, None).await;
+    }
     crate::managed_agents::validate_user_env_keys(&input.env_vars)?;
-    // Also validate definition_env (caller-supplied, same trust level as env_vars).
     crate::managed_agents::validate_user_env_keys(&input.definition_env)?;
 
     let acp_command = input
@@ -229,8 +225,7 @@ pub async fn discover_agent_models(
         &input.env_vars,
     );
     let merged_env = discovery_env_with_baked_floor(merged_env);
-    // Recover a build-provided provider when the form has none, so the create
-    // dialog discovers live models instead of falling through to the subprocess.
+    // Respect the build provider when the draft has none.
     let effective_provider = effective_discovery_provider(
         input.provider.as_deref(),
         runtime_meta.and_then(|meta| meta.provider_env_var),
@@ -543,6 +538,8 @@ async fn discover_openai_compatible_models(
     } else {
         openai_compatible_models_url_for_discovery(env, provider.as_deref())
     };
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&url)?;
     let response = client
         .get(&url)
         .bearer_auth(&api_key)

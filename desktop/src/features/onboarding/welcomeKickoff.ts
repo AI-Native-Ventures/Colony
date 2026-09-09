@@ -1,4 +1,13 @@
 import * as React from "react";
+import { relayClient } from "@/shared/api/relayClient";
+import { assertFirstJobScope } from "./firstJobScope";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import {
+  allowLegacyFirstJobKickoff,
+  readFirstJobSetupStatus,
+  subscribeFirstJobSetup,
+  suppressLegacyFirstJobKickoff,
+} from "./firstJobSetup";
 
 import {
   managedAgentsQueryKey,
@@ -42,7 +51,7 @@ import {
   founderBriefOpening,
   readFounderBrief,
 } from "./founderBriefSummary";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export const WELCOME_KICKOFF_OPENER_MARKER = "buzz-welcome-kickoff.opener.v1";
 export const WELCOME_KICKOFF_CLOSER_MARKER = "buzz-welcome-kickoff.closer.v1";
@@ -558,7 +567,46 @@ export function useWelcomeKickoff(
   const agentAccessOwnerOnly = agentAccessOwnerOnlyQuery.data;
   const { globalConfig, isLoading: configLoading } = useGlobalAgentConfig();
   const channelId = activeChannel?.id ?? null;
-  const isActiveWelcome = isWelcomeChannel(activeChannel);
+  const identityQuery = useIdentityQuery();
+  const ownerPubkey = identityQuery.data?.pubkey;
+  const relayUrl = activeCommunity?.relayUrl;
+  const setupStatus = React.useSyncExternalStore(subscribeFirstJobSetup, () =>
+    ownerPubkey && relayUrl
+      ? readFirstJobSetupStatus({ ownerPubkey, relayUrl })
+      : "unavailable",
+  );
+  const mayRunLegacy =
+    isWelcomeChannel(activeChannel) &&
+    Boolean(ownerPubkey && relayUrl && channelId) &&
+    !suppressLegacyFirstJobKickoff(
+      setupStatus,
+      {
+        ownerPubkey: ownerPubkey ?? "",
+        relayUrl: relayUrl ?? "",
+        channelId: channelId ?? "",
+      },
+      channelEvents,
+    );
+  const legacyHistory = useQuery({
+    queryKey: ["onboarding-legacy-welcome", ownerPubkey, relayUrl, channelId],
+    enabled: mayRunLegacy,
+    queryFn: async () => {
+      if (!ownerPubkey || !relayUrl || !channelId) return false;
+      await assertFirstJobScope({ ownerPubkey, relayUrl });
+      const allowed = await allowLegacyFirstJobKickoff(() =>
+        relayClient.fetchEvents({
+          kinds: [9],
+          authors: [ownerPubkey],
+          "#h": [channelId],
+          limit: 500,
+        }),
+      );
+      await assertFirstJobScope({ ownerPubkey, relayUrl });
+      return allowed;
+    },
+  });
+  const isActiveWelcome =
+    mayRunLegacy && !legacyHistory.isFetching && legacyHistory.data === true;
   const focusedWelcomeChannelRef = React.useRef<string | null>(null);
   focusedWelcomeChannelRef.current = isActiveWelcome ? channelId : null;
   // Watch the opener's thread subtree directly so teammate intro replies are

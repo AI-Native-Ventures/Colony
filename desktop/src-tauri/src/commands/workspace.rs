@@ -53,6 +53,8 @@ pub async fn fetch_workspace_icon(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let http_url = relay::relay_http_base_url(&relay_url);
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(&http_url)?;
     let Ok(response) = state
         .http_client
         .get(&http_url)

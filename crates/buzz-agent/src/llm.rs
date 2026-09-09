@@ -2498,6 +2498,9 @@ async fn openrouter_post(
     ))
 }
 
+#[path = "llm_openrouter_free.rs"]
+mod openrouter_free;
+
 fn apply_openrouter_mutations(
     body: &mut Value,
     effort: Option<ThinkingEffort>,
@@ -2516,14 +2519,15 @@ fn apply_openrouter_mutations(
         // chain leads with the configured model so an empty
         // `OPENROUTER_FALLBACK_MODELS` is a no-op rather than a reordering.
         //
-        // Measured 2026-08-29: OpenRouter 429s are frequently per-endpoint
-        // rather than account-wide — `z-ai/glm-5.2:free` was throttled while
-        // `minimax/minimax-m3:free` served fine on the same key in the same
-        // minute — so a chain recovers the common failure, not just the rare one.
+        // Filter after the live refresh so neither a saved nor a relay-ranked
+        // chain can turn a free primary into a paid request on retry.
         // The configured chain is a snapshot taken at spawn; `relay_chain`
         // returns a newer one when the relay has re-ranked since, and returns
         // this one untouched when the value was set by hand.
-        let live = crate::relay_chain::effective(fallback_models);
+        let live = openrouter_free::fallbacks(
+            effective_model,
+            crate::relay_chain::effective(fallback_models),
+        );
         let fallback_models: &[String] = &live;
         if !fallback_models.is_empty() {
             let mut chain = vec![effective_model.to_string()];

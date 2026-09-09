@@ -58,11 +58,24 @@ export async function provisionWorkspace(
   companyName: string,
   storedSlug: string | null,
   api: ProvisionApi,
+  rememberCandidate: (slug: string | null) => void = () => {},
 ): Promise<ProvisionOutcome> {
   try {
     if (storedSlug) {
       const mine = await api.listMine();
-      const existing = (mine.communities ?? []).find(
+      if (
+        !Array.isArray(mine.communities) ||
+        !mine.communities.every(
+          (community) =>
+            typeof community?.slug === "string" && community.slug.length > 0,
+        )
+      )
+        return {
+          ok: false,
+          reason: "unreachable",
+          message: UNREACHABLE_MESSAGE,
+        };
+      const existing = mine.communities.find(
         (community) => community.slug === storedSlug && !community.archived_at,
       );
       if (existing) {
@@ -75,12 +88,34 @@ export async function provisionWorkspace(
             communityId: existing.id ?? null,
           };
         }
+        // Ownership exists, but its address has not become usable yet.
+        // Preserve the original request rather than attempting another create.
+        return {
+          ok: false,
+          reason: "unreachable",
+          message: UNREACHABLE_MESSAGE,
+        };
       }
     }
 
-    for (const candidate of slugCandidates(slugifyCompany(companyName))) {
+    const candidates = storedSlug
+      ? [storedSlug]
+      : slugCandidates(slugifyCompany(companyName));
+    for (const candidate of candidates) {
       const availability = await api.check(candidate);
-      if (availability.available === false) continue;
+      if (availability.available === false) {
+        // A remembered request is uncertain until ownership can be resolved.
+        // Never turn it into a second workspace under a numbered fallback.
+        if (storedSlug)
+          return {
+            ok: false,
+            reason: "unreachable",
+            message:
+              "We are still checking your business setup. Try again shortly.",
+          };
+        continue;
+      }
+      rememberCandidate(candidate);
       try {
         const response = await api.create(candidate);
         const community = response.community;
@@ -102,7 +137,45 @@ export async function provisionWorkspace(
         if (isLimitError(error)) {
           return { ok: false, reason: "limit", message: LIMIT_MESSAGE };
         }
-        if (isTakenError(error)) continue;
+        if (isTakenError(error)) {
+          const mine = await api.listMine();
+          if (
+            !Array.isArray(mine.communities) ||
+            !mine.communities.every(
+              (community) =>
+                typeof community?.slug === "string" &&
+                community.slug.length > 0,
+            )
+          )
+            return {
+              ok: false,
+              reason: "unreachable",
+              message: UNREACHABLE_MESSAGE,
+            };
+          const owned = mine.communities.find(
+            (community) =>
+              community.slug === candidate && !community.archived_at,
+          );
+          const relayUrl = owned ? hostedCommunityRelayUrl(owned) : null;
+          if (owned && relayUrl)
+            return {
+              ok: true,
+              slug: candidate,
+              relayUrl,
+              communityId: owned.id ?? null,
+            };
+          if (owned)
+            return {
+              ok: false,
+              reason: "unreachable",
+              message: UNREACHABLE_MESSAGE,
+            };
+          // Ownership was read successfully and the relay definitively
+          // rejected this claim. Release its checkpoint before inviting an
+          // edited-name retry; uncertain ownership checks never reach here.
+          rememberCandidate(null);
+          return { ok: false, reason: "exhausted", message: EXHAUSTED_MESSAGE };
+        }
         throw error;
       }
     }
@@ -110,4 +183,13 @@ export async function provisionWorkspace(
   } catch {
     return { ok: false, reason: "unreachable", message: UNREACHABLE_MESSAGE };
   }
+}
+
+/** A previous workspace's applied flag cannot complete a new business handoff. */
+export function expectedWorkspaceApplied(
+  expectedRelay: string | null,
+  activeRelay: string | null,
+  applied: boolean,
+): boolean {
+  return applied && expectedRelay !== null && activeRelay === expectedRelay;
 }

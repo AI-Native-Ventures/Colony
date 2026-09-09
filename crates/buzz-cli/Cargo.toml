@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "buzz"
 path = "src/main.rs"
 
+[features]
+# Explicit local proof build only; never enabled in normal packages.
+onboarding-fixture = ["buzz-ws-client/onboarding-fixture"]
+
 [dependencies]
 # CLI argument parsing — derive macros + env var support (BUZZ_API_TOKEN auto-wired)
 clap = { version = "4", features = ["derive", "env"] }

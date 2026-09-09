@@ -17,6 +17,12 @@ import {
   createNcryptsecBackup,
   getIdentity,
   importIdentity,
+  preparePendingSignup,
+  loadPendingSignup,
+  markPendingSignupRegistered,
+  clearPendingSignup,
+  discardPendingSignup,
+  saveRecoveryCode,
 } from "@/shared/api/tauriIdentity";
 
 import { createAuthService } from "../authService";
@@ -51,7 +57,20 @@ export function createWiredAuthService() {
       await importIdentity(blob, password);
     },
     getPubkey: async () => (await getIdentity()).pubkey,
+    prepareSignup: preparePendingSignup,
+    loadPendingSignup,
+    markRegistered: markPendingSignupRegistered,
+    clearPendingSignup,
+    discardPendingSignup,
+    saveRecoveryCode,
   });
+}
+
+/** Synthetic services keep the native mock's public identity across entry paths. */
+export function createIdentityBoundFakeServices(
+  getPubkey: () => Promise<string> = async () => (await getIdentity()).pubkey,
+): OnboardingServices {
+  return createFakeServices({ getPubkey });
 }
 
 /**
@@ -60,10 +79,11 @@ export function createWiredAuthService() {
  * the e2e build keeps fakes so its specs stay hermetic, everything else gets
  * the real service.
  */
-export function resolveMachineAuthService(env: {
-  MODE?: string;
-}): OnboardingServices["auth"] {
+export function resolveMachineAuthService(
+  env: { MODE?: string },
+  getPubkey?: () => Promise<string>,
+): OnboardingServices["auth"] {
   return env.MODE === "e2e"
-    ? createFakeServices().auth
+    ? createIdentityBoundFakeServices(getPubkey).auth
     : createWiredAuthService();
 }

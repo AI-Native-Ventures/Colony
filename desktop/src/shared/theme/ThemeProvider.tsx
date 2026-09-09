@@ -26,6 +26,13 @@ import {
   resolveSystemTheme,
 } from "./theme-loader";
 
+import {
+  WORKSPACE_GRADIENT_STORAGE_KEY,
+  type WorkspaceGradientPattern,
+  applyWorkspaceAppearance,
+  parseWorkspaceGradientPattern,
+} from "./workspaceAppearance";
+
 export const THEME_STORAGE_KEY = "buzz-theme";
 /**
  * Bumped when the token values behind the cache change.
@@ -95,6 +102,7 @@ type ThemeContextValue = {
   isDark: boolean;
   isLoading: boolean;
   accentColor: string;
+  gradientPattern: WorkspaceGradientPattern;
   followSystem: boolean;
   glassBackground: boolean;
   glassOpacity: number;
@@ -104,10 +112,12 @@ type ThemeContextValue = {
   terminalPalette: ThemeInfo["terminalPalette"] | null;
   setTheme: (name: string) => void;
   setAccentColor: (color: string) => void;
+  setGradientPattern: (pattern: WorkspaceGradientPattern) => void;
   setFollowSystem: (enabled: boolean) => void;
   applyAppearance: (appearance: {
     theme: SyntaxThemeName;
     accent: string;
+    gradientPattern?: WorkspaceGradientPattern;
     followSystem: boolean;
   }) => void;
   setGlassBackground: (enabled: boolean) => void;
@@ -237,151 +247,15 @@ function rgbToHex({ r, g, b }: Rgb): string {
     .join("")}`;
 }
 
-/**
- * Colony's chrome wash follows the accent.
- *
- * The sidebar, rail and top chrome are painted from
- * `--buzz-gradient-*` (see shared/styles/globals/buzz-sidebar.css). Those used
- * to be one hardcoded violet, so picking green gave you a green selected row
- * inside a lilac window, and the marketing site could not show the workspace
- * in anything but violet whatever hue the page had rolled.
- *
- * The stops are derived from the accent rather than tabulated, so a custom hex
- * from the picker tints the chrome too, not just the eleven presets. Ratios
- * come from the pair the app already shipped: violet #895AF6 washed to
- * #c9b6f7, which is the same hue at 87% of its saturation and 84% lightness.
- * Neutral keeps the greys it always had.
- *
- * The defaults in theme.css stay as they are: they paint the first frame
- * before this runs, and mobile mirrors them in
- * mobile/lib/shared/theme/colony_theme.dart.
- */
-const CHROME_LIGHT_SATURATION_RATIO = 0.87;
-const CHROME_LIGHT_LIGHTNESS = 84;
-const CHROME_DARK_TOP = { saturation: 0.46, lightness: 20 };
-const CHROME_DARK_BOTTOM = { saturation: 0.52, lightness: 9 };
-const CHROME_NEUTRAL = {
-  lightTop: "#ebebeb",
-  lightBottom: "#ebebeb",
-  darkTop: "#2e2e2e",
-  darkBottom: "#141414",
-} as const;
-
-function parseHslComponents(
-  hsl: string,
-): { hue: number; saturation: number; lightness: number } | null {
-  const match = hsl.match(/^(-?[\d.]+)\s+(-?[\d.]+)%\s+(-?[\d.]+)%$/);
-  if (!match) return null;
-  return {
-    hue: Number(match[1]),
-    saturation: Number(match[2]),
-    lightness: Number(match[3]),
-  };
-}
-
-/**
- * HSL back to hex. The gradient stops stay in the same notation as the
- * defaults they replace (theme.css, and mobile's colony_theme.dart), so a
- * value read off the root is comparable with the one shipped rather than
- * merely equivalent to it.
- */
-function hslToHex(hue: number, saturation: number, lightness: number): string {
-  const s = saturation / 100;
-  const l = lightness / 100;
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const hp = (((hue % 360) + 360) % 360) / 60;
-  const x = c * (1 - Math.abs((hp % 2) - 1));
-  const [r1, g1, b1] =
-    hp < 1
-      ? [c, x, 0]
-      : hp < 2
-        ? [x, c, 0]
-        : hp < 3
-          ? [0, c, x]
-          : hp < 4
-            ? [0, x, c]
-            : hp < 5
-              ? [x, 0, c]
-              : [c, 0, x];
-  const m = l - c / 2;
-  return `#${[r1, g1, b1]
-    .map((channel) =>
-      Math.round((channel + m) * 255)
-        .toString(16)
-        .padStart(2, "0"),
-    )
-    .join("")}`;
-}
-
-/**
- * The shipped Colony violet, kept verbatim.
- *
- * These four were picked by hand and sit slightly off the accent's own hue:
- * #c9b6f7 is hue 257.5 where #895AF6 is 258.1, and the dark bottom stop is a
- * blue #0a1423 rather than a violet. Derivation lands a unit away
- * (#cab6f7), which is invisible but would still be a change to the default
- * workspace for the sake of tidier code. The brand accent keeps its own
- * values; every other accent is derived.
- */
-const CHROME_BRAND_VIOLET = {
-  lightTop: "#c9b6f7",
-  lightBottom: "#c9b6f7",
-  darkTop: "#2a1e48",
-  darkBottom: "#0a1423",
-} as const;
-
-function setChromeStops(stops: {
-  lightTop: string;
-  lightBottom: string;
-  darkTop: string;
-  darkBottom: string;
-}) {
-  const root = document.documentElement;
-  root.style.setProperty("--buzz-gradient-light-top", stops.lightTop);
-  root.style.setProperty("--buzz-gradient-light-bottom", stops.lightBottom);
-  root.style.setProperty("--buzz-gradient-dark-top", stops.darkTop);
-  root.style.setProperty("--buzz-gradient-dark-bottom", stops.darkBottom);
-}
-
-function applyChromeTint(value: string) {
-  if (value.toLowerCase() === DEFAULT_ACCENT.toLowerCase()) {
-    setChromeStops(CHROME_BRAND_VIOLET);
-    return;
-  }
-
-  const components =
-    value === NEUTRAL_ACCENT ? null : parseHslComponents(hexToHsl(value));
-
-  if (!components || components.saturation === 0) {
-    // Neutral, or a grey hex: a saturated wash would contradict the choice.
-    setChromeStops(CHROME_NEUTRAL);
-    return;
-  }
-
-  const { hue, saturation } = components;
-  const light = hslToHex(
-    hue,
-    saturation * CHROME_LIGHT_SATURATION_RATIO,
-    CHROME_LIGHT_LIGHTNESS,
-  );
-  setChromeStops({
-    lightTop: light,
-    lightBottom: light,
-    darkTop: hslToHex(
-      hue,
-      saturation * CHROME_DARK_TOP.saturation,
-      CHROME_DARK_TOP.lightness,
-    ),
-    darkBottom: hslToHex(
-      hue,
-      saturation * CHROME_DARK_BOTTOM.saturation,
-      CHROME_DARK_BOTTOM.lightness,
-    ),
-  });
-}
-
 function applyAccentColor(value: string) {
   const root = document.documentElement;
+  applyWorkspaceAppearance(
+    root,
+    value,
+    parseWorkspaceGradientPattern(
+      getStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY),
+    ),
+  );
   if (value === NEUTRAL_ACCENT) {
     const styles = window.getComputedStyle(root);
     const foreground = styles.getPropertyValue("--foreground").trim();
@@ -406,7 +280,6 @@ function applyAccentColor(value: string) {
     // the subtle wash for this accent alone, without special-casing every
     // other one.
     root.dataset.accentNeutral = "true";
-    applyChromeTint(value);
     return;
   }
 
@@ -426,7 +299,6 @@ function applyAccentColor(value: string) {
   root.style.setProperty("--sidebar-active", accentHsl);
   root.style.setProperty("--sidebar-active-foreground", fgHsl);
   delete root.dataset.accentNeutral;
-  applyChromeTint(hex);
 }
 
 /**
@@ -636,9 +508,7 @@ function applyCachedVars(): string | null {
     glassThemeReady = true;
 
     const accent = getStorageItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT;
-    // Pin Buzz themes to the neutral accent here too, matching applyTheme.
-    // Otherwise a cached Buzz theme + non-neutral stored accent flashes the
-    // old accent on reload until the async applyTheme effect runs.
+    // Restore the selected accent and pattern before the first cached paint.
     applyAccentColor(resolveEffectiveAccent(themeName, accent));
 
     return themeName;
@@ -680,8 +550,7 @@ async function applyTheme(name: SyntaxThemeName): Promise<{
   // Apply the accent synchronously in the same batch as the theme vars so the
   // browser paints the new theme + accent together. Doing this in a later
   // microtask (e.g. the caller's `.then`) let the previous accent flash on the
-  // new theme for a frame — the flicker seen when switching to Buzz. Buzz
-  // themes resolve to the neutral accent regardless of the stored value.
+  // new theme for a frame — the flicker seen when switching to Buzz.
   applyAccentColor(
     resolveEffectiveAccent(
       name,
@@ -724,6 +593,11 @@ export function ThemeProvider({
     // denied-storage origin would otherwise kill the root on first mount.
     return getStorageItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT;
   });
+  const [gradientPattern, setGradientPatternState] = useState(() =>
+    parseWorkspaceGradientPattern(
+      getStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY),
+    ),
+  );
   const [glassBackground, setGlassBackgroundState] = useState<boolean>(() => {
     const stored = getStorageItem(GLASS_BACKGROUND_STORAGE_KEY);
     // Glass is opt-in. Explicitly saved preferences remain intact, while a
@@ -847,12 +721,29 @@ export function ThemeProvider({
   }, [followSystem]);
 
   // Re-apply the accent when the user picks a new swatch or the effective theme
-  // changes. applyTheme already applies the (Buzz-neutral-aware) accent in the
+  // changes. applyTheme already applies the selected accent in the
   // same synchronous batch as the theme vars — the flicker fix — so this effect
   // is idempotent on theme changes and simply covers accent-only changes.
   useEffect(() => {
     applyAccentColor(resolveEffectiveAccent(effectiveTheme, accentColor));
   }, [accentColor, effectiveTheme]);
+
+  useEffect(() => {
+    applyWorkspaceAppearance(
+      document.documentElement,
+      accentColor,
+      gradientPattern,
+    );
+  }, [accentColor, gradientPattern]);
+
+  const setGradientPattern = useCallback(
+    (pattern: WorkspaceGradientPattern) => {
+      const next = parseWorkspaceGradientPattern(pattern);
+      setStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY, next);
+      setGradientPatternState(next);
+    },
+    [],
+  );
 
   const setTheme = useCallback((name: string) => {
     if (!isValidThemeName(name)) return;
@@ -874,8 +765,12 @@ export function ThemeProvider({
     (appearance: {
       theme: SyntaxThemeName;
       accent: string;
+      gradientPattern?: WorkspaceGradientPattern;
       followSystem: boolean;
     }) => {
+      const pattern = parseWorkspaceGradientPattern(appearance.gradientPattern);
+      setStorageItem(WORKSPACE_GRADIENT_STORAGE_KEY, pattern);
+      setGradientPatternState(pattern);
       // Write the complete preference before updating state so applyTheme reads
       // the target community's accent in the same batch, never the previous one.
       try {
@@ -928,6 +823,7 @@ export function ThemeProvider({
     isDark,
     isLoading,
     accentColor,
+    gradientPattern,
     followSystem,
     glassBackground,
     glassOpacity,
@@ -937,6 +833,7 @@ export function ThemeProvider({
     terminalPalette,
     setTheme,
     setAccentColor,
+    setGradientPattern,
     setFollowSystem,
     applyAppearance,
     setGlassBackground,

@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "buzz-acp"
 path = "src/main.rs"
 
+[features]
+# Explicit local proof build only; never enabled in normal packages.
+onboarding-fixture = ["buzz-ws-client/onboarding-fixture", "buzz-meter/onboarding-fixture"]
+
 [dependencies]
 # Internal
 buzz-core = { workspace = true }

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge } from "../helpers/bridge";
 
 const WATERCOOLER_CHANNEL_ID = "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11";
@@ -54,7 +55,7 @@ test.describe("list virtualization", () => {
   }) => {
     await installMockBridge(page);
     await page.goto("/");
-    await page.getByTestId("open-pulse-view").click();
+    await openSidebarDestination(page, "open-pulse-view");
 
     // The seeded feed overflows the viewport (30 notes), so the windowed list
     // renders a subset and the composer stays pinned. Wait for virtual rows.
@@ -159,10 +160,12 @@ test.describe("list virtualization", () => {
 
     // dnd-kit marks each section's wrapping row with role="button" +
     // aria-roledescription="sortable" and spreads the drag listeners there, so
-    // the row itself is the handle. Scoping to that attribute reads the live
-    // section order and excludes the inner disclosure button and the (hidden)
-    // assign-to-section context-menu items that reuse the same names.
-    const headers = page.locator('[aria-roledescription="sortable"]');
+    // the row itself is the handle. Scope to channel content so the community
+    // rail's sortable buttons are excluded, along with the inner disclosure
+    // buttons and hidden assign-to-section menu items with the same names.
+    const headers = page
+      .getByTestId("sidebar-channel-content")
+      .locator('[aria-roledescription="sortable"]');
     const topHeader = headers.filter({ hasText: "Priority" });
     const bottomHeader = headers.filter({ hasText: "Archive" });
     await expect(topHeader).toBeVisible();
@@ -211,6 +214,28 @@ test.describe("list virtualization", () => {
     // Initial bottom positioning can momentarily cross the start threshold. Let
     // any resulting page transaction settle before driving explicit crossings.
     await page.waitForTimeout(1_000);
+    const box = await timeline.boundingBox();
+    if (!box) throw new Error("timeline has no bounding box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const wheelTo = async (top: number) => {
+      // Newly visible variable-height rows can adjust the first wheel's
+      // destination. Correct from measured positions, never queued deltas.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const current = await timeline.evaluate((element) => element.scrollTop);
+        if (Math.abs(current - top) < 2) return;
+        await page.mouse.wheel(0, top - current);
+        await expect
+          .poll(() => timeline.evaluate((element) => element.scrollTop))
+          .not.toBe(current);
+        await timeline.evaluate(async () => {
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+        });
+      }
+      expect(
+        await timeline.evaluate((element) => element.scrollTop),
+      ).toBeCloseTo(top, 0);
+    };
 
     const sampleVisibleAnchor = (expectedId?: string) =>
       timeline.evaluate(async (scroller, anchorId) => {
@@ -246,16 +271,11 @@ test.describe("list virtualization", () => {
     // variable-height rows and repeated front insertions exercise the full
     // index-shift path rather than allowing a single lucky pass.
     for (let pageIndex = 0; pageIndex < 15; pageIndex += 1) {
-      // Leave the threshold first so Virtua emits a fresh start-edge crossing;
-      // initial positioning can briefly report offset 0 while mounting.
-      await timeline.evaluate((element) => {
-        element.scrollTop = 4000;
-      });
-      await page.waitForTimeout(300);
-      await timeline.evaluate((element) => {
-        element.scrollTop = 180;
-      });
-      await page.waitForTimeout(150);
+      // Real input retires bottom/prepend intent. Raw scrollTop writes can be
+      // restored by a pending measurement before the first CDP wheel arrives.
+      // Stay outside the 200px fetch edge until both observers are installed.
+      await wheelTo(4000);
+      await wheelTo(240);
       const before = await sampleVisibleAnchor();
       const ctrlWheelPromise =
         pageIndex === 0
@@ -288,36 +308,45 @@ test.describe("list virtualization", () => {
         const startHeight = s.scrollHeight;
         let growthAt = -1;
         let rollbackAtGrowth = 0;
-        const deadline = performance.now() + 120;
-        const startedAt = performance.now();
-        while (performance.now() < deadline) {
+        let startedAt: number | null = null;
+        const start = (event: WheelEvent) => {
+          if (!event.ctrlKey) startedAt ??= performance.now();
+        };
+        s.addEventListener("wheel", start, { passive: true });
+        const safetyDeadline = performance.now() + 10_000;
+        while (
+          performance.now() < safetyDeadline &&
+          (startedAt === null || performance.now() < startedAt + 120)
+        ) {
           maxBoundaryRollback = Math.max(
             maxBoundaryRollback,
             s.scrollTop - previousScrollTop,
           );
           if (growthAt < 0 && s.scrollHeight > startHeight + 400) {
-            growthAt = Math.round(performance.now() - startedAt);
+            growthAt = Math.round(
+              performance.now() - (startedAt ?? performance.now()),
+            );
             rollbackAtGrowth = maxBoundaryRollback;
           }
           previousScrollTop = s.scrollTop;
           minScrollTop = Math.min(minScrollTop, s.scrollTop);
           await new Promise((resolve) => requestAnimationFrame(resolve));
         }
+        s.removeEventListener("wheel", start);
         return {
+          sawWheel: startedAt !== null,
           maxBoundaryRollback,
           minScrollTop,
           growthAt,
           rollbackAtGrowth,
         };
       });
-      const box = await timeline.boundingBox();
-      if (!box) throw new Error("timeline has no bounding box");
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       for (const deltaY of [-60, -30, -20, -15]) {
         await page.mouse.wheel(0, deltaY);
         await page.waitForTimeout(12);
       }
       const wheelTrace = await wheelTracePromise;
+      expect(wheelTrace.sawWheel).toBe(true);
       expect(wheelTrace.minScrollTop).toBeLessThanOrEqual(350);
       // Measure the reversal this assertion is about: the pre-prepend one. The
       // 120ms window above assumes the 300ms relay delay keeps input boundary
@@ -871,10 +900,19 @@ test("live tail arrivals stay buffered while reading and release on jump", async
 
   const timeline = page.getByTestId("message-timeline");
   await expect(timeline.locator("[data-message-id]").first()).toBeVisible();
-  await timeline.evaluate((element) => {
-    element.scrollTop = Math.max(500, element.scrollHeight / 2);
-    element.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  await timeline.hover();
+  const distance = await timeline.evaluate(
+    (element) => element.clientHeight * 2,
+  );
+  await page.mouse.wheel(0, -distance);
+  await expect
+    .poll(() =>
+      timeline.evaluate(
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeGreaterThan(100);
   await expect(page.getByTestId("message-scroll-to-latest")).toBeVisible();
   const frozenHeight = await timeline.evaluate(
     (element) => element.scrollHeight,

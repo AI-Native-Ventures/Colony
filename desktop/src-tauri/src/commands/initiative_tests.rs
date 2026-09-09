@@ -22,7 +22,7 @@ fn chat_team_id() -> String {
     coordination_team_id_for_relay(CHAT_RELAY).expect("a non-blank relay mints an id")
 }
 
-fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
+pub(super) fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
     ManagedAgentRecord {
         tier: None,
         manager: None,
@@ -86,7 +86,7 @@ fn agent_with_no_persona(pubkey: &str) -> ManagedAgentRecord {
     }
 }
 
-fn coordination_team() -> TeamRecord {
+pub(super) fn coordination_team() -> TeamRecord {
     TeamRecord {
         id: chat_team_id(),
         name: "Company Coordination".to_string(),

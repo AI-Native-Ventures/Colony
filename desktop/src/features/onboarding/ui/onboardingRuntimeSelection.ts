@@ -12,12 +12,20 @@ const VISIBLE_ONBOARDING_RUNTIME_IDS = new Set<string>(
   ONBOARDING_RUNTIME_ORDER,
 );
 
+/** An absent runtime pin inherits the bundled native default, never a detected CLI. */
+export function effectiveOnboardingRuntimeId(
+  preferredRuntime: string | null | undefined,
+): string {
+  return preferredRuntime?.trim() || "buzz-agent";
+}
+
 export function runtimeIsVisibleInOnboarding(runtimeId: string) {
   return VISIBLE_ONBOARDING_RUNTIME_IDS.has(runtimeId);
 }
 
 export function runtimeIsReadyForOnboarding(runtime: AcpRuntimeCatalogEntry) {
   return (
+    !runtime.localLaunchError &&
     runtime.availability === "available" &&
     (runtime.authStatus.status === "logged_in" ||
       runtime.authStatus.status === "not_applicable")

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge } from "../helpers/bridge";
 
 const ISSUE_COMMENTS = [
@@ -11,7 +12,7 @@ const ISSUE_COMMENTS = [
 
 async function openBuzzProject(page: import("@playwright/test").Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.getByTestId("open-projects-view").click();
+  await openSidebarDestination(page, "open-projects-view");
   await page.getByTestId("projects-section-projects").click();
   const projectEntry = page
     .locator(

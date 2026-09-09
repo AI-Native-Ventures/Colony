@@ -57,6 +57,7 @@ fn run_with_timeout(
 ) -> Result<std::process::Output, String> {
     let mut cmd = std::process::Command::new(&argv[0]);
     cmd.args(&argv[1..])
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     crate::util::configure_no_window(&mut cmd);

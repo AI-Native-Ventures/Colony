@@ -48,16 +48,10 @@ import { UnreadDivider } from "./UnreadDivider";
 import { useTimelineRetention } from "./useTimelineRetention";
 import { useUpwardPaginationWheel } from "./useUpwardPaginationWheel";
 import { useVirtualizedBottomSettle } from "./useVirtualizedBottomSettle";
+import { useVirtualizedPrependAnchor } from "./useVirtualizedPrependAnchor";
 
-export type TimelineVirtualizerApi = {
-  cancelBottomIntent: () => void;
-  scrollToBottom: (behavior?: ScrollBehavior) => void;
-  settleAtBottom: () => void;
-  scrollToMessage: (
-    messageId: string,
-    options?: { behavior?: ScrollBehavior },
-  ) => boolean;
-};
+import type { TimelineVirtualizerApi } from "./timelineVirtualizerApi";
+export type { TimelineVirtualizerApi } from "./timelineVirtualizerApi";
 
 type TimelineMessageListProps = {
   channelId?: string | null;
@@ -513,18 +507,14 @@ function VirtualizedTimelineRows({
     (version: number) => version + 1,
     0,
   );
-  const { cancel: cancelBottomSettle, settle: settleAtBottom } =
-    useVirtualizedBottomSettle(hostRef, listRef, itemsLengthRef);
+  const {
+    cancel: cancelBottomSettle,
+    settle: settleAtBottom,
+    hasBottomIntent,
+  } = useVirtualizedBottomSettle(hostRef, listRef, itemsLengthRef);
   const { arm: armUpwardMomentum } = useUpwardPaginationWheel(
     hostRef,
     cancelBottomSettle,
-  );
-
-  React.useEffect(
-    () => () => {
-      cancelBottomSettle();
-    },
-    [cancelBottomSettle],
   );
 
   const isPrepend = React.useMemo(() => {
@@ -534,6 +524,20 @@ function VirtualizedTimelineRows({
   if (isPrepend) {
     hasSeenPrependRef.current = true;
   }
+
+  const markReaderInput = React.useCallback(() => {
+    programmaticBottomSettleRef.current = false;
+    programmaticScrollRef.current = false;
+    userScrollGestureRef.current = true;
+  }, []);
+  const { capture: captureReadingAnchor, cancel: cancelReadingAnchor } =
+    useVirtualizedPrependAnchor(
+      hostRef,
+      listRef,
+      isPrepend,
+      hasBottomIntent,
+      markReaderInput,
+    );
 
   React.useLayoutEffect(() => {
     previousKeysRef.current = keys;
@@ -570,29 +574,7 @@ function VirtualizedTimelineRows({
       );
     }
     onVirtualizerScrollerChange?.(element);
-    if (!element) return;
-    const markUserScrollGesture = () => {
-      programmaticBottomSettleRef.current = false;
-      programmaticScrollRef.current = false;
-      userScrollGestureRef.current = true;
-    };
-    element.addEventListener("pointerdown", markUserScrollGesture, {
-      passive: true,
-    });
-    element.addEventListener("touchstart", markUserScrollGesture, {
-      passive: true,
-    });
-    element.addEventListener("wheel", markUserScrollGesture, {
-      passive: true,
-    });
-    element.addEventListener("keydown", markUserScrollGesture);
-    return () => {
-      element.removeEventListener("pointerdown", markUserScrollGesture);
-      element.removeEventListener("touchstart", markUserScrollGesture);
-      element.removeEventListener("wheel", markUserScrollGesture);
-      element.removeEventListener("keydown", markUserScrollGesture);
-      onVirtualizerScrollerChange?.(null);
-    };
+    return () => onVirtualizerScrollerChange?.(null);
   }, [onVirtualizerScrollerChange]);
 
   React.useLayoutEffect(() => {
@@ -601,25 +583,24 @@ function VirtualizedTimelineRows({
 
   React.useLayoutEffect(() => {
     if (!onVirtualizerApiChange) return;
+    const scrollToBottom = () => {
+      cancelReadingAnchor();
+      programmaticBottomSettleRef.current = true;
+      programmaticScrollRef.current = false;
+      lastReaderScrollOffsetRef.current = null;
+      settleAtBottom();
+    };
     const api: TimelineVirtualizerApi = {
-      cancelBottomIntent() {
+      cancelBottomIntent(reason = "navigation") {
+        if (reason === "navigation") cancelReadingAnchor();
         programmaticBottomSettleRef.current = false;
         programmaticScrollRef.current = false;
         cancelBottomSettle();
       },
-      scrollToBottom() {
-        programmaticBottomSettleRef.current = true;
-        programmaticScrollRef.current = false;
-        lastReaderScrollOffsetRef.current = null;
-        settleAtBottom();
-      },
-      settleAtBottom() {
-        programmaticBottomSettleRef.current = true;
-        programmaticScrollRef.current = false;
-        lastReaderScrollOffsetRef.current = null;
-        settleAtBottom();
-      },
+      scrollToBottom,
+      settleAtBottom: scrollToBottom,
       scrollToMessage(messageId) {
+        cancelReadingAnchor();
         programmaticBottomSettleRef.current = false;
         programmaticScrollRef.current = true;
         lastReaderScrollOffsetRef.current = null;
@@ -632,7 +613,12 @@ function VirtualizedTimelineRows({
     };
     onVirtualizerApiChange(api);
     return () => onVirtualizerApiChange(null);
-  }, [cancelBottomSettle, onVirtualizerApiChange, settleAtBottom]);
+  }, [
+    cancelBottomSettle,
+    cancelReadingAnchor,
+    onVirtualizerApiChange,
+    settleAtBottom,
+  ]);
 
   const offscreenBufferSize = useTimelineScrollerResize({
     hasInitialPositionedRef,
@@ -651,7 +637,8 @@ function VirtualizedTimelineRows({
       if (!list || !(scroller instanceof HTMLDivElement)) return;
       onVirtualizerRangeChanged?.();
       const distanceFromBottom = list.scrollSize - list.viewportSize - offset;
-      if (programmaticBottomSettleRef.current) {
+      // Measurement scrolls retain bottom intent until reader input or navigation.
+      if (programmaticBottomSettleRef.current || hasBottomIntent()) {
         if (distanceFromBottom <= 32) {
           programmaticBottomSettleRef.current = false;
         }
@@ -676,13 +663,16 @@ function VirtualizedTimelineRows({
         if (distanceFromBottom > 32) {
           lastReaderScrollOffsetRef.current = offset;
           cancelBottomSettle();
+          captureReadingAnchor();
         } else {
           lastReaderScrollOffsetRef.current = null;
           userScrollGestureRef.current = false;
         }
       }
-      // Keep the reader's non-bottom offset until an actual gesture claims it.
-      onAtBottomStateChange?.(distanceFromBottom <= 32, "scroll");
+      onAtBottomStateChange?.(
+        distanceFromBottom <= 32,
+        distanceFromBottom > 32 && hasBottomIntent() ? "resize" : "scroll",
+      );
       updatePinnedDayLabel(offset);
       if (offset <= 200) {
         // Layout scrolls near the top must not poison the reader's next input.
@@ -692,6 +682,8 @@ function VirtualizedTimelineRows({
     [
       armUpwardMomentum,
       cancelBottomSettle,
+      captureReadingAnchor,
+      hasBottomIntent,
       onAtBottomStateChange,
       onStartReached,
       onVirtualizerRangeChanged,
@@ -901,15 +893,17 @@ function MessageRowItem({
     return (
       <div
         className={cn(
-          "group/message relative mx-1 mb-1 flex flex-col gap-0 rounded-2xl px-0 py-1 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
+          "colony-conversation-root group/message relative mx-1 mb-1 flex flex-col gap-0 rounded-2xl px-0 py-1 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
           isOpenThreadRoot &&
             "bg-primary/[0.07] ring-1 ring-inset ring-primary/20",
           isHighlighted &&
             "-mx-4 px-4 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-6",
         )}
+        data-open-thread-root={isOpenThreadRoot || undefined}
       >
         <MessageRow
           channelId={channelId}
+          currentPubkey={currentPubkey}
           highlighted={false}
           hoverBackground={false}
           huddleMemberPubkeys={huddleMemberPubkeys}
@@ -922,6 +916,7 @@ function MessageRowItem({
           }
           isUnread={isUnread}
           isContinuation={isContinuation}
+          isOpenThreadRoot={isOpenThreadRoot}
           playEntrance={playEntrance}
           onEntranceComplete={onEntranceComplete}
           message={message}
@@ -963,12 +958,14 @@ function MessageRowItem({
   return (
     <div
       className={cn(
-        "flex flex-col gap-1",
+        "colony-conversation-root flex flex-col gap-1",
         isFollowedByContinuation ? "pb-0" : "pb-2.5",
       )}
+      data-followed-by-continuation={isFollowedByContinuation || undefined}
     >
       <MessageRow
         channelId={channelId}
+        currentPubkey={currentPubkey}
         highlighted={message.id === highlightedMessageId || isSearchActive}
         isOpenThreadRoot={isOpenThreadRoot}
         huddleMemberPubkeys={huddleMemberPubkeys}

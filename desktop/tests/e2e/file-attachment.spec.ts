@@ -426,10 +426,22 @@ test("upload progress floats above the dock and lifts Jump to latest", async ({
 
   const timeline = page.getByTestId("message-timeline");
   await expect(timeline.locator("[data-message-id]").first()).toBeVisible();
-  await timeline.evaluate((element) => {
-    element.scrollTop = Math.max(500, element.scrollHeight / 2);
-    element.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  const scrollUpToRead = async () => {
+    await timeline.hover();
+    const distance = await timeline.evaluate(
+      (element) => element.clientHeight * 2,
+    );
+    await page.mouse.wheel(0, -distance);
+    await expect
+      .poll(() =>
+        timeline.evaluate(
+          (element) =>
+            element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+      )
+      .toBeGreaterThan(100);
+  };
+  await scrollUpToRead();
   const jumpToLatest = page.getByTestId("message-scroll-to-latest");
   await expect(jumpToLatest).toBeVisible();
   const restingBox = await jumpToLatest.boundingBox();
@@ -438,10 +450,7 @@ test("upload progress floats above the dock and lifts Jump to latest", async ({
   await page.getByTestId("send-message").click();
   const uploadMotion = page.getByTestId("composer-upload-progress-motion");
   await expect(uploadMotion).toBeVisible();
-  await timeline.evaluate((element) => {
-    element.scrollTop = Math.max(500, element.scrollHeight / 2);
-    element.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  await scrollUpToRead();
   await expect(jumpToLatest).toBeVisible();
   await page.waitForTimeout(250);
 
@@ -490,14 +499,23 @@ test("dropping a file on the channel column attaches it to the composer", async 
   await expect(label).toContainText("Drop files to upload");
 
   const [dropZoneBox, overlayBox, overlayStyles, stacking] = await Promise.all([
-    dropZone.boundingBox(),
+    dropZone.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      // Absolute inset:0 covers the padding box inside the new pane border.
+      return {
+        x: box.x + element.clientLeft,
+        y: box.y + element.clientTop,
+        width: element.clientWidth,
+        height: element.clientHeight,
+      };
+    }),
     overlay.boundingBox(),
     page.evaluate(() => {
       const overlayElement = document.querySelector<HTMLElement>(
         '[data-testid="drop-zone-overlay"]',
       );
       const contentSurface = document.querySelector<HTMLElement>(
-        "[data-buzz-content-surface]",
+        '[data-testid="channel-drop-zone"]',
       );
       if (!(overlayElement && contentSurface)) return null;
       const overlayStyle = getComputedStyle(overlayElement);

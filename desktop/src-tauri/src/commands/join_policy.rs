@@ -33,8 +33,13 @@ fn join_policy_url(relay_url: &str) -> Result<Url, String> {
 #[tauri::command]
 pub async fn fetch_join_policy(relay_url: String) -> Result<Option<Value>, String> {
     let url = join_policy_url(&relay_url)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    #[cfg(feature = "onboarding-fixture")]
+    crate::relay::validate_fixture_url(url.as_str())?;
+    let builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    #[cfg(feature = "onboarding-fixture")]
+    let builder = buzz_ws_client::onboarding_fixture::configure_process_http(builder)
+        .map_err(|error| error.to_string())?;
+    let client = builder
         .build()
         .map_err(|error| format!("failed to build join policy client: {error}"))?;
     let response = client

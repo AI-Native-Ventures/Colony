@@ -344,6 +344,12 @@ export function AgentDefaultsEditor({
               testId="global-agent-default-harness"
               value={selectedRuntime?.id ?? ""}
             />
+            {selectedRuntime?.localLaunchError && (
+              <p className="text-sm text-destructive" role="status">
+                {selectedRuntime.localLaunchError} Choose Colony Agent above to
+                use the supported local teammate.
+              </p>
+            )}
           </div>
           <ColonyCreditsCredentialChoice
             config={renderedConfig}

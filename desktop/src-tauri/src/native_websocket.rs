@@ -1,13 +1,14 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+#[cfg(feature = "onboarding-fixture")]
+use buzz_ws_client::transport::connect as connect_async;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, plugin::TauriPlugin, Manager, Runtime};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::protocol::{frame::coding::CloseCode, CloseFrame, Message},
-};
+#[cfg(not(feature = "onboarding-fixture"))]
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame, Message};
 use tokio_util::sync::CancellationToken;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

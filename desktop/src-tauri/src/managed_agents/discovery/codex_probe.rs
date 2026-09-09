@@ -87,6 +87,9 @@ pub(crate) fn probe_codex_acp_version_with_path(
         }
         crate::util::configure_no_window(&mut command);
         let spawned = command
+            // A version probe must never read or reconfigure the parent's
+            // private Electron transport on stdin.
+            .stdin(std::process::Stdio::null())
             .stdout(tmp.try_clone().ok()?)
             .stderr(std::process::Stdio::null())
             .spawn();

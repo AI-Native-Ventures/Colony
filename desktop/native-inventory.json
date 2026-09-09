@@ -1,10 +1,10 @@
 {
   "files": {
-    "rust_total": 445,
-    "rust_lines": 173480,
-    "tauri_coupled": 177,
-    "portable": 268,
-    "portable_lines": 98972,
+    "rust_total": 475,
+    "rust_lines": 178965,
+    "tauri_coupled": 188,
+    "portable": 287,
+    "portable_lines": 101921,
     "tauri_coupled_list": [
       "src-tauri/src/app_menu.rs",
       "src-tauri/src/app_state.rs",
@@ -20,6 +20,7 @@
       "src-tauri/src/commands/agent_logs.rs",
       "src-tauri/src/commands/agent_metric_archive.rs",
       "src-tauri/src/commands/agent_models.rs",
+      "src-tauri/src/commands/agent_models_credits.rs",
       "src-tauri/src/commands/agent_proposals.rs",
       "src-tauri/src/commands/agent_providers.rs",
       "src-tauri/src/commands/agent_settings.rs",
@@ -49,6 +50,7 @@
       "src-tauri/src/commands/identity.rs",
       "src-tauri/src/commands/identity_archive.rs",
       "src-tauri/src/commands/initiative.rs",
+      "src-tauri/src/commands/initiative_scope.rs",
       "src-tauri/src/commands/join_policy.rs",
       "src-tauri/src/commands/ledger.rs",
       "src-tauri/src/commands/legacy_storage.rs",
@@ -63,6 +65,7 @@
       "src-tauri/src/commands/messages/markers.rs",
       "src-tauri/src/commands/notifications.rs",
       "src-tauri/src/commands/observer_archive.rs",
+      "src-tauri/src/commands/onboarding_recovery.rs",
       "src-tauri/src/commands/openrouter_connect.rs",
       "src-tauri/src/commands/openrouter_quota.rs",
       "src-tauri/src/commands/org_placement.rs",
@@ -108,6 +111,11 @@
       "src-tauri/src/discovery_worker/worker_host.rs",
       "src-tauri/src/discovery_worker/worker_host_tests.rs",
       "src-tauri/src/egress_guard_tests.rs",
+      "src-tauri/src/electron_host/deep_links.rs",
+      "src-tauri/src/electron_host/migration.rs",
+      "src-tauri/src/electron_host/mod.rs",
+      "src-tauri/src/electron_host/runtime.rs",
+      "src-tauri/src/electron_host/updater.rs",
       "src-tauri/src/event_sync.rs",
       "src-tauri/src/huddle/agent_voice.rs",
       "src-tauri/src/huddle/agents.rs",
@@ -133,6 +141,8 @@
       "src-tauri/src/macos_notifications.rs",
       "src-tauri/src/managed_agents/coordination.rs",
       "src-tauri/src/managed_agents/global_config/mod.rs",
+      "src-tauri/src/managed_agents/isolation/launch.rs",
+      "src-tauri/src/managed_agents/isolation/network.rs",
       "src-tauri/src/managed_agents/model_chain.rs",
       "src-tauri/src/managed_agents/nest.rs",
       "src-tauri/src/managed_agents/persona_events.rs",
@@ -148,6 +158,7 @@
       "src-tauri/src/managed_agents/runtime/record_state.rs",
       "src-tauri/src/managed_agents/runtime/stop.rs",
       "src-tauri/src/managed_agents/runtime_commands.rs",
+      "src-tauri/src/managed_agents/runtime_commands/start.rs",
       "src-tauri/src/managed_agents/spawn_snapshot/diff.rs",
       "src-tauri/src/managed_agents/storage.rs",
       "src-tauri/src/managed_agents/teams.rs",
@@ -222,7 +233,10 @@
       "src-tauri/src/commands/agent_proposals_tests.rs",
       "src-tauri/src/commands/agents_tests.rs",
       "src-tauri/src/commands/channels_tests.rs",
+      "src-tauri/src/commands/global_agent_config_scope_tests.rs",
       "src-tauri/src/commands/identity_key_backup_tests.rs",
+      "src-tauri/src/commands/initiative_dispatch_binding.rs",
+      "src-tauri/src/commands/initiative_scope_tests.rs",
       "src-tauri/src/commands/initiative_tests.rs",
       "src-tauri/src/commands/ledger/usage_records.rs",
       "src-tauri/src/commands/link_preview_rate_limit.rs",
@@ -236,6 +250,9 @@
       "src-tauri/src/commands/messages/feed.rs",
       "src-tauri/src/commands/messages_tests.rs",
       "src-tauri/src/commands/mod.rs",
+      "src-tauri/src/commands/onboarding_recovery_fixture.rs",
+      "src-tauri/src/commands/onboarding_recovery_state.rs",
+      "src-tauri/src/commands/onboarding_recovery_tests.rs",
       "src-tauri/src/commands/pairing_generation_tests.rs",
       "src-tauri/src/commands/pairing_relay_tests.rs",
       "src-tauri/src/commands/personas/card/tests.rs",
@@ -288,6 +305,8 @@
       "src-tauri/src/discovery_worker/worker_host_multi_source_tests.rs",
       "src-tauri/src/discovery_worker/worker_host_outbox_tests.rs",
       "src-tauri/src/egress_guard.rs",
+      "src-tauri/src/electron_host/main.rs",
+      "src-tauri/src/electron_host/wire.rs",
       "src-tauri/src/event_sync_team_events_tests.rs",
       "src-tauri/src/event_sync_tests.rs",
       "src-tauri/src/events.rs",
@@ -341,6 +360,7 @@
       "src-tauri/src/managed_agents/custom_harnesses.rs",
       "src-tauri/src/managed_agents/discovery.rs",
       "src-tauri/src/managed_agents/discovery/codex_probe.rs",
+      "src-tauri/src/managed_agents/discovery/command_paths.rs",
       "src-tauri/src/managed_agents/discovery/npm_prefix.rs",
       "src-tauri/src/managed_agents/discovery/nvm.rs",
       "src-tauri/src/managed_agents/discovery/overrides.rs",
@@ -358,6 +378,11 @@
       "src-tauri/src/managed_agents/env_vars/tests.rs",
       "src-tauri/src/managed_agents/git_bash.rs",
       "src-tauri/src/managed_agents/global_config/tests.rs",
+      "src-tauri/src/managed_agents/isolation.rs",
+      "src-tauri/src/managed_agents/isolation/agent_tests.rs",
+      "src-tauri/src/managed_agents/isolation/network_tests.rs",
+      "src-tauri/src/managed_agents/isolation/runtime_tests.rs",
+      "src-tauri/src/managed_agents/isolation/tests.rs",
       "src-tauri/src/managed_agents/managed_node_paths.rs",
       "src-tauri/src/managed_agents/mod.rs",
       "src-tauri/src/managed_agents/model_effort.rs",
@@ -383,15 +408,19 @@
       "src-tauri/src/managed_agents/retention/legacy_migration.rs",
       "src-tauri/src/managed_agents/retention/legacy_migration/tests.rs",
       "src-tauri/src/managed_agents/role_backfill.rs",
+      "src-tauri/src/managed_agents/runtime/electron_browser.rs",
+      "src-tauri/src/managed_agents/runtime/electron_isolation.rs",
       "src-tauri/src/managed_agents/runtime/instance_reaper.rs",
       "src-tauri/src/managed_agents/runtime/lifecycle.rs",
       "src-tauri/src/managed_agents/runtime/metadata.rs",
+      "src-tauri/src/managed_agents/runtime/pair_placeholder.rs",
       "src-tauri/src/managed_agents/runtime/path.rs",
       "src-tauri/src/managed_agents/runtime/prime_agent_config.rs",
       "src-tauri/src/managed_agents/runtime/spend_tests.rs",
       "src-tauri/src/managed_agents/runtime/sweep.rs",
       "src-tauri/src/managed_agents/runtime/test_fixtures.rs",
       "src-tauri/src/managed_agents/runtime/tests.rs",
+      "src-tauri/src/managed_agents/runtime_commands/start_scope.rs",
       "src-tauri/src/managed_agents/runtime_commands/tests.rs",
       "src-tauri/src/managed_agents/runtime_types.rs",
       "src-tauri/src/managed_agents/snapshot_avatar.rs",
@@ -443,6 +472,7 @@
       "src-tauri/src/relay_admission.rs",
       "src-tauri/src/reset.rs",
       "src-tauri/src/secret_store.rs",
+      "src-tauri/src/secret_store_atomic_entry.rs",
       "src-tauri/src/templates/mod.rs",
       "src-tauri/src/templates/types.rs",
       "src-tauri/src/terminal_runtime/scroll_sign.rs",
@@ -459,22 +489,27 @@
     ]
   },
   "commands": {
-    "registered": 353,
-    "defined": 353,
+    "registered": 367,
+    "defined": 367,
     "by_reach": {
-      "frontend": 347,
-      "NO CALLER FOUND": 4,
+      "frontend": 356,
+      "NO CALLER FOUND": 9,
       "frontend-plugin-prefixed": 2
     },
     "no_caller": [
       "download_voice_models",
+      "electron_export_frontend_state",
+      "electron_finish_frontend_migration",
+      "electron_frontend_migration_fixture",
+      "electron_open_deep_link",
+      "electron_read_frontend_migration",
       "operator_pubkey",
       "operator_sign_nip98",
       "start_stt_pipeline"
     ]
   },
   "params": {
-    "AppHandle": 362,
+    "AppHandle": 376,
     "State": 265,
     "Window": 7,
     "ipc::Request": 1,
@@ -482,7 +517,7 @@
   },
   "params_by_context": {
     "prod": {
-      "AppHandle": 359,
+      "AppHandle": 373,
       "State": 265,
       "Window": 7,
       "ipc::Request": 1,
@@ -501,7 +536,7 @@
     }
   },
   "apphandle_usage": {
-    ".state::<": 112,
+    ".state::<": 121,
     ".emit(": 48,
     ".emit_to(": 2,
     ".dialog()": 5,
@@ -509,14 +544,14 @@
     ".opener()": 1,
     ".notification()": 1,
     ".updater()": 0,
-    ".get_webview_window(": 6,
+    ".get_webview_window(": 7,
     ".global_shortcut(": 1,
     ".request_restart(": 7,
     ".run_on_main_thread(": 3,
     ".config()": 5,
     ".env()": 1,
-    ".path()": 27,
-    ".exit(": 1
+    ".path()": 28,
+    ".exit(": 5
   },
   "events": {
     "distinct": 34,
@@ -576,6 +611,7 @@
     "src-tauri/src/commands/relay_members.rs": 6,
     "src-tauri/src/commands/identity_archive.rs": 6,
     "src-tauri/src/commands/personas/card.rs": 6,
+    "src-tauri/src/commands/onboarding_recovery.rs": 6,
     "src-tauri/src/commands/media_download.rs": 6,
     "src-tauri/src/managed_agents/runtime_commands.rs": 6,
     "src-tauri/src/commands/mesh_llm.rs": 6,
@@ -593,10 +629,12 @@
     "src-tauri/src/commands/team_snapshot.rs": 4,
     "src-tauri/src/native_websocket.rs": 4,
     "src-tauri/src/commands/teams.rs": 4,
+    "src-tauri/src/electron_host/migration.rs": 4,
     "src-tauri/src/commands/canvas.rs": 4,
     "src-tauri/src/commands/agents.rs": 3,
     "src-tauri/src/commands/personas/mod.rs": 3,
     "src-tauri/src/commands/agent_models.rs": 3,
+    "src-tauri/src/electron_host/updater.rs": 3,
     "src-tauri/src/huddle/agent_voice.rs": 3,
     "src-tauri/src/huddle/audio_output.rs": 3,
     "src-tauri/src/huddle/commands.rs": 3,
@@ -632,6 +670,7 @@
     "src-tauri/src/commands/openrouter_connect.rs": 1,
     "src-tauri/src/commands/agent_creation.rs": 1,
     "src-tauri/src/commands/personas/create.rs": 1,
+    "src-tauri/src/electron_host/deep_links.rs": 1,
     "src-tauri/src/commands/agent_proposals.rs": 1,
     "src-tauri/src/commands/block_data.rs": 1,
     "src-tauri/src/commands/join_policy.rs": 1,
@@ -691,7 +730,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1024",
-        "src/shared/api/tauri.ts:376"
+        "src/shared/api/tauri.ts:351"
       ]
     },
     "add_reaction": {
@@ -712,7 +751,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:674",
-        "src/shared/api/tauri.ts:761"
+        "src/shared/api/tauri.ts:702"
       ]
     },
     "advance_initiative": {
@@ -802,7 +841,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1251",
-        "src/shared/api/initiative.ts:97"
+        "src/shared/api/initiative.ts:102"
       ]
     },
     "auto_connect_default_relay_enabled": {
@@ -812,7 +851,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:333",
-        "src/shared/api/tauri.ts:358"
+        "src/shared/api/tauri.ts:333"
       ]
     },
     "bounce_queue_task": {
@@ -850,7 +889,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:746",
-        "src/shared/api/tauri.ts:1080"
+        "src/shared/api/tauri.ts:1021"
       ]
     },
     "card_mint_key_status": {
@@ -878,7 +917,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1030",
-        "src/shared/api/tauri.ts:391"
+        "src/shared/api/tauri.ts:366"
       ]
     },
     "change_relay_member_role": {
@@ -888,7 +927,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:680",
-        "src/shared/api/tauri.ts:772"
+        "src/shared/api/tauri.ts:713"
       ]
     },
     "check_pipeline_hotstart": {
@@ -900,6 +939,15 @@
         "src/features/huddle/lib/usePipelineHotstart.ts:12",
         "src/parity/session/script.ts:712",
         "src/parity/session/script.ts:713"
+      ]
+    },
+    "clear_pending_signup": {
+      "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
+      "module": "onboarding_recovery",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriIdentity.ts:68"
       ]
     },
     "clear_tray_agent_activity": {
@@ -1020,7 +1068,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:742",
-        "src/shared/api/tauri.ts:1076"
+        "src/shared/api/tauri.ts:1017"
       ]
     },
     "confirm_team_snapshot_import": {
@@ -1122,7 +1170,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/initiative.ts:207"
+        "src/shared/api/initiative.ts:219"
       ]
     },
     "create_managed_agent": {
@@ -1131,7 +1179,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauri.ts:788"
+        "src/shared/api/tauri.ts:729"
       ]
     },
     "create_ncryptsec_backup": {
@@ -1140,7 +1188,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriIdentity.ts:77"
+        "src/shared/api/tauriIdentity.ts:128"
       ]
     },
     "create_persona": {
@@ -1189,7 +1237,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/initiative.ts:150"
+        "src/shared/api/initiative.ts:162"
       ]
     },
     "create_workflow": {
@@ -1242,7 +1290,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1515",
-        "src/shared/api/tauri.ts:907"
+        "src/shared/api/tauri.ts:848"
       ]
     },
     "delete_managed_agent": {
@@ -1251,7 +1299,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauri.ts:830"
+        "src/shared/api/tauri.ts:771"
       ]
     },
     "delete_message": {
@@ -1338,6 +1386,15 @@
         "src/shared/api/tauriWorkflows.ts:266"
       ]
     },
+    "discard_pending_signup": {
+      "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
+      "module": "onboarding_recovery",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriIdentity.ts:73"
+      ]
+    },
     "disconnect": {
       "defining_file": "src-tauri/src/native_websocket.rs",
       "module": "native_websocket",
@@ -1374,7 +1431,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1490",
         "src/parity/session/script.ts:1491",
-        "src/shared/api/tauri.ts:867"
+        "src/shared/api/tauri.ts:808"
       ]
     },
     "discover_agent_models": {
@@ -1385,7 +1442,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1387",
         "src/parity/session/script.ts:1388",
-        "src/shared/api/agentModels.ts:15"
+        "src/shared/api/agentModels.ts:17"
       ]
     },
     "discover_backend_providers": {
@@ -1395,7 +1452,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1484",
-        "src/shared/api/tauri.ts:1048"
+        "src/shared/api/tauri.ts:989"
       ]
     },
     "discover_git_bash_prerequisite": {
@@ -1405,7 +1462,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1496",
-        "src/shared/api/tauri.ts:853"
+        "src/shared/api/tauri.ts:794"
       ]
     },
     "discover_managed_agent_prereqs": {
@@ -1415,7 +1472,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1493",
-        "src/shared/api/tauri.ts:925"
+        "src/shared/api/tauri.ts:866"
       ]
     },
     "download_file": {
@@ -1467,6 +1524,68 @@
         "src/parity/session/script.ts:587",
         "src/shared/api/editMessage.ts:13"
       ]
+    },
+    "electron_check_for_update": {
+      "defining_file": "src-tauri/src/electron_host/updater.rs",
+      "module": "updater",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/electronUpdater.ts:14"
+      ]
+    },
+    "electron_download_update": {
+      "defining_file": "src-tauri/src/electron_host/updater.rs",
+      "module": "updater",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/electronUpdater.ts:30"
+      ]
+    },
+    "electron_export_frontend_state": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_finish_frontend_migration": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_frontend_migration_fixture": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_install_update": {
+      "defining_file": "src-tauri/src/electron_host/updater.rs",
+      "module": "updater",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/electronUpdater.ts:47"
+      ]
+    },
+    "electron_open_deep_link": {
+      "defining_file": "src-tauri/src/electron_host/deep_links.rs",
+      "module": "deep_links",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
+    },
+    "electron_read_frontend_migration": {
+      "defining_file": "src-tauri/src/electron_host/migration.rs",
+      "module": "migration",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "NO CALLER FOUND",
+      "example_sites": []
     },
     "encode_agent_snapshot_for_send": {
       "defining_file": "src-tauri/src/commands/personas/snapshot.rs",
@@ -1632,7 +1751,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriIdentity.ts:69"
+        "src/shared/api/tauriIdentity.ts:120"
       ]
     },
     "get_active_workspace": {
@@ -1652,7 +1771,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1362",
-        "src/shared/api/tauri.ts:949"
+        "src/shared/api/tauri.ts:890"
       ]
     },
     "get_agent_memory": {
@@ -1673,7 +1792,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1390",
-        "src/shared/api/tauri.ts:943"
+        "src/shared/api/tauri.ts:884"
       ]
     },
     "get_agent_usage_series": {
@@ -1705,7 +1824,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1368",
-        "src/shared/api/tauri.ts:1022"
+        "src/shared/api/tauri.ts:963"
       ]
     },
     "get_baked_build_env_keys": {
@@ -1715,7 +1834,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1365",
-        "src/shared/api/tauri.ts:992"
+        "src/shared/api/tauri.ts:933"
       ]
     },
     "get_build_default_relay_url": {
@@ -1735,7 +1854,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:80",
         "src/parity/session/script.ts:1008",
-        "src/shared/api/tauri.ts:403"
+        "src/shared/api/tauri.ts:378"
       ]
     },
     "get_channel_details": {
@@ -1837,7 +1956,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:329",
-        "src/shared/api/tauri.ts:354"
+        "src/shared/api/tauri.ts:329"
       ]
     },
     "get_event": {
@@ -1973,7 +2092,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1401",
-        "src/shared/api/tauri.ts:838"
+        "src/shared/api/tauri.ts:779"
       ]
     },
     "get_media_proxy_port": {
@@ -2005,7 +2124,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:667",
-        "src/shared/api/tauri.ts:741"
+        "src/shared/api/tauri.ts:682"
       ]
     },
     "get_note": {
@@ -2066,7 +2185,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:77",
         "src/parity/session/script.ts:662",
-        "src/shared/api/tauri.ts:341"
+        "src/shared/api/tauri.ts:316"
       ]
     },
     "get_profile": {
@@ -2145,7 +2264,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:324",
-        "src/shared/api/tauri.ts:370",
+        "src/shared/api/tauri.ts:345",
         "src/shared/lib/mediaUrl.ts:194"
       ]
     },
@@ -2166,7 +2285,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:319",
-        "src/shared/api/tauri.ts:366"
+        "src/shared/api/tauri.ts:341"
       ]
     },
     "get_run_approvals": {
@@ -2186,7 +2305,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1369",
-        "src/shared/api/tauri.ts:979"
+        "src/shared/api/tauri.ts:920"
       ]
     },
     "get_task_artifact_event": {
@@ -2214,8 +2333,8 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:565",
-        "src/shared/api/tauri.ts:508",
-        "src/shared/api/types.ts:892"
+        "src/shared/api/tauri.ts:483",
+        "src/shared/api/types.ts:894"
       ]
     },
     "get_tts_settings": {
@@ -2245,7 +2364,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:366",
-        "src/shared/api/tauriProfiles.ts:102"
+        "src/shared/api/tauriProfiles.ts:108"
       ]
     },
     "get_users_batch": {
@@ -2256,7 +2375,7 @@
       "example_sites": [
         "src/parity/canonicalizers.ts:76",
         "src/parity/session/script.ts:369",
-        "src/shared/api/tauriProfiles.ts:109"
+        "src/shared/api/tauriProfiles.ts:115"
       ]
     },
     "get_voice_input_mode": {
@@ -2307,7 +2426,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/onboarding/flow/completeFirstRunIo.ts:27",
+        "src/features/onboarding/flow/completeFirstRunIo.ts:87",
         "src/parity/session/script.ts:1416",
         "src/shared/api/tauriManagedAgentMessageMarkers.ts:9"
       ]
@@ -2331,7 +2450,7 @@
       "example_sites": [
         "src/features/communities/useCommunityInit.ts:272",
         "src/parity/session/script.ts:316",
-        "src/shared/api/tauriIdentity.ts:37"
+        "src/shared/api/tauriIdentity.ts:88"
       ]
     },
     "import_pocket_voice": {
@@ -2360,7 +2479,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1518",
-        "src/shared/api/tauri.ts:914"
+        "src/shared/api/tauri.ts:855"
       ]
     },
     "interrupt_huddle_speech": {
@@ -2379,7 +2498,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1543",
-        "src/shared/api/tauri.ts:1115"
+        "src/shared/api/tauri.ts:1056"
       ]
     },
     "is_shared_identity": {
@@ -2389,7 +2508,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:332",
-        "src/shared/api/tauri.ts:362"
+        "src/shared/api/tauri.ts:337"
       ]
     },
     "join_channel": {
@@ -2400,7 +2519,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:95",
         "src/parity/session/script.ts:434",
-        "src/shared/api/tauri.ts:395"
+        "src/shared/api/tauri.ts:370"
       ]
     },
     "join_huddle": {
@@ -2421,7 +2540,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:96",
         "src/parity/session/script.ts:435",
-        "src/shared/api/tauri.ts:399"
+        "src/shared/api/tauri.ts:374"
       ]
     },
     "leave_huddle": {
@@ -2525,7 +2644,7 @@
       "example_sites": [
         "src/features/huddle/components/AddAgentDialog.tsx:53",
         "src/parity/session/script.ts:1396",
-        "src/shared/api/tauri.ts:782"
+        "src/shared/api/tauri.ts:723"
       ]
     },
     "list_personas": {
@@ -2556,7 +2675,7 @@
       "example_sites": [
         "src/features/agents/hooks.ts:349",
         "src/parity/session/script.ts:1499",
-        "src/shared/api/tauri.ts:776"
+        "src/shared/api/tauri.ts:717"
       ]
     },
     "list_relay_members": {
@@ -2566,7 +2685,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:670",
-        "src/shared/api/tauri.ts:735"
+        "src/shared/api/tauri.ts:676"
       ]
     },
     "list_save_subscriptions": {
@@ -2607,6 +2726,24 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/shared/api/tauriPersonas.ts:371"
+      ]
+    },
+    "load_pending_signup": {
+      "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
+      "module": "onboarding_recovery",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriIdentity.ts:54"
+      ]
+    },
+    "mark_pending_signup_registered": {
+      "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
+      "module": "onboarding_recovery",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriIdentity.ts:61"
       ]
     },
     "merge_project_pull_request": {
@@ -2707,7 +2844,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauri.ts:1068"
+        "src/shared/api/tauri.ts:1009"
       ]
     },
     "nip44_encrypt_to_self": {
@@ -2717,7 +2854,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:352",
-        "src/shared/api/tauri.ts:1062"
+        "src/shared/api/tauri.ts:1003"
       ]
     },
     "notification_permission_state": {
@@ -2832,7 +2969,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:313",
-        "src/shared/api/tauriIdentity.ts:43"
+        "src/shared/api/tauriIdentity.ts:94"
       ]
     },
     "pick_and_upload_image": {
@@ -2850,7 +2987,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauri.ts:561"
+        "src/shared/api/tauri.ts:536"
       ]
     },
     "pick_workspace_file": {
@@ -2861,6 +2998,15 @@
       "example_sites": [
         "src/features/workspace/kinds/fileKind.tsx:80",
         "src/features/workspace/kinds/imageKind.tsx:64"
+      ]
+    },
+    "prepare_pending_signup": {
+      "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
+      "module": "onboarding_recovery",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriIdentity.ts:46"
       ]
     },
     "preview_agent_snapshot_import": {
@@ -2900,7 +3046,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1487",
-        "src/shared/api/tauri.ts:1054"
+        "src/shared/api/tauri.ts:995"
       ]
     },
     "publish_note": {
@@ -2962,7 +3108,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1372",
-        "src/shared/api/tauri.ts:958"
+        "src/shared/api/tauri.ts:899"
       ]
     },
     "put_managed_agent_runtime_lifecycle": {
@@ -2972,7 +3118,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1428",
-        "src/shared/api/tauriManagedAgents.ts:104"
+        "src/shared/api/tauriManagedAgents.ts:110"
       ]
     },
     "read_archived_events": {
@@ -3042,7 +3188,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1434",
-        "src/shared/api/tauriManagedAgents.ts:113"
+        "src/shared/api/tauriManagedAgents.ts:119"
       ]
     },
     "reconnect_colony_credits": {
@@ -3123,7 +3269,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:109",
         "src/parity/session/script.ts:1027",
-        "src/shared/api/tauri.ts:383"
+        "src/shared/api/tauri.ts:358"
       ]
     },
     "remove_reaction": {
@@ -3144,7 +3290,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:677",
-        "src/shared/api/tauri.ts:765"
+        "src/shared/api/tauri.ts:706"
       ]
     },
     "remove_save_subscription_kind": {
@@ -3212,7 +3358,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1443",
-        "src/shared/api/tauriManagedAgents.ts:97"
+        "src/shared/api/tauriManagedAgents.ts:103"
       ]
     },
     "save_agent_card": {
@@ -3253,7 +3399,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriIdentity.ts:85"
+        "src/shared/api/tauriIdentity.ts:136"
       ]
     },
     "save_png_data_url": {
@@ -3264,6 +3410,15 @@
       "example_sites": [
         "src/parity/session/script.ts:1567",
         "src/parity/session/script.ts:1568"
+      ]
+    },
+    "save_recovery_code": {
+      "defining_file": "src-tauri/src/commands/onboarding_recovery.rs",
+      "module": "onboarding_recovery",
+      "registered_in": "src-tauri/src/lib.rs",
+      "reached_by": "frontend",
+      "example_sites": [
+        "src/shared/api/tauriIdentity.ts:80"
       ]
     },
     "scan_agent_subscriptions": {
@@ -3294,7 +3449,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:570",
-        "src/shared/api/tauri.ts:452"
+        "src/shared/api/tauri.ts:427"
       ]
     },
     "search_users": {
@@ -3304,7 +3459,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:372",
-        "src/shared/api/tauriProfiles.ts:129"
+        "src/shared/api/tauriProfiles.ts:135"
       ]
     },
     "send": {
@@ -3346,7 +3501,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1446",
         "src/parity/session/script.ts:1447",
-        "src/shared/api/tauri.ts:1109"
+        "src/shared/api/tauri.ts:1050"
       ]
     },
     "set_audio_output_device": {
@@ -3368,7 +3523,7 @@
       "example_sites": [
         "src/features/agents/ui/agentSessionToolCatalog.ts:112",
         "src/parity/session/script.ts:1009",
-        "src/shared/api/tauri.ts:419"
+        "src/shared/api/tauri.ts:394"
       ]
     },
     "set_channel_purpose": {
@@ -3555,7 +3710,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1552",
         "src/parity/session/script.ts:1553",
-        "src/shared/theme/ThemeProvider.tsx:602"
+        "src/shared/theme/ThemeProvider.tsx:474"
       ]
     },
     "show_native_notification": {
@@ -3584,7 +3739,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:339",
-        "src/shared/api/tauri.ts:606"
+        "src/shared/api/tauri.ts:581"
       ]
     },
     "sign_nostr_identity_binding": {
@@ -3602,7 +3757,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriIdentity.ts:55"
+        "src/shared/api/tauriIdentity.ts:106"
       ]
     },
     "sign_project_pull_request_review_request": {
@@ -3682,7 +3837,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1437",
-        "src/shared/api/tauriManagedAgents.ts:83"
+        "src/shared/api/tauriManagedAgents.ts:85"
       ]
     },
     "start_pairing": {
@@ -3692,7 +3847,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:745",
-        "src/shared/api/tauri.ts:1072"
+        "src/shared/api/tauri.ts:1013"
       ]
     },
     "start_stt_pipeline": {
@@ -3719,7 +3874,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1440",
-        "src/shared/api/tauriManagedAgents.ts:90"
+        "src/shared/api/tauriManagedAgents.ts:96"
       ]
     },
     "sync_agents_to_active_huddle": {
@@ -3768,7 +3923,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:147"
+        "src/features/terminal/terminalClient.ts:155"
       ]
     },
     "terminal_attach": {
@@ -3777,7 +3932,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:83"
+        "src/features/terminal/terminalClient.ts:89"
       ]
     },
     "terminal_close": {
@@ -3786,7 +3941,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:143"
+        "src/features/terminal/terminalClient.ts:151"
       ]
     },
     "terminal_detach": {
@@ -3795,7 +3950,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:136"
+        "src/features/terminal/terminalClient.ts:144"
       ]
     },
     "terminal_focus": {
@@ -3804,7 +3959,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:132"
+        "src/features/terminal/terminalClient.ts:140"
       ]
     },
     "terminal_input": {
@@ -3813,7 +3968,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:93"
+        "src/features/terminal/terminalClient.ts:101"
       ]
     },
     "terminal_resize": {
@@ -3822,7 +3977,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:102"
+        "src/features/terminal/terminalClient.ts:110"
       ]
     },
     "terminal_scroll": {
@@ -3831,7 +3986,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:128"
+        "src/features/terminal/terminalClient.ts:136"
       ]
     },
     "terminal_viewport_ready": {
@@ -3840,7 +3995,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/features/terminal/terminalClient.ts:112"
+        "src/features/terminal/terminalClient.ts:120"
       ]
     },
     "title_bar_double_click": {
@@ -3914,7 +4069,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1393",
-        "src/shared/api/tauri.ts:1034"
+        "src/shared/api/tauri.ts:975"
       ]
     },
     "update_persona": {
@@ -3943,7 +4098,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:362",
-        "src/shared/api/tauriProfiles.ts:84"
+        "src/shared/api/tauriProfiles.ts:85"
       ]
     },
     "update_profile_at_relay": {
@@ -3953,7 +4108,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:377",
-        "src/shared/api/tauriProfiles.ts:95"
+        "src/shared/api/tauriProfiles.ts:101"
       ]
     },
     "update_team": {
@@ -3994,7 +4149,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1082",
         "src/parity/session/script.ts:1083",
-        "src/shared/api/tauri.ts:553"
+        "src/shared/api/tauri.ts:528"
       ]
     },
     "upload_media_bytes": {
@@ -4004,7 +4159,7 @@
       "reached_by": "frontend",
       "example_sites": [
         "src/parity/session/script.ts:1046",
-        "src/shared/api/tauri.ts:569"
+        "src/shared/api/tauri.ts:544"
       ]
     },
     "upload_media_bytes_raw": {
@@ -4033,7 +4188,7 @@
       "example_sites": [
         "src/parity/session/script.ts:1092",
         "src/parity/session/script.ts:1095",
-        "src/shared/api/tauri.ts:1102"
+        "src/shared/api/tauri.ts:1043"
       ]
     },
     "verify_ncryptsec_backup": {
@@ -4042,7 +4197,7 @@
       "registered_in": "src-tauri/src/lib.rs",
       "reached_by": "frontend",
       "example_sites": [
-        "src/shared/api/tauriIdentity.ts:101"
+        "src/shared/api/tauriIdentity.ts:152"
       ]
     },
     "workspace_terminal_close": {

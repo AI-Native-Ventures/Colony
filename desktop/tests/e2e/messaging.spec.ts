@@ -374,9 +374,8 @@ test("send a message and see it in timeline", async ({ page }) => {
   await page.getByTestId("send-message").click();
 
   await expect(page.getByTestId("message-timeline")).toContainText(message);
-  await expect(page.getByTestId("message-row").last()).toContainText(
-    "npub1mock...",
-  );
+  const sentRow = page.getByTestId("message-row").filter({ hasText: message });
+  await expect(sentRow.getByTestId("message-author")).toHaveText("You");
 });
 
 test("long autolink wraps without widening the timeline", async ({ page }) => {
@@ -1294,11 +1293,50 @@ test("composer link preview embeds stay attachment-sized while loading and ready
       });
     }
 
+    const available = await card.evaluate((element) => {
+      const composer = element.closest<HTMLElement>(
+        '[data-testid="message-composer"]',
+      );
+      const previews = element.closest("[data-composer-link-previews]");
+      const row = previews?.firstElementChild;
+      const hide = previews?.querySelector<HTMLElement>(
+        '[data-testid="composer-hide-link-previews"]',
+      );
+      if (!composer || !row || !hide) {
+        throw new Error("Expected the preview and hide control in a composer.");
+      }
+      const style = getComputedStyle(composer);
+      const composerRect = composer.getBoundingClientRect();
+      const contentLeft =
+        composerRect.left +
+        Number.parseFloat(style.borderLeftWidth) +
+        Number.parseFloat(style.paddingLeft);
+      const contentRight =
+        composerRect.right -
+        Number.parseFloat(style.borderRightWidth) -
+        Number.parseFloat(style.paddingRight);
+      const cardRect = element.getBoundingClientRect();
+      const hideRect = hide.getBoundingClientRect();
+      const gap = Number.parseFloat(getComputedStyle(row).columnGap);
+      return {
+        cardWidth: contentRight - contentLeft - hideRect.width - gap,
+        contained:
+          cardRect.left >= contentLeft && hideRect.right <= contentRight,
+        controlGap: hideRect.left - cardRect.right,
+        gap,
+      };
+    });
     expect(initial.height).toBe(55);
-    expect(initial.width).toBe(320);
+    // The preferred 320px attachment must shrink to preserve the composer's
+    // padding and the adjacent hide control on a narrow window.
+    expect(initial.width).toBe(Math.min(320, available.cardWidth));
+    expect(available.contained).toBe(true);
+    expect(available.controlGap).toBe(available.gap);
     expect(initial.thumbnailHeight).toBe(55);
     expect(initial.thumbnailWidth).toBe(55);
     expect(ready).toEqual(initial);
+    await page.getByTestId("composer-hide-link-previews").click();
+    await expect(card).toHaveCount(0);
   }
 });
 
@@ -2008,9 +2046,7 @@ test("sends a thread message to its parent channel with a root-thread link", asy
       return false;
     })
     .toBe(true);
-  await expect(sharedRow.getByTestId("message-author")).toHaveText(
-    "npub1mock...",
-  );
+  await expect(sharedRow.getByTestId("message-author")).toHaveText("You");
   await expect(sharedRow.getByTestId("message-avatar-fallback")).toBeVisible();
   await expect(sharedRow.locator('[data-mention=""]')).toContainText("alice");
   await expect(sharedRow.locator("img[data-custom-emoji]")).toHaveAttribute(
@@ -2388,7 +2424,7 @@ test("thread panel width uses session storage and reset handle", async ({
   page,
 }) => {
   const customWidthPx = 520;
-  const defaultWidthPx = 380;
+  const widthStorageKey = "buzz.desktop.thread-panel-width";
 
   await page.addInitScript((width) => {
     window.sessionStorage.setItem(
@@ -2404,6 +2440,10 @@ test("thread panel width uses session storage and reset handle", async ({
   const timeline = page.getByTestId("message-timeline");
   const rootMessage = timeline.getByTestId("message-row").first();
   const threadPanel = page.getByTestId("message-thread-panel");
+  // Saved widths describe the framed pane, not its border-inset contents.
+  const threadSurface = page.locator(
+    '.colony-thread-surface[data-thread-mode="split"]',
+  );
   const resizeHandle = threadPanel.getByTestId(
     "right-auxiliary-pane-resize-handle",
   );
@@ -2414,18 +2454,36 @@ test("thread panel width uses session storage and reset handle", async ({
 
   await expect
     .poll(async () => {
-      return threadPanel.evaluate((panel) => {
+      return threadSurface.evaluate((panel) => {
         const element = panel as HTMLElement;
         return Math.round(element.getBoundingClientRect().width);
       });
     })
     .toBe(customWidthPx);
 
+  await expect
+    .poll(() =>
+      page.evaluate((key) => sessionStorage.getItem(key), widthStorageKey),
+    )
+    .toBe(String(customWidthPx));
+
+  // Colony's automatic split gives the reading thread 52% of the available
+  // conversation width. Reset removes the manual preference entirely.
+  const defaultWidthPx = await page
+    .locator("[data-colony-channel-layout]")
+    .evaluate((layout) =>
+      Math.round(layout.getBoundingClientRect().width * 0.52),
+    );
   await resizeHandle.dblclick();
+  await expect
+    .poll(() =>
+      page.evaluate((key) => sessionStorage.getItem(key), widthStorageKey),
+    )
+    .toBeNull();
 
   await expect
     .poll(async () => {
-      return threadPanel.evaluate((panel) => {
+      return threadSurface.evaluate((panel) => {
         const element = panel as HTMLElement;
         return Math.round(element.getBoundingClientRect().width);
       });
@@ -2441,12 +2499,15 @@ test("thread panel width uses session storage and reset handle", async ({
 
   await expect
     .poll(async () => {
-      return threadPanel.evaluate((panel) => {
+      return threadSurface.evaluate((panel) => {
         const element = panel as HTMLElement;
         return Math.round(element.getBoundingClientRect().width);
       });
     })
     .toBe(defaultWidthPx);
+  expect(
+    await page.evaluate((key) => sessionStorage.getItem(key), widthStorageKey),
+  ).toBeNull();
 });
 
 test("narrow thread view collapses channel header actions into a menu", async ({

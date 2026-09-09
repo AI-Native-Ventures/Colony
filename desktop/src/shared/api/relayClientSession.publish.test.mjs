@@ -18,6 +18,52 @@ const EVENT = {
   sig: "c".repeat(128),
 };
 
+test("a captured destination refuses a session switched before publish begins", async () => {
+  resetRateLimitGate();
+  const client = new RelayClient();
+  client.relayUrl = "wss://another-business.invalid";
+  let sends = 0;
+  client.ensureConnected = async () => {};
+  client.sendRaw = async () => {
+    sends++;
+    throw new Error("wrong destination reached");
+  };
+  await assert.rejects(
+    client.publishEvent(
+      EVENT,
+      "timed out",
+      "failed",
+      "wss://original-business.invalid",
+    ),
+    /destination changed/,
+  );
+  assert.equal(sends, 0);
+});
+
+test("a captured destination is checked after reconnect resolves", async () => {
+  resetRateLimitGate();
+  const client = new RelayClient();
+  let sends = 0;
+  client.ensureConnected = async () => {
+    await Promise.resolve();
+    client.relayUrl = "wss://another-business.invalid";
+  };
+  client.sendRaw = async () => {
+    sends++;
+    throw new Error("wrong destination reached");
+  };
+  await assert.rejects(
+    client.publishEvent(
+      EVENT,
+      "timed out",
+      "failed",
+      "wss://original-business.invalid",
+    ),
+    /destination changed/,
+  );
+  assert.equal(sends, 0);
+});
+
 test("an in-progress publish never reconnects across a community switch", async () => {
   resetRateLimitGate();
   const client = new RelayClient();

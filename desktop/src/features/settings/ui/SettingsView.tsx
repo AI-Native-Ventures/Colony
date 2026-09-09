@@ -1,3 +1,4 @@
+import { electronDesktop } from "@/shared/api/electronNativeBridge";
 import * as React from "react";
 import { getVersion } from "@/shared/api/nativeBridge";
 import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
@@ -76,6 +77,7 @@ const settingsNavGroups: Array<{
   {
     label: "App",
     sections: [
+      "browser",
       "agents",
       "blocks",
       "compute",
@@ -143,6 +145,7 @@ export function SettingsView({
   const featureState = useFeatureSnapshot();
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
+      if (s.value === "browser" && !electronDesktop()) return false;
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).

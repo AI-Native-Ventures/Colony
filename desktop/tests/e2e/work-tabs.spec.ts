@@ -391,7 +391,8 @@ test("the sidebar has a single Tasks row that opens the list view", async ({
 
   const tasksRow = page.getByTestId("open-work-view");
   await expect(tasksRow).toHaveCount(1);
-  await expect(tasksRow).toHaveText("Tasks");
+  await expect(tasksRow).toBeVisible();
+  await expect(tasksRow).toHaveAccessibleName("Tasks");
 
   // The three rows and the per-initiative list the section used to carry are
   // tabs on the page now. Asserting they are gone is what stops the sidebar

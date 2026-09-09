@@ -84,6 +84,9 @@ export function duplicatePersonaDialogState(
       namePool: persona.namePool ?? [],
       envVars: persona.envVars ?? {},
       ...behaviorEntry(persona),
+      ...(persona.roleId && persona.roleTitle
+        ? { roleId: persona.roleId, roleTitle: persona.roleTitle }
+        : {}),
     },
   };
 }
@@ -133,6 +136,9 @@ export function editPersonaDialogState(
       namePool: persona.namePool ?? [],
       envVars: persona.envVars ?? {},
       ...behaviorEntry(persona),
+      ...(persona.roleId && persona.roleTitle
+        ? { roleId: persona.roleId, roleTitle: persona.roleTitle }
+        : {}),
     },
   };
 }

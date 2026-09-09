@@ -64,16 +64,31 @@ with a TypeScript lookup table or an id comparison in a component.
    via `synthesizeEmptyDiscoveryStatus()` and is intentionally **not cached**
    so that closing → reopening the dialog re-runs discovery after the user
    installs or signs into the CLI (`isCacheableDiscoveryResponse()`).
-7. **Onboarding setup detects readiness; it does not select defaults.** The
-   setup page derives visible and ready harnesses from the runtime catalog and
-   only offers install or sign-in actions. The following defaults page is the
-   sole onboarding surface that chooses and persists `preferred_runtime`, and
-   its Finish gate consumes the shared renderer's `onValidityChange` signal —
-   a harness selection alone does not complete onboarding when the harness
-   requires provider/model/credential config (e.g. buzz-agent with no
-   provider). Baked build env and runtime-file config satisfy the gate.
-   `onboarding-agent-defaults.spec.ts` is the acceptance gate for anything
-   touching this flow or the shared renderer.
+7. **Founder onboarding makes payment explicit; existing choices survive.**
+   The owner chooses subscriptions, Colony Credits or OpenRouter in the power
+   step. Catalog `localLaunchError` comes from the same native isolation guard
+   used at spawn, independently of installed/auth status; readiness never calls
+   a blocked local runtime ready. A preserved unsupported choice asks the owner
+   to choose again rather than switching their payment route. Credits account
+   reads are allowed before saving a choice; reconnect still requires saved
+   Credits mode. Credits configuration has no local provider-key requirement,
+   and model discovery uses a native gateway lease and the served gateway
+   catalog, never the user's API key. Gateway availability and a selected served
+   model are separate from a structurally valid default. Onboarding saves fence
+   the expected owner and relay during native persistence and limit immediate
+   restarts to that captured pair. Defaults still apply device-wide to future
+   launches; this is not separate billing configuration per business.
+   **Legacy founder fallback:**
+   The approved public founder journey collects account and business details.
+   `ensureBuiltInFounderConfig` preserves an existing ready configuration;
+   otherwise it configures the bundled Colony teammate and awaits both the
+   write and catalog readiness before Welcome. It must not automatically select
+   a personal CLI subscription just because discovery finds one. Capability
+   facts still come from the runtime catalog and the shared config core.
+   Legacy/advanced setup and defaults screens retain their explicit selectors;
+   selecting a harness alone never bypasses its required credentials or model.
+   `onboarding-first-run-public.spec.ts`, `onboarding-redesign.spec.ts` and the
+   existing agent-defaults tests cover the respective journeys.
 8. **Omit the Model control only after a confirmed successful empty
    discovery on an optional-model harness.** When the field model marks model
    as `acpNative` (Claude Code / Codex), `shouldRenderModelControl` hides the
@@ -232,3 +247,14 @@ matches the code is worse than no rule; a new pattern that isn't written down
 here will be broken by the next agent that never learns it existed. Reviewers:
 treat a config-behavior diff without a matching AGENTS.md diff (or an explicit
 "no rules changed" note) as incomplete.
+
+## Job identity in the workspace
+
+Agent names and job titles are separate. The definition editor writes the existing
+`roleId` / `roleTitle` pair and preserves its stable role ID when the title changes.
+Editing and duplicating seed that pair from the stored persona. A title does not
+change the instance's rank, manager, permissions, harness or model. Messages and
+one-to-one DMs consume the community-scoped, content-stable role context; do not
+add a persona query observer per message. Avatar images and chosen emoji colours
+remain authoritative; fallback colours derive from the agent pubkey independently
+of the workspace accent.

@@ -260,3 +260,157 @@ test("a provider Colony Credits cannot serve never reads as ready", () => {
     { action: "skip", reason: "relay-has-no-hosted-agent" },
   );
 });
+
+test("founder defaults do not select a discovered personal CLI", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const { io, device } = fakeDevice({
+    runtimes: [...CLEAN_MACHINE, runtime("codex")],
+  });
+  await ensureBuiltInFounderConfig(io);
+  assert.equal(device.config.preferred_runtime, "buzz-agent");
+  assert.equal(device.config.credential_mode, "colony_credits");
+});
+test("founder setup propagates failed config write instead of declaring readiness", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const { io } = fakeDevice();
+  await assert.rejects(
+    () =>
+      ensureBuiltInFounderConfig({
+        ...io,
+        saveConfig: async () => {
+          throw new Error("synthetic write failure");
+        },
+      }),
+    /synthetic write failure/,
+  );
+});
+
+test("founder setup preserves unsupported saved subscriptions and asks for an explicit power choice", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const { io, device } = fakeDevice({
+    runtimes: [
+      {
+        ...runtime("claude"),
+        localLaunchError:
+          "This Electron beta requires Colony Agent for isolated local teammates",
+      },
+      ...CLEAN_MACHINE,
+    ],
+    config: { ...EMPTY_CONFIG, preferred_runtime: "claude" },
+  });
+  await assert.rejects(
+    () => ensureBuiltInFounderConfig(io),
+    /Choose how to power your agents/,
+  );
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.installed, []);
+  assert.equal(device.config.preferred_runtime, "claude");
+});
+
+test("explicit Power completion never replaces an unready saved lane with Credits", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  for (const config of [
+    { ...EMPTY_CONFIG, preferred_runtime: "codex" },
+    {
+      ...EMPTY_CONFIG,
+      preferred_runtime: "buzz-agent",
+      provider: "openrouter",
+      model: "openrouter/free",
+    },
+    {
+      ...EMPTY_CONFIG,
+      credential_mode: "colony_credits",
+      preferred_runtime: "buzz-agent",
+      provider: "openai-compat",
+    },
+  ]) {
+    const { io, device } = fakeDevice({ config });
+    let provisioningReads = 0;
+    await assert.rejects(
+      ensureBuiltInFounderConfig(
+        {
+          ...io,
+          loadProvisioning: async () => {
+            provisioningReads += 1;
+            return HOSTED_RELAY;
+          },
+        },
+        { mode: "validate-only" },
+      ),
+      /Your saved agent connection is not ready/,
+    );
+    assert.equal(provisioningReads, 0);
+    assert.equal(device.writes, 0);
+    assert.deepEqual(device.installed, []);
+    assert.deepEqual(device.config, config);
+  }
+});
+
+test("explicit Power validation preserves a ready saved OpenRouter choice", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const config = {
+    ...EMPTY_CONFIG,
+    preferred_runtime: "buzz-agent",
+    provider: "openrouter",
+    model: "openrouter/free",
+    env_vars: { OPENROUTER_API_KEY: "synthetic-owner-key" },
+  };
+  const { io, device } = fakeDevice({ config });
+  await ensureBuiltInFounderConfig(io, { mode: "validate-only" });
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.installed, []);
+  assert.deepEqual(device.config, config);
+});
+
+test("legacy fallback retains its captured native save scope after an account switch", async () => {
+  const { ensureBuiltInFounderConfig } = await import(
+    "./automaticAgentSetup.ts"
+  );
+  const scope = {
+    ownerPubkey: "a".repeat(64),
+    relayUrl: "wss://original.colony.example",
+  };
+  let activeScope = scope;
+  let savedScope;
+  const { io, device } = fakeDevice();
+  await assert.rejects(
+    ensureBuiltInFounderConfig(
+      {
+        ...io,
+        installRuntime: async () => {
+          activeScope = {
+            ownerPubkey: "b".repeat(64),
+            relayUrl: "wss://other.colony.example",
+          };
+        },
+        saveConfig: async (config, expectedScope) => {
+          savedScope = expectedScope;
+          // Mirrors the existing native save fence: unscoped legacy writes
+          // are allowed, but a scoped write cannot cross an account switch.
+          if (
+            expectedScope &&
+            (expectedScope.ownerPubkey !== activeScope.ownerPubkey ||
+              expectedScope.relayUrl !== activeScope.relayUrl)
+          )
+            throw new Error("The account or business changed");
+          return io.saveConfig(config);
+        },
+      },
+      { scope },
+    ),
+    /The account or business changed/,
+  );
+  assert.deepEqual(savedScope, scope);
+  assert.equal(device.writes, 0);
+  assert.deepEqual(device.config, EMPTY_CONFIG);
+});

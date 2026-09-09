@@ -58,14 +58,18 @@ test("creating a community starts the founder walk at the company screen", async
   await expect(page.getByTestId("workspace-setup-gate")).toBeVisible();
   await page.getByTestId("community-choice-create").click();
 
-  await expect(page.getByText("Now, your company.")).toBeVisible();
-  // The company screen is this run's first screen, and the total counts only
-  // what is coming: the account and recovery screens are behind them, invites
-  // ship dark, and the brain screen appears only if the probe finds a tool
-  // they already pay for. So the position is pinned and the total is not.
-  await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
-    /^01 \/ 0[1-9]$/,
+  await expect(
+    page.getByRole("heading", { name: "Your business", exact: true }),
+  ).toBeVisible();
+  // Existing identities confirm business and power; account recovery stays
+  // behind them.
+  await expect(page.getByTestId("onboarding-account")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
+  const steps = page.getByTestId("onboarding-step-counter");
+  await expect(steps.locator('[aria-current="step"]')).toHaveText(
+    "1 · Business",
   );
+  await expect(steps).toContainText("2 · Power");
   // The request is recorded, so a relaunch halfway through the walk resumes
   // it instead of dropping the person back on the choice screen.
   await expect
@@ -86,9 +90,13 @@ test("leaving the founder walk returns to the community choice", async ({
   await page.goto("/");
 
   await page.getByTestId("community-choice-create").click();
-  await expect(page.getByText("Now, your company.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Your business", exact: true }),
+  ).toBeVisible();
 
-  await page.getByRole("button", { name: "Back" }).click();
+  await page
+    .getByRole("button", { name: "Back to Colony", exact: true })
+    .click();
   await expect(page.getByTestId("workspace-setup-gate")).toBeVisible();
   await expect(page.getByTestId("community-choice-create")).toBeVisible();
 });

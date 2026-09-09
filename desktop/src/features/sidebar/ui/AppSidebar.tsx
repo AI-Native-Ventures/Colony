@@ -1,5 +1,7 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
+import { WorkspaceAnts } from "@/app/WorkspaceAnts";
+import { Settings2 } from "lucide-react";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 import type { Community } from "@/features/communities/types";
@@ -53,7 +55,7 @@ import type {
   CreateChannelKind,
 } from "@/features/sidebar/ui/AppSidebar.types";
 import { SidebarRelayConnectionCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
-import { WorkSidebarSection } from "@/features/sidebar/ui/WorkSidebarSection";
+import { SidebarWorkspaceHeader } from "./SidebarWorkspaceHeader";
 import { useSidebarMoreNav } from "@/features/sidebar/useSidebarMoreNav";
 import type { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import {
@@ -80,6 +82,7 @@ import {
   SidebarFooter,
   SidebarMenu,
   SidebarMenuItem,
+  SidebarMenuButton,
   SidebarRail,
   useSidebar,
 } from "@/shared/ui/sidebar";
@@ -537,6 +540,14 @@ export function AppSidebar({
         data-sidebar-background
         data-testid="app-sidebar-scroll-anchor"
       >
+        <SidebarWorkspaceHeader
+          activeCommunity={activeCommunity}
+          communities={communities}
+          onSwitchCommunity={onSwitchCommunity}
+          onAddCommunity={onOpenAddCommunity}
+          onUpdateCommunity={onUpdateCommunity}
+          onRemoveCommunity={onRemoveCommunity}
+        />
         <AppSidebarPinnedHeader
           channelLabels={dmChannelLabels}
           currentChannelId={
@@ -586,6 +597,7 @@ export function AppSidebar({
                 onSelectAgents={onSelectAgents}
                 onSelectDiscovery={onSelectDiscovery}
                 onSelectHome={onSelectHome}
+                onSelectWork={onSelectWork}
                 onSelectProjects={onSelectProjects}
                 onSelectContent={onSelectContent}
                 onSelectPulse={onSelectPulse}
@@ -600,10 +612,6 @@ export function AppSidebar({
 
               {!isLoading ? (
                 <>
-                  <WorkSidebarSection
-                    isActive={selectedView === "work"}
-                    onSelect={onSelectWork}
-                  />
                   {starredChannels.length > 0 ? (
                     <ChannelGroupSection
                       hasUnread={starredChannels.some((c) =>
@@ -850,6 +858,7 @@ export function AppSidebar({
           ) : null}
 
           <SidebarFooter>
+            <WorkspaceAnts />
             {relayConnectionCard.showSidebarRelayConnectionCard &&
             (isMobile ? openMobile : sidebarOpen) ? (
               <SidebarRelayConnectionCard
@@ -895,6 +904,16 @@ export function AppSidebar({
                   selfUserStatus={selfUserStatus}
                   communities={communities}
                 />
+              </SidebarMenuItem>
+              <SidebarMenuItem className="colony-sidebar-settings hidden">
+                <SidebarMenuButton
+                  onClick={() => onSelectSettings()}
+                  data-testid="sidebar-settings"
+                  type="button"
+                >
+                  <Settings2 className="size-4" />
+                  <span>Settings</span>
+                </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarFooter>

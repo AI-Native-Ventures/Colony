@@ -17,10 +17,14 @@ async function openSelfProfile(page: import("@playwright/test").Page) {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  // First seed message in #general is from the active identity.
+  // The active identity has no published name; its author label stays friendly.
   const firstMessage = page.getByTestId("message-row").first();
-  await firstMessage.locator("button", { hasText: "npub1mock..." }).click();
-  await expect(page.getByTestId("user-profile-panel")).toBeVisible();
+  const author = firstMessage.getByTestId("message-author");
+  await expect(author).toHaveText("You");
+  await author.click();
+  const panel = page.getByTestId("user-profile-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("deadbeef");
 }
 
 async function openAliceProfile(page: import("@playwright/test").Page) {

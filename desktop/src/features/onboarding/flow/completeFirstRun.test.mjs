@@ -144,25 +144,27 @@ test("throws when starter channels fail without a focus channel", async () => {
   );
 });
 
-test("profile write failure does not block completion", async () => {
+test("profile write failure preserves setup for retry without losing the owner's name", async () => {
   const { io, calls } = makeIo({
     updateProfile: async () => {
       throw new Error("profile down");
     },
   });
-  const result = await completeFirstRun(
-    {
-      queryClient: {},
-      relayUrl: "wss://r",
-      pubkey: "pk",
-      draft: null,
-      profileDisplayName: "Aisha",
-      profileAvatarUrl: null,
-    },
-    io,
+  await assert.rejects(
+    completeFirstRun(
+      {
+        queryClient: {},
+        relayUrl: "wss://r",
+        pubkey: "pk",
+        draft: null,
+        profileDisplayName: "Aisha",
+        profileAvatarUrl: null,
+      },
+      io,
+    ),
+    /could not save your profile/,
   );
-  assert.equal(result.focusChannelId, "chan-1");
-  assert.ok(calls.includes("complete:pk:wss://r"));
+  assert.deepEqual(calls, ["channels"]);
 });
 
 test("the founder's photo is published with their name, in one profile write", async () => {
@@ -237,4 +239,117 @@ test("a photo with no name still reaches the profile", async () => {
     io,
   );
   assert.deepEqual(written, [{ avatarUrl: "https://cdn.test/aisha.png" }]);
+});
+
+test("leaving during channel setup stops the old run before profile and task writes", async () => {
+  let current = true;
+  const { io, calls } = makeIo({
+    initializeStarterChannels: async () => {
+      calls.push("channels");
+      current = false;
+      return { ok: true, focusChannelId: "chan-1" };
+    },
+  });
+  await assert.rejects(
+    completeFirstRun(
+      {
+        queryClient: {},
+        relayUrl: "wss://acme.test",
+        pubkey: "pk1",
+        draft,
+        profileDisplayName: "Owner",
+        profileAvatarUrl: null,
+        assertCurrent: () => {
+          if (!current) throw new Error("Run ended");
+        },
+      },
+      io,
+    ),
+    /Run ended/,
+  );
+  assert.deepEqual(calls, ["channels"]);
+});
+
+const suggestionDraft = {
+  ...draft,
+  company: {
+    ...draft.company,
+    name: "Horizon Labs",
+    summary: "Branding for service businesses",
+  },
+  firstTask: {
+    ...draft.firstTask,
+    mode: "suggestion",
+    deliveryMarker: "setup-123",
+  },
+};
+const suggestionDeps = {
+  queryClient: {},
+  relayUrl: "wss://acme.test",
+  pubkey: "a".repeat(64),
+  draft: suggestionDraft,
+  profileDisplayName: null,
+  profileAvatarUrl: null,
+};
+test("new first run saves explicit handoff before Welcome and focuses the actual suggestion root", async () => {
+  const root = "b".repeat(64);
+  const { io, calls } = makeIo({
+    markExplicitHandoff: async (scope) => {
+      assert.equal(scope.ownerPubkey, suggestionDeps.pubkey);
+      calls.push("explicit");
+    },
+    deliverSuggestion: async (payload, marker) => {
+      assert.equal(payload.businessName, "Horizon Labs");
+      assert.equal(payload.business, "Branding for service businesses");
+      assert.equal(payload.requestId, "setup-123");
+      assert.match(marker, /setup-123/);
+      calls.push("suggestion");
+      return { eventId: root };
+    },
+    navigateToThread: (channel, eventId) =>
+      calls.push(`thread:${channel}:${eventId}`),
+  });
+  const result = await completeFirstRun(suggestionDeps, io);
+  assert.equal(result.firstTaskEventId, root);
+  assert.deepEqual(calls, [
+    "explicit",
+    "channels",
+    "nav:chan-1",
+    "suggestion",
+    `thread:chan-1:${root}`,
+    `complete:${suggestionDeps.pubkey}:wss://acme.test`,
+  ]);
+});
+test("new first run cannot create Welcome when durable explicit mode is unavailable", async () => {
+  const { io, calls } = makeIo({
+    markExplicitHandoff: async () => {
+      throw new Error("storage failed");
+    },
+    deliverSuggestion: async () => ({ eventId: "b".repeat(64) }),
+    navigateToThread: () => {},
+  });
+  await assert.rejects(completeFirstRun(suggestionDeps, io), /storage failed/);
+  assert.deepEqual(calls, []);
+});
+test("new first run never completes or invents a thread after uncertain suggestion delivery", async () => {
+  const { io, calls } = makeIo({
+    markExplicitHandoff: async () => calls.push("explicit"),
+    deliverSuggestion: async () => {
+      throw new Error("acknowledgement lost");
+    },
+    navigateToThread: () => calls.push("thread"),
+  });
+  await assert.rejects(
+    completeFirstRun(suggestionDeps, io),
+    /acknowledgement lost/,
+  );
+  assert.deepEqual(calls, ["explicit", "channels", "nav:chan-1"]);
+});
+test("suggestion mode fails before effects if explicit adapters are absent", async () => {
+  const { io, calls } = makeIo();
+  await assert.rejects(
+    completeFirstRun(suggestionDeps, io),
+    /handoff.*unavailable/i,
+  );
+  assert.deepEqual(calls, []);
 });

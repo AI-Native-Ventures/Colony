@@ -89,6 +89,9 @@ fn queue_community_deep_link(
 }
 
 fn activate_main_window(app: &tauri::AppHandle) {
+    if crate::electron_host::enabled() {
+        return;
+    }
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

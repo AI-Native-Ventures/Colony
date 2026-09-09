@@ -1,3 +1,6 @@
+mod command_paths;
+use command_paths::command_search_dirs;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,16 +19,12 @@ mod nvm;
 mod presets;
 mod runtime_metadata;
 
-// Re-exported so every existing path to these keeps working: `runtime.rs`
-// reaches `find_nvm_default_bin` through `managed_agents`, and the tests reach
-// all three through `discovery`.
 pub use nvm::find_nvm_default_bin;
 #[cfg(test)]
 pub(crate) use nvm::{is_safe_nvm_tag, parse_semver_tag};
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
 
-// Split out for the file-size ratchet; every existing path keeps working.
 #[cfg(test)]
 pub(crate) use codex_probe::codex_adapter_is_outdated;
 #[allow(unused_imports)]
@@ -511,25 +510,6 @@ fn profile_target_dirs(root: &Path) -> [PathBuf; 2] {
     } else {
         [root.join("target/release"), root.join("target/debug")]
     }
-}
-
-fn command_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = profile_target_dirs(&workspace_root_dir()).to_vec();
-    if let Ok(current_dir) = std::env::current_dir() {
-        dirs.extend(profile_target_dirs(&current_dir));
-    }
-
-    dirs.extend(
-        std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf)),
-    );
-    dirs.into_iter().fold(Vec::new(), |mut unique, dir| {
-        if !unique.contains(&dir) {
-            unique.push(dir);
-        }
-        unique
-    })
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -1180,6 +1160,7 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             label: runtime.label.to_string(),
             avatar_url: runtime.avatar_url.to_string(),
             availability,
+            local_launch_error: super::isolation::launch::ensure_supported(Some(runtime.id)).err(),
             command,
             binary_path,
             default_args,
@@ -1351,6 +1332,7 @@ pub fn discover_acp_runtimes_from(
                 // All icons are bundled assets; customs fall back to TerminalSquare in the UI.
                 avatar_url: String::new(),
                 availability,
+                local_launch_error: super::isolation::launch::ensure_supported(Some(&def.id)).err(),
                 command,
                 binary_path,
                 default_args,

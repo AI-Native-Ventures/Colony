@@ -355,6 +355,12 @@ jobs:
         run: just desktop-tauri-test
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      - name: Electron native compatibility host
+        run: |
+          cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --features electron-host --all-targets -- -D warnings
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --features electron-host electron_host::wire::tests
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload desktop e2e artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -427,6 +433,9 @@ jobs:
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Onboarding fixture Chromium transport
+        if: matrix.shard == 1
+        run: node --test desktop/src-electron/onboarding-fixture/proxy.chromium.mjs
       - name: Desktop E2E build
         run: pnpm -C desktop build:e2e
       - name: Desktop smoke e2e
@@ -1187,6 +1196,17 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: New-community work profile bootstrap
+        # The archive already includes the relay lib. Run both post-startup
+        # provisioning regressions and the default-profile contract tests.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-relay) and (test(/community_provisioning::profile_tests/) or test(/community_profile::tests/))' \
+            --run-ignored all
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+          REDIS_URL: redis://localhost:6379
       - name: NIP-ER reminder e2e
         # Feature e2e for NIP-ER (Event Reminders, kind:30300): write-path
         # validation, author-only read filtering, and scheduler delivery against

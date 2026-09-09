@@ -6,7 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Local native-onboarding proof only. Never enable in a distributable package.
+onboarding-fixture = ["dep:reqwest", "dep:rustls", "dep:serde"]
+
 [dependencies]
+base64 = { workspace = true }
 nostr = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -15,3 +20,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 tracing = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-rustls = { version = "0.26", default-features = false }

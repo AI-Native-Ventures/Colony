@@ -441,6 +441,7 @@ fn no_sentinel_reaches_the_owning_process_debug_output() {
         .spawn()
         .expect("spawn placeholder child");
     let process = crate::managed_agents::ManagedAgentProcess {
+        isolation_network: None,
         provisioned_lease: None,
         child,
         log_path: std::path::PathBuf::new(),

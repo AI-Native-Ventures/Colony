@@ -1,3 +1,5 @@
+import { useLayoutEffect } from "react";
+import { electronDesktop } from "@/shared/api/electronNativeBridge";
 import {
   createContext,
   useCallback,
@@ -156,6 +158,14 @@ const CommunitiesContext = createContext<UseCommunitiesReturn | null>(null);
 
 export function CommunitiesProvider({ children }: { children: ReactNode }) {
   const value = useCommunitiesInternal();
+  useLayoutEffect(() => {
+    void electronDesktop()
+      ?.request("business", {
+        id: value.activeCommunity?.id ?? null,
+        relay: value.activeCommunity?.relayUrl ?? null,
+      })
+      .catch(() => {});
+  }, [value.activeCommunity?.id, value.activeCommunity?.relayUrl]);
   return (
     <CommunitiesContext.Provider value={value}>
       {children}

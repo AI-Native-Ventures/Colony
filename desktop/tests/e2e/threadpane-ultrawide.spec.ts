@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { waitForAnimations } from "../helpers/animations";
 import { TEST_IDENTITIES, installMockBridge } from "../helpers/bridge";
 
 // Ultrawide viewport: 3440px is a common 21:9 monitor width.
@@ -83,16 +84,23 @@ async function openThread(page: import("@playwright/test").Page) {
 test.describe("thread pane on ultrawide monitors", () => {
   test("expands well past the legacy 720px cap", async ({ page }) => {
     await page.setViewportSize(ULTRAWIDE);
+    // Seed a narrow manual width: the automatic Colony split already exceeds
+    // 720px here, so it cannot prove that dragging crosses the legacy cap.
+    await page.addInitScript(() => {
+      sessionStorage.setItem("buzz.desktop.thread-panel-width", "380");
+    });
     await installMockBridge(page);
     await openThread(page);
 
-    const pane = page.getByTestId("message-thread-panel");
+    const pane = page.locator(
+      '.colony-thread-surface[data-thread-mode="split"]',
+    );
     const handle = page.getByTestId("right-auxiliary-pane-resize-handle");
 
     const beforeBox = await pane.boundingBox();
     if (!beforeBox) throw new Error("thread panel not laid out");
-    // The panel opens at its default narrow width, far from the viewport edge.
-    expect(beforeBox.width).toBeLessThan(720);
+    expect(beforeBox.width).toBe(380);
+    await waitForAnimations(page);
     await page.screenshot({
       path: "test-results/threadpane-ultrawide-before.png",
     });
@@ -114,6 +122,7 @@ test.describe("thread pane on ultrawide monitors", () => {
     if (!afterBox) throw new Error("thread panel not laid out after resize");
     // The pane is now far wider than the old 720px hard cap.
     expect(afterBox.width).toBeGreaterThan(1200);
+    await waitForAnimations(page);
     await page.screenshot({
       path: "test-results/threadpane-ultrawide-after.png",
     });
@@ -126,7 +135,9 @@ test.describe("thread pane on ultrawide monitors", () => {
     await installMockBridge(page);
     await openThread(page);
 
-    const pane = page.getByTestId("message-thread-panel");
+    const pane = page.locator(
+      '.colony-thread-surface[data-thread-mode="split"]',
+    );
     const handle = page.getByTestId("right-auxiliary-pane-resize-handle");
     const handleBox = await handle.boundingBox();
     if (!handleBox) throw new Error("resize handle not laid out");
@@ -140,21 +151,38 @@ test.describe("thread pane on ultrawide monitors", () => {
     }
     await page.mouse.up();
 
-    const renderedWidth = await pane.evaluate((element) =>
-      Math.round(element.getBoundingClientRect().width),
-    );
+    const geometry = await pane.evaluate((element) => {
+      const layout = element.closest("[data-colony-channel-layout]");
+      const main = layout?.querySelector('[data-testid="channel-drop-zone"]');
+      if (!layout || !main) throw new Error("Expected both split panes.");
+      const paneRect = element.getBoundingClientRect();
+      const mainRect = main.getBoundingClientRect();
+      return {
+        availableWidth: layout.getBoundingClientRect().width,
+        gap: Number.parseFloat(getComputedStyle(layout).columnGap),
+        mainWidth: mainRect.width,
+        renderedGap: paneRect.left - mainRect.right,
+        renderedWidth: paneRect.width,
+        requestedWidth: Number.parseFloat((element as HTMLElement).style.width),
+      };
+    });
     const storedWidth = await page.evaluate(() =>
       Number(window.sessionStorage.getItem("buzz.desktop.thread-panel-width")),
     );
-    const mainWidth = await page
-      .getByTestId("channel-drop-zone")
-      .evaluate((element) => Math.round(element.getBoundingClientRect().width));
-
+    await waitForAnimations(page);
     await page.screenshot({
       path: "test-results/threadpane-expanded-after-fix.png",
     });
 
-    expect(renderedWidth).toBe(storedWidth);
-    expect(mainWidth).toBeGreaterThanOrEqual(300);
+    // The saved preference is the requested outer width. Paint additionally
+    // reserves the frame gutter, keeping the channel's 300px reading minimum.
+    expect(storedWidth).toBe(geometry.availableWidth - 300);
+    expect(geometry.requestedWidth).toBe(storedWidth);
+    expect(geometry.renderedWidth).toBe(
+      Math.min(storedWidth, geometry.availableWidth - 300 - geometry.gap),
+    );
+    expect(geometry.gap).toBe(12);
+    expect(geometry.renderedGap).toBe(geometry.gap);
+    expect(geometry.mainWidth).toBeGreaterThanOrEqual(300);
   });
 });

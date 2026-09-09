@@ -1,3 +1,5 @@
+import type { FirstJobSuggestion } from "../firstJobSuggestion";
+import type { FirstJobSetupScope } from "../firstJobSetup";
 // desktop/src/features/onboarding/flow/completeFirstRun.ts
 import type { FounderBriefSummary } from "../founderBriefSummary";
 import { founderBriefSummaryFrom } from "../founderBriefSummary";
@@ -27,6 +29,8 @@ import {
  */
 export type CompleteFirstRunDeps = {
   queryClient: unknown;
+  /** Stop subsequent handoff phases after this owner leaves or changes identity. */
+  assertCurrent?: () => void;
   relayUrl: string;
   pubkey: string;
   /** Scout's opening brief; null skips delivery entirely. */
@@ -48,10 +52,13 @@ export type CompleteFirstRunIo = {
     queryClient: unknown,
     args: { focus: boolean; pubkey: string; communityScope: string },
   ) => Promise<{ ok: boolean; reason?: string; focusChannelId?: string }>;
-  updateProfile: (input: {
-    displayName?: string;
-    avatarUrl?: string;
-  }) => Promise<unknown>;
+  updateProfile: (
+    input: { displayName?: string; avatarUrl?: string },
+    context: Pick<
+      CompleteFirstRunDeps,
+      "queryClient" | "relayUrl" | "pubkey" | "assertCurrent"
+    >,
+  ) => Promise<unknown>;
   hasMarker: (args: {
     channelId: string;
     marker: string;
@@ -70,22 +77,50 @@ export type CompleteFirstRunIo = {
   rememberFounderBrief: (summary: FounderBriefSummary) => void;
   takePendingWelcomeChannelForDirectEntry: () => void;
   navigateToChannel: (channelId: string) => void;
+  /** Required only for the new explicit-Start flow, before Welcome can mount. */
+  markExplicitHandoff?: (scope: FirstJobSetupScope) => Promise<void>;
+  /** Durable owner-signed setup root. This never dispatches agent work. */
+  deliverSuggestion?: (
+    payload: FirstJobSuggestion,
+    marker: string,
+  ) => Promise<{ eventId: string }>;
+  /** Focus the actual acknowledged setup root in the existing Welcome thread. */
+  navigateToThread?: (channelId: string, eventId: string) => void;
 };
 
 /**
- * The profile write is best effort: a founder with no kind:0 still has a
- * working workspace, and settings can publish the name later. The gate key is
- * written last so a thrown step leaves onboarding re-runnable.
+ * A supplied name must be published before completion, so a temporary relay
+ * failure cannot discard it and leave the owner named after their key. The
+ * gate key is written last so a thrown step leaves onboarding re-runnable.
  */
 export async function completeFirstRun(
   deps: CompleteFirstRunDeps,
   io: CompleteFirstRunIo,
 ): Promise<CompleteFirstRunResult> {
+  deps.assertCurrent?.();
+  const suggestionMode = deps.draft?.firstTask.mode === "suggestion";
+  if (suggestionMode) {
+    if (
+      !io.markExplicitHandoff ||
+      !io.deliverSuggestion ||
+      !io.navigateToThread
+    ) {
+      throw new Error(
+        "The explicit first-job handoff is unavailable. Update Colony and retry.",
+      );
+    }
+    await io.markExplicitHandoff({
+      ownerPubkey: deps.pubkey,
+      relayUrl: deps.relayUrl,
+    });
+    deps.assertCurrent?.();
+  }
   const result = await io.initializeStarterChannels(deps.queryClient, {
     focus: true,
     pubkey: deps.pubkey,
     communityScope: deps.relayUrl,
   });
+  deps.assertCurrent?.();
   if (!result.ok && !result.focusChannelId) {
     throw new Error(result.reason ?? "Failed to set up starter channels");
   }
@@ -99,14 +134,21 @@ export async function completeFirstRun(
   const avatarUrl = deps.profileAvatarUrl?.trim();
   if (displayName || avatarUrl) {
     try {
-      await io.updateProfile({
-        ...(displayName ? { displayName } : {}),
-        ...(avatarUrl ? { avatarUrl } : {}),
-      });
-    } catch (error) {
-      console.warn("First-run profile write failed; continuing.", error);
+      await io.updateProfile(
+        {
+          ...(displayName ? { displayName } : {}),
+          ...(avatarUrl ? { avatarUrl } : {}),
+        },
+        deps,
+      );
+    } catch {
+      throw new Error(
+        "We could not save your profile. Your setup is still here. Try again.",
+      );
     }
   }
+
+  deps.assertCurrent?.();
 
   // Land the founder in Welcome BEFORE the brief is delivered. Delivery is a
   // network write that can fail; landing is not. On 2026-08-27 a first run hit
@@ -117,6 +159,41 @@ export async function completeFirstRun(
   if (focusChannelId) {
     io.takePendingWelcomeChannelForDirectEntry();
     io.navigateToChannel(focusChannelId);
+  }
+
+  if (
+    suggestionMode &&
+    deps.draft &&
+    io.deliverSuggestion &&
+    io.navigateToThread
+  ) {
+    if (!focusChannelId)
+      throw new Error("The Welcome channel is not ready. Retry setup.");
+    const payload: FirstJobSuggestion = {
+      version: 1,
+      ownerPubkey: deps.pubkey,
+      relayUrl: deps.relayUrl,
+      channelId: focusChannelId,
+      requestId: deps.draft.firstTask.deliveryMarker,
+      businessName: deps.draft.company.name?.trim() || "Your business",
+      business: deps.draft.company.summary.trim(),
+      website: deps.draft.company.hasWebsite
+        ? deps.draft.company.canonicalUrl
+        : "",
+      brief: deps.draft.firstTask.content.trim(),
+    };
+    const sent = await io.deliverSuggestion(
+      payload,
+      onboardingFirstTaskMarker(deps.draft),
+    );
+    deps.assertCurrent?.();
+    if (!/^[a-f0-9]{64}$/.test(sent.eventId))
+      throw new Error(
+        "The suggestion's thread could not be verified. Retry setup.",
+      );
+    io.navigateToThread(focusChannelId, sent.eventId);
+    io.markComplete(deps.pubkey, deps.relayUrl);
+    return { focusChannelId, firstTaskEventId: sent.eventId };
   }
 
   if (deps.draft) {
@@ -132,6 +209,7 @@ export async function completeFirstRun(
       marker,
       markerScope: "channel",
     });
+    deps.assertCurrent?.();
     if (exists) {
       firstTaskEventId = "already-delivered";
     } else {
@@ -144,6 +222,7 @@ export async function completeFirstRun(
     }
   }
 
+  deps.assertCurrent?.();
   io.markComplete(deps.pubkey, deps.relayUrl);
   return { focusChannelId, firstTaskEventId };
 }

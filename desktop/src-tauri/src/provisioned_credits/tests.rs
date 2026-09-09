@@ -56,6 +56,39 @@ fn one_day_lease_refreshes_before_expiry_without_an_immediate_loop() {
 }
 
 #[test]
+fn one_day_lease_with_server_clock_skew_does_not_restart_workers_immediately() {
+    let issued = Utc::now();
+    // These positive offsets all fit the accepted five-second expiry tolerance.
+    // The former exact-TTL branch scheduled a fresh rotation after only the
+    // offset, causing each replacement worker to be replaced again immediately.
+    for skew_ms in [-5_000, -1, 1, 50, 1_000, 5_000] {
+        let lifetime = ChronoDuration::hours(24) + ChronoDuration::milliseconds(skew_ms);
+        let expires = issued + lifetime;
+        let refresh_at = lease_refresh_at(issued, expires);
+        assert_eq!(refresh_at, expires - lifetime / 2);
+        assert!(refresh_at > issued + ChronoDuration::hours(11));
+        assert!(refresh_at < expires);
+    }
+}
+
+#[test]
+fn lease_refresh_caps_lead_without_extending_short_or_expired_leases() {
+    let issued = Utc::now();
+    let short = issued + ChronoDuration::milliseconds(500);
+    assert_eq!(
+        lease_refresh_at(issued, short),
+        issued + ChronoDuration::milliseconds(250)
+    );
+    let expired = issued - ChronoDuration::seconds(1);
+    assert_eq!(lease_refresh_at(issued, expired), expired);
+    let longer = issued + ChronoDuration::hours(72);
+    assert_eq!(
+        lease_refresh_at(issued, longer),
+        longer - ChronoDuration::hours(24)
+    );
+}
+
+#[test]
 fn account_requires_usd_and_matching_status() {
     let account: GatewayAccount = serde_json::from_value(serde_json::json!({
         "balance_nanousd": "-1",

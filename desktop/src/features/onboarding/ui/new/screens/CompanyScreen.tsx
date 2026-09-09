@@ -1,180 +1,219 @@
-// desktop/src/features/onboarding/ui/new/screens/CompanyScreen.tsx
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
+import { ArrowRight } from "lucide-react";
+import { FounderLayout } from "../FounderLayout";
+import type { OnboardingServices } from "../../../contracts";
 import { isWebsite, normaliseWebsite } from "../../../flow/validation";
 
 export type CompanyStage = "live" | "building";
-
 export type CompanyValues = {
   company: string;
-  stage: CompanyStage | null;
-  hasWebsite: boolean | null;
   website: string;
+  description: string;
+  stage?: CompanyStage | null;
+  hasWebsite?: boolean | null;
 };
-
 export function companyReady(values: CompanyValues): boolean {
-  if (values.company.trim().length === 0) return false;
-  if (!values.stage) return false;
-  if (values.hasWebsite === null) return false;
-  return values.hasWebsite === false || isWebsite(values.website);
+  return (
+    !!values.company.trim() &&
+    (!values.website.trim() || isWebsite(values.website)) &&
+    !!values.description.trim()
+  );
 }
-
-/**
- * What a disabled primary action says is missing.
- *
- * The rule the redesign exists to honour: never a dead button with no reason.
- * The three questions are asked in the order they are answered, so the note
- * names the first one still open rather than the last one touched.
- */
 export function companyBlockedReason(values: CompanyValues): string | null {
-  if (companyReady(values)) return null;
-  if (values.company.trim().length === 0)
-    return "Enter your company name to continue.";
-  if (!values.stage || values.hasWebsite === null) {
-    return "Answer both questions to continue.";
-  }
-  return "Check the web address above to continue.";
+  if (!values.company.trim()) return "Enter your business name.";
+  if (values.website.trim() && !isWebsite(values.website))
+    return "Check the website address, or leave it blank.";
+  if (!values.description.trim())
+    return "Add a short description, or read your website.";
+  return null;
 }
 
-const STAGE_OPTIONS: ReadonlyArray<{ id: CompanyStage; label: string }> = [
-  { id: "live", label: "Yes, we are open and making money" },
-  { id: "building", label: "Not yet, we are still building" },
-];
-
-type Props = {
-  values: CompanyValues;
-  onChange: (patch: Partial<CompanyValues>) => void;
-  /** Hands up the normalised web address, or null when there is no site. */
-  onSubmit: (normalisedWebsite: string | null) => void;
-  onBack: () => void;
-  /** The workspace is being claimed right now. */
-  isSubmitting?: boolean;
-  /** Why the last attempt did not work, in the user's words. */
-  error?: string | null;
-};
-
-/**
- * Company name, stage and website, on one screen.
- *
- * These were two screens with the probe and the brain picker between them,
- * which asked a founder to describe the same company twice in one sitting
- * with an unrelated question in the middle. They are three plain questions
- * about one thing, so they are asked together.
- */
 export function CompanyScreen({
   values,
   onChange,
   onSubmit,
   onBack,
+  onSignIn,
+  businessOnly = false,
   isSubmitting = false,
-  error = null,
-}: Props) {
-  const [siteTouched, setSiteTouched] = useState(false);
-  const siteOk = isWebsite(values.website);
-  const ready = companyReady(values) && !isSubmitting;
-  const blocked = companyBlockedReason(values);
-
-  const submit = () => {
-    if (!ready) return;
-    onSubmit(values.hasWebsite ? normaliseWebsite(values.website) : null);
-  };
-
+  error,
+  scrape,
+}: {
+  values: CompanyValues;
+  onChange: (patch: Partial<CompanyValues>) => void;
+  onSubmit: (normalisedWebsite: string | null) => void;
+  onBack?: () => void;
+  onSignIn?: () => void;
+  businessOnly?: boolean;
+  isSubmitting?: boolean;
+  error?: string | null;
+  scrape: OnboardingServices["scrape"];
+}) {
+  const [reading, setReading] = useState(false);
+  const [scanNote, setScanNote] = useState<string | null>(null);
+  const editRevision = useRef(0);
+  const requestId = useRef(0);
+  const [websiteRead, setWebsiteRead] = useState<string | null>(null);
+  async function readWebsite() {
+    if (!isWebsite(values.website) || reading || isSubmitting) return;
+    const id = ++requestId.current;
+    const revision = editRevision.current;
+    setReading(true);
+    setScanNote(null);
+    try {
+      const result = await scrape.describeBusiness(
+        normaliseWebsite(values.website),
+      );
+      if (id !== requestId.current) return;
+      if (result.ok) {
+        if (revision === editRevision.current) {
+          onChange({ description: result.description });
+          setWebsiteRead(normaliseWebsite(values.website));
+          setScanNote(
+            "Here is what we found. Edit the summary so it sounds like your business.",
+          );
+        } else
+          setScanNote(
+            "Your description changed while we read the site. We kept your wording.",
+          );
+      } else
+        setScanNote(
+          "We could not read that website. Describe your business below to continue.",
+        );
+    } catch {
+      if (id === requestId.current)
+        setScanNote(
+          "We could not read that website. Describe your business below to continue.",
+        );
+    } finally {
+      if (id === requestId.current) setReading(false);
+    }
+  }
   return (
-    <div className="onb-screen">
-      <div className="onb-col-head">
-        <h1 className="onb-headline">
-          Now, your <em>company</em>.
-        </h1>
-        <p className="onb-sub">
-          This becomes your workspace. You can change the name later.
-        </p>
-      </div>
-      <div className="onb-panel">
-        <div className="onb-stack">
-          <label className="onb-field" htmlFor="onb-company-name">
-            <span className="onb-label">Company name</span>
-            <Input
-              id="onb-company-name"
-              value={values.company}
-              placeholder="Rosebank Auto Care"
-              onChange={(e) => onChange({ company: e.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && ready) submit();
-              }}
-            />
-          </label>
-          <fieldset
-            className="onb-options"
-            aria-label="Is your company up and running?"
-          >
-            <p className="onb-label">Is your company up and running?</p>
-            {STAGE_OPTIONS.map((option) => (
-              <button
-                type="button"
-                key={option.id}
-                className="onb-option"
-                data-selected={values.stage === option.id}
-                onClick={() => onChange({ stage: option.id })}
-              >
-                <span className="onb-option__title">{option.label}</span>
-              </button>
-            ))}
-          </fieldset>
-          <fieldset className="onb-options" aria-label="Do you have a website?">
-            <p className="onb-label">Do you have a website?</p>
-            <div className="onb-row">
-              <button
-                type="button"
-                className="onb-option"
-                data-selected={values.hasWebsite === true}
-                onClick={() => onChange({ hasWebsite: true })}
-              >
-                <span className="onb-option__title">Yes</span>
-              </button>
-              <button
-                type="button"
-                className="onb-option"
-                data-selected={values.hasWebsite === false}
-                onClick={() => onChange({ hasWebsite: false, website: "" })}
-              >
-                <span className="onb-option__title">No</span>
-              </button>
-            </div>
-            {values.hasWebsite ? (
-              <div className="onb-field">
-                <Input
-                  value={values.website}
-                  placeholder="rosebankautocare.co.za"
-                  onChange={(event) =>
-                    onChange({ website: event.target.value })
-                  }
-                  onBlur={() => setSiteTouched(true)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && ready) submit();
-                  }}
-                />
-                {siteTouched && values.website && !siteOk ? (
-                  <p className="onb-note onb-note-warn">
-                    That does not look like a web address. It should look like
-                    rosebankautocare.co.za
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-          </fieldset>
+    <FounderLayout
+      step="company"
+      onSignIn={onSignIn}
+      navigationDisabled={isSubmitting}
+      business={values.company}
+      description={values.description}
+      businessOnly={businessOnly}
+    >
+      <form
+        className="onb-simple-card"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (companyReady(values) && !isSubmitting)
+            onSubmit(
+              values.website.trim() ? normaliseWebsite(values.website) : null,
+            );
+        }}
+      >
+        <div className="onb-simple-form-heading">
+          <h2>Your business</h2>
+          <p>Only the essentials. You can add more as you go.</p>
         </div>
-        {error ? <p className="onb-note onb-note-warn">{error}</p> : null}
-        {blocked && !error ? <p className="onb-note">{blocked}</p> : null}
-      </div>
-      <div className="onb-actions">
-        <Button size="lg" disabled={!ready} onClick={submit}>
-          {isSubmitting ? "Creating your workspace" : "Create workspace"}
+        <div className="onb-simple-field">
+          <label htmlFor="onb-company-name">Business name</label>
+          <Input
+            id="onb-company-name"
+            required
+            value={values.company}
+            placeholder="Your business name"
+            disabled={isSubmitting}
+            onChange={(e) => onChange({ company: e.target.value })}
+          />
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-company-website">
+            Website <span className="onb-simple-note">optional</span>
+          </label>
+          <Input
+            id="onb-company-website"
+            value={values.website}
+            placeholder="yourbusiness.com"
+            disabled={isSubmitting}
+            onChange={(e) => {
+              requestId.current += 1;
+              editRevision.current += 1;
+              setReading(false);
+              setWebsiteRead(null);
+              setScanNote(null);
+              onChange({ website: e.target.value });
+            }}
+          />
+          {values.website.trim() && (
+            <button
+              className="onb-simple-link onb-read-website"
+              type="button"
+              disabled={!isWebsite(values.website) || reading || isSubmitting}
+              onClick={() => void readWebsite()}
+            >
+              {reading
+                ? "Reading your website…"
+                : websiteRead
+                  ? "Read website again"
+                  : "Read website"}
+            </button>
+          )}
+        </div>
+        <div className="onb-simple-field">
+          <label htmlFor="onb-company-description">
+            {values.website.trim()
+              ? "Business summary"
+              : "What does your business do?"}
+          </label>
+          <textarea
+            id="onb-company-description"
+            rows={3}
+            required
+            value={values.description}
+            placeholder="We help…"
+            disabled={isSubmitting}
+            onChange={(e) => {
+              editRevision.current += 1;
+              onChange({ description: e.target.value });
+            }}
+          />
+          <p className="onb-simple-note">
+            {values.website.trim()
+              ? "Review this summary before Scout uses it. You can edit every detail."
+              : "One sentence gives Scout a useful starting point."}
+          </p>
+        </div>
+        {scanNote && (
+          <p className="onb-simple-note" role="status">
+            {scanNote}
+          </p>
+        )}
+        {error && (
+          <p className="onb-simple-error" role="alert">
+            {error}
+          </p>
+        )}
+        <Button
+          className="onb-simple-button onb-simple-primary"
+          type="submit"
+          disabled={!companyReady(values) || isSubmitting}
+        >
+          {isSubmitting ? "Preparing your business…" : "Continue"}
+          {!isSubmitting && <ArrowRight aria-hidden="true" />}
         </Button>
-        <button type="button" className="onb-quiet-action" onClick={onBack}>
-          Back
-        </button>
-      </div>
-    </div>
+        <p className="onb-simple-note">
+          Your teammate will use this context for the first job.
+        </p>
+        {onBack && (
+          <button
+            className="onb-simple-link"
+            type="button"
+            onClick={onBack}
+            disabled={isSubmitting}
+          >
+            Back to Colony
+          </button>
+        )}
+      </form>
+    </FounderLayout>
   );
 }

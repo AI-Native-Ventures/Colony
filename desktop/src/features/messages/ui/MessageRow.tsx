@@ -12,14 +12,13 @@ import {
   assertCanSendMessageToChannel,
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
-import type { TimelineMessage } from "@/features/messages/types";
-import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { AgentRoleSubtitle } from "@/features/agents/ui/AgentRoleSubtitle";
+import { useIsKnownAgentPubkey } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { isBlockMessage } from "@/features/blocks/blockTags";
 import { BlockMessageBoundary } from "@/features/blocks/ui/BlockMessageBoundary";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
-import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { useRemindLater } from "@/features/reminders/ui/RemindMeLaterProvider";
 import {
@@ -37,7 +36,6 @@ import {
 } from "@/shared/constants/kinds";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
@@ -45,8 +43,13 @@ import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
 import { useMessageMentionNames } from "@/features/messages/lib/useMessageMentionNames";
-import { Markdown } from "@/shared/ui/markdown";
-import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
+import { MessageProse } from "./MessageProse";
+import type {
+  MessageRowProps,
+  ThreadDepthGuideAction,
+} from "./MessageRowProps";
+import type { TimelineMessage } from "@/features/messages/types";
+import { parseFirstJobSuggestion } from "@/features/onboarding/firstJobSuggestion";
 import { useOpenVideoReviewAt } from "@/shared/ui/VideoReviewNavigation";
 import { parseVideoReviewTimecode } from "@/shared/ui/videoReviewTimecode";
 import { VideoReviewTimecodeButton } from "@/shared/ui/VideoReviewTimecodeButton";
@@ -61,15 +64,14 @@ import { SentFromThreadLine } from "./SentFromThreadLine";
 import { WaveMessageAttachment } from "./WaveMessageAttachment";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
+const FirstJobSuggestion = React.lazy(
+  () => import("@/features/onboarding/ui/FirstJobSuggestion"),
+);
+
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
 
-export type ThreadDepthGuideAction = {
-  active?: boolean;
-  depth: number;
-  label: string;
-  message: TimelineMessage;
-};
+export type { ThreadDepthGuideAction } from "./MessageRowProps";
 
 export const MessageRow = React.memo(
   function MessageRow({
@@ -114,62 +116,11 @@ export const MessageRow = React.memo(
     showDepthGuides = true,
     videoReviewCommentRootId,
     videoReviewContext,
-  }: {
-    channelId?: string | null;
-    currentPubkey?: string;
-    collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
-    connectDescendants?: boolean;
-    depthGuideDepths?: ReadonlyArray<number>;
-    highlighted?: boolean;
-    highlightDescendantRail?: boolean;
-    highlightReplyConnector?: boolean;
-    highlightThreadLineDepths?: ReadonlyArray<number>;
-    hoverBackground?: boolean;
-    huddleMemberPubkeys?: readonly string[];
-    huddleMemberPubkeysPending?: boolean;
-    hideAgentAccessBadge?: boolean;
-    actionBarPlacement?: "floating" | "inside";
-    collapseDescendantsLabel?: string;
-    isFollowingThread?: boolean;
-    isContinuation?: boolean;
-    isOpenThreadRoot?: boolean;
-    isUnread?: boolean;
-    layoutVariant?: "default" | "thread-reply";
-    message: TimelineMessage;
-    onCollapseDepthGuide?: (message: TimelineMessage) => void;
-    onCollapseDepthGuideHoverChange?: (
-      message: TimelineMessage,
-      hovered: boolean,
-    ) => void;
-    onCollapseDescendants?: (message: TimelineMessage) => void;
-    onCollapseDescendantsHoverChange?: (
-      message: TimelineMessage,
-      hovered: boolean,
-    ) => void;
-    onDelete?: (message: TimelineMessage) => void;
-    onEdit?: (message: TimelineMessage) => void;
-    onFollowThread?: (message: TimelineMessage) => void;
-    onMarkUnread?: (message: TimelineMessage) => void;
-    onMarkRead?: (message: TimelineMessage) => void;
-    onToggleReaction?: (
-      message: TimelineMessage,
-      emoji: string,
-      remove: boolean,
-    ) => Promise<void>;
-    onReply?: (message: TimelineMessage) => void;
-    onSendToChannel?: (message: TimelineMessage) => Promise<void>;
-    onUnfollowThread?: (message: TimelineMessage) => void;
-    onEntranceComplete?: (messageId: string) => void;
-    playEntrance?: boolean;
-    profiles?: UserProfileLookup;
-    searchQuery?: string;
-    showDepthGuides?: boolean;
-    videoReviewCommentRootId?: string;
-    videoReviewContext?: VideoReviewContext;
-  }) {
+  }: MessageRowProps) {
     // Keep the transient send state with its timestamp rather than collapsing
     // it into a grouped message row with no header.
-    const isDisplayedAsContinuation = isContinuation && !message.pending;
+    const isDisplayedAsContinuation =
+      isContinuation && !message.pending && !isOpenThreadRoot;
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
@@ -247,21 +198,7 @@ export const MessageRow = React.memo(
       message.tags,
       profiles,
     );
-    // "Is this pubkey an agent" = the community-scoped baseline every surface
-    // shares (managed ∪ relay) plus the pubkey's own profile `isAgent` flag from this surface's lookup. Both are per-pubkey
-    // O(1) checks — no per-row rescan of `profiles` (that duplicated parent
-    // work in every mounted row and re-ran on each profile-lookup change).
-    const knownAgentPubkeys = useKnownAgentPubkeys();
-    const isKnownAgentPubkey = React.useCallback(
-      (pubkey: string) => {
-        const normalized = normalizePubkey(pubkey);
-        return (
-          knownAgentPubkeys.has(normalized) ||
-          profiles?.[normalized]?.isAgent === true
-        );
-      },
-      [knownAgentPubkeys, profiles],
-    );
+    const isKnownAgentPubkey = useIsKnownAgentPubkey(profiles);
     const profilePopoverRole =
       message.role === "bot" ||
       (message.pubkey && isKnownAgentPubkey(message.pubkey))
@@ -421,7 +358,8 @@ export const MessageRow = React.memo(
             ? parseVideoReviewTimecode(message.body)
             : null;
           const markdown = (
-            <Markdown
+            <MessageProse
+              scopeKey={`${channelId}:${message.id}:${layoutVariant}`}
               channelNames={channelNames}
               className={cn(
                 "max-w-full text-sm",
@@ -451,6 +389,19 @@ export const MessageRow = React.memo(
               videoReviewContext={videoReviewContext}
             />
           );
+          if (parseFirstJobSuggestion(message.tags)) {
+            return (
+              <React.Suspense fallback={markdown}>
+                <FirstJobSuggestion
+                  message={message}
+                  channelId={channelId}
+                  currentPubkey={currentPubkey}
+                >
+                  {markdown}
+                </FirstJobSuggestion>
+              </React.Suspense>
+            );
+          }
           if (!reviewRootEventId || !reviewTimecode || !openVideoReviewAt) {
             return markdown;
           }
@@ -486,6 +437,9 @@ export const MessageRow = React.memo(
           avatarUrl={message.avatarUrl ?? null}
           className="shrink-0"
           displayName={message.author}
+          identitySeed={
+            profilePopoverRole === "bot" ? message.pubkey : undefined
+          }
           testId="message-avatar"
         />
         {showRespondToIndicator &&
@@ -649,7 +603,7 @@ export const MessageRow = React.memo(
       ) : null;
 
     const headerNode = isDisplayedAsContinuation ? null : (
-      <MessageHeaderRow>
+      <MessageHeaderRow className="colony-message-header">
         {message.pubkey ? (
           <UserProfilePopover
             pubkey={message.pubkey}
@@ -668,12 +622,9 @@ export const MessageRow = React.memo(
         )}
         {agentOwnerNode}
         {inlineMetadataNode}
-        {message.personaDisplayName &&
-        message.personaDisplayName !== message.author ? (
-          <span className="text-xs text-muted-foreground">
-            {message.personaDisplayName}
-          </span>
-        ) : null}
+        {profilePopoverRole === "bot" && (
+          <AgentRoleSubtitle pubkey={message.pubkey} />
+        )}
       </MessageHeaderRow>
     );
     const bodyContainerClass = isDisplayedAsContinuation
@@ -888,7 +839,7 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message relative z-10 rounded-2xl transition-colors",
+            "colony-message-row group/message relative z-10 rounded-2xl transition-colors",
             playEntrance && "motion-enter-conversation",
             "py-1",
             hoverBackground
@@ -907,13 +858,15 @@ export const MessageRow = React.memo(
               : "",
           )}
           data-message-id={message.id}
+          data-continuation={isDisplayedAsContinuation || undefined}
+          data-open-thread-root={isOpenThreadRoot || undefined}
           data-testid="message-row"
           onAnimationEnd={handleEntranceAnimationEnd}
         >
           {isThreadReplyLayout ? (
             <>
               {avatarGutterNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="colony-message-content flex min-w-0 flex-1 flex-col gap-0.5">
                 {headerNode}
                 <div className={bodyContainerClass}>{messageBodyNode}</div>
               </div>
@@ -921,7 +874,7 @@ export const MessageRow = React.memo(
           ) : (
             <>
               {avatarGutterNode}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="colony-message-content flex min-w-0 flex-1 flex-col gap-0.5">
                 {headerNode}
                 <div className={bodyContainerClass}>{messageBodyNode}</div>
               </div>

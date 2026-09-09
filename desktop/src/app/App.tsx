@@ -26,9 +26,12 @@ import { useMachineOnboardingState } from "@/features/onboarding/machineOnboardi
 import {
   clearFounderRunRequested,
   isFounderRunRequested,
+  isFreshFounderIdentity,
   markFounderRunRequested,
   shouldRunCanvasFirstRun,
 } from "@/features/onboarding/freshFounder";
+import { firstRunAnswersKey } from "@/features/onboarding/flow/persistence";
+import { getStorageItem } from "@/shared/lib/safeStorage";
 import { CanvasFirstRunHost } from "@/features/onboarding/ui/new/CanvasFirstRunHost";
 import { ExistingIdentityProfileFlow } from "@/features/onboarding/ui/new/ExistingIdentityProfileFlow";
 import {
@@ -582,7 +585,10 @@ function CommunityApp({
     !transaction &&
     canvasRunState !== "finished" &&
     (canvasRunState === "active" ||
-      shouldRunCanvasFirstRun({ pubkey: currentPubkey, hasOwnCommunity }));
+      shouldRunCanvasFirstRun({ pubkey: currentPubkey, hasOwnCommunity }) ||
+      (currentPubkey !== null &&
+        isFreshFounderIdentity(currentPubkey) &&
+        getStorageItem(firstRunAnswersKey(currentPubkey)) !== null));
   useEffect(() => {
     if (canvasEligible && canvasRunState === "unstarted") {
       setCanvasRunState("active");
@@ -593,7 +599,11 @@ function CommunityApp({
   if (canvasEligible && currentPubkey) {
     appContent = (
       <CanvasFirstRunHost
-        activeRelayUrl={activeCommunity?.relayUrl ?? null}
+        activeRelayUrl={
+          activeCommunity?.pubkey === currentPubkey
+            ? activeCommunity.relayUrl
+            : null
+        }
         communityApplied={communityApplied}
         currentPubkey={currentPubkey}
         existingIdentity={isRequestedFounderRun}

@@ -2,19 +2,12 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
+import {
+  fillFounderBusiness,
+  openFounderBusiness,
+} from "../helpers/simpleFounder";
 
-/**
- * The journey a founder who already has an account walks when they create
- * another community, and what the credit balance does around it.
- *
- * This file used to drive `OnboardingV2Flow`, three pastel screens that only
- * this journey could reach. It is the canvas walk now, so the two tests that
- * asserted V2's own runtime-check screen ("codex is connected", its Install
- * button) are gone with it: that screen never existed on the canvas, the
- * decision it displayed runs headlessly in `ensureAutomaticAgentConfig`, and
- * the decision itself is covered by automaticAgentSetup.test.mjs and
- * automaticRuntime.test.mjs.
- */
+/** Additional-business completion and live balance remain independent. */
 
 const TRANSACTION_STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 const RELAY_URL = "wss://default.example.com";
@@ -64,28 +57,18 @@ async function seedCreatedCommunity(page: Page, transactionId: string) {
   );
 }
 
-/** Company, then the building screen, then the draft it ends on. */
-async function walkToBrain(page: Page) {
-  await expect(
-    page.getByRole("heading", { name: "Now, your company." }),
-  ).toBeVisible();
-  await page.getByLabel("Company name").fill("Second Company");
-  await page
-    .getByRole("button", { name: "Not yet, we are still building" })
-    .click();
-  await page.getByRole("button", { name: "No", exact: true }).click();
-  await page.getByRole("button", { name: "Create workspace" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Tell us what you do." }),
-  ).toBeVisible({ timeout: 20_000 });
-  await page
-    .getByPlaceholder("We repair and service cars in Johannesburg.")
-    .fill("A second company with its own operating context.");
-  await page.getByRole("button", { name: "Looks right" }).click();
+/** A signed-in founder supplies business context without account or billing forms. */
+async function fillSecondBusiness(page: Page) {
+  await fillFounderBusiness(
+    page,
+    "Second Company",
+    "A second company with its own operating context.",
+  );
+  await expect(page.getByTestId("onboarding-account")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-recovery")).toHaveCount(0);
 }
 
-test("a created community walks the canvas, with a way out on every screen", async ({
+test("a created community confirms business and its saved agent connection with a way out", async ({
   page,
 }) => {
   await seedCreatedCommunity(page, "additional-community-canvas");
@@ -96,47 +79,26 @@ test("a created community walks the canvas, with a way out on every screen", asy
         credential_mode: "byok",
         env_vars: {},
         model: null,
-        preferred_runtime: "codex",
+        preferred_runtime: "claude",
         provider: null,
       },
     },
     { relayWsUrl: RELAY_URL, skipOnboardingSeed: true },
   );
-
   await page.goto("/");
 
-  // The canvas, not the pastel flow: the same first screen every founder
-  // sees, minus the two that make an account. The counter proves those two
-  // are not being counted against this walk.
-  await expect(
-    page.getByRole("heading", { name: "Now, your company." }),
-  ).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId("onboarding-step-counter")).toHaveText(
-    "01 / 04",
-  );
-
-  // The way out is the requirement this journey exists to fix: it was reachable
-  // only after an error, and the transaction survived a relaunch, so a founder
-  // who did not want to finish had nowhere to go.
-  await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
-
-  await walkToBrain(page);
-
-  await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await expect(
-    page.getByRole("heading", { name: "Put something in the tin." }),
-  ).toBeVisible();
-  await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
-  await page.getByTestId("onboarding-credits-later").click();
-
-  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
+  await expect(page.getByTestId("onboarding-business")).toBeVisible({
     timeout: 15_000,
   });
+  const steps = page.getByTestId("onboarding-step-counter");
+  await expect(steps.locator('[aria-current="step"]')).toHaveText(
+    "1 · Business",
+  );
+  await expect(steps).toContainText("2 · Power");
+  await expect(page.getByTestId("community-onboarding-exit")).toBeVisible();
+  await fillSecondBusiness(page);
+  await openFounderBusiness(page);
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
 });
 
 test("the way out drops the founder into the community that was just created", async ({
@@ -151,7 +113,7 @@ test("the way out drops the founder into the community that was just created", a
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Now, your company." }),
+    page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible({ timeout: 15_000 });
   await page.getByTestId("community-onboarding-exit").click();
 
@@ -184,7 +146,7 @@ test("a zero balance never stands between a second company and its workspace", a
         env_vars: {},
         model: "deepseek-v4-flash",
         preferred_runtime: "buzz-agent",
-        provider: "deepseek",
+        provider: "openai-compat",
       },
     },
     { relayWsUrl: RELAY_URL, skipOnboardingSeed: true },
@@ -192,22 +154,11 @@ test("a zero balance never stands between a second company and its workspace", a
 
   await page.goto("/");
 
-  await walkToBrain(page);
-  await expect(
-    page.getByRole("heading", { name: "Pick who does the thinking." }),
-  ).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  // Nothing on the credits screen is a wall: an empty account still reaches
-  // the workspace, and the balance says so beside the profile afterwards.
-  await expect(
-    page.getByRole("heading", { name: "Put something in the tin." }),
-  ).toBeVisible();
-  await page.getByTestId("onboarding-credits-later").click();
-
-  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
-    timeout: 15_000,
-  });
+  await fillSecondBusiness(page);
+  await openFounderBusiness(page);
+  // Zero credits do not insert a payment step between context and Welcome.
+  await expect(page.getByTestId("onboarding-credits-later")).toHaveCount(0);
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
   await expect(page.getByTestId("sidebar-credits-balance")).toContainText(
     "Credits $0.00",
   );
@@ -223,7 +174,7 @@ test("a Colony Credits user sees the live balance beside the profile", async ({
       env_vars: {},
       model: "deepseek-v4-flash",
       preferred_runtime: "buzz-agent",
-      provider: "deepseek",
+      provider: "openai-compat",
     },
   });
 

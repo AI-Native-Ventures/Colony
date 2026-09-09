@@ -130,9 +130,14 @@ pub(in crate::managed_agents) fn build_augmented_path(
     if let Some(nvm_bin) = nvm_bin {
         managed.push(nvm_bin);
     }
-    if let Some(parent) = exe_parent {
-        managed.push(parent);
+    if let Some(parent) = exe_parent.as_ref() {
+        managed.push(parent.clone());
     }
+    super::electron_isolation::prioritize_packaged_helpers(
+        &mut managed,
+        exe_parent.as_deref(),
+        crate::electron_host::packaged(),
+    );
 
     // Split the login-shell PATH into individual entries.
     let had_shell_path = shell_path.is_some();

@@ -43,6 +43,7 @@ export function CommunityThemeController() {
     theme: theme.selectedThemeName as CommunityThemePreference["theme"],
     accent: theme.accentColor,
     followSystem: theme.followSystem,
+    gradientPattern: theme.gradientPattern,
   });
 
   const currentPreferenceRef = useRef<CommunityThemePreference>({
@@ -50,12 +51,14 @@ export function CommunityThemeController() {
     theme: theme.selectedThemeName as CommunityThemePreference["theme"],
     accent: theme.accentColor,
     followSystem: theme.followSystem,
+    gradientPattern: theme.gradientPattern,
   });
   currentPreferenceRef.current = {
     version: 1,
     theme: theme.selectedThemeName as CommunityThemePreference["theme"],
     accent: theme.accentColor,
     followSystem: theme.followSystem,
+    gradientPattern: theme.gradientPattern,
   };
 
   const applyPreference = useCallback(
@@ -193,6 +196,7 @@ export function CommunityThemeController() {
       theme: theme.selectedThemeName as CommunityThemePreference["theme"],
       accent: theme.accentColor,
       followSystem: theme.followSystem,
+      gradientPattern: theme.gradientPattern,
     };
     const persistenceAction = communityThemePersistenceAction(
       expectedAppliedRef.current,
@@ -215,6 +219,7 @@ export function CommunityThemeController() {
     theme.selectedThemeName,
     theme.accentColor,
     theme.followSystem,
+    theme.gradientPattern,
   ]);
 
   return null;

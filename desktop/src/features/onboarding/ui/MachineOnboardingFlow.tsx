@@ -8,7 +8,6 @@ import {
   persistCurrentIdentity,
 } from "@/shared/api/tauriIdentity";
 import type { IdentityStorage } from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -16,8 +15,20 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
-import { markFreshIdentity } from "../freshFounder";
+import {
+  markFreshIdentity,
+  clearFreshIdentity,
+  clearFounderRunRequested,
+} from "../freshFounder";
 import { resolveMachineAuthService } from "../lib/wiredAuthService";
+import { AccountSetup } from "./new/AccountSetup";
+import { founderWithName } from "../accountNameDraft";
+import { answerStorage } from "./new/NewOnboardingFlow";
+import {
+  firstRunAnswersKey,
+  loadAnswers,
+  saveAnswers,
+} from "../flow/persistence";
 import { AccountSignInStep } from "./AccountSignInStep";
 import { BackupStep } from "./BackupStep";
 import { DownloadKeyStep } from "./DownloadKeyStep";
@@ -25,7 +36,6 @@ import {
   resetEncryptedBackupSession,
   useEncryptedBackupSession,
 } from "./EncryptedBackupCreator";
-import { IdentityKeyHelpDialog } from "./IdentityKeyHelpDialog";
 import { IdentityRecoveryPairing } from "./IdentityRecoveryPairing";
 import { MachineCanvas } from "./new/MachineCanvas";
 import type { MachineStep } from "./new/machineSteps";
@@ -203,6 +213,10 @@ export function MachineOnboardingFlow({
    */
   const finishAccountSignIn = React.useCallback(async () => {
     const identity = await getIdentity();
+    // Explicit account restoration returns to existing-business selection;
+    // a former fresh-run marker must not trap the owner at a lost checkpoint.
+    clearFreshIdentity(identity.pubkey);
+    clearFounderRunRequested(identity.pubkey);
     continueWithIdentity(identity.pubkey);
     queryClient.setQueryData(["identity"], identity);
     complete(identity.pubkey);
@@ -269,6 +283,7 @@ export function MachineOnboardingFlow({
 
   return (
     <MachineCanvas
+      className={page === "identity" ? "onb-founder-canvas" : undefined}
       // The security subview is its own dark ceremony; it keeps the canvas
       // but not the step marker, because it is a detour rather than a step.
       showStep={page !== "identity" && !isSecuritySubview}
@@ -290,42 +305,36 @@ export function MachineOnboardingFlow({
               direction={transitionDirection}
               transitionKey={`machine-identity-${transitionDirection}`}
             >
-              <div className="onb-col-head">
-                <img
-                  alt="Colony"
-                  className="onb-wordmark"
-                  src="/landing/colony-wordmark.svg"
-                />
-                <p className="onb-sub">
-                  Your people, your agents, your projects, all in one place.
+              {error && (
+                <p className="onb-simple-error" role="alert">
+                  {error}
                 </p>
-              </div>
-              {error ? <p className="onb-note-warn">{error}</p> : null}
-              <div className="onb-actions">
-                <Button
-                  disabled={isPending}
-                  onClick={() => void loadFreshIdentity()}
-                  size="lg"
-                  type="button"
-                >
-                  {isPending
-                    ? "Starting Colony…"
-                    : selectedPubkey
-                      ? "Continue"
-                      : "Start with Colony"}
-                </Button>
-                <button
-                  className="onb-quiet-action"
-                  disabled={isPending}
-                  onClick={openAccountSignin}
-                  type="button"
-                >
-                  {selectedPubkey
-                    ? "Use a different account"
-                    : "Sign in to an existing account"}
-                </button>
-              </div>
-              <IdentityKeyHelpDialog />
+              )}
+              <AccountSetup
+                auth={auth}
+                onSignIn={openAccountSignin}
+                onUsePrivateKey={() => setPage("key-import")}
+                onCreated={async (result, email, fullName) => {
+                  const identity = await getIdentity();
+                  if (identity.pubkey !== result.pubkey) {
+                    throw new Error("The active account changed. Retry setup.");
+                  }
+                  const key = firstRunAnswersKey(identity.pubkey);
+                  const previous = loadAnswers(answerStorage, key);
+                  saveAnswers(
+                    answerStorage,
+                    {
+                      ...previous,
+                      account: { email },
+                      founder: founderWithName(previous.founder, fullName),
+                      signupAttemptId: result.attemptId,
+                      identityPubkey: identity.pubkey,
+                    },
+                    key,
+                  );
+                  await loadFreshIdentity();
+                }}
+              />
             </OnboardingSlideTransition>
           ) : page === "account-signin" ? (
             <OnboardingSlideTransition

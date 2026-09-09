@@ -64,6 +64,7 @@ export function AppTopChrome({
   hasCommunityRail = false,
 }: AppTopChromeProps) {
   const topChromeRef = React.useRef<HTMLDivElement>(null);
+  const sidebar = useOptionalSidebar();
   const isFullscreen = useIsFullscreen();
   // On macOS the traffic-light buttons overlay the chrome (see
   // `trafficLightPosition` in `tauri.conf.json`), so the nav row clears their
@@ -104,6 +105,8 @@ export function AppTopChrome({
         navRowPaddingClass,
       )}
       data-tauri-drag-region
+      data-sidebar-open={sidebar?.open && !sidebar.isMobile ? "true" : "false"}
+      data-native-window-controls={macChrome ? "true" : "false"}
       data-testid="app-top-chrome"
     >
       <div className={cn("flex items-center gap-0.5", navRowAlignmentClass)}>

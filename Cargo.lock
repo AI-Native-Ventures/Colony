@@ -1208,6 +1208,7 @@ dependencies = [
  "axum",
  "buzz-core",
  "buzz-meter-core",
+ "buzz-ws-client",
  "bytes",
  "chrono",
  "dashmap",
@@ -1340,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "buzz-relay"
-version = "0.11.7"
+version = "0.11.8"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1542,11 +1543,17 @@ dependencies = [
 name = "buzz-ws-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "nostr",
+ "reqwest 0.13.4",
+ "rustls",
+ "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite 0.29.0",
  "tracing",
  "url",

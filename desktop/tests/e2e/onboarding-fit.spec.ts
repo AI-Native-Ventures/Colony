@@ -17,8 +17,8 @@ import { seedActiveIdentity, seedFreshFounder } from "../helpers/onboarding";
  *
  * 1. at 1280x720 the primary button's bottom clears the viewport bottom by at
  *    least 24px, and nothing needs scrolling;
- * 2. at 800x500 the screen stacks to one column, the headline keeps at least
- *    60% of the viewport width, and the panel sits below it;
+ * 2. at 800x500 the story and form keep readable widths side by side
+ *    without horizontal overflow;
  * 3. when the content is taller than the window the stage scrolls, a bottom
  *    fade says so, and the primary button is reachable.
  */
@@ -38,9 +38,8 @@ const BOTTOM_CLEARANCE_PX = 24;
  * screens before it by hand would measure the same layout while spending a
  * minute per viewport on screens this spec does not assert.
  *
- * The company screen is the tallest of the flow now that it carries a name
- * field and two question groups, which is what makes it the one worth
- * measuring beside the account screen.
+ * The business form includes its editable description, so it is measured
+ * beside account entry rather than splitting those fields across screens.
  */
 const RESUMED_ONTO_COMPANY = JSON.stringify({
   account: { email: "aisha@rosebankauto.co.za" },
@@ -81,24 +80,12 @@ async function seedFreshFirstRun(
   });
 }
 
-/**
- * Machine onboarding stands in front of the flow on a machine with no
- * community: its completion is vouched by a matching community pubkey, and
- * these runs deliberately have none. One click is the whole step.
- */
-async function passMachineLanding(page: Page) {
-  await expect(page.getByTestId("machine-onboarding-gate")).toBeVisible();
-  await page.getByRole("button", { name: "Start with Colony" }).click();
-}
-
 /** Geometry of the one screen on the canvas, read in one round trip. */
 async function readLayout(page: Page) {
   return page.evaluate(() => {
     const stage = document.querySelector<HTMLElement>(".onb-stage");
-    const headline = document.querySelector<HTMLElement>(".onb-headline");
-    const panel = document.querySelector<HTMLElement>(
-      ".onb-panel, .onb-options",
-    );
+    const headline = document.querySelector<HTMLElement>(".onb-simple-heading");
+    const panel = document.querySelector<HTMLElement>(".onb-simple-card");
     if (!stage || !headline || !panel) {
       throw new Error("onboarding canvas is not on screen");
     }
@@ -106,6 +93,10 @@ async function readLayout(page: Page) {
     const panelBox = panel.getBoundingClientRect();
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
+      rootFontSize: Number.parseFloat(
+        getComputedStyle(document.documentElement).fontSize,
+      ),
+      documentWidth: document.documentElement.scrollWidth,
       scrollHeight: stage.scrollHeight,
       clientHeight: stage.clientHeight,
       headline: {
@@ -151,8 +142,8 @@ async function assertFitsLaptopWindow(
   ).toBeLessThanOrEqual(1);
 }
 
-/** Points 2 and 3: one column, a scroll cue, and a reachable action at 800x500. */
-async function assertStacksAndScrollsAtMinimumWindow(
+/** Points 2 and 3: readable columns, a scroll cue, and a reachable action. */
+async function assertColumnsAndScrollsAtMinimumWindow(
   page: Page,
   screenName: string,
   action: string,
@@ -161,24 +152,25 @@ async function assertStacksAndScrollsAtMinimumWindow(
   const layout = await readLayout(page);
 
   expect(
-    layout.headline.width,
-    `${screenName} screen at 800 wide: headline is only ${Math.round(
-      layout.headline.width,
-    )}px, under 60% of the window`,
-  ).toBeGreaterThanOrEqual(layout.viewport.width * 0.6);
+    layout.panel.width,
+    `${screenName} screen at 800 wide must retain a readable form column`,
+  ).toBeGreaterThanOrEqual(19 * layout.rootFontSize);
+  expect(layout.documentWidth).toBe(layout.viewport.width);
   expect(
-    layout.panel.y,
-    `${screenName} screen at 800 wide: the panel is beside the headline, not below it`,
-  ).toBeGreaterThanOrEqual(layout.headline.y + layout.headline.height);
+    layout.panel.x,
+    `${screenName} screen at 800 wide keeps the approved story and form beside each other`,
+  ).toBeGreaterThanOrEqual(layout.headline.x + layout.headline.width);
 
-  expect(
-    layout.scrollHeight,
-    `${screenName} screen at 800x500 should be taller than the window`,
-  ).toBeGreaterThan(layout.clientHeight);
-  await expect(
-    page.getByTestId("onboarding-canvas-scroll-fade"),
-    `${screenName} screen at 800x500 shows no bottom fade for the content below`,
-  ).toBeVisible();
+  if (layout.scrollHeight > layout.clientHeight + 1) {
+    await expect(
+      page.getByTestId("onboarding-canvas-scroll-fade"),
+      `${screenName} screen at 800x500 shows no bottom cue for its overflow`,
+    ).toBeVisible();
+  } else {
+    await expect(page.getByTestId("onboarding-canvas-scroll-fade")).toHaveCount(
+      0,
+    );
+  }
 
   await scrollStageToBottom(page);
   const button = await page.getByRole("button", { name: action }).boundingBox();
@@ -197,30 +189,31 @@ test("the account screen fits the window it is given", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await seedFreshFirstRun(page);
   await page.goto("/");
-  await passMachineLanding(page);
   await expect(
-    page.getByRole("heading", { name: "Let's get your colony started." }),
+    page.getByRole("heading", { name: "Create your account", exact: true }),
   ).toBeVisible();
 
-  await assertFitsLaptopWindow(page, "account", "Continue");
-  await assertStacksAndScrollsAtMinimumWindow(page, "account", "Continue");
+  await assertFitsLaptopWindow(page, "account", "Create account");
+  await assertColumnsAndScrollsAtMinimumWindow(
+    page,
+    "account",
+    "Create account",
+  );
 });
 
 test("the company screen fits the window it is given", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await seedFreshFirstRun(page, {
-    "colony.onboarding.answers": RESUMED_ONTO_COMPANY,
+    [`colony.onboarding.answers.identity:${FIRST_RUN_IDENTITY.pubkey}`]:
+      RESUMED_ONTO_COMPANY,
+    [`buzz-machine-onboarding-complete.v2:${FIRST_RUN_IDENTITY.pubkey}`]:
+      "true",
   });
   await page.goto("/");
-  await passMachineLanding(page);
   await expect(
-    page.getByRole("heading", { name: "Now, your company." }),
+    page.getByRole("heading", { name: "Your business" }),
   ).toBeVisible();
 
-  await assertFitsLaptopWindow(page, "company", "Create workspace");
-  await assertStacksAndScrollsAtMinimumWindow(
-    page,
-    "company",
-    "Create workspace",
-  );
+  await assertFitsLaptopWindow(page, "company", "Continue");
+  await assertColumnsAndScrollsAtMinimumWindow(page, "company", "Continue");
 });

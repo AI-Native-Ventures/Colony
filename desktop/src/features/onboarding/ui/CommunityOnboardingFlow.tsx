@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { ensureAutomaticAgentConfig } from "@/features/onboarding/automaticAgentSetup";
+import { ensureBuiltInFounderConfig } from "@/features/onboarding/automaticAgentSetup";
 import {
   isOwnerLedCommunityOnboarding,
   markCommunityOnboardingComplete,
@@ -178,18 +178,31 @@ export function CommunityOnboardingFlow({
   const agentSetupRef = React.useRef<Promise<unknown> | null>(null);
   const startAgentSetup = React.useCallback(() => {
     if (!agentSetupRef.current) {
-      agentSetupRef.current = ensureAutomaticAgentConfig().catch((error) => {
-        // Setup never blocks entry: an unconfigured machine still lands the
-        // user in Colony, and Settings is still there to do it by hand.
-        console.warn("Automatic agent setup failed.", error);
+      agentSetupRef.current = (async () => {
+        if (!relayUrl) throw new Error("The business connection is not ready.");
+        const identity = await getIdentity();
+        await ensureBuiltInFounderConfig(
+          {},
+          { scope: { ownerPubkey: identity.pubkey, relayUrl } },
+        );
+      })().catch((error) => {
+        agentSetupRef.current = null;
+        throw error;
       });
     }
     return agentSetupRef.current;
-  }, []);
+  }, [relayUrl]);
   React.useEffect(() => {
-    if (!isTeamIntroVisible || !isOwnerLed) return;
-    void startAgentSetup();
-  }, [isOwnerLed, isTeamIntroVisible, startAgentSetup]);
+    if (
+      !isTeamIntroVisible ||
+      !isOwnerLed ||
+      transaction?.source === "create-community"
+    )
+      return;
+    void startAgentSetup().catch(() => {
+      /* The awaited finalization presents retry. */
+    });
+  }, [isOwnerLed, isTeamIntroVisible, startAgentSetup, transaction?.source]);
   const finish = React.useCallback(async () => {
     if (!relayUrl) return;
     const identity = await getIdentity();
@@ -227,7 +240,13 @@ export function CommunityOnboardingFlow({
         const work = (async () => {
           // Before the channels exist, so it is settled before the kickoff
           // runs.
-          if (isOwnerLed) await startAgentSetup();
+          if (isOwnerLed) {
+            if (transaction?.source === "create-community") {
+              await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
+            } else {
+              await startAgentSetup();
+            }
+          }
           const identity = await getIdentity();
           // A resumed transaction whose brief already went out keeps its
           // recorded id and must not re-check the marker; passing draft: null
@@ -288,6 +307,7 @@ export function CommunityOnboardingFlow({
       queryClient,
       relayUrl,
       startAgentSetup,
+      transaction?.source,
       update,
     ],
   );
@@ -461,6 +481,7 @@ export function CommunityOnboardingFlow({
         }}
         onExit={() => void finish()}
         transactionId={transaction.id}
+        relayUrl={transaction.relayUrl}
       />
     );
   }

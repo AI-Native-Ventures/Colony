@@ -11,6 +11,8 @@ mod filter;
 mod meter_env;
 mod meter_publish;
 mod observer;
+#[cfg(all(test, feature = "onboarding-fixture"))]
+mod onboarding_fixture_mcp_tests;
 mod pool;
 mod pool_lifecycle;
 mod queue;
@@ -2103,6 +2105,9 @@ async fn tokio_main() -> Result<()> {
                 .meter_openai_upstream
                 .clone()
                 .unwrap_or(defaults.openai_upstream),
+            // Desktop supplies an exact provider base separately from the existing
+            // root-style upstream overrides (including Colony Credits).
+            openai_base_url: std::env::var("BUZZ_METER_OPENAI_BASE_URL").ok(),
             anthropic_provider: config.meter_anthropic_provider.clone(),
             openai_provider: config.meter_openai_provider.clone(),
         };
@@ -2127,7 +2132,14 @@ async fn tokio_main() -> Result<()> {
                 .as_deref()
                 .is_some_and(|key| !key.trim().is_empty()),
         };
-        match buzz_meter::start_meter(meter_config).await {
+        let meter_port = match std::env::var("BUZZ_ACP_METER_PORT") {
+            Ok(value) => value
+                .parse::<u16>()
+                .map_err(|_| anyhow::anyhow!("Invalid host-assigned metering port"))?,
+            Err(std::env::VarError::NotPresent) => 0,
+            Err(_) => return Err(anyhow::anyhow!("Invalid host-assigned metering port")),
+        };
+        match buzz_meter::start_meter_on(meter_config, meter_port).await {
             Ok((port, mut calls, handle)) => {
                 if let Err(_meter) = meter_env::set_active_meter(meter_env::ActiveMeter {
                     port,
@@ -2193,9 +2205,9 @@ async fn tokio_main() -> Result<()> {
             }
             Err(error) => {
                 tracing::error!("metering checkpoint failed to start: {error}");
-                if config.provisioned {
+                if config.provisioned || std::env::var_os("BUZZ_WORKER_PROXY").is_some() {
                     return Err(anyhow::anyhow!(
-                        "provisioned Colony Credits metering checkpoint failed to start"
+                        "required metering checkpoint failed to start"
                     ));
                 }
                 None
@@ -2385,7 +2397,7 @@ async fn tokio_main() -> Result<()> {
     let ctx = Arc::new(PromptContext {
         completion_check: config.completion_check,
         deadline_extend_tx: Some(deadline_extend_tx.clone()),
-        mcp_servers: build_mcp_servers(&config),
+        mcp_servers: build_runtime_mcp_servers(&config)?,
         initial_message: config.initial_message.clone(),
         idle_timeout: Duration::from_secs(config.idle_timeout_secs),
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
@@ -5946,6 +5958,31 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 /// construction sites agree on what an agent sees.
 const BROWSER_MCP_SERVER_NAME: &str = "buzz-browser";
 
+fn build_runtime_mcp_servers(config: &Config) -> Result<Vec<McpServer>> {
+    let servers = build_mcp_servers(config);
+    #[cfg(feature = "onboarding-fixture")]
+    let servers = {
+        let fixture = buzz_ws_client::onboarding_fixture::FixtureTransport::from_env()?;
+        let mut servers = servers;
+        if let Some(server) = servers
+            .iter_mut()
+            .find(|server| server.command == config.mcp_command)
+        {
+            // buzz-agent clears inherited env before applying this trusted MCP
+            // declaration. Forward only the validated public transport, after
+            // all ordinary entries; the browser receives no fixture override.
+            let name = buzz_ws_client::onboarding_fixture::CONFIG_ENV;
+            server.env.retain(|entry| entry.name != name);
+            server.env.push(EnvVar {
+                name: name.into(),
+                value: fixture.config_json().into(),
+            });
+        }
+        servers
+    };
+    Ok(servers)
+}
+
 fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
     let mut servers = Vec::new();
 
@@ -6001,6 +6038,19 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                 env
             },
         });
+    }
+
+    if let Some(browser) = &config.electron_browser {
+        servers.push(McpServer {
+            name: BROWSER_MCP_SERVER_NAME.to_string(),
+            command: browser.command.clone(),
+            args: vec![browser.adapter.clone(), browser.grant.clone()],
+            env: vec![EnvVar {
+                name: "ELECTRON_RUN_AS_NODE".into(),
+                value: "1".into(),
+            }],
+        });
+        return servers;
     }
 
     // `config.browser_mcp_command` is only non-empty when desktop resolved
@@ -7736,7 +7786,7 @@ mod build_mcp_servers_tests {
     /// Env-var-touching tests must run serially — env vars are process-global.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn test_config() -> Config {
+    pub(super) fn test_config() -> Config {
         Config {
             completion_check: false,
             keys: nostr::Keys::generate(),
@@ -7747,6 +7797,7 @@ mod build_mcp_servers_tests {
             browser_mcp_command: "".into(),
             browser_endpoint: "".into(),
             browser_target_id: "".into(),
+            electron_browser: None,
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,
@@ -7946,6 +7997,35 @@ mod build_mcp_servers_tests {
     }
 
     #[test]
+    fn electron_browser_session_uses_scoped_adapter_and_suppresses_global_browser() {
+        let mut config = test_config();
+        config.browser_mcp_command = "/unscoped/browserd".into();
+        config.electron_browser = crate::config::ElectronBrowserConfig::parse(
+            r#"{"command":"/App/Electron","adapter":"/app.asar/browser/mcp.mjs","grant":"/private/runtime/worker.json"}"#
+        ).unwrap();
+        let servers = build_mcp_servers(&config);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[1].command, "/App/Electron");
+        assert_eq!(
+            servers[1].args,
+            ["/app.asar/browser/mcp.mjs", "/private/runtime/worker.json"]
+        );
+        assert_eq!(servers[1].env.len(), 1);
+        assert_eq!(servers[1].env[0].name, "ELECTRON_RUN_AS_NODE");
+        assert_eq!(servers[1].env[0].value, "1");
+        assert!(
+            crate::config::ElectronBrowserConfig::parse(r#"{"command":"/App/Electron"}"#).is_err()
+        );
+        assert!(crate::config::ElectronBrowserConfig::parse(
+            r#"{"command":"relative","adapter":"/adapter","grant":"/grant"}"#
+        )
+        .is_err());
+        assert!(crate::config::ElectronBrowserConfig::parse("")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn browser_mcp_command_absent_returns_only_the_primary_server() {
         let mut config = test_config();
         config.browser_mcp_command = "".into();
@@ -8074,6 +8154,7 @@ mod error_outcome_emission_tests {
             browser_mcp_command: "".into(),
             browser_endpoint: "".into(),
             browser_target_id: "".into(),
+            electron_browser: None,
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: config::DEFAULT_MAX_TURN_DURATION_SECS,
             agents: 1,

@@ -232,6 +232,52 @@ test("resolveAgentReadiness_legacy_config_does_not_treat_goose_binary_as_ready",
   assert.deepEqual(result, { ready: false });
 });
 
+test("preferred readiness inherits the bundled runtime without changing legacy provider defaults", () => {
+  const bundled = makeRuntime({ id: "buzz-agent", label: "Colony Agent" });
+  for (const provider of ["anthropic", "openrouter"]) {
+    const config = makeConfig({
+      preferred_runtime: null,
+      provider,
+      model: "existing-model",
+      env_vars: {
+        [provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENROUTER_API_KEY"]:
+          "synthetic-credential",
+      },
+    });
+    const before = structuredClone(config);
+    assert.deepEqual(resolveAgentReadiness([bundled], config, "preferred"), {
+      ready: true,
+      reason: "buzz-agent",
+    });
+    assert.deepEqual(config, before);
+    for (const unavailable of [
+      { ...bundled, availability: "not_installed" },
+      { ...bundled, localLaunchError: "Synthetic isolation failure" },
+    ]) {
+      assert.deepEqual(
+        resolveAgentReadiness([unavailable], config, "preferred"),
+        { ready: false },
+      );
+    }
+    assert.deepEqual(
+      resolveAgentReadiness(
+        [bundled],
+        { ...config, env_vars: {} },
+        "preferred",
+      ),
+      { ready: false },
+    );
+    assert.deepEqual(
+      resolveAgentReadiness(
+        [bundled],
+        { ...config, preferred_runtime: "missing-custom-runtime" },
+        "preferred",
+      ),
+      { ready: false },
+    );
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Preferred runtime isolation
 // ---------------------------------------------------------------------------
@@ -251,4 +297,24 @@ test("resolveAgentReadiness_preferred_goose_does_not_borrow_ready_buzz_agent_con
     "preferred",
   );
   assert.equal(result.ready, false);
+});
+
+test("detected signed-in subscriptions are not launch-ready when isolation blocks them", () => {
+  const runtimes = [
+    makeRuntime({
+      id: "claude",
+      localLaunchError:
+        "This Electron beta requires Colony Agent for isolated local teammates",
+    }),
+  ];
+  for (const scope of ["any", "preferred"]) {
+    assert.equal(
+      resolveAgentReadiness(
+        runtimes,
+        makeConfig({ preferred_runtime: "claude" }),
+        scope,
+      ).ready,
+      false,
+    );
+  }
 });

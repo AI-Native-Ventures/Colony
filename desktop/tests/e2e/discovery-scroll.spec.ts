@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openSidebarDestination } from "../helpers/sidebar";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { seedActiveIdentity } from "../helpers/onboarding";
 
@@ -12,7 +13,7 @@ test("all Discovery industries are reachable by scrolling", async ({
   await installMockBridge(page);
   await page.goto("/");
 
-  await page.getByTestId("open-discovery-view").click();
+  await openSidebarDestination(page, "open-discovery-view");
   await expect(page).toHaveURL(/#\/discovery/);
   await page.getByTestId("discovery-top-tab-discover").click();
 

@@ -224,6 +224,8 @@ export function signBlockInstance({
   handle,
   instanceId,
   manifestId,
+  parentEventId,
+  createdAt,
   processorPubkey,
   requiresAttention = false,
   signer = "charlie",
@@ -234,6 +236,8 @@ export function signBlockInstance({
   handle: string;
   instanceId: string;
   manifestId: string;
+  parentEventId?: string;
+  createdAt?: number;
   processorPubkey?: string;
   requiresAttention?: boolean;
   signer?: keyof typeof TEST_IDENTITIES;
@@ -241,9 +245,15 @@ export function signBlockInstance({
   return finalizeEvent(
     {
       kind: 9,
-      created_at: Math.floor(Date.now() / 1_000),
+      created_at: createdAt ?? Math.floor(Date.now() / 1_000),
       tags: [
         ["h", channelId],
+        ...(parentEventId
+          ? [
+              ["e", parentEventId, "", "root"],
+              ["e", parentEventId, "", "reply"],
+            ]
+          : []),
         ...blockTags({
           data,
           handle,

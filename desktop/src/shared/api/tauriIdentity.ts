@@ -29,6 +29,57 @@ export async function getNsec(): Promise<string> {
   return invokeTauri<string>("get_nsec");
 }
 
+/** Native secure checkpoint. Never persist or log this record in the renderer. */
+export type PendingSignup = {
+  pubkey: string;
+  email: string;
+  attemptId: string;
+  recoveryCode: string;
+  phase: "prepared" | "registered";
+};
+
+/** Securely create or reuse this identity and email's pending signup before POST. */
+export async function preparePendingSignup(
+  email: string,
+  recoveryCode?: string,
+): Promise<PendingSignup> {
+  return invokeTauri<PendingSignup>("prepare_pending_signup", {
+    email,
+    recoveryCode,
+  });
+}
+
+/** Restore the same pending code, including after an uncertain signup result. */
+export async function loadPendingSignup(): Promise<PendingSignup | null> {
+  return invokeTauri<PendingSignup | null>("load_pending_signup");
+}
+
+/** Mark this exact signup as registered after the account request succeeds. */
+export async function markPendingSignupRegistered(
+  attemptId: string,
+): Promise<PendingSignup> {
+  return invokeTauri<PendingSignup>("mark_pending_signup_registered", {
+    attemptId,
+  });
+}
+
+/** Clear only this registered attempt after explicit recovery acknowledgement. */
+export async function clearPendingSignup(attemptId: string): Promise<void> {
+  return invokeTauri<void>("clear_pending_signup", { attemptId });
+}
+
+/** Discard an exact prepared attempt after definitive rejection, never an uncertain result. */
+export async function discardPendingSignup(attemptId: string): Promise<void> {
+  return invokeTauri<void>("discard_pending_signup", { attemptId });
+}
+
+/** Save the native checkpoint's code; null means the user cancelled the dialog. */
+export async function saveRecoveryCode(
+  attemptId: string,
+): Promise<string | null> {
+  return invokeTauri<string | null>("save_recovery_code", { attemptId });
+}
+
 export async function importIdentity(
   nsec: string,
   password?: string,

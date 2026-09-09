@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "buzz-browserd"
 path = "src/main.rs"
 
+[features]
+# Keep the ACP library's HTTP and WebSocket mode consistent in explicit fixture builds.
+onboarding-fixture = ["buzz-acp/onboarding-fixture"]
+
 [dependencies]
 buzz-acp = { path = "../buzz-acp" }
 tokio = { workspace = true }

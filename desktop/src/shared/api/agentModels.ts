@@ -3,6 +3,8 @@ import { invokeTauri } from "@/shared/api/tauri";
 
 export type DiscoverAgentModelsInput = {
   acpCommand?: string;
+  /** Resolve the host-owned Credits catalog without exposing its lease. */
+  credentialMode?: "byok" | "colony_credits";
   agentCommand: string;
   agentArgs?: string[];
   provider?: string;

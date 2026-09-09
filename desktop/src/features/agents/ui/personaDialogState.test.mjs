@@ -294,3 +294,22 @@ test("a non-allowlist mode does not seed a stale allowlist into the dialog", () 
     "stale pubkeys must not resurrect through the dialog seed",
   );
 });
+
+test("editing and duplicating retain the job role separately from a personal name", () => {
+  const persona = {
+    id: "branding",
+    displayName: "Sarah",
+    roleId: "brand-designer",
+    roleTitle: "Brand designer",
+    systemPrompt: "",
+    avatarUrl: null,
+  };
+  for (const state of [
+    editPersonaDialogState(persona),
+    duplicatePersonaDialogState(persona),
+  ]) {
+    assert.equal(state.initialValues.roleId, "brand-designer");
+    assert.equal(state.initialValues.roleTitle, "Brand designer");
+    assert.notEqual(state.initialValues.displayName, "Brand designer");
+  }
+});

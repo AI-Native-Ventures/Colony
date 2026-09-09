@@ -148,6 +148,7 @@ pub fn finish_spawn(
         );
     }
     super::ManagedAgentProcess {
+        isolation_network: None,
         child,
         log_path,
         spawn_config,

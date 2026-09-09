@@ -6,6 +6,20 @@ use crate::provisioned_credits::{
     ensure_lease_blocking, normalized_gateway_upstream, GatewayLease,
 };
 
+/// Apply the final Spend-related environment policy to a managed child.
+///
+/// `env_remove` is intentional even when the Desktop inherited the variable:
+/// it records an explicit removal in `Command` and prevents the child from
+/// bypassing metering after all user-controlled layers have been resolved.
+pub(crate) fn apply_spend_env_policy(command: &mut std::process::Command, provisioned: bool) {
+    command.env_remove("BUZZ_ACP_NO_METER");
+    if provisioned {
+        command.env("BUZZ_ACP_PROVISIONED", "true");
+    } else {
+        command.env_remove("BUZZ_ACP_PROVISIONED");
+    }
+}
+
 pub(crate) fn configure_runtime_cli(
     command: &mut std::process::Command,
     runtime: Option<&super::KnownAcpRuntime>,

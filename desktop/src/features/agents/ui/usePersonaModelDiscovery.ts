@@ -162,6 +162,7 @@ export function isSuccessfulEmptyDiscovery({
 }
 
 export function usePersonaModelDiscovery({
+  credentialMode = "byok",
   envVars,
   isCustomProviderEditing,
   modelFieldVisible,
@@ -169,6 +170,7 @@ export function usePersonaModelDiscovery({
   provider,
   selectedRuntime,
 }: {
+  credentialMode?: "byok" | "colony_credits";
   envVars: EnvVarsValue;
   isCustomProviderEditing: boolean;
   modelFieldVisible: boolean;
@@ -228,9 +230,11 @@ export function usePersonaModelDiscovery({
       agentCommand: discoveryAgentCommand,
       agentArgs: modelDiscoveryArgsKey,
       provider: trimmedProvider,
+      credentialMode,
       envVars: modelDiscoveryEnvKey,
     });
   }, [
+    credentialMode,
     canDiscoverModelOptions,
     discoveryAgentCommand,
     modelDiscoveryArgsKey,
@@ -252,7 +256,9 @@ export function usePersonaModelDiscovery({
         setModelDiscoveryStatus(
           formatModelDiscoveryErrorStatus(
             new Error(`Runtime not available: ${selectedRuntimeAvailability}`),
-            trimmedProvider,
+            credentialMode === "colony_credits"
+              ? "colony-credits"
+              : trimmedProvider,
             selectedRuntimeLabel,
           ),
         );
@@ -269,7 +275,12 @@ export function usePersonaModelDiscovery({
     modelDiscoveryRequestRef.current = requestId;
     const activeAgentCommand = discoveryAgentCommand;
     const activeModelDiscoveryKey = modelDiscoveryKey;
-    const cached = modelDiscoveryCacheRef.current.get(activeModelDiscoveryKey);
+    // Credits catalogs belong to the active owner/relay lease, which this
+    // provider cache key does not identify. Always fetch them from native.
+    const cached =
+      credentialMode === "colony_credits"
+        ? undefined
+        : modelDiscoveryCacheRef.current.get(activeModelDiscoveryKey);
     if (cached) {
       setModelDiscoveryData(cached);
       setModelDiscoveryDataKey(activeModelDiscoveryKey);
@@ -288,6 +299,7 @@ export function usePersonaModelDiscovery({
     setModelDiscoveryLoading(true);
     function runModelDiscovery() {
       void discoverAgentModels({
+        credentialMode,
         agentCommand: activeAgentCommand,
         agentArgs: selectedRuntimeDefaultArgs ?? [],
         provider: trimmedProvider || undefined,
@@ -302,7 +314,10 @@ export function usePersonaModelDiscovery({
           // empty/no-switching result gets the "reopen this screen" warning,
           // and closing → reopening the dialog must re-run discovery so the
           // user's CLI-install/sign-in is actually reflected.
-          if (isCacheableDiscoveryResponse(response, trimmedProvider)) {
+          if (
+            credentialMode !== "colony_credits" &&
+            isCacheableDiscoveryResponse(response, trimmedProvider)
+          ) {
             modelDiscoveryCacheRef.current.set(
               activeModelDiscoveryKey,
               response,
@@ -324,7 +339,9 @@ export function usePersonaModelDiscovery({
           setModelDiscoveryStatus(
             formatModelDiscoveryErrorStatus(
               error,
-              trimmedProvider,
+              credentialMode === "colony_credits"
+                ? "colony-credits"
+                : trimmedProvider,
               selectedRuntimeLabel,
             ),
           );
@@ -355,6 +372,7 @@ export function usePersonaModelDiscovery({
       }
     };
   }, [
+    credentialMode,
     discoveryAgentCommand,
     envVars,
     modelDiscoveryKey,
