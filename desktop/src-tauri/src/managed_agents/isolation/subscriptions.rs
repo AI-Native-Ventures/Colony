@@ -318,3 +318,7 @@ mod tests {
         .is_err());
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "subscription_runtime_tests.rs"]
+mod runtime_tests;

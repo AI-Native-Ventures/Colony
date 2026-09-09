@@ -17,61 +17,6 @@ pub(crate) struct Config {
     pub mcp_servers: Value,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture(root: &Path) -> Config {
-        let profile = root.join("provider");
-        let workspace = root.join("worker");
-        std::fs::create_dir_all(&profile).unwrap();
-        std::fs::create_dir_all(&workspace).unwrap();
-        Config {
-            runtime: "claude".into(),
-            vendor_binary: PathBuf::from("/synthetic/vendor"),
-            profile,
-            workspace,
-            model: "synthetic-model".into(),
-            mcp_servers: serde_json::json!({"colony_work":{"command":"/usr/bin/sandbox-exec","args":["-p","synthetic-policy","/synthetic/tool"],"env":{}}}),
-        }
-    }
-
-    use std::path::Path;
-
-    #[test]
-    fn native_configuration_requires_separate_auth_and_prepared_work_tools() {
-        let root = tempfile::tempdir().unwrap();
-        let config = fixture(root.path());
-        assert!(config.validate().is_ok());
-        let mut invalid = config.clone();
-        invalid.profile = config.workspace.clone();
-        assert!(invalid.validate().is_err());
-        invalid = config.clone();
-        invalid.mcp_servers = serde_json::json!({});
-        assert!(invalid.validate().is_err());
-        invalid = config.clone();
-        invalid.mcp_servers["colony_work"]["command"] = serde_json::json!("/bin/sh");
-        assert!(invalid.validate().is_err());
-        invalid = config.clone();
-        invalid.runtime = "unknown-provider".into();
-        assert!(invalid.validate().is_err());
-        assert!(config.permits_mcp_tool("mcp__colony_work__shell"));
-        assert!(!config.permits_mcp_tool("mcp__other_business__shell"));
-        assert!(!config.permits_mcp_tool("Bash"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_cannot_hide_a_profile_inside_the_worker_root() {
-        let root = tempfile::tempdir().unwrap();
-        let mut config = fixture(root.path());
-        let alias = root.path().join("profile-alias");
-        std::os::unix::fs::symlink(&config.workspace, &alias).unwrap();
-        config.profile = alias;
-        assert!(config.validate().is_err());
-    }
-}
-
 impl Config {
     pub(super) fn from_environment() -> Result<Self> {
         let encoded = std::env::var("BUZZ_SUBSCRIPTION_BRIDGE_CONFIG")
@@ -155,5 +100,60 @@ impl Config {
                 .keys()
                 .any(|name| tool.starts_with(&format!("mcp__{name}__")))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(root: &Path) -> Config {
+        let profile = root.join("provider");
+        let workspace = root.join("worker");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        Config {
+            runtime: "claude".into(),
+            vendor_binary: PathBuf::from("/synthetic/vendor"),
+            profile,
+            workspace,
+            model: "synthetic-model".into(),
+            mcp_servers: serde_json::json!({"colony_work":{"command":"/usr/bin/sandbox-exec","args":["-p","synthetic-policy","/synthetic/tool"],"env":{}}}),
+        }
+    }
+
+    use std::path::Path;
+
+    #[test]
+    fn native_configuration_requires_separate_auth_and_prepared_work_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let config = fixture(root.path());
+        assert!(config.validate().is_ok());
+        let mut invalid = config.clone();
+        invalid.profile = config.workspace.clone();
+        assert!(invalid.validate().is_err());
+        invalid = config.clone();
+        invalid.mcp_servers = serde_json::json!({});
+        assert!(invalid.validate().is_err());
+        invalid = config.clone();
+        invalid.mcp_servers["colony_work"]["command"] = serde_json::json!("/bin/sh");
+        assert!(invalid.validate().is_err());
+        invalid = config.clone();
+        invalid.runtime = "unknown-provider".into();
+        assert!(invalid.validate().is_err());
+        assert!(config.permits_mcp_tool("mcp__colony_work__shell"));
+        assert!(!config.permits_mcp_tool("mcp__other_business__shell"));
+        assert!(!config.permits_mcp_tool("Bash"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cannot_hide_a_profile_inside_the_worker_root() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = fixture(root.path());
+        let alias = root.path().join("profile-alias");
+        std::os::unix::fs::symlink(&config.workspace, &alias).unwrap();
+        config.profile = alias;
+        assert!(config.validate().is_err());
     }
 }

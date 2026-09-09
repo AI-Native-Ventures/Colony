@@ -1917,10 +1917,6 @@ function getMockIdentity() {
   };
 }
 
-function cloneProfile(profile: RawProfile): RawProfile {
-  return { ...profile };
-}
-
 function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
   return {
     ...agent,
