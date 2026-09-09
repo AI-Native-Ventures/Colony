@@ -1,0 +1,27 @@
+{
+  "name": "colony-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Hello out/hello.mp4",
+    "render:t1": "remotion render src/index.ts T1 out/t1.mp4 --props=jobs/customers.json",
+    "render:batch": "node scripts/render-batch.mjs",
+    "check": "biome check src && tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.522",
+    "@remotion/google-fonts": "4.0.522",
+    "@remotion/zod-types": "4.0.522",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.522",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.16",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "hook": "My boss already pays for ChatGPT, so I cost him nothing extra.",
+  "hue": "pink",
+  "lines": [
+    {"who":"owner", "text":"Show me what this costs. I don't want another AI bill."},
+    {"who":"scout", "text":"You already pay for ChatGPT. I run on the same account. Zero extra."}
+  ],
+  "results": [
+    {"name":"Bryanston Business Park", "detail":"Facilities manager: Thabo M."},
+    {"name":"Sandton Medical Suites", "detail":"Practice manager: Lerato K."},
+    {"name":"Grayston Office Tower", "detail":"Building manager: Pieter V."}
+  ],
+  "approval": {"question":"Send 20 intro emails from your address?", "fine":"You can read each one before it goes."},
+  "endCard": {"title":"Give your business a team.", "url":"colony.ainative.ventures"}
+}
