@@ -163,7 +163,15 @@ export function CanvasFirstRunHost({
       };
       assertCurrent();
       const relayUrl = await waitForApply(assertCurrent);
-      await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
+      if (!currentPubkey)
+        throw new Error("Sign in before completing business setup");
+      await ensureBuiltInFounderConfig(
+        {},
+        {
+          mode: "validate-only",
+          scope: { ownerPubkey: currentPubkey, relayUrl },
+        },
+      );
       assertCurrent();
       await completeFirstRun(
         {

@@ -122,7 +122,7 @@ export function OpenRouterAllowance({
                 quota.total_credits_usd.toFixed(2) +
                 " in total. "
               : ""}
-            Buy {"$" + shortfall.toFixed(2)} more in OpenRouter credits to reach
+            Buy {`$${shortfall.toFixed(2)}`} more in OpenRouter credits to reach
             the current 1,000-request daily allowance. OpenRouter may add
             checkout fees.
           </p>

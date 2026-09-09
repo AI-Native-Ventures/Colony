@@ -32,13 +32,16 @@ export function SubscriptionPowerFields({
   const queryClient = useQueryClient();
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const generation = useRef(0);
+  const generation = useRef<SubscriptionScope | null>(null);
   useEffect(() => {
-    generation.current += 1;
+    generation.current = {
+      ownerPubkey: scope.ownerPubkey,
+      relayUrl: scope.relayUrl,
+    };
     setConnecting(null);
     setError(null);
     return () => {
-      generation.current += 1;
+      generation.current = null;
     };
   }, [scope.ownerPubkey, scope.relayUrl]);
   const query = useQuery({
@@ -78,7 +81,9 @@ export function SubscriptionPowerFields({
         setError(
           cause instanceof Error
             ? cause.message
-            : "Sign-in did not finish. Try again.",
+            : typeof cause === "string"
+              ? cause
+              : "Sign-in did not finish. Try again.",
         );
     } finally {
       if (generation.current === started) setConnecting(null);

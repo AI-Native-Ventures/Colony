@@ -48,7 +48,7 @@ export function PendingInviteGate() {
             <button
               className="onb-quiet-action"
               data-testid="pending-invite-cancel"
-              onClick={clear}
+              onClick={() => clear(transaction.id)}
               type="button"
             >
               Cancel

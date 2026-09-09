@@ -48,6 +48,7 @@ export function PowerCreditsPurchase({
   const busy =
     phase === "loading" || phase === "opening" || phase === "checking";
   const pending = hasAttempt || phase === "uncertain";
+  const currency = catalogue?.currency;
   const chosen = catalogue?.packs.find((pack) => pack.id === selected);
 
   const check = useCallback(async () => {
@@ -81,7 +82,7 @@ export function PowerCreditsPurchase({
     setError(null);
     setPhase("loading");
     try {
-      let attempt;
+      let attempt: ReturnType<typeof runtime.store.read>;
       try {
         attempt = runtime.store.read(runtime.scope);
       } catch (cause) {
@@ -209,7 +210,7 @@ export function PowerCreditsPurchase({
             )}
           </div>
         </>
-      ) : !catalogue?.packs.length ? (
+      ) : !catalogue?.packs.length || !currency ? (
         <>
           <p role="status">
             {phase === "loading"
@@ -235,10 +236,7 @@ export function PowerCreditsPurchase({
               {catalogue.packs.map((pack) => (
                 <option key={pack.id} value={pack.id}>
                   {formatGrant(pack.grantNanousd)} credits — pay{" "}
-                  {formatPrice(
-                    priceOf(pack, catalogue.currency),
-                    catalogue.currency,
-                  )}
+                  {formatPrice(priceOf(pack, currency), currency)}
                 </option>
               ))}
             </select>
@@ -263,11 +261,7 @@ export function PowerCreditsPurchase({
             {phase === "opening"
               ? "Opening checkout…"
               : chosen
-                ? "Pay " +
-                  formatPrice(
-                    priceOf(chosen, catalogue.currency),
-                    catalogue.currency,
-                  )
+                ? "Pay " + formatPrice(priceOf(chosen, currency), currency)
                 : "Choose an amount"}
           </Button>
           <p className="onb-simple-note">

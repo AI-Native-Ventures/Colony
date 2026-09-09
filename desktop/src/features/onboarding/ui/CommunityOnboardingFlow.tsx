@@ -238,11 +238,12 @@ export function CommunityOnboardingFlow({
       liveRun.current.transactionId === transactionId &&
       liveRun.current.currentPubkey === ownerPubkey &&
       (transaction?.source !== "create-community" ||
-        isCurrentCommunityOnboardingTransaction(
-          transactionId,
-          ownerPubkey ?? "",
-          relayUrl,
-        ));
+        (!!transactionId &&
+          isCurrentCommunityOnboardingTransaction(
+            transactionId,
+            ownerPubkey ?? "",
+            relayUrl,
+          )));
     if (!ownerPubkey || !isCurrent()) return;
     await assertFirstJobScope({ ownerPubkey, relayUrl });
     if (!isCurrent()) return;
@@ -318,7 +319,10 @@ export function CommunityOnboardingFlow({
           // runs.
           if (isOwnerLed) {
             if (transaction?.source === "create-community") {
-              await ensureBuiltInFounderConfig({}, { mode: "validate-only" });
+              await ensureBuiltInFounderConfig(
+                {},
+                { mode: "validate-only", scope: { ownerPubkey, relayUrl } },
+              );
             } else {
               await startAgentSetup();
             }
