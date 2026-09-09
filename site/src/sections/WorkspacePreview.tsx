@@ -6,7 +6,7 @@ import "./workspace-preview.css";
 const icons = {
   inbox: "M3 4h14l3 10v5H2v-5L3 4Zm-1 10h5l2 3h6l2-3h3",
   tasks: "m2 5 2 2 4-4M11 5h9M2 13h5v5H2zM11 13h9M11 18h6",
-  agents: "M8 5h8v3H8zM12 2v3M5 8h14v12H5zM2 12v4M22 12v4M9 12v3M15 12v3",
+  employees: "M8 5h8v3H8zM12 2v3M5 8h14v12H5zM2 12v4M22 12v4M9 12v3M15 12v3",
   billing: "M5 3h14v18H5zM15 7h-5a2 2 0 0 0 0 4h3a2 2 0 0 1 0 4H8M12 5v12",
   search: "M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
   settings: "M3 6h5m4 0h9M3 17h10m4 0h4M8 3v6M13 14v6",
@@ -56,7 +56,7 @@ function Person({
           <strong>{name}</strong>
         </div>
         {jobTitle && (
-          <p className="preview-message__role">{jobTitle} · Agent</p>
+          <p className="preview-message__role">{jobTitle} · AI employee</p>
         )}
         <div className="preview-message__prose">{children}</div>
       </div>
@@ -131,19 +131,19 @@ export function WorkspacePreview() {
     <section
       className="workspace-example section-wrap"
       id="inside-colony"
-      aria-labelledby="workspace-example-title"
+      aria-labelledby="inside-colony-title"
     >
       <div className="workspace-example__intro">
         <div>
           <p className="eyebrow">Inside Colony</p>
-          <h2 id="workspace-example-title">
+          <h2 id="inside-colony-title">
             Your team talks.
             <br />
             The work stays with the conversation.
           </h2>
         </div>
         <p>
-          Give a job to your AI teammate in a shared conversation. Open its
+          Give a job to your AI employee in a shared conversation. Open its
           replies to discuss the details and review the result, all in the same
           place.
         </p>
@@ -157,7 +157,7 @@ export function WorkspacePreview() {
       <section
         className="workspace-preview"
         data-thread-open={threadOpen}
-        aria-label="Example Colony workspace"
+        aria-label="Example of the Colony app"
       >
         <div className="preview-rail" aria-hidden="true">
           <span className="preview-rail__business">YC</span>
@@ -165,10 +165,7 @@ export function WorkspacePreview() {
             <Icon name="plus" />
           </span>
         </div>
-        <aside
-          className="preview-sidebar"
-          aria-label="Example workspace navigation"
-        >
+        <aside className="preview-sidebar" aria-label="Example app navigation">
           <div className="preview-sidebar__history" aria-hidden="true">
             <Icon name="panel" />
             <Icon name="back" />
@@ -180,7 +177,7 @@ export function WorkspacePreview() {
             <strong>Your company</strong>
             <Icon name="down" />
           </div>
-          <p className="preview-sidebar__subtitle">Your workspace</p>
+          <p className="preview-sidebar__subtitle">Your business</p>
           <div className="preview-search">
             <Icon name="search" />
             <span>Search everything</span>
@@ -190,7 +187,7 @@ export function WorkspacePreview() {
               [
                 ["inbox", "Inbox"],
                 ["tasks", "Tasks"],
-                ["agents", "Agents"],
+                ["employees", "Employees"],
                 ["billing", "Billing"],
               ] as const
             ).map(([icon, label]) => (
@@ -391,14 +388,14 @@ export function WorkspacePreview() {
           <span>01</span>
           <p>
             <strong>A place for your business.</strong>Find your conversations,
-            jobs and AI teammates in the sidebar.
+            jobs and AI employees in the sidebar.
           </p>
         </div>
         <div>
           <span>02</span>
           <p>
             <strong>A shared conversation.</strong>Give instructions and keep
-            your people and AI teammates in the loop.
+            your people and AI employees in the loop.
           </p>
         </div>
         <div>

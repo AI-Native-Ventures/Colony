@@ -15,22 +15,17 @@ export function Hero({
       <div className="hero-copy">
         <div className="hero-intro">
           <AntParade />
-          <span>Meet Colony</span>
+          <span>For small business owners</span>
         </div>
-        <h1 id="hero-title">
-          Run your business in Colony.
-          <br />
-          <span className="hero-tagline">
-            Give your team a job. Check the result.
-          </span>
-        </h1>
+        <h1 id="hero-title">Run your business with a team of AI employees.</h1>
         <p className="hero-description">
-          Colony is an app for managing your business with people and AI
-          teammates. Assign jobs, see who is doing what, and check the results
-          before deciding what happens next.
+          Colony is an app that gives your business a team of AI employees. One
+          finds new customers. One writes your website, emails and quotes. One
+          keeps track of it all and reports to you. They do the work, then ask
+          you before anything is sent out.
         </p>
         <p className="hero-audience">
-          AI teammates are software you can talk to. They use tools to research,
+          AI employees are software you can talk to. They use tools to research,
           write and carry out tasks for your business.
         </p>
         <div className="hero-actions">
@@ -38,7 +33,7 @@ export function Hero({
             Apply for early access <span aria-hidden="true">↗</span>
           </a>
           <a className="button button-glass" href="#how-it-works">
-            How you use it <span aria-hidden="true">↓</span>
+            See how it works <span aria-hidden="true">↓</span>
           </a>
         </div>
         <p className="availability">
