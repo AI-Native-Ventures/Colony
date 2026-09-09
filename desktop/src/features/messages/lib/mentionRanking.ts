@@ -1,4 +1,4 @@
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 
 export type MentionCandidateForRanking =
   | {
@@ -125,7 +125,7 @@ export function rankMentionCandidates<T extends MentionCandidateForRanking>(
       const label =
         candidate.displayName ??
         (isActorCandidate(candidate) && candidate.pubkey
-          ? truncatePubkey(candidate.pubkey)
+          ? truncateNpub(candidate.pubkey)
           : "agent");
       const groupRank = getMentionCandidateGroupRank(
         candidate,

@@ -29,7 +29,7 @@ import {
 import { invokeTauri } from "@/shared/api/tauri";
 import { useComposerNewTask } from "./useComposerNewTask";
 import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 import {
   attachOutgoingWorkContext,
   buildTypedMentionRouting,
@@ -824,7 +824,7 @@ export function useMentionSendFlow({
 
     return pendingNonMemberSend.nonMemberPubkeys.map(
       (pubkey) =>
-        mentions.getMentionDisplayName(pubkey) ?? truncatePubkey(pubkey),
+        mentions.getMentionDisplayName(pubkey) ?? truncateNpub(pubkey),
     );
   }, [mentions.getMentionDisplayName, pendingNonMemberSend]);
 

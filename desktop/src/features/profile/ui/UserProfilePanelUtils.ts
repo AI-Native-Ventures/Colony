@@ -8,9 +8,9 @@ import type {
   RelayAgent,
   UpdateManagedAgentInput,
 } from "@/shared/api/types";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 
-export { truncatePubkey };
+export { truncateNpub };
 
 export type ProfileChannelLink = {
   id: string;
@@ -231,7 +231,7 @@ export function resolveProfileDisplayName({
   return (
     profile?.displayName ??
     persona?.displayName ??
-    (pubkey ? truncatePubkey(pubkey) : "Agent")
+    (pubkey ? truncateNpub(pubkey) : "Agent")
   );
 }
 
@@ -246,7 +246,7 @@ export function resolveOwnerHandle(
   return (
     profile?.nip05Handle?.trim() ||
     profile?.displayName?.trim() ||
-    truncatePubkey(currentPubkey)
+    truncateNpub(currentPubkey)
   );
 }
 

@@ -11,7 +11,7 @@ import {
   DISCOVERY_MENTION_KINDS,
   type DiscoveryMentionKind,
 } from "./discoveryMentionRefs";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 
 export function formatSearchUserDisplayName(user: UserSearchResult) {
   return user.displayName?.trim() || user.nip05Handle?.trim() || null;
@@ -119,7 +119,7 @@ export function mentionCandidateLabel(candidate: MentionCandidate) {
   }
   return (
     candidate.displayName ??
-    (candidate.pubkey ? truncatePubkey(candidate.pubkey) : "agent")
+    (candidate.pubkey ? truncateNpub(candidate.pubkey) : "agent")
   );
 }
 

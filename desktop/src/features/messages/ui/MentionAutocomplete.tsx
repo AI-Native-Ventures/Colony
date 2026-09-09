@@ -12,7 +12,7 @@ import {
 } from "@/shared/ui/popoverSurface";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { safeNpub } from "@/shared/lib/nostrUtils";
-import { truncatePubkey } from "@/shared/lib/pubkey";
+import { truncateNpub } from "@/shared/lib/pubkey";
 
 const DISCOVERY_MENTION_LABELS: Record<string, string> = {
   industry: "Industry",
@@ -320,7 +320,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                     data-testid="mention-collision-npub"
                     title={collisionNpub}
                   >
-                    {truncatePubkey(collisionNpub)}
+                    {truncateNpub(collisionNpub)}
                   </span>
                 ) : null}
               </span>

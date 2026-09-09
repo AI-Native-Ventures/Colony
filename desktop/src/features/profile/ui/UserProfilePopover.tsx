@@ -33,7 +33,7 @@ import { useOpenAgentActivity } from "@/features/agents/useOpenAgentActivity";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { cn } from "@/shared/lib/cn";
-import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 import { useProfileInteractionActions } from "@/features/profile/ui/useProfileInteractionActions";
 
 import {
@@ -119,7 +119,7 @@ function HoverPubkeyName({
       <span
         className={`${TEXT_SWAP_BASE_CLASS} ${TEXT_SWAP_HIDDEN_CLASS} ${TEXT_SWAP_HOVER_VISIBLE_CLASS}`}
       >
-        {truncatePubkey(pubkey)}
+        {truncateNpub(pubkey)}
       </span>
     </span>
   );
@@ -205,7 +205,7 @@ export function UserProfilePopover({
       relayAgentsQuery.isPending ||
       managedAgentsQuery.isPending ||
       usersBatchQuery.isPending);
-  const displayName = profile?.displayName ?? truncatePubkey(pubkey);
+  const displayName = profile?.displayName ?? truncateNpub(pubkey);
   // Owner signal mirrors UserProfilePanel: a declared NIP-OA owner whose agent
   // runs elsewhere holds no local seckey, so key custody (`isOwner`) alone
   // wrongly hides the affordance from them — and gating on bot-ness alone shows

@@ -33,7 +33,7 @@ export function ProfileAvatar({
   plain = false,
   testId,
 }: ProfileAvatarProps) {
-  const initials = getInitials(label);
+  const initials = getInitials(identitySeed ?? label);
   const presentation = useAvatarPresentation(avatarUrl);
   const presentedAvatarUrl = presentation?.displayUrl ?? avatarUrl;
 
