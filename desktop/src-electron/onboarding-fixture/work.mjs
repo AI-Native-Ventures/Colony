@@ -154,7 +154,8 @@ export async function completeFixtureWork({
       let lastError;
       do {
         try {
-          return (prepared = await reader.readTeam());
+          prepared = await reader.readTeam();
+          return prepared;
         } catch (error) {
           lastError = error;
           await new Promise((resolve) => setTimeout(resolve, 300));

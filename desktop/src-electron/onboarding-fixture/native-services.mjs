@@ -155,6 +155,11 @@ export async function startNativeBackingServices({ directory, tools }) {
     ).stdout.trim();
   async function close() {
     const errors = [];
+    try {
+      healthy();
+    } catch (error) {
+      errors.push(error);
+    }
     const receipts = [];
     for (const { child, done, log, name } of [...children].reverse()) {
       if (child.pid && child.exitCode === null && child.signalCode === null) {

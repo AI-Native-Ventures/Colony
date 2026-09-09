@@ -269,6 +269,13 @@ async function launch() {
       .map((name) => `colony://app/assets/${name}`);
   });
   await page.waitForFunction(() => !!window.colonyDesktop);
+  // The migration page also has the preload. Do not reload or seed app state
+  // until the normal transfer has completed and React has mounted.
+  await page.waitForFunction(
+    () => !!document.querySelector("#root")?.children.length,
+    {},
+    { timeout: 30_000 },
+  );
   if (failure) throw failure;
   return page;
 }
@@ -297,6 +304,7 @@ try {
     adminBinary,
     providerHttpUrl: provider.httpUrl,
   });
+  proof.backingServices = relay.backingServices;
   proxy = await createOnboardingFixtureProxy({
     domain,
     upstreamHttpUrl: relay.upstreamHttpUrl,
@@ -413,7 +421,6 @@ try {
   });
   const { page: _page, rootEvent: _event, ...identifiers } = result;
   Object.assign(proof, identifiers, {
-    backingServices: relay.backingServices,
     accountCompleted: true,
     zeroCreditStart: "blocked without Task, instruction or model call",
     hostedSignup: "not tested",
@@ -458,6 +465,8 @@ try {
       .evaluate(async (owner) => {
         const state = {
           url: location.href,
+          rootMounted: !!document.querySelector("#root")?.children.length,
+          migrationError: window.__COLONY_FRONTEND_MIGRATION_ERROR__ ?? null,
           alerts: Array.from(document.querySelectorAll('[role="alert"]')).map(
             (node) => node.textContent,
           ),
