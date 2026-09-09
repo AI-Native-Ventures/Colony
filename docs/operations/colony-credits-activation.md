@@ -55,6 +55,16 @@ Activation evidence at 09:01 UTC:
   `promo:colony-4:2026-09-09:gateway-pilot-1`, and returned a $1 balance. The same
   reference must be reused for any retry; no new cash was received or purchased.
 
+The installed beta subsequently displayed $1.00 in Agent defaults and the
+sidebar. Scout was running but repeatedly replaced before producing output.
+The local log recorded 349 starts; server metadata recorded 348 successive
+24-hour leases, with normal revocation and no inference debits or settlement
+intents. A server clock slightly ahead of the desktop put the old `expiry - 24h`
+refresh deadline milliseconds in the future. The source fix caps the refresh
+lead at half the remaining lifetime and includes clock-skew regressions; the
+updated packaged beta still needs verification. Scout was stopped through the
+UI at 09:16 UTC. At 09:18 UTC the full $1 remained available.
+
 Done means an installed beta can load the actual business's Credits balance and
 served models, start an isolated teammate, return one approved draft, and show a
 matching provider charge and Colony ledger debit. A green CI run, saved key or

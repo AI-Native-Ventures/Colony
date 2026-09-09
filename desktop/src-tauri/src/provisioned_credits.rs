@@ -174,11 +174,9 @@ pub struct GatewayLease {
     pub generation: u64,
     /// Relay-provided expiry.
     pub expires_at: DateTime<Utc>,
-    /// Cancellable proactive refresh deadline. For a lease whose total TTL is
-    /// at most the 24-hour lead, this is the midpoint of its actual lifetime;
-    /// otherwise it is the literal `expires_at - 24h` deadline. Keeping the
-    /// computed instant avoids an immediate refresh loop for the Phase 1
-    /// 24-hour lease while still refreshing before expiry.
+    /// Cancellable proactive refresh deadline. The refresh lead is at most
+    /// half the actual remaining lifetime, up to 24 hours. This keeps a small
+    /// relay clock skew from repeatedly replacing a fresh 24-hour lease.
     pub(crate) refresh_at: DateTime<Utc>,
     /// Exact signer captured when this lease was minted. It is never read
     /// from mutable AppState during revoke or refresh, so an identity swap

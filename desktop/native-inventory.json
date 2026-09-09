@@ -1,7 +1,7 @@
 {
   "files": {
     "rust_total": 472,
-    "rust_lines": 178311,
+    "rust_lines": 178343,
     "tauri_coupled": 185,
     "portable": 287,
     "portable_lines": 101918,

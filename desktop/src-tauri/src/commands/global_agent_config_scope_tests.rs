@@ -143,8 +143,8 @@ fn scoped_restart_never_stops_unknown_owners_or_other_community_pairs() {
     assert!(!scope.owns_agent(Some(&scope.owner), "wss://other.example"));
     let active = ManagedAgentRuntimeKey::new("a".repeat(64), RELAY).unwrap();
     let other = ManagedAgentRuntimeKey::new("a".repeat(64), "wss://other.example").unwrap();
-    assert!(scope.permits_restart_pairs(&[active.clone()]));
+    assert!(scope.permits_restart_pairs(std::slice::from_ref(&active)));
     assert!(!scope.permits_restart_pairs(&[]));
-    assert!(!scope.permits_restart_pairs(&[other.clone()]));
+    assert!(!scope.permits_restart_pairs(std::slice::from_ref(&other)));
     assert!(!scope.permits_restart_pairs(&[active, other]));
 }
