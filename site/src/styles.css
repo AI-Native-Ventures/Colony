@@ -468,6 +468,36 @@ p {
   margin: 0 auto;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+/* founder story */
+.founder-story {
+  padding: 85px 0;
+  text-align: center;
+}
+.founder-story blockquote {
+  font-size: 22px;
+  line-height: 1.4;
+  max-width: 60ch;
+  margin: 0 auto 18px;
+  letter-spacing: -0.02em;
+  font-weight: 550;
+  color: var(--ink);
+}
+.founder-attribution {
+  font-size: 14px;
+  color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

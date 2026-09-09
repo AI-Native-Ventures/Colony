@@ -218,24 +218,41 @@ export function BusinessGuide() {
         </div>
       </section>
       <section
+        id="ai-bill"
+        className="business-bill"
+        aria-labelledby="bill-title"
+      >
+        <div className="section-heading">
+          <p className="eyebrow">The AI bill</p>
+          <h2 id="bill-title">
+            Already pay for ChatGPT or Claude? Use it here.
+          </h2>
+          <p>
+            AI employees think using an AI service such as ChatGPT or Claude. If
+            you already pay for one, Colony can use it, so you pay nothing extra
+            for the AI. If you do not, Colony can supply the AI and you pay for
+            what your employees use.
+          </p>
+        </div>
+      </section>
+      <section
         className="business-fit section-wrap"
         aria-labelledby="fit-title"
       >
         <div className="section-heading">
-          <p className="eyebrow">Built around your business</p>
+          <p className="eyebrow">Three ways in</p>
           <h2 id="fit-title">
-            Start something new.
-            <br />
-            Or bring the business you already run.
+            Starting out, already busy, or running things for clients.
           </h2>
         </div>
         <div className="business-fit-grid">
           <article>
             <span className="fit-label">Starting out</span>
-            <h3>Turn your idea into work you can act on.</h3>
+            <h3>Starting a business</h3>
             <p>
-              Use Colony to keep your research, plans and first jobs together.
-              Give your AI team one clear piece of work at a time.
+              You have an idea and no staff. Your AI team finds your first
+              customers and writes your website before you spend a cent on
+              salaries.
             </p>
             <blockquote>
               “Compare these three business ideas. Tell me who the customers
@@ -244,14 +261,27 @@ export function BusinessGuide() {
           </article>
           <article>
             <span className="fit-label">Already in business</span>
-            <h3>Bring your team and ongoing work together.</h3>
+            <h3>Already running one</h3>
             <p>
-              Share updates, keep job details with their conversation and check
-              the work before acting on it.
+              You have customers and no spare hours. Hand over the repeat work:
+              follow-up emails, quotes, posts, finding new leads. Grow without
+              hiring.
             </p>
             <blockquote>
               “Here are the notes from our client meeting. List the decisions
               and the work we need to do next.”
+            </blockquote>
+          </article>
+          <article>
+            <span className="fit-label">Agencies</span>
+            <h3>An agency with clients</h3>
+            <p>
+              Give each client their own team, under your name. One bill comes
+              to you, and you decide what to charge them.
+            </p>
+            <blockquote>
+              “Set up a team for our new client, a bakery in Durban. First job:
+              find 20 offices nearby that order catering.”
             </blockquote>
           </article>
         </div>
