@@ -107,7 +107,7 @@ and footer all present, with no console errors.
 ## Business-owner landing page and early access
 
 The page explains Colony as a place to assign business jobs, follow progress and review results
-with people and AI teammates. It uses the owner experience described in the positioning task and
+with people and AI employees. It uses the owner experience described in the positioning task and
 its September 5/7 product recommendations. The latest owner direction supersedes the older
 agency-first marketing choice.
 
