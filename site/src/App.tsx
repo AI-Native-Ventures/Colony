@@ -3,6 +3,8 @@ import { AntMark } from "@/brand/AntMark";
 import { BrandField } from "@/brand/BrandField";
 import { getBrandScene } from "@/brand/brandScene";
 import { BusinessGuide } from "@/sections/BusinessGuide";
+import { FounderStory } from "@/sections/FounderStory";
+import { TrustStrip } from "@/sections/TrustStrip";
 import { ComingSoon } from "@/sections/ComingSoon";
 import { FAQ } from "@/sections/FAQ";
 import { Hero } from "@/sections/Hero";
@@ -39,6 +41,7 @@ export function App() {
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
             <a href="#inside-colony">See an example</a>
+            <a href="#team">What they can do</a>
             <a className="nav-apply" href="#early-access">
               Apply for early access <span aria-hidden="true">↗</span>
             </a>
@@ -51,7 +54,9 @@ export function App() {
             toggleMotion={() => setMotionPaused((paused) => !paused)}
           />
           <div className="page-content">
+            <TrustStrip />
             <BusinessGuide />
+            <FounderStory />
             <FAQ />
             <ComingSoon />
           </div>
