@@ -653,6 +653,9 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
   await expect(power).not.toContainText("Your credits are available.");
   await expect(power.getByRole("button", { name: /^Pay / })).toHaveCount(0);
   expect(initialized).toBe(1);
+  await expect(power.getByLabel("Default model")).toHaveValue(
+    "deepseek-v4-flash",
+  );
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-power-payment-awaiting-balance.png",
@@ -672,6 +675,12 @@ test("Power buys credits and resumes the same checkout after changing lanes", as
   );
   await expect(power).toContainText("$5.00 available for your agents.");
   expect(initialized).toBe(1);
+  await expect(power.getByLabel("Default model")).toHaveValue(
+    "deepseek-v4-flash",
+  );
+  await expect(
+    power.getByRole("button", { name: "Open my Colony", exact: true }),
+  ).toBeEnabled();
   await waitForAnimations(page);
   await page.screenshot({
     path: "test-results/simple-founder-power-payment-confirmed.png",

@@ -8,7 +8,6 @@ import {
   discoverAcpRuntimes,
   getChannelMembers,
   listManagedAgents,
-  updateManagedAgent,
 } from "@/shared/api/tauri";
 import { getGlobalAgentConfig } from "@/shared/api/tauriGlobalAgentConfig";
 import { listPersonas, setPersonaActive } from "@/shared/api/tauriPersonas";
@@ -270,14 +269,10 @@ export async function buildWelcomeStarterCreateInput(
   );
   return {
     ...(await buildInstanceInputForDefinition(persona, runtime)),
-    // Onboarding pins deliberately, and says so here rather than relying on
-    // the builder to infer it. The starters carry `runtime: null`, so they
-    // used to be pinned by the builder's "no preference" branch — the same
-    // branch that silently re-stamped every defaults-mode create, which is
-    // why that branch now returns false. The harness the user picked during
-    // onboarding is a real choice, so this states it at the one call site
-    // that means it.
-    harnessOverride: true,
+    // Power is the shared default, not an agent-specific runtime choice. A
+    // background seed may have read it before the owner saves a new choice;
+    // leaving this unpinned makes native spawn use the latest saved defaults.
+    harnessOverride: false,
     name: starter.name,
     teamId: WELCOME_TEAM_ID,
     relayUrl: relayUrl ?? undefined,
@@ -287,37 +282,6 @@ export async function buildWelcomeStarterCreateInput(
     // agent only ever answers the member who owns it, on that member's
     // machine and subscription (docs/design/role-agents.html).
     respondTo: "owner-only",
-  };
-}
-
-export function welcomeStarterRuntimeUpdate(
-  existing: ManagedAgent,
-  desired: CreateManagedAgentInput,
-) {
-  if (!desired.agentCommand) return null;
-
-  const desiredArgs = desired.agentArgs ?? [];
-  const desiredModel = desired.model ?? null;
-  const desiredProvider = desired.provider ?? null;
-  const desiredMcpCommand = desired.mcpCommand ?? "";
-  if (
-    existing.agentCommand === desired.agentCommand &&
-    existing.agentArgs.join(",") === desiredArgs.join(",") &&
-    existing.model === desiredModel &&
-    existing.provider === desiredProvider &&
-    existing.mcpCommand === desiredMcpCommand
-  ) {
-    return null;
-  }
-
-  return {
-    pubkey: existing.pubkey,
-    agentCommand: desired.agentCommand,
-    harnessOverride: true,
-    agentArgs: desiredArgs,
-    mcpCommand: desiredMcpCommand,
-    model: desiredModel,
-    provider: desiredProvider,
   };
 }
 
@@ -386,6 +350,18 @@ async function provisionWelcomeTeam(
     if (!persona) {
       throw new Error(`${starter.name} agent not found.`);
     }
+    const existing = pickWelcomeTeamStarterAgentForRelay(
+      existingAgents,
+      starter,
+      relayUrl,
+    );
+    if (existing) {
+      // Defaults-mode instances already resolve current Power settings natively.
+      // Never rewrite a manual pin (including one on the built-in Scout) during
+      // background channel setup. Older accidental pins need an explicit reset.
+      agents.push(existing);
+      continue;
+    }
     const desired = await buildWelcomeStarterCreateInput(
       starter,
       persona,
@@ -393,21 +369,6 @@ async function provisionWelcomeTeam(
       globalConfig.preferred_runtime,
       relayUrl,
     );
-    const existing = pickWelcomeTeamStarterAgentForRelay(
-      existingAgents,
-      starter,
-      relayUrl,
-    );
-    if (existing) {
-      const runtimeUpdate = welcomeStarterRuntimeUpdate(existing, desired);
-      agents.push(
-        runtimeUpdate
-          ? (await updateManagedAgent(runtimeUpdate)).agent
-          : existing,
-      );
-      continue;
-    }
-
     const created = await createManagedAgent(desired);
     agents.push(created.agent);
   }
